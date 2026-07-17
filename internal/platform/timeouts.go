@@ -89,6 +89,26 @@ type Timeouts struct {
 	// container boot that FirstConnectBudget must clear with margin. Not
 	// given an explicit figure in the plan; chosen as 90s.
 	ImagePullBootP99 time.Duration
+
+	// --- PR-06 standalone additions: no ordering relationship with the
+	// two chains above, so (per that PR's own instructions) not wired into
+	// a fake invariant link — just plain fields with sensible defaults.
+
+	// HMACWindow is the internal-auth HMAC freshness window (§5.2,
+	// explicit: "bearer timestamp.signature, 5-min window, fail closed").
+	HMACWindow time.Duration
+
+	// ShutdownGracePeriod bounds how long `narvi serve` waits for
+	// in-flight requests to drain (via http.Server.Shutdown) after
+	// receiving SIGINT/SIGTERM before giving up. Not specified in the
+	// plan; chosen as 10s (invented).
+	ShutdownGracePeriod time.Duration
+
+	// HealthCheckTimeout bounds how long the /health handler waits on
+	// pool.Ping before reporting unhealthy, so a stuck DB never hangs the
+	// handler past this. Not specified in the plan; chosen as 2s
+	// (invented).
+	HealthCheckTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -103,6 +123,10 @@ func DefaultTimeouts() Timeouts {
 		ProviderWorstColdStart:    220 * time.Second, // §4.1, "220s+" floor
 		FirstConnectBudget:        240 * time.Second, // §3.2, explicit
 		ImagePullBootP99:          90 * time.Second,  // not specified; chosen with margin below FirstConnectBudget
+
+		HMACWindow:          5 * time.Minute,  // §5.2, explicit
+		ShutdownGracePeriod: 10 * time.Second, // not specified; invented
+		HealthCheckTimeout:  2 * time.Second,  // not specified; invented
 	}
 }
 

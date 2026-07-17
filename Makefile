@@ -1,4 +1,4 @@
-.PHONY: build vet fmt tidy lint test test-integration contracts-generate contracts-check
+.PHONY: build vet fmt tidy lint test test-integration contracts-generate contracts-check dev
 
 build:
 	go build ./...
@@ -26,6 +26,20 @@ test:
 
 test-integration:
 	go test -tags=integration -race ./...
+
+# dev is a LOCAL DEV convenience only (docker-compose.dev.yml), distinct
+# from the self-host production story (§12.1: "one binary + Postgres") —
+# this just brings up a throwaway local Postgres and runs `narvi serve`
+# against it. The 3 HMAC secrets below are obviously-fake, dev-only values
+# supplied inline by this recipe; Config.Load() still requires all three
+# unconditionally in Go — nothing is made "optional in development" there.
+dev:
+	docker compose -f docker-compose.dev.yml up -d --wait
+	NARVI_DATABASE_URL=postgres://narvi:narvi@localhost:5432/narvi?sslmode=disable \
+	NARVI_HMAC_SANDBOX_SECRET=dev-only-insecure-sandbox-secret \
+	NARVI_HMAC_BOTS_SECRET=dev-only-insecure-bots-secret \
+	NARVI_HMAC_WEBHOOK_SECRET=dev-only-insecure-webhook-secret \
+	go run ./cmd/control-plane serve
 
 # contracts-generate regenerates every codegen target under contracts/gen from
 # the JSON Schemas under /contracts (§6). Go output uses the go-jsonschema
