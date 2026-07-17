@@ -3,11 +3,27 @@ package boot_test
 import (
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 )
+
+// validSessionConfigJSON is a well-formed SESSION_CONFIG document (every
+// required field per contracts/session-config/v1/session-config.schema.json
+// present) whose bootMode is "fresh" -- used by every NARVI_SESSION_CONFIG
+// test below that needs a valid document, mutating just bootMode where a
+// mismatch is wanted.
+const validSessionConfigJSON = `{
+	"bootMode": "fresh",
+	"controlPlaneWsUrl": "wss://cp.example.com/sessions/sess-1/ws?type=sandbox",
+	"correlationId": null,
+	"gen": 1,
+	"repos": [{"name": "repo1", "url": "https://example.com/repo1.git", "branch": null}],
+	"sandboxToken": "tok-123",
+	"sessionId": "sess-1"
+}`
 
 // These tests use t.Setenv, which the testing package forbids combining
 // with t.Parallel() (env vars are process-global) -- so none of them call
@@ -114,5 +130,135 @@ func TestLoad_InvalidLogLevel(t *testing.T) {
 	}
 	if invErr.Error() == "" {
 		t.Errorf("InvalidLogLevelError.Error() = %q, want a non-empty message", invErr.Error())
+	}
+}
+
+func TestLoad_CredentialCacheDirDefault(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_CREDENTIAL_CACHE_DIR", "")
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.CredentialCacheDir != "/tmp/narvi-credentials" {
+		t.Errorf("CredentialCacheDir = %q, want %q", cfg.CredentialCacheDir, "/tmp/narvi-credentials")
+	}
+}
+
+func TestLoad_CredentialCacheDirOverride(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_CREDENTIAL_CACHE_DIR", "/custom/creds")
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.CredentialCacheDir != "/custom/creds" {
+		t.Errorf("CredentialCacheDir = %q, want %q", cfg.CredentialCacheDir, "/custom/creds")
+	}
+}
+
+// TestLoad_SessionConfigAbsent proves NARVI_SESSION_CONFIG's absence
+// remains a fully valid, correct state: SessionConfig is nil and every
+// other field behaves exactly as it did before this Step (Steps 13/14's
+// own tests, unmodified, already cover that).
+func TestLoad_SessionConfigAbsent(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_SESSION_CONFIG", "")
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.SessionConfig != nil {
+		t.Errorf("SessionConfig = %+v, want nil", cfg.SessionConfig)
+	}
+}
+
+// TestLoad_SessionConfigPresentAndValid proves a well-formed
+// NARVI_SESSION_CONFIG document whose bootMode agrees with NARVI_BOOT_MODE
+// parses into a populated Config.SessionConfig.
+func TestLoad_SessionConfigPresentAndValid(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_SESSION_CONFIG", validSessionConfigJSON)
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.SessionConfig == nil {
+		t.Fatal("SessionConfig = nil, want a populated *SessionConfig")
+	}
+	if cfg.SessionConfig.SessionId != "sess-1" {
+		t.Errorf("SessionConfig.SessionId = %q, want %q", cfg.SessionConfig.SessionId, "sess-1")
+	}
+	if len(cfg.SessionConfig.Repos) != 1 || cfg.SessionConfig.Repos[0].Name != "repo1" {
+		t.Errorf("SessionConfig.Repos = %+v, want one repo named %q", cfg.SessionConfig.Repos, "repo1")
+	}
+}
+
+// TestLoad_SessionConfigMalformedJSON proves a malformed NARVI_SESSION_CONFIG
+// document is a real, propagated error (fail-fast, matching every other
+// Load() failure mode) -- not silently ignored.
+func TestLoad_SessionConfigMalformedJSON(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_SESSION_CONFIG", "{not valid json")
+
+	_, err := boot.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want an error for malformed NARVI_SESSION_CONFIG")
+	}
+}
+
+// TestLoad_SessionConfigMissingRequiredField proves a SESSION_CONFIG
+// document missing a required field surfaces the generated UnmarshalJSON's
+// own error, unwrapped and un-rehashed -- Load() must not swallow or
+// re-wrap it into something less informative.
+func TestLoad_SessionConfigMissingRequiredField(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	// sessionId is omitted entirely.
+	t.Setenv("NARVI_SESSION_CONFIG", `{
+		"bootMode": "fresh",
+		"controlPlaneWsUrl": "wss://cp.example.com/sessions/sess-1/ws?type=sandbox",
+		"correlationId": null,
+		"gen": 1,
+		"repos": [{"name": "repo1", "url": "https://example.com/repo1.git", "branch": null}],
+		"sandboxToken": "tok-123"
+	}`)
+
+	_, err := boot.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want an error for a SESSION_CONFIG document missing sessionId")
+	}
+	if !strings.Contains(err.Error(), "sessionId") {
+		t.Errorf("Load() error = %v, want it to name the missing field %q", err, "sessionId")
+	}
+}
+
+// TestLoad_SessionConfigBootModeMismatch proves a valid SESSION_CONFIG
+// document whose bootMode disagrees with the separately-read
+// NARVI_BOOT_MODE is a fail-fast *ModeMismatchError.
+func TestLoad_SessionConfigBootModeMismatch(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "repo_image")
+	t.Setenv("NARVI_SESSION_CONFIG", validSessionConfigJSON) // bootMode: "fresh"
+
+	_, err := boot.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want *boot.ModeMismatchError")
+	}
+
+	var mismatchErr *boot.ModeMismatchError
+	if !errors.As(err, &mismatchErr) {
+		t.Fatalf("Load() error = %v (%T), want *boot.ModeMismatchError", err, err)
+	}
+	if mismatchErr.EnvValue != "repo_image" {
+		t.Errorf("EnvValue = %q, want %q", mismatchErr.EnvValue, "repo_image")
+	}
+	if mismatchErr.SessionConfigValue != "fresh" {
+		t.Errorf("SessionConfigValue = %q, want %q", mismatchErr.SessionConfigValue, "fresh")
+	}
+	if mismatchErr.Error() == "" {
+		t.Errorf("ModeMismatchError.Error() = %q, want a non-empty message", mismatchErr.Error())
 	}
 }

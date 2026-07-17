@@ -249,6 +249,29 @@ type Timeouts struct {
 	// ServiceReadinessTimeout's 30s budget, without hammering the port/
 	// health endpoint.
 	ServiceReadinessPollInterval time.Duration
+
+	// --- Step 15 standalone additions: no ordering relationship with
+	// either invariant chain above (or with any prior Step's standalone
+	// additions), so — per those additions' own precedent — plain fields
+	// with sensible defaults, not wired into a fake invariant link.
+
+	// RepoCloneTimeout bounds how long a single `git clone` invocation
+	// (internal/sandboxagent/gitclone.CloneAll) may run before
+	// sandbox-agent kills it. Not specified in the plan; chosen
+	// generously as 5m since a large repo's initial clone can be slow.
+	RepoCloneTimeout time.Duration
+
+	// CredentialFetchTimeout bounds a single credential-helper call to CP
+	// (internal/sandboxagent/credentials.CPClient.Fetch) minting a fresh
+	// git credential. Not specified in the plan; chosen as 10s — a
+	// lightweight mint call, not a large data transfer.
+	CredentialFetchTimeout time.Duration
+
+	// CredentialExpiryBuffer is the credential-helper's cache staleness
+	// buffer (§5.2, explicit: "caches to disk with flock, 5-min expiry
+	// buffer"): a cached credential within this buffer of its own
+	// ExpiresAt is treated as already stale, never handed back as-is.
+	CredentialExpiryBuffer time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -289,6 +312,10 @@ func DefaultTimeouts() Timeouts {
 
 		ServiceReadinessTimeout:      30 * time.Second,       // not specified; chosen
 		ServiceReadinessPollInterval: 250 * time.Millisecond, // not specified; chosen
+
+		RepoCloneTimeout:       5 * time.Minute,  // not specified; chosen generously (large repos)
+		CredentialFetchTimeout: 10 * time.Second, // not specified; chosen (lightweight mint call)
+		CredentialExpiryBuffer: 5 * time.Minute,  // §5.2, explicit
 	}
 }
 

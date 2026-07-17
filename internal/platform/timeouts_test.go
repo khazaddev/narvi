@@ -235,6 +235,33 @@ func TestDefaultTimeouts_Step14StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step15StandaloneFields proves the Step 15 standalone
+// additions (RepoCloneTimeout, CredentialFetchTimeout,
+// CredentialExpiryBuffer) ship with sane, non-zero defaults. These fields
+// have no ordering relationship with either invariant chain, so this only
+// checks their own values -- not Validate, which never touches them.
+func TestDefaultTimeouts_Step15StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	tests := []struct {
+		name string
+		got  time.Duration
+		want time.Duration
+	}{
+		{"RepoCloneTimeout", to.RepoCloneTimeout, 5 * time.Minute},
+		{"CredentialFetchTimeout", to.CredentialFetchTimeout, 10 * time.Second},
+		{"CredentialExpiryBuffer", to.CredentialExpiryBuffer, 5 * time.Minute},
+	}
+
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
