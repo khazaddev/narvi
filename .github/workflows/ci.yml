@@ -48,3 +48,6 @@ jobs:
 
       - name: Test
         run: make test
+
+      - name: Test (integration)
+        run: make test-integration
