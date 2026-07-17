@@ -1,0 +1,23 @@
+# docker-compose.dev.yml is a LOCAL DEV convenience only (used by `make
+# dev`), distinct from the self-host production story (README/§12.1:
+# "one binary + Postgres") — this file just brings up a throwaway Postgres
+# quickly for iterating on `narvi serve` locally; it is never deployed.
+services:
+  postgres:
+    image: postgres:17-alpine # same image the Step 04 testcontainers integration test uses, for consistency
+    environment:
+      POSTGRES_USER: narvi
+      POSTGRES_PASSWORD: narvi
+      POSTGRES_DB: narvi
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - narvi-dev-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U narvi -d narvi"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  narvi-dev-postgres:

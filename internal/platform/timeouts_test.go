@@ -3,6 +3,7 @@ package platform_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -94,6 +95,27 @@ func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 				t.Fatalf("TimeoutInvariantError.Chain = %q, want %q", invErr.Chain, tc.wantChain)
 			}
 		})
+	}
+}
+
+// TestDefaultTimeouts_StandaloneFields proves the PR-06 standalone
+// additions (HMACWindow, ShutdownGracePeriod, HealthCheckTimeout) ship with
+// sane, non-zero defaults. These fields have no ordering relationship with
+// either invariant chain (§ scope note on the struct), so this only checks
+// their own values -- not Validate, which never touches them.
+func TestDefaultTimeouts_StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.HMACWindow != 5*time.Minute {
+		t.Errorf("HMACWindow = %v, want %v (§5.2, explicit)", to.HMACWindow, 5*time.Minute)
+	}
+	if to.ShutdownGracePeriod <= 0 {
+		t.Errorf("ShutdownGracePeriod = %v, want > 0", to.ShutdownGracePeriod)
+	}
+	if to.HealthCheckTimeout <= 0 {
+		t.Errorf("HealthCheckTimeout = %v, want > 0", to.HealthCheckTimeout)
 	}
 }
 
