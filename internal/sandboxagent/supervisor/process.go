@@ -39,6 +39,18 @@ func (p *Process) Wait(ctx context.Context) (ExitResult, error) {
 	}
 }
 
+// Exited reports whether the process has already exited (reaped by the
+// background goroutine), returning its ExitResult if so. Unlike Wait, it
+// NEVER blocks -- a single non-blocking channel check.
+func (p *Process) Exited() (ExitResult, bool) {
+	select {
+	case <-p.doneCh:
+		return p.result, true
+	default:
+		return ExitResult{}, false
+	}
+}
+
 // Stop is graceful-then-forceful and bounded. It ALWAYS signals the whole
 // process group -- even when the tracked leader has already exited -- a
 // leader that backgrounds a descendant before exiting on its own leaves

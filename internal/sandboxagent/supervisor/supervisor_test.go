@@ -242,6 +242,45 @@ func waitForChildPID(t *testing.T, childPidFile string) int {
 	return 0
 }
 
+// TestProcess_Exited covers both of Exited's outcomes: false (with a zero
+// ExitResult) while the process is still running, and true (with the
+// correct ExitResult) once it has exited and been reaped -- proving Exited
+// itself never blocks either way.
+func TestProcess_Exited(t *testing.T) {
+	t.Parallel()
+
+	sup := New()
+	proc := spawnShell(t, sup, `trap "exit 0" TERM; while true; do :; done`)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = proc.Stop(ctx, time.Second)
+	})
+
+	result, exited := proc.Exited()
+	if exited {
+		t.Fatalf("Exited() = (%v, true), want (_, false) for a still-running process", result)
+	}
+	if result != (ExitResult{}) {
+		t.Errorf("Exited() result = %+v, want zero ExitResult while not yet exited", result)
+	}
+
+	exitedProc := spawnShell(t, sup, "exit 9")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := exitedProc.Wait(ctx); err != nil {
+		t.Fatalf("Wait() error = %v", err)
+	}
+
+	result, exited = exitedProc.Exited()
+	if !exited {
+		t.Fatal("Exited() = (_, false), want (_, true) for an already-exited process")
+	}
+	if result.ExitCode != 9 {
+		t.Errorf("Exited() ExitCode = %d, want 9", result.ExitCode)
+	}
+}
+
 func TestSupervisor_StopAll(t *testing.T) {
 	t.Parallel()
 
