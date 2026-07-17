@@ -55,3 +55,38 @@ func (q *Queries) GetSandbox(ctx context.Context, sessionID pgtype.UUID) (Sandbo
 	)
 	return i, err
 }
+
+const updateSandboxStatus = `-- name: UpdateSandboxStatus :one
+UPDATE sandboxes
+SET status = $2,
+    last_seen_at = COALESCE($3, last_seen_at),
+    updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at
+`
+
+type UpdateSandboxStatusParams struct {
+	SessionID  pgtype.UUID        `json:"session_id"`
+	Status     SandboxStatus      `json:"status"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
+}
+
+// Sets a sandbox's status, plus last_seen_at when the caller supplies a
+// real timestamp (sqlc.narg + COALESCE, same pattern as
+// UpdateTurnStatus) -- per §3.2 "Liveness = max of all signals",
+// last_seen_at only ever moves forward on an actual signal, never as a
+// side effect of a plain status write.
+func (q *Queries) UpdateSandboxStatus(ctx context.Context, arg UpdateSandboxStatusParams) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, updateSandboxStatus, arg.SessionID, arg.Status, arg.LastSeenAt)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}

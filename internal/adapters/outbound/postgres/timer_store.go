@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -11,7 +12,7 @@ import (
 // TimerStore is a thin, pass-through wrapper around the sqlc-generated
 // session_timers queries (§4.3 TimerScheduler, §2 named persistent
 // timers). No caching, no retries, no business rules — the timer pump
-// lands in PR-11.
+// lands in Step 11.
 type TimerStore struct {
 	q *sqlcgen.Queries
 }
@@ -19,6 +20,13 @@ type TimerStore struct {
 // NewTimerStore builds a TimerStore backed by pool.
 func NewTimerStore(pool *pgxpool.Pool) *TimerStore {
 	return &TimerStore{q: sqlcgen.New(pool)}
+}
+
+// WithTx returns a TimerStore whose queries run on tx instead of the pool
+// this store was built with — used both by the timer pump's claim
+// transaction and by app/sessionactor's transactional-write helper (§2).
+func (s *TimerStore) WithTx(tx pgx.Tx) *TimerStore {
+	return &TimerStore{q: s.q.WithTx(tx)}
 }
 
 // Upsert arms (or re-arms) a named timer for a session: ON CONFLICT
@@ -31,4 +39,23 @@ func (s *TimerStore) Upsert(ctx context.Context, arg sqlcgen.UpsertSessionTimerP
 // Get fetches a named timer for a session.
 func (s *TimerStore) Get(ctx context.Context, arg sqlcgen.GetSessionTimerParams) (sqlcgen.SessionTimer, error) {
 	return s.q.GetSessionTimer(ctx, arg)
+}
+
+// ListDue fetches up to limit due timers, locking each row (FOR UPDATE
+// SKIP LOCKED) so concurrent pump ticks never select the same row — the
+// timer pump's poll query (§2).
+func (s *TimerStore) ListDue(ctx context.Context, limit int32) ([]sqlcgen.SessionTimer, error) {
+	return s.q.ListDueTimers(ctx, limit)
+}
+
+// Claim pushes an already-locked (via ListDue, same transaction) timer's
+// fires_at forward, so it won't be re-selected as due until the claim
+// window elapses (redelivery-safety, §2).
+func (s *TimerStore) Claim(ctx context.Context, arg sqlcgen.ClaimDueTimerParams) (sqlcgen.SessionTimer, error) {
+	return s.q.ClaimDueTimer(ctx, arg)
+}
+
+// Delete removes a named timer for a session.
+func (s *TimerStore) Delete(ctx context.Context, arg sqlcgen.DeleteSessionTimerParams) error {
+	return s.q.DeleteSessionTimer(ctx, arg)
 }

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -11,8 +12,8 @@ import (
 
 // SandboxStore is a thin, pass-through wrapper around the sqlc-generated
 // sandbox queries (§4.3 SandboxStore). No caching, no retries, no business
-// rules — that lives in domain/sandbox (PR-07) and app/sessionactor
-// (PR-11+).
+// rules — that lives in domain/sandbox (Step 07) and app/sessionactor
+// (Step 11+).
 type SandboxStore struct {
 	q *sqlcgen.Queries
 }
@@ -20,6 +21,13 @@ type SandboxStore struct {
 // NewSandboxStore builds a SandboxStore backed by pool.
 func NewSandboxStore(pool *pgxpool.Pool) *SandboxStore {
 	return &SandboxStore{q: sqlcgen.New(pool)}
+}
+
+// WithTx returns a SandboxStore whose queries run on tx instead of the
+// pool this store was built with — used by app/sessionactor's
+// transactional-write helper (§2).
+func (s *SandboxStore) WithTx(tx pgx.Tx) *SandboxStore {
+	return &SandboxStore{q: s.q.WithTx(tx)}
 }
 
 // Create inserts a new sandbox row for sessionID and returns it. The
@@ -32,4 +40,11 @@ func (s *SandboxStore) Create(ctx context.Context, sessionID pgtype.UUID) (sqlcg
 // Get fetches the sandbox row for sessionID.
 func (s *SandboxStore) Get(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Sandbox, error) {
 	return s.q.GetSandbox(ctx, sessionID)
+}
+
+// UpdateStatus sets a sandbox's status, plus last_seen_at when the caller
+// supplies a real timestamp (see UpdateSandboxStatusParams' generated doc
+// for the COALESCE semantics).
+func (s *SandboxStore) UpdateStatus(ctx context.Context, arg sqlcgen.UpdateSandboxStatusParams) (sqlcgen.Sandbox, error) {
+	return s.q.UpdateSandboxStatus(ctx, arg)
 }

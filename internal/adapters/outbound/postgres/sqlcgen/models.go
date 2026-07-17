@@ -545,6 +545,7 @@ type Session struct {
 	CreatedBy     pgtype.UUID           `json:"created_by"`
 	CreatedAt     pgtype.Timestamptz    `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz    `json:"updated_at"`
+	ActorEpoch    int64                 `json:"actor_epoch"`
 }
 
 type SessionTimer struct {

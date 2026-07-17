@@ -60,3 +60,81 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 	)
 	return i, err
 }
+
+const listTurnsForSession = `-- name: ListTurnsForSession :many
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at FROM turns
+WHERE session_id = $1
+ORDER BY created_at ASC
+`
+
+// Full turn history for one session, oldest first -- exactly the input
+// shape internal/domain/session.DeriveStatus requires (an ordered slice
+// of turn.Summary derived from these rows).
+func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID) ([]Turn, error) {
+	rows, err := q.db.Query(ctx, listTurnsForSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Turn
+	for rows.Next() {
+		var i Turn
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Status,
+			&i.ConversationID,
+			&i.CreatedAt,
+			&i.DispatchedAt,
+			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateTurnStatus = `-- name: UpdateTurnStatus :one
+UPDATE turns
+SET status = $2,
+    dispatched_at = COALESCE($3, dispatched_at),
+    completed_at = COALESCE($4, completed_at)
+WHERE id = $1
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at
+`
+
+type UpdateTurnStatusParams struct {
+	ID           pgtype.UUID        `json:"id"`
+	Status       TurnStatus         `json:"status"`
+	DispatchedAt pgtype.Timestamptz `json:"dispatched_at"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+}
+
+// Sets a turn's status, plus dispatched_at/completed_at when the caller
+// supplies one (sqlc.narg + COALESCE: an absent/NULL argument leaves the
+// existing column value untouched, matching dispatched_at/completed_at's
+// own nullability -- each is set at most once, at the (from, trigger)
+// transition that reaches Dispatched or a terminal state respectively).
+func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusParams) (Turn, error) {
+	row := q.db.QueryRow(ctx, updateTurnStatus,
+		arg.ID,
+		arg.Status,
+		arg.DispatchedAt,
+		arg.CompletedAt,
+	)
+	var i Turn
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Status,
+		&i.ConversationID,
+		&i.CreatedAt,
+		&i.DispatchedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}

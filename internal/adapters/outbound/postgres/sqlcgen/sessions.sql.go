@@ -11,11 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bumpActorEpoch = `-- name: BumpActorEpoch :one
+UPDATE sessions SET actor_epoch = actor_epoch + 1
+WHERE id = $1
+RETURNING actor_epoch
+`
+
+// Increments a session's actor_epoch and returns the new value. Called
+// once, at acquisition time, when an actor takes ownership of a session
+// (§2: "bumped on each acquisition") -- never as part of an ordinary
+// state-transition write (those only READ the epoch, via
+// GetSessionActorEpochForUpdate below, to check it hasn't moved).
+func (q *Queries) BumpActorEpoch(ctx context.Context, id pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, bumpActorEpoch, id)
+	var actor_epoch int64
+	err := row.Scan(&actor_epoch)
+	return actor_epoch, err
+}
+
 const createSession = `-- name: CreateSession :one
 
 INSERT INTO sessions (title, spawn_source, created_by)
 VALUES ($1, $2, $3)
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch
 `
 
 type CreateSessionParams struct {
@@ -40,12 +58,13 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ActorEpoch,
 	)
 	return i, err
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at FROM sessions
+SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch FROM sessions
 WHERE id = $1
 `
 
@@ -62,6 +81,60 @@ func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (Session, erro
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ActorEpoch,
+	)
+	return i, err
+}
+
+const getSessionActorEpochForUpdate = `-- name: GetSessionActorEpochForUpdate :one
+SELECT actor_epoch FROM sessions
+WHERE id = $1
+FOR UPDATE
+`
+
+// Locks and reads a session's current actor_epoch. Called at the START of
+// every transactional write, inside that same transaction, to fence a
+// stale writer (an actor whose epoch no longer matches -- proof a newer
+// actor has since taken over) before it does anything else (§2: "writes
+// with a stale epoch fail").
+func (q *Queries) GetSessionActorEpochForUpdate(ctx context.Context, id pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, getSessionActorEpochForUpdate, id)
+	var actor_epoch int64
+	err := row.Scan(&actor_epoch)
+	return actor_epoch, err
+}
+
+const updateSessionStatus = `-- name: UpdateSessionStatus :one
+UPDATE sessions
+SET status = $2, failure_reason = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch
+`
+
+type UpdateSessionStatusParams struct {
+	ID            pgtype.UUID           `json:"id"`
+	Status        SessionStatus         `json:"status"`
+	FailureReason *SessionFailureReason `json:"failure_reason"`
+}
+
+// Persists a session's derived status + failure_reason --
+// internal/domain/session.DeriveStatus's output, never written directly
+// (§11: "every state transition goes through the machine's transition
+// table").
+func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStatusParams) (Session, error) {
+	row := q.db.QueryRow(ctx, updateSessionStatus, arg.ID, arg.Status, arg.FailureReason)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Status,
+		&i.FailureReason,
+		&i.Archived,
+		&i.SpawnSource,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ActorEpoch,
 	)
 	return i, err
 }
