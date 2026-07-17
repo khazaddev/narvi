@@ -181,6 +181,34 @@ func TestDefaultTimeouts_Step11StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step13StandaloneFields proves the Step 13 standalone
+// additions (HookTimeout, ProcessStopGracePeriod, SupervisorShutdownTimeout,
+// RepoSHADiscoveryTimeout) ship with sane, non-zero defaults. These fields
+// have no ordering relationship with either invariant chain, so this only
+// checks their own values -- not Validate, which never touches them.
+func TestDefaultTimeouts_Step13StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	tests := []struct {
+		name string
+		got  time.Duration
+		want time.Duration
+	}{
+		{"HookTimeout", to.HookTimeout, 10 * time.Minute},
+		{"ProcessStopGracePeriod", to.ProcessStopGracePeriod, 10 * time.Second},
+		{"SupervisorShutdownTimeout", to.SupervisorShutdownTimeout, 30 * time.Second},
+		{"RepoSHADiscoveryTimeout", to.RepoSHADiscoveryTimeout, 5 * time.Second},
+	}
+
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
