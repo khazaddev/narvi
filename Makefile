@@ -1,4 +1,4 @@
-.PHONY: build vet fmt tidy lint test
+.PHONY: build vet fmt tidy lint test test-integration
 
 build:
 	go build ./...
@@ -23,3 +23,6 @@ lint:
 
 test:
 	go test -race ./...
+
+test-integration:
+	go test -tags=integration -race ./...
