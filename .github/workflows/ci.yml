@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  branch-name:
+    # Enforces the <type>/<short-kebab-description> branch naming convention
+    # documented in CLAUDE.md — only meaningful on pull_request events, since
+    # github.head_ref is empty on push.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check branch name follows Conventional-Commits type/kebab-description
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          if ! [[ "$BRANCH" =~ ^(feat|fix|docs|chore|refactor|test|perf|ci|build)/[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "::error::Branch name '$BRANCH' doesn't follow <type>/<short-kebab-description> (see CLAUDE.md). Allowed types: feat, fix, docs, chore, refactor, test, perf, ci, build."
+            exit 1
+          fi
+          echo "Branch name '$BRANCH' OK"
+
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: make vet
+
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+      - name: Lint (custom checks)
+        run: go run ./tools/lint/narvichecks ./...
+
+      - name: Test
+        run: make test
