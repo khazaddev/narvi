@@ -191,6 +191,41 @@ type Timeouts struct {
 	// enough that a genuinely crashed pod's claimed timer is retried
 	// reasonably quickly.
 	TimerClaimDuration time.Duration
+
+	// --- Step 13 standalone additions: no ordering relationship with
+	// either invariant chain above (or with any prior Step's standalone
+	// additions), so — per those additions' own precedent — plain fields
+	// with sensible defaults, not wired into a fake invariant link.
+
+	// HookTimeout is the max wall-clock time a single boot hook
+	// (setup.sh/start.sh, §6.4) may run before sandbox-agent kills it. Not
+	// specified in the plan; chosen generously as 10min since setup.sh may
+	// install dependencies.
+	HookTimeout time.Duration
+
+	// ProcessStopGracePeriod is the grace period between SIGTERM and
+	// SIGKILL when sandbox-agent's supervisor (internal/sandboxagent/
+	// supervisor) stops one supervised process group. Not specified in the
+	// plan; chosen as 10s — matches the existing, unrelated
+	// ShutdownGracePeriod's own value (control-plane's own HTTP graceful
+	// shutdown) only by coincidence; this is a distinct field for a
+	// distinct subsystem, never reused across the two.
+	ProcessStopGracePeriod time.Duration
+
+	// SupervisorShutdownTimeout is the outer bound across ALL of
+	// sandbox-agent's supervised processes during its own bounded
+	// shutdown (Supervisor.StopAll), distinct from the per-process
+	// ProcessStopGracePeriod above — this is the ceiling for StopAll as a
+	// whole, not for any single process within it. Not specified in the
+	// plan; chosen as 30s.
+	SupervisorShutdownTimeout time.Duration
+
+	// RepoSHADiscoveryTimeout bounds each individual `git -C <dir>
+	// rev-parse HEAD` call sandbox-agent's boot-fingerprint assembly
+	// (internal/sandboxagent/boot.DiscoverRepoSHAs) makes per repo — a
+	// very minor, sub-second local git-plumbing call with no natural
+	// existing Timeouts field. Not specified in the plan; chosen as 5s.
+	RepoSHADiscoveryTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -223,6 +258,11 @@ func DefaultTimeouts() Timeouts {
 		ActorIdleTTL:       30 * time.Minute, // §2, explicit
 		TimerPumpInterval:  5 * time.Second,  // not specified; chosen
 		TimerClaimDuration: 30 * time.Second, // not specified; chosen
+
+		HookTimeout:               10 * time.Minute, // not specified; chosen generously (setup.sh may install deps)
+		ProcessStopGracePeriod:    10 * time.Second, // not specified; chosen
+		SupervisorShutdownTimeout: 30 * time.Second, // not specified; chosen
+		RepoSHADiscoveryTimeout:   5 * time.Second,  // not specified; chosen
 	}
 }
 
