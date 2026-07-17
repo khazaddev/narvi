@@ -164,6 +164,33 @@ type Timeouts struct {
 	// InactivityMinCheckInterval is the minimum interval between inactivity
 	// alarm checks. Not given an explicit figure in the plan; chosen as 30s.
 	InactivityMinCheckInterval time.Duration
+
+	// --- Step 11 standalone additions: no ordering relationship with
+	// either invariant chain above (or with the PR-06/Step 07 additions),
+	// so — per those additions' own precedent — plain fields with
+	// sensible defaults, not wired into a fake invariant link.
+
+	// ActorIdleTTL is how long a session actor may go without processing
+	// any command before it evicts itself (§2, explicit: "evicts after
+	// idle TTL (default 30 min without commands or connected clients)").
+	ActorIdleTTL time.Duration
+
+	// TimerPumpInterval is how often the per-pod timer pump
+	// (app/sessionactor) polls session_timers for due rows (§2: "A
+	// per-pod timer pump polls due timers"). Not given an explicit figure
+	// in the plan; chosen as 5s — near-real-time timer delivery without
+	// hammering Postgres with a poll query.
+	TimerPumpInterval time.Duration
+
+	// TimerClaimDuration is how long a timer the pump has just claimed
+	// (pushed fires_at forward, see app/sessionactor's timer pump) is
+	// protected from being picked up again by a concurrent or later pump
+	// tick before the actor handling it finishes. Not given an explicit
+	// figure in the plan; chosen as 30s — comfortably longer than a
+	// single actor's expected processing time for one timer, but short
+	// enough that a genuinely crashed pod's claimed timer is retried
+	// reasonably quickly.
+	TimerClaimDuration time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -192,6 +219,10 @@ func DefaultTimeouts() Timeouts {
 		InactivityTimeout:          10 * time.Minute,  // not specified; chosen
 		InactivityExtension:        5 * time.Minute,   // not specified; chosen
 		InactivityMinCheckInterval: 30 * time.Second,  // not specified; chosen
+
+		ActorIdleTTL:       30 * time.Minute, // §2, explicit
+		TimerPumpInterval:  5 * time.Second,  // not specified; chosen
+		TimerClaimDuration: 30 * time.Second, // not specified; chosen
 	}
 }
 

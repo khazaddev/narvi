@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -11,7 +12,7 @@ import (
 
 // SessionStore is a thin, pass-through wrapper around the sqlc-generated
 // session queries (§4.3 SessionStore). No caching, no retries, no business
-// rules — that lives in app/sessionactor (PR-11+).
+// rules — that lives in app/sessionactor (Step 11+).
 type SessionStore struct {
 	q *sqlcgen.Queries
 }
@@ -19,6 +20,16 @@ type SessionStore struct {
 // NewSessionStore builds a SessionStore backed by pool.
 func NewSessionStore(pool *pgxpool.Pool) *SessionStore {
 	return &SessionStore{q: sqlcgen.New(pool)}
+}
+
+// WithTx returns a SessionStore whose queries run on tx instead of the
+// pool this store was built with — used by app/sessionactor's
+// epoch-fenced transactional-write helper, which needs
+// GetActorEpochForUpdate and UpdateStatus to run inside the SAME
+// transaction (§2: "state transition + appended event + outbox entries
+// commit in ONE Postgres transaction").
+func (s *SessionStore) WithTx(tx pgx.Tx) *SessionStore {
+	return &SessionStore{q: s.q.WithTx(tx)}
 }
 
 // Create inserts a new session row and returns it.
@@ -29,4 +40,23 @@ func (s *SessionStore) Create(ctx context.Context, arg sqlcgen.CreateSessionPara
 // Get fetches a session by id.
 func (s *SessionStore) Get(ctx context.Context, id pgtype.UUID) (sqlcgen.Session, error) {
 	return s.q.GetSession(ctx, id)
+}
+
+// BumpActorEpoch increments a session's actor_epoch and returns the new
+// value. Called once, at acquisition time, when an actor takes ownership
+// of the session (§2: "bumped on each acquisition").
+func (s *SessionStore) BumpActorEpoch(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.q.BumpActorEpoch(ctx, id)
+}
+
+// GetActorEpochForUpdate locks and reads a session's current actor_epoch.
+// Meaningful only when called on a store built via WithTx: it must run
+// inside the same transaction as the write it is fencing (§2).
+func (s *SessionStore) GetActorEpochForUpdate(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.q.GetSessionActorEpochForUpdate(ctx, id)
+}
+
+// UpdateStatus persists a session's derived status + failure_reason.
+func (s *SessionStore) UpdateStatus(ctx context.Context, arg sqlcgen.UpdateSessionStatusParams) (sqlcgen.Session, error) {
+	return s.q.UpdateSessionStatus(ctx, arg)
 }

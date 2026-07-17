@@ -1,0 +1,18 @@
+-- actor_epoch fences a session actor's writes against zombies from an old
+-- pod (§2: "every write includes the actor's epoch (bumped on each
+-- acquisition); writes with a stale epoch fail. A zombie actor on an old
+-- pod can never corrupt state").
+--
+-- This lives on sessions, not turns/sandboxes, because OWNERSHIP is scoped
+-- to the session as a whole, not to any one table: exactly one actor owns
+-- a session at a time, and every transactional write that actor makes --
+-- whatever combination of session/turn/sandbox rows that transaction
+-- happens to touch -- is fenced by that ONE epoch, checked once at the
+-- start of the transaction (via a single `SELECT actor_epoch ... FOR
+-- UPDATE` on the session row). Duplicating an epoch column onto turns and
+-- sandboxes would let one table's epoch drift out of sync with another's
+-- for the same session, and would fence nothing extra: a given actor is
+-- either the legitimate owner of the whole session (and every table it
+-- touches on that session's behalf) or it isn't -- there is no scenario
+-- where it legitimately owns, say, the sandbox row but not the turn rows.
+ALTER TABLE sessions ADD COLUMN actor_epoch BIGINT NOT NULL DEFAULT 0;

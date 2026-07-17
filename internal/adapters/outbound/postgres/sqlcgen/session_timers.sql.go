@@ -11,6 +11,54 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimDueTimer = `-- name: ClaimDueTimer :one
+UPDATE session_timers
+SET fires_at = $1
+WHERE session_id = $2 AND name = $3
+RETURNING id, session_id, name, fires_at, created_at
+`
+
+type ClaimDueTimerParams struct {
+	FiresAt   pgtype.Timestamptz `json:"fires_at"`
+	SessionID pgtype.UUID        `json:"session_id"`
+	Name      string             `json:"name"`
+}
+
+// Pushes an already-locked (via ListDueTimers, same transaction) timer's
+// fires_at forward by the pump's claim duration, so a second
+// concurrent/later pump tick won't re-select the same row as due again
+// until the claim window elapses -- the redelivery-safety mechanism (§2):
+// claiming before delivering means a crash after claiming but before the
+// actor finishes handling it self-heals once the claim window passes,
+// with no permanent loss.
+func (q *Queries) ClaimDueTimer(ctx context.Context, arg ClaimDueTimerParams) (SessionTimer, error) {
+	row := q.db.QueryRow(ctx, claimDueTimer, arg.FiresAt, arg.SessionID, arg.Name)
+	var i SessionTimer
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Name,
+		&i.FiresAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const deleteSessionTimer = `-- name: DeleteSessionTimer :exec
+DELETE FROM session_timers
+WHERE session_id = $1 AND name = $2
+`
+
+type DeleteSessionTimerParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	Name      string      `json:"name"`
+}
+
+func (q *Queries) DeleteSessionTimer(ctx context.Context, arg DeleteSessionTimerParams) error {
+	_, err := q.db.Exec(ctx, deleteSessionTimer, arg.SessionID, arg.Name)
+	return err
+}
+
 const getSessionTimer = `-- name: GetSessionTimer :one
 SELECT id, session_id, name, fires_at, created_at FROM session_timers
 WHERE session_id = $1 AND name = $2
@@ -32,6 +80,43 @@ func (q *Queries) GetSessionTimer(ctx context.Context, arg GetSessionTimerParams
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listDueTimers = `-- name: ListDueTimers :many
+SELECT id, session_id, name, fires_at, created_at FROM session_timers
+WHERE fires_at <= now()
+ORDER BY fires_at
+LIMIT $1
+FOR UPDATE SKIP LOCKED
+`
+
+// The timer pump's poll query (§2, explicit): FOR UPDATE SKIP LOCKED so
+// multiple concurrent pump ticks (this pod or another) never select the
+// same due row.
+func (q *Queries) ListDueTimers(ctx context.Context, limit int32) ([]SessionTimer, error) {
+	rows, err := q.db.Query(ctx, listDueTimers, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SessionTimer
+	for rows.Next() {
+		var i SessionTimer
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Name,
+			&i.FiresAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const upsertSessionTimer = `-- name: UpsertSessionTimer :one

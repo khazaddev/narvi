@@ -153,6 +153,34 @@ func TestDefaultTimeouts_Step07StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step11StandaloneFields proves the Step 11 standalone
+// additions (ActorIdleTTL, TimerPumpInterval, TimerClaimDuration) ship
+// with the exact values §2 specifies (or, where §2 gives no figure, the
+// chosen default documented alongside the field). These fields have no
+// ordering relationship with either invariant chain, so this only checks
+// their own values -- not Validate, which never touches them.
+func TestDefaultTimeouts_Step11StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	tests := []struct {
+		name string
+		got  time.Duration
+		want time.Duration
+	}{
+		{"ActorIdleTTL", to.ActorIdleTTL, 30 * time.Minute},
+		{"TimerPumpInterval", to.TimerPumpInterval, 5 * time.Second},
+		{"TimerClaimDuration", to.TimerClaimDuration, 30 * time.Second},
+	}
+
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
