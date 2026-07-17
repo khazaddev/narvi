@@ -54,35 +54,55 @@ func RunHooks(
 	hookTimeout, stopGrace time.Duration,
 ) error {
 	for _, repo := range repos {
-		for _, hook := range []sandboxboot.Hook{sandboxboot.HookSetup, sandboxboot.HookStart} {
-			outcome := sandboxboot.EvaluateHook(mode, hook, repo.Primary)
-			if !outcome.ShouldRun {
-				continue
-			}
+		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, hookTimeout, stopGrace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-			repoDir := filepath.Join(workspaceDir, repo.Name)
-			scriptPath := filepath.Join(repoDir, string(hook))
+// runRepoHooks runs HookSetup then HookStart (in that order) for exactly
+// one repo, per §6.4's hook policy (sandboxboot.EvaluateHook) -- the exact
+// per-repo body RunHooks used to inline directly in its own loop, factored
+// out unchanged (a pure refactor, no behavior change) so
+// internal/sandboxagent/boot's new RunBoot (runboot.go) can reuse it for a
+// repo that falls back to the hook contract.
+func runRepoHooks(
+	ctx context.Context,
+	sup *supervisor.Supervisor,
+	workspaceDir string,
+	repo RepoInfo,
+	mode sandboxboot.BootMode,
+	hookTimeout, stopGrace time.Duration,
+) error {
+	for _, hook := range []sandboxboot.Hook{sandboxboot.HookSetup, sandboxboot.HookStart} {
+		outcome := sandboxboot.EvaluateHook(mode, hook, repo.Primary)
+		if !outcome.ShouldRun {
+			continue
+		}
 
-			present, err := hookScriptPresent(scriptPath)
-			if err != nil {
-				if outcome.FatalOnFailure {
-					return fmt.Errorf("boot: stat %s: %w", scriptPath, err)
-				}
-				platform.Logger(ctx).Warn("boot: hook stat failed, skipping",
-					"repo", repo.Name, "hook", string(hook), "error", err)
-				continue
-			}
-			if !present {
-				continue
-			}
+		repoDir := filepath.Join(workspaceDir, repo.Name)
+		scriptPath := filepath.Join(repoDir, string(hook))
 
-			if runErr := runHook(ctx, sup, scriptPath, repoDir, hookTimeout, stopGrace); runErr != nil {
-				if outcome.FatalOnFailure {
-					return fmt.Errorf("boot: %s in %s failed (fatal): %w", hook, repo.Name, runErr)
-				}
-				platform.Logger(ctx).Warn("boot: hook failed, continuing",
-					"repo", repo.Name, "hook", string(hook), "error", runErr)
+		present, err := hookScriptPresent(scriptPath)
+		if err != nil {
+			if outcome.FatalOnFailure {
+				return fmt.Errorf("boot: stat %s: %w", scriptPath, err)
 			}
+			platform.Logger(ctx).Warn("boot: hook stat failed, skipping",
+				"repo", repo.Name, "hook", string(hook), "error", err)
+			continue
+		}
+		if !present {
+			continue
+		}
+
+		if runErr := runHook(ctx, sup, scriptPath, repoDir, hookTimeout, stopGrace); runErr != nil {
+			if outcome.FatalOnFailure {
+				return fmt.Errorf("boot: %s in %s failed (fatal): %w", hook, repo.Name, runErr)
+			}
+			platform.Logger(ctx).Warn("boot: hook failed, continuing",
+				"repo", repo.Name, "hook", string(hook), "error", runErr)
 		}
 	}
 	return nil

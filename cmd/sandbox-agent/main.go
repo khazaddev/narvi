@@ -1,10 +1,14 @@
 // Command sandbox-agent is the static binary shipped into sandbox images
-// (§1). Step 13 gives it its first real behavior: boot-mode/hook-policy
+// (§1). Step 13 gave it its first real behavior: boot-mode/hook-policy
 // decisions (internal/domain/sandboxboot) plus native process supervision
 // (internal/sandboxagent/supervisor) -- process groups, killpg-style
-// signaling, reaping, and bounded graceful-then-forceful shutdown,
-// orchestrated by internal/sandboxagent/boot. It logs a boot fingerprint
-// first (§5.3), runs whatever boot hooks the (currently empty, until
+// signaling, reaping, and bounded graceful-then-forceful shutdown. Step 14
+// extends its boot dispatch to also supervise a per-repo .narvi/
+// services.yml multi-service manifest (internal/sandboxagent/services,
+// §14.2) when one is present, falling back to the original setup.sh/
+// start.sh hook contract otherwise -- both orchestrated by
+// internal/sandboxagent/boot.RunBoot. It logs a boot fingerprint first
+// (§5.3), runs the boot sequence for whatever (currently empty, until
 // Step 15) repo list names, then blocks until told to shut down.
 package main
 
@@ -18,6 +22,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
+	"github.com/khazaddev/narvi/internal/sandboxagent/services"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
 
@@ -63,16 +68,32 @@ func run() error {
 
 	sup := supervisor.New()
 
+	// reportBootProgress is a slog-only ProgressReporter (§6.1's
+	// boot_progress event, logged rather than transported anywhere yet).
+	// HONEST GAP, same shape as Step 13's own NARVI_IMAGE_DIGEST gap:
+	// Step 16 (control-plane WS bridge) is expected to replace/wrap this
+	// with a reporter that also forwards each event over the real WS
+	// connection once that bridge exists.
+	reportBootProgress := func(event services.BootProgressEvent) {
+		if event.Phase == services.PhaseFailed {
+			slog.Info("sandbox-agent: boot_progress",
+				"service", event.ServiceName, "phase", string(event.Phase), "error", event.Err)
+			return
+		}
+		slog.Info("sandbox-agent: boot_progress", "service", event.ServiceName, "phase", string(event.Phase))
+	}
+
 	// repos is nil/empty until Step 15 populates it from SESSION_CONFIG --
 	// multi-repo cloning does not exist yet (this Step's own scope
-	// boundary). An empty slice is RunHooks' documented, correct no-op.
-	if err := boot.RunHooks(ctx, sup, cfg.WorkspaceDir, nil, cfg.BootMode,
-		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod); err != nil {
-		return fmt.Errorf("sandbox-agent: boot hooks: %w", err)
+	// boundary). An empty slice is RunBoot's documented, correct no-op.
+	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, nil, cfg.BootMode, reportBootProgress,
+		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
+		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval); err != nil {
+		return fmt.Errorf("sandbox-agent: boot: %w", err)
 	}
 
 	slog.Info("sandbox-agent: boot sequence complete (partial -- multi-repo clone: Step 15; " +
-		"services.yml supervision: Step 14; control-plane WS bridge: Step 16; OpenCode adapter: Step 17)")
+		"control-plane WS bridge: Step 16; OpenCode adapter: Step 17)")
 
 	// Block until told to shut down: a real sandbox-agent process must
 	// stay alive/supervising until then -- there is simply nothing else

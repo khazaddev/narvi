@@ -226,6 +226,29 @@ type Timeouts struct {
 	// very minor, sub-second local git-plumbing call with no natural
 	// existing Timeouts field. Not specified in the plan; chosen as 5s.
 	RepoSHADiscoveryTimeout time.Duration
+
+	// --- Step 14 standalone additions: no ordering relationship with
+	// either invariant chain above (or with any prior Step's standalone
+	// additions), so — per those additions' own precedent — plain fields
+	// with sensible defaults, not wired into a fake invariant link.
+
+	// ServiceReadinessTimeout bounds how long
+	// internal/sandboxagent/services.Run waits for ONE declared
+	// services.yml service (§14.2) to become ready (port dial or HTTP
+	// health check succeeding) before giving up on it (PhaseTimeout). Not
+	// specified in the plan; chosen as 30s — generous enough for a
+	// typical dev-server/mock-server cold start without being so long
+	// that a primary service's timeout stalls the whole boot sequence
+	// for an unreasonable time.
+	ServiceReadinessTimeout time.Duration
+
+	// ServiceReadinessPollInterval is how often
+	// internal/sandboxagent/services.Run retries a service's readiness
+	// check while waiting. Not specified in the plan; chosen as 250ms —
+	// frequent enough that readiness is detected promptly relative to
+	// ServiceReadinessTimeout's 30s budget, without hammering the port/
+	// health endpoint.
+	ServiceReadinessPollInterval time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -263,6 +286,9 @@ func DefaultTimeouts() Timeouts {
 		ProcessStopGracePeriod:    10 * time.Second, // not specified; chosen
 		SupervisorShutdownTimeout: 30 * time.Second, // not specified; chosen
 		RepoSHADiscoveryTimeout:   5 * time.Second,  // not specified; chosen
+
+		ServiceReadinessTimeout:      30 * time.Second,       // not specified; chosen
+		ServiceReadinessPollInterval: 250 * time.Millisecond, // not specified; chosen
 	}
 }
 

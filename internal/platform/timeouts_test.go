@@ -209,6 +209,32 @@ func TestDefaultTimeouts_Step13StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step14StandaloneFields proves the Step 14 standalone
+// additions (ServiceReadinessTimeout, ServiceReadinessPollInterval) ship
+// with sane, non-zero defaults. These fields have no ordering relationship
+// with either invariant chain, so this only checks their own values -- not
+// Validate, which never touches them.
+func TestDefaultTimeouts_Step14StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	tests := []struct {
+		name string
+		got  time.Duration
+		want time.Duration
+	}{
+		{"ServiceReadinessTimeout", to.ServiceReadinessTimeout, 30 * time.Second},
+		{"ServiceReadinessPollInterval", to.ServiceReadinessPollInterval, 250 * time.Millisecond},
+	}
+
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
