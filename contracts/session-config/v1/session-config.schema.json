@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://narvi.dev/contracts/session-config/v1/session-config.schema.json",
+  "title": "SessionConfig",
+  "description": "The SESSION_CONFIG document (§4.1: 'sandbox env passed as one SESSION_CONFIG JSON document — the provider never assembles env fragments'). This shape is NOT fully enumerated anywhere in the technical plan; it is built here from what §4.1/§3.4/§5.2/§5.3/§6.4 explicitly reference. It is expected to GROW when PR-12 (Modal provider) actually consumes it — treat this as the honest floor, not a final shape. Field nullability convention: 'nullable' means a required key whose value may be JSON null.",
+  "$ref": "#/$defs/SessionConfig",
+  "$defs": {
+    "SessionConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "gen", "sandboxToken", "bootMode", "controlPlaneWsUrl", "repos", "correlationId"],
+      "properties": {
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer", "description": "Spawn generation (§3.2 fencing)." },
+        "sandboxToken": {
+          "type": "string",
+          "description": "§5.2: sandbox tokens are hashed at rest control-plane-side; one per gen. This is the plaintext bearer value handed to the sandbox at spawn time."
+        },
+        "bootMode": {
+          "type": "string",
+          "enum": ["build", "fresh", "repo_image", "snapshot_restore"],
+          "description": "§6.4. Delivered to the sandbox as the NARVI_BOOT_MODE env var."
+        },
+        "controlPlaneWsUrl": {
+          "type": "string",
+          "format": "uri",
+          "description": "Where sandbox-agent connects back for the sandbox WS (§6.1)."
+        },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "description": "§3.4: position 0 = primary; repos are always a list, never a scalar single-repo mirror.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "url", "branch"],
+            "properties": {
+              "name": { "type": "string" },
+              "url": { "type": "string" },
+              "branch": { "type": ["string", "null"], "description": "Null means create the session branch from the repo's default base branch." }
+            }
+          }
+        },
+        "correlationId": {
+          "type": ["string", "null"],
+          "description": "§5.3 propagation chain: webhook -> CP -> provider -> sandbox-agent -> OpenCode wrapper -> back. Null only when no upstream correlation id exists (e.g. session created without an ingress webhook)."
+        }
+      }
+    }
+  }
+}

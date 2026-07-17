@@ -1,0 +1,15 @@
+{
+  "name": "@narvi/contracts",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Codegen + typecheck for Narvi's wire contracts (/contracts, §6). Scoped npm project — does not make the repo root an npm project; phase 6 (the web UI) brings its own frontend package.",
+  "type": "module",
+  "scripts": {
+    "generate": "node scripts/generate-ts.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "15.0.4",
+    "typescript": "7.0.2"
+  }
+}
