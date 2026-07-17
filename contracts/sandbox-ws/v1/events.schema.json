@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://narvi.dev/contracts/sandbox-ws/v1/events.schema.json",
+  "title": "SandboxEvent",
+  "description": "sandbox-agent -> control-plane WS events (technical plan §6.1). Every event carries the common envelope (type, messageId, sessionId, gen). The 5 CRITICAL types (execution_complete, error, snapshot_ready, push_complete, push_error) additionally require ackId, deterministically formatted '{type}:{messageId}' (enforced here via both a description and a per-type 'pattern' anchored on the literal type prefix) so the ack protocol (§6.1: sender buffers 1000 events, evicts oldest non-critical, re-sends on reconnect until acked; receiver dedupes by upsert-on-messageId) can redeliver them exactly once. Field nullability convention: a property documented as 'nullable' is a REQUIRED key whose value may be JSON null, EXCEPT step_finish's cost.tokens.cached and cost.usd — §6.1 only specifies that 'tokens is an object, not a number'; the {input, output, cached?, usd?} breakdown and which of those sub-fields are optional is this contract's own invention, not literally specified by the technical plan.",
+  "$defs": {
+    "Ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "First event on a fresh WS connection, once the agent is ready to receive commands.",
+      "required": ["type", "messageId", "sessionId", "gen", "timestamp"],
+      "properties": {
+        "type": { "type": "string", "const": "ready" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Heartbeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "§6.1: every 30s; carries conversation id + last_boot_phase so liveness (last_seen_at, §3.2) and turn-resume state stay current even with no other traffic.",
+      "required": ["type", "messageId", "sessionId", "gen", "conversationId", "lastBootPhase", "timestamp"],
+      "properties": {
+        "type": { "type": "string", "const": "heartbeat" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "conversationId": { "type": ["string", "null"], "description": "Null before the first turn has started a conversation." },
+        "lastBootPhase": { "type": ["string", "null"], "description": "Null once boot has completed (no more boot phases to report)." },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "BootProgress": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Named boot phase report; re-arms the connecting deadline during long boots (§3.2).",
+      "required": ["type", "messageId", "sessionId", "gen", "phase", "timestamp"],
+      "properties": {
+        "type": { "type": "string", "const": "boot_progress" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "phase": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Token": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "§6.1: text is CUMULATIVE, not a delta. Consumers MUST treat this as a full replacement of the streamed text keyed by messageId (upsert-by-messageId), never append the text onto a running buffer.",
+      "required": ["type", "messageId", "sessionId", "gen", "text"],
+      "properties": {
+        "type": { "type": "string", "const": "token" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "text": { "type": "string", "description": "The full cumulative text so far for this messageId — replace, do not append." }
+      }
+    },
+    "ToolCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "messageId", "sessionId", "gen", "callId", "toolName", "input"],
+      "properties": {
+        "type": { "type": "string", "const": "tool_call" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "callId": { "type": "string" },
+        "toolName": { "type": "string" },
+        "input": { "type": "object", "additionalProperties": true, "description": "Freeform, tool-specific input." }
+      }
+    },
+    "ToolResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "messageId", "sessionId", "gen", "callId", "output", "isError"],
+      "properties": {
+        "type": { "type": "string", "const": "tool_result" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "callId": { "type": "string" },
+        "output": { "type": "object", "additionalProperties": true, "description": "Freeform, tool-specific output." },
+        "isError": { "type": "boolean" }
+      }
+    },
+    "StepStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "messageId", "sessionId", "gen", "stepId"],
+      "properties": {
+        "type": { "type": "string", "const": "step_start" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "stepId": { "type": "string" }
+      }
+    },
+    "StepFinish": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "THE CRITICAL SCHEMA (§6.1 / §9.1 dedicated test): cost.tokens is an OBJECT, never a bare number. A number-vs-object mismatch here silently zeroes cost tracking downstream, so this shape is pinned by a dedicated round-trip + rejection test in contracts/contractstest.",
+      "required": ["type", "messageId", "sessionId", "gen", "stepId", "cost"],
+      "properties": {
+        "type": { "type": "string", "const": "step_finish" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "stepId": { "type": "string" },
+        "cost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tokens"],
+          "properties": {
+            "tokens": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "NOTE: tokens is an object, not a number (§6.1 explicit warning).",
+              "required": ["input", "output"],
+              "properties": {
+                "input": { "type": "integer" },
+                "output": { "type": "integer" },
+                "cached": { "type": ["integer", "null"] }
+              }
+            },
+            "usd": { "type": ["number", "null"] }
+          }
+        }
+      }
+    },
+    "GitSync": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "§3.4 stash -> checkout -> pop sequence, reported as it happens.",
+      "required": ["type", "messageId", "sessionId", "gen", "status", "branch"],
+      "properties": {
+        "type": { "type": "string", "const": "git_sync" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "status": { "type": "string", "enum": ["stash", "checkout", "pop"] },
+        "branch": { "type": "string" }
+      }
+    },
+    "Artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "artifactType MUST match the Postgres artifact_type enum (migrations/000012_artifacts.up.sql) exactly.",
+      "required": ["type", "messageId", "sessionId", "gen", "artifactType", "url", "metadata"],
+      "properties": {
+        "type": { "type": "string", "const": "artifact" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "artifactType": { "type": "string", "enum": ["pr", "preview", "upload"] },
+        "url": { "type": "string", "format": "uri" },
+        "metadata": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "ExecutionComplete": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CRITICAL (requires ackId). outcome MUST match the turn_status terminal states (migrations/000005_turns.up.sql).",
+      "required": ["type", "messageId", "sessionId", "gen", "ackId", "outcome", "reason"],
+      "properties": {
+        "type": { "type": "string", "const": "execution_complete" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "ackId": {
+          "type": "string",
+          "pattern": "^execution_complete:.+$",
+          "description": "Deterministic ackId = 'execution_complete:{messageId}' (§6.1)."
+        },
+        "outcome": { "type": "string", "enum": ["completed", "failed", "cancelled"] },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "PushComplete": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CRITICAL (requires ackId).",
+      "required": ["type", "messageId", "sessionId", "gen", "ackId", "repos"],
+      "properties": {
+        "type": { "type": "string", "const": "push_complete" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "ackId": {
+          "type": "string",
+          "pattern": "^push_complete:.+$",
+          "description": "Deterministic ackId = 'push_complete:{messageId}' (§6.1)."
+        },
+        "repos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "branch", "sha"],
+            "properties": {
+              "name": { "type": "string" },
+              "branch": { "type": "string" },
+              "sha": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "PushError": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CRITICAL (requires ackId).",
+      "required": ["type", "messageId", "sessionId", "gen", "ackId", "error"],
+      "properties": {
+        "type": { "type": "string", "const": "push_error" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "ackId": {
+          "type": "string",
+          "pattern": "^push_error:.+$",
+          "description": "Deterministic ackId = 'push_error:{messageId}' (§6.1)."
+        },
+        "error": { "type": "string" }
+      }
+    },
+    "SessionTitle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "messageId", "sessionId", "gen", "title"],
+      "properties": {
+        "type": { "type": "string", "const": "session_title" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "title": { "type": "string" }
+      }
+    },
+    "Warning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "messageId", "sessionId", "gen", "message"],
+      "properties": {
+        "type": { "type": "string", "const": "warning" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "message": { "type": "string" }
+      }
+    },
+    "SandboxErrorEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CRITICAL (requires ackId). Named SandboxErrorEvent rather than Error in this schema — a $def literally named Error generates a TS interface that shadows the built-in Error class for any consumer that imports it unaliased.",
+      "required": ["type", "messageId", "sessionId", "gen", "ackId", "message", "fatal"],
+      "properties": {
+        "type": { "type": "string", "const": "error" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "ackId": {
+          "type": "string",
+          "pattern": "^error:.+$",
+          "description": "Deterministic ackId = 'error:{messageId}' (§6.1)."
+        },
+        "message": { "type": "string" },
+        "fatal": { "type": "boolean" }
+      }
+    },
+    "SnapshotReady": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CRITICAL (requires ackId).",
+      "required": ["type", "messageId", "sessionId", "gen", "ackId", "snapshotId"],
+      "properties": {
+        "type": { "type": "string", "const": "snapshot_ready" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "ackId": {
+          "type": "string",
+          "pattern": "^snapshot_ready:.+$",
+          "description": "Deterministic ackId = 'snapshot_ready:{messageId}' (§6.1)."
+        },
+        "snapshotId": { "type": "string" }
+      }
+    }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/Ready" },
+    { "$ref": "#/$defs/Heartbeat" },
+    { "$ref": "#/$defs/BootProgress" },
+    { "$ref": "#/$defs/Token" },
+    { "$ref": "#/$defs/ToolCall" },
+    { "$ref": "#/$defs/ToolResult" },
+    { "$ref": "#/$defs/StepStart" },
+    { "$ref": "#/$defs/StepFinish" },
+    { "$ref": "#/$defs/GitSync" },
+    { "$ref": "#/$defs/Artifact" },
+    { "$ref": "#/$defs/ExecutionComplete" },
+    { "$ref": "#/$defs/PushComplete" },
+    { "$ref": "#/$defs/PushError" },
+    { "$ref": "#/$defs/SessionTitle" },
+    { "$ref": "#/$defs/Warning" },
+    { "$ref": "#/$defs/SandboxErrorEvent" },
+    { "$ref": "#/$defs/SnapshotReady" }
+  ]
+}

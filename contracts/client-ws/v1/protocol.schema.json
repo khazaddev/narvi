@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://narvi.dev/contracts/client-ws/v1/protocol.schema.json",
+  "title": "ClientWSProtocol",
+  "description": "Browser <-> control-plane WS protocol (§6.2). These 4 shapes are independent named payloads, not a discriminated union, so (per the PR-05 spec) there is deliberately no top-level oneOf here — each is emitted as its own top-level $def. Connect -> subscribe{token, clientId} within 30s (timeout lives in a later PR's platform/timeouts.go) -> a single 'subscribed' reply (SubscribedPayload: full state + event replay + artifacts + participants) -> broadcast stream. fetch_history is cursor-paginated. Close codes 4001 (re-auth) / 4002 (token expired) are connection-level, not part of these payload shapes. Field nullability convention: 'nullable' means a required key whose value may be JSON null.",
+  "$defs": {
+    "SubscribeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Sent by the browser client immediately after connecting; must arrive within 30s (§6.2).",
+      "required": ["token", "clientId"],
+      "properties": {
+        "token": { "type": "string", "description": "Per-participant WS token minted via REST (/api/sessions/:id/ws-token)." },
+        "clientId": { "type": "string" }
+      }
+    },
+    "SubscribedPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The single reply to subscribe. state/events/artifacts/participants are deliberately loosely typed here (additionalProperties: true) — the full session/turn/sandbox read-model shape is assembled by later PRs; this schema only fixes the top-level envelope.",
+      "required": ["sessionId", "state", "events", "artifacts", "participants"],
+      "properties": {
+        "sessionId": { "type": "string", "format": "uuid" },
+        "state": { "type": "object", "additionalProperties": true, "description": "Full session/turn/sandbox read model (shape assembled by later PRs)." },
+        "events": {
+          "type": "array",
+          "description": "Event replay.",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "participants": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+    "FetchHistoryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "cursor", "limit"],
+      "properties": {
+        "sessionId": { "type": "string", "format": "uuid" },
+        "cursor": { "type": ["string", "null"], "description": "Opaque pagination cursor; null to start from the beginning/most recent (server-defined)." },
+        "limit": { "type": ["integer", "null"], "description": "Null means use the server default page size." }
+      }
+    },
+    "FetchHistoryResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["events", "nextCursor"],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "nextCursor": { "type": ["string", "null"], "description": "Null when there are no more pages." }
+      }
+    }
+  }
+}

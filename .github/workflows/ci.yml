@@ -35,6 +35,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: contracts/package-lock.json
+
+      - name: Install contracts dependencies
+        run: npm ci
+        working-directory: contracts
+
       - name: Vet
         run: make vet
 
@@ -51,3 +62,6 @@ jobs:
 
       - name: Test (integration)
         run: make test-integration
+
+      - name: Contracts (schema codegen drift + TS typecheck)
+        run: make contracts-check
