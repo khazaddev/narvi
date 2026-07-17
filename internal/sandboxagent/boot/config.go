@@ -1,11 +1,13 @@
 package boot
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"strings"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
 )
 
@@ -15,12 +17,20 @@ import (
 // contracts/gen/go/sessionconfig's own doc comment on SessionConfig.
 // BootMode); the rest are this Step's own invented plumbing, since no
 // other SESSION_CONFIG delivery mechanism is pinned yet.
+//
+// sessionConfigEnvVar (NARVI_SESSION_CONFIG) is Step 15's own answer to
+// that gap: an OPTIONAL env var carrying the full SESSION_CONFIG document
+// as JSON. Its absence remains a fully valid, correct state (see Config.
+// SessionConfig's own doc comment) -- dev/CI environments have no live
+// session and are not required to set it.
 const (
-	bootModeEnvVar     = "NARVI_BOOT_MODE"
-	agentVersionEnvVar = "NARVI_AGENT_VERSION"
-	imageDigestEnvVar  = "NARVI_IMAGE_DIGEST"
-	workspaceDirEnvVar = "NARVI_WORKSPACE_DIR"
-	logLevelEnvVar     = "NARVI_LOG_LEVEL"
+	bootModeEnvVar           = "NARVI_BOOT_MODE"
+	agentVersionEnvVar       = "NARVI_AGENT_VERSION"
+	imageDigestEnvVar        = "NARVI_IMAGE_DIGEST"
+	workspaceDirEnvVar       = "NARVI_WORKSPACE_DIR"
+	logLevelEnvVar           = "NARVI_LOG_LEVEL"
+	sessionConfigEnvVar      = "NARVI_SESSION_CONFIG"
+	credentialCacheDirEnvVar = "NARVI_CREDENTIAL_CACHE_DIR"
 )
 
 // Defaults for every optional env var above.
@@ -44,6 +54,12 @@ const (
 
 	// defaultLogLevelValue is used when NARVI_LOG_LEVEL is unset.
 	defaultLogLevelValue = "info"
+
+	// defaultCredentialCacheDir is used when NARVI_CREDENTIAL_CACHE_DIR is
+	// unset. Deliberately OUTSIDE defaultWorkspaceDir (the agent-visible
+	// /workspace tree, §6.4) so a coding agent operating there never sees
+	// the raw credential cache file (§5.2).
+	defaultCredentialCacheDir = "/tmp/narvi-credentials"
 )
 
 // Config is sandbox-agent's own typed, boot-time-validated configuration,
@@ -55,6 +71,45 @@ type Config struct {
 	ImageDigest  string
 	WorkspaceDir string
 	LogLevel     slog.Level
+
+	// CredentialCacheDir is where the git credential helper
+	// (internal/sandboxagent/credentials) caches minted credentials on
+	// disk (§5.2: "caches to disk with flock"). Deliberately OUTSIDE
+	// WorkspaceDir -- see defaultCredentialCacheDir's own doc comment.
+	CredentialCacheDir string
+
+	// SessionConfig is the full SESSION_CONFIG document (§6.4), parsed
+	// from NARVI_SESSION_CONFIG when present -- nil when that env var is
+	// unset. This is intentionally NOT a forced requirement: dev/CI
+	// environments have no live session, and nil here (with a nil Repos
+	// slice, exactly today's boot behavior) remains a fully valid,
+	// correct state. When present, its own BootMode field is
+	// cross-checked against the separately-read NARVI_BOOT_MODE (see
+	// ModeMismatchError) -- a real, fail-fast reconciliation, the
+	// same shape as ports.CreateSpec.Validate's Gen/SessionConfig.Gen
+	// check.
+	SessionConfig *sessionconfig.SessionConfig
+}
+
+// ModeMismatchError is returned by Load when NARVI_SESSION_CONFIG is
+// present but its own bootMode field disagrees with the separately-read
+// NARVI_BOOT_MODE env var. The two are a deliberate duplicate (NARVI_
+// BOOT_MODE is §6.4's own pinned delivery mechanism; SessionConfig.
+// BootMode travels inside the larger, optional SESSION_CONFIG document)
+// with nothing structurally keeping them in sync -- a caller-side bug
+// that sets one and forgets the other must be caught before either value
+// is trusted, exactly like ports.CreateSpec.Validate's GenMismatchError
+// catches a diverging Gen/SessionConfig.Gen pair.
+type ModeMismatchError struct {
+	EnvValue           string
+	SessionConfigValue string
+}
+
+func (e *ModeMismatchError) Error() string {
+	return fmt.Sprintf(
+		"boot: %s=%q does not match NARVI_SESSION_CONFIG's bootMode=%q",
+		bootModeEnvVar, e.EnvValue, e.SessionConfigValue,
+	)
 }
 
 // InvalidLogLevelError is returned by Load when NARVI_LOG_LEVEL is set to
@@ -126,11 +181,54 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	credentialCacheDir := os.Getenv(credentialCacheDirEnvVar)
+	if credentialCacheDir == "" {
+		credentialCacheDir = defaultCredentialCacheDir
+	}
+
+	sessionConfig, err := loadSessionConfig(mode)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
-		BootMode:     mode,
-		AgentVersion: agentVersion,
-		ImageDigest:  imageDigest,
-		WorkspaceDir: workspaceDir,
-		LogLevel:     logLevel,
+		BootMode:           mode,
+		AgentVersion:       agentVersion,
+		ImageDigest:        imageDigest,
+		WorkspaceDir:       workspaceDir,
+		LogLevel:           logLevel,
+		CredentialCacheDir: credentialCacheDir,
+		SessionConfig:      sessionConfig,
 	}, nil
+}
+
+// loadSessionConfig reads and parses NARVI_SESSION_CONFIG when present,
+// cross-checking its bootMode field against mode (the already-resolved
+// NARVI_BOOT_MODE value). Returns (nil, nil) when the env var is unset --
+// a fully valid, correct state (see Config.SessionConfig's own doc
+// comment). A malformed JSON document is a wrapped, propagated error
+// (fail-fast, matching every other Load() failure mode); a document
+// missing a required SessionConfig field surfaces the generated
+// UnmarshalJSON's own error UNWRAPPED and un-rehashed, per this Step's own
+// scope (SessionConfig's generated json.Unmarshal already validates every
+// required field is present).
+func loadSessionConfig(mode sandboxboot.BootMode) (*sessionconfig.SessionConfig, error) {
+	raw := os.Getenv(sessionConfigEnvVar)
+	if raw == "" {
+		return nil, nil
+	}
+
+	var sc sessionconfig.SessionConfig
+	if err := json.Unmarshal([]byte(raw), &sc); err != nil {
+		return nil, fmt.Errorf("boot: %s: %w", sessionConfigEnvVar, err)
+	}
+
+	if string(sc.BootMode) != string(mode) {
+		return nil, &ModeMismatchError{
+			EnvValue:           string(mode),
+			SessionConfigValue: string(sc.BootMode),
+		}
+	}
+
+	return &sc, nil
 }
