@@ -1,0 +1,138 @@
+package platform_test
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/khazaddev/narvi/internal/platform"
+)
+
+// TestDefaultTimeouts_Valid proves the real shipped defaults actually
+// satisfy every invariant chain -- not just that Validate works on
+// contrived inputs.
+func TestDefaultTimeouts_Valid(t *testing.T) {
+	t.Parallel()
+
+	if err := platform.DefaultTimeouts().Validate(); err != nil {
+		t.Fatalf("DefaultTimeouts().Validate() = %v, want nil", err)
+	}
+}
+
+// TestValidate_CatchesEachBrokenLink is table-driven over every pairwise
+// relationship the two invariant chains define (§5.4's "provider cap >
+// supervisor > bridge > SSE" chain contributes 3 adjacent links; the
+// independent "providerHTTPClientTimeout > cold start" and
+// "first_connect_budget > image pull + boot p99" pairs contribute one
+// link each -- 5 links total from the 8-field design in this PR). Each
+// case starts from DefaultTimeouts (known-valid) and mutates exactly one
+// field so exactly one link breaks, then asserts Validate reports a
+// *TimeoutInvariantError naming that exact chain -- so the test actually
+// catches someone breaking one specific link later, not merely "some
+// error happened".
+func TestValidate_CatchesEachBrokenLink(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		mutate    func(*platform.Timeouts)
+		wantChain string
+	}{
+		{
+			name: "ProviderHardCap not > SupervisorTurnCap",
+			mutate: func(to *platform.Timeouts) {
+				to.SupervisorTurnCap = to.ProviderHardCap
+			},
+			wantChain: "ProviderHardCap > SupervisorTurnCap",
+		},
+		{
+			name: "SupervisorTurnCap not > TurnDeadline",
+			mutate: func(to *platform.Timeouts) {
+				to.TurnDeadline = to.SupervisorTurnCap
+			},
+			wantChain: "SupervisorTurnCap > TurnDeadline",
+		},
+		{
+			name: "TurnDeadline not > SSEInactivityTimeout",
+			mutate: func(to *platform.Timeouts) {
+				to.SSEInactivityTimeout = to.TurnDeadline
+			},
+			wantChain: "TurnDeadline > SSEInactivityTimeout",
+		},
+		{
+			name: "ProviderHTTPClientTimeout not > ProviderWorstColdStart",
+			mutate: func(to *platform.Timeouts) {
+				to.ProviderWorstColdStart = to.ProviderHTTPClientTimeout
+			},
+			wantChain: "ProviderHTTPClientTimeout > ProviderWorstColdStart",
+		},
+		{
+			name: "FirstConnectBudget not > ImagePullBootP99",
+			mutate: func(to *platform.Timeouts) {
+				to.ImagePullBootP99 = to.FirstConnectBudget
+			},
+			wantChain: "FirstConnectBudget > ImagePullBootP99",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			to := platform.DefaultTimeouts()
+			tc.mutate(&to)
+
+			err := to.Validate()
+			if err == nil {
+				t.Fatalf("Validate() = nil, want an error for broken link %q", tc.wantChain)
+			}
+
+			var invErr *platform.TimeoutInvariantError
+			if !errors.As(err, &invErr) {
+				t.Fatalf("Validate() = %v, want a *TimeoutInvariantError in the chain", err)
+			}
+			if invErr.Chain != tc.wantChain {
+				t.Fatalf("TimeoutInvariantError.Chain = %q, want %q", invErr.Chain, tc.wantChain)
+			}
+		})
+	}
+}
+
+// TestValidate_ReportsAllViolations proves Validate collects every broken
+// link (via errors.Join) rather than stopping at the first one.
+func TestValidate_ReportsAllViolations(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+	to.SupervisorTurnCap = to.ProviderHardCap   // breaks link 1
+	to.ImagePullBootP99 = to.FirstConnectBudget // breaks link 5 (independent chain)
+
+	err := to.Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want error")
+	}
+
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		t.Fatalf("Validate() error %v does not support errors.Join unwrapping", err)
+	}
+
+	gotChains := map[string]bool{}
+	for _, e := range joined.Unwrap() {
+		var invErr *platform.TimeoutInvariantError
+		if errors.As(e, &invErr) {
+			gotChains[invErr.Chain] = true
+		}
+	}
+
+	for _, want := range []string{
+		"ProviderHardCap > SupervisorTurnCap",
+		"FirstConnectBudget > ImagePullBootP99",
+	} {
+		if !gotChains[want] {
+			t.Errorf("Validate() did not report violated chain %q; got chains: %v", want, gotChains)
+		}
+	}
+	if len(gotChains) != 2 {
+		t.Errorf("Validate() reported %d distinct violated chains, want exactly 2 (got: %v)", len(gotChains), gotChains)
+	}
+}
