@@ -119,6 +119,40 @@ func TestDefaultTimeouts_StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step07StandaloneFields proves the Step 07 standalone
+// additions (sandbox liveness/circuit-breaker/spawn/inactivity fields) ship
+// with the exact values §3.2 specifies (or, where §3.2 gives no figure, the
+// chosen default documented alongside the field). These fields have no
+// ordering relationship with either invariant chain, so this only checks
+// their own values -- not Validate, which never touches them.
+func TestDefaultTimeouts_Step07StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	tests := []struct {
+		name string
+		got  time.Duration
+		want time.Duration
+	}{
+		{"SteadyHeartbeatBudget", to.SteadyHeartbeatBudget, 90 * time.Second},
+		{"TerminalGracePeriod", to.TerminalGracePeriod, 60 * time.Second},
+		{"CircuitBreakerWindow", to.CircuitBreakerWindow, 5 * time.Minute},
+		{"SpawnCooldown", to.SpawnCooldown, 30 * time.Second},
+		{"SpawnReadyWait", to.SpawnReadyWait, 60 * time.Second},
+		{"SpawnStuckTimeout", to.SpawnStuckTimeout, 120 * time.Second},
+		{"InactivityTimeout", to.InactivityTimeout, 10 * time.Minute},
+		{"InactivityExtension", to.InactivityExtension, 5 * time.Minute},
+		{"InactivityMinCheckInterval", to.InactivityMinCheckInterval, 30 * time.Second},
+	}
+
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

@@ -109,6 +109,61 @@ type Timeouts struct {
 	// handler past this. Not specified in the plan; chosen as 2s
 	// (invented).
 	HealthCheckTimeout time.Duration
+
+	// --- Step 07 standalone additions: no ordering relationship with the
+	// two chains above (or with the PR-06 additions), so — per that PR's
+	// own precedent — just plain fields with sensible defaults, not wired
+	// into a fake invariant link.
+
+	// SteadyHeartbeatBudget is the liveness budget for a sandbox that has
+	// already shown at least one sign of life (heartbeat or boot-progress
+	// ping), distinct from FirstConnectBudget above. §3.2 gives this
+	// explicitly: "steady_heartbeat_budget (default 90s; heartbeats every
+	// 30s)".
+	SteadyHeartbeatBudget time.Duration
+
+	// TerminalGracePeriod is how long a sandbox stays in "suspect" before
+	// a watchdog's silence/timeout is treated as genuinely dead (§3.2:
+	// "two-phase terminalization: a watchdog never writes failed directly.
+	// It writes suspect and arms terminal_grace (default 60s)").
+	TerminalGracePeriod time.Duration
+
+	// CircuitBreakerWindow is the sliding window the sandbox spawn circuit
+	// breaker counts permanent failures within. §3.2 gives this explicitly:
+	// "3 permanent spawn failures within 5 min blocks spawning". The
+	// companion threshold (3) is a plain int, not a duration, so it lives
+	// as a named constant in domain/sandbox instead of here.
+	CircuitBreakerWindow time.Duration
+
+	// SpawnCooldown is the minimum interval between spawn attempts (bypassed
+	// for failed/stopped sandboxes). Not given an explicit figure in the
+	// plan; chosen as 30s.
+	SpawnCooldown time.Duration
+
+	// SpawnReadyWait is how long a sandbox that reports "ready" without an
+	// active WebSocket is given to reconnect before a fresh spawn is
+	// considered. Not given an explicit figure in the plan; chosen as 60s.
+	SpawnReadyWait time.Duration
+
+	// SpawnStuckTimeout is the max time a sandbox may remain in a
+	// spawning/connecting-style status before it is treated as dead (an
+	// interrupted spawn) and a fresh spawn is allowed. Not given an explicit
+	// figure in the plan; chosen as 120s.
+	SpawnStuckTimeout time.Duration
+
+	// InactivityTimeout is how long a ready, non-processing sandbox may go
+	// without activity before it is stopped (and snapshotted). Not given an
+	// explicit figure in the plan; chosen as 10min.
+	InactivityTimeout time.Duration
+
+	// InactivityExtension is the additional time granted (with a warning)
+	// when the inactivity timeout fires but clients are still connected.
+	// Not given an explicit figure in the plan; chosen as 5min.
+	InactivityExtension time.Duration
+
+	// InactivityMinCheckInterval is the minimum interval between inactivity
+	// alarm checks. Not given an explicit figure in the plan; chosen as 30s.
+	InactivityMinCheckInterval time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -127,6 +182,16 @@ func DefaultTimeouts() Timeouts {
 		HMACWindow:          5 * time.Minute,  // §5.2, explicit
 		ShutdownGracePeriod: 10 * time.Second, // not specified; invented
 		HealthCheckTimeout:  2 * time.Second,  // not specified; invented
+
+		SteadyHeartbeatBudget:      90 * time.Second,  // §3.2, explicit
+		TerminalGracePeriod:        60 * time.Second,  // §3.2, explicit
+		CircuitBreakerWindow:       5 * time.Minute,   // §3.2, explicit
+		SpawnCooldown:              30 * time.Second,  // not specified; chosen
+		SpawnReadyWait:             60 * time.Second,  // not specified; chosen
+		SpawnStuckTimeout:          120 * time.Second, // not specified; chosen
+		InactivityTimeout:          10 * time.Minute,  // not specified; chosen
+		InactivityExtension:        5 * time.Minute,   // not specified; chosen
+		InactivityMinCheckInterval: 30 * time.Second,  // not specified; chosen
 	}
 }
 
