@@ -78,22 +78,6 @@ jobs:
       - name: Install OpenCode
         run: npm install -g --allow-scripts=opencode-ai opencode-ai
 
-      # TEMPORARY diagnostic step -- to be removed once the fix to
-      # opencodeproc.waitHealthy is confirmed on this runner. The traced
-      # loop (previous commit) showed the real root cause: attempts 1-5
-      # got an instant "connection refused" in under 1.25s, then a ~19s
-      # gap before a single final timeout -- opencode serve's listener
-      # accepts connections promptly but can take several seconds to
-      # actually service the first few requests while its own startup
-      # work finishes, and healthCheck shared ONE long-lived context
-      # across the whole polling loop, so a single slow response could
-      # silently consume the entire readiness budget. Fixed in spawn.go
-      # by bounding each individual attempt well below the overall
-      # deadline. This step confirms the fix against the real Spawn
-      # function on the actual runner.
-      - name: Debug OpenCode serve (confirm the waitHealthy fix)
-        run: go run ./cmd/debugspawn/
-
       - name: Vet
         run: make vet
 
