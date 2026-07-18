@@ -78,6 +78,32 @@ jobs:
       - name: Install OpenCode
         run: npm install -g --allow-scripts=opencode-ai opencode-ai
 
+      # TEMPORARY diagnostic step -- to be removed once the real cause of
+      # the opencode-serve health-check timeout on this runner is found.
+      - name: Debug OpenCode serve
+        run: |
+          set +e
+          which opencode
+          opencode --version
+          file "$(npm root -g)/opencode-ai/bin/opencode.exe"
+          echo "--- starting opencode serve ---"
+          opencode serve --port 4321 --hostname 127.0.0.1 > /tmp/opencode-debug.log 2>&1 &
+          OC_PID=$!
+          for i in $(seq 1 10); do
+            sleep 1
+            echo "--- attempt $i (pid $OC_PID alive: $(kill -0 $OC_PID 2>/dev/null && echo yes || echo no)) ---"
+            curl -sv --max-time 2 http://127.0.0.1:4321/api/health
+            echo ""
+          done
+          echo "--- ss/netstat ---"
+          ss -tlnp 2>&1 || netstat -tlnp 2>&1
+          echo "--- process tree ---"
+          pgrep -fa opencode || true
+          echo "--- opencode serve log ---"
+          cat /tmp/opencode-debug.log
+          kill $OC_PID 2>/dev/null
+          true
+
       - name: Vet
         run: make vet
 
