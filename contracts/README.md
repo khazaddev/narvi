@@ -67,15 +67,25 @@ on every push/PR (`.github/workflows/ci.yml`).
 ## Scope note: REST DTOs (§6.3)
 
 §6.3 names the full BFF-facing REST route surface — sessions, events,
-artifacts, secrets, environments, automations, uploads, ws-token — but only
-**sessions** and **ws-token** are specified in enough field-level detail
-anywhere in the technical plan to schema honestly as of PR-05.
-`rest/v1/dtos.schema.json` therefore models exactly three shapes: `Session`,
-`CreateSessionRequest`, and `WSTokenResponse`. Events, artifacts, secrets,
-environments, automations, and uploads DTOs are **deliberately not modeled
-here** — this is a scope decision, not an oversight. They belong to the PRs
-that actually define those features and can schema them honestly:
-environments (PR-10/26), automations (PR-46/47), uploads (PR-49), and so
-on. Do not invent field shapes for those ahead of the PRs that own them;
-extend `rest/v1/dtos.schema.json` (or add a new versioned sibling) when that
-PR lands instead.
+artifacts, secrets, environments, automations, uploads, ws-token. As of
+PR-05, only **sessions** and **ws-token** were specified in enough
+field-level detail anywhere in the technical plan to schema honestly, so
+`rest/v1/dtos.schema.json` originally modeled exactly three shapes:
+`Session`, `CreateSessionRequest`, and `WSTokenResponse`.
+
+Step 19 ("wshub: clients + session REST") added the **events** and
+**artifacts** read endpoints, and with them two more shapes: `EventsResponse`
+and `ArtifactsResponse`. Both deliberately reuse the same
+`additionalProperties: true` looseness as `contracts/client-ws/v1/
+protocol.schema.json`'s own `SubscribedPayload`/`FetchHistoryResponse` (the
+technical plan itself leaves the full event/artifact read-model shape to
+"later PRs" — REST and the client WS protocol intentionally do not diverge
+on this).
+
+**Secrets, environments, automations, and uploads DTOs are still
+deliberately not modeled here** — this remains a scope decision, not an
+oversight. They belong to the PRs that actually define those features and
+can schema them honestly: environments (PR-10/26), automations (PR-46/47),
+uploads (PR-49), and so on. Do not invent field shapes for those ahead of
+the PRs that own them; extend `rest/v1/dtos.schema.json` (or add a new
+versioned sibling) when that PR lands instead.

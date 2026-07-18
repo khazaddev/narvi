@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -50,6 +51,14 @@ type Registry struct {
 	timeouts platform.Timeouts
 	stores   storeBundle
 
+	// broadcaster is threaded through to every Actor this Registry
+	// hydrates (§6.2's "→ broadcast stream", made real via
+	// internal/adapters/inbound/wshub's *Hub -- see
+	// internal/app/ports.EventBroadcaster's own doc comment for the full
+	// rationale). May be nil (some tests construct a Registry without
+	// one) -- Actor.broadcastPending already guards against that.
+	broadcaster ports.EventBroadcaster
+
 	// group tracks every actor's mailbox-loop goroutine, so evicted/
 	// crashed actors are cleanly reaped and Shutdown can wait on all of
 	// them. Deliberately the zero value, NOT errgroup.WithContext(...) --
@@ -74,14 +83,18 @@ type Registry struct {
 
 // NewRegistry builds a Registry backed by pool. ctx represents the
 // process's own lifetime; Shutdown cancels the context every spawned
-// actor's run loop derives from.
-func NewRegistry(ctx context.Context, pool *pgxpool.Pool, timeouts platform.Timeouts) *Registry {
+// actor's run loop derives from. broadcaster is threaded through to every
+// Actor this Registry hydrates (§6.2's "→ broadcast stream") -- may be
+// nil, in which case every Actor simply never broadcasts (see
+// Actor.broadcastPending).
+func NewRegistry(ctx context.Context, pool *pgxpool.Pool, timeouts platform.Timeouts, broadcaster ports.EventBroadcaster) *Registry {
 	lifecycleCtx, cancel := context.WithCancel(ctx)
 	return &Registry{
 		actors:       make(map[pgtype.UUID]*Actor),
 		pool:         pool,
 		timeouts:     timeouts,
 		stores:       newStoreBundle(pool),
+		broadcaster:  broadcaster,
 		lifecycleCtx: lifecycleCtx,
 		cancel:       cancel,
 	}

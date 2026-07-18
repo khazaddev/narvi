@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -38,6 +39,28 @@ type Actor struct {
 	pool     *pgxpool.Pool
 	timeouts platform.Timeouts
 	stores   storeBundle
+
+	// broadcaster is how a successfully committed event reaches every
+	// currently-subscribed browser client for this session, live (§6.2's
+	// "→ broadcast stream" made real -- design decision: broadcasting is a
+	// generic, automatic property of transact's own commit path, not
+	// something each command handler must remember to call; see
+	// pendingBroadcast below and transact's own doc comment). May be nil
+	// (some tests construct an Actor without one, e.g. via a fake
+	// storeBundle-only setup) -- appendEvent/appendRawEvent still append to
+	// pendingBroadcast unconditionally, but transact skips the delivery
+	// loop entirely when broadcaster is nil.
+	broadcaster ports.EventBroadcaster
+
+	// pendingBroadcast queues each event appended (via appendEvent/
+	// appendRawEvent) during the CURRENT transact attempt, in order. Safe
+	// unsynchronized: Actor.handle processes exactly one command at a time
+	// (the same single-goroutine invariant every other Actor field already
+	// relies on, see doc.go's Concurrency section), so no two goroutines
+	// ever touch this slice concurrently. Reset to nil on every transact
+	// entry path (see transact's own doc comment) -- never accumulates
+	// across separate commands or separate attempts.
+	pendingBroadcast []json.RawMessage
 
 	registry *Registry
 
@@ -225,6 +248,10 @@ func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string,
 	}); err != nil {
 		return fmt.Errorf("sessionactor: append raw %s event: %w", eventType, err)
 	}
+	// Queue for broadcast AFTER commit (§6.2's "→ broadcast stream", made
+	// generic rather than per-handler -- see transact's own doc comment
+	// for the commit-then-broadcast, discard-on-rollback ordering).
+	a.pendingBroadcast = append(a.pendingBroadcast, raw)
 	return nil
 }
 
@@ -239,6 +266,21 @@ func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string,
 // state-transition writes) and commits. §2: "state transition + appended
 // event + outbox entries commit in ONE Postgres transaction. There is no
 // such thing as a fire-and-forget state write."
+//
+// Broadcasting (§6.2's "→ broadcast stream") is wired here, generically,
+// rather than in any individual command handler: appendEvent/
+// appendRawEvent both queue their own already-marshaled payload onto
+// a.pendingBroadcast as they run inside fn (see each of their own doc
+// comments). On any early return -- fn's own error, or tx.Commit's own
+// error -- that queue is discarded (a.pendingBroadcast reset to nil)
+// without ever calling a.broadcaster: an event that might still roll back,
+// or whose surrounding transaction never actually committed, must never
+// be announced to a live client. Only on a SUCCESSFUL commit is the queue
+// taken, the field reset to nil, and THEN (deliberately after the reset,
+// so a panic or re-entrancy inside Broadcast can never corrupt the next
+// call's own queue) each payload handed to a.broadcaster.Broadcast, once
+// per item, in order. A nil a.broadcaster (some tests construct an Actor
+// without one) is guarded against by skipping the loop entirely.
 func (a *Actor) transact(ctx context.Context, fn func(ctx context.Context, tx pgx.Tx) error) error {
 	conn, err := a.pool.Acquire(ctx)
 	if err != nil {
@@ -265,11 +307,33 @@ func (a *Actor) transact(ctx context.Context, fn func(ctx context.Context, tx pg
 	}
 
 	if err := fn(ctx, tx); err != nil {
+		a.pendingBroadcast = nil
 		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
+		a.pendingBroadcast = nil
 		return fmt.Errorf("sessionactor: transact: commit: %w", err)
 	}
+
+	a.broadcastPending()
 	return nil
+}
+
+// broadcastPending delivers every queued event payload (in order) to
+// a.broadcaster, then resets the queue -- called only after transact's own
+// successful commit above. Takes and resets a.pendingBroadcast BEFORE
+// calling Broadcast for any item, so a panic or re-entrant call partway
+// through the loop can never leave a stale/duplicated queue for the next
+// transact attempt to inherit.
+func (a *Actor) broadcastPending() {
+	pending := a.pendingBroadcast
+	a.pendingBroadcast = nil
+
+	if a.broadcaster == nil {
+		return
+	}
+	for _, payload := range pending {
+		a.broadcaster.Broadcast(a.sessionID.String(), payload)
+	}
 }

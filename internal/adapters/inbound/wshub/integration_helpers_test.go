@@ -1,8 +1,8 @@
 //go:build integration
 
 // Shared fixtures for this package's own integration tests (sandbox_test.go,
-// dispatch_test.go) -- gated behind the "integration" build tag (needs
-// Docker), matching internal/app/sessionactor/integration_helpers_test.go's
+// dispatch_test.go, client_test.go) -- gated behind the "integration" build
+// tag (needs Docker), matching internal/app/sessionactor/integration_helpers_test.go's
 // own testcontainers-Postgres-plus-embedded-migrations convention exactly
 // (each DB-touching package builds its own copy of this small helper rather
 // than sharing one across package boundaries, per that same file's own
@@ -204,4 +204,54 @@ func newTestServer(registry *sessionactor.Registry, sandboxes *narvipg.SandboxSt
 	server := httptest.NewServer(router)
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	return server, wsURL
+}
+
+// newDispatcherTestServer builds a chi router mounting the REAL top-level
+// dispatcher (wshub.NewHandler, wiring BOTH NewSandboxHandler and
+// NewClientHandler at the single shared route) -- used by client_test.go
+// for the client-hub's own tests and for proving the type=sandbox vs
+// type=client routing itself, as opposed to newTestServer above (which
+// mounts the sandbox handler alone, unchanged since Step 18, still used by
+// this package's pre-existing sandbox-only tests).
+func newDispatcherTestServer(
+	registry *sessionactor.Registry,
+	sessions *narvipg.SessionStore,
+	turns *narvipg.TurnStore,
+	sandboxes *narvipg.SandboxStore,
+	events *narvipg.EventStore,
+	artifacts *narvipg.ArtifactStore,
+	wsTokens *narvipg.WSTokenStore,
+	hub *wshub.Hub,
+	timeouts platform.Timeouts,
+) (*httptest.Server, string) {
+	router := chi.NewRouter()
+	router.Get("/sessions/{sessionID}/ws", wshub.NewHandler(
+		wshub.NewSandboxHandler(registry, sandboxes, timeouts),
+		wshub.NewClientHandler(registry, sessions, turns, sandboxes, events, artifacts, wsTokens, hub, timeouts),
+	))
+	server := httptest.NewServer(router)
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	return server, wsURL
+}
+
+// createTestWSToken mints a fresh plaintext ws-token via the SAME
+// production helpers the real mint endpoint uses
+// (platform.GenerateToken/HashToken), persists only its hash with the
+// given expiresAt, and returns the plaintext -- exactly what a real
+// client would have received from POST /api/sessions/:id/ws-token.
+func createTestWSToken(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID, expiresAt time.Time) string {
+	t.Helper()
+
+	token, err := platform.GenerateToken()
+	if err != nil {
+		t.Fatalf("generate test ws-token: %v", err)
+	}
+	if _, err := narvipg.NewWSTokenStore(pool).Create(ctx, sqlcgen.CreateWSTokenParams{
+		SessionID: sessionID,
+		TokenHash: platform.HashToken(token),
+		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		t.Fatalf("create test ws-token: %v", err)
+	}
+	return token
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -14,7 +15,10 @@ import (
 // caching, no retries, no business rules — appending an event as part of
 // a state transition is app/sessionactor's job (Step 11+), always inside
 // that transition's own transaction (§2: "state transition + appended
-// event + outbox entries commit in ONE Postgres transaction").
+// event + outbox entries commit in ONE Postgres transaction"). Reading
+// back a page of that log (ListForSession, Step 19) has no such
+// transactional requirement — it always runs against the pool, never
+// WithTx.
 type EventStore struct {
 	q *sqlcgen.Queries
 }
@@ -34,4 +38,18 @@ func (s *EventStore) WithTx(tx pgx.Tx) *EventStore {
 // Create inserts a new event row and returns it.
 func (s *EventStore) Create(ctx context.Context, arg sqlcgen.CreateEventParams) (sqlcgen.Event, error) {
 	return s.q.CreateEvent(ctx, arg)
+}
+
+// ListForSession returns up to limit events for sessionID with id >
+// afterID, oldest first (afterID = 0 means "from the beginning" -- a null
+// fetch_history cursor / the REST endpoint's own ?cursor= default). Shared
+// by both the client WS hub's fetch_history/initial-replay handling and
+// the REST GET .../events endpoint (§6.2, §6.3) -- one implementation,
+// two callers, no duplication.
+func (s *EventStore) ListForSession(ctx context.Context, sessionID pgtype.UUID, afterID int64, limit int32) ([]sqlcgen.Event, error) {
+	return s.q.ListEventsForSession(ctx, sqlcgen.ListEventsForSessionParams{
+		SessionID: sessionID,
+		ID:        afterID,
+		Limit:     limit,
+	})
 }

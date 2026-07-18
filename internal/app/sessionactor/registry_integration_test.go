@@ -25,8 +25,8 @@ func TestConcurrentGetOrSpawn_ExactlyOneWins(t *testing.T) {
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
 
-	r1 := NewRegistry(ctx, pool, platform.DefaultTimeouts())
-	r2 := NewRegistry(ctx, pool, platform.DefaultTimeouts())
+	r1 := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil)
+	r2 := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil)
 	t.Cleanup(func() { _ = r1.Shutdown() })
 	t.Cleanup(func() { _ = r2.Shutdown() })
 
@@ -85,7 +85,7 @@ func TestActorTransact_StaleEpochEvictsSelf(t *testing.T) {
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts())
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -151,7 +151,7 @@ func TestActorIdleEviction_ReleasesLock(t *testing.T) {
 	timeouts := platform.DefaultTimeouts()
 	timeouts.ActorIdleTTL = 100 * time.Millisecond
 
-	r := NewRegistry(ctx, pool, timeouts)
+	r := NewRegistry(ctx, pool, timeouts, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a1, err := r.GetOrSpawn(ctx, sessionID)

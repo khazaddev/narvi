@@ -27,6 +27,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver, used only for the golang-migrate handle below
 	"golang.org/x/sync/errgroup"
 
+	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
@@ -91,12 +92,28 @@ func serve() error {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 
+	// hub is the single shared piece of state connecting the app-layer
+	// actor to the adapter-layer client sockets (§6.2's "→ broadcast
+	// stream", Step 19): constructed once here, then threaded through to
+	// BOTH sessionactor.NewRegistry (as the ports.EventBroadcaster every
+	// Actor's successful transact commits to) and wshub.NewClientHandler
+	// (so it can register/unregister each subscribed connection) -- see
+	// internal/adapters/inbound/wshub's own Hub doc comment.
+	hub := wshub.NewHub()
+
 	// Registry/wshub are wired into the real binary for the first time in
-	// this Step (Step 18) -- an intended, natural consequence of that: the
-	// timer pump (already built in Step 11) becomes genuinely live here for
-	// the first time too, run via the errgroup below.
-	registry := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts)
+	// Step 18 -- an intended, natural consequence of that: the timer pump
+	// (already built in Step 11) becomes genuinely live here for the first
+	// time too, run via the errgroup below. Step 19 adds the client-hub
+	// half (hub above) and the store handles its own handlers/REST
+	// endpoints need.
+	registry := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub)
+	sessionStore := postgres.NewSessionStore(pool)
+	turnStore := postgres.NewTurnStore(pool)
 	sandboxStore := postgres.NewSandboxStore(pool)
+	eventStore := postgres.NewEventStore(pool)
+	artifactStore := postgres.NewArtifactStore(pool)
+	wsTokenStore := postgres.NewWSTokenStore(pool)
 
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
@@ -106,7 +123,21 @@ func serve() error {
 	// and stacking chi's competing convention on top would give every
 	// request two different request-identity mechanisms.
 	router.Get("/health", healthHandler(pool, cfg.Timeouts))
-	router.Get("/sessions/{sessionID}/ws", wshub.NewSandboxHandler(registry, sandboxStore, cfg.Timeouts))
+	router.Get("/sessions/{sessionID}/ws", wshub.NewHandler(
+		wshub.NewSandboxHandler(registry, sandboxStore, cfg.Timeouts),
+		wshub.NewClientHandler(registry, sessionStore, turnStore, sandboxStore, eventStore, artifactStore, wsTokenStore, hub, cfg.Timeouts),
+	))
+
+	// REST routes the UI needs (§6.3, Step 19's own plan row: "create/get/
+	// events/artifacts", + ws-token named separately by §6.2). Every REST
+	// endpoint here is genuinely open/unauthenticated today -- see
+	// internal/adapters/inbound/httpapi/doc.go's own auth-gap writeup
+	// (Step 20, "auth v1", is what fixes this).
+	router.Post("/api/sessions", httpapi.CreateSession(sessionStore))
+	router.Get("/api/sessions/{sessionID}", httpapi.GetSession(sessionStore))
+	router.Get("/api/sessions/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
+	router.Get("/api/sessions/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
+	router.Post("/api/sessions/{sessionID}/ws-token", httpapi.MintWSToken(sessionStore, wsTokenStore, cfg.Timeouts))
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,

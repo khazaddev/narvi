@@ -575,3 +575,12 @@ type User struct {
 	Disabled     bool               `json:"disabled"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
+
+type WsToken struct {
+	ID        pgtype.UUID        `json:"id"`
+	SessionID pgtype.UUID        `json:"session_id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	TokenHash string             `json:"token_hash"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
