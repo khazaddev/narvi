@@ -80,15 +80,36 @@ jobs:
 
       # TEMPORARY diagnostic step -- to be removed once the real cause of
       # the opencode-serve health-check timeout on this runner is found.
-      # Manually running `opencode serve` directly on this exact runner
-      # (a prior version of this same diagnostic step) became healthy in
-      # ~2s -- ruling out a broken binary/install. This step instead runs
-      # the real Go-side spawn path (supervisor.Spawn + opencodeproc.Spawn,
-      # freePort's own bind-then-release-then-rebind) for ONE isolated
-      # test, with nothing else in the suite running concurrently, to
-      # confirm or rule out cross-package test concurrency as the trigger.
-      - name: Debug OpenCode serve (isolated Go spawn path)
-        run: go test -race -count=1 -v -run TestSpawn_RealBinary ./internal/sandboxagent/opencodeproc/...
+      # Already confirmed: (1) manually running `opencode serve` from the
+      # checkout dir on this exact runner succeeds in ~2s (rules out a
+      # broken binary/install); (2) the real Go spawn path
+      # (supervisor.Spawn + opencodeproc.Spawn) fails identically even
+      # completely ISOLATED (no other test running concurrently) -- rules
+      # out cross-package test concurrency as the trigger. This step
+      # isolates the one remaining variable between (1) and (2): the
+      # working directory -- opencodeproc.Spawn's own test passes an
+      # empty t.TempDir(), while the earlier manual success ran from the
+      # checkout dir instead. Everything else here matches that earlier
+      # successful manual run (fixed port, plain background job, output
+      # to a file).
+      - name: Debug OpenCode serve (from empty tempdir)
+        run: |
+          set +e
+          WORKDIR=$(mktemp -d)
+          echo "workdir: $WORKDIR"
+          cd "$WORKDIR"
+          opencode serve --port 4322 --hostname 127.0.0.1 > /tmp/opencode-debug2.log 2>&1 &
+          OC_PID=$!
+          for i in $(seq 1 10); do
+            sleep 1
+            echo "--- attempt $i (pid $OC_PID alive: $(kill -0 $OC_PID 2>/dev/null && echo yes || echo no)) ---"
+            curl -sv --max-time 2 http://127.0.0.1:4322/api/health
+            echo ""
+          done
+          echo "--- opencode serve log ---"
+          cat /tmp/opencode-debug2.log
+          kill $OC_PID 2>/dev/null
+          true
 
       - name: Vet
         run: make vet
