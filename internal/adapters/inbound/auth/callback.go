@@ -1,0 +1,436 @@
+package auth
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/oauth2"
+
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/platform"
+)
+
+// githubUser is the subset of GET /user's response body this Step reads
+// (verified live against docs.github.com during this Step's design
+// phase): id (int64) and login (string). The response also carries a
+// top-level, nullable "email" field -- deliberately NEVER read here: it
+// may be unverified, so githubEmail (below), fetched from the SEPARATE
+// /user/emails endpoint, is the ONLY source of the verified primary email
+// this package trusts.
+type githubUser struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+	Name  string `json:"name"`
+}
+
+// githubEmail is one entry of GET /user/emails's response array (verified
+// live against docs.github.com). Only an entry with Primary && Verified is
+// ever trusted as the user's real email -- see fetchVerifiedPrimaryEmail.
+type githubEmail struct {
+	Email    string `json:"email"`
+	Primary  bool   `json:"primary"`
+	Verified bool   `json:"verified"`
+}
+
+// CallbackOutcome names each distinct branch NewCallbackHandler's own flow
+// can take. Used only in server-side log lines (see this package's own
+// security note: the HTTP response body never distinguishes WHY a request
+// was rejected, so an attacker probing the endpoint gets no differential
+// signal beyond the status code) and by this package's own tests.
+type CallbackOutcome string
+
+// The full outcome table (see doc.go for the complete branch-by-branch
+// writeup).
+const (
+	OutcomeReturningUser    CallbackOutcome = "returning_user"
+	OutcomeFirstTimeAllowed CallbackOutcome = "first_time_allowed"
+	OutcomeFirstTimeDenied  CallbackOutcome = "first_time_denied"
+	OutcomeNoVerifiedEmail  CallbackOutcome = "no_verified_email"
+	OutcomeStateMismatch    CallbackOutcome = "state_mismatch"
+	OutcomeExchangeFailed   CallbackOutcome = "exchange_failed"
+)
+
+// NewCallbackHandler backs GET /auth/github/callback (§13.1/§13.2/§13.4).
+// See doc.go for the complete outcome table this flow implements.
+//
+// apiBaseURL is an overridable parameter -- NEVER a hardcoded
+// "https://api.github.com" literal in this function body -- specifically
+// so this Step's own tests can point it at a local httptest.Server
+// standing in for GitHub's REST API (§13's own design decision 12).
+// Production wiring (cmd/control-plane/main.go) passes the real
+// "https://api.github.com".
+//
+// pool and initialAdminEmails are threaded through in addition to the
+// stores/allowlist/etc. named directly by this Step's own design decisions:
+// pool is what lets the first-time-sign-in branch run UserStore.Create and
+// IdentityStore.Create inside ONE real Postgres transaction (§13.1: "in ONE
+// transaction"); initialAdminEmails is what lets that same branch decide
+// admin-vs-member at creation time (§13.4: "initial admins set by config").
+func NewCallbackHandler(
+	pool *pgxpool.Pool,
+	oauthConfig *oauth2.Config,
+	users *postgres.UserStore,
+	identities *postgres.IdentityStore,
+	userSessions *postgres.UserSessionStore,
+	allowlist AllowlistConfig,
+	initialAdminEmails []string,
+	tokenEncryptionKey []byte,
+	timeouts platform.Timeouts,
+	secureCookies bool,
+	apiBaseURL string,
+) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		// a. State check: exact-match against the short-lived cookie set by
+		// NewLoginHandler. Missing or mismatched -> 400, the token exchange
+		// is NEVER attempted -- this is exactly the CSRF protection state
+		// exists for.
+		stateCookie, cookieErr := r.Cookie(oauthStateCookieName)
+		queryState := r.URL.Query().Get("state")
+		if cookieErr != nil || stateCookie.Value == "" || stateCookie.Value != queryState {
+			logger.Warn("auth: oauth callback rejected", "outcome", OutcomeStateMismatch)
+			http.Error(w, "invalid or missing oauth state", http.StatusBadRequest)
+			return
+		}
+		// Consumed: clear the state cookie regardless of what happens next,
+		// so it can never be replayed.
+		http.SetCookie(w, expiredCookie(oauthStateCookieName, secureCookies))
+
+		// b. Exchange the code for a token.
+		code := r.URL.Query().Get("code")
+		token, err := oauthConfig.Exchange(ctx, code)
+		if err != nil {
+			// A failed exchange is either a bad/reused code (client-caused)
+			// or a genuine backend/network problem (server-caused) --
+			// x/oauth2 wraps both similarly (a *oauth2.RetrieveError from
+			// GitHub's own token endpoint, or a plain transport error), and
+			// reliably telling them apart would mean heuristically parsing
+			// GitHub's own error body. Simplification, documented honestly
+			// rather than silently picked: this always responds 401,
+			// treating every exchange failure as "the presented code was
+			// not valid" from the caller's point of view.
+			logger.Warn("auth: oauth callback rejected", "outcome", OutcomeExchangeFailed, "error", err)
+			http.Error(w, "oauth exchange failed", http.StatusUnauthorized)
+			return
+		}
+
+		httpClient := oauthConfig.Client(ctx, token)
+		// Never follow redirects automatically: checkOrgMembership's own
+		// fail-closed logic (see that function's doc comment) depends on
+		// observing GitHub's literal 302 status code, not whatever page it
+		// would otherwise redirect to.
+		httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+
+		ghUser, err := fetchGitHubUser(ctx, httpClient, apiBaseURL)
+		if err != nil {
+			logger.Error("auth: fetch github user failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		verifiedEmail, hasVerifiedEmail, err := fetchVerifiedPrimaryEmail(ctx, httpClient, apiBaseURL)
+		if err != nil {
+			logger.Error("auth: fetch github emails failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if !hasVerifiedEmail {
+			logger.Warn("auth: oauth callback rejected", "outcome", OutcomeNoVerifiedEmail, "github_login", ghUser.Login)
+			http.Error(w, "no verified primary email", http.StatusForbidden)
+			return
+		}
+
+		// Encrypt now (never log the plaintext OR the resulting ciphertext
+		// -- see this package's own security notes in doc.go) so both the
+		// returning-user and first-time branches below share one encrypted
+		// value.
+		encryptedToken, err := platform.EncryptToken(tokenEncryptionKey, []byte(token.AccessToken))
+		if err != nil {
+			logger.Error("auth: encrypt provider token failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		externalID := strconv.FormatInt(ghUser.ID, 10)
+
+		var userID pgtype.UUID
+		existing, err := identities.GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderGithub, externalID)
+		switch {
+		case err == nil:
+			// d (returning user): skip the allowlist entirely (§13.1's own
+			// "evaluated at first sign-in" -- re-checking every login would
+			// let a later allowlist tightening silently lock out an
+			// already-provisioned user mid-session, which is not what
+			// "at first sign-in" means).
+			if _, updateErr := identities.UpdateAccessToken(ctx, sqlcgen.UpdateIdentityAccessTokenParams{
+				ID:                   existing.ID,
+				AccessTokenEncrypted: encryptedToken,
+			}); updateErr != nil {
+				logger.Error("auth: update access token failed", "error", updateErr)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			userID = existing.UserID
+			logger.Info("auth: oauth callback", "outcome", OutcomeReturningUser)
+
+		case errors.Is(err, pgx.ErrNoRows):
+			// d (first-time sign-in): evaluate the allowlist.
+			allowed := allowlist.EmailAllowed(verifiedEmail)
+			if !allowed && len(allowlist.GitHubOrgs) > 0 {
+				allowed = checkAnyOrgMembership(ctx, httpClient, apiBaseURL, ghUser.Login, allowlist.GitHubOrgs)
+			}
+			if !allowed {
+				// Deliberately generic: does not say WHICH of the 3
+				// mechanisms almost matched -- that's enumeration
+				// information an attacker could use to probe the
+				// allowlist's own configuration.
+				logger.Warn("auth: oauth callback rejected", "outcome", OutcomeFirstTimeDenied)
+				http.Error(w, "not authorized to sign up", http.StatusForbidden)
+				return
+			}
+
+			createdUserID, createErr := createUserAndIdentity(ctx, pool, users, identities, createUserAndIdentityParams{
+				verifiedEmail:      verifiedEmail,
+				githubLogin:        ghUser.Login,
+				githubName:         ghUser.Name,
+				externalID:         externalID,
+				encryptedToken:     encryptedToken,
+				initialAdminEmails: initialAdminEmails,
+			})
+			if createErr != nil {
+				logger.Error("auth: create user+identity failed", "error", createErr)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			userID = createdUserID
+			logger.Info("auth: oauth callback", "outcome", OutcomeFirstTimeAllowed)
+
+		default:
+			logger.Error("auth: lookup identity failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		// e. Mint a fresh user-session either way.
+		sessionToken, err := platform.GenerateToken()
+		if err != nil {
+			logger.Error("auth: generate user-session token failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		expiresAt := time.Now().Add(timeouts.UserSessionTTL)
+		if _, err := userSessions.Create(ctx, sqlcgen.CreateUserSessionParams{
+			UserID:    userID,
+			TokenHash: platform.HashToken(sessionToken),
+			ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+		}); err != nil {
+			logger.Error("auth: create user session failed", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
+		http.SetCookie(w, platform.WithAuthSessionCookie(sessionToken, expiresAt, secureCookies))
+		// There is no SPA to land on yet -- Phase 6 is what makes "/" a
+		// meaningful landing page. This redirect target is an intentional,
+		// forward-compatible interim behavior, not a bug.
+		http.Redirect(w, r, "/", http.StatusFound)
+	}
+}
+
+// createUserAndIdentityParams bundles createUserAndIdentity's inputs,
+// avoiding an unwieldy positional-argument list.
+type createUserAndIdentityParams struct {
+	verifiedEmail      string
+	githubLogin        string
+	githubName         string
+	externalID         string
+	encryptedToken     []byte
+	initialAdminEmails []string
+}
+
+// createUserAndIdentity runs the first-time-sign-in write path: a users row
+// then an identities row, in ONE Postgres transaction (§13.1's own explicit
+// requirement) so a failure partway through never leaves an orphaned user
+// with no identity or vice versa.
+func createUserAndIdentity(ctx context.Context, pool *pgxpool.Pool, users *postgres.UserStore, identities *postgres.IdentityStore, p createUserAndIdentityParams) (pgtype.UUID, error) {
+	role := sqlcgen.UserRoleMember
+	for _, adminEmail := range p.initialAdminEmails {
+		if strings.EqualFold(adminEmail, p.verifiedEmail) {
+			role = sqlcgen.UserRoleAdmin
+			break
+		}
+	}
+
+	displayName := p.githubLogin
+	if p.githubName != "" {
+		displayName = p.githubName
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("auth: begin user-creation tx: %w", err)
+	}
+	// Rollback is a safety net for every return path other than a
+	// successful Commit below; pgx reports (and this discards) an
+	// already-closed-transaction error on the no-op case where Commit
+	// already ran -- same pattern as app/sessionactor's own transact.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	createdUser, err := users.WithTx(tx).Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: p.verifiedEmail,
+		DisplayName:  displayName,
+		Role:         role,
+	})
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("auth: create user: %w", err)
+	}
+
+	// linked_via="admin" is a slight overload here (nothing about this
+	// sign-in is admin-initiated) but is the least-wrong of the 3 existing
+	// identity_linked_via enum values for "no real linking algorithm ran,
+	// this identity was simply created": auto_email specifically means
+	// "matched an ALREADY-existing user's OTHER identity by email" (§13.2's
+	// own auto-linking algorithm, Step 39's job, not built yet); prompt
+	// means a human was asked to confirm a link (also Step 39). This is a
+	// deliberate, documented Step 39 hand-off note, not a silent choice.
+	if _, err := identities.WithTx(tx).Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:               createdUser.ID,
+		Provider:             sqlcgen.IdentityProviderGithub,
+		ExternalID:           p.externalID,
+		Email:                &p.verifiedEmail,
+		EmailVerified:        true,
+		LinkedVia:            sqlcgen.IdentityLinkedViaAdmin,
+		AccessTokenEncrypted: p.encryptedToken,
+	}); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("auth: create identity: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("auth: commit user-creation tx: %w", err)
+	}
+
+	return createdUser.ID, nil
+}
+
+// fetchGitHubUser calls GET {apiBaseURL}/user with client (already carrying
+// the signing-in user's bearer token via oauthConfig.Client).
+func fetchGitHubUser(ctx context.Context, client *http.Client, apiBaseURL string) (githubUser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL+"/user", nil)
+	if err != nil {
+		return githubUser{}, fmt.Errorf("build /user request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return githubUser{}, fmt.Errorf("GET /user: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return githubUser{}, fmt.Errorf("GET /user: unexpected status %d", resp.StatusCode)
+	}
+
+	var u githubUser
+	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		return githubUser{}, fmt.Errorf("decode /user response: %w", err)
+	}
+	return u, nil
+}
+
+// fetchVerifiedPrimaryEmail calls GET {apiBaseURL}/user/emails and returns
+// the entry with Primary && Verified, if any. A false second return means
+// no such entry exists -- callers must treat this as an allowlist/signup
+// FAILURE, never fall back to githubUser's own unverified top-level email
+// field (see githubUser's own doc comment).
+func fetchVerifiedPrimaryEmail(ctx context.Context, client *http.Client, apiBaseURL string) (string, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL+"/user/emails", nil)
+	if err != nil {
+		return "", false, fmt.Errorf("build /user/emails request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false, fmt.Errorf("GET /user/emails: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", false, fmt.Errorf("GET /user/emails: unexpected status %d", resp.StatusCode)
+	}
+
+	var emails []githubEmail
+	if err := json.NewDecoder(resp.Body).Decode(&emails); err != nil {
+		return "", false, fmt.Errorf("decode /user/emails response: %w", err)
+	}
+
+	for _, e := range emails {
+		if e.Primary && e.Verified {
+			return e.Email, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// checkAnyOrgMembership reports whether the signing-in user (identified by
+// username, using their OWN token via client) is a member of ANY org in
+// orgs -- a single 204 from any configured org is enough to pass (§13's
+// own design decision 8).
+func checkAnyOrgMembership(ctx context.Context, client *http.Client, apiBaseURL, username string, orgs []string) bool {
+	for _, org := range orgs {
+		if checkOrgMembership(ctx, client, apiBaseURL, org, username) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkOrgMembership calls GET {apiBaseURL}/orgs/{org}/members/{username}
+// using the SIGNING-IN user's own token (checking their OWN membership,
+// never anyone else's).
+//
+// GitHub's own documented status-code semantics here (verified live
+// against docs.github.com during this Step's design phase) are a real
+// quirk worth getting right: 204 = the requester is an org member AND the
+// checked user is a member; 404 = the requester is an org member but the
+// checked user is NOT a member; 302 = the REQUESTER is not themselves a
+// member of that org AT ALL (meaning if the signing-in user isn't
+// privileged in that org, GitHub returns a redirect instead of a clean
+// 404).
+//
+// Since this function only ever checks "is the signing-in user themselves
+// a member of one of the configured allowed orgs" (using that SAME user's
+// own token, requester == checked user), it treats literally ANY response
+// other than exactly 204 (302, 404, or any transport/decode error) as "not
+// a member of this org" -- fail-closed, and deliberately does NOT
+// special-case 302 differently from 404: either way, the answer to "is
+// this user a member" is no from this endpoint's own point of view for the
+// one case this function is ever used for.
+func checkOrgMembership(ctx context.Context, client *http.Client, apiBaseURL, org, username string) bool {
+	url := apiBaseURL + "/orgs/" + org + "/members/" + username
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return resp.StatusCode == http.StatusNoContent
+}

@@ -6,7 +6,9 @@
 // secrets/environments/automations/uploads are NOT this Step's job (see
 // contracts/README.md's own scope note on rest/v1/dtos.schema.json).
 //
-// # Routes (all under /api/sessions, mounted by cmd/control-plane/main.go)
+// # Routes (all under /api/sessions, mounted by cmd/control-plane/main.go,
+// behind internal/adapters/inbound/auth.Middleware as of Step 20 -- see
+// that package's own doc.go)
 //
 //   - POST /api/sessions -- create.go's CreateSession: decodes
 //     restdtos.CreateSessionRequest (body capped via http.MaxBytesReader,
@@ -29,24 +31,25 @@
 //     (platform.HashToken), and responds 200 with
 //     restdtos.WSTokenResponse{Token: <plaintext>, ExpiresAt}.
 //
-// # The auth gap -- resolved honestly, not faked (Step 20 owns the fix)
+// # The auth gap -- resolved (Step 20, "auth v1")
 //
-// No REST/cookie/OAuth auth middleware exists anywhere in this codebase
-// yet -- every endpoint above is genuinely open/unauthenticated today.
-// This is not worked around with a placeholder "system user":
+// Every route above is now mounted behind internal/adapters/inbound/auth.
+// Middleware in cmd/control-plane/main.go: a request with no valid
+// narvi_auth_session cookie gets 401 before reaching any handler in this
+// package. Both of Step 19's own honest gaps are directly closed as a
+// result:
 //
-//   - CreateSession always inserts with created_by: NULL (sessions.
-//     created_by is nullable specifically for this class of gap -- see
-//     migrations/000004_sessions.up.sql's own "bot/automation-created
-//     sessions may have no direct human user" comment, broadened here to
-//     also cover "no auth mechanism exists yet either").
-//   - CreateSessionRequest.prompt is accepted and parsed but NOT acted
-//     upon -- dispatching a first turn needs a real sandbox spawn, Step
-//     21's job ("e2e happy path"), not this one.
-//   - MintWSToken mints a token scoped to the SESSION only, not truly
-//     "per-participant" in the RBAC sense yet (ws_tokens.user_id stays
-//     NULL always) -- no real participant/user concept exists yet to
-//     scope it to. Once Step 20 lands, whoever calls this endpoint would
-//     be a real authenticated user via cookie session, and that identity
-//     is what would populate user_id going forward.
+//   - CreateSession now inserts created_by with the REAL authenticated
+//     caller's id (platform.UserFromContext, resolved via
+//     authenticatedUserID in helpers.go) instead of always NULL.
+//   - MintWSToken now scopes ws_tokens.user_id to the REAL authenticated
+//     caller the same way, instead of always NULL.
+//
+// CreateSessionRequest.prompt is still accepted and parsed but NOT acted
+// upon -- dispatching a first turn needs a real sandbox spawn, Step 21's
+// job ("e2e happy path"), not this one. Wiring participants/presence
+// (§8.11) is still untouched -- a distinct, not-yet-scoped concern, now
+// simply for a cleaner reason ("real user identity exists as of this Step,
+// but presence/multiplayer wiring is its own job") rather than "no auth
+// mechanism exists yet at all".
 package httpapi

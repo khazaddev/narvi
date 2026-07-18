@@ -7,6 +7,15 @@
 // (each DB-touching package builds its own copy of this small helper
 // rather than sharing one across package boundaries, per that package's
 // own precedent). Run via `make test-integration`.
+//
+// As of Step 20 ("auth v1"), every route in this file is mounted behind
+// internal/adapters/inbound/auth.Middleware, exactly like cmd/
+// control-plane/main.go's own real wiring -- every request below now goes
+// through a REAL session (createAuthenticatedUser constructs one directly
+// via the stores: users.Create + identities.Create + userSessions.Create +
+// attaching the resulting cookie, mirroring exactly how Step 19's own
+// createSession helper already bypasses REST for test setup) rather than
+// mocking auth away.
 package httpapi_test
 
 import (
@@ -27,12 +36,14 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -99,14 +110,19 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 }
 
 // testRig bundles a fresh pool + every store + an httptest.Server
-// mounting all 5 REST routes exactly as cmd/control-plane/main.go does.
+// mounting all 5 REST routes exactly as cmd/control-plane/main.go does --
+// including, as of Step 20, auth.Middleware gating the whole /api/sessions
+// group.
 type testRig struct {
-	pool      *pgxpool.Pool
-	sessions  *narvipg.SessionStore
-	events    *narvipg.EventStore
-	artifacts *narvipg.ArtifactStore
-	wsTokens  *narvipg.WSTokenStore
-	server    *httptest.Server
+	pool         *pgxpool.Pool
+	sessions     *narvipg.SessionStore
+	events       *narvipg.EventStore
+	artifacts    *narvipg.ArtifactStore
+	wsTokens     *narvipg.WSTokenStore
+	users        *narvipg.UserStore
+	identities   *narvipg.IdentityStore
+	userSessions *narvipg.UserSessionStore
+	server       *httptest.Server
 }
 
 func newTestRig(t *testing.T) testRig {
@@ -114,19 +130,25 @@ func newTestRig(t *testing.T) testRig {
 	pool := newTestPool(t)
 
 	rig := testRig{
-		pool:      pool,
-		sessions:  narvipg.NewSessionStore(pool),
-		events:    narvipg.NewEventStore(pool),
-		artifacts: narvipg.NewArtifactStore(pool),
-		wsTokens:  narvipg.NewWSTokenStore(pool),
+		pool:         pool,
+		sessions:     narvipg.NewSessionStore(pool),
+		events:       narvipg.NewEventStore(pool),
+		artifacts:    narvipg.NewArtifactStore(pool),
+		wsTokens:     narvipg.NewWSTokenStore(pool),
+		users:        narvipg.NewUserStore(pool),
+		identities:   narvipg.NewIdentityStore(pool),
+		userSessions: narvipg.NewUserSessionStore(pool),
 	}
 
 	router := chi.NewRouter()
-	router.Post("/api/sessions", httpapi.CreateSession(rig.sessions))
-	router.Get("/api/sessions/{sessionID}", httpapi.GetSession(rig.sessions))
-	router.Get("/api/sessions/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
-	router.Get("/api/sessions/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
-	router.Post("/api/sessions/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
+	router.Route("/api/sessions", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateSession(rig.sessions))
+		r.Get("/{sessionID}", httpapi.GetSession(rig.sessions))
+		r.Get("/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
+		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
+		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
+	})
 
 	rig.server = httptest.NewServer(router)
 	t.Cleanup(rig.server.Close)
@@ -143,10 +165,58 @@ func (r testRig) createSession(ctx context.Context, t *testing.T) sqlcgen.Sessio
 	return row
 }
 
+// createAuthenticatedUser builds a real user + linked GitHub identity + a
+// user_sessions row directly via the stores (bypassing the OAuth flow
+// entirely -- internal/adapters/inbound/auth's own package is what
+// integration-tests that flow; this package only needs a REAL, valid
+// session to attach as a cookie), and returns the created user row plus
+// the PLAINTEXT session token.
+func (r testRig) createAuthenticatedUser(ctx context.Context, t *testing.T) (sqlcgen.User, string) {
+	t.Helper()
+
+	externalID := fmt.Sprintf("test-github-id-%d", time.Now().UnixNano())
+	email := externalID + "@example.com"
+
+	user, err := r.users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: email,
+		DisplayName:  "Test User",
+		Role:         sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create test user: %v", err)
+	}
+
+	if _, err := r.identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:        user.ID,
+		Provider:      sqlcgen.IdentityProviderGithub,
+		ExternalID:    externalID,
+		Email:         &email,
+		EmailVerified: true,
+		LinkedVia:     sqlcgen.IdentityLinkedViaAdmin,
+	}); err != nil {
+		t.Fatalf("create test identity: %v", err)
+	}
+
+	token, err := platform.GenerateToken()
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	if _, err := r.userSessions.Create(ctx, sqlcgen.CreateUserSessionParams{
+		UserID:    user.ID,
+		TokenHash: platform.HashToken(token),
+		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(platform.DefaultTimeouts().UserSessionTTL), Valid: true},
+	}); err != nil {
+		t.Fatalf("create test user session: %v", err)
+	}
+
+	return user, token
+}
+
 // doJSON issues method against r.server.URL+path with an optional body,
-// decoding the response body into v (if non-nil) and returning the
-// status code.
-func (r testRig) doJSON(t *testing.T, method, path string, body []byte, v any) int {
+// decoding the response body into v (if non-nil) and returning the status
+// code. If token is non-empty, it is attached as the narvi_auth_session
+// cookie -- pass "" to exercise the no-auth-at-all case.
+func (r testRig) doJSON(t *testing.T, method, path string, body []byte, v any, token string) int {
 	t.Helper()
 
 	var reqBody io.Reader
@@ -159,6 +229,9 @@ func (r testRig) doJSON(t *testing.T, method, path string, body []byte, v any) i
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: platform.AuthSessionCookieName, Value: token})
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -175,10 +248,44 @@ func (r testRig) doJSON(t *testing.T, method, path string, body []byte, v any) i
 	return resp.StatusCode
 }
 
+// --- Auth gate itself ---
+
+// TestRoutes_RequireAuth proves every one of the 5 routes rejects a request
+// with NO narvi_auth_session cookie at all with 401 -- the concrete proof
+// Step 19's old open-access behavior is gone.
+func TestRoutes_RequireAuth(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := rig.createSession(ctx, t)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "CreateSession", method: http.MethodPost, path: "/api/sessions"},
+		{name: "GetSession", method: http.MethodGet, path: "/api/sessions/" + session.ID.String()},
+		{name: "ListEvents", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/events"},
+		{name: "ListArtifacts", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/artifacts"},
+		{name: "MintWSToken", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/ws-token"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			status := rig.doJSON(t, tc.method, tc.path, []byte{}, nil, "" /* no cookie */)
+			if status != http.StatusUnauthorized {
+				t.Errorf("status = %d, want %d (no auth cookie presented)", status, http.StatusUnauthorized)
+			}
+		})
+	}
+}
+
 // --- CreateSession ---
 
 func TestCreateSession_HappyPath(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
 
 	body := []byte(`{
 		"spawnSource": "web",
@@ -190,7 +297,7 @@ func TestCreateSession_HappyPath(t *testing.T) {
 	}`)
 
 	var got restdtos.Session
-	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
 	}
@@ -203,8 +310,13 @@ func TestCreateSession_HappyPath(t *testing.T) {
 	if got.SpawnSource != restdtos.SessionSpawnSourceWeb {
 		t.Errorf("SpawnSource = %q, want %q", got.SpawnSource, restdtos.SessionSpawnSourceWeb)
 	}
-	if got.CreatedBy != nil {
-		t.Errorf("CreatedBy = %v, want nil (no auth mechanism exists yet)", *got.CreatedBy)
+	// The concrete proof Step 19's own "created_by always NULL" gap is
+	// closed: it now matches the REAL authenticated caller's id.
+	if got.CreatedBy == nil {
+		t.Fatal("CreatedBy = nil, want the authenticated user's id")
+	}
+	if *got.CreatedBy != user.ID.String() {
+		t.Errorf("CreatedBy = %q, want %q", *got.CreatedBy, user.ID.String())
 	}
 	if got.Title == nil || *got.Title != "my session" {
 		t.Errorf("Title = %v, want \"my session\"", got.Title)
@@ -214,11 +326,23 @@ func TestCreateSession_HappyPath(t *testing.T) {
 	}
 }
 
-func TestCreateSession_EmptyRepos(t *testing.T) {
+func TestCreateSession_NoAuth(t *testing.T) {
 	rig := newTestRig(t)
 
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, "" /* no cookie */)
+	if status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", status, http.StatusUnauthorized)
+	}
+}
+
+func TestCreateSession_EmptyRepos(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
 	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[],"modelId":null,"planMode":false}`)
-	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
 	}
@@ -226,8 +350,10 @@ func TestCreateSession_EmptyRepos(t *testing.T) {
 
 func TestCreateSession_MalformedBody(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
-	status := rig.doJSON(t, http.MethodPost, "/api/sessions", []byte("not json"), nil)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", []byte("not json"), nil, token)
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
 	}
@@ -235,6 +361,8 @@ func TestCreateSession_MalformedBody(t *testing.T) {
 
 func TestCreateSession_OversizedBody(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
 	// A single "repos[0].name" value well beyond the 1 MiB request-body
 	// cap -- json.Decoder will hit http.MaxBytesReader's own limit before
@@ -242,7 +370,7 @@ func TestCreateSession_OversizedBody(t *testing.T) {
 	huge := strings.Repeat("a", 2<<20) // 2 MiB
 	body := []byte(fmt.Sprintf(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":%q,"url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`, huge))
 
-	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
 	if status != http.StatusRequestEntityTooLarge {
 		t.Errorf("status = %d, want %d", status, http.StatusRequestEntityTooLarge)
 	}
@@ -254,9 +382,10 @@ func TestGetSession_HappyPath(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	session := rig.createSession(ctx, t)
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
 	var got restdtos.Session
-	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String(), nil, &got)
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String(), nil, &got, token)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
@@ -267,8 +396,10 @@ func TestGetSession_HappyPath(t *testing.T) {
 
 func TestGetSession_MalformedID(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
-	status := rig.doJSON(t, http.MethodGet, "/api/sessions/not-a-uuid", nil, nil)
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/not-a-uuid", nil, nil, token)
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
 	}
@@ -276,8 +407,10 @@ func TestGetSession_MalformedID(t *testing.T) {
 
 func TestGetSession_NotFound(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
-	status := rig.doJSON(t, http.MethodGet, "/api/sessions/11111111-1111-1111-1111-111111111111", nil, nil)
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/11111111-1111-1111-1111-111111111111", nil, nil, token)
 	if status != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
 	}
@@ -289,6 +422,7 @@ func TestListEvents_HappyPath(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	session := rig.createSession(ctx, t)
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
 	const total = 3
 	for i := 0; i < total; i++ {
@@ -302,7 +436,7 @@ func TestListEvents_HappyPath(t *testing.T) {
 	}
 
 	var got restdtos.EventsResponse
-	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/events?limit=2", nil, &got)
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/events?limit=2", nil, &got, token)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
@@ -314,7 +448,7 @@ func TestListEvents_HappyPath(t *testing.T) {
 	}
 
 	var page2 restdtos.EventsResponse
-	status = rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/events?cursor="+*got.NextCursor+"&limit=2", nil, &page2)
+	status = rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/events?cursor="+*got.NextCursor+"&limit=2", nil, &page2, token)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
@@ -328,8 +462,10 @@ func TestListEvents_HappyPath(t *testing.T) {
 
 func TestListEvents_SessionNotFound(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
-	status := rig.doJSON(t, http.MethodGet, "/api/sessions/11111111-1111-1111-1111-111111111111/events", nil, nil)
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/11111111-1111-1111-1111-111111111111/events", nil, nil, token)
 	if status != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
 	}
@@ -337,8 +473,10 @@ func TestListEvents_SessionNotFound(t *testing.T) {
 
 func TestListEvents_MalformedSessionID(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
-	status := rig.doJSON(t, http.MethodGet, "/api/sessions/not-a-uuid/events", nil, nil)
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/not-a-uuid/events", nil, nil, token)
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
 	}
@@ -350,6 +488,7 @@ func TestListArtifacts_HappyPath(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	session := rig.createSession(ctx, t)
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
 	if _, err := rig.pool.Exec(ctx,
 		`INSERT INTO artifacts (session_id, type, url) VALUES ($1, 'pr', 'https://example.com/pr/1')`,
@@ -359,7 +498,7 @@ func TestListArtifacts_HappyPath(t *testing.T) {
 	}
 
 	var got restdtos.ArtifactsResponse
-	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/artifacts", nil, &got)
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/artifacts", nil, &got, token)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
@@ -370,8 +509,10 @@ func TestListArtifacts_HappyPath(t *testing.T) {
 
 func TestListArtifacts_SessionNotFound(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
-	status := rig.doJSON(t, http.MethodGet, "/api/sessions/11111111-1111-1111-1111-111111111111/artifacts", nil, nil)
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/11111111-1111-1111-1111-111111111111/artifacts", nil, nil, token)
 	if status != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
 	}
@@ -383,10 +524,11 @@ func TestMintWSToken_HappyPath(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	session := rig.createSession(ctx, t)
+	user, token := rig.createAuthenticatedUser(ctx, t)
 
 	before := time.Now()
 	var got restdtos.WSTokenResponse
-	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/ws-token", []byte{}, &got)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/ws-token", []byte{}, &got, token)
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
@@ -399,9 +541,10 @@ func TestMintWSToken_HappyPath(t *testing.T) {
 		t.Errorf("ExpiresAt = %v, want close to %v", got.ExpiresAt, wantExpiry)
 	}
 
-	// The stored row holds only the HASH, never the plaintext, and is
-	// scoped to this session with a NULL user_id (no auth mechanism
-	// exists yet).
+	// The stored row holds only the HASH, never the plaintext, is scoped
+	// to this session, and -- the concrete proof Step 19's own
+	// "ws_tokens.user_id always NULL" gap is closed -- carries the REAL
+	// authenticated caller's id.
 	stored, err := rig.wsTokens.GetByHash(ctx, platform.HashToken(got.Token))
 	if err != nil {
 		t.Fatalf("GetByHash: %v", err)
@@ -409,15 +552,31 @@ func TestMintWSToken_HappyPath(t *testing.T) {
 	if stored.SessionID != session.ID {
 		t.Errorf("stored.SessionID = %v, want %v", stored.SessionID, session.ID)
 	}
-	if stored.UserID.Valid {
-		t.Error("stored.UserID.Valid = true, want false (NULL)")
+	if !stored.UserID.Valid {
+		t.Fatal("stored.UserID.Valid = false, want true (a real authenticated user)")
+	}
+	if stored.UserID != user.ID {
+		t.Errorf("stored.UserID = %v, want %v", stored.UserID, user.ID)
+	}
+}
+
+func TestMintWSToken_NoAuth(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := rig.createSession(ctx, t)
+
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/ws-token", []byte{}, nil, "" /* no cookie */)
+	if status != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", status, http.StatusUnauthorized)
 	}
 }
 
 func TestMintWSToken_SessionNotFound(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
-	status := rig.doJSON(t, http.MethodPost, "/api/sessions/11111111-1111-1111-1111-111111111111/ws-token", []byte{}, nil)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/11111111-1111-1111-1111-111111111111/ws-token", []byte{}, nil, token)
 	if status != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
 	}
@@ -425,8 +584,10 @@ func TestMintWSToken_SessionNotFound(t *testing.T) {
 
 func TestMintWSToken_MalformedSessionID(t *testing.T) {
 	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
 
-	status := rig.doJSON(t, http.MethodPost, "/api/sessions/not-a-uuid/ws-token", []byte{}, nil)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/not-a-uuid/ws-token", []byte{}, nil, token)
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
 	}

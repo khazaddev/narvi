@@ -27,6 +27,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver, used only for the golang-migrate handle below
 	"golang.org/x/sync/errgroup"
 
+	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
@@ -34,6 +35,14 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
 )
+
+// githubAPIBaseURL is GitHub's own real REST API base, passed to
+// auth.NewCallbackHandler's own apiBaseURL parameter in production wiring.
+// That parameter exists specifically so internal/adapters/inbound/auth's
+// own tests can override it with a local httptest.Server standing in for
+// GitHub's API — this constant is the ONLY place the real
+// "https://api.github.com" literal appears in this binary's wiring.
+const githubAPIBaseURL = "https://api.github.com"
 
 // This is intentionally a bare-bones dispatch, not a flag-parsing library:
 // there is exactly one subcommand today ("serve"). Anything else prints a
@@ -115,6 +124,25 @@ func serve() error {
 	artifactStore := postgres.NewArtifactStore(pool)
 	wsTokenStore := postgres.NewWSTokenStore(pool)
 
+	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
+	// OAuth login, backend-issued session cookies, and route middleware --
+	// see internal/adapters/inbound/auth's own doc.go for the full writeup.
+	userStore := postgres.NewUserStore(pool)
+	identityStore := postgres.NewIdentityStore(pool)
+	userSessionStore := postgres.NewUserSessionStore(pool)
+
+	oauthConfig := auth.NewGitHubOAuthConfig(*cfg)
+	allowlist := auth.AllowlistConfig{
+		EmailDomains: cfg.AllowedEmailDomains,
+		GitHubOrgs:   cfg.AllowedGitHubOrgs,
+		Emails:       cfg.AllowedEmails,
+	}
+	// A cookie marked Secure is simply never sent over plain http://,
+	// which is exactly what a local dev loop needs relaxed — everywhere
+	// else (staging, production) it must always be true (§13.1, see
+	// internal/platform/authcookie.go's own doc comment).
+	secureCookies := cfg.Stage != platform.StageDevelopment
+
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
 	router.Use(platform.CorrelationIDMiddleware)
@@ -128,16 +156,46 @@ func serve() error {
 		wshub.NewClientHandler(registry, sessionStore, turnStore, sandboxStore, eventStore, artifactStore, wsTokenStore, hub, cfg.Timeouts),
 	))
 
+	// Auth routes (§13.1/§13.4, Step 20): how a session is obtained/
+	// discarded in the first place, so — obviously — mounted OUTSIDE any
+	// auth gate. See internal/adapters/inbound/auth's own doc.go for the
+	// full routes/outcome-table writeup.
+	router.Get("/auth/github/login", auth.NewLoginHandler(oauthConfig, cfg.Timeouts, secureCookies))
+	router.Get("/auth/github/callback", auth.NewCallbackHandler(
+		pool,
+		oauthConfig,
+		userStore,
+		identityStore,
+		userSessionStore,
+		allowlist,
+		cfg.InitialAdminEmails,
+		cfg.TokenEncryptionKey,
+		cfg.Timeouts,
+		secureCookies,
+		githubAPIBaseURL,
+	))
+	router.Post("/auth/logout", auth.NewLogoutHandler(userSessionStore, secureCookies))
+
 	// REST routes the UI needs (§6.3, Step 19's own plan row: "create/get/
-	// events/artifacts", + ws-token named separately by §6.2). Every REST
-	// endpoint here is genuinely open/unauthenticated today -- see
-	// internal/adapters/inbound/httpapi/doc.go's own auth-gap writeup
-	// (Step 20, "auth v1", is what fixes this).
-	router.Post("/api/sessions", httpapi.CreateSession(sessionStore))
-	router.Get("/api/sessions/{sessionID}", httpapi.GetSession(sessionStore))
-	router.Get("/api/sessions/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
-	router.Get("/api/sessions/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
-	router.Post("/api/sessions/{sessionID}/ws-token", httpapi.MintWSToken(sessionStore, wsTokenStore, cfg.Timeouts))
+	// events/artifacts", + ws-token named separately by §6.2), all gated
+	// behind auth.Middleware as of Step 20 — see
+	// internal/adapters/inbound/httpapi/doc.go's own updated writeup. This
+	// is a "must be logged in" gate only: it does not apply to /health or
+	// to GET /sessions/{sessionID}/ws above, which already has its OWN,
+	// type-specific auth (the sandbox half's header-bearer-token handshake
+	// and the client half's own post-upgrade ws-token subscribe message,
+	// both Step 18/19's own precedent, untouched) — gating the WS UPGRADE
+	// itself behind a cookie check would break the sandbox-agent's own
+	// connection, which carries no cookie at all, only its own
+	// Authorization header.
+	router.Route("/api/sessions", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateSession(sessionStore))
+		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
+		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
+		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
+		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(sessionStore, wsTokenStore, cfg.Timeouts))
+	})
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,

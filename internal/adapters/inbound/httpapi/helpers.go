@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // maxRequestBodyBytes bounds every JSON request body this package decodes
@@ -50,4 +52,33 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// authenticatedUserID resolves platform.UserFromContext(r.Context()) into a
+// pgtype.UUID -- the real authenticated caller's id, now that every route
+// in this package is mounted behind internal/adapters/inbound/auth.
+// Middleware (Step 20, "auth v1"; see doc.go's own updated writeup). Writes
+// a 500 response (logging the failure server-side) and returns ok=false if
+// either the context lookup fails (should never happen for a request
+// routed behind that middleware, but defended against anyway rather than
+// silently proceeding with a NULL that could have been avoided) or the
+// stored id string fails to parse as a UUID.
+func authenticatedUserID(w http.ResponseWriter, r *http.Request) (pgtype.UUID, bool) {
+	ctx := r.Context()
+	logger := platform.Logger(ctx)
+
+	authUser, ok := platform.UserFromContext(ctx)
+	if !ok {
+		logger.Error("httpapi: no authenticated user in context (route not mounted behind auth.Middleware?)")
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return pgtype.UUID{}, false
+	}
+
+	var id pgtype.UUID
+	if err := id.Scan(authUser.ID); err != nil {
+		logger.Error("httpapi: parse authenticated user id failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return pgtype.UUID{}, false
+	}
+	return id, true
 }

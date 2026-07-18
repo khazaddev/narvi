@@ -69,13 +69,20 @@
 //     false) and its events DO get persisted/bump liveness
 //     (internal/app/sessionactor's own handleSandboxEvent), but no
 //     recovery transition fires for it.
-//   - Real user auth/identity does not exist anywhere in this codebase
-//     yet (Step 20, "auth v1") -- ws-tokens (this Step) are minted and
-//     verified WITHOUT any real per-user/per-participant scoping
-//     (ws_tokens.user_id is always NULL); participants stays completely
+//   - Real user auth/identity now exists (Step 20, "auth v1") -- REST
+//     ws-token minting (internal/adapters/inbound/httpapi's own
+//     MintWSToken) is gated behind internal/adapters/inbound/auth.
+//     Middleware and scopes ws_tokens.user_id to the real authenticated
+//     caller. This package's own client-WS subscribe-time verification
+//     (client.go) is UNCHANGED by that Step: it still only checks the
+//     presented ws-token's hash against ws_tokens, never anything
+//     per-participant beyond that. participants stays completely
 //     untouched (SubscribedPayload.participants is always an empty
-//     array) -- see internal/adapters/inbound/httpapi/doc.go for the full
-//     writeup of this same gap on the REST/minting side.
+//     array) -- real user identity existing now is not the same as
+//     multiplayer/presence being wired, which is its own, distinct,
+//     not-yet-scoped concern (§8.11) -- see
+//     internal/adapters/inbound/httpapi/doc.go and
+//     internal/adapters/inbound/auth/doc.go for the full writeup.
 //   - Cross-pod broadcast fan-out is NOT solved here: *Hub only ever
 //     reaches connections registered in the SAME process as the actor
 //     that persisted the event -- the same class of honest gap as

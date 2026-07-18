@@ -485,14 +485,15 @@ type Event struct {
 }
 
 type Identity struct {
-	ID            pgtype.UUID        `json:"id"`
-	UserID        pgtype.UUID        `json:"user_id"`
-	Provider      IdentityProvider   `json:"provider"`
-	ExternalID    string             `json:"external_id"`
-	Email         *string            `json:"email"`
-	EmailVerified bool               `json:"email_verified"`
-	LinkedVia     IdentityLinkedVia  `json:"linked_via"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	ID                   pgtype.UUID        `json:"id"`
+	UserID               pgtype.UUID        `json:"user_id"`
+	Provider             IdentityProvider   `json:"provider"`
+	ExternalID           string             `json:"external_id"`
+	Email                *string            `json:"email"`
+	EmailVerified        bool               `json:"email_verified"`
+	LinkedVia            IdentityLinkedVia  `json:"linked_via"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	AccessTokenEncrypted []byte             `json:"access_token_encrypted"`
 }
 
 type Outbox struct {
@@ -574,6 +575,14 @@ type User struct {
 	Role         UserRole           `json:"role"`
 	Disabled     bool               `json:"disabled"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type UserSession struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	TokenHash string             `json:"token_hash"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
 type WsToken struct {

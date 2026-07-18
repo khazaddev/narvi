@@ -359,6 +359,30 @@ type Timeouts struct {
 	// close code 4002 ("token expired"). §6.2 gives this explicitly: "24h
 	// TTL".
 	WSTokenTTL time.Duration
+
+	// --- Step 20 standalone additions: no ordering relationship with
+	// either invariant chain above (or with any prior Step's standalone
+	// additions), so — per those additions' own precedent — plain fields
+	// with sensible defaults, not wired into a fake invariant link.
+
+	// OAuthStateTTL is how long the short-lived narvi_oauth_state cookie
+	// (internal/adapters/inbound/auth's own login handler, §13.1) remains
+	// valid before the CSRF-protection state value it carries is
+	// considered expired (enforced by the cookie's own MaxAge/Expires, so
+	// an abandoned login attempt's browser simply stops sending it). Not
+	// specified in the plan; chosen as 10min — generous for a real browser
+	// round-trip to GitHub and back, short enough that an abandoned login
+	// attempt's own state cookie doesn't linger.
+	OAuthStateTTL time.Duration
+
+	// UserSessionTTL is how long a minted user-session (internal/platform.
+	// GenerateToken, the narvi_auth_session cookie, §13.1) remains valid
+	// before internal/adapters/inbound/auth's own Middleware rejects it.
+	// Not specified in the plan; chosen as 30 days — a fairly standard
+	// "stay signed in" web-app session length given GitHub itself is the
+	// re-authentication backstop and no MFA/step-up flow exists to shorten
+	// it for.
+	UserSessionTTL time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -416,6 +440,9 @@ func DefaultTimeouts() Timeouts {
 
 		ClientSubscribeTimeout: 30 * time.Second, // §6.2, explicit
 		WSTokenTTL:             24 * time.Hour,   // §6.2, explicit
+
+		OAuthStateTTL:  10 * time.Minute,    // not specified; chosen
+		UserSessionTTL: 30 * 24 * time.Hour, // not specified; chosen ("stay signed in" duration)
 	}
 }
 
