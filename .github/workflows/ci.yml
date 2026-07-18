@@ -62,8 +62,21 @@ jobs:
       # paid provider secret to CI is a decision left to the user, not
       # made unilaterally here (see this Step's own report/PR description
       # for the same note).
+      # opencode-ai ships a `postinstall` script (node ./postinstall.mjs)
+      # that does the real work of setting up a working `opencode` binary.
+      # npm's newer supply-chain-security default blocks install-time
+      # lifecycle scripts for packages it hasn't been told to trust ("npm
+      # warn allow-scripts ... not yet covered by allowScripts") -- without
+      # --allow-scripts, that postinstall silently never runs, leaving a
+      # broken `opencode` on PATH and every opencode-serve-spawning test
+      # (this package's own AND internal/sandboxagent/opencodeproc's)
+      # failing with a health-check timeout, not a skip. `npm approve-
+      # scripts` (what the warning itself suggests) does not work for
+      # global installs (no project package.json to record the approval
+      # against, npm/cli#9457) -- the actual fix for a one-off `-g`
+      # install is the --allow-scripts=<pkg> flag.
       - name: Install OpenCode
-        run: npm install -g opencode-ai
+        run: npm install -g --allow-scripts=opencode-ai opencode-ai
 
       - name: Vet
         run: make vet
