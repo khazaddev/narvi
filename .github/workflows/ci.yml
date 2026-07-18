@@ -80,16 +80,15 @@ jobs:
 
       # TEMPORARY diagnostic step -- to be removed once the real cause of
       # the opencode-serve health-check timeout on this runner is found.
-      # A hand-copied reimplementation of opencodeproc.Spawn's own logic
-      # has now passed on THIS runner under every combination tried (plain
-      # go run, -race, and via go test's own harness) -- ruling out broken
-      # binary/install, cross-package concurrency, empty tempdir, freePort,
-      # Setpgid, -race, and the go-test-vs-go-run harness distinction all
-      # individually. This calls the REAL opencodeproc.Spawn/supervisor.New
-      # functions directly instead of a hand-copied reimplementation, in
-      # case the reimplementation itself quietly differs from the real
-      # code somewhere not yet noticed.
-      - name: Debug OpenCode serve (calling the real Spawn function)
+      # Calling the REAL opencodeproc.Spawn function directly (previous
+      # commit) DID reproduce the failure, even though every hand-copied
+      # reimplementation tried before that passed -- proving the real
+      # code's own waitHealthy/healthCheck logic differs from those
+      # reimplementations in some way that matters. This reimplements
+      # waitHealthy with per-attempt tracing (exact same shared long-lived
+      # context across every poll, same 250ms interval as the real code)
+      # to see the ACTUAL failure mode directly instead of inferring it.
+      - name: Debug OpenCode serve (traced waitHealthy loop)
         run: go run ./cmd/debugspawn/
 
       - name: Vet
