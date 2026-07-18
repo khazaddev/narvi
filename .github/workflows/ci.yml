@@ -80,17 +80,17 @@ jobs:
 
       # TEMPORARY diagnostic step -- to be removed once the real cause of
       # the opencode-serve health-check timeout on this runner is found.
-      # Already ruled out: broken binary/install, cross-package test
-      # concurrency, an empty-tempdir working directory, freePort()'s own
-      # bind-close-reuse dance, exec.Cmd's Setpgid:true process-group
-      # setup, and -race (all 3 scenarios in cmd/debugspawn/main.go passed
-      # on THIS exact runner via plain `go run` and `go run -race`). The
-      # one remaining untested difference: running via `go test`'s own
-      # test-binary harness specifically, as opposed to `go run`. This
-      # wraps the exact same 3 scenarios as one real Go test (still no
-      # -race, isolating the harness itself as the last variable).
-      - name: Debug OpenCode serve (same scenarios, via go test)
-        run: go test -count=1 -v ./cmd/debugspawn/
+      # A hand-copied reimplementation of opencodeproc.Spawn's own logic
+      # has now passed on THIS runner under every combination tried (plain
+      # go run, -race, and via go test's own harness) -- ruling out broken
+      # binary/install, cross-package concurrency, empty tempdir, freePort,
+      # Setpgid, -race, and the go-test-vs-go-run harness distinction all
+      # individually. This calls the REAL opencodeproc.Spawn/supervisor.New
+      # functions directly instead of a hand-copied reimplementation, in
+      # case the reimplementation itself quietly differs from the real
+      # code somewhere not yet noticed.
+      - name: Debug OpenCode serve (calling the real Spawn function)
+        run: go run ./cmd/debugspawn/
 
       - name: Vet
         run: make vet
