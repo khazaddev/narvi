@@ -247,6 +247,30 @@ func TestSandboxEventsRoundTrip(t *testing.T) {
 			SnapshotId: "snap-1",
 		})
 	})
+
+	t.Run("SubTaskStart", func(t *testing.T) {
+		roundTrip(t, sch, sandboxws.SubTaskStart{
+			Type:            "sub_task_start",
+			MessageId:       "e18",
+			SessionId:       testSessionID,
+			Gen:             1,
+			SubTaskId:       "prt_subtask1",
+			Label:           "Investigate flaky test",
+			ParentMessageId: "msg_parent1",
+		})
+	})
+
+	t.Run("SubTaskFinish", func(t *testing.T) {
+		roundTrip(t, sch, sandboxws.SubTaskFinish{
+			Type:      "sub_task_finish",
+			MessageId: "e19",
+			SessionId: testSessionID,
+			Gen:       1,
+			AckId:     "sub_task_finish:e19",
+			SubTaskId: "prt_subtask1",
+			Outcome:   sandboxws.SubTaskFinishOutcomeCompleted,
+		})
+	})
 }
 
 // TestStepFinishCostTokensIsObjectNotNumber is the dedicated regression test

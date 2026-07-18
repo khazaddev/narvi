@@ -301,6 +301,28 @@ type Timeouts struct {
 	// SandboxWSReconnectMaxBackoff is the ceiling the exponential backoff
 	// above is capped at. Not specified in the plan; chosen as 30s.
 	SandboxWSReconnectMaxBackoff time.Duration
+
+	// --- Step 17 standalone additions: no ordering relationship with
+	// either invariant chain above (or with any prior Step's standalone
+	// additions), so — per those additions' own precedent — plain fields
+	// with sensible defaults, not wired into a fake invariant link.
+	// SSEInactivityTimeout (Chain A, already above) is deliberately REUSED
+	// for the OpenCode adapter's own SSE-inactivity fallback (§7) rather
+	// than duplicated here — it already exists specifically for this.
+
+	// OpenCodeReadinessTimeout bounds how long
+	// internal/sandboxagent/opencodeproc waits for a freshly-spawned
+	// `opencode serve` process to report healthy (GET /api/health) before
+	// giving up. Not specified in the plan; chosen as 30s — OpenCode's own
+	// startup may need to initialize providers/plugins, generous by the
+	// same reasoning as ServiceReadinessTimeout above.
+	OpenCodeReadinessTimeout time.Duration
+
+	// OpenCodeReadinessPollInterval is how often
+	// internal/sandboxagent/opencodeproc retries the health check while
+	// waiting. Not specified in the plan; chosen as 250ms, matching
+	// ServiceReadinessPollInterval's own precedent exactly.
+	OpenCodeReadinessPollInterval time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -350,6 +372,9 @@ func DefaultTimeouts() Timeouts {
 		SandboxWSDialTimeout:         15 * time.Second, // not specified; chosen
 		SandboxWSReconnectMinBackoff: 1 * time.Second,  // not specified; chosen
 		SandboxWSReconnectMaxBackoff: 30 * time.Second, // not specified; chosen
+
+		OpenCodeReadinessTimeout:      30 * time.Second,       // not specified; chosen (OpenCode startup may init providers/plugins)
+		OpenCodeReadinessPollInterval: 250 * time.Millisecond, // not specified; chosen, matches ServiceReadinessPollInterval
 	}
 }
 

@@ -76,6 +76,12 @@ type Bridge struct {
 	// by SendBootProgress/MarkBootComplete.
 	bootMu        sync.Mutex
 	lastBootPhase *string
+
+	// convMu guards conversationID, read by the heartbeat loop and written
+	// by SetConversationID -- the OpenCode-adapter analogue of bootMu/
+	// lastBootPhase above.
+	convMu         sync.Mutex
+	conversationID *string
 }
 
 // New builds a Bridge for one session, from its full SessionConfig (dial
@@ -137,6 +143,29 @@ func (b *Bridge) setLastBootPhase(phase *string) {
 // main.go's own boot.RunBoot call returns successfully.
 func (b *Bridge) MarkBootComplete() {
 	b.setLastBootPhase(nil)
+}
+
+// SetConversationID updates what the NEXT heartbeat reports as
+// Heartbeat.ConversationId (§6.1: "heartbeat (30s, carries conversation id
+// + last_boot_phase)"). Step 16 hardcoded ConversationId: nil with an
+// explicit "no OpenCode adapter exists yet" comment (see run.go's
+// heartbeatLoop) -- this Step's OpenCode adapter
+// (internal/adapters/outbound/opencode) is that adapter, and
+// cmd/sandbox-agent's own commandHandler calls this once StartTurn returns
+// a real conversation id. Pass nil to clear it back to "no conversation
+// yet" (there is no scenario that currently does this, but the method
+// accepts it for the same reason SendBootProgress/heartbeat's own
+// LastBootPhase is nilable).
+func (b *Bridge) SetConversationID(id *string) {
+	b.convMu.Lock()
+	defer b.convMu.Unlock()
+	b.conversationID = id
+}
+
+func (b *Bridge) getConversationID() *string {
+	b.convMu.Lock()
+	defer b.convMu.Unlock()
+	return b.conversationID
 }
 
 // newMessageID mints a fresh messageId for a Bridge-originated event

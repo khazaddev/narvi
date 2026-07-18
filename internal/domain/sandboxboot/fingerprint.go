@@ -18,4 +18,14 @@ type BootFingerprint struct {
 	// an empty map are not meaningfully different here -- keep it simple,
 	// callers should not distinguish them.
 	RepoSHAs map[string]string
+
+	// OpenCodeVersion is the pinned OpenCode binary version (§7: "Pin the
+	// OpenCode version in the image; record it in the boot fingerprint").
+	// Empty when unknown -- e.g. before OpenCode has been spawned yet
+	// (cfg.SessionConfig is nil, the common dev/test case with nothing to
+	// prompt at all, mirroring RepoSHAs' own "best-effort, discovery
+	// happens later" shape: the DISCOVERY itself is
+	// internal/sandboxagent/opencodeproc's own impure job, this is purely
+	// the plain data field it fills in.
+	OpenCodeVersion string
 }

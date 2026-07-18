@@ -92,7 +92,7 @@
     "Ack": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Acknowledge one of the 5 critical event types by its deterministic ackId (§6.1 ack protocol).",
+      "description": "Acknowledge one of the 6 critical event types by its deterministic ackId (§6.1 ack protocol).",
       "required": ["type", "messageId", "sessionId", "gen", "ackId"],
       "properties": {
         "type": { "type": "string", "const": "ack" },

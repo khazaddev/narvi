@@ -93,11 +93,12 @@ func (s *spyHandler) stopsSnapshot() []sandboxws.Stop {
 // enforce "type" equality/required-ness that would make it awkward to
 // peek at a message without already knowing its exact shape.
 type testEnvelope struct {
-	Type          string  `json:"type"`
-	AckID         string  `json:"ackId"`
-	MessageID     string  `json:"messageId"`
-	Phase         string  `json:"phase"`
-	LastBootPhase *string `json:"lastBootPhase"`
+	Type           string  `json:"type"`
+	AckID          string  `json:"ackId"`
+	MessageID      string  `json:"messageId"`
+	Phase          string  `json:"phase"`
+	LastBootPhase  *string `json:"lastBootPhase"`
+	ConversationID *string `json:"conversationId"`
 }
 
 // runInBackground launches bridge.Run(ctx) through an errgroup (never a
@@ -784,6 +785,82 @@ func TestHeartbeat_TracksBootPhaseAndClearsOnComplete(t *testing.T) {
 	}
 	if !sawClearedPhase {
 		t.Fatal("never observed a heartbeat with lastBootPhase = null after MarkBootComplete")
+	}
+
+	cancel()
+	if err := wait(); err != nil {
+		t.Errorf("Run() error = %v, want nil after ctx cancellation", err)
+	}
+}
+
+func TestHeartbeat_TracksConversationID(t *testing.T) {
+	t.Parallel()
+
+	msgCh := make(chan []byte, 32)
+
+	script := func(conn *websocket.Conn) {
+		for {
+			_, data, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			msgCh <- data
+		}
+	}
+
+	fake := &stepServer{steps: []func(*websocket.Conn){script}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	bridge := wsbridge.New(testSessionConfig(server.URL), "sbx-1", noopHandler{},
+		testDialTimeout, testShortHeartbeat, testMinBackoff, testMaxBackoff)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wait := runInBackground(ctx, bridge)
+
+	// First message is "ready"; drain it.
+	readyData := waitChan(t, msgCh, testWait)
+	var readyEnv testEnvelope
+	if err := json.Unmarshal(readyData, &readyEnv); err != nil || readyEnv.Type != "ready" {
+		t.Fatalf("first message = %s, want a ready event", readyData)
+	}
+
+	// Before any SetConversationID call, every heartbeat carries a null
+	// conversationId -- events.schema.json's own Heartbeat.ConversationId
+	// doc comment: "Null before the first turn has started a conversation."
+	var sawNullConversationID bool
+	deadline := time.Now().Add(testWait)
+	for time.Now().Before(deadline) && !sawNullConversationID {
+		data := waitChan(t, msgCh, testWait)
+		var env testEnvelope
+		if err := json.Unmarshal(data, &env); err != nil {
+			t.Fatalf("malformed message: %v", err)
+		}
+		if env.Type == "heartbeat" && env.ConversationID == nil {
+			sawNullConversationID = true
+		}
+	}
+	if !sawNullConversationID {
+		t.Fatal("never observed a heartbeat with conversationId = null before SetConversationID")
+	}
+
+	convID := "ses_abc123"
+	bridge.SetConversationID(&convID)
+
+	var sawTrackedConversationID bool
+	deadline = time.Now().Add(testWait)
+	for time.Now().Before(deadline) && !sawTrackedConversationID {
+		data := waitChan(t, msgCh, testWait)
+		var env testEnvelope
+		if err := json.Unmarshal(data, &env); err != nil {
+			t.Fatalf("malformed message: %v", err)
+		}
+		if env.Type == "heartbeat" && env.ConversationID != nil && *env.ConversationID == convID {
+			sawTrackedConversationID = true
+		}
+	}
+	if !sawTrackedConversationID {
+		t.Fatalf("never observed a heartbeat with conversationId = %q after SetConversationID", convID)
 	}
 
 	cancel()

@@ -46,6 +46,25 @@ jobs:
         run: npm ci
         working-directory: contracts
 
+      # Step 17 (§7): installs the real OpenCode binary so the OpenCode
+      # adapter's own server-only contract tests (spawning it, GET
+      # /api/health, POST /session, GET /event's server.connected
+      # handshake -- no AI provider call, no credential needed) run for
+      # real in CI, not just on a dev machine. This CI runner has no AI
+      # provider configured (no OPENAI_API_KEY/ANTHROPIC_API_KEY secret,
+      # and no `opencode auth login` credential store) -- the REAL-
+      # scripted-turn tests (internal/adapters/outbound/opencode's own
+      # TestRealTurn_* tests) correctly detect that and skip gracefully
+      # rather than fail. This is a deliberate, visible trade-off: those
+      # tests only prove the SSE-translation logic against a real model
+      # response on a machine that HAS a provider configured (verified on
+      # a dev machine during this Step's own design phase) -- adding a
+      # paid provider secret to CI is a decision left to the user, not
+      # made unilaterally here (see this Step's own report/PR description
+      # for the same note).
+      - name: Install OpenCode
+        run: npm install -g opencode-ai
+
       - name: Vet
         run: make vet
 

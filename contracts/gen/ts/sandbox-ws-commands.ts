@@ -108,7 +108,7 @@ export interface Shutdown {
   gen: number;
 }
 /**
- * Acknowledge one of the 5 critical event types by its deterministic ackId (§6.1 ack protocol).
+ * Acknowledge one of the 6 critical event types by its deterministic ackId (§6.1 ack protocol).
  */
 export interface Ack {
   type: 'ack';

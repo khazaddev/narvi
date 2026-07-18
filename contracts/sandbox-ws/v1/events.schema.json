@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://narvi.dev/contracts/sandbox-ws/v1/events.schema.json",
   "title": "SandboxEvent",
-  "description": "sandbox-agent -> control-plane WS events (technical plan §6.1). Every event carries the common envelope (type, messageId, sessionId, gen). The 5 CRITICAL types (execution_complete, error, snapshot_ready, push_complete, push_error) additionally require ackId, deterministically formatted '{type}:{messageId}' (enforced here via both a description and a per-type 'pattern' anchored on the literal type prefix) so the ack protocol (§6.1: sender buffers 1000 events, evicts oldest non-critical, re-sends on reconnect until acked; receiver dedupes by upsert-on-messageId) can redeliver them exactly once. Field nullability convention: a property documented as 'nullable' is a REQUIRED key whose value may be JSON null, EXCEPT step_finish's cost.tokens.cached and cost.usd — §6.1 only specifies that 'tokens is an object, not a number'; the {input, output, cached?, usd?} breakdown and which of those sub-fields are optional is this contract's own invention, not literally specified by the technical plan.",
+  "description": "sandbox-agent -> control-plane WS events (technical plan §6.1). Every event carries the common envelope (type, messageId, sessionId, gen). The 6 CRITICAL types (execution_complete, error, snapshot_ready, push_complete, push_error, sub_task_finish) additionally require ackId, deterministically formatted '{type}:{messageId}' (enforced here via both a description and a per-type 'pattern' anchored on the literal type prefix) so the ack protocol (§6.1: sender buffers 1000 events, evicts oldest non-critical, re-sends on reconnect until acked; receiver dedupes by upsert-on-messageId) can redeliver them exactly once. sub_task_finish (§7.1) joins the critical set because it closes an 'active' state the UI tracks (a live sub-lane count) exactly like execution_complete does at the turn level — a dropped, never-redelivered sub_task_finish would leave a sub-lane stuck active forever. Field nullability convention: a property documented as 'nullable' is a REQUIRED key whose value may be JSON null, EXCEPT step_finish's cost.tokens.cached and cost.usd — §6.1 only specifies that 'tokens is an object, not a number'; the {input, output, cached?, usd?} breakdown and which of those sub-fields are optional is this contract's own invention, not literally specified by the technical plan.",
   "$defs": {
     "Ready": {
       "type": "object",
@@ -287,6 +287,40 @@
         },
         "snapshotId": { "type": "string" }
       }
+    },
+    "SubTaskStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "§7.1: brackets a spawned sub-task's lifetime. NOT critical (no ackId) — only sub_task_finish closes an 'active' state the ack protocol must guarantee delivery of.",
+      "required": ["type", "messageId", "sessionId", "gen", "subTaskId", "label", "parentMessageId"],
+      "properties": {
+        "type": { "type": "string", "const": "sub_task_start" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "subTaskId": { "type": "string", "description": "Stable correlator for this sub-task's lifetime (§7.1), derived from whatever correlator the engine itself exposes (OpenCode's own nested-task id today)." },
+        "label": { "type": "string", "description": "Human-readable sub-task label (e.g. OpenCode's own subtask part 'description' field)." },
+        "parentMessageId": { "type": "string", "description": "The messageId of the enclosing main-lane message whose invocation spawned this sub-task." }
+      }
+    },
+    "SubTaskFinish": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CRITICAL (requires ackId). §7.1: closes an 'active' state the UI tracks (a live sub-lane count), the same criticality reasoning as execution_complete at the turn level.",
+      "required": ["type", "messageId", "sessionId", "gen", "ackId", "subTaskId", "outcome"],
+      "properties": {
+        "type": { "type": "string", "const": "sub_task_finish" },
+        "messageId": { "type": "string" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "gen": { "type": "integer" },
+        "ackId": {
+          "type": "string",
+          "pattern": "^sub_task_finish:.+$",
+          "description": "Deterministic ackId = 'sub_task_finish:{messageId}' (§6.1)."
+        },
+        "subTaskId": { "type": "string", "description": "Same subTaskId this sub-task's own sub_task_start carried." },
+        "outcome": { "type": "string", "enum": ["completed", "failed", "cancelled"], "description": "Reuses the turn's own outcome taxonomy (§3.3, §7.1)." }
+      }
     }
   },
   "oneOf": [
@@ -306,6 +340,8 @@
     { "$ref": "#/$defs/SessionTitle" },
     { "$ref": "#/$defs/Warning" },
     { "$ref": "#/$defs/SandboxErrorEvent" },
-    { "$ref": "#/$defs/SnapshotReady" }
+    { "$ref": "#/$defs/SnapshotReady" },
+    { "$ref": "#/$defs/SubTaskStart" },
+    { "$ref": "#/$defs/SubTaskFinish" }
   ]
 }

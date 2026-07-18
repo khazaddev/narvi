@@ -32,11 +32,40 @@
 // signal cancels ctx, or the control plane sends a "shutdown" command, or
 // the handshake returns a fatal 401/403/404/410 status) converges on the
 // SAME StopAll-based graceful shutdown Step 13 built, except a fatal
-// connect status propagates as run()'s own error instead. prompt/stop/push/
-// snapshot/git_sync_complete are wired to a log-only stub handler --
-// implementing what any of them actually DO is Step 17 (OpenCode adapter,
-// prompt/stop), Step 21 (e2e happy path, push), Step 22 (snapshots &
-// restore, snapshot), and Step 29 (gitstate in-sandbox, git_sync_complete).
+// connect status propagates as run()'s own error instead. As of Step 16,
+// prompt/stop/push/snapshot/git_sync_complete were all wired to a log-only
+// stub handler.
+//
+// Step 17 lands the real OpenCode adapter (internal/adapters/outbound/
+// opencode) and its process-spawning sibling
+// (internal/sandboxagent/opencodeproc): when Config.SessionConfig is
+// present, run() spawns `opencode serve` (via opencodeproc.Spawn, which
+// itself reuses the SAME Supervisor already tracking every other
+// supervised process -- StopAll's own existing graceful shutdown reaps it
+// too, no new cleanup code needed) BEFORE the WS bridge starts accepting
+// commands -- a "prompt" command can arrive as soon as the bridge connects,
+// concurrently with the boot/clone sequence (Step 16's own design), so the
+// adapter must already exist by then. commandHandler.HandlePrompt now
+// launches the actual turn (adapter.StartTurn) on its own goroutine (via
+// this Step's own new commandHandler.group field, an errgroup.Group --
+// never a bare `go` statement, §11) rather than running it inline: wsbridge
+// dispatches HandlePrompt synchronously from its own readLoop, and a turn
+// can run for minutes -- if it blocked readLoop directly, a "stop" command
+// arriving while a turn is in flight would never be read, let alone acted
+// on, defeating Stop's entire purpose. That goroutine deliberately uses
+// run()'s own long-lived, OS-signal-driven ctx (captured in commandHandler
+// at construction), NOT the shorter-lived, per-WS-connection ctx wsbridge's
+// dispatch hands to HandlePrompt/HandleStop -- a turn that outlives a mere
+// WS reconnect must not be aborted just because the connection blipped
+// (the wsbridge ack protocol already handles redelivering the turn's own
+// events across a reconnect independently of whether the turn itself is
+// still running). push/snapshot/git_sync_complete remain the EXACT
+// log-only stubs Step 16 shipped -- Step 21 (e2e happy path, push), Step 22
+// (snapshots & restore, snapshot), and Step 29 (gitstate in-sandbox,
+// git_sync_complete) are each that command's own job, per
+// docs/IMPLEMENTATION_PLAN.md's own Phase 1/2 row assignments (the
+// sandbox-agent-touching Step stream converges again at Step 21, then not
+// again until Step 29).
 package main
 
 import (
@@ -51,10 +80,13 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/opencode"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
 	"github.com/khazaddev/narvi/internal/sandboxagent/gitclone"
+	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
 	"github.com/khazaddev/narvi/internal/sandboxagent/services"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 	"github.com/khazaddev/narvi/internal/sandboxagent/wsbridge"
@@ -138,34 +170,110 @@ func runCredentialHelper(args []string) error {
 	)
 }
 
-// commandHandler is Step 16's own log-only wsbridge.CommandHandler
-// implementation: the WS transport/ack/reconnect/dispatch machinery is
-// this Step's real, tested deliverable (internal/sandboxagent/wsbridge) --
-// what any of these 5 commands actually DOES is each cited Step's own
-// job, confirmed against docs/IMPLEMENTATION_PLAN.md rather than guessed.
-type commandHandler struct{}
+// commandHandler is sandbox-agent's own wsbridge.CommandHandler
+// implementation. Step 16 shipped it as an empty, log-only struct for all
+// 5 commands; Step 17 gives HandlePrompt/HandleStop their real behavior
+// (push/snapshot/git_sync_complete are untouched, still each their own
+// later Step's job, confirmed against docs/IMPLEMENTATION_PLAN.md rather
+// than guessed).
+//
+// A *commandHandler (pointer receiver, unlike Step 16's value-receiver
+// empty struct) because adapter/bridge are populated in TWO phases: run()
+// constructs a *commandHandler with adapter already set, passes it to
+// wsbridge.New as the CommandHandler interface value, THEN sets .bridge on
+// that SAME pointer once the Bridge itself exists -- Bridge and
+// commandHandler each need a reference to the other (HandlePrompt forwards
+// events onto the bridge; the bridge dispatches commands to the handler),
+// so one of the two references must be filled in after construction.
+type commandHandler struct {
+	// adapter is nil exactly when cfg.SessionConfig is nil (see run()) --
+	// HandlePrompt/HandleStop below treat that as "no live session, no
+	// OpenCode to talk to" and log a warning instead of dispatching,
+	// mirroring this Step's own "no real session, no work" precedent from
+	// every prior sandbox-agent Step. In practice a *commandHandler is
+	// only ever constructed at all within that same cfg.SessionConfig !=
+	// nil branch (see run()), so this nil check is defense-in-depth, not
+	// a path this binary's own current wiring can actually reach.
+	adapter *opencode.Adapter
+	bridge  *wsbridge.Bridge
 
-func (commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
-	slog.Info("sandbox-agent: received prompt, not yet implemented (Step 17: OpenCode adapter)",
-		"messageId", cmd.MessageId)
+	// runCtx is run()'s own long-lived, OS-signal-driven context --
+	// deliberately NOT the shorter-lived, per-WS-connection ctx wsbridge's
+	// own dispatch hands to HandlePrompt/HandleStop (see the package doc
+	// comment's own Step 17 paragraph for why: a turn must survive a mere
+	// WS reconnect, not be aborted by one).
+	runCtx context.Context
+
+	// group launches each HandlePrompt's own StartTurn call on its own
+	// goroutine (via errgroup.Group.Go, never a bare `go` statement, §11)
+	// so wsbridge's own readLoop -- which calls HandlePrompt synchronously
+	// -- is never blocked for an entire turn's duration; a "stop" command
+	// arriving mid-turn must still reach HandleStop promptly. Deliberately
+	// a zero-value errgroup.Group, never Wait()'d on except once, at
+	// shutdown (run()'s own final drain) -- the SAME "one launched unit's
+	// own failure/completion must never cancel a sibling's independent
+	// work" reasoning as internal/sandboxagent/supervisor.Supervisor's own
+	// analogous field.
+	group errgroup.Group
 }
 
-func (commandHandler) HandleStop(_ context.Context, cmd sandboxws.Stop) {
-	slog.Info("sandbox-agent: received stop, not yet implemented (Step 17: OpenCode adapter)",
-		"messageId", cmd.MessageId)
+func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
+	if h.adapter == nil {
+		slog.Warn("sandbox-agent: received prompt but no OpenCode adapter is configured (no live session)",
+			"messageId", cmd.MessageId)
+		return
+	}
+
+	h.group.Go(func() error {
+		sink := func(event ports.AgentEvent) {
+			if event.Critical {
+				if err := h.bridge.SendCritical(h.runCtx, event.Payload, event.AckID); err != nil {
+					slog.Warn("sandbox-agent: send critical agent event over WS bridge failed",
+						"messageId", cmd.MessageId, "ackId", event.AckID, "error", err)
+				}
+				return
+			}
+			if err := h.bridge.SendBestEffort(h.runCtx, event.Payload); err != nil {
+				slog.Warn("sandbox-agent: send best-effort agent event over WS bridge failed",
+					"messageId", cmd.MessageId, "error", err)
+			}
+		}
+
+		conversationID, err := h.adapter.StartTurn(h.runCtx, cmd, sink)
+		if conversationID != "" {
+			h.bridge.SetConversationID(&conversationID)
+		}
+		if err != nil {
+			slog.Warn("sandbox-agent: StartTurn returned an error", "messageId", cmd.MessageId, "error", err)
+		}
+		// Never propagate a per-turn error into this shared group -- one
+		// turn's own failure must never affect a sibling launched call.
+		return nil
+	})
 }
 
-func (commandHandler) HandlePush(_ context.Context, cmd sandboxws.Push) {
+func (h *commandHandler) HandleStop(_ context.Context, cmd sandboxws.Stop) {
+	if h.adapter == nil {
+		slog.Warn("sandbox-agent: received stop but no OpenCode adapter is configured (no live session)",
+			"messageId", cmd.MessageId)
+		return
+	}
+	if err := h.adapter.Stop(h.runCtx, cmd); err != nil {
+		slog.Warn("sandbox-agent: Stop failed", "messageId", cmd.MessageId, "error", err)
+	}
+}
+
+func (*commandHandler) HandlePush(_ context.Context, cmd sandboxws.Push) {
 	slog.Info("sandbox-agent: received push, not yet implemented (Step 21: e2e happy path)",
 		"messageId", cmd.MessageId)
 }
 
-func (commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapshot) {
+func (*commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapshot) {
 	slog.Info("sandbox-agent: received snapshot, not yet implemented (Step 22: snapshots & restore)",
 		"messageId", cmd.MessageId)
 }
 
-func (commandHandler) HandleGitSyncComplete(_ context.Context, cmd sandboxws.GitSyncComplete) {
+func (*commandHandler) HandleGitSyncComplete(_ context.Context, cmd sandboxws.GitSyncComplete) {
 	slog.Info("sandbox-agent: received git_sync_complete, not yet implemented (Step 29: gitstate in-sandbox)",
 		"messageId", cmd.MessageId)
 }
@@ -191,8 +299,11 @@ func run() error {
 
 	// §5.3: "sandbox-agent logs a boot fingerprint first" -- this MUST be
 	// the very first line this binary emits; nothing above this point
-	// logs anything.
-	fingerprint := boot.CollectFingerprint(cfg, timeouts.RepoSHADiscoveryTimeout)
+	// logs anything. openCodeVersion is necessarily "" here (§7's own
+	// discovery requires the OpenCode server to already be running, which
+	// hasn't happened yet) -- see the supplementary fingerprint log below,
+	// once it has.
+	fingerprint := boot.CollectFingerprint(cfg, timeouts.RepoSHADiscoveryTimeout, "")
 	slog.Info("sandbox-agent: boot fingerprint",
 		"agent_version", fingerprint.AgentVersion,
 		"image_digest", fingerprint.ImageDigest,
@@ -205,16 +316,78 @@ func run() error {
 
 	sup := supervisor.New()
 
-	// bridge is nil exactly when cfg.SessionConfig is nil (the common dev/
-	// test case with no real session) -- everything below that branches on
-	// "bridge != nil" preserves today's original no-bridge behavior
-	// unchanged in that case. sandboxID is this Step's own HONEST-GAP value
-	// (Config.SandboxID's own doc comment).
-	var bridge *wsbridge.Bridge
+	// agentRuntime is nil exactly when cfg.SessionConfig is nil (the
+	// common dev/test case with no real session) -- there is nothing to
+	// prompt at all, matching this Step's own "no real session, no work"
+	// precedent from every prior sandbox-agent Step. Spawned BEFORE the WS
+	// bridge starts accepting commands (below): a "prompt" command can
+	// arrive as soon as the bridge connects, concurrently with the boot/
+	// clone sequence (Step 16's own design), so the adapter must already
+	// exist by then -- see this file's own package doc comment for the
+	// full reasoning.
+	var agentRuntime *opencode.Adapter
 	if cfg.SessionConfig != nil {
-		bridge = wsbridge.New(*cfg.SessionConfig, cfg.SandboxID, commandHandler{},
+		// opencodeproc.Spawn's own Dir is cfg.WorkspaceDir -- normally
+		// created by gitclone.CloneAll (runBootSequence, below), which
+		// hasn't run yet at this point. Ensure it exists NOW instead of
+		// letting the spawn fail on a nonexistent chdir target; idempotent
+		// (os.MkdirAll no-ops if it already exists) and harmless for
+		// CloneAll's own later MkdirAll call.
+		if err := os.MkdirAll(cfg.WorkspaceDir, 0o755); err != nil {
+			return fmt.Errorf("sandbox-agent: create workspace dir: %w", err)
+		}
+
+		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir,
+			timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
+		if spawnErr != nil {
+			// Best-effort cleanup of whatever sup may already be tracking
+			// -- opencodeproc.Spawn's own internal Supervisor.Spawn call
+			// registers the process before its readiness check even
+			// starts, so a timed-out or crashed process is still known to
+			// sup here -- before failing fast, the same "boot.Load() is
+			// the earliest possible failure" shape as this function's own
+			// very first error path.
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), timeouts.SupervisorShutdownTimeout)
+			_ = sup.StopAll(shutdownCtx, timeouts.ProcessStopGracePeriod)
+			cancel()
+			return fmt.Errorf("sandbox-agent: spawn opencode: %w", spawnErr)
+		}
+
+		agentRuntime = opencode.New(result.BaseURL, timeouts.SSEInactivityTimeout)
+		defer agentRuntime.Close()
+
+		// §7: "Pin the OpenCode version in the image; record it in the
+		// boot fingerprint" -- the FIRST fingerprint log (above)
+		// necessarily reported this as empty; now that OpenCode has
+		// actually been spawned, log a SECOND, supplementary line -- the
+		// SAME "log first with what's known, then a supplementary line
+		// once more is known" pattern Step 15 already established for
+		// repo_shas (see runBootSequence's own post-clone fingerprint
+		// log).
+		postSpawnFingerprint := boot.CollectFingerprint(cfg, timeouts.RepoSHADiscoveryTimeout, result.Version)
+		slog.Info("sandbox-agent: boot fingerprint (post-opencode-spawn)",
+			"opencode_version", postSpawnFingerprint.OpenCodeVersion)
+	}
+
+	// bridge/handler are nil exactly when cfg.SessionConfig is nil --
+	// everything below that branches on "bridge != nil" preserves today's
+	// original no-bridge behavior unchanged in that case. sandboxID is
+	// Step 16's own HONEST-GAP value (Config.SandboxID's own doc comment).
+	//
+	// handler is constructed with adapter already set, passed to
+	// wsbridge.New as the CommandHandler interface value, THEN gets
+	// .bridge set on that SAME pointer once Bridge exists -- see
+	// commandHandler's own doc comment for why this two-phase
+	// construction is necessary (Bridge and commandHandler each need a
+	// reference to the other).
+	var bridge *wsbridge.Bridge
+	var handler *commandHandler
+	if cfg.SessionConfig != nil {
+		handler = &commandHandler{adapter: agentRuntime, runCtx: ctx}
+		bridge = wsbridge.New(*cfg.SessionConfig, cfg.SandboxID, handler,
 			timeouts.SandboxWSDialTimeout, timeouts.SandboxWSHeartbeatInterval,
 			timeouts.SandboxWSReconnectMinBackoff, timeouts.SandboxWSReconnectMaxBackoff)
+		handler.bridge = bridge
 	}
 
 	// reportBootProgress forwards each §6.1 boot_progress event over the
@@ -285,10 +458,21 @@ func run() error {
 		if bridge != nil {
 			bridge.MarkBootComplete()
 		}
-		slog.Info("sandbox-agent: boot sequence complete (partial -- OpenCode adapter: Step 17)")
+		slog.Info("sandbox-agent: boot sequence complete (push: Step 21, snapshot: Step 22, git_sync_complete: Step 29)")
 	}
 
 	runErr := group.Wait()
+
+	// Drain every turn goroutine commandHandler.HandlePrompt launched
+	// (handler.group) before proceeding to the supervised-process shutdown
+	// below -- by this point ctx is already canceled (whatever triggered
+	// the convergence above), so any in-flight StartTurn call is already
+	// unwinding per its own documented ctx-cancellation contract; this is
+	// a bounded wait, not an open-ended one. A nil handler (cfg.
+	// SessionConfig was nil) has nothing to drain.
+	if handler != nil {
+		_ = handler.group.Wait()
+	}
 
 	// Always attempt a bounded graceful shutdown of every supervised
 	// process, regardless of why the above finished -- a fatal WS status or
@@ -365,7 +549,11 @@ func runBootSequence(
 		// so repo_shas actually carries the information §5.3 asks for on
 		// this exact path; nothing about the original "logs first" line is
 		// changed or replaced, this is a second, supplementary log line.
-		postCloneFingerprint := boot.CollectFingerprint(cfg, timeouts.RepoSHADiscoveryTimeout)
+		// openCodeVersion is passed as "" here -- this log line's own
+		// purpose is repo_shas specifically (run()'s own separate
+		// "post-opencode-spawn" supplementary line already covers that
+		// field, logged before runBootSequence is ever called).
+		postCloneFingerprint := boot.CollectFingerprint(cfg, timeouts.RepoSHADiscoveryTimeout, "")
 		slog.Info("sandbox-agent: boot fingerprint (post-clone)",
 			"repo_shas", postCloneFingerprint.RepoSHAs,
 		)
