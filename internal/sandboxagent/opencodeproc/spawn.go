@@ -114,13 +114,33 @@ func waitHealthy(
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
+	// Each individual health-check attempt is bounded well below the
+	// OVERALL readiness deadline (readyCtx), never by it directly. A real,
+	// observed failure mode this fixes: opencode serve's own listener can
+	// start accepting connections promptly while still taking several
+	// seconds to actually service the first few requests (its own
+	// startup work isn't done yet) -- healthCheck previously ran with
+	// readyCtx itself as its request context, so ONE such slow-to-respond
+	// attempt could silently consume most or all of the remaining budget
+	// by itself, leaving only a handful of attempts ever made before the
+	// overall timeout fired, even though the server would have become
+	// healthy well within that same window if polling had continued.
+	// Deriving from readyCtx (not ctx) keeps it correctly bounded by
+	// whatever of the overall deadline remains, never longer.
+	attemptTimeout := timeout / 10
+
 	for {
 		if result, exited := proc.Exited(); exited {
 			return fmt.Errorf("opencodeproc: opencode serve exited before becoming healthy: %s", describeExit(result))
 		}
-		if healthCheck(readyCtx, baseURL) {
+
+		attemptCtx, cancelAttempt := context.WithTimeout(readyCtx, attemptTimeout)
+		healthy := healthCheck(attemptCtx, baseURL)
+		cancelAttempt()
+		if healthy {
 			return nil
 		}
+
 		select {
 		case <-readyCtx.Done():
 			return fmt.Errorf("opencodeproc: opencode serve did not become healthy within %s", timeout)
