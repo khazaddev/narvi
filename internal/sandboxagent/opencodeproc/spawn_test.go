@@ -1,0 +1,97 @@
+package opencodeproc_test
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
+	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+)
+
+// These tests need only the OpenCode SERVER itself (spawning it, hitting
+// /api/health) -- no AI provider call is ever made, so they run
+// unconditionally, no skip needed (starting the server costs nothing and
+// needs no credentials).
+
+func TestSpawn_RealBinary(t *testing.T) {
+	t.Parallel()
+
+	sup := supervisor.New()
+	// A generous 60s test-local readiness bound (well above
+	// platform.Timeouts.OpenCodeReadinessTimeout's own 30s production
+	// default) -- a real dev machine running `go test ./...` under -race
+	// has many OTHER packages' own test binaries compiling/running
+	// concurrently, which was observed to occasionally starve a fresh
+	// opencode serve process past 30s; production spawns exactly one
+	// opencode server per sandbox VM with no such competition.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Registered BEFORE the fallible Spawn call below, deliberately: even
+	// when Spawn's own readiness wait times out, its own internal
+	// sup.Spawn call already registered the OS process with sup the
+	// moment it started, well before any readiness check -- so sup still
+	// knows about it and can still reap it. t.Fatalf calls
+	// runtime.Goexit() immediately; a t.Cleanup registered AFTER an
+	// `if err != nil { t.Fatalf(...) }` check would never run at all on
+	// that path, leaking a real orphaned OS process across test runs.
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		_ = sup.StopAll(stopCtx, 5*time.Second)
+	})
+
+	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), 60*time.Second, 250*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Spawn() error = %v, want nil (real opencode binary should be on PATH)", err)
+	}
+
+	if !strings.HasPrefix(result.BaseURL, "http://127.0.0.1:") {
+		t.Errorf("BaseURL = %q, want an http://127.0.0.1:<port> URL", result.BaseURL)
+	}
+	if result.Version == "" {
+		t.Errorf("Version = %q, want a non-empty version string from the real installed binary", result.Version)
+	}
+	if result.Process == nil {
+		t.Fatal("Process = nil, want a live *supervisor.Process")
+	}
+	if _, exited := result.Process.Exited(); exited {
+		t.Error("Process.Exited() = true immediately after a successful Spawn, want still running")
+	}
+
+	resp, err := http.Get(result.BaseURL + "/api/health")
+	if err != nil {
+		t.Fatalf("GET %s/api/health: %v", result.BaseURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /api/health status = %d, want 200", resp.StatusCode)
+	}
+}
+
+// TestSpawn_BadBinaryPath verifies a nonexistent binary fails cleanly and
+// promptly (bounded, not hanging) -- PATH is overridden to a directory
+// containing no "opencode" executable at all, so exec.Command's own
+// LookPath resolution fails immediately inside supervisor.Spawn, well
+// before Spawn's own readiness-wait loop would ever start.
+func TestSpawn_BadBinaryPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	sup := supervisor.New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), 30*time.Second, 250*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Spawn() error = nil, want a fail-fast error for a nonexistent opencode binary")
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("Spawn() took %s to fail, want a fast, bounded failure (LookPath fails immediately)", elapsed)
+	}
+}

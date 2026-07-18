@@ -151,9 +151,10 @@ func (b *Bridge) runConnection(ctx context.Context, conn *websocket.Conn) error 
 }
 
 // sendReady sends "ready" directly on conn -- deliberately NOT buffered:
-// it is genuinely fresh on every connection (§6.1: "First event on a fresh
-// WS connection"), never something to replay verbatim from a PRIOR
-// connection's buffer.
+// it is genuinely fresh on every connection -- events.schema.json's own
+// Ready doc comment: "First event on a fresh WS connection, once the
+// agent is ready to receive commands" -- never something to replay
+// verbatim from a PRIOR connection's buffer.
 func (b *Bridge) sendReady(ctx context.Context, conn *websocket.Conn) error {
 	msg := sandboxws.Ready{
 		Type:      "ready",
@@ -200,10 +201,11 @@ func (b *Bridge) heartbeatLoop(ctx context.Context, conn *websocket.Conn) error 
 				MessageId: b.newMessageID(),
 				SessionId: b.sessionID,
 				Gen:       b.sessionGen,
-				// ConversationId is always nil for this Step -- no
-				// OpenCode adapter exists yet (Step 17) to ever start a
-				// real conversation. An honest, documented gap, not a bug.
-				ConversationId: nil,
+				// ConversationId reflects whatever SetConversationID last
+				// recorded -- nil until the first turn's own StartTurn call
+				// (internal/adapters/outbound/opencode.Adapter, Step 17)
+				// returns a real OpenCode conversation id.
+				ConversationId: b.getConversationID(),
 				LastBootPhase:  b.getLastBootPhase(),
 				Timestamp:      time.Now(),
 			}

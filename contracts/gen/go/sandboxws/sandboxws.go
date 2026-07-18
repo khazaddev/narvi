@@ -8,7 +8,7 @@ import "reflect"
 import "regexp"
 import "time"
 
-// Acknowledge one of the 5 critical event types by its deterministic ackId (§6.1
+// Acknowledge one of the 6 critical event types by its deterministic ackId (§6.1
 // ack protocol).
 type Ack struct {
 	// The ackId being acknowledged, formatted '{type}:{messageId}' (§6.1).
@@ -1405,6 +1405,174 @@ func (j *Stop) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s: must be equal to %s", "type", "stop")
 	}
 	*j = Stop(plain)
+	return nil
+}
+
+// CRITICAL (requires ackId). §7.1: closes an 'active' state the UI tracks (a live
+// sub-lane count), the same criticality reasoning as execution_complete at the
+// turn level.
+type SubTaskFinish struct {
+	// Deterministic ackId = 'sub_task_finish:{messageId}' (§6.1).
+	AckId string `json:"ackId" yaml:"ackId" mapstructure:"ackId"`
+
+	// Gen corresponds to the JSON schema field "gen".
+	Gen int `json:"gen" yaml:"gen" mapstructure:"gen"`
+
+	// MessageId corresponds to the JSON schema field "messageId".
+	MessageId string `json:"messageId" yaml:"messageId" mapstructure:"messageId"`
+
+	// Reuses the turn's own outcome taxonomy (§3.3, §7.1).
+	Outcome SubTaskFinishOutcome `json:"outcome" yaml:"outcome" mapstructure:"outcome"`
+
+	// SessionId corresponds to the JSON schema field "sessionId".
+	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// Same subTaskId this sub-task's own sub_task_start carried.
+	SubTaskId string `json:"subTaskId" yaml:"subTaskId" mapstructure:"subTaskId"`
+
+	// Type corresponds to the JSON schema field "type".
+	Type string `json:"type" yaml:"type" mapstructure:"type"`
+}
+
+type SubTaskFinishOutcome string
+
+const SubTaskFinishOutcomeCancelled SubTaskFinishOutcome = "cancelled"
+const SubTaskFinishOutcomeCompleted SubTaskFinishOutcome = "completed"
+const SubTaskFinishOutcomeFailed SubTaskFinishOutcome = "failed"
+
+var enumValues_SubTaskFinishOutcome = []interface{}{
+	"completed",
+	"failed",
+	"cancelled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SubTaskFinishOutcome) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_SubTaskFinishOutcome {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_SubTaskFinishOutcome, v)
+	}
+	*j = SubTaskFinishOutcome(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SubTaskFinish) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["ackId"]; raw != nil && !ok {
+		return fmt.Errorf("field ackId in SubTaskFinish: required")
+	}
+	if _, ok := raw["gen"]; raw != nil && !ok {
+		return fmt.Errorf("field gen in SubTaskFinish: required")
+	}
+	if _, ok := raw["messageId"]; raw != nil && !ok {
+		return fmt.Errorf("field messageId in SubTaskFinish: required")
+	}
+	if _, ok := raw["outcome"]; raw != nil && !ok {
+		return fmt.Errorf("field outcome in SubTaskFinish: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in SubTaskFinish: required")
+	}
+	if _, ok := raw["subTaskId"]; raw != nil && !ok {
+		return fmt.Errorf("field subTaskId in SubTaskFinish: required")
+	}
+	if _, ok := raw["type"]; raw != nil && !ok {
+		return fmt.Errorf("field type in SubTaskFinish: required")
+	}
+	type Plain SubTaskFinish
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^sub_task_finish:.+$`, string(plain.AckId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "AckId", `^sub_task_finish:.+$`)
+	}
+	if plain.Type != "sub_task_finish" {
+		return fmt.Errorf("field %s: must be equal to %s", "type", "sub_task_finish")
+	}
+	*j = SubTaskFinish(plain)
+	return nil
+}
+
+// §7.1: brackets a spawned sub-task's lifetime. NOT critical (no ackId) — only
+// sub_task_finish closes an 'active' state the ack protocol must guarantee
+// delivery of.
+type SubTaskStart struct {
+	// Gen corresponds to the JSON schema field "gen".
+	Gen int `json:"gen" yaml:"gen" mapstructure:"gen"`
+
+	// Human-readable sub-task label (e.g. OpenCode's own subtask part 'description'
+	// field).
+	Label string `json:"label" yaml:"label" mapstructure:"label"`
+
+	// MessageId corresponds to the JSON schema field "messageId".
+	MessageId string `json:"messageId" yaml:"messageId" mapstructure:"messageId"`
+
+	// The messageId of the enclosing main-lane message whose invocation spawned this
+	// sub-task.
+	ParentMessageId string `json:"parentMessageId" yaml:"parentMessageId" mapstructure:"parentMessageId"`
+
+	// SessionId corresponds to the JSON schema field "sessionId".
+	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// Stable correlator for this sub-task's lifetime (§7.1), derived from whatever
+	// correlator the engine itself exposes (OpenCode's own nested-task id today).
+	SubTaskId string `json:"subTaskId" yaml:"subTaskId" mapstructure:"subTaskId"`
+
+	// Type corresponds to the JSON schema field "type".
+	Type string `json:"type" yaml:"type" mapstructure:"type"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SubTaskStart) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["gen"]; raw != nil && !ok {
+		return fmt.Errorf("field gen in SubTaskStart: required")
+	}
+	if _, ok := raw["label"]; raw != nil && !ok {
+		return fmt.Errorf("field label in SubTaskStart: required")
+	}
+	if _, ok := raw["messageId"]; raw != nil && !ok {
+		return fmt.Errorf("field messageId in SubTaskStart: required")
+	}
+	if _, ok := raw["parentMessageId"]; raw != nil && !ok {
+		return fmt.Errorf("field parentMessageId in SubTaskStart: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in SubTaskStart: required")
+	}
+	if _, ok := raw["subTaskId"]; raw != nil && !ok {
+		return fmt.Errorf("field subTaskId in SubTaskStart: required")
+	}
+	if _, ok := raw["type"]; raw != nil && !ok {
+		return fmt.Errorf("field type in SubTaskStart: required")
+	}
+	type Plain SubTaskStart
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.Type != "sub_task_start" {
+		return fmt.Errorf("field %s: must be equal to %s", "type", "sub_task_start")
+	}
+	*j = SubTaskStart(plain)
 	return nil
 }
 

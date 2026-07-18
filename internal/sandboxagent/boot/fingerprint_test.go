@@ -62,7 +62,7 @@ func TestCollectFingerprint(t *testing.T) {
 		WorkspaceDir: workspaceDir,
 	}
 
-	fp := boot.CollectFingerprint(cfg, 5*time.Second)
+	fp := boot.CollectFingerprint(cfg, 5*time.Second, "")
 
 	if fp.AgentVersion != cfg.AgentVersion {
 		t.Errorf("AgentVersion = %q, want %q", fp.AgentVersion, cfg.AgentVersion)
@@ -75,6 +75,24 @@ func TestCollectFingerprint(t *testing.T) {
 	}
 	if _, ok := fp.RepoSHAs["repo-a"]; !ok {
 		t.Errorf("RepoSHAs missing repo-a entry: %v", fp.RepoSHAs)
+	}
+	if fp.OpenCodeVersion != "" {
+		t.Errorf("OpenCodeVersion = %q, want empty when not yet discovered", fp.OpenCodeVersion)
+	}
+}
+
+func TestCollectFingerprint_OpenCodeVersion(t *testing.T) {
+	t.Parallel()
+
+	cfg := boot.Config{
+		BootMode:     sandboxboot.BootModeFresh,
+		AgentVersion: "1.2.3",
+		WorkspaceDir: t.TempDir(),
+	}
+
+	fp := boot.CollectFingerprint(cfg, 5*time.Second, "1.17.15")
+	if fp.OpenCodeVersion != "1.17.15" {
+		t.Errorf("OpenCodeVersion = %q, want %q", fp.OpenCodeVersion, "1.17.15")
 	}
 }
 

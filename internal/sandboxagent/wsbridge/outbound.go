@@ -16,7 +16,7 @@ import (
 // SendCritical marshals msg (already a fully-populated concrete
 // contracts/gen/go/sandboxws.* struct, e.g. sandboxws.ExecutionComplete{...}
 // -- this package does not know or care which specific type, only that
-// it's one of the 5 real critical types per events.schema.json, see
+// it's one of the 6 real critical types per events.schema.json, see
 // doc.go) and buffers+sends it under ackID, resent on every future
 // reconnect until the matching "ack{ackId}" command arrives (dispatch.go).
 // A critical (unacked) buffered entry is NEVER evicted -- see buffer.go's
@@ -55,7 +55,7 @@ func (b *Bridge) SendBestEffort(ctx context.Context, msg any) error {
 
 // SendBootProgress translates one internal/sandboxagent/services.
 // BootProgressEvent into a wire boot_progress event and sends it
-// (best-effort, not critical -- boot_progress is not one of the 5 critical
+// (best-effort, not critical -- boot_progress is not one of the 6 critical
 // types). events.schema.json's own "phase" field is a free-form string
 // with no enum -- this Step's own invented, documented convention for
 // reporting Step 14's PER-SERVICE phase over a wire event that only

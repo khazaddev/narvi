@@ -7,7 +7,7 @@
  */
 
 /**
- * sandbox-agent -> control-plane WS events (technical plan §6.1). Every event carries the common envelope (type, messageId, sessionId, gen). The 5 CRITICAL types (execution_complete, error, snapshot_ready, push_complete, push_error) additionally require ackId, deterministically formatted '{type}:{messageId}' (enforced here via both a description and a per-type 'pattern' anchored on the literal type prefix) so the ack protocol (§6.1: sender buffers 1000 events, evicts oldest non-critical, re-sends on reconnect until acked; receiver dedupes by upsert-on-messageId) can redeliver them exactly once. Field nullability convention: a property documented as 'nullable' is a REQUIRED key whose value may be JSON null, EXCEPT step_finish's cost.tokens.cached and cost.usd — §6.1 only specifies that 'tokens is an object, not a number'; the {input, output, cached?, usd?} breakdown and which of those sub-fields are optional is this contract's own invention, not literally specified by the technical plan.
+ * sandbox-agent -> control-plane WS events (technical plan §6.1). Every event carries the common envelope (type, messageId, sessionId, gen). The 6 CRITICAL types (execution_complete, error, snapshot_ready, push_complete, push_error, sub_task_finish) additionally require ackId, deterministically formatted '{type}:{messageId}' (enforced here via both a description and a per-type 'pattern' anchored on the literal type prefix) so the ack protocol (§6.1: sender buffers 1000 events, evicts oldest non-critical, re-sends on reconnect until acked; receiver dedupes by upsert-on-messageId) can redeliver them exactly once. sub_task_finish (§7.1) joins the critical set because it closes an 'active' state the UI tracks (a live sub-lane count) exactly like execution_complete does at the turn level — a dropped, never-redelivered sub_task_finish would leave a sub-lane stuck active forever. Field nullability convention: a property documented as 'nullable' is a REQUIRED key whose value may be JSON null, EXCEPT step_finish's cost.tokens.cached and cost.usd — §6.1 only specifies that 'tokens is an object, not a number'; the {input, output, cached?, usd?} breakdown and which of those sub-fields are optional is this contract's own invention, not literally specified by the technical plan.
  */
 export type SandboxEvent =
   | Ready
@@ -26,7 +26,9 @@ export type SandboxEvent =
   | SessionTitle
   | Warning
   | SandboxErrorEvent
-  | SnapshotReady;
+  | SnapshotReady
+  | SubTaskStart
+  | SubTaskFinish;
 
 /**
  * First event on a fresh WS connection, once the agent is ready to receive commands.
@@ -250,4 +252,46 @@ export interface SnapshotReady {
    */
   ackId: string;
   snapshotId: string;
+}
+/**
+ * §7.1: brackets a spawned sub-task's lifetime. NOT critical (no ackId) — only sub_task_finish closes an 'active' state the ack protocol must guarantee delivery of.
+ */
+export interface SubTaskStart {
+  type: 'sub_task_start';
+  messageId: string;
+  sessionId: string;
+  gen: number;
+  /**
+   * Stable correlator for this sub-task's lifetime (§7.1), derived from whatever correlator the engine itself exposes (OpenCode's own nested-task id today).
+   */
+  subTaskId: string;
+  /**
+   * Human-readable sub-task label (e.g. OpenCode's own subtask part 'description' field).
+   */
+  label: string;
+  /**
+   * The messageId of the enclosing main-lane message whose invocation spawned this sub-task.
+   */
+  parentMessageId: string;
+}
+/**
+ * CRITICAL (requires ackId). §7.1: closes an 'active' state the UI tracks (a live sub-lane count), the same criticality reasoning as execution_complete at the turn level.
+ */
+export interface SubTaskFinish {
+  type: 'sub_task_finish';
+  messageId: string;
+  sessionId: string;
+  gen: number;
+  /**
+   * Deterministic ackId = 'sub_task_finish:{messageId}' (§6.1).
+   */
+  ackId: string;
+  /**
+   * Same subTaskId this sub-task's own sub_task_start carried.
+   */
+  subTaskId: string;
+  /**
+   * Reuses the turn's own outcome taxonomy (§3.3, §7.1).
+   */
+  outcome: 'completed' | 'failed' | 'cancelled';
 }

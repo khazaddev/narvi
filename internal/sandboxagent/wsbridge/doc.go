@@ -5,27 +5,25 @@
 // boot_progress translation, and inbound command dispatch (with per-message
 // gen-fencing) to a pluggable CommandHandler.
 //
-// # The real, merged contract has 5 critical types, not 6
+// # The real, merged contract now has 6 critical types
 //
-// Technical plan §6.1's own prose lists `sub_task_finish` as a 6th critical/
-// ackable event type alongside execution_complete, error, snapshot_ready,
-// push_complete, and push_error. That is not what the ALREADY-MERGED wire
-// contract this package implements against actually says:
-// contracts/sandbox-ws/v1/events.schema.json's own top-level description
-// names exactly 5 CRITICAL types, and its `oneOf` has no
-// sub_task_start/sub_task_finish variant at all -- there is no
+// Step 16 (which first implemented this package) documented a then-real gap:
+// technical plan §6.1's own prose already listed `sub_task_finish` as a 6th
+// critical/ackable event type, but contracts/sandbox-ws/v1/events.schema.json
+// had not yet been extended to match -- there was no
 // contracts/gen/go/sandboxws.SubTaskStart or SubTaskFinish type to even
-// construct. §7.1's own "Phasing" note assigns sub-task adapter-side
-// tagging to Step 17 (the OpenCode adapter); whoever implements that Step is
-// the one who must first EXTEND events.schema.json with a real
-// sub_task_start/sub_task_finish variant before either could become a real,
-// ackable wire type. This package therefore implements the ack protocol
-// against exactly the 5 types the schema and contracts/gen/go/sandboxws
-// actually define: ExecutionComplete, SandboxErrorEvent (named to avoid
-// shadowing the builtin `error`, per that type's own doc comment),
-// SnapshotReady, PushComplete, PushError. SendCritical does not know or
-// care which concrete type it is handed, so this package needs no changes
-// if/when a future Step extends the schema.
+// construct. §7.1's own "Phasing" note assigned closing that gap to Step 17
+// (the OpenCode adapter, this package's own sibling in
+// internal/adapters/outbound/opencode) -- THIS Step is what extends
+// events.schema.json for real (SubTaskStart, SubTaskFinish, both added to
+// the top-level `oneOf`) and updates the schema's own top-level description
+// to correctly name all 6. This package's own ack protocol needed ZERO code
+// changes to pick this up: SendCritical takes `msg any` and does not know or
+// care which concrete type it is handed (see SendCritical's own doc
+// comment) -- it already worked against ExecutionComplete, SandboxErrorEvent
+// (named to avoid shadowing the builtin `error`), SnapshotReady,
+// PushComplete, and PushError, and now equally against SubTaskFinish, the
+// 6th real critical type, with no changes here at all.
 //
 // # Outbound ack-protocol buffer: the eviction policy is the single most
 // important design decision in this package
@@ -94,7 +92,9 @@
 // X-Sandbox-ID header -- no Step yet wires a real provider-assigned
 // sandbox-instance id into the sandbox's own environment (see
 // internal/sandboxagent/boot.Config.SandboxID's own doc comment), matching
-// Step 13's NARVI_IMAGE_DIGEST gap exactly. Heartbeat.ConversationId is
-// always nil for this Step: no OpenCode adapter exists yet (Step 17) to
-// ever start a real conversation.
+// Step 13's NARVI_IMAGE_DIGEST gap exactly. Heartbeat.ConversationId was
+// always nil as of Step 16 (no OpenCode adapter existed yet); Step 17 adds
+// SetConversationID (bridge.go) so cmd/sandbox-agent's own commandHandler
+// can record a real OpenCode conversation id once StartTurn returns one,
+// which the heartbeat loop (run.go) now reports on every subsequent tick.
 package wsbridge
