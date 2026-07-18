@@ -81,15 +81,14 @@ jobs:
       # TEMPORARY diagnostic step -- to be removed once the real cause of
       # the opencode-serve health-check timeout on this runner is found.
       # Already ruled out: broken binary/install, cross-package test
-      # concurrency, and an empty-tempdir working directory (all succeed
-      # via a plain background shell job on this exact runner). This
-      # bisects the two remaining variables between that success and the
-      # real Go spawn path's failure: freePort()'s own bind-close-reuse
-      # dance, and exec.Cmd's Setpgid:true process-group setup -- see
-      # cmd/debugspawn/main.go's own 3 scenarios (A: Setpgid alone, B:
-      # freePort alone, C: both together, matching the real code exactly).
-      - name: Debug OpenCode serve (bisect freePort vs Setpgid)
-        run: go run ./cmd/debugspawn/
+      # concurrency, an empty-tempdir working directory, freePort()'s own
+      # bind-close-reuse dance, and exec.Cmd's Setpgid:true process-group
+      # setup (all 3 scenarios in cmd/debugspawn/main.go passed on THIS
+      # exact runner via plain `go run`). The one remaining untested
+      # difference between that and the real failing tests: -race. Same
+      # 3 scenarios, this time race-instrumented.
+      - name: Debug OpenCode serve (same scenarios, with -race)
+        run: go run -race ./cmd/debugspawn/
 
       - name: Vet
         run: make vet
