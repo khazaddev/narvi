@@ -82,13 +82,15 @@ jobs:
       # the opencode-serve health-check timeout on this runner is found.
       # Already ruled out: broken binary/install, cross-package test
       # concurrency, an empty-tempdir working directory, freePort()'s own
-      # bind-close-reuse dance, and exec.Cmd's Setpgid:true process-group
-      # setup (all 3 scenarios in cmd/debugspawn/main.go passed on THIS
-      # exact runner via plain `go run`). The one remaining untested
-      # difference between that and the real failing tests: -race. Same
-      # 3 scenarios, this time race-instrumented.
-      - name: Debug OpenCode serve (same scenarios, with -race)
-        run: go run -race ./cmd/debugspawn/
+      # bind-close-reuse dance, exec.Cmd's Setpgid:true process-group
+      # setup, and -race (all 3 scenarios in cmd/debugspawn/main.go passed
+      # on THIS exact runner via plain `go run` and `go run -race`). The
+      # one remaining untested difference: running via `go test`'s own
+      # test-binary harness specifically, as opposed to `go run`. This
+      # wraps the exact same 3 scenarios as one real Go test (still no
+      # -race, isolating the harness itself as the last variable).
+      - name: Debug OpenCode serve (same scenarios, via go test)
+        run: go test -count=1 -v ./cmd/debugspawn/
 
       - name: Vet
         run: make vet
