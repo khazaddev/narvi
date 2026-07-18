@@ -1,0 +1,665 @@
+//go:build integration
+
+// End-to-end integration tests proving internal/adapters/inbound/wshub's
+// CLIENT handshake (§6.2, client.go) against a REAL client
+// (github.com/coder/websocket.Dial), a real Postgres instance, and (for
+// the live-broadcast test) a real internal/app/sessionactor.Actor --
+// gated behind the "integration" build tag. Run via `make
+// test-integration`.
+package wshub_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/khazaddev/narvi/contracts/gen/go/clientws"
+	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
+	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/platform"
+)
+
+// clientTestRig bundles a fresh pool + every store + registry + hub +
+// dispatcher test server a client-hub test needs, built once per test.
+type clientTestRig struct {
+	pool      *pgxpool.Pool
+	sessions  *narvipg.SessionStore
+	turns     *narvipg.TurnStore
+	sandboxes *narvipg.SandboxStore
+	events    *narvipg.EventStore
+	artifacts *narvipg.ArtifactStore
+	wsTokens  *narvipg.WSTokenStore
+	registry  *sessionactor.Registry
+	hub       *wshub.Hub
+	wsURL     string
+}
+
+// newClientTestRig spins up a fresh Postgres-backed rig (registry built
+// WITHOUT the hub as its broadcaster -- see newClientTestRigWithBroadcast
+// below for the live-broadcast test's own variant that needs that wiring)
+// with the given timeouts, and returns it alongside a freshly created
+// session row. t.Cleanup tears everything down.
+func newClientTestRig(t *testing.T, timeouts platform.Timeouts) (clientTestRig, sqlcgen.Session) {
+	t.Helper()
+	return newClientTestRigImpl(t, timeouts, false)
+}
+
+// newClientTestRigWithBroadcast is newClientTestRig's variant that wires
+// rig.hub as the registry's own ports.EventBroadcaster -- needed only by
+// the live-broadcast test, since every other test in this file exercises
+// the read-only handshake/fetch_history paths, which never touch the
+// actor at all.
+func newClientTestRigWithBroadcast(t *testing.T, timeouts platform.Timeouts) (clientTestRig, sqlcgen.Session) {
+	t.Helper()
+	return newClientTestRigImpl(t, timeouts, true)
+}
+
+func newClientTestRigImpl(t *testing.T, timeouts platform.Timeouts, wireBroadcaster bool) (clientTestRig, sqlcgen.Session) {
+	t.Helper()
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	sessionRow, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+	})
+	if err != nil {
+		t.Fatalf("create test session: %v", err)
+	}
+
+	hub := wshub.NewHub()
+
+	var broadcaster ports.EventBroadcaster
+	if wireBroadcaster {
+		broadcaster = hub
+	}
+	registry := sessionactor.NewRegistry(ctx, pool, timeouts, broadcaster)
+	t.Cleanup(func() { _ = registry.Shutdown() })
+
+	rig := clientTestRig{
+		pool:      pool,
+		sessions:  narvipg.NewSessionStore(pool),
+		turns:     narvipg.NewTurnStore(pool),
+		sandboxes: narvipg.NewSandboxStore(pool),
+		events:    narvipg.NewEventStore(pool),
+		artifacts: narvipg.NewArtifactStore(pool),
+		wsTokens:  narvipg.NewWSTokenStore(pool),
+		registry:  registry,
+		hub:       hub,
+	}
+
+	server, wsURL := newDispatcherTestServer(rig.registry, rig.sessions, rig.turns, rig.sandboxes, rig.events, rig.artifacts, rig.wsTokens, rig.hub, timeouts)
+	t.Cleanup(server.Close)
+	rig.wsURL = wsURL
+
+	return rig, sessionRow
+}
+
+// subscribeClient dials ?type=client for sessionID, sends a subscribe
+// frame with token, reads and discards the subscribed reply, and returns
+// the live connection (caller owns closing it).
+func subscribeClient(ctx context.Context, t *testing.T, wsURL, sessionID, token string) *websocket.Conn {
+	t.Helper()
+
+	conn, _, err := websocket.Dial(ctx, wsURL+"/sessions/"+sessionID+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+
+	req := clientws.SubscribeRequest{Token: token, ClientId: "test-client"}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal subscribe request: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+		t.Fatalf("Write subscribe: %v", err)
+	}
+
+	rc, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, _, err := conn.Read(rc); err != nil {
+		t.Fatalf("Read subscribed reply: %v", err)
+	}
+	return conn
+}
+
+// waitForClose reads from conn until it errors (the server closing the
+// connection) and returns the close status code via
+// websocket.CloseStatus (-1 if the error was not a clean WS close).
+func waitForClose(ctx context.Context, t *testing.T, conn *websocket.Conn) websocket.StatusCode {
+	t.Helper()
+	_, _, err := conn.Read(ctx)
+	if err == nil {
+		t.Fatal("conn.Read succeeded, want the server to have closed the connection")
+	}
+	return websocket.CloseStatus(err)
+}
+
+// TestClientHandler_HandshakeRejections_PreUpgrade covers the two
+// rejections visible as a plain (non-upgrading) HTTP status, mirroring
+// sandbox_test.go's own doHandshake-based precedent: a malformed session
+// id, and a well-formed id with no matching session row -- both 404
+// (client.go's own doc comment, outcome steps 1-2).
+func TestClientHandler_HandshakeRejections_PreUpgrade(t *testing.T) {
+	rig, _ := newClientTestRig(t, platform.DefaultTimeouts())
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"malformed session id", "/sessions/not-a-valid-uuid/ws"},
+		{"session not found", "/sessions/11111111-1111-1111-1111-111111111111/ws"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := doHandshake(t, rig.wsURL, tc.path, "type=client", nil)
+			if got != http.StatusNotFound {
+				t.Errorf("status = %d, want %d", got, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+// TestClientHandler_SubscribeTimeout proves a connection that upgrades
+// but never sends a subscribe frame is closed with 4001 once
+// ClientSubscribeTimeout elapses.
+func TestClientHandler_SubscribeTimeout(t *testing.T) {
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ClientSubscribeTimeout = 200 * time.Millisecond
+	rig, sessionRow := newClientTestRig(t, timeouts)
+
+	ctx := context.Background()
+	conn, _, err := websocket.Dial(ctx, rig.wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if got := waitForClose(readCtx, t, conn); got != websocket.StatusCode(4001) {
+		t.Errorf("close code = %d, want 4001", got)
+	}
+}
+
+// TestClientHandler_MalformedSubscribeFrame proves a subscribe frame that
+// isn't valid JSON closes the connection with 4001.
+func TestClientHandler_MalformedSubscribeFrame(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+
+	ctx := context.Background()
+	conn, _, err := websocket.Dial(ctx, rig.wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+
+	if err := conn.Write(ctx, websocket.MessageText, []byte("not json")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if got := waitForClose(readCtx, t, conn); got != websocket.StatusCode(4001) {
+		t.Errorf("close code = %d, want 4001", got)
+	}
+}
+
+// TestClientHandler_TokenRejections is table-driven over the 3 ways a
+// presented ws-token can fail verification: unknown hash, a real hash but
+// scoped to a DIFFERENT session, and a real hash for THIS session that has
+// already expired -- the first two close 4001, the third closes 4002
+// (client.go's own doc comment, outcome step 5).
+func TestClientHandler_TokenRejections(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+
+	otherSessionRow, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb})
+	if err != nil {
+		t.Fatalf("create other session: %v", err)
+	}
+	wrongSessionToken := createTestWSToken(ctx, t, rig.pool, otherSessionRow.ID, time.Now().Add(24*time.Hour))
+	expiredToken := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(-1*time.Hour))
+
+	tests := []struct {
+		name      string
+		token     string
+		wantClose websocket.StatusCode
+	}{
+		{"unknown token", "this-token-was-never-minted", websocket.StatusCode(4001)},
+		{"wrong-session token", wrongSessionToken, websocket.StatusCode(4001)},
+		{"expired token", expiredToken, websocket.StatusCode(4002)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, _, err := websocket.Dial(ctx, rig.wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+			if err != nil {
+				t.Fatalf("Dial: %v", err)
+			}
+			defer func() { _ = conn.CloseNow() }()
+
+			req := clientws.SubscribeRequest{Token: tc.token, ClientId: "test-client"}
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatalf("marshal subscribe request: %v", err)
+			}
+			if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+
+			readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if got := waitForClose(readCtx, t, conn); got != tc.wantClose {
+				t.Errorf("close code = %d, want %d", got, tc.wantClose)
+			}
+		})
+	}
+}
+
+// TestClientHandler_TokenLookupBackendError proves a genuine backend
+// failure during the ws-token lookup (as opposed to "no matching row") is
+// reported as StatusInternalError, NOT folded into close code 4001 -- a
+// real bug found in review: a transient Postgres blip was previously
+// indistinguishable from "this token is bad", which would have told every
+// subscribing client its credential was invalid during an unrelated
+// infrastructure hiccup. Forces a genuine, non-ErrNoRows error by pointing
+// the handler's own wsTokens store at an already-closed pool, while every
+// other store (sessions, etc.) still uses the rig's normal, working pool.
+func TestClientHandler_TokenLookupBackendError(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+
+	brokenPool := newTestPool(t)
+	brokenWSTokens := narvipg.NewWSTokenStore(brokenPool)
+	brokenPool.Close() // any subsequent query now fails with a real, non-ErrNoRows error.
+
+	server, wsURL := newDispatcherTestServer(rig.registry, rig.sessions, rig.turns, rig.sandboxes, rig.events, rig.artifacts, brokenWSTokens, rig.hub, platform.DefaultTimeouts())
+	t.Cleanup(server.Close)
+
+	conn, _, err := websocket.Dial(ctx, wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+
+	req := clientws.SubscribeRequest{Token: "irrelevant-the-lookup-itself-fails", ClientId: "test-client"}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal subscribe request: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if got, want := waitForClose(readCtx, t, conn), websocket.StatusInternalError; got != want {
+		t.Errorf("close code = %d, want %d (a backend error must never be reported as 4001 re-auth)", got, want)
+	}
+}
+
+// TestClientHandler_ValidHandshakeSubscribes proves a fully valid
+// handshake replies with a single `subscribed` payload of the right
+// shape: sessionId matches, participants is an empty array (§6.2 design
+// decision -- participants stays untouched this Step), and events/
+// artifacts/state are present.
+func TestClientHandler_ValidHandshakeSubscribes(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	conn, _, err := websocket.Dial(ctx, rig.wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+
+	req := clientws.SubscribeRequest{Token: token, ClientId: "test-client"}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal subscribe request: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, data, err := conn.Read(readCtx)
+	if err != nil {
+		t.Fatalf("Read subscribed reply: %v", err)
+	}
+
+	var payload clientws.SubscribedPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal SubscribedPayload: %v (%s)", err, data)
+	}
+
+	if payload.SessionId != sessionRow.ID.String() {
+		t.Errorf("SessionId = %q, want %q", payload.SessionId, sessionRow.ID.String())
+	}
+	if len(payload.Participants) != 0 {
+		t.Errorf("Participants = %v, want an empty array (untouched this Step)", payload.Participants)
+	}
+	if payload.Events == nil {
+		t.Error("Events = nil, want a (possibly empty) array")
+	}
+	if payload.Artifacts == nil {
+		t.Error("Artifacts = nil, want a (possibly empty) array")
+	}
+	if payload.State == nil {
+		t.Fatal("State = nil, want a populated map")
+	}
+	for _, key := range []string{"session", "turns", "sandbox"} {
+		if _, ok := payload.State[key]; !ok {
+			t.Errorf("State missing key %q", key)
+		}
+	}
+}
+
+// TestClientHandler_FetchHistoryPagination creates several events, then
+// paginates through them via fetch_history with a small limit, confirming
+// nextCursor is non-nil while more pages remain, produces the remaining
+// events on the follow-up request, and is nil once exhausted.
+func TestClientHandler_FetchHistoryPagination(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	const total = 5
+	for i := 0; i < total; i++ {
+		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
+			SessionID: sessionRow.ID,
+			Type:      "token",
+			Payload:   []byte(fmt.Sprintf(`{"n":%d}`, i)),
+		}); err != nil {
+			t.Fatalf("create event %d: %v", i, err)
+		}
+	}
+
+	conn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	defer func() { _ = conn.CloseNow() }()
+
+	fetchPage := func(cursor *string, limit int) clientws.FetchHistoryResponse {
+		t.Helper()
+		cursorJSON := "null"
+		if cursor != nil {
+			cursorJSON = strconv.Quote(*cursor)
+		}
+		msg := fmt.Sprintf(`{"type":"fetch_history","sessionId":%q,"cursor":%s,"limit":%d}`, sessionRow.ID.String(), cursorJSON, limit)
+		if err := conn.Write(ctx, websocket.MessageText, []byte(msg)); err != nil {
+			t.Fatalf("Write fetch_history: %v", err)
+		}
+		rc, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		_, data, err := conn.Read(rc)
+		if err != nil {
+			t.Fatalf("Read fetch_history response: %v", err)
+		}
+		var resp clientws.FetchHistoryResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			t.Fatalf("unmarshal FetchHistoryResponse: %v (%s)", err, data)
+		}
+		return resp
+	}
+
+	// First page: limit 2 -> exactly 2 events, non-nil nextCursor (more
+	// likely exist).
+	page1 := fetchPage(nil, 2)
+	if len(page1.Events) != 2 {
+		t.Fatalf("page1 len = %d, want 2", len(page1.Events))
+	}
+	if page1.NextCursor == nil {
+		t.Fatal("page1.NextCursor = nil, want non-nil (3 more events remain)")
+	}
+
+	// Second page from that cursor: the next 2.
+	page2 := fetchPage(page1.NextCursor, 2)
+	if len(page2.Events) != 2 {
+		t.Fatalf("page2 len = %d, want 2", len(page2.Events))
+	}
+	if page2.NextCursor == nil {
+		t.Fatal("page2.NextCursor = nil, want non-nil (1 more event remains)")
+	}
+
+	// Third page: the last event, and nextCursor is now nil (exhausted).
+	page3 := fetchPage(page2.NextCursor, 2)
+	if len(page3.Events) != 1 {
+		t.Fatalf("page3 len = %d, want 1", len(page3.Events))
+	}
+	if page3.NextCursor != nil {
+		t.Errorf("page3.NextCursor = %v, want nil (exhausted)", *page3.NextCursor)
+	}
+
+	if got := len(page1.Events) + len(page2.Events) + len(page3.Events); got != total {
+		t.Errorf("total events across pages = %d, want %d", got, total)
+	}
+}
+
+// TestClientHandler_SubscribeSurvivesManyLargeEvents re-creates, end to
+// end, a real bug found in review: initialReplayLimit (an item-count cap)
+// alone did not bound the SubscribedPayload's own total marshaled size, so
+// a session with enough sizeable event payloads could produce a
+// `subscribed` reply exceeding coder/websocket's own default 32KiB
+// per-message read limit, killing the ENTIRE subscribe handshake with
+// ErrMessageTooBig for any stock client (default limits, unchanged on
+// either side). Creates enough large events to reproduce that exact
+// failure mode absent the fix, then subscribes with a real,
+// default-configured websocket.Dial client and confirms the handshake
+// still completes successfully.
+func TestClientHandler_SubscribeSurvivesManyLargeEvents(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	// 200 events (matching initialReplayLimit) at ~8KB each -> ~1.6MB
+	// total, far beyond coder/websocket's 32KiB default read limit if the
+	// byte-budget fix were absent.
+	largePayload := strings.Repeat("x", 8*1024)
+	for i := 0; i < 200; i++ {
+		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
+			SessionID: sessionRow.ID,
+			Type:      "token",
+			Payload:   []byte(fmt.Sprintf(`{"text":"%s"}`, largePayload)),
+		}); err != nil {
+			t.Fatalf("create event %d: %v", i, err)
+		}
+	}
+
+	// subscribeClient itself already fails the test (via t.Fatalf) if
+	// Dial, the subscribe write, or reading the subscribed reply errors --
+	// including a coder/websocket ErrMessageTooBig, which is exactly what
+	// this test guards against. A stock websocket.Dial with no custom
+	// SetReadLimit call is used deliberately, matching a real, unmodified
+	// client.
+	conn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	_ = conn.CloseNow()
+}
+
+// TestClientHandler_LiveBroadcast subscribes a client, then has the
+// session's own actor append a new event via a REAL SandboxEvent command
+// (handleSandboxEvent, internal/app/sessionactor) routed through the SAME
+// registry+hub this test server was built with, and confirms the
+// already-subscribed connection receives it unsolicited, raw, matching
+// exactly what was stored (§6.2: no wrapper envelope for a live broadcast
+// frame).
+func TestClientHandler_LiveBroadcast(t *testing.T) {
+	rig, sessionRow := newClientTestRigWithBroadcast(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+
+	if _, err := rig.sandboxes.Create(ctx, sessionRow.ID); err != nil {
+		t.Fatalf("create test sandbox: %v", err)
+	}
+
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+	conn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	defer func() { _ = conn.CloseNow() }()
+
+	// Drive a real sandbox event through the actor -- this is what queues
+	// a broadcast (via appendRawEvent) delivered only after the actor's
+	// own transact commits.
+	actor, err := rig.registry.GetOrSpawn(ctx, sessionRow.ID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	eventRaw := json.RawMessage(fmt.Sprintf(`{"type":"token","messageId":"m1","sessionId":%q,"gen":1,"text":"hi"}`, sessionRow.ID.String()))
+	reply := make(chan sessionactor.SandboxEventOutcome, 1)
+	if err := actor.Send(ctx, sessionactor.SandboxEvent{Type: "token", Gen: 1, Raw: eventRaw, Reply: reply}); err != nil {
+		t.Fatalf("actor.Send: %v", err)
+	}
+	select {
+	case outcome := <-reply:
+		if !outcome.Persisted {
+			t.Fatal("sandbox event was not persisted")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the sandbox event outcome")
+	}
+
+	broadcastCtx, cancelBroadcast := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBroadcast()
+	_, data, err := conn.Read(broadcastCtx)
+	if err != nil {
+		t.Fatalf("Read live broadcast: %v", err)
+	}
+	if string(data) != string(eventRaw) {
+		t.Errorf("live broadcast payload = %s, want exactly the stored raw event %s", data, eventRaw)
+	}
+}
+
+// TestHandler_DispatchesByType proves the top-level dispatcher
+// (wshub.NewHandler) routes ?type=sandbox to the sandbox handler and
+// ?type=client to the client handler, and 400s on anything else --
+// exercised through the SAME combined dispatcher server every other test
+// in this file uses.
+func TestHandler_DispatchesByType(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+
+	// type=sandbox, with no sandbox-auth headers at all: reaches the
+	// SANDBOX handler's own step 3 (missing Authorization) -> 401. Only
+	// the sandbox handler has this check, so a 401 here proves the
+	// dispatcher routed to it, not the client handler.
+	got := doHandshake(t, rig.wsURL, "/sessions/"+sessionRow.ID.String()+"/ws", "type=sandbox", nil)
+	if got != http.StatusUnauthorized {
+		t.Errorf("type=sandbox (no auth headers) status = %d, want %d", got, http.StatusUnauthorized)
+	}
+
+	// type=client: a real WS Dial (proper upgrade headers) for an existing
+	// session succeeds (101), proving the dispatcher reached the CLIENT
+	// handler (which has no sandbox-specific header requirements at all).
+	conn, resp, err := websocket.Dial(ctx, rig.wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial (type=client): %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Errorf("type=client handshake status = %d, want %d", resp.StatusCode, http.StatusSwitchingProtocols)
+	}
+
+	// missing/invalid type -> 400, from the dispatcher itself, before
+	// either handler ever runs.
+	for _, query := range []string{"", "type=banana"} {
+		got := doHandshake(t, rig.wsURL, "/sessions/"+sessionRow.ID.String()+"/ws", query, nil)
+		if got != http.StatusBadRequest {
+			t.Errorf("query=%q status = %d, want %d", query, got, http.StatusBadRequest)
+		}
+	}
+}
+
+// TestClientHandler_SlowConnectionDoesNotBlockOthers proves a slow/
+// non-draining client connection does not block a broadcast from
+// reaching OTHER connections subscribed to the same session -- the
+// single most important correctness property of the Hub design (proven
+// deterministically, without any network involved, in hub_test.go's own
+// TestHub_BroadcastNonBlockingOnFullChannel; this test confirms the same
+// property end-to-end over real WS connections). One connection
+// subscribes and then is never read from again (simulating a stalled
+// browser tab); a second connection subscribes and actively drains via a
+// background reader (errgroup.Group.Go -- §11, no naked goroutines). A
+// burst of direct Hub.Broadcast calls must complete promptly, and the
+// fast connection must still receive all of them.
+func TestClientHandler_SlowConnectionDoesNotBlockOthers(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	slowConn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	defer func() { _ = slowConn.CloseNow() }() // deliberately never read from again below.
+
+	fastConn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	defer func() { _ = fastConn.CloseNow() }()
+
+	// Deliberately fewer than hubConnBufferSize (64): the FAST connection's
+	// own channel must never legitimately overflow just from ordinary
+	// burst timing/network-write latency -- this test is about the SLOW
+	// connection never blocking delivery to others, not about exercising
+	// the fast connection's own buffer capacity limit (hub_test.go's
+	// TestHub_BroadcastNonBlockingOnFullChannel already covers that
+	// separately, deterministically, without any network involved).
+	const broadcastCount = 50
+	msgCh := make(chan []byte, broadcastCount)
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
+
+	var readerGroup errgroup.Group
+	readerGroup.Go(func() error {
+		for {
+			_, data, err := fastConn.Read(readCtx)
+			if err != nil {
+				return nil
+			}
+			msgCh <- data
+		}
+	})
+
+	completed := make(chan struct{})
+	var burstGroup errgroup.Group
+	burstGroup.Go(func() error {
+		for i := 0; i < broadcastCount; i++ {
+			rig.hub.Broadcast(sessionRow.ID.String(), json.RawMessage(fmt.Sprintf(`{"type":"tick","n":%d}`, i)))
+		}
+		close(completed)
+		return nil
+	})
+
+	select {
+	case <-completed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("broadcasting with a slow/non-draining connection present took too long -- want it to never block on one slow subscriber")
+	}
+	if err := burstGroup.Wait(); err != nil {
+		t.Fatalf("broadcast goroutine: %v", err)
+	}
+
+	received := 0
+	timeout := time.After(5 * time.Second)
+collect:
+	for received < broadcastCount {
+		select {
+		case <-msgCh:
+			received++
+		case <-timeout:
+			break collect
+		}
+	}
+	if received != broadcastCount {
+		t.Errorf("fast connection received %d/%d broadcasts, want all %d despite the slow connection never draining", received, broadcastCount, broadcastCount)
+	}
+
+	cancelRead()
+	_ = readerGroup.Wait()
+}

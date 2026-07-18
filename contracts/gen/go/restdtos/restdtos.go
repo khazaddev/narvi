@@ -7,6 +7,33 @@ import "fmt"
 import "reflect"
 import "time"
 
+// GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list
+// is expected to stay small.
+type ArtifactsResponse struct {
+	// Artifacts corresponds to the JSON schema field "artifacts".
+	Artifacts []ArtifactsResponseArtifactsElem `json:"artifacts" yaml:"artifacts" mapstructure:"artifacts"`
+}
+
+type ArtifactsResponseArtifactsElem map[string]interface{}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ArtifactsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["artifacts"]; raw != nil && !ok {
+		return fmt.Errorf("field artifacts in ArtifactsResponse: required")
+	}
+	type Plain ArtifactsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ArtifactsResponse(plain)
+	return nil
+}
+
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
@@ -149,6 +176,44 @@ func (j *CreateSessionRequest) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s length: must be >= %d", "repos", 1)
 	}
 	*j = CreateSessionRequest(plain)
+	return nil
+}
+
+// GET /api/sessions/:id/events (§6.3). Mirrors client-ws/v1's own
+// FetchHistoryResponse shape exactly, for the same reason that schema gives: the
+// full event-payload shape is assembled by later PRs, and REST/WS should not
+// diverge on this envelope.
+type EventsResponse struct {
+	// Events corresponds to the JSON schema field "events".
+	Events []EventsResponseEventsElem `json:"events" yaml:"events" mapstructure:"events"`
+
+	// Null when there are no more pages.
+	NextCursor EventsResponseNextCursor `json:"nextCursor" yaml:"nextCursor" mapstructure:"nextCursor"`
+}
+
+type EventsResponseEventsElem map[string]interface{}
+
+// Null when there are no more pages.
+type EventsResponseNextCursor *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *EventsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["events"]; raw != nil && !ok {
+		return fmt.Errorf("field events in EventsResponse: required")
+	}
+	if _, ok := raw["nextCursor"]; raw != nil && !ok {
+		return fmt.Errorf("field nextCursor in EventsResponse: required")
+	}
+	type Plain EventsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = EventsResponse(plain)
 	return nil
 }
 

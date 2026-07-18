@@ -506,6 +506,10 @@ func (a *Actor) appendEvent(ctx context.Context, tx pgx.Tx, eventType string, pa
 	}); err != nil {
 		return fmt.Errorf("sessionactor: append %s event: %w", eventType, err)
 	}
+	// Queue for broadcast AFTER commit -- see actor.go's transact/
+	// broadcastPending doc comments for the full commit-then-broadcast,
+	// discard-on-rollback ordering this is part of.
+	a.pendingBroadcast = append(a.pendingBroadcast, raw)
 	return nil
 }
 

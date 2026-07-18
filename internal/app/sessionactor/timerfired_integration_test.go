@@ -51,7 +51,7 @@ func TestTurnDeadlineTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("move turn to processing: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, timeouts)
+	r := NewRegistry(ctx, pool, timeouts, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)

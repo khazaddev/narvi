@@ -62,7 +62,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 		return n
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts())
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)

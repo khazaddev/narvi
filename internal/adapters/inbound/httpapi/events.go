@@ -1,0 +1,127 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/platform"
+)
+
+// eventsDefaultLimit / eventsMaxLimit bound ?limit= on ListEvents below --
+// a plain count, not a duration. This is the first Step to expose a
+// client-controlled page-size query param at all, so these figures have
+// no existing precedent to match; chosen to match
+// internal/adapters/inbound/wshub's own fetch_history default/max
+// exactly, since REST and WS read the identical underlying event log via
+// the identical EventStore.ListForSession and should not diverge on page
+// sizing either.
+const (
+	eventsDefaultLimit = 100
+	eventsMaxLimit     = 500
+)
+
+// ListEvents backs GET /api/sessions/{sessionID}/events?cursor=&limit=
+// (§6.3). Session existence is checked FIRST (matching the client WS
+// hub's own session-existence-first convention) -- 404 if it doesn't
+// exist. cursor defaults to 0 ("from the beginning"); limit defaults to
+// eventsDefaultLimit and is capped at eventsMaxLimit regardless of what
+// the caller requests. Responds 200 with restdtos.EventsResponse, shaped
+// like clientws.FetchHistoryResponse deliberately (§6.2/§6.3 should not
+// diverge on this envelope, per that DTO's own schema doc comment) --
+// backed by the SAME EventStore.ListForSession the client WS hub's own
+// fetch_history handler uses, one implementation, two callers.
+func ListEvents(sessions *postgres.SessionStore, events *postgres.EventStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		sessionID, ok := parseSessionID(w, r)
+		if !ok {
+			return
+		}
+		ctx := platform.WithSessionID(r.Context(), sessionID.String())
+		logger := platform.Logger(ctx)
+
+		if _, err := sessions.Get(ctx, sessionID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "session not found")
+				return
+			}
+			logger.Error("httpapi: get session failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		var cursor int64
+		if raw := r.URL.Query().Get("cursor"); raw != "" {
+			parsed, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "malformed cursor")
+				return
+			}
+			cursor = parsed
+		}
+
+		limit := eventsDefaultLimit
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed <= 0 {
+				writeError(w, http.StatusBadRequest, "malformed limit")
+				return
+			}
+			limit = parsed
+			if limit > eventsMaxLimit {
+				limit = eventsMaxLimit
+			}
+		}
+
+		rows, err := events.ListForSession(ctx, sessionID, cursor, int32(limit))
+		if err != nil {
+			logger.Error("httpapi: list events failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		wire := make([]restdtos.EventsResponseEventsElem, len(rows))
+		for i, e := range rows {
+			wire[i] = eventWireMap(e)
+		}
+
+		var nextCursor *string
+		if len(rows) == limit {
+			s := strconv.FormatInt(rows[len(rows)-1].ID, 10)
+			nextCursor = &s
+		}
+
+		writeJSON(w, http.StatusOK, restdtos.EventsResponse{
+			Events:     wire,
+			NextCursor: nextCursor,
+		})
+	}
+}
+
+// eventWireMap mirrors internal/adapters/inbound/wshub's own identical
+// helper in client.go (same field choices, same json.RawMessage
+// treatment to avoid base64-encoding sqlcgen.Event.Payload's plain
+// []byte) -- duplicated, not shared, since the two packages return
+// distinctly-named generated element types (restdtos.
+// EventsResponseEventsElem here vs clientws.SubscribedPayloadEventsElem/
+// FetchHistoryResponseEventsElem there) even though all are structurally
+// map[string]interface{}; each must be assembled directly as its own
+// named type, so a shared "returns []map[string]interface{}" helper would
+// still need a per-package conversion loop regardless. This mirrors the
+// codebase's own established tolerance for small, justified per-package
+// duplication (e.g. sessionactor's and wshub's own near-identical
+// integration_helpers_test.go files).
+func eventWireMap(e sqlcgen.Event) map[string]interface{} {
+	return map[string]interface{}{
+		"id":        e.ID,
+		"type":      e.Type,
+		"payload":   json.RawMessage(e.Payload),
+		"createdAt": e.CreatedAt,
+	}
+}

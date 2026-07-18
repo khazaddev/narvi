@@ -24,8 +24,12 @@ type CreateEventParams struct {
 }
 
 // Queries backing EventStore (§4.3, §6.1's append-only per-session event
-// log). Just CreateEvent for now -- reads (cursor-paginated fetch_history)
-// land with the client WS hub (Steps 18+).
+// log). CreateEvent appends; ListEventsForSession is the cursor-paginated
+// read this same table's own migration comment predicted ("reads
+// (cursor-paginated fetch_history) land with the client WS hub (Steps
+// 18+)") -- this is that Step, backing both the client WS hub's own
+// fetch_history/replay and the REST GET .../events endpoint (one
+// implementation, two callers).
 func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error) {
 	row := q.db.QueryRow(ctx, createEvent, arg.SessionID, arg.Type, arg.Payload)
 	var i Event
@@ -37,4 +41,47 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listEventsForSession = `-- name: ListEventsForSession :many
+SELECT id, session_id, type, payload, created_at FROM events
+WHERE session_id = $1 AND id > $2
+ORDER BY id ASC
+LIMIT $3
+`
+
+type ListEventsForSessionParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	ID        int64       `json:"id"`
+	Limit     int32       `json:"limit"`
+}
+
+// afterID = 0 means "from the beginning" -- matches a null fetch_history
+// cursor / a REST ?cursor= default. The monotonic BIGSERIAL id is the
+// natural pagination cursor (events_session_id_id_idx,
+// migrations/000008_events.up.sql's own doc comment).
+func (q *Queries) ListEventsForSession(ctx context.Context, arg ListEventsForSessionParams) ([]Event, error) {
+	rows, err := q.db.Query(ctx, listEventsForSession, arg.SessionID, arg.ID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Event
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Type,
+			&i.Payload,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

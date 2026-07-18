@@ -7,7 +7,7 @@
  */
 
 /**
- * REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions and ws-token are specified in enough field-level detail anywhere in the technical plan to schema honestly today. Secrets/environments/automations/uploads DTOs are deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26; automations: PR-46/47; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). These 3 shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly.
+ * REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, and ws-token are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/automations/uploads DTOs are deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26; automations: PR-46/47; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). These 5 shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly.
  */
 export interface RestDtos {
   [k: string]: unknown;
@@ -98,4 +98,30 @@ export interface CreateSessionRequest {
 export interface WSTokenResponse {
   token: string;
   expiresAt: string;
+}
+/**
+ * GET /api/sessions/:id/events (§6.3). Mirrors client-ws/v1's own FetchHistoryResponse shape exactly, for the same reason that schema gives: the full event-payload shape is assembled by later PRs, and REST/WS should not diverge on this envelope.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "EventsResponse".
+ */
+export interface EventsResponse {
+  events: {
+    [k: string]: unknown;
+  }[];
+  /**
+   * Null when there are no more pages.
+   */
+  nextCursor: string | null;
+}
+/**
+ * GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list is expected to stay small.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ArtifactsResponse".
+ */
+export interface ArtifactsResponse {
+  artifacts: {
+    [k: string]: unknown;
+  }[];
 }

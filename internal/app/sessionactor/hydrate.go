@@ -96,16 +96,17 @@ func (r *Registry) hydrateAndAcquire(ctx context.Context, sessionID pgtype.UUID)
 	)
 
 	return &Actor{
-		sessionID: sessionID,
-		epoch:     epoch,
-		pool:      r.pool,
-		timeouts:  r.timeouts,
-		stores:    r.stores,
-		registry:  r,
-		lockConn:  conn,
-		mailbox:   make(chan Command, mailboxBufferSize),
-		done:      make(chan struct{}),
-		logger:    logger,
+		sessionID:   sessionID,
+		epoch:       epoch,
+		pool:        r.pool,
+		timeouts:    r.timeouts,
+		stores:      r.stores,
+		broadcaster: r.broadcaster,
+		registry:    r,
+		lockConn:    conn,
+		mailbox:     make(chan Command, mailboxBufferSize),
+		done:        make(chan struct{}),
+		logger:      logger,
 	}, nil
 }
 

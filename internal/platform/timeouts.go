@@ -340,6 +340,25 @@ type Timeouts struct {
 	// ack is noticed and abandoned well before the sandbox-agent's own
 	// heartbeat cadence would otherwise mask it.
 	SandboxEventAckTimeout time.Duration
+
+	// --- Step 19 standalone additions: no ordering relationship with
+	// either invariant chain above (or with any prior Step's standalone
+	// additions), so — per those additions' own precedent — plain fields
+	// with sensible defaults, not wired into a fake invariant link.
+
+	// ClientSubscribeTimeout bounds how long internal/adapters/inbound/
+	// wshub's client-WS handshake waits for the browser's first inbound
+	// message (the subscribe{token, clientId} frame) before closing the
+	// connection with code 4001 ("re-auth required"). §6.2 gives this
+	// explicitly: "subscribe{token, clientId} within 30s".
+	ClientSubscribeTimeout time.Duration
+
+	// WSTokenTTL is how long a minted ws-token (internal/platform.
+	// GenerateToken, POST /api/sessions/:id/ws-token) remains valid before
+	// the client hub's own subscribe-time verification rejects it with
+	// close code 4002 ("token expired"). §6.2 gives this explicitly: "24h
+	// TTL".
+	WSTokenTTL time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -394,6 +413,9 @@ func DefaultTimeouts() Timeouts {
 		OpenCodeReadinessPollInterval: 250 * time.Millisecond, // not specified; chosen, matches ServiceReadinessPollInterval
 
 		SandboxEventAckTimeout: 5 * time.Second, // not specified; chosen
+
+		ClientSubscribeTimeout: 30 * time.Second, // §6.2, explicit
+		WSTokenTTL:             24 * time.Hour,   // §6.2, explicit
 	}
 }
 
