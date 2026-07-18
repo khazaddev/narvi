@@ -27,7 +27,9 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver, used only for the golang-migrate handle below
 	"golang.org/x/sync/errgroup"
 
+	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
 )
@@ -89,6 +91,13 @@ func serve() error {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 
+	// Registry/wshub are wired into the real binary for the first time in
+	// this Step (Step 18) -- an intended, natural consequence of that: the
+	// timer pump (already built in Step 11) becomes genuinely live here for
+	// the first time too, run via the errgroup below.
+	registry := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts)
+	sandboxStore := postgres.NewSandboxStore(pool)
+
 	router := chi.NewRouter()
 	router.Use(middleware.Recoverer)
 	router.Use(platform.CorrelationIDMiddleware)
@@ -97,6 +106,7 @@ func serve() error {
 	// and stacking chi's competing convention on top would give every
 	// request two different request-identity mechanisms.
 	router.Get("/health", healthHandler(pool, cfg.Timeouts))
+	router.Get("/sessions/{sessionID}/ws", wshub.NewSandboxHandler(registry, sandboxStore, cfg.Timeouts))
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
@@ -114,6 +124,18 @@ func serve() error {
 	})
 
 	group.Go(func() error {
+		if err := registry.RunTimerPump(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			// RunTimerPump returns ctx.Err() (context.Canceled) on normal
+			// shutdown -- that must NOT be treated as a fatal error the way
+			// http.ErrServerClosed is already specially unwrapped for the
+			// listener goroutine above; only a genuinely different error is
+			// surfaced here.
+			return fmt.Errorf("timer pump: %w", err)
+		}
+		return nil
+	})
+
+	group.Go(func() error {
 		<-groupCtx.Done()
 		slog.Info("narvi control-plane: shutting down", "grace_period", cfg.Timeouts.ShutdownGracePeriod.String())
 
@@ -122,6 +144,17 @@ func serve() error {
 
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			return fmt.Errorf("http server shutdown: %w", err)
+		}
+
+		// Registry.Shutdown cancels every live actor's run loop and waits
+		// for all of them, plus the timer-pump goroutine above, to finish.
+		// Its own errgroup.Wait() will very likely surface context.Canceled
+		// from every actor whose run loop was still alive at shutdown time
+		// -- expected/benign, not a real failure, so it gets the exact same
+		// context.Canceled carve-out as the timer pump above; anything else
+		// is a genuine shutdown failure.
+		if err := registry.Shutdown(); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("session actor registry shutdown: %w", err)
 		}
 		return nil
 	})

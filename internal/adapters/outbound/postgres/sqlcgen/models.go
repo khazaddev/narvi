@@ -524,6 +524,7 @@ type Sandbox struct {
 	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	TokenHash  *string            `json:"token_hash"`
 }
 
 type SandboxHistory struct {

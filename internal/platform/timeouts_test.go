@@ -262,6 +262,27 @@ func TestDefaultTimeouts_Step15StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step18StandaloneFields proves the Step 18 standalone
+// addition (SandboxEventAckTimeout) ships with a sane, non-zero default,
+// and that adding it did not accidentally break either pre-existing
+// invariant chain (it is a standalone field, wired into neither).
+func TestDefaultTimeouts_Step18StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.SandboxEventAckTimeout <= 0 {
+		t.Errorf("SandboxEventAckTimeout = %v, want > 0", to.SandboxEventAckTimeout)
+	}
+	if to.SandboxEventAckTimeout != 5*time.Second {
+		t.Errorf("SandboxEventAckTimeout = %v, want %v", to.SandboxEventAckTimeout, 5*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (SandboxEventAckTimeout must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

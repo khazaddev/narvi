@@ -323,6 +323,23 @@ type Timeouts struct {
 	// waiting. Not specified in the plan; chosen as 250ms, matching
 	// ServiceReadinessPollInterval's own precedent exactly.
 	OpenCodeReadinessPollInterval time.Duration
+
+	// --- Step 18 standalone additions: no ordering relationship with
+	// either invariant chain above (or with any prior Step's standalone
+	// additions), so — per those additions' own precedent — a plain field
+	// with a sensible default, not wired into a fake invariant link.
+
+	// SandboxEventAckTimeout bounds how long
+	// internal/adapters/inbound/wshub's read loop waits for the session
+	// actor's own reply (via the per-message SandboxEvent.Reply channel,
+	// internal/app/sessionactor) on ONE inbound sandbox-WS event before
+	// giving up on acking THAT message and moving on to the next frame.
+	// Not specified in the plan; chosen as 5s — generous relative to a
+	// single Postgres transaction (the actor's own handleSandboxEvent),
+	// small relative to SandboxWSHeartbeatInterval's 30s so a lost/slow
+	// ack is noticed and abandoned well before the sandbox-agent's own
+	// heartbeat cadence would otherwise mask it.
+	SandboxEventAckTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -375,6 +392,8 @@ func DefaultTimeouts() Timeouts {
 
 		OpenCodeReadinessTimeout:      30 * time.Second,       // not specified; chosen (OpenCode startup may init providers/plugins)
 		OpenCodeReadinessPollInterval: 250 * time.Millisecond, // not specified; chosen, matches ServiceReadinessPollInterval
+
+		SandboxEventAckTimeout: 5 * time.Second, // not specified; chosen
 	}
 }
 

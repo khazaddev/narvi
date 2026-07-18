@@ -61,6 +61,8 @@ func (a *Actor) handle(ctx context.Context, cmd Command) error {
 	switch c := cmd.(type) {
 	case TimerFired:
 		return a.handleTimerFired(ctx, c)
+	case SandboxEvent:
+		return a.handleSandboxEvent(ctx, c)
 	default:
 		return fmt.Errorf("sessionactor: unhandled command type %T", cmd)
 	}
