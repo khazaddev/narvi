@@ -1,0 +1,12 @@
+-- sandboxes.token_hash: the hashed-at-rest sandbox bearer token (§5.2:
+-- "Sandbox tokens: hashed at rest, one per gen, rotated on identity
+-- rotation with a previous-gen grace window during overlapping spawns").
+-- Nullable with no default: real token MINTING (generating a fresh token
+-- + writing its hash at spawn time) requires a real SandboxProvider.Spawn
+-- call, which does not exist until Step 21+ -- every row today (existing
+-- or newly created) simply has NULL here until that later Step starts
+-- writing it. internal/adapters/inbound/wshub's own verifySandboxToken
+-- (Step 18) treats a NULL token_hash as "accept any non-empty bearer
+-- token", an explicit, documented, forward-compatible bridge exactly like
+-- Step 13's NARVI_IMAGE_DIGEST gap and Step 15's scm-credentials gap.
+ALTER TABLE sandboxes ADD COLUMN token_hash TEXT;

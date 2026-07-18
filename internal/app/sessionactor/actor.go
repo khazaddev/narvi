@@ -2,6 +2,7 @@ package sessionactor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -206,6 +208,24 @@ func (a *Actor) drainMailbox() {
 			return
 		}
 	}
+}
+
+// appendRawEvent inserts a session event row inside tx, exactly like
+// timerfired.go's own appendEvent, but for a caller that already holds raw
+// wire bytes to persist verbatim (Step 18's sandboxevent.go) rather than a
+// map[string]any this package would otherwise have to marshal itself --
+// skipping that round-trip means the append-only event log holds precisely
+// what the sandbox sent, not a lossy re-encoding through an intermediate Go
+// value.
+func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string, raw json.RawMessage) error {
+	if _, err := a.stores.event.WithTx(tx).Create(ctx, sqlcgen.CreateEventParams{
+		SessionID: a.sessionID,
+		Type:      eventType,
+		Payload:   raw,
+	}); err != nil {
+		return fmt.Errorf("sessionactor: append raw %s event: %w", eventType, err)
+	}
+	return nil
 }
 
 // transact is the ONLY way this package writes session/turn/sandbox state

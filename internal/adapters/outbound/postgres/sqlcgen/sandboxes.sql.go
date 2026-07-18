@@ -15,7 +15,7 @@ const createSandbox = `-- name: CreateSandbox :one
 
 INSERT INTO sandboxes (session_id)
 VALUES ($1)
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash
 `
 
 // Queries backing SandboxStore (§4.3). Just enough to prove the pipeline
@@ -32,12 +32,13 @@ func (q *Queries) CreateSandbox(ctx context.Context, sessionID pgtype.UUID) (San
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TokenHash,
 	)
 	return i, err
 }
 
 const getSandbox = `-- name: GetSandbox :one
-SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at FROM sandboxes
+SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash FROM sandboxes
 WHERE session_id = $1
 `
 
@@ -52,6 +53,7 @@ func (q *Queries) GetSandbox(ctx context.Context, sessionID pgtype.UUID) (Sandbo
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TokenHash,
 	)
 	return i, err
 }
@@ -62,7 +64,7 @@ SET status = $2,
     last_seen_at = COALESCE($3, last_seen_at),
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash
 `
 
 type UpdateSandboxStatusParams struct {
@@ -87,6 +89,7 @@ func (q *Queries) UpdateSandboxStatus(ctx context.Context, arg UpdateSandboxStat
 		&i.LastSeenAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TokenHash,
 	)
 	return i, err
 }
