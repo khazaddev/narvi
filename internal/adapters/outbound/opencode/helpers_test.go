@@ -21,10 +21,17 @@ import (
 const (
 	// testReadinessTimeout is generous (well above platform.Timeouts.
 	// OpenCodeReadinessTimeout's own 30s production default) for the same
-	// reason testSSEInactivityTimeout below is: a real dev machine running
-	// `go test ./...` under -race has many other packages' own test
-	// binaries competing for CPU concurrently.
-	testReadinessTimeout      = 60 * time.Second
+	// reason testSSEInactivityTimeout below is: a real dev machine (or a
+	// shared, smaller-CPU-count CI runner) running `go test ./...` under
+	// -race has many other packages' own test binaries competing for CPU
+	// concurrently. 60s was observed to still occasionally time out on
+	// GitHub Actions' own hosted runners specifically (confirmed via a
+	// from-scratch Docker repro matching the runner's exact node/npm
+	// versions and architecture: opencode serve became healthy in under 5s
+	// with NO other load competing for CPU, so the timeout, not a broken
+	// install, is what's marginal under real CI contention) -- 150s gives
+	// real headroom above that without being unbounded.
+	testReadinessTimeout      = 150 * time.Second
 	testReadinessPollInterval = 250 * time.Millisecond
 	// testSSEInactivityTimeout is deliberately generous (well above
 	// platform.Timeouts' own 120s production default would need to be

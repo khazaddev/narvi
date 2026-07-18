@@ -20,14 +20,19 @@ func TestSpawn_RealBinary(t *testing.T) {
 	t.Parallel()
 
 	sup := supervisor.New()
-	// A generous 60s test-local readiness bound (well above
+	// A generous 150s test-local readiness bound (well above
 	// platform.Timeouts.OpenCodeReadinessTimeout's own 30s production
-	// default) -- a real dev machine running `go test ./...` under -race
-	// has many OTHER packages' own test binaries compiling/running
-	// concurrently, which was observed to occasionally starve a fresh
-	// opencode serve process past 30s; production spawns exactly one
-	// opencode server per sandbox VM with no such competition.
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// default) -- a real dev machine (or a shared, smaller-CPU-count CI
+	// runner) running `go test ./...` under -race has many OTHER packages'
+	// own test binaries compiling/running concurrently, which was observed
+	// to occasionally starve a fresh opencode serve process past even a
+	// 60s bound specifically on GitHub Actions' own hosted runners
+	// (confirmed via a from-scratch Docker repro matching the runner's
+	// exact node/npm versions and architecture: opencode serve became
+	// healthy in under 5s with no other load competing for CPU) --
+	// production spawns exactly one opencode server per sandbox VM with no
+	// such competition.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
 
 	// Registered BEFORE the fallible Spawn call below, deliberately: even
@@ -44,7 +49,7 @@ func TestSpawn_RealBinary(t *testing.T) {
 		_ = sup.StopAll(stopCtx, 5*time.Second)
 	})
 
-	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), 60*time.Second, 250*time.Millisecond)
+	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), 150*time.Second, 250*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Spawn() error = %v, want nil (real opencode binary should be on PATH)", err)
 	}
