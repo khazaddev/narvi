@@ -272,6 +272,35 @@ type Timeouts struct {
 	// buffer"): a cached credential within this buffer of its own
 	// ExpiresAt is treated as already stale, never handed back as-is.
 	CredentialExpiryBuffer time.Duration
+
+	// --- Step 16 standalone additions: no ordering relationship with
+	// either invariant chain above (or with any prior Step's standalone
+	// additions), so — per those additions' own precedent — plain fields
+	// with sensible defaults, not wired into a fake invariant link.
+
+	// SandboxWSHeartbeatInterval is how often
+	// internal/sandboxagent/wsbridge.Bridge sends a "heartbeat" event over
+	// the sandbox WS connection. §6.1 gives this explicitly: "heartbeat
+	// (30s, ...)" — unlike the other three fields in this group, this one
+	// is not invented.
+	SandboxWSHeartbeatInterval time.Duration
+
+	// SandboxWSDialTimeout bounds a single sandbox-WS connect attempt
+	// (internal/sandboxagent/wsbridge.Bridge.Run's call to
+	// websocket.Dial). Not specified in the plan; chosen as 15s — generous
+	// for a handshake round trip without letting one stuck attempt stall
+	// the reconnect loop for long.
+	SandboxWSDialTimeout time.Duration
+
+	// SandboxWSReconnectMinBackoff is the initial (and floor) backoff
+	// between sandbox-WS reconnect attempts after a non-fatal connect
+	// failure (§6.1: "else exponential-backoff reconnect"). Not specified
+	// in the plan; chosen as 1s.
+	SandboxWSReconnectMinBackoff time.Duration
+
+	// SandboxWSReconnectMaxBackoff is the ceiling the exponential backoff
+	// above is capped at. Not specified in the plan; chosen as 30s.
+	SandboxWSReconnectMaxBackoff time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -316,6 +345,11 @@ func DefaultTimeouts() Timeouts {
 		RepoCloneTimeout:       5 * time.Minute,  // not specified; chosen generously (large repos)
 		CredentialFetchTimeout: 10 * time.Second, // not specified; chosen (lightweight mint call)
 		CredentialExpiryBuffer: 5 * time.Minute,  // §5.2, explicit
+
+		SandboxWSHeartbeatInterval:   30 * time.Second, // §6.1, explicit
+		SandboxWSDialTimeout:         15 * time.Second, // not specified; chosen
+		SandboxWSReconnectMinBackoff: 1 * time.Second,  // not specified; chosen
+		SandboxWSReconnectMaxBackoff: 30 * time.Second, // not specified; chosen
 	}
 }
 

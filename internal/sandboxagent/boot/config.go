@@ -31,6 +31,7 @@ const (
 	logLevelEnvVar           = "NARVI_LOG_LEVEL"
 	sessionConfigEnvVar      = "NARVI_SESSION_CONFIG"
 	credentialCacheDirEnvVar = "NARVI_CREDENTIAL_CACHE_DIR"
+	sandboxIDEnvVar          = "NARVI_SANDBOX_ID"
 )
 
 // Defaults for every optional env var above.
@@ -60,6 +61,14 @@ const (
 	// /workspace tree, §6.4) so a coding agent operating there never sees
 	// the raw credential cache file (§5.2).
 	defaultCredentialCacheDir = "/tmp/narvi-credentials"
+
+	// defaultSandboxID is used when NARVI_SANDBOX_ID is unset. HONEST GAP,
+	// same shape as defaultImageDigest above: no Step yet wires a real
+	// provider-assigned sandbox-instance id into the sandbox's own
+	// environment, so internal/sandboxagent/wsbridge's X-Sandbox-ID header
+	// value will always default to "" in practice until some later Step
+	// closes that gap.
+	defaultSandboxID = ""
 )
 
 // Config is sandbox-agent's own typed, boot-time-validated configuration,
@@ -77,6 +86,13 @@ type Config struct {
 	// disk (§5.2: "caches to disk with flock"). Deliberately OUTSIDE
 	// WorkspaceDir -- see defaultCredentialCacheDir's own doc comment.
 	CredentialCacheDir string
+
+	// SandboxID is the value internal/sandboxagent/wsbridge.New sends as
+	// the sandbox WS connection's X-Sandbox-ID header (§6.1). HONEST GAP --
+	// see defaultSandboxID's own doc comment: this defaults to "" until
+	// some later Step wires a real provider-assigned sandbox-instance id
+	// into the sandbox's environment.
+	SandboxID string
 
 	// SessionConfig is the full SESSION_CONFIG document (§6.4), parsed
 	// from NARVI_SESSION_CONFIG when present -- nil when that env var is
@@ -186,6 +202,11 @@ func Load() (Config, error) {
 		credentialCacheDir = defaultCredentialCacheDir
 	}
 
+	sandboxID := os.Getenv(sandboxIDEnvVar)
+	if sandboxID == "" {
+		sandboxID = defaultSandboxID
+	}
+
 	sessionConfig, err := loadSessionConfig(mode)
 	if err != nil {
 		return Config{}, err
@@ -198,6 +219,7 @@ func Load() (Config, error) {
 		WorkspaceDir:       workspaceDir,
 		LogLevel:           logLevel,
 		CredentialCacheDir: credentialCacheDir,
+		SandboxID:          sandboxID,
 		SessionConfig:      sessionConfig,
 	}, nil
 }

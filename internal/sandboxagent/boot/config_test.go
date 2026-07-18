@@ -159,6 +159,32 @@ func TestLoad_CredentialCacheDirOverride(t *testing.T) {
 	}
 }
 
+func TestLoad_SandboxIDDefault(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_SANDBOX_ID", "")
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.SandboxID != "" {
+		t.Errorf("SandboxID = %q, want empty string (HONEST GAP default)", cfg.SandboxID)
+	}
+}
+
+func TestLoad_SandboxIDOverride(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_SANDBOX_ID", "sbx-abc123")
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.SandboxID != "sbx-abc123" {
+		t.Errorf("SandboxID = %q, want %q", cfg.SandboxID, "sbx-abc123")
+	}
+}
+
 // TestLoad_SessionConfigAbsent proves NARVI_SESSION_CONFIG's absence
 // remains a fully valid, correct state: SessionConfig is nil and every
 // other field behaves exactly as it did before this Step (Steps 13/14's
