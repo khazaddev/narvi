@@ -4,6 +4,7 @@
 package platform
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -142,6 +143,96 @@ func (e *InvalidHMACSecretError) Error() string {
 	)
 }
 
+// gitHubClientIDEnvVarName, gitHubClientSecretEnvVarName, and
+// publicBaseURLEnvVarName are the env vars Load reads for Step 20's
+// ("auth v1", §13.1) GitHub OAuth wiring. All three are required in every
+// stage — never defaulted, matching the 3 HMAC secrets' own "never a
+// baked-in default" convention.
+const (
+	gitHubClientIDEnvVarName     = "NARVI_GITHUB_CLIENT_ID"
+	gitHubClientSecretEnvVarName = "NARVI_GITHUB_CLIENT_SECRET"
+	publicBaseURLEnvVarName      = "NARVI_PUBLIC_BASE_URL"
+)
+
+// tokenEncryptionKeyEnvVarName is the env var Load reads for the AES-256-GCM
+// key protecting provider tokens at rest (§13.1: "Provider tokens encrypted
+// at rest (AES-GCM), per-user"). Required in every stage; the raw value
+// must base64-decode to exactly tokenEncryptionKeyByteLength bytes.
+const tokenEncryptionKeyEnvVarName = "NARVI_TOKEN_ENCRYPTION_KEY"
+
+// tokenEncryptionKeyByteLength is the exact decoded key length AES-256-GCM
+// requires. A plain byte count, not a duration/interval, so (matching
+// tokenhash.go's own wsTokenByteLength precedent) it is an ordinary Go
+// constant rather than a platform.Timeouts field.
+const tokenEncryptionKeyByteLength = 32
+
+// InvalidTokenEncryptionKeyError is returned by Load when
+// NARVI_TOKEN_ENCRYPTION_KEY fails either of its two checks: the raw value
+// isn't valid base64, or it decodes to something other than exactly
+// tokenEncryptionKeyByteLength bytes. Reason names which check failed —
+// never a bare "invalid key".
+type InvalidTokenEncryptionKeyError struct {
+	Reason string
+}
+
+func (e *InvalidTokenEncryptionKeyError) Error() string {
+	return fmt.Sprintf("invalid %s: %s", tokenEncryptionKeyEnvVarName, e.Reason)
+}
+
+// allowedEmailDomainsEnvVarName, allowedGitHubOrgsEnvVarName, and
+// allowedEmailsEnvVarName are the 3 signup-allowlist mechanisms §13.1
+// names ("allowlist of email domains / GitHub orgs / explicit users").
+// Each is individually optional (a comma-separated list, parsed by
+// parseCommaSeparatedList), but Load fails fast if ALL THREE are empty —
+// see EmptyAllowlistError.
+const (
+	allowedEmailDomainsEnvVarName = "NARVI_ALLOWED_EMAIL_DOMAINS"
+	allowedGitHubOrgsEnvVarName   = "NARVI_ALLOWED_GITHUB_ORGS"
+	allowedEmailsEnvVarName       = "NARVI_ALLOWED_EMAILS"
+)
+
+// EmptyAllowlistError is returned by Load when NARVI_ALLOWED_EMAIL_DOMAINS,
+// NARVI_ALLOWED_GITHUB_ORGS, and NARVI_ALLOWED_EMAILS are ALL empty. An
+// allowlist that allows nobody by omission is a footgun this codebase's
+// own "never a baked-in permissive default" convention (the 3 HMAC
+// secrets already never have a default) argues against — the operator
+// must configure at least one allowlist mechanism explicitly, in every
+// stage including development.
+type EmptyAllowlistError struct{}
+
+func (e *EmptyAllowlistError) Error() string {
+	return fmt.Sprintf(
+		"at least one of %s, %s, %s must be set (§13.1's signup allowlist) — an allowlist that allows nobody by omission is not a safe default",
+		allowedEmailDomainsEnvVarName, allowedGitHubOrgsEnvVarName, allowedEmailsEnvVarName,
+	)
+}
+
+// initialAdminEmailsEnvVarName is the env var Load reads for the
+// first-run-seeding initial-admin list (§13.4: "initial admins set by
+// config"). Optional — an empty list simply means every first-time
+// sign-in defaults to role "member".
+const initialAdminEmailsEnvVarName = "NARVI_INITIAL_ADMIN_EMAILS"
+
+// parseCommaSeparatedList splits raw on commas, trims whitespace from each
+// entry, and drops empty entries — used for every optional
+// comma-separated-list env var this file reads (the 3 allowlist mechanisms
+// plus InitialAdminEmails). An empty/unset raw value returns a nil slice,
+// never a slice containing one empty string.
+func parseCommaSeparatedList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
 // Config is the top-level, typed control-plane configuration, validated
 // once at boot (§5.4, §11: "typed config validated at boot, fail-fast,
 // named errors").
@@ -175,6 +266,47 @@ type Config struct {
 	HMACSandboxSecret string
 	HMACBotsSecret    string
 	HMACWebhookSecret string
+
+	// GitHubClientID and GitHubClientSecret are the GitHub OAuth App
+	// credentials (§13.1: "GitHub OAuth is the primary login"), read from
+	// NARVI_GITHUB_CLIENT_ID / NARVI_GITHUB_CLIENT_SECRET. Both required in
+	// every stage — never defaulted. GitHubClientSecret is never logged
+	// anywhere (see internal/adapters/inbound/auth's own security notes).
+	GitHubClientID     string
+	GitHubClientSecret string
+
+	// PublicBaseURL is this control plane's own externally-reachable base
+	// URL (e.g. "http://localhost:8080" in development, a real https://
+	// URL in production), read from NARVI_PUBLIC_BASE_URL. Required — used
+	// to construct the OAuth RedirectURL as PublicBaseURL +
+	// "/auth/github/callback" (internal/adapters/inbound/auth.
+	// NewGitHubOAuthConfig). Not validated as a well-formed URL beyond
+	// non-empty, matching DatabaseURL's own precedent above.
+	PublicBaseURL string
+
+	// TokenEncryptionKey is the already-decoded, exactly-32-byte AES-256-GCM
+	// key protecting provider tokens at rest (§13.1), read from
+	// NARVI_TOKEN_ENCRYPTION_KEY and base64-decoded + length-validated once
+	// here at Load() time — never re-decoded per call (internal/platform.
+	// EncryptToken/DecryptToken take this value directly).
+	TokenEncryptionKey []byte
+
+	// AllowedEmailDomains, AllowedGitHubOrgs, and AllowedEmails are the 3
+	// signup-allowlist mechanisms §13.1 names, each parsed from a
+	// comma-separated env var (NARVI_ALLOWED_EMAIL_DOMAINS /
+	// NARVI_ALLOWED_GITHUB_ORGS / NARVI_ALLOWED_EMAILS), trimmed, with
+	// empty entries dropped. Each is individually optional, but Load fails
+	// fast if all three end up empty (see EmptyAllowlistError).
+	AllowedEmailDomains []string
+	AllowedGitHubOrgs   []string
+	AllowedEmails       []string
+
+	// InitialAdminEmails is the first-run-seeding initial-admin list
+	// (§13.4: "initial admins set by config"), parsed the same
+	// comma-separated way from NARVI_INITIAL_ADMIN_EMAILS. Optional — a
+	// verified sign-in email found here gets role "admin" at creation
+	// time instead of the enum's own "member" default.
+	InitialAdminEmails []string
 }
 
 // Load reads process configuration and validates it fail-fast, returning
@@ -235,18 +367,70 @@ func Load() (*Config, error) {
 		errs = append(errs, &InvalidHMACSecretError{EnvVar: hmacWebhookSecretEnvVarName})
 	}
 
+	gitHubClientID := os.Getenv(gitHubClientIDEnvVarName)
+	if gitHubClientID == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubClientIDEnvVarName})
+	}
+
+	gitHubClientSecret := os.Getenv(gitHubClientSecretEnvVarName)
+	if gitHubClientSecret == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubClientSecretEnvVarName})
+	}
+
+	publicBaseURL := os.Getenv(publicBaseURLEnvVarName)
+	if publicBaseURL == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: publicBaseURLEnvVarName})
+	}
+
+	var tokenEncryptionKey []byte
+	rawTokenEncryptionKey := os.Getenv(tokenEncryptionKeyEnvVarName)
+	if rawTokenEncryptionKey == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: tokenEncryptionKeyEnvVarName})
+	} else {
+		decoded, decodeErr := base64.StdEncoding.DecodeString(rawTokenEncryptionKey)
+		switch {
+		case decodeErr != nil:
+			errs = append(errs, &InvalidTokenEncryptionKeyError{
+				Reason: fmt.Sprintf("not valid base64: %v", decodeErr),
+			})
+		case len(decoded) != tokenEncryptionKeyByteLength:
+			errs = append(errs, &InvalidTokenEncryptionKeyError{
+				Reason: fmt.Sprintf("must base64-decode to exactly %d bytes for AES-256-GCM, got %d", tokenEncryptionKeyByteLength, len(decoded)),
+			})
+		default:
+			tokenEncryptionKey = decoded
+		}
+	}
+
+	allowedEmailDomains := parseCommaSeparatedList(os.Getenv(allowedEmailDomainsEnvVarName))
+	allowedGitHubOrgs := parseCommaSeparatedList(os.Getenv(allowedGitHubOrgsEnvVarName))
+	allowedEmails := parseCommaSeparatedList(os.Getenv(allowedEmailsEnvVarName))
+	if len(allowedEmailDomains) == 0 && len(allowedGitHubOrgs) == 0 && len(allowedEmails) == 0 {
+		errs = append(errs, &EmptyAllowlistError{})
+	}
+
+	initialAdminEmails := parseCommaSeparatedList(os.Getenv(initialAdminEmailsEnvVarName))
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
 
 	return &Config{
-		Stage:             stage,
-		Timeouts:          timeouts,
-		LogLevel:          logLevel,
-		DatabaseURL:       databaseURL,
-		HTTPAddr:          httpAddr,
-		HMACSandboxSecret: hmacSandboxSecret,
-		HMACBotsSecret:    hmacBotsSecret,
-		HMACWebhookSecret: hmacWebhookSecret,
+		Stage:               stage,
+		Timeouts:            timeouts,
+		LogLevel:            logLevel,
+		DatabaseURL:         databaseURL,
+		HTTPAddr:            httpAddr,
+		HMACSandboxSecret:   hmacSandboxSecret,
+		HMACBotsSecret:      hmacBotsSecret,
+		HMACWebhookSecret:   hmacWebhookSecret,
+		GitHubClientID:      gitHubClientID,
+		GitHubClientSecret:  gitHubClientSecret,
+		PublicBaseURL:       publicBaseURL,
+		TokenEncryptionKey:  tokenEncryptionKey,
+		AllowedEmailDomains: allowedEmailDomains,
+		AllowedGitHubOrgs:   allowedGitHubOrgs,
+		AllowedEmails:       allowedEmails,
+		InitialAdminEmails:  initialAdminEmails,
 	}, nil
 }

@@ -1,0 +1,121 @@
+// Package auth implements Step 20 ("auth v1", §13.1/§13.4): GitHub OAuth
+// login, backend-issued host-scoped session cookies, the first-sign-in
+// allowlist gate, and the "must be logged in" route middleware. Every
+// piece of state/API-client logic this package depends on (the 3 new
+// internal/adapters/outbound/postgres stores, the GitHub REST API,
+// cookies) lives HERE -- internal/platform stays pure/dependency-free
+// (hmacauth.go, tokenhash.go, correlation.go, and this Step's own
+// tokenencrypt.go/authcontext.go/authcookie.go), consumed by this package
+// but never importing anything back from it.
+//
+// # Routes (mounted by cmd/control-plane/main.go, ALL outside the auth
+// gate -- these are how a session is obtained/discarded in the first
+// place, so they cannot themselves require one)
+//
+//   - GET  /auth/github/login    -- login.go's NewLoginHandler: mints a
+//     CSRF state value, stores it in a short-lived narvi_oauth_state
+//     cookie, redirects (302) to GitHub's own authorize URL.
+//   - GET  /auth/github/callback -- callback.go's NewCallbackHandler: the
+//     full flow below.
+//   - POST /auth/logout          -- logout.go's NewLogoutHandler: revokes
+//     the real DB row (if any) and always clears the cookie.
+//
+// # The OAuth-callback outcome table
+//
+//   - Missing/mismatched `state` query param vs. the narvi_oauth_state
+//     cookie -> 400 (OutcomeStateMismatch). The token exchange is NEVER
+//     attempted.
+//   - oauthConfig.Exchange failure (bad/reused code, or a genuine
+//     backend/network problem -- these two causes are NOT distinguished,
+//     see callback.go's own comment on this simplification) ->
+//     401 (OutcomeExchangeFailed).
+//   - No entry with Primary && Verified in GET /user/emails -> 403
+//     (OutcomeNoVerifiedEmail); no user/identity/session row is ever
+//     created.
+//   - Identity already linked (GetByProviderAndExternalID hits) ->
+//     "returning user" (OutcomeReturningUser): the allowlist is SKIPPED
+//     entirely (§13.1: "evaluated at first sign-in"), the stored
+//     access_token_encrypted is refreshed, a fresh session is minted --
+//     302 to "/".
+//   - Identity not linked, allowlist check fails on ALL 3 mechanisms
+//     (exact email, email domain, GitHub org membership) -> 403
+//     (OutcomeFirstTimeDenied); no user/identity/session row is ever
+//     created; the response body does NOT say which mechanism almost
+//     matched (enumeration hardening).
+//   - Identity not linked, allowlist passes -> "first-time-allowed"
+//     (OutcomeFirstTimeAllowed): a users row + an identities row are
+//     created in ONE Postgres transaction (createUserAndIdentity in
+//     callback.go) -- role = admin iff the verified email is in
+//     InitialAdminEmails, else member; linked_via = "admin", a deliberate,
+//     documented overload (see that function's own comment, a Step 39
+//     hand-off note) -- then a session is minted -- 302 to "/".
+//
+// Either of the last two branches then mints a fresh user_sessions row
+// (platform.GenerateToken + HashToken, expires_at = now +
+// timeouts.UserSessionTTL), sets the narvi_auth_session cookie
+// (platform.WithAuthSessionCookie) to the PLAINTEXT token, and redirects
+// (302) to "/" -- there is no SPA to land on yet (Phase 6 is what makes
+// that landing meaningful); this is an intentional, forward-compatible
+// interim behavior, not a bug.
+//
+// # Org-membership check (a real GitHub API quirk, verified live against
+// docs.github.com during this Step's design phase)
+//
+// GET /orgs/{org}/members/{username}, called using the SIGNING-IN user's
+// OWN token (so requester == checked user, always): 204 = member, 404 =
+// the requester is an org member but the checked user is not, 302 = the
+// requester isn't themselves a member of that org AT ALL. Since this
+// package only ever checks "is the signing-in user a member of one of the
+// configured orgs, using their own token", checkOrgMembership (callback.go)
+// treats literally ANY response other than exactly 204 as "not a member"
+// -- fail-closed, and 302 is deliberately NOT special-cased differently
+// from 404 (see that function's own comment for the complete reasoning).
+//
+// # Security notes
+//
+//   - GitHubClientSecret and TokenEncryptionKey (platform.Config) are
+//     never logged anywhere in this package, under any circumstance.
+//   - The user-session bearer token is logged only as "present"/"absent"
+//     (never the plaintext), matching internal/adapters/inbound/wshub's
+//     own ws-token precedent exactly -- see middleware.go/logout.go, which
+//     log outcome labels, never cookie values.
+//   - The encrypted-at-rest GitHub access token's plaintext is never
+//     logged; error paths touching it (platform.EncryptToken's own error
+//     wrapping) are deliberately narrow so a stack trace can never
+//     accidentally include it.
+//   - The oauth-state CSRF cookie is exact-string-compared and consumed
+//     (cleared) the moment it is read, so it cannot be replayed across
+//     requests.
+//   - Cookie attributes (HttpOnly/SameSite=Lax/Path=/, no Domain,
+//     Secure-per-stage) are defined in exactly one place
+//     (internal/platform/authcookie.go) and never weakened here for
+//     convenience -- every test in this package exercises the REAL
+//     cookie-issuing code path.
+//
+// # Explicitly out of scope (see cmd/control-plane/main.go and the plan's
+// own §13.4 phasing for the owning Step)
+//
+//   - Identity auto-linking across multiple providers, link prompts, the
+//     full four-role permission matrix, a real domain/authz package, the
+//     viewer guard, and audit-log WRITES (the audit_log table already
+//     exists, migration 000013 -- this package never writes to it) --
+//     all Step 39 ("identities + full RBAC", docs/IMPLEMENTATION_PLAN.md
+//     row 39), §13.2/§13.3.
+//   - Actually USING the stored, encrypted GitHub access token for
+//     anything (creating a PR, pushing a branch, minting a git
+//     credential) -- Step 21's own SourceControl adapter job ("createPR,
+//     credential minting", §8.11). This package only obtains and stores
+//     it.
+//   - Wiring authenticated-user identity into internal/app/sessionactor or
+//     internal/app/ports -- nothing downstream needs "which user issued
+//     this command" yet.
+//   - Wiring the participants table (multiplayer/presence, §8.11) -- a
+//     distinct, not-yet-scoped concern.
+//   - Any role-based (admin-only) ROUTE gating -- Middleware here is a
+//     "must be logged in" gate only; "role skeleton" this Step means the
+//     DATA MODEL (real role assignment at creation time) is correct, not
+//     that any route enforces a role check yet.
+//   - OIDC/Google/enterprise SSO -- §13.1 names it explicitly as
+//     "configuration, not code" and secondary to GitHub OAuth; not this
+//     package's job to build a pluggable second provider.
+package auth

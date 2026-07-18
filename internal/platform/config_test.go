@@ -3,24 +3,35 @@ package platform_test
 import (
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// setRequiredEnv sets NARVI_DATABASE_URL and the three per-direction HMAC
-// secret env vars (PR-06) to valid dummy values for the duration of the
-// calling (sub)test, via t.Setenv. Tests that exercise one specific,
-// unrelated env var (NARVI_STAGE, NARVI_LOG_LEVEL, ...) call this first so
-// Load doesn't also fail on these newer required vars; tests that exercise
-// one of these vars themselves call this first and then override that one
-// var with the value under test.
+// setRequiredEnv sets NARVI_DATABASE_URL, the three per-direction HMAC
+// secret env vars (PR-06), and Step 20's ("auth v1") own required vars
+// (GitHub OAuth credentials, PublicBaseURL, a valid 32-byte base64 token
+// encryption key, and one allowlist mechanism) to valid dummy values for
+// the duration of the calling (sub)test, via t.Setenv. Tests that exercise
+// one specific, unrelated env var (NARVI_STAGE, NARVI_LOG_LEVEL, ...) call
+// this first so Load doesn't also fail on these newer required vars; tests
+// that exercise one of these vars themselves call this first and then
+// override that one var with the value under test.
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("NARVI_DATABASE_URL", "postgres://narvi:narvi@localhost:5432/narvi_test?sslmode=disable")
 	t.Setenv("NARVI_HMAC_SANDBOX_SECRET", "test-sandbox-secret")
 	t.Setenv("NARVI_HMAC_BOTS_SECRET", "test-bots-secret")
 	t.Setenv("NARVI_HMAC_WEBHOOK_SECRET", "test-webhook-secret")
+	t.Setenv("NARVI_GITHUB_CLIENT_ID", "test-github-client-id")
+	t.Setenv("NARVI_GITHUB_CLIENT_SECRET", "test-github-client-secret")
+	t.Setenv("NARVI_PUBLIC_BASE_URL", "http://localhost:8080")
+	t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=") // base64 of exactly 32 bytes
+	t.Setenv("NARVI_ALLOWED_EMAIL_DOMAINS", "example.com")
+	t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "")
+	t.Setenv("NARVI_ALLOWED_EMAILS", "")
+	t.Setenv("NARVI_INITIAL_ADMIN_EMAILS", "")
 }
 
 // TestLoad is table-driven over NARVI_STAGE values: unset, each of the
@@ -314,4 +325,207 @@ func TestLoadHMACSecretsAllMissing(t *testing.T) {
 	if len(gotEnvVars) != 3 {
 		t.Errorf("Load() reported %d distinct missing HMAC secrets, want exactly 3 (got: %v)", len(gotEnvVars), gotEnvVars)
 	}
+}
+
+// TestLoadGitHubOAuthConfig is table-driven over NARVI_GITHUB_CLIENT_ID /
+// NARVI_GITHUB_CLIENT_SECRET / NARVI_PUBLIC_BASE_URL, each individually
+// unset: Load must fail fast with a *platform.MissingRequiredEnvError
+// naming that exact env var. A final subtest confirms Load succeeds and
+// threads all three values through when every one is set.
+func TestLoadGitHubOAuthConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVar string
+	}{
+		{name: "client id missing", envVar: "NARVI_GITHUB_CLIENT_ID"},
+		{name: "client secret missing", envVar: "NARVI_GITHUB_CLIENT_SECRET"},
+		{name: "public base url missing", envVar: "NARVI_PUBLIC_BASE_URL"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv(tc.envVar, "")
+
+			cfg, err := platform.Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil, want error for %s=%q", tc.envVar, "")
+			}
+			var missErr *platform.MissingRequiredEnvError
+			if !errors.As(err, &missErr) {
+				t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+			}
+			if missErr.EnvVar != tc.envVar {
+				t.Fatalf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, tc.envVar)
+			}
+			if cfg != nil {
+				t.Fatalf("Load() cfg = %+v, want nil on error", cfg)
+			}
+		})
+	}
+
+	t.Run("all three set succeeds", func(t *testing.T) {
+		setRequiredEnv(t)
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.GitHubClientID != "test-github-client-id" {
+			t.Errorf("Load().GitHubClientID = %q, want %q", cfg.GitHubClientID, "test-github-client-id")
+		}
+		if cfg.GitHubClientSecret != "test-github-client-secret" {
+			t.Errorf("Load().GitHubClientSecret = %q, want %q", cfg.GitHubClientSecret, "test-github-client-secret")
+		}
+		if cfg.PublicBaseURL != "http://localhost:8080" {
+			t.Errorf("Load().PublicBaseURL = %q, want %q", cfg.PublicBaseURL, "http://localhost:8080")
+		}
+	})
+}
+
+// TestLoadTokenEncryptionKey covers all three outcomes for
+// NARVI_TOKEN_ENCRYPTION_KEY: unset (*platform.MissingRequiredEnvError),
+// not valid base64 or the wrong decoded length (both
+// *platform.InvalidTokenEncryptionKeyError), and a valid 32-byte key
+// (Load succeeds and threads the DECODED bytes through, never the raw
+// base64 string).
+func TestLoadTokenEncryptionKey(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "")
+
+		_, err := platform.Load()
+		var missErr *platform.MissingRequiredEnvError
+		if !errors.As(err, &missErr) {
+			t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+		}
+		if missErr.EnvVar != "NARVI_TOKEN_ENCRYPTION_KEY" {
+			t.Fatalf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, "NARVI_TOKEN_ENCRYPTION_KEY")
+		}
+	})
+
+	t.Run("not valid base64", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "not-valid-base64!!!")
+
+		_, err := platform.Load()
+		var keyErr *platform.InvalidTokenEncryptionKeyError
+		if !errors.As(err, &keyErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidTokenEncryptionKeyError", err)
+		}
+	})
+
+	t.Run("wrong decoded length", func(t *testing.T) {
+		setRequiredEnv(t)
+		// Valid base64, but decodes to far fewer than 32 bytes.
+		t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "dG9vc2hvcnQ=")
+
+		_, err := platform.Load()
+		var keyErr *platform.InvalidTokenEncryptionKeyError
+		if !errors.As(err, &keyErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidTokenEncryptionKeyError", err)
+		}
+	})
+
+	t.Run("valid 32-byte key succeeds", func(t *testing.T) {
+		setRequiredEnv(t)
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if len(cfg.TokenEncryptionKey) != 32 {
+			t.Fatalf("len(Load().TokenEncryptionKey) = %d, want 32", len(cfg.TokenEncryptionKey))
+		}
+	})
+}
+
+// TestLoadAllowlist proves Load fails fast with *platform.EmptyAllowlistError
+// when all three allowlist env vars are empty, and otherwise parses each
+// comma-separated var (trimmed, empty entries dropped) independently.
+func TestLoadAllowlist(t *testing.T) {
+	t.Run("all three empty fails fast", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_ALLOWED_EMAIL_DOMAINS", "")
+		t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "")
+		t.Setenv("NARVI_ALLOWED_EMAILS", "")
+
+		cfg, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error when all 3 allowlist mechanisms are empty")
+		}
+		var allowErr *platform.EmptyAllowlistError
+		if !errors.As(err, &allowErr) {
+			t.Fatalf("Load() error = %v, want *platform.EmptyAllowlistError", err)
+		}
+		if cfg != nil {
+			t.Fatalf("Load() cfg = %+v, want nil on error", cfg)
+		}
+	})
+
+	t.Run("only github orgs set succeeds", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_ALLOWED_EMAIL_DOMAINS", "")
+		t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "my-org")
+		t.Setenv("NARVI_ALLOWED_EMAILS", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if len(cfg.AllowedEmailDomains) != 0 {
+			t.Errorf("Load().AllowedEmailDomains = %v, want empty", cfg.AllowedEmailDomains)
+		}
+		if want := []string{"my-org"}; !slices.Equal(cfg.AllowedGitHubOrgs, want) {
+			t.Errorf("Load().AllowedGitHubOrgs = %v, want %v", cfg.AllowedGitHubOrgs, want)
+		}
+	})
+
+	t.Run("comma-separated list is trimmed and drops empty entries", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_ALLOWED_EMAIL_DOMAINS", " example.com ,, other.com ,")
+		t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "")
+		t.Setenv("NARVI_ALLOWED_EMAILS", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		want := []string{"example.com", "other.com"}
+		if !slices.Equal(cfg.AllowedEmailDomains, want) {
+			t.Errorf("Load().AllowedEmailDomains = %v, want %v", cfg.AllowedEmailDomains, want)
+		}
+	})
+}
+
+// TestLoadInitialAdminEmails proves NARVI_INITIAL_ADMIN_EMAILS is optional
+// (Load succeeds when unset, with a nil/empty result) and parsed the same
+// comma-separated way as the allowlist vars when set.
+func TestLoadInitialAdminEmails(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_INITIAL_ADMIN_EMAILS", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if len(cfg.InitialAdminEmails) != 0 {
+			t.Errorf("Load().InitialAdminEmails = %v, want empty", cfg.InitialAdminEmails)
+		}
+	})
+
+	t.Run("set", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_INITIAL_ADMIN_EMAILS", "admin1@example.com, admin2@example.com")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		want := []string{"admin1@example.com", "admin2@example.com"}
+		if !slices.Equal(cfg.InitialAdminEmails, want) {
+			t.Errorf("Load().InitialAdminEmails = %v, want %v", cfg.InitialAdminEmails, want)
+		}
+	})
 }
