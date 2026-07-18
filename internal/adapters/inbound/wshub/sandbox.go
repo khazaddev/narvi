@@ -60,7 +60,7 @@ import (
 //     another pod picks it up"); any other GetOrSpawn error -> 500.
 //  11. websocket.Accept, then the read/dispatch loop (dispatch.go) runs
 //     until conn.Read errors or ctx is done.
-func NewSandboxHandler(registry *sessionactor.Registry, sandboxes *postgres.SandboxStore, timeouts platform.Timeouts) http.HandlerFunc {
+func NewSandboxHandler(registry *sessionactor.Registry, sandboxes *postgres.SandboxStore, commander *SandboxRegistry, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// (1) ?type=sandbox -- the client-hub type is Step 19's own job,
 		// not yet implemented; this route only serves the sandbox half.
@@ -170,6 +170,16 @@ func NewSandboxHandler(registry *sessionactor.Registry, sandboxes *postgres.Sand
 		defer func() { _ = conn.CloseNow() }()
 
 		logger.Info("wshub: sandbox ws connected")
+
+		// Register this connection as sessionID's own live sandbox
+		// connection BEFORE entering readLoop, so a SandboxCommander.
+		// SendCommand call from app/sessionactor can reach it the instant
+		// the handshake completes (Step 21, "e2e happy path", design
+		// decision 4). unregister runs on this same goroutine's own
+		// return, guaranteeing the registry never holds a dead connection
+		// past this handler's own lifetime.
+		unregister := commander.Register(sessionID.String(), conn)
+		defer unregister()
 
 		readLoop(ctx, conn, actor, sessionID.String(), gen, timeouts)
 	}

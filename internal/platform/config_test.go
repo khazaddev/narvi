@@ -32,6 +32,9 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "")
 	t.Setenv("NARVI_ALLOWED_EMAILS", "")
 	t.Setenv("NARVI_INITIAL_ADMIN_EMAILS", "")
+	t.Setenv("NARVI_MODAL_BASE_URL", "https://modal.example.test")
+	t.Setenv("NARVI_MODAL_AUTH_TOKEN", "test-modal-auth-token")
+	t.Setenv("NARVI_MODAL_EGRESS_PROXY_URL", "")
 }
 
 // TestLoad is table-driven over NARVI_STAGE values: unset, each of the
@@ -379,6 +382,61 @@ func TestLoadGitHubOAuthConfig(t *testing.T) {
 		}
 		if cfg.PublicBaseURL != "http://localhost:8080" {
 			t.Errorf("Load().PublicBaseURL = %q, want %q", cfg.PublicBaseURL, "http://localhost:8080")
+		}
+	})
+}
+
+// TestLoadModalConfig mirrors TestLoadGitHubOAuthConfig's own table shape:
+// NARVI_MODAL_BASE_URL/NARVI_MODAL_AUTH_TOKEN are each individually
+// required (Step 21, "e2e happy path" -- this Step is the SandboxProvider's
+// first real production caller), NARVI_MODAL_EGRESS_PROXY_URL stays
+// optional.
+func TestLoadModalConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVar string
+	}{
+		{name: "base url missing", envVar: "NARVI_MODAL_BASE_URL"},
+		{name: "auth token missing", envVar: "NARVI_MODAL_AUTH_TOKEN"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv(tc.envVar, "")
+
+			cfg, err := platform.Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil, want error for %s=%q", tc.envVar, "")
+			}
+			var missErr *platform.MissingRequiredEnvError
+			if !errors.As(err, &missErr) {
+				t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+			}
+			if missErr.EnvVar != tc.envVar {
+				t.Fatalf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, tc.envVar)
+			}
+			if cfg != nil {
+				t.Fatalf("Load() cfg = %+v, want nil on error", cfg)
+			}
+		})
+	}
+
+	t.Run("both required set, proxy optional, succeeds", func(t *testing.T) {
+		setRequiredEnv(t)
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.ModalBaseURL != "https://modal.example.test" {
+			t.Errorf("Load().ModalBaseURL = %q, want %q", cfg.ModalBaseURL, "https://modal.example.test")
+		}
+		if cfg.ModalAuthToken != "test-modal-auth-token" {
+			t.Errorf("Load().ModalAuthToken = %q, want %q", cfg.ModalAuthToken, "test-modal-auth-token")
+		}
+		if cfg.ModalEgressProxyURL != "" {
+			t.Errorf("Load().ModalEgressProxyURL = %q, want empty (unset in this test)", cfg.ModalEgressProxyURL)
 		}
 	})
 }

@@ -25,11 +25,12 @@ import (
 // non-critical event types, LastBootPhase is nil/absent for every type
 // except heartbeat -- both exactly as intended.
 type envelope struct {
-	Type          string  `json:"type"`
-	MessageID     string  `json:"messageId"`
-	Gen           int     `json:"gen"`
-	AckID         string  `json:"ackId"`
-	LastBootPhase *string `json:"lastBootPhase"`
+	Type           string  `json:"type"`
+	MessageID      string  `json:"messageId"`
+	Gen            int     `json:"gen"`
+	AckID          string  `json:"ackId"`
+	LastBootPhase  *string `json:"lastBootPhase"`
+	ConversationID *string `json:"conversationId"`
 }
 
 // readLoop reads and dispatches inbound sandbox-WS frames on conn until
@@ -64,11 +65,12 @@ func readLoop(ctx context.Context, conn *websocket.Conn, actor *sessionactor.Act
 		// immediately, even if this loop already gave up waiting below.
 		reply := make(chan sessionactor.SandboxEventOutcome, 1)
 		cmd := sessionactor.SandboxEvent{
-			Type:          env.Type,
-			Gen:           env.Gen,
-			Raw:           json.RawMessage(data),
-			LastBootPhase: env.LastBootPhase,
-			Reply:         reply,
+			Type:           env.Type,
+			Gen:            env.Gen,
+			Raw:            json.RawMessage(data),
+			LastBootPhase:  env.LastBootPhase,
+			ConversationID: env.ConversationID,
+			Reply:          reply,
 		}
 
 		if err := actor.Send(ctx, cmd); err != nil {

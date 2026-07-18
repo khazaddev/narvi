@@ -518,14 +518,17 @@ type Participant struct {
 }
 
 type Sandbox struct {
-	ID         pgtype.UUID        `json:"id"`
-	SessionID  pgtype.UUID        `json:"session_id"`
-	Gen        int32              `json:"gen"`
-	Status     SandboxStatus      `json:"status"`
-	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-	TokenHash  *string            `json:"token_hash"`
+	ID                 pgtype.UUID        `json:"id"`
+	SessionID          pgtype.UUID        `json:"session_id"`
+	Gen                int32              `json:"gen"`
+	Status             SandboxStatus      `json:"status"`
+	LastSeenAt         pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	TokenHash          *string            `json:"token_hash"`
+	ProviderID         *string            `json:"provider_id"`
+	SpawnFailureCount  int32              `json:"spawn_failure_count"`
+	LastSpawnFailureAt pgtype.Timestamptz `json:"last_spawn_failure_at"`
 }
 
 type SandboxHistory struct {
@@ -538,16 +541,18 @@ type SandboxHistory struct {
 }
 
 type Session struct {
-	ID            pgtype.UUID           `json:"id"`
-	Title         *string               `json:"title"`
-	Status        SessionStatus         `json:"status"`
-	FailureReason *SessionFailureReason `json:"failure_reason"`
-	Archived      bool                  `json:"archived"`
-	SpawnSource   SessionSpawnSource    `json:"spawn_source"`
-	CreatedBy     pgtype.UUID           `json:"created_by"`
-	CreatedAt     pgtype.Timestamptz    `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz    `json:"updated_at"`
-	ActorEpoch    int64                 `json:"actor_epoch"`
+	ID                     pgtype.UUID           `json:"id"`
+	Title                  *string               `json:"title"`
+	Status                 SessionStatus         `json:"status"`
+	FailureReason          *SessionFailureReason `json:"failure_reason"`
+	Archived               bool                  `json:"archived"`
+	SpawnSource            SessionSpawnSource    `json:"spawn_source"`
+	CreatedBy              pgtype.UUID           `json:"created_by"`
+	CreatedAt              pgtype.Timestamptz    `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz    `json:"updated_at"`
+	ActorEpoch             int64                 `json:"actor_epoch"`
+	Repos                  []byte                `json:"repos"`
+	OpencodeConversationID *string               `json:"opencode_conversation_id"`
 }
 
 type SessionTimer struct {
@@ -566,6 +571,9 @@ type Turn struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	DispatchedAt   pgtype.Timestamptz `json:"dispatched_at"`
 	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+	Prompt         *string            `json:"prompt"`
+	ModelID        *string            `json:"model_id"`
+	PlanMode       bool               `json:"plan_mode"`
 }
 
 type User struct {

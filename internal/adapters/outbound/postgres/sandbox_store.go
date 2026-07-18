@@ -48,3 +48,22 @@ func (s *SandboxStore) Get(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.
 func (s *SandboxStore) UpdateStatus(ctx context.Context, arg sqlcgen.UpdateSandboxStatusParams) (sqlcgen.Sandbox, error) {
 	return s.q.UpdateSandboxStatus(ctx, arg)
 }
+
+// UpsertForSpawn creates the sandbox row (if none exists) or bumps its gen
+// and resets it to spawning (if one already does) -- see
+// UpsertSandboxForSpawnParams' generated doc comment (Step 21, design
+// decision 3a).
+func (s *SandboxStore) UpsertForSpawn(ctx context.Context, arg sqlcgen.UpsertSandboxForSpawnParams) (sqlcgen.Sandbox, error) {
+	return s.q.UpsertSandboxForSpawn(ctx, arg)
+}
+
+// UpdateProviderID records the provider's own opaque handle once
+// CreateSandbox succeeds.
+func (s *SandboxStore) UpdateProviderID(ctx context.Context, arg sqlcgen.UpdateSandboxProviderIDParams) (sqlcgen.Sandbox, error) {
+	return s.q.UpdateSandboxProviderID(ctx, arg)
+}
+
+// UpdateCircuitBreaker persists internal/domain/sandbox.CircuitBreakerState.
+func (s *SandboxStore) UpdateCircuitBreaker(ctx context.Context, arg sqlcgen.UpdateSandboxCircuitBreakerParams) (sqlcgen.Sandbox, error) {
+	return s.q.UpdateSandboxCircuitBreaker(ctx, arg)
+}

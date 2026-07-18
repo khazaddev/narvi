@@ -47,6 +47,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
 )
@@ -116,39 +117,64 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 type testRig struct {
 	pool         *pgxpool.Pool
 	sessions     *narvipg.SessionStore
+	turns        *narvipg.TurnStore
+	sandboxes    *narvipg.SandboxStore
 	events       *narvipg.EventStore
 	artifacts    *narvipg.ArtifactStore
 	wsTokens     *narvipg.WSTokenStore
 	users        *narvipg.UserStore
 	identities   *narvipg.IdentityStore
 	userSessions *narvipg.UserSessionStore
+	registry     *sessionactor.Registry
 	server       *httptest.Server
+
+	// tokenEncryptionKey is a fixed, valid 32-byte AES-256-GCM key used by
+	// this rig's own scm-credentials tests (real EncryptToken/DecryptToken
+	// round trip, matching the SAME real flow Step 20's own OAuth callback
+	// uses -- not a shortcut).
+	tokenEncryptionKey []byte
 }
 
 func newTestRig(t *testing.T) testRig {
 	t.Helper()
+	ctx := context.Background()
 	pool := newTestPool(t)
 
 	rig := testRig{
 		pool:         pool,
 		sessions:     narvipg.NewSessionStore(pool),
+		turns:        narvipg.NewTurnStore(pool),
+		sandboxes:    narvipg.NewSandboxStore(pool),
 		events:       narvipg.NewEventStore(pool),
 		artifacts:    narvipg.NewArtifactStore(pool),
 		wsTokens:     narvipg.NewWSTokenStore(pool),
 		users:        narvipg.NewUserStore(pool),
 		identities:   narvipg.NewIdentityStore(pool),
 		userSessions: narvipg.NewUserSessionStore(pool),
+		// nil provider/commander: this rig's own tests only assert that
+		// EnsureDispatched is correctly TRIGGERED by CreateSession, not
+		// what the full spawn/dispatch decision tree then does with it --
+		// internal/app/sessionactor's own dispatch_integration_test.go
+		// covers that decision tree exhaustively.
+		registry:           sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil),
+		tokenEncryptionKey: []byte("01234567890123456789012345678901"), // exactly 32 bytes
 	}
+	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Post("/", httpapi.CreateSession(rig.sessions))
+		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.registry))
 		r.Get("/{sessionID}", httpapi.GetSession(rig.sessions))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
 	})
+	// scm-credentials is deliberately mounted OUTSIDE /api/sessions and
+	// outside auth.Middleware entirely -- see scmcredentials.go's own doc
+	// comment.
+	router.Post("/sessions/{sessionID}/scm-credentials",
+		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
 
 	rig.server = httptest.NewServer(router)
 	t.Cleanup(rig.server.Close)
@@ -323,6 +349,68 @@ func TestCreateSession_HappyPath(t *testing.T) {
 	}
 	if got.Archived {
 		t.Error("Archived = true, want false for a freshly created session")
+	}
+
+	// Step 21 ("e2e happy path"): repos is now actually persisted, and a
+	// pending turn was created carrying the prompt/planMode -- the
+	// concrete proof create.go's own doc comment describes.
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+	var reposJSON []byte
+	if err := rig.pool.QueryRow(ctx, `SELECT repos FROM sessions WHERE id = $1`, sessionID).Scan(&reposJSON); err != nil {
+		t.Fatalf("query persisted repos: %v", err)
+	}
+	var repos []map[string]any
+	if err := json.Unmarshal(reposJSON, &repos); err != nil {
+		t.Fatalf("unmarshal persisted repos: %v", err)
+	}
+	if len(repos) != 1 || repos[0]["name"] != "narvi" {
+		t.Errorf("persisted repos = %s, want one entry named %q", reposJSON, "narvi")
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("len(turns) = %d, want 1 (prompt was non-nil)", len(turns))
+	}
+	if turns[0].Status != sqlcgen.TurnStatusPending {
+		t.Errorf("turn status = %s, want %s", turns[0].Status, sqlcgen.TurnStatusPending)
+	}
+	if turns[0].Prompt == nil || *turns[0].Prompt != "do the thing" {
+		t.Errorf("turn prompt = %v, want %q", turns[0].Prompt, "do the thing")
+	}
+}
+
+// TestCreateSession_NoPrompt_NoTurnCreated proves a nil prompt creates the
+// session with NO turn row at all -- CreateSessionRequest.Prompt being
+// nil means "create the session without dispatching a first turn".
+func TestCreateSession_NoPrompt_NoTurnCreated(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+	turns, err := rig.turns.ListForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Errorf("len(turns) = %d, want 0 (prompt was nil)", len(turns))
 	}
 }
 

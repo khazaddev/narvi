@@ -207,6 +207,23 @@ func (e *EmptyAllowlistError) Error() string {
 	)
 }
 
+// modalBaseURLEnvVarName, modalAuthTokenEnvVarName, and
+// modalEgressProxyURLEnvVarName configure the real
+// internal/adapters/outbound/modal.Provider construction in cmd/
+// control-plane/main.go (Step 21, "e2e happy path" -- this Step is the
+// SandboxProvider's first real production caller). BaseURL/AuthToken are
+// required in every stage, matching every other "never a baked-in
+// default" secret this file already reads (the 3 HMAC secrets, the GitHub
+// OAuth credentials) -- there genuinely is no safe placeholder Modal
+// endpoint/token. EgressProxyURL is optional (§4.1: "the configurable
+// egress proxy" is itself optional/fail-open at the modal package's own
+// New constructor).
+const (
+	modalBaseURLEnvVarName        = "NARVI_MODAL_BASE_URL"
+	modalAuthTokenEnvVarName      = "NARVI_MODAL_AUTH_TOKEN"
+	modalEgressProxyURLEnvVarName = "NARVI_MODAL_EGRESS_PROXY_URL"
+)
+
 // initialAdminEmailsEnvVarName is the env var Load reads for the
 // first-run-seeding initial-admin list (§13.4: "initial admins set by
 // config"). Optional — an empty list simply means every first-time
@@ -307,6 +324,24 @@ type Config struct {
 	// verified sign-in email found here gets role "admin" at creation
 	// time instead of the enum's own "member" default.
 	InitialAdminEmails []string
+
+	// ModalBaseURL and ModalAuthToken configure the real
+	// internal/adapters/outbound/modal.Provider cmd/control-plane/main.go
+	// constructs (Step 21, "e2e happy path"), read from
+	// NARVI_MODAL_BASE_URL / NARVI_MODAL_AUTH_TOKEN. Both required in
+	// every stage — never defaulted (there is no real Modal account
+	// reachable from this codebase's own tests/CI, see
+	// internal/adapters/outbound/modal/doc.go; a real value must be
+	// supplied by whoever deploys this binary against an actual Modal
+	// account, or a mock standing in for one, e.g. Step 27's own future
+	// Prism-based mock server).
+	ModalBaseURL   string
+	ModalAuthToken string
+
+	// ModalEgressProxyURL optionally routes all Modal traffic through an
+	// egress proxy (§4.1), read from NARVI_MODAL_EGRESS_PROXY_URL. Empty
+	// (the default) means a direct connection.
+	ModalEgressProxyURL string
 }
 
 // Load reads process configuration and validates it fail-fast, returning
@@ -411,6 +446,18 @@ func Load() (*Config, error) {
 
 	initialAdminEmails := parseCommaSeparatedList(os.Getenv(initialAdminEmailsEnvVarName))
 
+	modalBaseURL := os.Getenv(modalBaseURLEnvVarName)
+	if modalBaseURL == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: modalBaseURLEnvVarName})
+	}
+
+	modalAuthToken := os.Getenv(modalAuthTokenEnvVarName)
+	if modalAuthToken == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: modalAuthTokenEnvVarName})
+	}
+
+	modalEgressProxyURL := os.Getenv(modalEgressProxyURLEnvVarName)
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -432,5 +479,8 @@ func Load() (*Config, error) {
 		AllowedGitHubOrgs:   allowedGitHubOrgs,
 		AllowedEmails:       allowedEmails,
 		InitialAdminEmails:  initialAdminEmails,
+		ModalBaseURL:        modalBaseURL,
+		ModalAuthToken:      modalAuthToken,
+		ModalEgressProxyURL: modalEgressProxyURL,
 	}, nil
 }

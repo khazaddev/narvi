@@ -13,21 +13,36 @@ import (
 
 const createTurn = `-- name: CreateTurn :one
 
-INSERT INTO turns (session_id, status)
-VALUES ($1, $2)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode
 `
 
 type CreateTurnParams struct {
 	SessionID pgtype.UUID `json:"session_id"`
 	Status    TurnStatus  `json:"status"`
+	Prompt    *string     `json:"prompt"`
+	ModelID   *string     `json:"model_id"`
+	PlanMode  bool        `json:"plan_mode"`
 }
 
 // Queries backing TurnStore (§4.3). Just enough to prove the pipeline end
 // to end (create + get), including exercising the
 // turns_one_processing_per_session partial unique index (§3.3).
+// prompt/model_id/plan_mode (migrations/000018_session_repos.up.sql, Step
+// 21) are the turn's own dispatch-time inputs -- prompt/model_id are
+// nullable and plan_mode defaults false, so every EXISTING call site
+// (every prior Step's `CreateTurnParams{SessionID, Status}`) keeps
+// compiling and behaving identically: the zero-value nil/nil/false it
+// already implicitly got before this Step's own columns existed.
 func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, error) {
-	row := q.db.QueryRow(ctx, createTurn, arg.SessionID, arg.Status)
+	row := q.db.QueryRow(ctx, createTurn,
+		arg.SessionID,
+		arg.Status,
+		arg.Prompt,
+		arg.ModelID,
+		arg.PlanMode,
+	)
 	var i Turn
 	err := row.Scan(
 		&i.ID,
@@ -37,12 +52,15 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.CreatedAt,
 		&i.DispatchedAt,
 		&i.CompletedAt,
+		&i.Prompt,
+		&i.ModelID,
+		&i.PlanMode,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode FROM turns
 WHERE id = $1
 `
 
@@ -57,12 +75,15 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.CreatedAt,
 		&i.DispatchedAt,
 		&i.CompletedAt,
+		&i.Prompt,
+		&i.ModelID,
+		&i.PlanMode,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -87,6 +108,9 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.CreatedAt,
 			&i.DispatchedAt,
 			&i.CompletedAt,
+			&i.Prompt,
+			&i.ModelID,
+			&i.PlanMode,
 		); err != nil {
 			return nil, err
 		}
@@ -104,7 +128,7 @@ SET status = $2,
     dispatched_at = COALESCE($3, dispatched_at),
     completed_at = COALESCE($4, completed_at)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode
 `
 
 type UpdateTurnStatusParams struct {
@@ -135,6 +159,9 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.CreatedAt,
 		&i.DispatchedAt,
 		&i.CompletedAt,
+		&i.Prompt,
+		&i.ModelID,
+		&i.PlanMode,
 	)
 	return i, err
 }

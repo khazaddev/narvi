@@ -383,6 +383,38 @@ type Timeouts struct {
 	// re-authentication backstop and no MFA/step-up flow exists to shorten
 	// it for.
 	UserSessionTTL time.Duration
+
+	// --- Step 21 standalone additions ("e2e happy path"): no ordering
+	// relationship with either invariant chain above (or with any prior
+	// Step's standalone additions), so — per those additions' own
+	// precedent — plain fields with sensible defaults, not wired into a
+	// fake invariant link.
+
+	// SandboxCommandSendTimeout bounds one internal/app/ports.
+	// SandboxCommander.SendCommand write (internal/adapters/inbound/
+	// wshub's own SandboxRegistry) -- generous for a single WS frame
+	// write, small enough that a genuinely-dead connection is noticed
+	// promptly. Not specified in the plan; chosen as 10s.
+	SandboxCommandSendTimeout time.Duration
+
+	// ScmCredentialTTL is the expiry window internal/adapters/inbound/
+	// httpapi's scm-credentials endpoint mints for each credential it
+	// hands back. §5.2 gives the SANDBOX-side cache's own staleness
+	// buffer explicitly ("5-min expiry buffer") — this is a DIFFERENT
+	// concept: the server-minted credential's own lifetime, which must
+	// comfortably exceed a single push operation's realistic duration
+	// plus that 5-min sandbox-side cache buffer. Not specified in the
+	// plan; chosen as 15min.
+	ScmCredentialTTL time.Duration
+
+	// PRCreateTimeout bounds a single internal/app/ports.SourceControl.
+	// CreatePR call (internal/adapters/outbound/githubapi's own real POST
+	// to api.github.com, called by app/sessionactor's own
+	// createPRBestEffort, pushpr.go) -- a genuine outbound network call
+	// that must never run against the actor's own long-lived lifecycle
+	// context unbounded. Not specified in the plan; chosen as 30s,
+	// generous for a single GitHub REST API POST.
+	PRCreateTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -443,6 +475,10 @@ func DefaultTimeouts() Timeouts {
 
 		OAuthStateTTL:  10 * time.Minute,    // not specified; chosen
 		UserSessionTTL: 30 * 24 * time.Hour, // not specified; chosen ("stay signed in" duration)
+
+		SandboxCommandSendTimeout: 10 * time.Second, // not specified; chosen
+		ScmCredentialTTL:          15 * time.Minute, // not specified; chosen (comfortably exceeds a single push + the 5-min sandbox-side cache buffer)
+		PRCreateTimeout:           30 * time.Second, // not specified; chosen (generous for a single GitHub REST API POST)
 	}
 }
 

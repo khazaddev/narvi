@@ -200,7 +200,7 @@ func waitUntil(t *testing.T, timeout time.Duration, cond func() bool) {
 // string are the caller's own job to append).
 func newTestServer(registry *sessionactor.Registry, sandboxes *narvipg.SandboxStore, timeouts platform.Timeouts) (*httptest.Server, string) {
 	router := chi.NewRouter()
-	router.Get("/sessions/{sessionID}/ws", wshub.NewSandboxHandler(registry, sandboxes, timeouts))
+	router.Get("/sessions/{sessionID}/ws", wshub.NewSandboxHandler(registry, sandboxes, wshub.NewSandboxRegistry(timeouts), timeouts))
 	server := httptest.NewServer(router)
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
 	return server, wsURL
@@ -226,7 +226,7 @@ func newDispatcherTestServer(
 ) (*httptest.Server, string) {
 	router := chi.NewRouter()
 	router.Get("/sessions/{sessionID}/ws", wshub.NewHandler(
-		wshub.NewSandboxHandler(registry, sandboxes, timeouts),
+		wshub.NewSandboxHandler(registry, sandboxes, wshub.NewSandboxRegistry(timeouts), timeouts),
 		wshub.NewClientHandler(registry, sessions, turns, sandboxes, events, artifacts, wsTokens, hub, timeouts),
 	))
 	server := httptest.NewServer(router)

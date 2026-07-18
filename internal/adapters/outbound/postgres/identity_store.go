@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -45,6 +46,16 @@ func (s *IdentityStore) GetByProviderAndExternalID(ctx context.Context, provider
 	return s.q.GetIdentityByProviderAndExternalID(ctx, sqlcgen.GetIdentityByProviderAndExternalIDParams{
 		Provider:   provider,
 		ExternalID: externalID,
+	})
+}
+
+// GetByUserAndProvider fetches a user's identity for one provider (Step 21
+// "e2e happy path"'s own scm-credentials endpoint uses this to find a
+// session's created_by user's GitHub identity).
+func (s *IdentityStore) GetByUserAndProvider(ctx context.Context, userID pgtype.UUID, provider sqlcgen.IdentityProvider) (sqlcgen.Identity, error) {
+	return s.q.GetIdentityByUserAndProvider(ctx, sqlcgen.GetIdentityByUserAndProviderParams{
+		UserID:   userID,
+		Provider: provider,
 	})
 }
 

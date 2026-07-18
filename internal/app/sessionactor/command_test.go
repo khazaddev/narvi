@@ -41,6 +41,19 @@ func TestTimerFired_IsCommand(t *testing.T) {
 	}
 }
 
+// TestEnsureDispatched_IsCommand proves EnsureDispatched satisfies the
+// Command interface -- a zero-payload signal, so there is nothing to
+// round-trip beyond the type assertion itself (Step 21, "e2e happy path").
+func TestEnsureDispatched_IsCommand(t *testing.T) {
+	t.Parallel()
+
+	var cmd sessionactor.Command = sessionactor.EnsureDispatched{}
+
+	if _, ok := cmd.(sessionactor.EnsureDispatched); !ok {
+		t.Fatalf("type assertion to EnsureDispatched failed")
+	}
+}
+
 // TestTimerNameConstants proves the 5 named-timer constants match §2's
 // own list verbatim -- a typo here would silently desync the pump/
 // dispatch machinery from the plan's actual timer names.

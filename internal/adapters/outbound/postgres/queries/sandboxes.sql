@@ -23,3 +23,47 @@ SET status = $2,
     updated_at = now()
 WHERE session_id = $1
 RETURNING *;
+
+-- name: UpsertSandboxForSpawn :one
+-- Step 21 ("e2e happy path"), design decision 3a: creates the sandbox row
+-- (gen=1) if none exists yet, or bumps gen/resets status to 'spawning'/
+-- rotates token_hash if one already does (§3.2: "every spawn/restore
+-- increments sandbox.gen" -- paraphrased above, not a verbatim quote).
+-- provider_id is deliberately NOT cleared here --
+-- the second, post-CreateSandbox write (UpdateSandboxProviderID) is what
+-- ever sets it, and a stale previous-gen provider_id lingering between
+-- those two writes is harmless (SpawnState.ProviderObjectID is only read
+-- BEFORE this upsert runs, from the row as it stood prior to this call).
+INSERT INTO sandboxes (session_id, gen, status, token_hash)
+VALUES ($1, 1, 'spawning', $2)
+ON CONFLICT (session_id) DO UPDATE
+SET gen = sandboxes.gen + 1,
+    status = 'spawning',
+    token_hash = $2,
+    updated_at = now()
+RETURNING *;
+
+-- name: UpdateSandboxProviderID :one
+-- Records the provider's own opaque handle (internal/app/ports.SandboxRef.
+-- ProviderID) once CreateSandbox actually succeeds -- a SEPARATE write
+-- from UpsertSandboxForSpawn above, deliberately run in its own
+-- transaction AFTER the real CreateSandbox network call returns (a
+-- network call must never hold a Postgres transaction open).
+UPDATE sandboxes
+SET provider_id = $2, updated_at = now()
+WHERE session_id = $1
+RETURNING *;
+
+-- name: UpdateSandboxCircuitBreaker :one
+-- Persists internal/domain/sandbox.CircuitBreakerState verbatim: called
+-- with (0, NULL) when EvaluateCircuitBreaker's own ShouldReset is true,
+-- and with (incremented count, now) when a *ports.ProviderError with
+-- Transient=false increments the breaker (§3.2: "3 permanent spawn
+-- failures within 5 min blocks spawning"). Always a direct SET, never
+-- COALESCE -- unlike status/last_seen_at, both fields are meant to be
+-- overwritten with exactly the caller-computed value every time,
+-- including back to NULL on reset.
+UPDATE sandboxes
+SET spawn_failure_count = $2, last_spawn_failure_at = $3, updated_at = now()
+WHERE session_id = $1
+RETURNING *;

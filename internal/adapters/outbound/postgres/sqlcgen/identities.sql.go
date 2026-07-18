@@ -91,6 +91,37 @@ func (q *Queries) GetIdentityByProviderAndExternalID(ctx context.Context, arg Ge
 	return i, err
 }
 
+const getIdentityByUserAndProvider = `-- name: GetIdentityByUserAndProvider :one
+SELECT id, user_id, provider, external_id, email, email_verified, linked_via, created_at, access_token_encrypted FROM identities
+WHERE user_id = $1 AND provider = $2
+`
+
+type GetIdentityByUserAndProviderParams struct {
+	UserID   pgtype.UUID      `json:"user_id"`
+	Provider IdentityProvider `json:"provider"`
+}
+
+// Step 21 ("e2e happy path")'s own scm-credentials endpoint uses this to
+// find a session's created_by user's GitHub identity (to decrypt its
+// access_token_encrypted) -- the OAuth callback's own lookup above goes
+// the other direction (provider+external_id -> user).
+func (q *Queries) GetIdentityByUserAndProvider(ctx context.Context, arg GetIdentityByUserAndProviderParams) (Identity, error) {
+	row := q.db.QueryRow(ctx, getIdentityByUserAndProvider, arg.UserID, arg.Provider)
+	var i Identity
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Provider,
+		&i.ExternalID,
+		&i.Email,
+		&i.EmailVerified,
+		&i.LinkedVia,
+		&i.CreatedAt,
+		&i.AccessTokenEncrypted,
+	)
+	return i, err
+}
+
 const updateIdentityAccessToken = `-- name: UpdateIdentityAccessToken :one
 UPDATE identities
 SET access_token_encrypted = $2

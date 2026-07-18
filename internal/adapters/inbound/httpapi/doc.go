@@ -45,11 +45,29 @@
 //   - MintWSToken now scopes ws_tokens.user_id to the REAL authenticated
 //     caller the same way, instead of always NULL.
 //
-// CreateSessionRequest.prompt is still accepted and parsed but NOT acted
-// upon -- dispatching a first turn needs a real sandbox spawn, Step 21's
-// job ("e2e happy path"), not this one. Wiring participants/presence
-// (§8.11) is still untouched -- a distinct, not-yet-scoped concern, now
-// simply for a cleaner reason ("real user identity exists as of this Step,
-// but presence/multiplayer wiring is its own job") rather than "no auth
-// mechanism exists yet at all".
+// # Step 21 ("e2e happy path") updates
+//
+// CreateSession now actually PERSISTS req.Repos (design decision 1,
+// migrations/000018_session_repos.up.sql) and, when req.Prompt is
+// non-nil, inserts a Turn row in the SAME transaction as the session
+// insert, then fires EnsureDispatched on that session's own actor (see
+// create.go's own doc comment for the full sequencing) -- its own
+// constructor signature grew a *pgxpool.Pool, a *postgres.TurnStore, and
+// a *sessionactor.Registry parameter as a result.
+//
+// A SIXTH route is added, mounted OUTSIDE this package's own /api/sessions
+// group and outside auth.Middleware entirely (see scmcredentials.go's own
+// doc comment for why):
+//
+//   - POST /sessions/{sessionID}/scm-credentials -- scmcredentials.go's
+//     own ScmCredentials: a sandbox-bearer-token-authenticated endpoint
+//     (mirrors wshub's own header-bearer-token handshake precedent, NOT
+//     Step 20's cookie-based auth.Middleware) that decrypts and hands
+//     back the session's own created_by user's GitHub OAuth access token
+//     as a git-over-https credential (§5.2). This is the control-plane
+//     side of the wire contract internal/sandboxagent/credentials.
+//     CPClient (Step 15) already built and tested the client side of.
+//
+// Wiring participants/presence (§8.11) is still untouched -- a distinct,
+// not-yet-scoped concern.
 package httpapi
