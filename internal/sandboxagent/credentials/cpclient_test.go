@@ -128,10 +128,11 @@ func TestInvalidControlPlaneWsURLError_ErrorAndUnwrap(t *testing.T) {
 func TestCPClient_Fetch_RequestShape(t *testing.T) {
 	t.Parallel()
 
-	var gotHost, gotAuth, gotPath string
+	var gotHost, gotAuth, gotPath, gotGen string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
+		gotGen = r.Header.Get("X-Sandbox-Gen")
 
 		var body struct {
 			Host string `json:"host"`
@@ -155,7 +156,7 @@ func TestCPClient_Fetch_RequestShape(t *testing.T) {
 		t.Fatalf("NewCPClient() error = %v", err)
 	}
 
-	cred, err := client.Fetch(context.Background(), "sess-1", "sandbox-tok", "example.com")
+	cred, err := client.Fetch(context.Background(), "sess-1", "sandbox-tok", 42, "example.com")
 	if err != nil {
 		t.Fatalf("Fetch() error = %v, want nil", err)
 	}
@@ -168,6 +169,13 @@ func TestCPClient_Fetch_RequestShape(t *testing.T) {
 	}
 	if gotPath != "/sessions/sess-1/scm-credentials" {
 		t.Errorf("request path = %q, want %q", gotPath, "/sessions/sess-1/scm-credentials")
+	}
+	// The real, correctly-formatted X-Sandbox-Gen header (audit
+	// remediation: security-crosscutting & docs-completeness-vs-plan
+	// lenses) -- captured off a real httptest.Server request, not asserted
+	// against a mock.
+	if gotGen != "42" {
+		t.Errorf("X-Sandbox-Gen header = %q, want %q", gotGen, "42")
 	}
 	if cred.Username != "x-token" || cred.Password != "secret-pass" {
 		t.Errorf("Fetch() = %+v, want username=x-token password=secret-pass", cred)
@@ -188,7 +196,7 @@ func TestCPClient_Fetch_NonTwoXXIsAnError(t *testing.T) {
 		t.Fatalf("NewCPClient() error = %v", err)
 	}
 
-	_, err = client.Fetch(context.Background(), "sess-1", "tok", "example.com")
+	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com")
 	if err == nil {
 		t.Fatal("Fetch() error = nil, want an error for a 500 response")
 	}
@@ -215,7 +223,7 @@ func TestCPClient_Fetch_ErrorResponseBodyNeverLeaks(t *testing.T) {
 		t.Fatalf("NewCPClient() error = %v", err)
 	}
 
-	_, err = client.Fetch(context.Background(), "sess-1", "tok", "example.com")
+	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com")
 	if err == nil {
 		t.Fatal("Fetch() error = nil, want an error for a 401 response")
 	}
@@ -263,7 +271,7 @@ func TestCPClient_Fetch_RejectsNewlineInUsernameOrPassword(t *testing.T) {
 				t.Fatalf("NewCPClient() error = %v", err)
 			}
 
-			_, err = client.Fetch(context.Background(), "sess-1", "tok", "example.com")
+			_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com")
 			if err == nil {
 				t.Fatal("Fetch() error = nil, want an error for a username/password containing a newline")
 			}
@@ -285,7 +293,7 @@ func TestCPClient_Fetch_MalformedResponseBody(t *testing.T) {
 		t.Fatalf("NewCPClient() error = %v", err)
 	}
 
-	_, err = client.Fetch(context.Background(), "sess-1", "tok", "example.com")
+	_, err = client.Fetch(context.Background(), "sess-1", "tok", 1, "example.com")
 	if err == nil {
 		t.Fatal("Fetch() error = nil, want an error for a malformed 2xx response body")
 	}
