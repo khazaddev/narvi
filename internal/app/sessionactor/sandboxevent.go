@@ -112,6 +112,8 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 	var pushAfterCommit *pushSignal
 
 	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		now := time.Now()
+
 		row, err := a.stores.sandbox.WithTx(tx).Get(ctx, a.sessionID)
 		if err != nil {
 			return fmt.Errorf("sessionactor: get sandbox: %w", err)
@@ -158,9 +160,39 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		if _, err := a.stores.sandbox.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
 			SessionID:  a.sessionID,
 			Status:     target,
-			LastSeenAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+			LastSeenAt: pgtype.Timestamptz{Time: now, Valid: true},
 		}); err != nil {
 			return fmt.Errorf("sessionactor: update sandbox status/liveness: %w", err)
+		}
+
+		// First-time Booting->Ready transition, this event: arm BOTH
+		// liveness_check and inactivity exactly once, here, at the real
+		// moment the sandbox becomes Ready -- closing the confirmed gap
+		// where neither timer was ever armed for the first time by any
+		// production code path (they only ever re-arm themselves once
+		// already firing; see handleLivenessCheckTimer/
+		// handleInactivityTimer, timerfired.go). The guard is
+		// before-vs-after on THIS event's own transition, not a bare
+		// "is target Ready" check: on every later heartbeat while already
+		// Ready, row.Status and target are both already Ready, so this is
+		// false and neither timer is touched -- re-arming liveness_check on
+		// every 30s heartbeat would keep pushing its own fires_at forward
+		// and it would never get a real chance to fire. The exact same
+		// constants handleLivenessCheckTimer/handleInactivityTimer already
+		// use for their own self-re-arm are used here, so this initial arm
+		// looks identical in shape to every subsequent one -- matching
+		// TimerConnectingDeadline's own exactly-once-at-spawn precedent
+		// (dispatch.go's tryPlanSpawn). Once armed, handleConnectingDeadlineTimer's
+		// own already-correct delete-on-non-connecting-phase logic
+		// (timerfired.go) hands off cleanly the next time that stale timer
+		// fires: liveness_check is already live and watching by then.
+		if sandbox.State(row.Status) != sandbox.State(target) && sandbox.State(target) == sandbox.StateReady {
+			if err := a.armTimer(ctx, tx, TimerLivenessCheck, now.Add(a.timeouts.SteadyHeartbeatBudget)); err != nil {
+				return err
+			}
+			if err := a.armTimer(ctx, tx, TimerInactivity, now.Add(a.timeouts.InactivityMinCheckInterval)); err != nil {
+				return err
+			}
 		}
 
 		// §3.3: "reported on every heartbeat" -- a heartbeat is a
