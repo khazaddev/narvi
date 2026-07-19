@@ -177,7 +177,7 @@ func runCredentialHelper(args []string) error {
 
 	return credentials.RunGet(
 		context.Background(), os.Stdin, os.Stdout, cache, client,
-		cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, timeouts.CredentialExpiryBuffer,
+		cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen, timeouts.CredentialExpiryBuffer,
 	)
 }
 

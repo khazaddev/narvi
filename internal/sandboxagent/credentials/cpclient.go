@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,8 +30,16 @@ const maxScmCredentialsResponseSize = 1 << 20 // 1 MiB
 // "plain struct value or a tiny interface, your call" latitude) so the
 // real HTTP-backed implementation and the narrow surface Get actually
 // depends on stay independently readable.
+//
+// gen (audit remediation, security-crosscutting & docs-completeness-vs-plan
+// lenses) is the sandbox's own current spawn generation (§3.2 fencing),
+// sourced from the SAME SessionConfig.Gen the credential-helper subcommand
+// already reads sessionID/sandboxToken from -- threaded through so CP's
+// scm-credentials endpoint can reject a stale gen's request exactly like
+// the sandbox WS handshake already does (internal/adapters/inbound/wshub/
+// sandbox.go's own X-Sandbox-Gen check).
 type CredentialFetcher interface {
-	Fetch(ctx context.Context, sessionID, sandboxToken, host string) (Credential, error)
+	Fetch(ctx context.Context, sessionID, sandboxToken string, gen int, host string) (Credential, error)
 }
 
 // CPClient is the credential helper's CP client: it POSTs to control
@@ -142,12 +151,14 @@ type scmCredentialsResponse struct {
 }
 
 // Fetch POSTs {"host": host} to <baseURL>/sessions/<sessionID>/
-// scm-credentials with "Authorization: Bearer <sandboxToken>", and expects
-// back {"username": "...", "password": "...", "expiresAt": "<RFC3339>"} on
-// a 2xx response. Any non-2xx or malformed response is a plain error -- no
-// retry, no transient/permanent classification (a single failed fetch is
-// exactly what triggers Get's fail-closed "never fall back to stale
-// cache" behavior, §5.2).
+// scm-credentials with "Authorization: Bearer <sandboxToken>" and an
+// "X-Sandbox-Gen: <gen>" header (mirroring internal/sandboxagent/wsbridge/
+// run.go's own exact header name/convention for the sandbox WS handshake's
+// gen-fencing header), and expects back {"username": "...", "password":
+// "...", "expiresAt": "<RFC3339>"} on a 2xx response. Any non-2xx or
+// malformed response is a plain error -- no retry, no transient/permanent
+// classification (a single failed fetch is exactly what triggers Get's
+// fail-closed "never fall back to stale cache" behavior, §5.2).
 //
 // The raw response body is deliberately NEVER embedded in the returned
 // error: mirrors the exact lesson from the Modal adapter's own
@@ -155,7 +166,7 @@ type scmCredentialsResponse struct {
 // a validation-failure response is exactly the kind of body that can echo
 // request/secret data back verbatim, and this error can end up logged.
 // Only the HTTP status and a generic, fixed description ever surface.
-func (c CPClient) Fetch(ctx context.Context, sessionID, sandboxToken, host string) (Credential, error) {
+func (c CPClient) Fetch(ctx context.Context, sessionID, sandboxToken string, gen int, host string) (Credential, error) {
 	reqBody, err := json.Marshal(scmCredentialsRequest{Host: host})
 	if err != nil {
 		return Credential{}, fmt.Errorf("credentials: encode scm-credentials request: %w", err)
@@ -168,6 +179,7 @@ func (c CPClient) Fetch(ctx context.Context, sessionID, sandboxToken, host strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+sandboxToken)
+	req.Header.Set("X-Sandbox-Gen", strconv.Itoa(gen))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
