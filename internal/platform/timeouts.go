@@ -415,6 +415,22 @@ type Timeouts struct {
 	// context unbounded. Not specified in the plan; chosen as 30s,
 	// generous for a single GitHub REST API POST.
 	PRCreateTimeout time.Duration
+
+	// --- Step 22 standalone additions ("snapshots & restore"): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior Step's standalone additions), so -- per those additions' own
+	// precedent -- a plain field with a sensible default, not wired into a
+	// fake invariant link.
+
+	// SnapshotMintTimeout bounds sandbox-agent's own call
+	// (internal/sandboxagent/snapshotclient.Client.Mint) to the control
+	// plane's new snapshot-mint endpoint (design decision 2, POST
+	// /sessions/{id}/snapshot), which itself makes a real, network-bound
+	// SandboxProvider.TakeSnapshot call server-side -- more generous than
+	// CredentialFetchTimeout's own 10s (a lightweight mint call with no
+	// real provider round trip behind it) since a real snapshot operation
+	// can genuinely take longer. Not specified in the plan; chosen as 60s.
+	SnapshotMintTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -479,6 +495,8 @@ func DefaultTimeouts() Timeouts {
 		SandboxCommandSendTimeout: 10 * time.Second, // not specified; chosen
 		ScmCredentialTTL:          15 * time.Minute, // not specified; chosen (comfortably exceeds a single push + the 5-min sandbox-side cache buffer)
 		PRCreateTimeout:           30 * time.Second, // not specified; chosen (generous for a single GitHub REST API POST)
+
+		SnapshotMintTimeout: 60 * time.Second, // not specified; chosen (a real provider TakeSnapshot round trip, more generous than CredentialFetchTimeout)
 	}
 }
 

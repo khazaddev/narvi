@@ -1105,6 +1105,17 @@ type SnapshotReady struct {
 	// Deterministic ackId = 'snapshot_ready:{messageId}' (§6.1).
 	AckId string `json:"ackId" yaml:"ackId" mapstructure:"ackId"`
 
+	// Echoes the messageId of the Snapshot command this event is completing
+	// (sandbox-agent sets this to the exact MessageId of the Snapshot command it
+	// received). Optional and additive: this event has zero real production consumers
+	// before its own first implementation, so adding this field now is not a breaking
+	// wire-contract change. Exists so the control plane can correlate a
+	// snapshot_ready back to the specific attempt it answers -- gen alone cannot,
+	// since neither the snapshot-start nor snapshot-complete transition is gen-fenced
+	// (a snapshot cycle happens within the same gen). Absent/omitted on any producer
+	// that predates this field.
+	CommandMessageId *string `json:"commandMessageId,omitempty,omitzero" yaml:"commandMessageId,omitempty" mapstructure:"commandMessageId,omitempty"`
+
 	// Gen corresponds to the JSON schema field "gen".
 	Gen int `json:"gen" yaml:"gen" mapstructure:"gen"`
 

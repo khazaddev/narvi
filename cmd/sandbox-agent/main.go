@@ -59,11 +59,10 @@
 // WS reconnect must not be aborted just because the connection blipped
 // (the wsbridge ack protocol already handles redelivering the turn's own
 // events across a reconnect independently of whether the turn itself is
-// still running). snapshot/git_sync_complete remain the EXACT log-only
-// stubs Step 16 shipped -- Step 22 (snapshots & restore, snapshot) and
-// Step 29 (gitstate in-sandbox, git_sync_complete) are each that command's
-// own job, per docs/IMPLEMENTATION_PLAN.md's own Phase 1/2 row
-// assignments; leave both exactly as they are.
+// still running). git_sync_complete remains the EXACT log-only stub Step
+// 16 shipped -- Step 29 (gitstate in-sandbox) is that command's own job,
+// per docs/IMPLEMENTATION_PLAN.md's own Phase 2 row assignment; leave it
+// exactly as it is.
 //
 // Step 21 ("e2e happy path") gives push its own real behavior:
 // commandHandler.HandlePush now runs a real `git push` (via the SAME
@@ -72,6 +71,15 @@
 // established for `git clone`), then reports a real sandboxws.
 // PushComplete (with the resulting HEAD sha per repo) or PushError over
 // the WS bridge.
+//
+// Step 22 ("snapshots & restore") gives snapshot its own real behavior:
+// commandHandler.HandleSnapshot now calls the control plane's new
+// snapshot-mint endpoint (internal/sandboxagent/snapshotclient, design
+// decision 2) to obtain a real, sandbox-confirmed snapshotId, then reports
+// a real CRITICAL sandboxws.SnapshotReady over the WS bridge (design
+// decision 4) -- see HandleSnapshot's own doc comment for the full round
+// trip and its one honest, documented failure-reporting gap (no NACK
+// event exists on the wire for a failed snapshot attempt).
 package main
 
 import (
@@ -98,6 +106,7 @@ import (
 	"github.com/khazaddev/narvi/internal/sandboxagent/gitclone"
 	"github.com/khazaddev/narvi/internal/sandboxagent/opencodeproc"
 	"github.com/khazaddev/narvi/internal/sandboxagent/services"
+	"github.com/khazaddev/narvi/internal/sandboxagent/snapshotclient"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 	"github.com/khazaddev/narvi/internal/sandboxagent/wsbridge"
 )
@@ -459,9 +468,74 @@ func (h *commandHandler) sendPushError(cmd sandboxws.Push, pushErr error) {
 	}
 }
 
-func (*commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapshot) {
-	slog.Info("sandbox-agent: received snapshot, not yet implemented (Step 22: snapshots & restore)",
-		"messageId", cmd.MessageId)
+// HandleSnapshot implements the real `snapshot` command (Step 22,
+// "snapshots & restore", design decision 4): calls the control plane's own
+// new snapshot-mint endpoint (internal/sandboxagent/snapshotclient,
+// design decision 2 -- the real TakeSnapshot network call can only be
+// made by the control plane itself, which alone holds the provider's own
+// credentials) to obtain a real, sandbox-confirmed snapshotId, then
+// reports it back as a CRITICAL "snapshot_ready" event over the WS bridge
+// (mirroring sendPushComplete's own exact call shape: a fresh MessageId/
+// AckId minted here, this event originates from sandbox-agent, it does
+// not echo cmd's own MessageId as ITS OWN MessageId) -- except CommandMessageId,
+// which IS deliberately set to cmd.MessageId verbatim: the control plane's
+// own message-id-correlation fix (sessionactor's triggerSnapshotBestEffort/
+// handleSnapshotReadyEvent) needs this snapshot_ready echoed back to the
+// exact Snapshot command it answers, to tell two attempts on the same live
+// sandbox apart (gen alone can't: a snapshot cycle happens within the same
+// gen) -- mirroring how a request-id is normally echoed in a response.
+//
+// On any failure obtaining the id (no live session configured, an invalid
+// ControlPlaneWsUrl, the CP request itself failing, or CP returning a
+// non-2xx/malformed response): log and return without sending anything --
+// design decision 2's own honest, documented limitation: no NACK-shaped
+// event exists on the wire to tell the control plane "never mind". HONEST
+// GAP (documented, not fixed by this Step -- see sessionactor's own
+// triggerSnapshotBestEffort doc comment for the matching statement of the
+// same fact from the control-plane side): the control plane's own
+// Snapshotting state is only ever recovered by a real snapshot_ready (this
+// function never sending one is exactly the case that can't recover it) or
+// by revertSnapshotBestEffort's own SendCommand-failure detection -- a
+// mint failure THIS function hits AFTER a Snapshot command was already
+// successfully delivered is invisible to that detection, so the sandbox is
+// left stuck Snapshotting with no watchdog covering that state until a
+// later reconnect/restart cycle, or -- more honestly -- until a future
+// Step adds a real NACK/timeout mechanism this Step's own plan-row text
+// does not ask for (explicitly out of THIS Step's own scope: no new
+// dedicated snapshot-timeout timer, no broader NACK mechanism).
+func (h *commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapshot) {
+	if h.cfg.SessionConfig == nil {
+		slog.Warn("sandbox-agent: received snapshot but no live session is configured", "messageId", cmd.MessageId)
+		return
+	}
+
+	client, err := snapshotclient.New(h.cfg.SessionConfig.ControlPlaneWsUrl, h.timeouts.SnapshotMintTimeout)
+	if err != nil {
+		slog.Warn("sandbox-agent: snapshot: build CP client failed", "messageId", cmd.MessageId, "error", err)
+		return
+	}
+
+	snapshotID, err := client.Mint(h.runCtx, h.cfg.SessionConfig.SessionId, h.cfg.SessionConfig.SandboxToken)
+	if err != nil {
+		slog.Warn("sandbox-agent: snapshot: mint request to control plane failed", "messageId", cmd.MessageId, "error", err)
+		return
+	}
+
+	messageID := uuid.NewString()
+	commandMessageID := cmd.MessageId
+	msg := sandboxws.SnapshotReady{
+		Type:             "snapshot_ready",
+		MessageId:        messageID,
+		SessionId:        cmd.SessionId,
+		Gen:              cmd.Gen,
+		AckId:            "snapshot_ready:" + messageID,
+		SnapshotId:       snapshotID,
+		CommandMessageId: &commandMessageID,
+	}
+	if err := h.bridge.SendCritical(h.runCtx, msg, msg.AckId); err != nil {
+		slog.Warn("sandbox-agent: send snapshot_ready over WS bridge failed",
+			"messageId", cmd.MessageId, "ackId", msg.AckId, "error", err)
+	}
 }
 
 func (*commandHandler) HandleGitSyncComplete(_ context.Context, cmd sandboxws.GitSyncComplete) {
@@ -649,7 +723,7 @@ func run() error {
 		if bridge != nil {
 			bridge.MarkBootComplete()
 		}
-		slog.Info("sandbox-agent: boot sequence complete (snapshot: Step 22, git_sync_complete: Step 29)")
+		slog.Info("sandbox-agent: boot sequence complete (git_sync_complete: Step 29)")
 	}
 
 	runErr := group.Wait()

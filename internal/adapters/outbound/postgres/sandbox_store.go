@@ -67,3 +67,21 @@ func (s *SandboxStore) UpdateProviderID(ctx context.Context, arg sqlcgen.UpdateS
 func (s *SandboxStore) UpdateCircuitBreaker(ctx context.Context, arg sqlcgen.UpdateSandboxCircuitBreakerParams) (sqlcgen.Sandbox, error) {
 	return s.q.UpdateSandboxCircuitBreaker(ctx, arg)
 }
+
+// UpdateSnapshotID records a real, sandbox-confirmed snapshot id once a
+// "snapshot_ready" wire event arrives (Step 22, "snapshots & restore",
+// design decision 3). Also clears pending_snapshot_message_id back to
+// NULL in the same statement -- see UpdateSandboxSnapshotID's own
+// generated doc comment.
+func (s *SandboxStore) UpdateSnapshotID(ctx context.Context, arg sqlcgen.UpdateSandboxSnapshotIDParams) (sqlcgen.Sandbox, error) {
+	return s.q.UpdateSandboxSnapshotID(ctx, arg)
+}
+
+// UpdatePendingSnapshotMessageID sets (or clears, via nil) the MessageId
+// of whichever Snapshot command this sandbox is currently waiting on a
+// snapshot_ready for -- Step 22 fix (message-id correlation), closing a
+// real ambiguous-write race an independent review confirmed against a
+// real Postgres instance.
+func (s *SandboxStore) UpdatePendingSnapshotMessageID(ctx context.Context, arg sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams) (sqlcgen.Sandbox, error) {
+	return s.q.UpdateSandboxPendingSnapshotMessageID(ctx, arg)
+}

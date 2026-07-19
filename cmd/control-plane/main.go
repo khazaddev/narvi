@@ -207,6 +207,15 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/scm-credentials",
 		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, cfg.TokenEncryptionKey, cfg.Timeouts))
 
+	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
+	// deliberately mounted OUTSIDE /api/sessions and outside auth.
+	// Middleware entirely, mirroring scm-credentials immediately above
+	// exactly (see that handler's own doc comment, and
+	// httpapi/snapshotmint.go's own) -- another sandbox-bearer-token-
+	// authenticated route, not a browser-facing one.
+	router.Post("/sessions/{sessionID}/snapshot",
+		httpapi.SnapshotMint(sandboxStore, sandboxProvider))
+
 	// Auth routes (§13.1/§13.4, Step 20): how a session is obtained/
 	// discarded in the first place, so — obviously — mounted OUTSIDE any
 	// auth gate. See internal/adapters/inbound/auth's own doc.go for the

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
@@ -24,17 +25,37 @@ import (
 // CreateSandbox call it receives and returning a caller-configured
 // (ref, err) pair -- this package's own EnsureDispatched decision-tree
 // tests never talk to a real cloud provider.
+//
+// Step 22 ("snapshots & restore") extends this same fake with an identical
+// recording shape for RestoreFromSnapshot (restoreCalls/nextRestoreRef/
+// nextRestoreErr) rather than introducing a second, parallel fake -- the
+// restore-path tests below need the exact same CreateSandbox-call-recording
+// precedent, just for the other provider method dispatch.go's executeRestore
+// now calls.
 type fakeSpawnProvider struct {
 	mu      sync.Mutex
 	calls   []ports.CreateSpec
 	nextRef ports.SandboxRef
 	nextErr error
+
+	restoreCalls   []fakeRestoreCall
+	nextRestoreRef ports.SandboxRef
+	nextRestoreErr error
+}
+
+// fakeRestoreCall records one RestoreFromSnapshot invocation's own
+// arguments, mirroring how calls ([]ports.CreateSpec) records CreateSandbox's
+// own single argument -- RestoreFromSnapshot takes two, so this small struct
+// keeps both together per call.
+type fakeRestoreCall struct {
+	snapshotID ports.SnapshotID
+	spec       ports.CreateSpec
 }
 
 var _ ports.SandboxProvider = (*fakeSpawnProvider)(nil)
 
 func (f *fakeSpawnProvider) Capabilities() ports.Capabilities {
-	return ports.Capabilities{Snapshots: false, Resume: false, ExplicitStop: false, ImageBuilds: false}
+	return ports.Capabilities{Snapshots: true, Resume: false, ExplicitStop: false, ImageBuilds: false}
 }
 
 func (f *fakeSpawnProvider) CreateSandbox(_ context.Context, spec ports.CreateSpec) (ports.SandboxRef, error) {
@@ -51,8 +72,12 @@ func (f *fakeSpawnProvider) ResumeSandbox(context.Context, ports.SandboxRef) err
 func (f *fakeSpawnProvider) TakeSnapshot(context.Context, ports.SandboxRef) (ports.SnapshotID, error) {
 	return "", errors.New("not implemented")
 }
-func (f *fakeSpawnProvider) RestoreFromSnapshot(context.Context, ports.SnapshotID, ports.CreateSpec) (ports.SandboxRef, error) {
-	return ports.SandboxRef{}, errors.New("not implemented")
+
+func (f *fakeSpawnProvider) RestoreFromSnapshot(_ context.Context, id ports.SnapshotID, spec ports.CreateSpec) (ports.SandboxRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restoreCalls = append(f.restoreCalls, fakeRestoreCall{snapshotID: id, spec: spec})
+	return f.nextRestoreRef, f.nextRestoreErr
 }
 func (f *fakeSpawnProvider) BuildImage(context.Context, ports.ImageSpec) (ports.BuildRef, error) {
 	return "", errors.New("not implemented")
@@ -72,6 +97,18 @@ func (f *fakeSpawnProvider) lastSpec() ports.CreateSpec {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls[len(f.calls)-1]
+}
+
+func (f *fakeSpawnProvider) restoreCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.restoreCalls)
+}
+
+func (f *fakeSpawnProvider) lastRestoreCall() fakeRestoreCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.restoreCalls[len(f.restoreCalls)-1]
 }
 
 // fakeSendCommander is a test-only ports.SandboxCommander recording every
@@ -590,5 +627,229 @@ func TestExecuteSpawn_StaleEpochOnRecord_PropagatesErrStaleEpoch(t *testing.T) {
 	}
 	if row.ProviderID != nil {
 		t.Errorf("sandbox provider_id = %v, want nil (the record-outcome transact must have rolled back)", *row.ProviderID)
+	}
+}
+
+// --- Step 22 ("snapshots & restore"), design decision 6: executeRestore's
+// own decision-tree coverage, mirroring this file's own existing
+// spawn-path tests exactly (same rig helpers, same fakeSpawnProvider, same
+// waitUntil/fixed-sleep conventions) for the parallel Restore path
+// EvaluateSpawnDecision's own Restore branch (already built, dispatch.go's
+// own new caller) makes reachable for the first time.
+
+// seedStoppedSandboxWithSnapshot creates a sandbox row, moves it to Stopped,
+// and records snapshotID on it -- the exact (status, snapshot_id) precondition
+// EvaluateSpawnDecision's Restore branch requires (Stopped/Failed/Stale +
+// SnapshotImageID != ""). Returns the store so callers can re-Get afterward.
+func seedStoppedSandboxWithSnapshot(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID, snapshotID string) *narvipg.SandboxStore {
+	t.Helper()
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusStopped,
+	}); err != nil {
+		t.Fatalf("move sandbox to stopped: %v", err)
+	}
+	if _, err := sandboxStore.UpdateSnapshotID(ctx, sqlcgen.UpdateSandboxSnapshotIDParams{
+		SessionID: sessionID, SnapshotID: &snapshotID,
+	}); err != nil {
+		t.Fatalf("seed snapshot_id: %v", err)
+	}
+	return sandboxStore
+}
+
+// TestHandleEnsureDispatched_StoppedWithSnapshot_Restores proves the full
+// real Restore path: a Stopped sandbox carrying a real snapshot_id + a
+// pending turn -> EvaluateSpawnDecision's Restore branch fires -> a real
+// RestoreFromSnapshot call (not CreateSandbox) with a Validate()-passing
+// CreateSpec whose BootMode is SnapshotRestore (design decision 6b) and
+// whose SnapshotID argument is the sandbox row's own persisted one -- gen
+// is genuinely bumped (1 -> 2, the SAME UpsertSandboxForSpawn write a plain
+// spawn uses, per planRestore's own doc comment), and once the fake
+// provider's success response is recorded, the sandbox lands in Connecting
+// via the SAME Spawning->Connecting TriggerProviderAck transition a fresh
+// spawn also uses.
+func TestHandleEnsureDispatched_StoppedWithSnapshot_Restores(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithSnapshot(ctx, t, pool, sessionID, "snap-restore-1")
+
+	provider := &fakeSpawnProvider{nextRestoreRef: ports.SandboxRef{ProviderID: "restored-provider-object-1"}}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return provider.restoreCallCount() == 1
+	})
+	// CreateSandbox must never be called on the restore path.
+	if got := provider.callCount(); got != 0 {
+		t.Errorf("provider.CreateSandbox called %d times, want 0 (restore must call RestoreFromSnapshot, never CreateSandbox)", got)
+	}
+
+	call := provider.lastRestoreCall()
+	if call.snapshotID != "snap-restore-1" {
+		t.Errorf("RestoreFromSnapshot snapshotID = %q, want %q", call.snapshotID, "snap-restore-1")
+	}
+	if err := call.spec.Validate(); err != nil {
+		t.Errorf("CreateSpec.Validate() = %v, want nil", err)
+	}
+	if call.spec.Gen != 2 {
+		t.Errorf("CreateSpec.Gen = %d, want 2 (bumped from the Stopped row's own gen 1)", call.spec.Gen)
+	}
+	if call.spec.SessionConfig.BootMode != sessionconfig.SessionConfigBootModeSnapshotRestore {
+		t.Errorf("CreateSpec.SessionConfig.BootMode = %q, want %q",
+			call.spec.SessionConfig.BootMode, sessionconfig.SessionConfigBootModeSnapshotRestore)
+	}
+	if call.spec.SessionConfig.SandboxToken == "" {
+		t.Error("CreateSpec.SessionConfig.SandboxToken is empty, want a real freshly minted token")
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && row.Status == sqlcgen.SandboxStatusConnecting
+	})
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Gen != 2 {
+		t.Errorf("sandbox gen = %d, want 2 (a real gen bump, TriggerRestore's own gen-fencing check passing)", row.Gen)
+	}
+	if row.ProviderID == nil || *row.ProviderID != "restored-provider-object-1" {
+		t.Errorf("sandbox provider_id = %v, want %q", row.ProviderID, "restored-provider-object-1")
+	}
+	if row.SnapshotID == nil || *row.SnapshotID != "snap-restore-1" {
+		t.Errorf("sandbox snapshot_id = %v, want unchanged %q (a restore does not clear it)", row.SnapshotID, "snap-restore-1")
+	}
+}
+
+// TestExecuteRestore_PermanentProviderError_IncrementsCircuitBreaker mirrors
+// TestHandleEnsureDispatched_PermanentProviderError_IncrementsCircuitBreaker
+// exactly, but drives it via a permanent RestoreFromSnapshot failure instead
+// of a permanent CreateSandbox one -- proving design decision 6's own
+// required circuit-breaker reuse: recordSpawnFailure is the SAME function
+// for both, so a permanent restore failure increments the SAME
+// spawn_failure_count/last_spawn_failure_at columns and moves the sandbox to
+// Suspect (never straight to Failed). The gen bump from planRestore's own
+// write already committed before this failure was ever returned (mirroring
+// how a plain spawn's own gen/token/status write commits before CreateSandbox
+// is attempted) -- proven here by asserting gen == 2 even though the restore
+// itself failed.
+func TestExecuteRestore_PermanentProviderError_IncrementsCircuitBreaker(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithSnapshot(ctx, t, pool, sessionID, "snap-restore-2")
+
+	provider := &fakeSpawnProvider{nextRestoreErr: &ports.ProviderError{
+		Transient: false, Code: "INVALID_SNAPSHOT", Op: ports.OpRestoreFromSnapshot, Err: errors.New("boom"),
+	}}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && row.Status == sqlcgen.SandboxStatusSuspect
+	})
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.SpawnFailureCount != 1 {
+		t.Errorf("spawn_failure_count = %d, want 1 (the SAME circuit-breaker columns a permanent CreateSandbox failure uses)", row.SpawnFailureCount)
+	}
+	if !row.LastSpawnFailureAt.Valid {
+		t.Error("last_spawn_failure_at not set")
+	}
+	if row.Gen != 2 {
+		t.Errorf("sandbox gen = %d, want 2 (planRestore's own gen bump already committed before the failed provider call)", row.Gen)
+	}
+	if got := provider.restoreCallCount(); got != 1 {
+		t.Errorf("provider.RestoreFromSnapshot called %d times, want 1", got)
+	}
+}
+
+// TestHandleEnsureDispatched_RestoreCircuitBreakerOpen_DoesNotRestore mirrors
+// TestHandleEnsureDispatched_CircuitBreakerOpen_DoesNotSpawn exactly (same
+// seeded-3-failures-then-a-4th-is-blocked proof Step 21's own spawn circuit
+// breaker test already established), but on a Stopped+snapshot_id sandbox --
+// proving the circuit breaker gate in tryPlanSpawn runs BEFORE
+// EvaluateSpawnDecision is ever consulted, so it blocks a would-be Restore
+// exactly as completely as it blocks a would-be Spawn: RestoreFromSnapshot is
+// never called, and the sandbox row (status, gen, snapshot_id, circuit
+// breaker columns) is left completely untouched by this 4th attempt.
+func TestHandleEnsureDispatched_RestoreCircuitBreakerOpen_DoesNotRestore(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithSnapshot(ctx, t, pool, sessionID, "snap-restore-3")
+	if _, err := sandboxStore.UpdateCircuitBreaker(ctx, sqlcgen.UpdateSandboxCircuitBreakerParams{
+		SessionID:          sessionID,
+		SpawnFailureCount:  3,
+		LastSpawnFailureAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatalf("seed circuit breaker: %v", err)
+	}
+
+	provider := &fakeSpawnProvider{}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	// Same fixed-sleep-then-assert-nothing-happened shape this file's own
+	// TestHandleEnsureDispatched_CircuitBreakerOpen_DoesNotSpawn already uses
+	// -- there is no positive DB signal to poll FOR when asserting something
+	// did NOT happen.
+	time.Sleep(300 * time.Millisecond)
+
+	if got := provider.restoreCallCount(); got != 0 {
+		t.Errorf("provider.RestoreFromSnapshot called %d times, want 0 (circuit breaker should have blocked the 4th attempt)", got)
+	}
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusStopped {
+		t.Errorf("sandbox status = %s, want unchanged %s", row.Status, sqlcgen.SandboxStatusStopped)
+	}
+	if row.Gen != 1 {
+		t.Errorf("sandbox gen = %d, want unchanged 1 (no restore attempt should have run at all)", row.Gen)
+	}
+	if row.SpawnFailureCount != 3 {
+		t.Errorf("spawn_failure_count = %d, want unchanged 3", row.SpawnFailureCount)
 	}
 }

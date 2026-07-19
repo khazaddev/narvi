@@ -8,8 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -212,5 +214,676 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 	}
 	if got := countEvents("heartbeat"); got != 1 {
 		t.Errorf("heartbeat event count = %d, want 1 (the stale-gen one must not have been persisted)", got)
+	}
+}
+
+// --- Step 22 ("snapshots & restore"): triggerSnapshotBestEffort's own full
+// decision tree (design decision 1) and handleSandboxEvent's new
+// snapshot_ready branch (design decision 3).
+
+// sendSandboxEvent drives cmd through Actor.Send and returns the resulting
+// SandboxEventOutcome -- factored out of TestHandleSandboxEvent_FullRoundTrip's
+// own local `send` closure (above) since the snapshot_ready tests below need
+// the identical shape more than once.
+func sendSandboxEvent(ctx context.Context, t *testing.T, a *Actor, cmd SandboxEvent) SandboxEventOutcome {
+	t.Helper()
+	reply := make(chan SandboxEventOutcome, 1)
+	cmd.Reply = reply
+	if err := a.Send(ctx, cmd); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	select {
+	case outcome := <-reply:
+		return outcome
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SandboxEventOutcome")
+		return SandboxEventOutcome{}
+	}
+}
+
+// TestTriggerSnapshotBestEffort_ReadyToSnapshotting_SendsCommand proves the
+// "eligible" half of triggerSnapshotBestEffort's own decision tree: a Ready
+// sandbox transitions to Snapshotting and a real, schema-valid
+// sandboxws.Snapshot command is sent via SandboxCommander.SendCommand,
+// carrying the sandbox's own session id and gen. Called directly (bypassing
+// Actor.Send/the mailbox) -- mirrors TestExecuteSpawn_
+// StaleEpochOnRecord_PropagatesErrStaleEpoch's own precedent of driving an
+// unexported Actor method directly from this white-box (package
+// sessionactor) test file.
+func TestTriggerSnapshotBestEffort_ReadyToSnapshotting_SendsCommand(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	commander := &fakeSendCommander{}
+	r := newDispatchTestRegistry(ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	a.triggerSnapshotBestEffort(ctx)
+
+	if got := commander.callCount(); got != 1 {
+		t.Fatalf("SendCommand called %d times, want 1", got)
+	}
+
+	var cmd sandboxws.Snapshot
+	if err := json.Unmarshal(commander.lastPayload(), &cmd); err != nil {
+		t.Fatalf("unmarshal SendCommand payload as sandboxws.Snapshot: %v", err)
+	}
+	if cmd.Type != "snapshot" {
+		t.Errorf("Snapshot.Type = %q, want %q", cmd.Type, "snapshot")
+	}
+	if cmd.SessionId != sessionID.String() {
+		t.Errorf("Snapshot.SessionId = %q, want %q", cmd.SessionId, sessionID.String())
+	}
+	if cmd.Gen != 1 {
+		t.Errorf("Snapshot.Gen = %d, want 1", cmd.Gen)
+	}
+	if cmd.MessageId == "" {
+		t.Error("Snapshot.MessageId is empty, want a freshly minted uuid")
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusSnapshotting {
+		t.Errorf("sandbox status = %s, want %s", row.Status, sqlcgen.SandboxStatusSnapshotting)
+	}
+}
+
+// TestTriggerSnapshotBestEffort_NotReady_NoOp proves the "ineligible" half:
+// a sandbox that is not Ready (Booting here -- mid-boot, not yet idle) is
+// left completely untouched: no transition, no SendCommand call at all.
+func TestTriggerSnapshotBestEffort_NotReady_NoOp(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusBooting,
+	}); err != nil {
+		t.Fatalf("move sandbox to booting: %v", err)
+	}
+
+	commander := &fakeSendCommander{}
+	r := newDispatchTestRegistry(ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	a.triggerSnapshotBestEffort(ctx)
+
+	if got := commander.callCount(); got != 0 {
+		t.Errorf("SendCommand called %d times, want 0 (a Booting sandbox is not eligible to snapshot)", got)
+	}
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusBooting {
+		t.Errorf("sandbox status = %s, want unchanged %s", row.Status, sqlcgen.SandboxStatusBooting)
+	}
+}
+
+// TestTriggerSnapshotBestEffort_SendCommandFails_RevertsToReady proves the
+// compensating-write half: when SendCommand fails (the snapshot command
+// never reached the sandbox), the sandbox -- already committed Snapshotting
+// by this point -- is reverted back to Ready by a second, small transact,
+// logged, not fatal.
+func TestTriggerSnapshotBestEffort_SendCommandFails_RevertsToReady(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	commander := &fakeSendCommander{nextErr: ports.ErrNoLiveSandboxConnection}
+	r := newDispatchTestRegistry(ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	a.triggerSnapshotBestEffort(ctx)
+
+	if got := commander.callCount(); got != 1 {
+		t.Errorf("SendCommand called %d times, want 1", got)
+	}
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Errorf("sandbox status = %s, want %s (reverted after the failed send, never left stuck snapshotting)", row.Status, sqlcgen.SandboxStatusReady)
+	}
+}
+
+// TestHandleSnapshotReadyEvent_Normal_TransitionsToReadyAndPersistsID proves
+// the normal case: a real snapshot_ready event, whose own commandMessageId
+// matches the sandbox row's currently-outstanding pending_snapshot_message_id
+// (message-id correlation fix), arriving while the sandbox IS Snapshotting
+// transitions it to Ready and persists the reported snapshotId onto
+// sandboxes.snapshot_id (clearing pending_snapshot_message_id back to nil in
+// the same statement), with the ack outcome carrying the event's own ackId
+// verbatim.
+func TestHandleSnapshotReadyEvent_Normal_TransitionsToReadyAndPersistsID(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusSnapshotting,
+	}); err != nil {
+		t.Fatalf("move sandbox to snapshotting: %v", err)
+	}
+	pendingID := "cmd-msg-1"
+	if _, err := sandboxStore.UpdatePendingSnapshotMessageID(ctx, sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams{
+		SessionID: sessionID, PendingSnapshotMessageID: &pendingID,
+	}); err != nil {
+		t.Fatalf("seed pending snapshot message id: %v", err)
+	}
+
+	// No commander configured. Note that handleSandboxEvent's own
+	// post-commit triggerSnapshotBestEffort call is gated on cmd.Type ==
+	// "execution_complete" (design decision 1, as corrected by review) --
+	// this event is "snapshot_ready", not "execution_complete", so that
+	// call is never even attempted here; the sandbox simply lands on
+	// Ready via handleSnapshotReadyEvent itself and stays there.
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	raw := json.RawMessage(`{"type":"snapshot_ready","messageId":"sr-1","sessionId":"s","gen":1,"ackId":"snapshot_ready:sr-1","snapshotId":"snap-confirmed-1","commandMessageId":"cmd-msg-1"}`)
+	outcome := sendSandboxEvent(ctx, t, a, SandboxEvent{Type: "snapshot_ready", Gen: 1, Raw: raw})
+
+	if !outcome.Persisted {
+		t.Error("snapshot_ready: Persisted = false, want true")
+	}
+	if outcome.AckID != "snapshot_ready:sr-1" {
+		t.Errorf("snapshot_ready: AckID = %q, want %q", outcome.AckID, "snapshot_ready:sr-1")
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Errorf("sandbox status = %s, want %s", row.Status, sqlcgen.SandboxStatusReady)
+	}
+	if row.SnapshotID == nil || *row.SnapshotID != "snap-confirmed-1" {
+		t.Errorf("sandbox snapshot_id = %v, want %q", row.SnapshotID, "snap-confirmed-1")
+	}
+	if row.PendingSnapshotMessageID != nil {
+		t.Errorf("sandbox pending_snapshot_message_id = %q, want nil (cleared on accept)", *row.PendingSnapshotMessageID)
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM events WHERE session_id = $1 AND type = 'snapshot_ready'`,
+		sessionID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count snapshot_ready events: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("snapshot_ready event count = %d, want 1", n)
+	}
+}
+
+// TestHandleSandboxEvent_HeartbeatOnReadySandbox_DoesNotTriggerSnapshot
+// reproduces, and proves fixed, the defect an independent review of this
+// Step found: a routine "heartbeat" event arriving on an already-Ready,
+// otherwise-idle sandbox must NOT re-trigger a snapshot cycle.
+// triggerSnapshotBestEffort is only warranted on a genuine turn-terminal
+// event (§3.3: "On terminal event: complete turn, trigger snapshot...");
+// handleSandboxEvent's own post-commit block now gates that call on
+// cmd.Type == "execution_complete" (design decision 1, as corrected by
+// review) rather than on the sandbox's own Ready status alone. Two
+// heartbeats are sent in a row -- mirroring the review's own two-heartbeat
+// repro exactly -- to prove the fix holds on a first AND a subsequent
+// heartbeat, not just the first.
+func TestHandleSandboxEvent_HeartbeatOnReadySandbox_DoesNotTriggerSnapshot(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	commander := &fakeSendCommander{}
+	r := newDispatchTestRegistry(ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	heartbeat := func(messageID string) SandboxEvent {
+		return SandboxEvent{
+			Type: "heartbeat", Gen: 1,
+			Raw: json.RawMessage(`{"type":"heartbeat","messageId":"` + messageID + `","sessionId":"s","gen":1,"conversationId":null,"lastBootPhase":null}`),
+		}
+	}
+
+	outcome := sendSandboxEvent(ctx, t, a, heartbeat("hb-1"))
+	if !outcome.Persisted {
+		t.Error("first heartbeat: Persisted = false, want true")
+	}
+	if got := commander.callCount(); got != 0 {
+		t.Fatalf("after first heartbeat: SendCommand called %d times, want 0 (a routine idle heartbeat must never trigger a snapshot cycle)", got)
+	}
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Errorf("status after first heartbeat = %s, want unchanged %s", row.Status, sqlcgen.SandboxStatusReady)
+	}
+
+	outcome = sendSandboxEvent(ctx, t, a, heartbeat("hb-2"))
+	if !outcome.Persisted {
+		t.Error("second heartbeat: Persisted = false, want true")
+	}
+	if got := commander.callCount(); got != 0 {
+		t.Errorf("after second heartbeat: SendCommand called %d times, want 0 (the behavior must not start firing on a later heartbeat either)", got)
+	}
+	row, err = sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Errorf("status after second heartbeat = %s, want unchanged %s", row.Status, sqlcgen.SandboxStatusReady)
+	}
+}
+
+// TestHandleSandboxEvent_ExecutionComplete_TriggersSnapshotOnReadySandbox
+// proves the positive half of the same gating fix: a real
+// execution_complete event (a genuine turn-terminal event, §3.3) DOES
+// still trigger a snapshot cycle when the sandbox is Ready -- Ready
+// transitions to Snapshotting and a real sandboxws.Snapshot command is
+// sent -- exactly as design decision 1 always intended, just now
+// correctly gated on the event actually being turn-terminal instead of on
+// every sandbox-WS frame.
+func TestHandleSandboxEvent_ExecutionComplete_TriggersSnapshotOnReadySandbox(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createProcessingTurn(ctx, t, turnStore, sessionID)
+
+	commander := &fakeSendCommander{}
+	r := newDispatchTestRegistry(ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	outcome := sendSandboxEvent(ctx, t, a, SandboxEvent{
+		Type: "execution_complete",
+		Gen:  1,
+		Raw:  executionCompleteRaw(t, sessionID.String(), 1, sandboxws.ExecutionCompleteOutcomeCompleted),
+	})
+	if !outcome.Persisted {
+		t.Error("execution_complete: Persisted = false, want true")
+	}
+
+	// This session names no repos (createTestSession's own default), so
+	// completeProcessingTurn's own pushSignal is nil and sendPushBestEffort
+	// no-ops -- the only SendCommand call this test expects is the
+	// snapshot one, so waiting for callCount() == 1 unambiguously observes
+	// triggerSnapshotBestEffort's own asynchronous (post-Send) effect.
+	waitUntil(t, 5*time.Second, func() bool {
+		return commander.callCount() == 1
+	})
+
+	var cmd sandboxws.Snapshot
+	if err := json.Unmarshal(commander.lastPayload(), &cmd); err != nil {
+		t.Fatalf("unmarshal SendCommand payload as sandboxws.Snapshot: %v", err)
+	}
+	if cmd.Type != "snapshot" {
+		t.Errorf("SendCommand payload Type = %q, want %q", cmd.Type, "snapshot")
+	}
+	if cmd.SessionId != sessionID.String() {
+		t.Errorf("Snapshot.SessionId = %q, want %q", cmd.SessionId, sessionID.String())
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusSnapshotting {
+		t.Errorf("sandbox status = %s, want %s", row.Status, sqlcgen.SandboxStatusSnapshotting)
+	}
+}
+
+// TestHandleSnapshotReadyEvent_LateOrDuplicate_NoOp proves the late/duplicate
+// case: a snapshot_ready event arriving while the sandbox is NO LONGER
+// Snapshotting (here: already Ready, e.g. because a liveness watchdog
+// already resolved it some other way in the meantime) is logged and treated
+// as a no-op -- the event is still persisted/acked (never a transact
+// failure), but neither the status nor the previously-recorded snapshot_id
+// is touched by this event's own reported (and here, ignored) snapshotId.
+func TestHandleSnapshotReadyEvent_LateOrDuplicate_NoOp(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+	oldSnapshotID := "snap-old-already-recorded"
+	if _, err := sandboxStore.UpdateSnapshotID(ctx, sqlcgen.UpdateSandboxSnapshotIDParams{
+		SessionID: sessionID, SnapshotID: &oldSnapshotID,
+	}); err != nil {
+		t.Fatalf("seed old snapshot_id: %v", err)
+	}
+
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	raw := json.RawMessage(`{"type":"snapshot_ready","messageId":"sr-2","sessionId":"s","gen":1,"ackId":"snapshot_ready:sr-2","snapshotId":"snap-new-must-be-ignored"}`)
+	outcome := sendSandboxEvent(ctx, t, a, SandboxEvent{Type: "snapshot_ready", Gen: 1, Raw: raw})
+
+	if !outcome.Persisted {
+		t.Error("snapshot_ready: Persisted = false, want true (still persisted verbatim even though no transition applies)")
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Errorf("sandbox status = %s, want unchanged %s", row.Status, sqlcgen.SandboxStatusReady)
+	}
+	if row.SnapshotID == nil || *row.SnapshotID != oldSnapshotID {
+		t.Errorf("sandbox snapshot_id = %v, want unchanged %q (a late/duplicate snapshot_ready must not overwrite it)", row.SnapshotID, oldSnapshotID)
+	}
+}
+
+// TestSnapshotMessageIDCorrelation_StaleAttemptDiscardedNotAcceptedByLaterAttempt
+// reproduces, and proves fixed, the exact race an independent review
+// constructed and confirmed against a real Postgres instance (the most
+// severe finding of this Step's own 3-lens adversarial review):
+//
+//  1. Attempt #1's SendCommand reports a failure -- the classic ambiguous-
+//     write case (SendCommand is a context-bounded conn.Write; the frame
+//     can already have been flushed to the OS/TCP layer despite the local
+//     call erroring) -- triggering the compensating revert back to Ready.
+//  2. Attempt #2 starts at the SAME gen (neither snapshot trigger is
+//     gen-fenced by design) and succeeds.
+//  3. Attempt #1's real, delayed snapshot_ready now arrives. Before the
+//     message-id-correlation fix, the ONLY correctness check
+//     handleSnapshotReadyEvent had was "is the sandbox's CURRENT status
+//     Snapshotting" -- true here, satisfied by attempt #2 -- so this stale
+//     event would have been wrongly accepted as completing attempt #2,
+//     stamping the STALE snapshotId with no surfaced error.
+//  4. This test proves the fix: the stale event (its own commandMessageId
+//     matching attempt #1's, not attempt #2's currently-outstanding
+//     pending id) is discarded as stale -- attempt #2 remains outstanding,
+//     untouched -- and attempt #2's own real snapshot_ready subsequently
+//     IS correctly accepted.
+func TestSnapshotMessageIDCorrelation_StaleAttemptDiscardedNotAcceptedByLaterAttempt(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	// Attempt #1: SendCommand reports failure.
+	commander := &fakeSendCommander{nextErr: ports.ErrNoLiveSandboxConnection}
+	r := newDispatchTestRegistry(ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	a.triggerSnapshotBestEffort(ctx)
+	if got := commander.callCount(); got != 1 {
+		t.Fatalf("attempt #1: SendCommand called %d times, want 1", got)
+	}
+	var attempt1Cmd sandboxws.Snapshot
+	if err := json.Unmarshal(commander.lastPayload(), &attempt1Cmd); err != nil {
+		t.Fatalf("unmarshal attempt #1 Snapshot command: %v", err)
+	}
+	attempt1MessageID := attempt1Cmd.MessageId
+	if attempt1MessageID == "" {
+		t.Fatal("attempt #1 MessageId is empty")
+	}
+
+	// Confirm the compensating revert already ran: back to Ready, pending
+	// id cleared.
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Fatalf("after attempt #1's failed send, status = %s, want %s", row.Status, sqlcgen.SandboxStatusReady)
+	}
+	if row.PendingSnapshotMessageID != nil {
+		t.Fatalf("after attempt #1's revert, pending_snapshot_message_id = %v, want nil", *row.PendingSnapshotMessageID)
+	}
+
+	// Attempt #2: a later, genuinely successful attempt at the SAME gen.
+	commander.nextErr = nil
+	a.triggerSnapshotBestEffort(ctx)
+	if got := commander.callCount(); got != 2 {
+		t.Fatalf("attempt #2: SendCommand called %d times total, want 2", got)
+	}
+	var attempt2Cmd sandboxws.Snapshot
+	if err := json.Unmarshal(commander.lastPayload(), &attempt2Cmd); err != nil {
+		t.Fatalf("unmarshal attempt #2 Snapshot command: %v", err)
+	}
+	attempt2MessageID := attempt2Cmd.MessageId
+	if attempt2MessageID == "" || attempt2MessageID == attempt1MessageID {
+		t.Fatalf("attempt #2 MessageId = %q, want a fresh id distinct from attempt #1's %q", attempt2MessageID, attempt1MessageID)
+	}
+
+	row, err = sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusSnapshotting {
+		t.Fatalf("after attempt #2's send, status = %s, want %s", row.Status, sqlcgen.SandboxStatusSnapshotting)
+	}
+	if row.PendingSnapshotMessageID == nil || *row.PendingSnapshotMessageID != attempt2MessageID {
+		t.Fatalf("after attempt #2's send, pending_snapshot_message_id = %v, want %q", row.PendingSnapshotMessageID, attempt2MessageID)
+	}
+
+	// Attempt #1's real, delayed snapshot_ready now arrives late, carrying
+	// attempt #1's own commandMessageId -- NOT attempt #2's, which is the
+	// one currently outstanding.
+	staleRaw := json.RawMessage(`{"type":"snapshot_ready","messageId":"stale-evt","sessionId":"s","gen":1,"ackId":"snapshot_ready:stale-evt","snapshotId":"snap-STALE-must-be-discarded","commandMessageId":"` + attempt1MessageID + `"}`)
+	outcome := sendSandboxEvent(ctx, t, a, SandboxEvent{Type: "snapshot_ready", Gen: 1, Raw: staleRaw})
+	if !outcome.Persisted {
+		t.Error("attempt #1's late snapshot_ready: Persisted = false, want true (still persisted verbatim)")
+	}
+
+	row, err = sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusSnapshotting {
+		t.Errorf("after the STALE event, status = %s, want unchanged %s (attempt #2 must still be outstanding)", row.Status, sqlcgen.SandboxStatusSnapshotting)
+	}
+	if row.SnapshotID != nil {
+		t.Errorf("after the STALE event, snapshot_id = %q, want nil (the stale attempt's snapshotId must never be recorded)", *row.SnapshotID)
+	}
+	if row.PendingSnapshotMessageID == nil || *row.PendingSnapshotMessageID != attempt2MessageID {
+		t.Errorf("after the STALE event, pending_snapshot_message_id = %v, want unchanged %q (attempt #2's own pending id must survive the stale delivery)", row.PendingSnapshotMessageID, attempt2MessageID)
+	}
+
+	// Attempt #2's own real snapshot_ready then arrives and IS correctly
+	// accepted.
+	realRaw := json.RawMessage(`{"type":"snapshot_ready","messageId":"real-evt","sessionId":"s","gen":1,"ackId":"snapshot_ready:real-evt","snapshotId":"snap-real-attempt-2","commandMessageId":"` + attempt2MessageID + `"}`)
+	outcome = sendSandboxEvent(ctx, t, a, SandboxEvent{Type: "snapshot_ready", Gen: 1, Raw: realRaw})
+	if !outcome.Persisted {
+		t.Error("attempt #2's real snapshot_ready: Persisted = false, want true")
+	}
+
+	row, err = sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Errorf("after attempt #2's real snapshot_ready, status = %s, want %s", row.Status, sqlcgen.SandboxStatusReady)
+	}
+	if row.SnapshotID == nil || *row.SnapshotID != "snap-real-attempt-2" {
+		t.Errorf("after attempt #2's real snapshot_ready, snapshot_id = %v, want %q", row.SnapshotID, "snap-real-attempt-2")
+	}
+	if row.PendingSnapshotMessageID != nil {
+		t.Errorf("after attempt #2's real snapshot_ready, pending_snapshot_message_id = %v, want nil (cleared on accept)", *row.PendingSnapshotMessageID)
+	}
+}
+
+// TestHandleSnapshotReadyEvent_DecodeFailure_RevertsToReadyInsteadOfWedging
+// proves Finding 2's own fix: a snapshot_ready that fails schema decode
+// (genuinely malformed per sandboxws.SnapshotReady's own generated
+// UnmarshalJSON -- e.g. missing a required field -- which wshub's own
+// permissive read-loop peek does NOT filter out before constructing a
+// SandboxEvent) must revert the sandbox Snapshotting->Ready, exactly like
+// the SendCommand-failure path already does, instead of leaving it
+// permanently stuck Snapshotting (no watchdog covers that state).
+func TestHandleSnapshotReadyEvent_DecodeFailure_RevertsToReadyInsteadOfWedging(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusSnapshotting,
+	}); err != nil {
+		t.Fatalf("move sandbox to snapshotting: %v", err)
+	}
+	pendingID := "pending-msg-1"
+	if _, err := sandboxStore.UpdatePendingSnapshotMessageID(ctx, sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams{
+		SessionID: sessionID, PendingSnapshotMessageID: &pendingID,
+	}); err != nil {
+		t.Fatalf("seed pending snapshot message id: %v", err)
+	}
+
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	// Syntactically valid JSON, but missing "ackId" and "snapshotId" --
+	// both required by sandboxws.SnapshotReady's own generated
+	// UnmarshalJSON, so json.Unmarshal into that type fails even though
+	// wshub's own permissive envelope peek (type/gen/lastBootPhase only)
+	// already let it through as a SandboxEvent.
+	malformedRaw := json.RawMessage(`{"type":"snapshot_ready","messageId":"m-bad","sessionId":"s","gen":1}`)
+	outcome := sendSandboxEvent(ctx, t, a, SandboxEvent{Type: "snapshot_ready", Gen: 1, Raw: malformedRaw})
+
+	if !outcome.Persisted {
+		t.Error("malformed snapshot_ready: Persisted = false, want true (the raw event and the compensating revert commit together)")
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Errorf("sandbox status = %s, want %s (a decode failure must revert, not leave the sandbox stuck snapshotting)", row.Status, sqlcgen.SandboxStatusReady)
+	}
+	if row.PendingSnapshotMessageID != nil {
+		t.Errorf("pending_snapshot_message_id = %q, want nil (cleared by the revert)", *row.PendingSnapshotMessageID)
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM events WHERE session_id = $1 AND type = 'snapshot_ready'`,
+		sessionID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count snapshot_ready events: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("snapshot_ready event count = %d, want 1 (persisted verbatim despite the decode failure)", n)
 	}
 }

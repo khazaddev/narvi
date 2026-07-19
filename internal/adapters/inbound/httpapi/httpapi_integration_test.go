@@ -133,6 +133,12 @@ type testRig struct {
 	// round trip, matching the SAME real flow Step 20's own OAuth callback
 	// uses -- not a shortcut).
 	tokenEncryptionKey []byte
+
+	// provider is Step 22's ("snapshots & restore") own addition -- a
+	// *fakeSnapshotProvider (snapshotmint_integration_test.go), configured
+	// per-test via its own exported fields, backing this rig's own
+	// snapshot-mint route below.
+	provider *fakeSnapshotProvider
 }
 
 func newTestRig(t *testing.T) testRig {
@@ -158,6 +164,7 @@ func newTestRig(t *testing.T) testRig {
 		// covers that decision tree exhaustively.
 		registry:           sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil),
 		tokenEncryptionKey: []byte("01234567890123456789012345678901"), // exactly 32 bytes
+		provider:           &fakeSnapshotProvider{},
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -175,6 +182,10 @@ func newTestRig(t *testing.T) testRig {
 	// comment.
 	router.Post("/sessions/{sessionID}/scm-credentials",
 		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
+	// snapshot-mint (Step 22, "snapshots & restore") is mounted the SAME
+	// way -- see snapshotmint.go's own doc comment.
+	router.Post("/sessions/{sessionID}/snapshot",
+		httpapi.SnapshotMint(rig.sandboxes, rig.provider))
 
 	rig.server = httptest.NewServer(router)
 	t.Cleanup(rig.server.Close)
