@@ -5,8 +5,11 @@ package sessionactor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -213,4 +216,153 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 	if got := countEvents("heartbeat"); got != 1 {
 		t.Errorf("heartbeat event count = %d, want 1 (the stale-gen one must not have been persisted)", got)
 	}
+}
+
+// TestHandleSandboxEvent_ArmsLivenessAndInactivityOnceOnBootingToReady
+// proves the fix for the confirmed HIGH-severity audit finding
+// (sessionactor-ports & docs-completeness-vs-plan lenses):
+// liveness_check and inactivity are armed for the first time exactly at
+// the real Booting->Ready transition -- driven through a real
+// handleSandboxEvent via Actor.Send, exactly matching how
+// sandboxTransitionTrigger documents "heartbeat" with a nil
+// LastBootPhase as the Booting->Ready trigger -- and are NOT re-armed
+// (their fires_at pushed forward) by a later heartbeat while already
+// Ready, proving the once-only guard rather than a
+// re-arm-every-heartbeat regression. Reads session_timers directly via
+// raw SQL/TimerStore, never trusting handleSandboxEvent's own return
+// value alone.
+func TestHandleSandboxEvent_ArmsLivenessAndInactivityOnceOnBootingToReady(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	timerStore := narvipg.NewTimerStore(pool)
+
+	created, err := sandboxStore.Create(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID,
+		Status:    sqlcgen.SandboxStatusBooting,
+	}); err != nil {
+		t.Fatalf("move sandbox to booting: %v", err)
+	}
+
+	timeouts := platform.DefaultTimeouts()
+	r := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	send := func(t *testing.T, cmd SandboxEvent) SandboxEventOutcome {
+		t.Helper()
+		reply := make(chan SandboxEventOutcome, 1)
+		cmd.Reply = reply
+		if err := a.Send(ctx, cmd); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		select {
+		case outcome := <-reply:
+			return outcome
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for SandboxEventOutcome")
+			return SandboxEventOutcome{}
+		}
+	}
+
+	getFiresAt := func(t *testing.T, name string) (time.Time, bool) {
+		t.Helper()
+		row, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: name})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, false
+		}
+		if err != nil {
+			t.Fatalf("get %s timer: %v", name, err)
+		}
+		return row.FiresAt.Time, true
+	}
+
+	beforeHeartbeat := time.Now()
+
+	// First heartbeat, nil lastBootPhase, while Booting -> transitions to
+	// Ready (sandboxTransitionTrigger's own documented (b) mapping).
+	hbRaw := json.RawMessage(`{"type":"heartbeat","messageId":"h1","sessionId":"s","gen":1,"conversationId":null,"lastBootPhase":null}`)
+	outcome := send(t, SandboxEvent{Type: "heartbeat", Gen: int(created.Gen), Raw: hbRaw, LastBootPhase: nil})
+	if !outcome.Persisted {
+		t.Fatal("first heartbeat: Persisted = false, want true")
+	}
+
+	gotSandbox, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if gotSandbox.Status != sqlcgen.SandboxStatusReady {
+		t.Fatalf("status after heartbeat-while-booting = %s, want %s", gotSandbox.Status, sqlcgen.SandboxStatusReady)
+	}
+
+	livenessFiresAt, ok := getFiresAt(t, TimerLivenessCheck)
+	if !ok {
+		t.Fatal("liveness_check timer was not armed by the Booting->Ready transition -- the confirmed gap this batch fixes")
+	}
+	inactivityFiresAt, ok := getFiresAt(t, TimerInactivity)
+	if !ok {
+		t.Fatal("inactivity timer was not armed by the Booting->Ready transition -- the confirmed gap this batch fixes")
+	}
+
+	const tolerance = 5 * time.Second
+	if want := beforeHeartbeat.Add(timeouts.SteadyHeartbeatBudget); absDuration(livenessFiresAt.Sub(want)) > tolerance {
+		t.Errorf("liveness_check fires_at = %v, want ~%v (now+SteadyHeartbeatBudget, +/-%v)", livenessFiresAt, want, tolerance)
+	}
+	if want := beforeHeartbeat.Add(timeouts.InactivityMinCheckInterval); absDuration(inactivityFiresAt.Sub(want)) > tolerance {
+		t.Errorf("inactivity fires_at = %v, want ~%v (now+InactivityMinCheckInterval, +/-%v)", inactivityFiresAt, want, tolerance)
+	}
+
+	// Second heartbeat, still Ready (nil lastBootPhase again -- a real
+	// sandbox reports it on every heartbeat regardless of phase):
+	// sandboxTransitionTrigger's own (b) mapping requires status ==
+	// Booting, which no longer holds, so this is NOT a transition -- just
+	// a liveness-only bump. Neither timer's fires_at must move: proving
+	// the once-only guard, not a re-arm-every-heartbeat regression that
+	// would starve liveness_check of ever actually firing.
+	hb2Raw := json.RawMessage(`{"type":"heartbeat","messageId":"h2","sessionId":"s","gen":1,"conversationId":null,"lastBootPhase":null}`)
+	outcome = send(t, SandboxEvent{Type: "heartbeat", Gen: int(created.Gen), Raw: hb2Raw, LastBootPhase: nil})
+	if !outcome.Persisted {
+		t.Fatal("second heartbeat: Persisted = false, want true")
+	}
+
+	gotSandbox, err = sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if gotSandbox.Status != sqlcgen.SandboxStatusReady {
+		t.Fatalf("status after second heartbeat = %s, want unchanged %s", gotSandbox.Status, sqlcgen.SandboxStatusReady)
+	}
+
+	livenessFiresAt2, ok := getFiresAt(t, TimerLivenessCheck)
+	if !ok {
+		t.Fatal("liveness_check timer disappeared after second heartbeat")
+	}
+	inactivityFiresAt2, ok := getFiresAt(t, TimerInactivity)
+	if !ok {
+		t.Fatal("inactivity timer disappeared after second heartbeat")
+	}
+	if !livenessFiresAt2.Equal(livenessFiresAt) {
+		t.Errorf("liveness_check fires_at changed on a second, already-Ready heartbeat: before=%v after=%v (must stay untouched)", livenessFiresAt, livenessFiresAt2)
+	}
+	if !inactivityFiresAt2.Equal(inactivityFiresAt) {
+		t.Errorf("inactivity fires_at changed on a second, already-Ready heartbeat: before=%v after=%v (must stay untouched)", inactivityFiresAt, inactivityFiresAt2)
+	}
+}
+
+// absDuration returns d's absolute value.
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }

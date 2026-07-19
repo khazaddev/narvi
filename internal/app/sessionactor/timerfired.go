@@ -6,8 +6,20 @@
 // the result back transactionally) and never reimplementing a decision
 // those packages already make.
 //
-// All 5 named timers are fully wired here -- none needed a SandboxProvider
-// or AgentRuntime (neither exists until Step 12+):
+// All 5 named timers' RE-ARM/handling logic is fully wired here -- none
+// needed a SandboxProvider or AgentRuntime (neither exists until Step
+// 12+). The initial arm (the very first time each timer is ever set) is
+// each timer's OWN concern, not this file's: connecting_deadline and
+// turn_deadline are armed for the first time at spawn/dispatch time
+// (dispatch.go), and liveness_check/inactivity are armed for the first
+// time at the real Booting->Ready transition (sandboxevent.go's
+// handleSandboxEvent) -- see that function's own doc comment for why
+// arming them there, exactly once, rather than here, is correct.
+// terminal_grace is armed for the first time by transitionSandboxToSuspect
+// below, itself called from three different watchdog timeouts (inactivity,
+// connecting_deadline, liveness_check) and from a permanent spawn failure
+// (dispatch.go's recordSpawnFailure) -- never from this file directly
+// either.
 //
 //   - inactivity: domain/sandbox.EvaluateInactivityTimeout. One
 //     deliberate, documented simplification: ConnectedClientCount is

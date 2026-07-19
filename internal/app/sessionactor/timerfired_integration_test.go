@@ -4,6 +4,7 @@ package sessionactor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -104,5 +105,272 @@ func TestTurnDeadlineTimerFired_FullRoundTrip(t *testing.T) {
 	}
 	if eventCount != 1 {
 		t.Errorf("execution_complete event count = %d, want 1 (synthetic completion, §3.3)", eventCount)
+	}
+}
+
+// TestLivenessCheckTimerFired_FullRoundTrip proves the second half of this
+// batch's fix genuinely closes the gap end to end, not just that the arm
+// step in isolation exists: a Ready sandbox whose liveness_check timer is
+// (directly seeded, bypassing the live-heartbeat path entirely --
+// mirroring TestTurnDeadlineTimerFired_FullRoundTrip's own established
+// precedent for this exact kind of test) overdue, fired through a real
+// Actor via TimerFired, genuinely transitions the sandbox to Suspect and
+// arms terminal_grace -- the SAME transitionSandboxToSuspect path every
+// other watchdog timeout uses (§3.2: "a watchdog never writes failed
+// directly. It writes suspect and arms terminal_grace").
+func TestLivenessCheckTimerFired_FullRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	staleSince := time.Now().Add(-1 * time.Hour) // comfortably past the default 90s SteadyHeartbeatBudget
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID:  sessionID,
+		Status:     sqlcgen.SandboxStatusReady,
+		LastSeenAt: pgtype.Timestamptz{Time: staleSince, Valid: true},
+	}); err != nil {
+		t.Fatalf("move sandbox to ready with stale last_seen_at: %v", err)
+	}
+
+	timerStore := narvipg.NewTimerStore(pool)
+	if _, err := timerStore.Upsert(ctx, sqlcgen.UpsertSessionTimerParams{
+		SessionID: sessionID,
+		Name:      TimerLivenessCheck,
+		FiresAt:   pgtype.Timestamptz{Time: time.Now().Add(-1 * time.Minute), Valid: true}, // already overdue
+	}); err != nil {
+		t.Fatalf("seed overdue liveness_check timer: %v", err)
+	}
+
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	if err := a.Send(ctx, TimerFired{Name: TimerLivenessCheck}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		got, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && got.Status == sqlcgen.SandboxStatusSuspect
+	})
+
+	gotSandbox, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if gotSandbox.Status != sqlcgen.SandboxStatusSuspect {
+		t.Fatalf("sandbox status = %s, want %s", gotSandbox.Status, sqlcgen.SandboxStatusSuspect)
+	}
+
+	if _, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerLivenessCheck}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("liveness_check timer get = %v, want pgx.ErrNoRows (handler must delete it once handled)", err)
+	}
+
+	graceRow, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerTerminalGrace})
+	if err != nil {
+		t.Fatalf("get terminal_grace timer: %v (expected it to be armed by transitionSandboxToSuspect)", err)
+	}
+	if !graceRow.FiresAt.Valid {
+		t.Error("terminal_grace fires_at not set")
+	}
+}
+
+// TestInactivityTimerFired_FullRoundTrip mirrors
+// TestLivenessCheckTimerFired_FullRoundTrip for the `inactivity` named
+// timer: a Ready, non-processing sandbox whose last_seen_at is older than
+// InactivityTimeout, with a directly-seeded overdue inactivity timer row,
+// genuinely transitions to Suspect and arms terminal_grace via the SAME
+// shared transitionSandboxToSuspect path handleLivenessCheckTimer's own
+// test above just proved.
+func TestInactivityTimerFired_FullRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	staleSince := time.Now().Add(-1 * time.Hour) // comfortably past the default 10min InactivityTimeout
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID:  sessionID,
+		Status:     sqlcgen.SandboxStatusReady,
+		LastSeenAt: pgtype.Timestamptz{Time: staleSince, Valid: true},
+	}); err != nil {
+		t.Fatalf("move sandbox to ready with stale last_seen_at: %v", err)
+	}
+	// No turns at all: anyTurnProcessing (timerfired.go) is false, so
+	// EvaluateInactivityTimeout's own IsProcessing-deferral branch does not
+	// apply here.
+
+	timerStore := narvipg.NewTimerStore(pool)
+	if _, err := timerStore.Upsert(ctx, sqlcgen.UpsertSessionTimerParams{
+		SessionID: sessionID,
+		Name:      TimerInactivity,
+		FiresAt:   pgtype.Timestamptz{Time: time.Now().Add(-1 * time.Minute), Valid: true}, // already overdue
+	}); err != nil {
+		t.Fatalf("seed overdue inactivity timer: %v", err)
+	}
+
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	if err := a.Send(ctx, TimerFired{Name: TimerInactivity}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		got, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && got.Status == sqlcgen.SandboxStatusSuspect
+	})
+
+	gotSandbox, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if gotSandbox.Status != sqlcgen.SandboxStatusSuspect {
+		t.Fatalf("sandbox status = %s, want %s", gotSandbox.Status, sqlcgen.SandboxStatusSuspect)
+	}
+
+	if _, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerInactivity}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("inactivity timer get = %v, want pgx.ErrNoRows (handler must delete it once handled)", err)
+	}
+
+	graceRow, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerTerminalGrace})
+	if err != nil {
+		t.Fatalf("get terminal_grace timer: %v (expected it to be armed by transitionSandboxToSuspect)", err)
+	}
+	if !graceRow.FiresAt.Valid {
+		t.Error("terminal_grace fires_at not set")
+	}
+}
+
+// TestConnectingDeadlineHandoff_ToLivenessCheck drives the REAL sequence
+// this batch's own design decision claims needs no change to
+// handleConnectingDeadlineTimer: connecting_deadline is armed at spawn
+// time (simulated here by seeding it directly, exactly like a real
+// tryPlanSpawn write would have left it), the sandbox then genuinely
+// transitions Booting->Ready via a real heartbeat (arming liveness_check
+// in the SAME transact, this batch's own fix), and only THEN does the
+// stale connecting_deadline timer fire. Proves the hand-off is real, not
+// assumed: connecting_deadline deletes itself (isConnectingPhase(Ready) is
+// false) exactly as handleConnectingDeadlineTimer's own pre-existing logic
+// already does, while liveness_check -- already armed by the Ready
+// transition -- is left completely untouched by that firing.
+func TestConnectingDeadlineHandoff_ToLivenessCheck(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	created, err := sandboxStore.Create(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID,
+		Status:    sqlcgen.SandboxStatusBooting,
+	}); err != nil {
+		t.Fatalf("move sandbox to booting: %v", err)
+	}
+
+	timerStore := narvipg.NewTimerStore(pool)
+	// Simulates tryPlanSpawn's own arm-at-spawn-time write (dispatch.go) --
+	// this is the ONE call site that arms connecting_deadline in
+	// production, seeded here directly so this test does not have to drive
+	// the full spawn machinery (provider/commander are irrelevant to what
+	// this test proves).
+	if _, err := timerStore.Upsert(ctx, sqlcgen.UpsertSessionTimerParams{
+		SessionID: sessionID,
+		Name:      TimerConnectingDeadline,
+		FiresAt:   pgtype.Timestamptz{Time: time.Now().Add(platform.DefaultTimeouts().FirstConnectBudget), Valid: true},
+	}); err != nil {
+		t.Fatalf("seed connecting_deadline timer: %v", err)
+	}
+
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	// The real Booting->Ready trigger (sandboxTransitionTrigger's own (b)
+	// mapping): this batch's fix arms liveness_check/inactivity in the
+	// SAME transact as this transition.
+	hbRaw := json.RawMessage(`{"type":"heartbeat","messageId":"h1","sessionId":"s","gen":1,"conversationId":null,"lastBootPhase":null}`)
+	reply := make(chan SandboxEventOutcome, 1)
+	if err := a.Send(ctx, SandboxEvent{Type: "heartbeat", Gen: int(created.Gen), Raw: hbRaw, LastBootPhase: nil, Reply: reply}); err != nil {
+		t.Fatalf("Send heartbeat: %v", err)
+	}
+	select {
+	case outcome := <-reply:
+		if !outcome.Persisted {
+			t.Fatal("heartbeat: Persisted = false, want true")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for heartbeat outcome")
+	}
+
+	gotSandbox, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if gotSandbox.Status != sqlcgen.SandboxStatusReady {
+		t.Fatalf("status after heartbeat = %s, want %s", gotSandbox.Status, sqlcgen.SandboxStatusReady)
+	}
+
+	livenessBefore, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerLivenessCheck})
+	if err != nil {
+		t.Fatalf("get liveness_check timer (expected armed by the Ready transition): %v", err)
+	}
+
+	// NOW the stale connecting_deadline timer -- armed back at spawn time,
+	// never re-armed since (nothing in this batch's fix touches it) --
+	// finally fires. handleConnectingDeadlineTimer's own pre-existing
+	// logic must delete it (isConnectingPhase(Ready) == false), never
+	// re-arm it, and must not touch liveness_check at all.
+	if err := a.Send(ctx, TimerFired{Name: TimerConnectingDeadline}); err != nil {
+		t.Fatalf("Send TimerFired connecting_deadline: %v", err)
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		_, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerConnectingDeadline})
+		return errors.Is(err, pgx.ErrNoRows)
+	})
+
+	if _, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerConnectingDeadline}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("connecting_deadline timer get = %v, want pgx.ErrNoRows (must delete itself once status is no longer connecting-phase)", err)
+	}
+
+	livenessAfter, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerLivenessCheck})
+	if err != nil {
+		t.Fatalf("get liveness_check timer after connecting_deadline fired: %v (must still be armed and watching)", err)
+	}
+	if !livenessAfter.FiresAt.Time.Equal(livenessBefore.FiresAt.Time) {
+		t.Errorf("liveness_check fires_at changed when connecting_deadline fired: before=%v after=%v (connecting_deadline's own handler must not touch it)",
+			livenessBefore.FiresAt.Time, livenessAfter.FiresAt.Time)
+	}
+
+	gotSandbox, err = sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if gotSandbox.Status != sqlcgen.SandboxStatusReady {
+		t.Errorf("status after connecting_deadline fired = %s, want unchanged %s", gotSandbox.Status, sqlcgen.SandboxStatusReady)
 	}
 }
