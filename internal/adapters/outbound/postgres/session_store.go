@@ -60,3 +60,10 @@ func (s *SessionStore) GetActorEpochForUpdate(ctx context.Context, id pgtype.UUI
 func (s *SessionStore) UpdateStatus(ctx context.Context, arg sqlcgen.UpdateSessionStatusParams) (sqlcgen.Session, error) {
 	return s.q.UpdateSessionStatus(ctx, arg)
 }
+
+// UpdateConversationID persists the session-level OpenCode conversation id
+// (§3.3; see migrations/000018_session_repos.up.sql's own doc comment for
+// why this is session-scoped).
+func (s *SessionStore) UpdateConversationID(ctx context.Context, arg sqlcgen.UpdateSessionConversationIDParams) (sqlcgen.Session, error) {
+	return s.q.UpdateSessionConversationID(ctx, arg)
+}

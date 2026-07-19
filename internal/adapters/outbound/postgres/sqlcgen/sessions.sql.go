@@ -31,22 +31,34 @@ func (q *Queries) BumpActorEpoch(ctx context.Context, id pgtype.UUID) (int64, er
 
 const createSession = `-- name: CreateSession :one
 
-INSERT INTO sessions (title, spawn_source, created_by)
-VALUES ($1, $2, $3)
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch
+INSERT INTO sessions (title, spawn_source, created_by, repos)
+VALUES ($1, $2, $3, COALESCE($4, '[]'::jsonb))
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id
 `
 
 type CreateSessionParams struct {
 	Title       *string            `json:"title"`
 	SpawnSource SessionSpawnSource `json:"spawn_source"`
 	CreatedBy   pgtype.UUID        `json:"created_by"`
+	Repos       interface{}        `json:"repos"`
 }
 
 // Queries backing SessionStore (§4.3). Just enough to prove the pipeline
 // end to end (create + get) — full CRUD lands with the PRs that build out
 // session-actor persistence (PR-11+).
+// repos defaults to '[]'::jsonb via COALESCE (not the column's own DEFAULT
+// clause) specifically so every EXISTING call site that never set Repos
+// (every session created before Step 21 "e2e happy path") keeps compiling
+// and behaving identically: a nil/absent []byte param binds SQL NULL, and
+// COALESCE(NULL, '[]'::jsonb) resolves to the same empty-list default a
+// bare column-default insert would have produced.
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
-	row := q.db.QueryRow(ctx, createSession, arg.Title, arg.SpawnSource, arg.CreatedBy)
+	row := q.db.QueryRow(ctx, createSession,
+		arg.Title,
+		arg.SpawnSource,
+		arg.CreatedBy,
+		arg.Repos,
+	)
 	var i Session
 	err := row.Scan(
 		&i.ID,
@@ -59,12 +71,14 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ActorEpoch,
+		&i.Repos,
+		&i.OpencodeConversationID,
 	)
 	return i, err
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch FROM sessions
+SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id FROM sessions
 WHERE id = $1
 `
 
@@ -82,6 +96,8 @@ func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (Session, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ActorEpoch,
+		&i.Repos,
+		&i.OpencodeConversationID,
 	)
 	return i, err
 }
@@ -104,11 +120,49 @@ func (q *Queries) GetSessionActorEpochForUpdate(ctx context.Context, id pgtype.U
 	return actor_epoch, err
 }
 
+const updateSessionConversationID = `-- name: UpdateSessionConversationID :one
+UPDATE sessions
+SET opencode_conversation_id = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id
+`
+
+type UpdateSessionConversationIDParams struct {
+	ID                     pgtype.UUID `json:"id"`
+	OpencodeConversationID *string     `json:"opencode_conversation_id"`
+}
+
+// Persists the session-level OpenCode conversation id (§3.3: "recorded at
+// turn start ... also reported on every heartbeat"; see
+// migrations/000018_session_repos.up.sql's own doc comment for why this is
+// session-scoped, not turns.conversation_id). Called by
+// internal/app/sessionactor's handleSandboxEvent whenever a "heartbeat"
+// event carries a non-nil ConversationId.
+func (q *Queries) UpdateSessionConversationID(ctx context.Context, arg UpdateSessionConversationIDParams) (Session, error) {
+	row := q.db.QueryRow(ctx, updateSessionConversationID, arg.ID, arg.OpencodeConversationID)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Status,
+		&i.FailureReason,
+		&i.Archived,
+		&i.SpawnSource,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ActorEpoch,
+		&i.Repos,
+		&i.OpencodeConversationID,
+	)
+	return i, err
+}
+
 const updateSessionStatus = `-- name: UpdateSessionStatus :one
 UPDATE sessions
 SET status = $2, failure_reason = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id
 `
 
 type UpdateSessionStatusParams struct {
@@ -135,6 +189,8 @@ func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStat
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ActorEpoch,
+		&i.Repos,
+		&i.OpencodeConversationID,
 	)
 	return i, err
 }

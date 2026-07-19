@@ -59,24 +59,34 @@
 // WS reconnect must not be aborted just because the connection blipped
 // (the wsbridge ack protocol already handles redelivering the turn's own
 // events across a reconnect independently of whether the turn itself is
-// still running). push/snapshot/git_sync_complete remain the EXACT
-// log-only stubs Step 16 shipped -- Step 21 (e2e happy path, push), Step 22
-// (snapshots & restore, snapshot), and Step 29 (gitstate in-sandbox,
-// git_sync_complete) are each that command's own job, per
-// docs/IMPLEMENTATION_PLAN.md's own Phase 1/2 row assignments (the
-// sandbox-agent-touching Step stream converges again at Step 21, then not
-// again until Step 29).
+// still running). snapshot/git_sync_complete remain the EXACT log-only
+// stubs Step 16 shipped -- Step 22 (snapshots & restore, snapshot) and
+// Step 29 (gitstate in-sandbox, git_sync_complete) are each that command's
+// own job, per docs/IMPLEMENTATION_PLAN.md's own Phase 1/2 row
+// assignments; leave both exactly as they are.
+//
+// Step 21 ("e2e happy path") gives push its own real behavior:
+// commandHandler.HandlePush now runs a real `git push` (via the SAME
+// Supervisor every other supervised process already uses, configured with
+// the SAME per-invocation credential-helper convention CloneAll already
+// established for `git clone`), then reports a real sandboxws.
+// PushComplete (with the resulting HEAD sha per repo) or PushError over
+// the WS bridge.
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
+	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
@@ -204,6 +214,19 @@ type commandHandler struct {
 	// WS reconnect, not be aborted by one).
 	runCtx context.Context
 
+	// cfg/timeouts/sup are Step 21's ("e2e happy path") own additions,
+	// needed by HandlePush: cfg.WorkspaceDir/SessionConfig.Repos locate
+	// each repo and its original clone URL (to determine which host to
+	// mint a git credential for); timeouts bounds the push/rev-parse
+	// subprocesses; sup is the SAME Supervisor run() already constructs
+	// and uses for every other supervised process (hooks, services,
+	// opencode) -- HandlePush reuses it rather than spawning bare
+	// exec.Command calls, matching internal/sandboxagent/gitclone's own
+	// "never a bare exec.Command" precedent exactly.
+	cfg      boot.Config
+	timeouts platform.Timeouts
+	sup      *supervisor.Supervisor
+
 	// group launches each HandlePrompt's own StartTurn call on its own
 	// goroutine (via errgroup.Group.Go, never a bare `go` statement, §11)
 	// so wsbridge's own readLoop -- which calls HandlePrompt synchronously
@@ -263,9 +286,177 @@ func (h *commandHandler) HandleStop(_ context.Context, cmd sandboxws.Stop) {
 	}
 }
 
-func (*commandHandler) HandlePush(_ context.Context, cmd sandboxws.Push) {
-	slog.Info("sandbox-agent: received push, not yet implemented (Step 21: e2e happy path)",
-		"messageId", cmd.MessageId)
+// HandlePush implements the real `push` command (Step 21, "e2e happy
+// path", design decision 7): for each repo named in cmd.Repos, runs a
+// plain `git push <remote> <branch>` (this Step's own happy-path scope --
+// no pre-existing dirty-tree reconciliation; internal/domain/gitstate's
+// stash/checkout/pop machinery is explicitly Step 29's own job, not
+// touched here), configured with the SAME per-invocation, never-
+// persisted `-c credential.helper=!'<this binary>' credential-helper`
+// convention internal/sandboxagent/gitclone.CloneAll already uses for
+// cloning (gitclone.CredHelperGitArg, exported this Step specifically for
+// this second caller) -- git itself invokes the credential-helper
+// subcommand (internal/sandboxagent/credentials) exactly as it already
+// does for clone, so no new credential-fetching code path is needed here
+// at all, and §5.2's "never long-lived in sandbox" holds by construction
+// (nothing is ever written to a persistent git-credential store).
+//
+// On the FIRST repo that fails, sends a single sandboxws.PushError (this
+// wire type carries one error string, not a per-repo breakdown) and stops
+// -- matching Push's own schema, which has no partial-success shape to
+// report into.
+func (h *commandHandler) HandlePush(_ context.Context, cmd sandboxws.Push) {
+	if h.cfg.SessionConfig == nil {
+		slog.Warn("sandbox-agent: received push but no live session is configured", "messageId", cmd.MessageId)
+		return
+	}
+
+	completed := make([]sandboxws.PushCompleteReposElem, 0, len(cmd.Repos))
+	for _, repoSpec := range cmd.Repos {
+		sha, err := h.pushOneRepo(repoSpec)
+		if err != nil {
+			slog.Warn("sandbox-agent: push failed", "messageId", cmd.MessageId, "repo", repoSpec.Name, "error", err)
+			h.sendPushError(cmd, err)
+			return
+		}
+		completed = append(completed, sandboxws.PushCompleteReposElem{
+			Name: repoSpec.Name, Branch: repoSpec.Branch, Sha: sha,
+		})
+	}
+
+	h.sendPushComplete(cmd, completed)
+}
+
+// pushOneRepo runs `git push` for exactly one repo, then reads back the
+// resulting HEAD sha, both via h.sup (never a bare exec.Command).
+func (h *commandHandler) pushOneRepo(repoSpec sandboxws.PushReposElem) (string, error) {
+	dir := filepath.Join(h.cfg.WorkspaceDir, repoSpec.Name)
+
+	remote := "origin"
+	if repoSpec.Remote != nil && *repoSpec.Remote != "" {
+		remote = *repoSpec.Remote
+	}
+
+	credHelperArg, err := gitclone.CredHelperGitArg()
+	if err != nil {
+		return "", fmt.Errorf("determine credential helper: %w", err)
+	}
+
+	// RepoCloneTimeout is reused here rather than a distinct field:
+	// `git push` and `git clone` are both single, network-bound git
+	// transport operations against the SAME remote, and a push can carry
+	// a comparably large object set (a fresh branch's full diff) -- the
+	// same generous, "large repo" budget CloneAll's own calls already use
+	// (see RepoCloneTimeout's own doc comment) fits push equally well,
+	// matching headSHA's own precedent just below of reusing an existing
+	// Timeouts field for a materially identical class of operation rather
+	// than inventing a near-duplicate one.
+	pushCtx, cancel := context.WithTimeout(h.runCtx, h.timeouts.RepoCloneTimeout)
+	defer cancel()
+
+	var stderr bytes.Buffer
+	proc, err := h.sup.Spawn(supervisor.Spec{
+		Path:   "git",
+		Args:   []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "push", remote, repoSpec.Branch},
+		Stderr: &stderr,
+	})
+	if err != nil {
+		return "", fmt.Errorf("spawn git push for %s: %w", repoSpec.Name, err)
+	}
+
+	result, waitErr := proc.Wait(pushCtx)
+	if waitErr != nil {
+		_ = proc.Stop(h.runCtx, h.timeouts.ProcessStopGracePeriod)
+		return "", fmt.Errorf("git push %s: did not complete within %s: %w", repoSpec.Name, h.timeouts.RepoCloneTimeout, waitErr)
+	}
+	if result.Err != nil {
+		return "", fmt.Errorf("git push %s: %w", repoSpec.Name, result.Err)
+	}
+	if result.ExitCode != 0 {
+		return "", fmt.Errorf("git push %s: exited %d: %s", repoSpec.Name, result.ExitCode, strings.TrimSpace(stderr.String()))
+	}
+
+	sha, err := h.headSHA(dir)
+	if err != nil {
+		return "", fmt.Errorf("determine head sha for %s: %w", repoSpec.Name, err)
+	}
+	return sha, nil
+}
+
+// headSHA runs `git rev-parse HEAD` in dir and returns its trimmed
+// stdout -- a very minor, sub-second local git-plumbing call (matching
+// platform.Timeouts.RepoSHADiscoveryTimeout's own existing "boot
+// fingerprint" precedent exactly, reused rather than duplicated for a
+// materially identical class of operation), still run via h.sup (never a
+// bare exec.Command) using supervisor.Spec's own new Stdout field.
+func (h *commandHandler) headSHA(dir string) (string, error) {
+	ctx, cancel := context.WithTimeout(h.runCtx, h.timeouts.RepoSHADiscoveryTimeout)
+	defer cancel()
+
+	var stdout bytes.Buffer
+	proc, err := h.sup.Spawn(supervisor.Spec{
+		Path:   "git",
+		Args:   []string{"-C", dir, "rev-parse", "HEAD"},
+		Stdout: &stdout,
+	})
+	if err != nil {
+		return "", fmt.Errorf("spawn git rev-parse HEAD: %w", err)
+	}
+
+	result, waitErr := proc.Wait(ctx)
+	if waitErr != nil {
+		_ = proc.Stop(h.runCtx, h.timeouts.ProcessStopGracePeriod)
+		return "", fmt.Errorf("did not complete within %s: %w", h.timeouts.RepoSHADiscoveryTimeout, waitErr)
+	}
+	if result.Err != nil {
+		return "", result.Err
+	}
+	if result.ExitCode != 0 {
+		return "", fmt.Errorf("exited %d", result.ExitCode)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// sendPushComplete sends a real, CRITICAL sandboxws.PushComplete event --
+// MessageId/AckId are freshly minted here (this event ORIGINATES from
+// sandbox-agent; it does not echo cmd's own MessageId), matching
+// internal/adapters/outbound/opencode/translate.go's own
+// translateExecutionComplete precedent for every agent-originated
+// critical event exactly ("Deterministic ackId = '{type}:{messageId}'"
+// where messageId is THIS event's own, per contracts/sandbox-ws/v1's own
+// doc comments).
+func (h *commandHandler) sendPushComplete(cmd sandboxws.Push, repos []sandboxws.PushCompleteReposElem) {
+	messageID := uuid.NewString()
+	msg := sandboxws.PushComplete{
+		Type:      "push_complete",
+		MessageId: messageID,
+		SessionId: cmd.SessionId,
+		Gen:       cmd.Gen,
+		AckId:     "push_complete:" + messageID,
+		Repos:     repos,
+	}
+	if err := h.bridge.SendCritical(h.runCtx, msg, msg.AckId); err != nil {
+		slog.Warn("sandbox-agent: send push_complete over WS bridge failed",
+			"messageId", cmd.MessageId, "ackId", msg.AckId, "error", err)
+	}
+}
+
+// sendPushError mirrors sendPushComplete for the failure path -- a single
+// error string, per PushError's own schema (no per-repo breakdown).
+func (h *commandHandler) sendPushError(cmd sandboxws.Push, pushErr error) {
+	messageID := uuid.NewString()
+	msg := sandboxws.PushError{
+		Type:      "push_error",
+		MessageId: messageID,
+		SessionId: cmd.SessionId,
+		Gen:       cmd.Gen,
+		AckId:     "push_error:" + messageID,
+		Error:     pushErr.Error(),
+	}
+	if err := h.bridge.SendCritical(h.runCtx, msg, msg.AckId); err != nil {
+		slog.Warn("sandbox-agent: send push_error over WS bridge failed",
+			"messageId", cmd.MessageId, "ackId", msg.AckId, "error", err)
+	}
 }
 
 func (*commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapshot) {
@@ -383,7 +574,7 @@ func run() error {
 	var bridge *wsbridge.Bridge
 	var handler *commandHandler
 	if cfg.SessionConfig != nil {
-		handler = &commandHandler{adapter: agentRuntime, runCtx: ctx}
+		handler = &commandHandler{adapter: agentRuntime, runCtx: ctx, cfg: cfg, timeouts: timeouts, sup: sup}
 		bridge = wsbridge.New(*cfg.SessionConfig, cfg.SandboxID, handler,
 			timeouts.SandboxWSDialTimeout, timeouts.SandboxWSHeartbeatInterval,
 			timeouts.SandboxWSReconnectMinBackoff, timeouts.SandboxWSReconnectMaxBackoff)
@@ -458,7 +649,7 @@ func run() error {
 		if bridge != nil {
 			bridge.MarkBootComplete()
 		}
-		slog.Info("sandbox-agent: boot sequence complete (push: Step 21, snapshot: Step 22, git_sync_complete: Step 29)")
+		slog.Info("sandbox-agent: boot sequence complete (snapshot: Step 22, git_sync_complete: Step 29)")
 	}
 
 	runErr := group.Wait()

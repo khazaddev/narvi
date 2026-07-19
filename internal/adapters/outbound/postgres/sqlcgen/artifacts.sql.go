@@ -11,19 +11,53 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const listArtifactsForSession = `-- name: ListArtifactsForSession :many
+const createArtifact = `-- name: CreateArtifact :one
 
+INSERT INTO artifacts (session_id, type, url, metadata)
+VALUES ($1, $2, $3, $4)
+RETURNING id, session_id, type, url, metadata, created_at
+`
+
+type CreateArtifactParams struct {
+	SessionID pgtype.UUID  `json:"session_id"`
+	Type      ArtifactType `json:"type"`
+	Url       string       `json:"url"`
+	Metadata  []byte       `json:"metadata"`
+}
+
+// Queries backing ArtifactStore (§4.3, §6.3 GET /api/sessions/:id/
+// artifacts and the client WS hub's own SubscribedPayload.artifacts,
+// §6.2). CreateArtifact is Step 21's ("e2e happy path") own addition --
+// the first real artifact-minting caller anywhere in this codebase
+// (app/sessionactor's own createPRBestEffort records a "pr"-typed artifact
+// once SourceControl.CreatePR succeeds, see pushpr.go) -- previews (Step
+// 48) and uploads (Step 49) remain the only artifact_type values with no
+// Create caller yet.
+func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) (Artifact, error) {
+	row := q.db.QueryRow(ctx, createArtifact,
+		arg.SessionID,
+		arg.Type,
+		arg.Url,
+		arg.Metadata,
+	)
+	var i Artifact
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Type,
+		&i.Url,
+		&i.Metadata,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const listArtifactsForSession = `-- name: ListArtifactsForSession :many
 SELECT id, session_id, type, url, metadata, created_at FROM artifacts
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
 
-// Queries backing ArtifactStore (§4.3, §6.3 GET /api/sessions/:id/
-// artifacts and the client WS hub's own SubscribedPayload.artifacts,
-// §6.2). ListForSession only -- nothing in the codebase mints an artifact
-// row yet (real artifact CREATION is a later Step: PR creation is Step
-// 21+, previews Step 48, uploads Step 49), so no Create query exists here
-// either.
 func (q *Queries) ListArtifactsForSession(ctx context.Context, sessionID pgtype.UUID) ([]Artifact, error) {
 	rows, err := q.db.Query(ctx, listArtifactsForSession, sessionID)
 	if err != nil {

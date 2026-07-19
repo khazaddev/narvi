@@ -54,7 +54,7 @@ func CloneAll(
 		return nil, fmt.Errorf("gitclone: create workspace dir %s: %w", workspaceDir, err)
 	}
 
-	credHelperArg, err := credHelperGitArg()
+	credHelperArg, err := CredHelperGitArg()
 	if err != nil {
 		return nil, fmt.Errorf("gitclone: determine credential helper: %w", err)
 	}
@@ -127,13 +127,17 @@ func cloneOne(
 	return nil
 }
 
-// credHelperGitArg builds the exact `-c credential.helper=...` value: the
+// CredHelperGitArg builds the exact `-c credential.helper=...` value: the
 // CURRENTLY RUNNING binary's own absolute path (os.Executable()) plus the
 // "credential-helper" subcommand, prefixed with `!` so git runs this exact
 // shell command rather than treating it as a suffix appended to
 // "git-credential-" (git itself appends the final "get"/"store"/"erase"
-// argument when it invokes the helper).
-func credHelperGitArg() (string, error) {
+// argument when it invokes the helper). Exported (Step 21, "e2e happy
+// path") so cmd/sandbox-agent's own HandlePush can configure the SAME
+// per-invocation credential helper for `git push` that CloneAll already
+// configures for `git clone` -- one shared implementation, two callers,
+// never a second copy of this exact string-building logic.
+func CredHelperGitArg() (string, error) {
 	exePath, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("os.Executable: %w", err)

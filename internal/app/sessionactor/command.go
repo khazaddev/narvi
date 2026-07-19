@@ -81,10 +81,32 @@ type SandboxEvent struct {
 	Gen           int
 	Raw           json.RawMessage
 	LastBootPhase *string
-	Reply         chan<- SandboxEventOutcome
+	// ConversationID mirrors sandboxws.Heartbeat.ConversationId for a
+	// "heartbeat" event (nil/absent for every other type, and nil for a
+	// heartbeat that has nothing new to report -- HeartbeatConversationId
+	// is itself a *string, so "absent" and "explicit null" both decode to
+	// nil here, matching the wire schema's own documented equivalence).
+	// handleSandboxEvent (sandboxevent.go) persists a non-nil value to
+	// sessions.opencode_conversation_id (§3.3, design decision 6 --
+	// migrations/000018_session_repos.up.sql).
+	ConversationID *string
+	Reply          chan<- SandboxEventOutcome
 }
 
 func (SandboxEvent) isCommand() {}
+
+// EnsureDispatched is a fire-and-forget "please re-evaluate this
+// session's own spawn/dispatch state right now" signal (Step 21, "e2e
+// happy path", design decision 3) -- no payload, mirroring TimerFired's
+// own zero-payload shape. Sent from exactly two places: (a)
+// httpapi.CreateSession, right after a turn is created; (b) this
+// package's own handleSandboxEvent, unconditionally, right after its own
+// transact commits successfully (so a heartbeat-driven transition to
+// Booting/Ready is immediately followed by a fresh dispatch evaluation).
+// handleEnsureDispatched (dispatch.go) is its handler.
+type EnsureDispatched struct{}
+
+func (EnsureDispatched) isCommand() {}
 
 // SandboxEventOutcome is what handleSandboxEvent (sandboxevent.go) sends
 // back on SandboxEvent.Reply once its own transaction has committed (or

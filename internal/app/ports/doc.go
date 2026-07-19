@@ -31,9 +31,18 @@
 // wire event types are critical" classification every AgentRuntime
 // adapter should reuse rather than reimplement).
 //
-// The remaining §4.3 ports — SourceControl, Notifier, IntentClassifier,
-// LLM, BlobStore, SessionStore/TurnStore/SandboxStore, Outbox,
-// TimerScheduler, Clock — are out of scope for this Step and land in their
-// own later Steps, each adding its own interface file here without
-// touching SandboxProvider's or AgentRuntime's.
+// SandboxCommander (sandboxcommander.go) and SourceControl (sourcecontrol.go)
+// are the THIRD and FOURTH ports, both added at Step 21 ("e2e happy
+// path"): SandboxCommander lets app/sessionactor push an outbound command
+// to a session's live sandbox WS connection (internal/adapters/inbound/
+// wshub's own SandboxRegistry is the implementation) without importing
+// wshub itself; SourceControl creates a pull request
+// (internal/adapters/outbound/githubapi is the first real implementation,
+// internal/adapters/outbound/gitlabapi remains an untouched stub for a
+// future Step).
+//
+// The remaining §4.3 ports — Notifier, IntentClassifier, LLM, BlobStore,
+// SessionStore/TurnStore/SandboxStore, Outbox, TimerScheduler, Clock — are
+// out of scope for this Step and land in their own later Steps, each
+// adding its own interface file here without touching any existing one.
 package ports

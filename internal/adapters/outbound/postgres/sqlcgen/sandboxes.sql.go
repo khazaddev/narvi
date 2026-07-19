@@ -15,7 +15,7 @@ const createSandbox = `-- name: CreateSandbox :one
 
 INSERT INTO sandboxes (session_id)
 VALUES ($1)
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at
 `
 
 // Queries backing SandboxStore (§4.3). Just enough to prove the pipeline
@@ -33,12 +33,15 @@ func (q *Queries) CreateSandbox(ctx context.Context, sessionID pgtype.UUID) (San
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
 	)
 	return i, err
 }
 
 const getSandbox = `-- name: GetSandbox :one
-SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash FROM sandboxes
+SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at FROM sandboxes
 WHERE session_id = $1
 `
 
@@ -54,6 +57,85 @@ func (q *Queries) GetSandbox(ctx context.Context, sessionID pgtype.UUID) (Sandbo
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+	)
+	return i, err
+}
+
+const updateSandboxCircuitBreaker = `-- name: UpdateSandboxCircuitBreaker :one
+UPDATE sandboxes
+SET spawn_failure_count = $2, last_spawn_failure_at = $3, updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at
+`
+
+type UpdateSandboxCircuitBreakerParams struct {
+	SessionID          pgtype.UUID        `json:"session_id"`
+	SpawnFailureCount  int32              `json:"spawn_failure_count"`
+	LastSpawnFailureAt pgtype.Timestamptz `json:"last_spawn_failure_at"`
+}
+
+// Persists internal/domain/sandbox.CircuitBreakerState verbatim: called
+// with (0, NULL) when EvaluateCircuitBreaker's own ShouldReset is true,
+// and with (incremented count, now) when a *ports.ProviderError with
+// Transient=false increments the breaker (§3.2: "3 permanent spawn
+// failures within 5 min blocks spawning"). Always a direct SET, never
+// COALESCE -- unlike status/last_seen_at, both fields are meant to be
+// overwritten with exactly the caller-computed value every time,
+// including back to NULL on reset.
+func (q *Queries) UpdateSandboxCircuitBreaker(ctx context.Context, arg UpdateSandboxCircuitBreakerParams) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, updateSandboxCircuitBreaker, arg.SessionID, arg.SpawnFailureCount, arg.LastSpawnFailureAt)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+	)
+	return i, err
+}
+
+const updateSandboxProviderID = `-- name: UpdateSandboxProviderID :one
+UPDATE sandboxes
+SET provider_id = $2, updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at
+`
+
+type UpdateSandboxProviderIDParams struct {
+	SessionID  pgtype.UUID `json:"session_id"`
+	ProviderID *string     `json:"provider_id"`
+}
+
+// Records the provider's own opaque handle (internal/app/ports.SandboxRef.
+// ProviderID) once CreateSandbox actually succeeds -- a SEPARATE write
+// from UpsertSandboxForSpawn above, deliberately run in its own
+// transaction AFTER the real CreateSandbox network call returns (a
+// network call must never hold a Postgres transaction open).
+func (q *Queries) UpdateSandboxProviderID(ctx context.Context, arg UpdateSandboxProviderIDParams) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, updateSandboxProviderID, arg.SessionID, arg.ProviderID)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
 	)
 	return i, err
 }
@@ -64,7 +146,7 @@ SET status = $2,
     last_seen_at = COALESCE($3, last_seen_at),
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at
 `
 
 type UpdateSandboxStatusParams struct {
@@ -90,6 +172,53 @@ func (q *Queries) UpdateSandboxStatus(ctx context.Context, arg UpdateSandboxStat
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+	)
+	return i, err
+}
+
+const upsertSandboxForSpawn = `-- name: UpsertSandboxForSpawn :one
+INSERT INTO sandboxes (session_id, gen, status, token_hash)
+VALUES ($1, 1, 'spawning', $2)
+ON CONFLICT (session_id) DO UPDATE
+SET gen = sandboxes.gen + 1,
+    status = 'spawning',
+    token_hash = $2,
+    updated_at = now()
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at
+`
+
+type UpsertSandboxForSpawnParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	TokenHash *string     `json:"token_hash"`
+}
+
+// Step 21 ("e2e happy path"), design decision 3a: creates the sandbox row
+// (gen=1) if none exists yet, or bumps gen/resets status to 'spawning'/
+// rotates token_hash if one already does (§3.2: "every spawn/restore
+// increments sandbox.gen" -- paraphrased above, not a verbatim quote).
+// provider_id is deliberately NOT cleared here --
+// the second, post-CreateSandbox write (UpdateSandboxProviderID) is what
+// ever sets it, and a stale previous-gen provider_id lingering between
+// those two writes is harmless (SpawnState.ProviderObjectID is only read
+// BEFORE this upsert runs, from the row as it stood prior to this call).
+func (q *Queries) UpsertSandboxForSpawn(ctx context.Context, arg UpsertSandboxForSpawnParams) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, upsertSandboxForSpawn, arg.SessionID, arg.TokenHash)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
 	)
 	return i, err
 }

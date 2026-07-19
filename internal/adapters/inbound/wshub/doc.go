@@ -17,10 +17,18 @@
 // bearer-token verify side (HashSandboxToken + verifySandboxToken) against
 // sandboxes.token_hash (migrations/000015_sandbox_token_hash.up.sql).
 //
-// This Step's own outbound capability is ack-only (the plan row's own "ack
-// receipt" wording): it does not send prompt/stop/push/snapshot/shutdown/
-// git_sync_complete to a live connection -- Step 21 ("e2e happy path")
-// owns actually dispatching outbound sandbox commands.
+// Outbound dispatch (Step 21, "e2e happy path"): commander.go's own
+// SandboxRegistry is the single-recipient (not fan-out) live-connection
+// registry that implements internal/app/ports.SandboxCommander --
+// NewSandboxHandler registers each connection with it right before
+// entering readLoop, and internal/app/sessionactor's own EnsureDispatched
+// handling calls SandboxCommander.SendCommand to push a real sandboxws.
+// Prompt onto a session's live connection. A concurrent SendCommand write
+// and dispatch.go's own writeAck (running on the connection's own
+// read-loop goroutine) are documented-safe per coder/websocket.Conn's own
+// docs ("All methods may be called concurrently except for Reader and
+// Read") -- verified directly via `go doc github.com/coder/websocket.Conn`
+// during this Step's own design phase, not merely cited.
 //
 // # The client socket (Step 19)
 //
@@ -56,12 +64,23 @@
 //     limitation, not a permanent solution -- not scoped to any specific
 //     later Step by the plan.
 //   - Sandbox token MINTING (generating a fresh token + writing its hash
-//     at spawn time) does not exist yet -- HashSandboxToken is exported
-//     specifically so the future minting Step (§5.2, Step 21+, once a
-//     real SandboxProvider.Spawn call exists) can call it directly rather
-//     than reinventing its own hashing convention; verifySandboxToken
-//     accepts any non-empty bearer token while token_hash is NULL (every
-//     row today), an explicit, forward-compatible bridge.
+//     at spawn time) now exists (Step 21's own tryPlanSpawn,
+//     internal/app/sessionactor/dispatch.go, calling platform.
+//     GenerateToken + UpsertSandboxForSpawn) -- HashSandboxToken was
+//     exported specifically so that caller could reuse this package's own
+//     hashing convention rather than reinventing it, and it does.
+//     verifySandboxToken's own nil-token_hash bypass (any non-empty
+//     bearer token accepted while token_hash is NULL) therefore no longer
+//     "covers every row today" -- every row this Step's own real spawn
+//     path creates always sets token_hash. The bypass remains, unchanged,
+//     as defense-in-depth for a legacy or manually-inserted row that
+//     genuinely has no hash set, not because it is the normal path any
+//     real spawn takes. HashSandboxToken is also this Step's own second
+//     caller, internal/adapters/inbound/httpapi/scmcredentials.go, which
+//     deliberately does NOT copy this bypass -- see that file's own
+//     verifySandboxBearerToken doc comment for why (it hands back a real,
+//     live OAuth credential on success, a materially higher-stakes
+//     endpoint than gating a WS connection).
 //   - Suspect-state recovery-during-grace ("any liveness signal during
 //     grace returns to previous state", §3.2) is Step 24's own job
 //     ("two-phase terminalization") -- a Suspect sandbox reconnecting

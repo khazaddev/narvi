@@ -24,15 +24,27 @@ type storeBundle struct {
 	sandbox *postgres.SandboxStore
 	timer   *postgres.TimerStore
 	event   *postgres.EventStore
+
+	// identity and artifact are Step 21's ("e2e happy path") own additions
+	// -- both used only by pushpr.go's createPRBestEffort: identity to
+	// decrypt the session's own creator's GitHub OAuth access token,
+	// artifact to record a successfully created PR as an artifact row (the
+	// ONLY durable place a PR's URL is written -- see that file's own doc
+	// comment for why this is what makes it visible to a client at all,
+	// with no new wire contract needed).
+	identity *postgres.IdentityStore
+	artifact *postgres.ArtifactStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 	return storeBundle{
-		session: postgres.NewSessionStore(pool),
-		turn:    postgres.NewTurnStore(pool),
-		sandbox: postgres.NewSandboxStore(pool),
-		timer:   postgres.NewTimerStore(pool),
-		event:   postgres.NewEventStore(pool),
+		session:  postgres.NewSessionStore(pool),
+		turn:     postgres.NewTurnStore(pool),
+		sandbox:  postgres.NewSandboxStore(pool),
+		timer:    postgres.NewTimerStore(pool),
+		event:    postgres.NewEventStore(pool),
+		identity: postgres.NewIdentityStore(pool),
+		artifact: postgres.NewArtifactStore(pool),
 	}
 }
 
@@ -58,6 +70,29 @@ type Registry struct {
 	// rationale). May be nil (some tests construct a Registry without
 	// one) -- Actor.broadcastPending already guards against that.
 	broadcaster ports.EventBroadcaster
+
+	// commander, provider, and publicBaseURL are Step 21's ("e2e happy
+	// path") own additions, threaded through to every Actor this Registry
+	// hydrates exactly the same way broadcaster already is -- see Actor's
+	// own field doc comments (actor.go) for what each is used for. All
+	// three may be nil/empty (some tests, e.g. the resilience test in
+	// design decision 12, never exercise the spawn/dispatch path at all).
+	commander     ports.SandboxCommander
+	provider      ports.SandboxProvider
+	publicBaseURL string
+
+	// sourceControl and tokenEncryptionKey are Step 21's ("e2e happy
+	// path") own remaining additions, threaded through to every Actor this
+	// Registry hydrates exactly the same way commander/provider already
+	// are: sourceControl is the ports.SourceControl every Actor's
+	// createPRBestEffort (pushpr.go) calls CreatePR on once a push_complete
+	// event arrives; tokenEncryptionKey decrypts the session creator's own
+	// stored identities.access_token_encrypted (§13.1) to obtain the
+	// plaintext OAuth token CreatePR needs (§8.11: "PR created with the
+	// prompting user's OAuth token"). Both may be nil/empty (tests that
+	// never exercise the push/PR path).
+	sourceControl      ports.SourceControl
+	tokenEncryptionKey []byte
 
 	// group tracks every actor's mailbox-loop goroutine, so evicted/
 	// crashed actors are cleanly reaped and Shutdown can wait on all of
@@ -87,16 +122,47 @@ type Registry struct {
 // Actor this Registry hydrates (§6.2's "→ broadcast stream") -- may be
 // nil, in which case every Actor simply never broadcasts (see
 // Actor.broadcastPending).
-func NewRegistry(ctx context.Context, pool *pgxpool.Pool, timeouts platform.Timeouts, broadcaster ports.EventBroadcaster) *Registry {
+//
+// commander/provider/publicBaseURL are Step 21's ("e2e happy path") own
+// additions (design decisions 3/4/6): commander is the
+// ports.SandboxCommander every Actor's handleEnsureDispatched uses to push
+// a dispatched turn's prompt to a live sandbox connection; provider is the
+// ports.SandboxProvider every Actor's handleEnsureDispatched calls
+// CreateSandbox on; publicBaseURL is this control plane's own externally-
+// reachable http(s):// base URL, used to derive SessionConfig.
+// ControlPlaneWsUrl for a freshly spawned sandbox. sourceControl and
+// tokenEncryptionKey are this SAME Step's remaining additions (design
+// decision 9): sourceControl is the ports.SourceControl every Actor's
+// createPRBestEffort (pushpr.go) calls CreatePR on; tokenEncryptionKey
+// decrypts the session creator's own stored GitHub OAuth access token for
+// that same call. All five may be nil/empty -- callers that never
+// exercise the spawn/dispatch/push/PR path (e.g. the resilience test,
+// design decision 12) can safely omit them.
+func NewRegistry(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	timeouts platform.Timeouts,
+	broadcaster ports.EventBroadcaster,
+	commander ports.SandboxCommander,
+	provider ports.SandboxProvider,
+	publicBaseURL string,
+	sourceControl ports.SourceControl,
+	tokenEncryptionKey []byte,
+) *Registry {
 	lifecycleCtx, cancel := context.WithCancel(ctx)
 	return &Registry{
-		actors:       make(map[pgtype.UUID]*Actor),
-		pool:         pool,
-		timeouts:     timeouts,
-		stores:       newStoreBundle(pool),
-		broadcaster:  broadcaster,
-		lifecycleCtx: lifecycleCtx,
-		cancel:       cancel,
+		actors:             make(map[pgtype.UUID]*Actor),
+		pool:               pool,
+		timeouts:           timeouts,
+		stores:             newStoreBundle(pool),
+		broadcaster:        broadcaster,
+		commander:          commander,
+		provider:           provider,
+		publicBaseURL:      publicBaseURL,
+		sourceControl:      sourceControl,
+		tokenEncryptionKey: tokenEncryptionKey,
+		lifecycleCtx:       lifecycleCtx,
+		cancel:             cancel,
 	}
 }
 

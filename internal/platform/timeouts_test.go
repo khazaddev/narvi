@@ -283,6 +283,31 @@ func TestDefaultTimeouts_Step18StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step21StandaloneFields proves the Step 21 ("e2e
+// happy path") standalone additions (SandboxCommandSendTimeout,
+// ScmCredentialTTL, PRCreateTimeout) ship with sane, non-zero defaults,
+// and that adding them did not accidentally break either pre-existing
+// invariant chain (all three are standalone fields, wired into neither).
+func TestDefaultTimeouts_Step21StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.SandboxCommandSendTimeout <= 0 {
+		t.Errorf("SandboxCommandSendTimeout = %v, want > 0", to.SandboxCommandSendTimeout)
+	}
+	if to.ScmCredentialTTL <= 0 {
+		t.Errorf("ScmCredentialTTL = %v, want > 0", to.ScmCredentialTTL)
+	}
+	if to.PRCreateTimeout <= 0 {
+		t.Errorf("PRCreateTimeout = %v, want > 0", to.PRCreateTimeout)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (Step 21 fields must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

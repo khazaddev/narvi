@@ -5,9 +5,12 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -18,15 +21,26 @@ import (
 // surfaces as *http.MaxBytesError, reported as 413; any other decode
 // failure (malformed JSON) is 400. repos' own schema-level minItems:1 is
 // not enforced by Go's plain json.Unmarshal, so it is checked explicitly
-// here -- 400 on an empty list. The session is inserted with created_by
-// set to the REAL authenticated caller's id (platform.UserFromContext, via
-// authenticatedUserID in helpers.go); CreateSessionRequest.prompt is
-// decoded but deliberately NOT acted upon (dispatching a first turn needs a
-// real sandbox spawn, Step 21's job), and repos itself is validated but not
-// persisted anywhere (no repos column exists on sessions -- SESSION_CONFIG
-// assembly is a later Step's own job). Responds 201 with the created row as
-// restdtos.Session.
-func CreateSession(sessions *postgres.SessionStore) http.HandlerFunc {
+// here -- 400 on an empty list.
+//
+// Step 21 ("e2e happy path") update: req.Repos is now actually PERSISTED
+// (marshaled to the sessions.repos JSONB column -- design decision 1,
+// migrations/000018_session_repos.up.sql). When req.Prompt is non-nil, a
+// Turn row is ALSO inserted, in the SAME Postgres transaction as the
+// session insert (mirroring internal/adapters/inbound/auth's own
+// createUserAndIdentity pool.Begin/WithTx/Commit pattern exactly, so a
+// failure partway through never leaves an orphaned session with no turn
+// or vice versa). After a successful commit, GetOrSpawn + Send(
+// EnsureDispatched{}) run SYNCHRONOUSLY but are still "fire and forget" in
+// the sense that matters: GetOrSpawn only hydrates local actor state (a
+// few fast Postgres round trips, no external network call) and Send only
+// enqueues into the actor's own mailbox -- the SLOW work (a real
+// SandboxProvider.CreateSandbox call, if a spawn decision fires) happens
+// entirely on the actor's own already-running background goroutine,
+// AFTER this handler has already returned its 201. No naked goroutine is
+// spun up here for that reason -- see this func's own inline comment at
+// the call site.
+func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -54,15 +68,72 @@ func CreateSession(sessions *postgres.SessionStore) http.HandlerFunc {
 			return
 		}
 
-		created, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{
-			Title:       req.Title,
+		reposJSON, err := json.Marshal(req.Repos)
+		if err != nil {
+			logger.Error("httpapi: marshal repos failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			logger.Error("httpapi: begin create-session tx failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		// Rollback is a safety net for every return path other than a
+		// successful Commit below -- same pattern as internal/adapters/
+		// inbound/auth's own createUserAndIdentity and app/sessionactor's
+		// own transact.
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		created, err := sessions.WithTx(tx).Create(ctx, sqlcgen.CreateSessionParams{
+			Title:       (*string)(req.Title),
 			SpawnSource: sqlcgen.SessionSpawnSource(req.SpawnSource),
 			CreatedBy:   createdBy,
+			Repos:       reposJSON,
 		})
 		if err != nil {
 			logger.Error("httpapi: create session failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
+		}
+
+		hasPrompt := req.Prompt != nil
+		if hasPrompt {
+			if _, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
+				SessionID: created.ID,
+				Status:    sqlcgen.TurnStatusPending,
+				Prompt:    (*string)(req.Prompt),
+				ModelID:   (*string)(req.ModelId),
+				PlanMode:  req.PlanMode,
+			}); err != nil {
+				logger.Error("httpapi: create turn failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			logger.Error("httpapi: commit create-session tx failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		if hasPrompt {
+			// Fire-and-forget: GetOrSpawn hydrates local actor state (fast,
+			// no external network call) and Send only enqueues into the
+			// actor's own mailbox -- the actual spawn/dispatch decision
+			// (including any real CreateSandbox network call) runs
+			// entirely on the actor's own background goroutine, not on
+			// this request's own goroutine, so this does not block the
+			// 201 response on how long that decision takes.
+			actor, spawnErr := registry.GetOrSpawn(ctx, created.ID)
+			if spawnErr != nil {
+				logger.Warn("httpapi: GetOrSpawn after session create failed", "error", spawnErr)
+			} else if sendErr := actor.Send(ctx, sessionactor.EnsureDispatched{}); sendErr != nil {
+				logger.Warn("httpapi: send EnsureDispatched after session create failed", "error", sendErr)
+			}
 		}
 
 		writeJSON(w, http.StatusCreated, sessionToDTO(created))

@@ -104,6 +104,12 @@ func sandboxTransitionTrigger(eventType string, lastBootPhase *string, status sa
 // exactly as it does today.
 func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error {
 	var outcome SandboxEventOutcome
+	// pushAfterCommit is non-nil only when THIS event just completed a
+	// turn successfully (Step 21, "e2e happy path", pushpr.go) -- acted on
+	// (a real SandboxCommander.SendCommand call) only AFTER this
+	// function's own transact below has committed, never inside it (see
+	// pushpr.go's own top comment for why).
+	var pushAfterCommit *pushSignal
 
 	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		row, err := a.stores.sandbox.WithTx(tx).Get(ctx, a.sessionID)
@@ -157,10 +163,68 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			return fmt.Errorf("sessionactor: update sandbox status/liveness: %w", err)
 		}
 
+		// §3.3: "reported on every heartbeat" -- a heartbeat is a
+		// sandbox-level liveness signal, not a turn-scoped one (it carries
+		// no turn id), so this is a session-level write, independent of
+		// whatever transition (if any) target computed above (Step 21,
+		// "e2e happy path", design decision 6).
+		if cmd.Type == "heartbeat" && cmd.ConversationID != nil {
+			if _, err := a.stores.session.WithTx(tx).UpdateConversationID(ctx, sqlcgen.UpdateSessionConversationIDParams{
+				ID:                     a.sessionID,
+				OpencodeConversationID: cmd.ConversationID,
+			}); err != nil {
+				return fmt.Errorf("sessionactor: update session conversation id: %w", err)
+			}
+		}
+
+		// Step 21 ("e2e happy path"): a REAL execution_complete completes
+		// whichever turn is currently Processing (§3.3) -- see
+		// completeProcessingTurn's own doc comment (pushpr.go) for the full
+		// reasoning, including why no synthetic execution_complete is ever
+		// appended on this path.
+		if cmd.Type == "execution_complete" {
+			sig, err := a.completeProcessingTurn(ctx, tx, row, cmd.Raw)
+			if err != nil {
+				return err
+			}
+			pushAfterCommit = sig
+		}
+
 		outcome.Persisted = true
 		outcome.AckID = peekAckID(cmd.Raw)
 		return nil
 	})
+
+	// Design decision 3: unconditionally re-evaluate spawn/dispatch state
+	// right after this event's own transact commits successfully -- e.g.
+	// a "ready"/heartbeat-driven transition to Booting/Ready is
+	// immediately followed by a fresh dispatch evaluation, in case a
+	// pending turn is now dispatchable. Calls the SAME handler function
+	// EnsureDispatched itself invokes, directly (not via a.Send), since
+	// this already runs on the actor's own single command-processing
+	// goroutine -- see command.go's own EnsureDispatched doc comment.
+	// Deliberately does NOT alter this function's own return value: a
+	// failure here is logged, never treated as a failure of the sandbox
+	// event itself (which already committed successfully).
+	if err == nil {
+		if dispatchErr := a.handleEnsureDispatched(ctx); dispatchErr != nil {
+			a.logger.Warn("sessionactor: ensure-dispatched after sandbox event failed", "error", dispatchErr)
+		}
+
+		// Step 21 ("e2e happy path"): the two remaining best-effort side
+		// effects this event may trigger, both deliberately run OUTSIDE
+		// (i.e. after) the transact above committed, never inside it --
+		// see pushpr.go's own top comment for why. Neither failure alters
+		// this function's own return value: cmd.Type's own event already
+		// committed successfully regardless of what either side effect
+		// does next.
+		if pushAfterCommit != nil {
+			a.sendPushBestEffort(a.sessionID.String(), pushAfterCommit)
+		}
+		if cmd.Type == "push_complete" {
+			a.createPRBestEffort(ctx, cmd.Raw)
+		}
+	}
 
 	select {
 	case cmd.Reply <- outcome:

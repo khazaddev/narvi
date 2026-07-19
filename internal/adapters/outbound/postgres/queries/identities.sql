@@ -19,6 +19,14 @@ RETURNING *;
 SELECT * FROM identities
 WHERE provider = $1 AND external_id = $2;
 
+-- name: GetIdentityByUserAndProvider :one
+-- Step 21 ("e2e happy path")'s own scm-credentials endpoint uses this to
+-- find a session's created_by user's GitHub identity (to decrypt its
+-- access_token_encrypted) -- the OAuth callback's own lookup above goes
+-- the other direction (provider+external_id -> user).
+SELECT * FROM identities
+WHERE user_id = $1 AND provider = $2;
+
 -- name: UpdateIdentityAccessToken :one
 UPDATE identities
 SET access_token_encrypted = $2

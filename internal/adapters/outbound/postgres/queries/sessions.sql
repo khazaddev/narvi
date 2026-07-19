@@ -3,8 +3,14 @@
 -- session-actor persistence (PR-11+).
 
 -- name: CreateSession :one
-INSERT INTO sessions (title, spawn_source, created_by)
-VALUES ($1, $2, $3)
+-- repos defaults to '[]'::jsonb via COALESCE (not the column's own DEFAULT
+-- clause) specifically so every EXISTING call site that never set Repos
+-- (every session created before Step 21 "e2e happy path") keeps compiling
+-- and behaving identically: a nil/absent []byte param binds SQL NULL, and
+-- COALESCE(NULL, '[]'::jsonb) resolves to the same empty-list default a
+-- bare column-default insert would have produced.
+INSERT INTO sessions (title, spawn_source, created_by, repos)
+VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb))
 RETURNING *;
 
 -- name: GetSession :one
@@ -38,5 +44,17 @@ FOR UPDATE;
 -- table").
 UPDATE sessions
 SET status = $2, failure_reason = $3, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateSessionConversationID :one
+-- Persists the session-level OpenCode conversation id (§3.3: "recorded at
+-- turn start ... also reported on every heartbeat"; see
+-- migrations/000018_session_repos.up.sql's own doc comment for why this is
+-- session-scoped, not turns.conversation_id). Called by
+-- internal/app/sessionactor's handleSandboxEvent whenever a "heartbeat"
+-- event carries a non-nil ConversationId.
+UPDATE sessions
+SET opencode_conversation_id = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;

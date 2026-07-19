@@ -3,6 +3,7 @@ package supervisor
 import (
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -21,6 +22,21 @@ type Spec struct {
 	// behavior when Env is nil) -- callers that want a clean or
 	// augmented environment must build the full slice themselves.
 	Env []string
+
+	// Stdout and Stderr, when non-nil, receive the spawned process's own
+	// standard output/error streams (exec.Cmd's own Stdout/Stderr fields,
+	// passed through verbatim). Both default to nil -- exactly every
+	// EXISTING call site's own zero value -- which discards that stream
+	// entirely (exec.Cmd's own documented behavior for a nil Writer),
+	// identical to this package's behavior before these two fields
+	// existed. Added (Step 21, "e2e happy path") for a caller that needs
+	// a short-lived command's own OUTPUT, not just its exit code (e.g.
+	// `git rev-parse HEAD` for the resulting push SHA) -- Process itself
+	// still only ever tracks ExitResult; capturing output is entirely the
+	// caller's own choice of io.Writer (typically a bytes.Buffer), never
+	// buffered or exposed by Supervisor itself.
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // Supervisor tracks a set of concurrently-running Processes, each spawned
@@ -67,6 +83,8 @@ func (s *Supervisor) Spawn(spec Spec) (*Process, error) {
 	cmd := exec.Command(spec.Path, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = spec.Env
+	cmd.Stdout = spec.Stdout
+	cmd.Stderr = spec.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {

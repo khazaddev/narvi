@@ -63,6 +63,8 @@ func (a *Actor) handle(ctx context.Context, cmd Command) error {
 		return a.handleTimerFired(ctx, c)
 	case SandboxEvent:
 		return a.handleSandboxEvent(ctx, c)
+	case EnsureDispatched:
+		return a.handleEnsureDispatched(ctx)
 	default:
 		return fmt.Errorf("sessionactor: unhandled command type %T", cmd)
 	}

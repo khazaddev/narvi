@@ -52,6 +52,49 @@ type Actor struct {
 	// loop entirely when broadcaster is nil.
 	broadcaster ports.EventBroadcaster
 
+	// commander is how a successfully-dispatched turn's prompt actually
+	// reaches a live sandbox connection (Step 21, "e2e happy path", design
+	// decision 4) -- implemented by internal/adapters/inbound/wshub's own
+	// SandboxRegistry, app depends on the port
+	// (internal/app/ports.SandboxCommander), never the adapter. May be nil
+	// (some tests construct an Actor without one, e.g. the resilience
+	// test, which never exercises the dispatch path at all).
+	commander ports.SandboxCommander
+
+	// provider is this Actor's own SandboxProvider (Step 21) -- the SAME
+	// port every Actor of this Registry shares, used only by
+	// handleEnsureDispatched's own spawn branch (dispatch.go) to actually
+	// call CreateSandbox. May be nil (tests that never exercise the spawn
+	// path, e.g. the resilience test).
+	provider ports.SandboxProvider
+
+	// publicBaseURL is this control plane's own externally-reachable
+	// http(s):// base URL (platform.Config.PublicBaseURL, e.g.
+	// "http://localhost:8080" in dev, a real "https://..." URL in
+	// production) -- the SAME value Step 20's OAuth wiring already uses
+	// for its own redirect URL. sessionconfig.go's own assembleSessionConfig
+	// derives SessionConfig.ControlPlaneWsUrl from it by swapping the
+	// scheme (http->ws, https->wss) rather than requiring a second,
+	// separately-configured ws(s):// base URL field -- see that file's own
+	// doc comment for the full reasoning.
+	publicBaseURL string
+
+	// sourceControl is this Actor's own ports.SourceControl (Step 21) --
+	// used only by pushpr.go's createPRBestEffort, once a push_complete
+	// event arrives for a turn that completed successfully, to open a pull
+	// request. May be nil (tests that never exercise the push/PR path,
+	// e.g. the resilience test).
+	sourceControl ports.SourceControl
+
+	// tokenEncryptionKey decrypts identities.access_token_encrypted (§13.1)
+	// to obtain the session creator's own plaintext GitHub OAuth access
+	// token -- the SAME key platform.Config.TokenEncryptionKey already
+	// supplies Step 20's OAuth callback and the scm-credentials endpoint
+	// (design decision 8); createPRBestEffort (pushpr.go) is this
+	// package's own use of it. Never logged. May be nil/empty (tests that
+	// never exercise the push/PR path).
+	tokenEncryptionKey []byte
+
 	// pendingBroadcast queues each event appended (via appendEvent/
 	// appendRawEvent) during the CURRENT transact attempt, in order. Safe
 	// unsynchronized: Actor.handle processes exactly one command at a time

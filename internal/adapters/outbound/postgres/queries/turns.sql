@@ -3,8 +3,14 @@
 -- turns_one_processing_per_session partial unique index (§3.3).
 
 -- name: CreateTurn :one
-INSERT INTO turns (session_id, status)
-VALUES ($1, $2)
+-- prompt/model_id/plan_mode (migrations/000018_session_repos.up.sql, Step
+-- 21) are the turn's own dispatch-time inputs -- prompt/model_id are
+-- nullable and plan_mode defaults false, so every EXISTING call site
+-- (every prior Step's `CreateTurnParams{SessionID, Status}`) keeps
+-- compiling and behaving identically: the zero-value nil/nil/false it
+-- already implicitly got before this Step's own columns existed.
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: GetTurn :one

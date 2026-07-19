@@ -30,6 +30,8 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -110,13 +112,54 @@ func serve() error {
 	// internal/adapters/inbound/wshub's own Hub doc comment.
 	hub := wshub.NewHub()
 
+	// commander is the ports.SandboxCommander every Actor uses to push an
+	// outbound command (a dispatched turn's prompt) to a session's live
+	// sandbox WS connection (Step 21, "e2e happy path", design decision
+	// 4) -- constructed once here, then threaded through to BOTH
+	// sessionactor.NewRegistry (as the port) and wshub.NewSandboxHandler
+	// (so it can Register each connection as it completes its handshake),
+	// mirroring hub's own dual-threading immediately above exactly.
+	commander := wshub.NewSandboxRegistry(cfg.Timeouts)
+
+	// sandboxProvider is the real internal/adapters/outbound/modal.
+	// Provider (Step 21 is its first real production caller anywhere in
+	// this codebase -- see that package's own doc.go for the "no real
+	// Modal account reachable from this codebase's own tests/CI" caveat;
+	// a real deploy of this binary must point NARVI_MODAL_BASE_URL/
+	// NARVI_MODAL_AUTH_TOKEN at an actual Modal account, or a mock
+	// standing in for one).
+	sandboxProvider, err := modal.New(modal.Config{
+		BaseURL:        cfg.ModalBaseURL,
+		AuthToken:      cfg.ModalAuthToken,
+		Timeouts:       cfg.Timeouts,
+		EgressProxyURL: cfg.ModalEgressProxyURL,
+	})
+	if err != nil {
+		return fmt.Errorf("construct modal provider: %w", err)
+	}
+
+	// sourceControl is the ports.SourceControl every Actor's own
+	// createPRBestEffort (internal/app/sessionactor/pushpr.go) calls
+	// CreatePR on once a push_complete event arrives -- constructed once
+	// here, exactly mirroring modal.New's own real-adapter-in-production-
+	// wiring precedent immediately above. httpClient is nil (defaults to
+	// http.DefaultClient, see githubapi.New's own doc comment) since each
+	// individual CreatePR call is already bounded by its own caller-
+	// supplied context deadline (platform.Timeouts.PRCreateTimeout), not a
+	// package-level http.Client.Timeout.
+	sourceControl := githubapi.New(nil, githubAPIBaseURL)
+
 	// Registry/wshub are wired into the real binary for the first time in
 	// Step 18 -- an intended, natural consequence of that: the timer pump
 	// (already built in Step 11) becomes genuinely live here for the first
 	// time too, run via the errgroup below. Step 19 adds the client-hub
 	// half (hub above) and the store handles its own handlers/REST
-	// endpoints need.
-	registry := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub)
+	// endpoints need. Step 21 adds commander/sandboxProvider/
+	// cfg.PublicBaseURL/sourceControl/cfg.TokenEncryptionKey -- see
+	// internal/app/sessionactor.NewRegistry's own doc comment for what
+	// each is used for.
+	registry := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
+		sourceControl, cfg.TokenEncryptionKey)
 	sessionStore := postgres.NewSessionStore(pool)
 	turnStore := postgres.NewTurnStore(pool)
 	sandboxStore := postgres.NewSandboxStore(pool)
@@ -152,9 +195,17 @@ func serve() error {
 	// request two different request-identity mechanisms.
 	router.Get("/health", healthHandler(pool, cfg.Timeouts))
 	router.Get("/sessions/{sessionID}/ws", wshub.NewHandler(
-		wshub.NewSandboxHandler(registry, sandboxStore, cfg.Timeouts),
+		wshub.NewSandboxHandler(registry, sandboxStore, commander, cfg.Timeouts),
 		wshub.NewClientHandler(registry, sessionStore, turnStore, sandboxStore, eventStore, artifactStore, wsTokenStore, hub, cfg.Timeouts),
 	))
+
+	// scm-credentials (Step 21, "e2e happy path", design decision 8):
+	// deliberately mounted OUTSIDE /api/sessions and outside auth.
+	// Middleware entirely -- a sandbox-bearer-token-authenticated
+	// endpoint, not a browser-facing one (see that handler's own doc
+	// comment in internal/adapters/inbound/httpapi/scmcredentials.go).
+	router.Post("/sessions/{sessionID}/scm-credentials",
+		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, cfg.TokenEncryptionKey, cfg.Timeouts))
 
 	// Auth routes (§13.1/§13.4, Step 20): how a session is obtained/
 	// discarded in the first place, so — obviously — mounted OUTSIDE any
@@ -190,7 +241,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(sessionStore))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, registry))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
