@@ -92,6 +92,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/opencode"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
@@ -329,13 +330,33 @@ func (h *commandHandler) HandlePush(_ context.Context, cmd sandboxws.Push) {
 
 // pushOneRepo runs `git push` for exactly one repo, then reads back the
 // resulting HEAD sha, both via h.sup (never a bare exec.Command).
+//
+// Every one of repoSpec.Name/Branch/Remote is session-controlled
+// (sandboxws.Push.Repos[], relayed from the control plane) and is
+// validated via internal/domain/reposource BEFORE this repo's target
+// directory is even computed (filepath.Join) or any Args are built for
+// h.sup.Spawn -- the exact same argument-injection/path-traversal
+// reasoning internal/sandboxagent/gitclone.CloneAll's own validateRepoSpec
+// closes for clone, applied here for push's own two call-site-specific
+// fields (remote, in addition to name/branch). See reposource's own
+// package doc comment for the full reasoning.
 func (h *commandHandler) pushOneRepo(repoSpec sandboxws.PushReposElem) (string, error) {
-	dir := filepath.Join(h.cfg.WorkspaceDir, repoSpec.Name)
+	if err := reposource.ValidateRepoName(repoSpec.Name); err != nil {
+		return "", fmt.Errorf("invalid repo name: %w", err)
+	}
+	if err := reposource.ValidateBranch(repoSpec.Branch); err != nil {
+		return "", fmt.Errorf("invalid repo branch: %w", err)
+	}
 
 	remote := "origin"
 	if repoSpec.Remote != nil && *repoSpec.Remote != "" {
 		remote = *repoSpec.Remote
 	}
+	if err := reposource.ValidateRemoteName(remote); err != nil {
+		return "", fmt.Errorf("invalid remote: %w", err)
+	}
+
+	dir := filepath.Join(h.cfg.WorkspaceDir, repoSpec.Name)
 
 	credHelperArg, err := gitclone.CredHelperGitArg()
 	if err != nil {
@@ -356,8 +377,13 @@ func (h *commandHandler) pushOneRepo(repoSpec sandboxws.PushReposElem) (string, 
 
 	var stderr bytes.Buffer
 	proc, err := h.sup.Spawn(supervisor.Spec{
-		Path:   "git",
-		Args:   []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "push", remote, repoSpec.Branch},
+		Path: "git",
+		// "--" ends option parsing for everything after it (verified
+		// directly against real `git push` behavior, not assumed) --
+		// defense in depth alongside the validation above: even an
+		// already-validated remote/branch should never be positionally
+		// ambiguous to git's own argument parser.
+		Args:   []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "push", "--", remote, repoSpec.Branch},
 		Stderr: &stderr,
 	})
 	if err != nil {

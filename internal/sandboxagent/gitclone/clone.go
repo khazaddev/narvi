@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
@@ -18,9 +19,14 @@ type CloneResult struct {
 	// Primary is true for exactly the repo at position 0 in the manifest
 	// (§3.4: "position 0 = primary").
 	Primary bool
-	// Dir is workspaceDir/<Repo.Name> -- always set, even when Err is
-	// non-nil, so callers (WriteAgentsManifest, boot logging) always know
-	// where this repo was supposed to land.
+	// Dir is workspaceDir/<Repo.Name> -- set even when Err is non-nil, so
+	// callers (WriteAgentsManifest, boot logging) know where this repo
+	// was supposed to land, with exactly one exception: when Repo.Name/
+	// Url/Branch itself fails reposource validation (see validateRepoSpec
+	// below), Dir is left as the empty string rather than computed via
+	// filepath.Join -- an invalid Name is precisely a potential path-
+	// traversal payload, so no directory join is ever performed against
+	// it at all, not even a "harmless" string-only one.
 	Dir string
 	// Err is non-nil if this repo's clone failed.
 	Err error
@@ -62,9 +68,18 @@ func CloneAll(
 	results := make([]CloneResult, 0, len(repos))
 	for i, repo := range repos {
 		primary := i == 0
-		dir := filepath.Join(workspaceDir, repo.Name)
 
-		cloneErr := cloneOne(ctx, sup, credHelperArg, repo, dir, cloneTimeout, stopGrace)
+		// Validate BEFORE any filepath.Join or sup.Spawn happens for this
+		// repo -- repo.Name/Url/Branch are all session-controlled and
+		// reach this loop with no upstream validation of their own (see
+		// reposource's own package doc comment for the full argument-
+		// injection/path-traversal reasoning this closes).
+		var dir string
+		cloneErr := validateRepoSpec(repo)
+		if cloneErr == nil {
+			dir = filepath.Join(workspaceDir, repo.Name)
+			cloneErr = cloneOne(ctx, sup, credHelperArg, repo, dir, cloneTimeout, stopGrace)
+		}
 		results = append(results, CloneResult{Repo: repo, Primary: primary, Dir: dir, Err: cloneErr})
 
 		if cloneErr == nil {
@@ -79,6 +94,28 @@ func CloneAll(
 	}
 
 	return results, nil
+}
+
+// validateRepoSpec runs every internal/domain/reposource validator this
+// repo's fields need, in order, stopping at the first failure -- Branch
+// is validated only when non-nil (§3.4: nil means "the repo's own
+// default branch", reposource.ValidateBranch is never invoked for that
+// case). Called BEFORE any filepath.Join or sup.Spawn happens for this
+// repo (see CloneAll's own loop and reposource's own package doc comment
+// for the argument-injection/path-traversal reasoning this closes).
+func validateRepoSpec(repo sessionconfig.SessionConfigReposElem) error {
+	if err := reposource.ValidateRepoName(repo.Name); err != nil {
+		return fmt.Errorf("gitclone: invalid repo name: %w", err)
+	}
+	if err := reposource.ValidateRepoURL(repo.Url); err != nil {
+		return fmt.Errorf("gitclone: invalid repo url: %w", err)
+	}
+	if repo.Branch != nil {
+		if err := reposource.ValidateBranch(*repo.Branch); err != nil {
+			return fmt.Errorf("gitclone: invalid repo branch: %w", err)
+		}
+	}
+	return nil
 }
 
 // cloneOne spawns `git clone` for exactly one repo and waits for it,
@@ -99,7 +136,12 @@ func cloneOne(
 	if repo.Branch != nil {
 		args = append(args, "--branch", *repo.Branch)
 	}
-	args = append(args, repo.Url, dir)
+	// "--" ends option parsing for everything after it (verified directly
+	// against real `git clone` behavior, not assumed) -- defense in depth
+	// alongside validateRepoSpec's own rejection above: even an already-
+	// validated repo.Url/dir should never be positionally ambiguous to
+	// git's own argument parser.
+	args = append(args, "--", repo.Url, dir)
 
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: "git",

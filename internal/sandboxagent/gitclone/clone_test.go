@@ -3,6 +3,9 @@ package gitclone_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http/cgi"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +26,55 @@ const (
 	testCloneTimeout = 30 * time.Second
 	testStopGrace    = 2 * time.Second
 )
+
+// TestMain sets GIT_SSL_NO_VERIFY=true ONCE, before any test runs (never
+// racing any test's own t.Parallel() goroutines, unlike an os.Setenv call
+// from inside a test would): every successful-clone test below now clones
+// over a real, but self-signed-TLS, local git-http-backend server (see
+// startGitHTTPSServer) rather than a bare filesystem path, because
+// reposource.ValidateRepoURL (wired into CloneAll this Step) accepts only
+// an absolute "https://" URL -- a plain local path or a non-https scheme
+// is correctly rejected before ever reaching git at all. Trusting the
+// self-signed cert here is acceptable ONLY because these are throwaway
+// test servers, never anything resembling production configuration --
+// the same technique, for the same reason, as cmd/sandbox-agent's own
+// push_integration_test.go.
+func TestMain(m *testing.M) {
+	_ = os.Setenv("GIT_SSL_NO_VERIFY", "true")
+	os.Exit(m.Run())
+}
+
+// startGitHTTPSServer serves reposParent via git's own smart-HTTP backend
+// (git-http-backend, via net/http/cgi -- a real git server, not a mock of
+// one) over TLS, so these tests can clone a genuine "https://" URL end to
+// end, exactly like a real production remote. Skips (not fails) the
+// calling test if git-http-backend isn't available in this environment.
+func startGitHTTPSServer(t *testing.T, reposParent string) *httptest.Server {
+	t.Helper()
+
+	execPathOut, err := exec.Command("git", "--exec-path").Output()
+	if err != nil {
+		t.Fatalf("git --exec-path: %v", err)
+	}
+	backendPath := filepath.Join(strings.TrimSpace(string(execPathOut)), "git-http-backend")
+	if _, statErr := os.Stat(backendPath); statErr != nil {
+		t.Skipf("git-http-backend not available at %s, skipping: %v", backendPath, statErr)
+	}
+
+	cgiHandler := &cgi.Handler{
+		Path: backendPath,
+		Root: "/",
+		Env: []string{
+			"GIT_HTTP_EXPORT_ALL=1",
+			"GIT_PROJECT_ROOT=" + reposParent,
+		},
+	}
+
+	server := httptest.NewUnstartedServer(cgiHandler)
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server
+}
 
 // runGit runs git with args in dir, failing the test immediately on any
 // error.
@@ -74,12 +126,13 @@ func currentBranch(t *testing.T, dir string) string {
 func TestCloneAll_SinglePrimarySucceeds(t *testing.T) {
 	t.Parallel()
 
-	srcDir := filepath.Join(t.TempDir(), "src")
-	initRepo(t, srcDir)
+	reposParent := t.TempDir()
+	initRepo(t, filepath.Join(reposParent, "repo1-src"))
+	server := startGitHTTPSServer(t, reposParent)
 
 	workspaceDir := t.TempDir()
 	repos := []sessionconfig.SessionConfigReposElem{
-		{Name: "repo1", Url: srcDir},
+		{Name: "repo1", Url: server.URL + "/repo1-src"},
 	}
 
 	sup := supervisor.New()
@@ -111,7 +164,8 @@ func TestCloneAll_SinglePrimarySucceeds(t *testing.T) {
 func TestCloneAll_ExplicitBranchChecksOutThatBranch(t *testing.T) {
 	t.Parallel()
 
-	srcDir := filepath.Join(t.TempDir(), "src")
+	reposParent := t.TempDir()
+	srcDir := filepath.Join(reposParent, "repo1-src")
 	initRepo(t, srcDir) // default branch "main"
 
 	runGit(t, srcDir, "checkout", "-b", "feature-x")
@@ -122,10 +176,12 @@ func TestCloneAll_ExplicitBranchChecksOutThatBranch(t *testing.T) {
 	runGit(t, srcDir, "commit", "-m", "feature commit")
 	runGit(t, srcDir, "checkout", "main")
 
+	server := startGitHTTPSServer(t, reposParent)
+
 	branch := "feature-x"
 	workspaceDir := t.TempDir()
 	repos := []sessionconfig.SessionConfigReposElem{
-		{Name: "repo1", Url: srcDir, Branch: &branch},
+		{Name: "repo1", Url: server.URL + "/repo1-src", Branch: &branch},
 	}
 
 	sup := supervisor.New()
@@ -146,12 +202,13 @@ func TestCloneAll_ExplicitBranchChecksOutThatBranch(t *testing.T) {
 func TestCloneAll_NilBranchClonesDefaultBranch(t *testing.T) {
 	t.Parallel()
 
-	srcDir := filepath.Join(t.TempDir(), "src")
-	initRepo(t, srcDir) // default branch "main"
+	reposParent := t.TempDir()
+	initRepo(t, filepath.Join(reposParent, "repo1-src")) // default branch "main"
+	server := startGitHTTPSServer(t, reposParent)
 
 	workspaceDir := t.TempDir()
 	repos := []sessionconfig.SessionConfigReposElem{
-		{Name: "repo1", Url: srcDir}, // Branch left nil
+		{Name: "repo1", Url: server.URL + "/repo1-src"}, // Branch left nil
 	}
 
 	sup := supervisor.New()
@@ -173,7 +230,11 @@ func TestCloneAll_PrimaryFailureStopsImmediately(t *testing.T) {
 
 	workspaceDir := t.TempDir()
 	repos := []sessionconfig.SessionConfigReposElem{
-		{Name: "bad-primary", Url: "/nonexistent/path/to/nowhere-xyz"},
+		// Port 1 is never a listener in any real test/CI environment --
+		// this connects (and fails, connection refused) near-instantly,
+		// with no DNS lookup and no dependency on outbound network
+		// access, unlike a real unreachable hostname would risk.
+		{Name: "bad-primary", Url: "https://127.0.0.1:1/nowhere-xyz.git"},
 		{Name: "never-attempted", Url: "https://example.invalid/never.git"},
 	}
 
@@ -200,17 +261,20 @@ func TestCloneAll_PrimaryFailureStopsImmediately(t *testing.T) {
 func TestCloneAll_SecondaryFailureContinues(t *testing.T) {
 	t.Parallel()
 
-	primarySrc := filepath.Join(t.TempDir(), "primary-src")
-	initRepo(t, primarySrc)
-
-	laterSrc := filepath.Join(t.TempDir(), "later-src")
-	initRepo(t, laterSrc)
+	reposParent := t.TempDir()
+	initRepo(t, filepath.Join(reposParent, "primary-src"))
+	initRepo(t, filepath.Join(reposParent, "later-src"))
+	server := startGitHTTPSServer(t, reposParent)
 
 	workspaceDir := t.TempDir()
 	repos := []sessionconfig.SessionConfigReposElem{
-		{Name: "primary", Url: primarySrc},
-		{Name: "bad-secondary", Url: "/nonexistent/path/to/nowhere-xyz"},
-		{Name: "later", Url: laterSrc},
+		{Name: "primary", Url: server.URL + "/primary-src"},
+		// Port 1 is never a listener in any real test/CI environment --
+		// this connects (and fails, connection refused) near-instantly,
+		// with no DNS lookup and no dependency on outbound network
+		// access.
+		{Name: "bad-secondary", Url: "https://127.0.0.1:1/nowhere-xyz.git"},
+		{Name: "later", Url: server.URL + "/later-src"},
 	}
 
 	sup := supervisor.New()
@@ -234,6 +298,156 @@ func TestCloneAll_SecondaryFailureContinues(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(workspaceDir, "later", "README.md")); statErr != nil {
 		t.Errorf("later repo not actually cloned: %v", statErr)
 	}
+}
+
+// TestCloneAll_MaliciousRepoNameRejectedBeforeAnySpawn proves a repo.Name
+// attempting path traversal (a ".." segment) is rejected by
+// reposource.ValidateRepoName BEFORE CloneAll's own filepath.Join, let
+// alone cloneOne's sup.Spawn call, ever runs for it -- proven two ways:
+// results[0].Dir stays the empty string (no filepath.Join was ever
+// performed against the malicious name at all, per CloneResult.Dir's own
+// doc comment), and the traversal target itself is never created.
+func TestCloneAll_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T) {
+	t.Parallel()
+
+	parentDir := t.TempDir()
+	workspaceDir := filepath.Join(parentDir, "workspace")
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "../escaped-outside-workspace", Url: "https://example.invalid/never.git"},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	if err == nil {
+		t.Fatal("CloneAll() error = nil, want a fatal validation error for the malicious repo name")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].Err == nil {
+		t.Error("results[0].Err = nil, want a validation error")
+	}
+	if results[0].Dir != "" {
+		t.Errorf("results[0].Dir = %q, want empty -- an invalid Name must never even reach filepath.Join", results[0].Dir)
+	}
+
+	escapeTarget := filepath.Join(parentDir, "escaped-outside-workspace")
+	if _, statErr := os.Stat(escapeTarget); !os.IsNotExist(statErr) {
+		t.Errorf("escape target stat = %v, want IsNotExist (a path-traversal target must never be created)", statErr)
+	}
+}
+
+// TestCloneAll_MaliciousRepoURLRejectedBeforeAnySpawn proves a repo.Url
+// using git's own "ext::" alternate transport -- which, if it ever
+// reached a real `git clone` subprocess, would execute an arbitrary
+// shell command (here, one that creates a marker file) -- is rejected by
+// reposource.ValidateRepoURL BEFORE cloneOne's sup.Spawn call ever runs
+// for it.
+//
+// This is proven via the marker file's own absence, not merely "the
+// eventual git invocation fails harmlessly": the marker file could ONLY
+// ever be created by a REAL git process actually executing the ext::
+// command, and that only happens inside cloneOne -- a function CloneAll
+// never even calls once validateRepoSpec has already rejected this repo.
+// This is a strictly stronger, more concrete proof than "zero processes
+// spawned" bookkeeping would be, since supervisor.Supervisor exposes no
+// process count to assert against directly.
+func TestCloneAll_MaliciousRepoURLRejectedBeforeAnySpawn(t *testing.T) {
+	t.Parallel()
+
+	markerPath := filepath.Join(t.TempDir(), "should-never-exist")
+	workspaceDir := t.TempDir()
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "widgets", Url: fmt.Sprintf(`ext::sh -c "touch %s"`, markerPath)},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	if err == nil {
+		t.Fatal("CloneAll() error = nil, want a fatal validation error for the ext:: repo url")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].Err == nil {
+		t.Error("results[0].Err = nil, want a validation error")
+	}
+	if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+		t.Errorf("marker file stat = %v, want IsNotExist -- the ext:: url was actually executed by a real git process, "+
+			"proving validation did NOT run before sup.Spawn", statErr)
+	}
+}
+
+// TestGitCloneDashDash_RealDefenseInDepth proves, against the REAL git
+// binary (verified directly, not assumed from documentation), that "--"
+// placed in cloneOne's own exact position (after every -c/--branch flag,
+// immediately before the repo URL and target dir) genuinely stops git's
+// own option parser from treating a leading-"-" repo URL as an OPTION at
+// all, in favor of a literal positional value.
+//
+// This is isolated from reposource.ValidateRepoURL's own separate
+// rejection of any such value (which, in production, never lets such a
+// value reach cloneOne at all -- ValidateRepoURL's https-only allowlist
+// rejects it first): this test invokes git directly, bypassing CloneAll/
+// reposource entirely, to lock in "--"'s own real CLI behavior as the
+// second, independent layer of this Step's defense in depth, exactly as
+// this Step's own brief asks ("reason about it directly against real git
+// CLI semantics").
+//
+// The proof deliberately uses a made-up, unrecognized "--...-xyz" string
+// rather than a real flag like "--upload-pack": this isolates the
+// MECHANICAL option-vs-positional parsing question "--" answers, via
+// git's own two structurally different, LOCALE-INDEPENDENT failure
+// modes -- exit code 129 ("unknown option", git's own usage-error path,
+// triggered only when the string is read as an OPTION at all) without
+// "--", versus exit code 128 ("repository does not exist", git's own
+// fatal-application-error path, triggered once the SAME string is
+// instead read as a literal <repository> positional) with "--" -- rather
+// than on a real flag's own downstream side effect, which (verified
+// directly against this git version) additionally depends on whatever
+// positional argument is LEFT OVER after the flag is consumed happening
+// to already be a valid, reachable repository -- a precondition that
+// does not hold for cloneOne's own real two-positional shape
+// (repo.Url, dir), where dir is always a fresh clone destination that
+// does not exist yet.
+func TestGitCloneDashDash_RealDefenseInDepth(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	maliciousValue := "--this-is-not-a-real-git-clone-flag-xyz"
+
+	cmdWithout := exec.Command("git", "clone", maliciousValue, filepath.Join(tmp, "dest-without-sep"))
+	errWithout := cmdWithout.Run()
+	exitWithout := exitCode(t, errWithout)
+	if exitWithout != 129 {
+		t.Fatalf("sanity check failed: without --, `git clone %s ...` exited %d, want 129 (\"unknown option\") -- "+
+			"this test's own premise no longer holds against this git version", maliciousValue, exitWithout)
+	}
+
+	cmdWith := exec.Command("git", "clone", "--", maliciousValue, filepath.Join(tmp, "dest-with-sep"))
+	errWith := cmdWith.Run()
+	exitWith := exitCode(t, errWith)
+	if exitWith == 129 {
+		t.Errorf(`git clone -- %s ... exited 129 ("unknown option") -- "--" did NOT stop option parsing; `+
+			"the malicious value was still read as an option", maliciousValue)
+	}
+	if exitWith == 0 {
+		t.Fatalf("git clone -- %s ... unexpectedly succeeded (exit 0)", maliciousValue)
+	}
+}
+
+// exitCode extracts a subprocess's exit code from the error exec.Cmd.Run
+// returns (nil only on a genuine exit-0 success).
+func exitCode(t *testing.T, err error) int {
+	t.Helper()
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("Run() error = %v, want an *exec.ExitError", err)
+	}
+	return exitErr.ExitCode()
 }
 
 func TestWriteAgentsManifest(t *testing.T) {
