@@ -7,8 +7,20 @@
 -- implementation, two callers).
 
 -- name: CreateEvent :one
-INSERT INTO events (session_id, type, payload) VALUES ($1, $2, $3)
-RETURNING *;
+-- Upsert-on-(session_id, message_id) (§6.1: "receiver dedupes by
+-- upsert-on-messageId") -- a resend of an already-seen messageId hits the
+-- unique index (migrations/000019_events_message_id.up.sql) and this
+-- DO UPDATE (a deliberate, self-referential no-op: type is set back to
+-- its own current value) guarantees RETURNING always yields exactly one
+-- row either way, so callers never need a separate "0 rows means
+-- duplicate" branch. `(xmax = 0) AS inserted` is the standard Postgres
+-- idiom for "was this row just inserted by THIS statement" (xmax is 0
+-- only immediately after a fresh insert, non-zero after any update) --
+-- callers use it to decide whether to (re-)broadcast this event to live
+-- subscribers.
+INSERT INTO events (session_id, type, message_id, payload) VALUES ($1, $2, $3, $4)
+ON CONFLICT (session_id, message_id) DO UPDATE SET type = events.type
+RETURNING *, (xmax = 0) AS inserted;
 
 -- name: ListEventsForSession :many
 -- afterID = 0 means "from the beginning" -- matches a null fetch_history

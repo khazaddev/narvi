@@ -35,8 +35,11 @@ func (s *EventStore) WithTx(tx pgx.Tx) *EventStore {
 	return &EventStore{q: s.q.WithTx(tx)}
 }
 
-// Create inserts a new event row and returns it.
-func (s *EventStore) Create(ctx context.Context, arg sqlcgen.CreateEventParams) (sqlcgen.Event, error) {
+// Create upserts an event row on (session_id, message_id) and returns it
+// -- CreateEventRow.Inserted reports whether this call actually inserted a
+// fresh row (true) or found an already-persisted one from an earlier call
+// with the same messageId (false, a genuine resend/dedupe, §6.1).
+func (s *EventStore) Create(ctx context.Context, arg sqlcgen.CreateEventParams) (sqlcgen.CreateEventRow, error) {
 	return s.q.CreateEvent(ctx, arg)
 }
 

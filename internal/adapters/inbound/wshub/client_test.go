@@ -384,6 +384,7 @@ func TestClientHandler_FetchHistoryPagination(t *testing.T) {
 		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
 			SessionID: sessionRow.ID,
 			Type:      "token",
+			MessageID: fmt.Sprintf("msg-%d", i),
 			Payload:   []byte(fmt.Sprintf(`{"n":%d}`, i)),
 		}); err != nil {
 			t.Fatalf("create event %d: %v", i, err)
@@ -473,6 +474,7 @@ func TestClientHandler_SubscribeSurvivesManyLargeEvents(t *testing.T) {
 		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
 			SessionID: sessionRow.ID,
 			Type:      "token",
+			MessageID: fmt.Sprintf("msg-%d", i),
 			Payload:   []byte(fmt.Sprintf(`{"text":"%s"}`, largePayload)),
 		}); err != nil {
 			t.Fatalf("create event %d: %v", i, err)

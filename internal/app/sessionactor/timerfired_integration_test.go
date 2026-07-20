@@ -14,6 +14,7 @@ import (
 
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -372,5 +373,104 @@ func TestConnectingDeadlineHandoff_ToLivenessCheck(t *testing.T) {
 	}
 	if gotSandbox.Status != sqlcgen.SandboxStatusReady {
 		t.Errorf("status after connecting_deadline fired = %s, want unchanged %s", gotSandbox.Status, sqlcgen.SandboxStatusReady)
+	}
+}
+
+// TestTerminalGraceTimerFired_RedeliversEnsureDispatched_FreshSpawnAttempt
+// proves Finding 3's own fix end to end, driving the REAL production entry
+// point (a.Send(TimerFired{Name: TimerTerminalGrace}), never a bypass --
+// matching this whole audit series' own established discipline, Batch 4):
+// a session whose sandbox never managed to spawn a second time (left
+// Suspect, e.g. by a permanent spawn failure or a watchdog timeout) still
+// has a genuinely Pending turn when terminal_grace finally fires. Before
+// this batch's fix, nothing would ever call EnsureDispatched again for
+// this session (no sandbox event can ever arrive -- no sandbox process
+// exists to send one) and the turn would stay Pending forever. This test
+// proves handleTerminalGraceTimer's own transact committing Suspect->Failed
+// now genuinely triggers handleEnsureDispatched, which finds the Pending
+// turn, sees the (now dead, Failed) sandbox, and performs a REAL fresh
+// spawn attempt: a real ports.SandboxProvider.CreateSandbox call is made,
+// and the sandbox row lands in Connecting with a bumped gen once that call
+// succeeds -- exactly dispatch.go's own pre-existing "spawn again from
+// Failed via SpawnTrigger" logic, finally getting the chance to run again.
+func TestTerminalGraceTimerFired_RedeliversEnsureDispatched_FreshSpawnAttempt(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	created, err := sandboxStore.Create(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID,
+		Status:    sqlcgen.SandboxStatusSuspect,
+	}); err != nil {
+		t.Fatalf("move sandbox to suspect: %v", err)
+	}
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing, once a sandbox is ever actually spawned")
+
+	timerStore := narvipg.NewTimerStore(pool)
+	// Simulates transitionSandboxToSuspect's own arm-at-suspect-time write
+	// (timerfired.go) -- a real production Suspect transition always arms
+	// this alongside it; seeded directly here so this test does not have
+	// to drive whichever watchdog timeout produced the Suspect state in
+	// the first place (irrelevant to what this test proves).
+	if _, err := timerStore.Upsert(ctx, sqlcgen.UpsertSessionTimerParams{
+		SessionID: sessionID,
+		Name:      TimerTerminalGrace,
+		FiresAt:   pgtype.Timestamptz{Time: time.Now().Add(-1 * time.Minute), Valid: true}, // already overdue
+	}); err != nil {
+		t.Fatalf("seed overdue terminal_grace timer: %v", err)
+	}
+
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-redelivery"}}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	if err := a.Send(ctx, TimerFired{Name: TimerTerminalGrace}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// A genuine fresh spawn attempt was made: the real (fake, but real
+	// call-path) SandboxProvider.CreateSandbox was invoked -- this is the
+	// whole point of the fix (EnsureDispatched actually ran, found the
+	// Pending turn + now-dead sandbox, and decided to spawn).
+	waitUntil(t, 5*time.Second, func() bool {
+		return provider.callCount() == 1
+	})
+
+	if got := provider.callCount(); got != 1 {
+		t.Fatalf("provider.CreateSandbox called %d times, want exactly 1", got)
+	}
+
+	// The spawn succeeded end to end: sandbox lands in Connecting with a
+	// bumped gen (executeSpawn's own Spawning->Connecting transition,
+	// dispatch.go), not left stuck in Failed.
+	waitUntil(t, 5*time.Second, func() bool {
+		got, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && got.Status == sqlcgen.SandboxStatusConnecting
+	})
+
+	gotSandbox, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if gotSandbox.Status != sqlcgen.SandboxStatusConnecting {
+		t.Fatalf("sandbox status = %s, want %s", gotSandbox.Status, sqlcgen.SandboxStatusConnecting)
+	}
+	if gotSandbox.Gen <= created.Gen {
+		t.Errorf("sandbox gen = %d, want > %d (a genuinely fresh spawn, not the original)", gotSandbox.Gen, created.Gen)
+	}
+
+	if _, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: TimerTerminalGrace}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("terminal_grace timer get = %v, want pgx.ErrNoRows (handler must delete it once handled)", err)
 	}
 }

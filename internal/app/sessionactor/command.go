@@ -59,6 +59,12 @@ func (TimerFired) isCommand() {}
 //     transaction (never against the connection-level gen the handshake
 //     already validated, which may be stale by the time this particular
 //     message is actually processed).
+//   - MessageID is the wire message's own top-level "messageId" field --
+//     every one of the 19 sandbox-ws event types requires one
+//     (contracts/sandbox-ws/v1/events.schema.json) -- carried through so
+//     appendRawEvent (actor.go) can dedupe a resend of an already-
+//     persisted event by upsert-on-(session_id, messageId) rather than
+//     appending an indistinguishable duplicate row (§6.1).
 //   - Raw is the original, unmodified wire bytes -- persisted verbatim via
 //     appendRawEvent (actor.go) so the append-only event log holds exactly
 //     what the sandbox sent, not a lossy re-encoding through an
@@ -79,6 +85,7 @@ func (TimerFired) isCommand() {}
 type SandboxEvent struct {
 	Type          string
 	Gen           int
+	MessageID     string
 	Raw           json.RawMessage
 	LastBootPhase *string
 	// ConversationID mirrors sandboxws.Heartbeat.ConversationId for a

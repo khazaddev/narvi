@@ -517,6 +517,7 @@ func TestListEvents_HappyPath(t *testing.T) {
 		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
 			SessionID: session.ID,
 			Type:      "token",
+			MessageID: fmt.Sprintf("msg-%d", i),
 			Payload:   []byte(fmt.Sprintf(`{"n":%d}`, i)),
 		}); err != nil {
 			t.Fatalf("create event %d: %v", i, err)
