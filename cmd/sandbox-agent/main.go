@@ -570,7 +570,8 @@ func run() error {
 			return fmt.Errorf("sandbox-agent: spawn opencode: %w", spawnErr)
 		}
 
-		agentRuntime = opencode.New(result.BaseURL, timeouts.SSEInactivityTimeout)
+		agentRuntime = opencode.New(result.BaseURL, timeouts.SSEInactivityTimeout,
+			timeouts.OpenCodeSSEReconnectInterval, timeouts.OpenCodeRequestTimeout)
 		defer agentRuntime.Close()
 
 		// §7: "Pin the OpenCode version in the image; record it in the

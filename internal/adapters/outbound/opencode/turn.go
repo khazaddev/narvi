@@ -1,6 +1,8 @@
 package opencode
 
 import (
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -63,7 +65,14 @@ type turnState struct {
 	sawToolCall        bool
 
 	lastActivity time.Time
-	finalized    bool
+
+	// finalized is set exactly once, under mu, by tryFinalize below — and
+	// read under that SAME mu by emit (Finding 4), so a racing SSE-
+	// dispatched emit call and a concurrent Adapter.finalize call can
+	// never straddle the moment finalize commits: whichever acquires mu
+	// first atomically determines whether the event is delivered or
+	// dropped.
+	finalized bool
 
 	// done is closed exactly once, by Adapter.finalize, once this turn's
 	// own execution_complete (and any still-open sub_task_finish events)
@@ -87,8 +96,45 @@ func newTurnState(cmd sandboxws.Prompt, sink ports.EventSink) *turnState {
 
 // emit populates AgentEvent.Critical/AckID via ports.ClassifyAgentEvent
 // (the single shared "which wire types are critical" classification) and
-// forwards to the sink.
+// forwards to the sink — UNLESS this turn has already finalized (Finding
+// 4): a late-arriving SSE-dispatched event (e.g. a fresh sub_task_start,
+// dispatchSubtaskStart below racing Adapter.finalize on a different
+// goroutine) must never slip out after execution_complete was already
+// sent. The ts.finalized check happens under the SAME ts.mu that
+// tryFinalize sets it under, and sink is called WHILE STILL HOLDING that
+// lock — never released between the check and the sink call, or the race
+// reopens — so whichever of {this emit call} or {finalize's own
+// tryFinalize call} acquires ts.mu first correctly and atomically
+// determines the outcome; there is no window for a check-then-act race in
+// either direction. Every call site here goes through the SSE dispatch
+// path (dispatchEvent, dispatchPart, dispatchTool, dispatchSubtaskStart,
+// ...) — Adapter.finalize uses the separate emitFinal below instead, which
+// is deliberately NOT subject to this same check.
 func (ts *turnState) emit(payload any) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.finalized {
+		slog.Warn("opencode: dropping event emitted after finalize", "type", fmt.Sprintf("%T", payload))
+		return
+	}
+
+	critical, ackID := ports.ClassifyAgentEvent(payload)
+	ts.sink(ports.AgentEvent{Payload: payload, Critical: critical, AckID: ackID})
+}
+
+// emitFinal is used ONLY by Adapter.finalize (adapter.go), for its own two
+// kinds of terminal emission: the drained sub_task_finish events and the
+// final execution_complete itself. Unlike emit above, this does NOT check
+// ts.finalized — finalize is the one call path explicitly entitled to emit
+// despite having just set that flag via tryFinalize — and needs no locking
+// of its own beyond reading ts.sink, which is set once at construction
+// (newTurnState) and never mutated by any other method on this type
+// afterward: an unlocked read of a value that is written exactly once,
+// before this turnState is ever shared across goroutines (registerTurn
+// happens after newTurnState returns), and never written again, is safe
+// per Go's own memory model.
+func (ts *turnState) emitFinal(payload any) {
 	critical, ackID := ports.ClassifyAgentEvent(payload)
 	ts.sink(ports.AgentEvent{Payload: payload, Critical: critical, AckID: ackID})
 }
@@ -115,6 +161,17 @@ func (ts *turnState) idleFor(d time.Duration) bool {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	return time.Since(ts.lastActivity) >= d
+}
+
+// lastActivityTime returns the raw timestamp idleFor above compares against
+// — used by Adapter.shouldFinalizeByFallback (adapter.go) to ask
+// Adapter.disconnectedSince whether a genuine connection disconnect
+// occurred at any point during THIS turn's own current idle episode, not
+// just whether the turn has been idle for some duration in the abstract.
+func (ts *turnState) lastActivityTime() time.Time {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.lastActivity
 }
 
 func (ts *turnState) setLastAssistantError(err *openCodeTaggedError) {

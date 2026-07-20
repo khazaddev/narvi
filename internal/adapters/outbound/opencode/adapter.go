@@ -26,6 +26,24 @@ import (
 // automatically if that default is ever reconfigured.
 const ssePollDivisor = 24
 
+// fallbackReconnectGraceMultiplier bounds how many multiples of
+// sseInactivityTimeout waitForTurn's own poll loop waits for reconnection to
+// recover a dropped connection (Finding 1/2's own liveness disambiguation)
+// before finalizing via the fallback anyway -- a plain named int constant,
+// not a forbidden time.Duration literal (§5.4/§11's notimeliteral lint
+// forbids time.Second/time.Millisecond/etc. selectors outside
+// platform/timeouts.go and _test.go files; this multiplies an existing
+// duration FIELD, mirroring ssePollDivisor's own precedent above, not a
+// fresh unit literal). 2x gives reconnection (now happening every
+// platform.Timeouts.OpenCodeSSEReconnectInterval, deliberately much shorter
+// than sseInactivityTimeout) a full extra window beyond the normal
+// per-turn-idle threshold before concluding the turn's own real outcome is
+// unrecoverable -- long enough to be a genuine grace period for a
+// same-machine, sandbox-agent-managed process's connection to recover, short
+// enough that a turn can never wait unboundedly on a connection that never
+// comes back.
+const fallbackReconnectGraceMultiplier = 2
+
 // Adapter is the OpenCode ports.AgentRuntime implementation (§7): a pure
 // HTTP+SSE client against an ALREADY-RUNNING `opencode serve` process —
 // mirroring internal/adapters/outbound/modal's own shape exactly. This
@@ -71,8 +89,44 @@ type Adapter struct {
 	sseInactivityTimeout time.Duration
 	pollInterval         time.Duration
 
+	// reconnectInterval is runEventLoop's own reconnect delay after a
+	// dropped GET /event connection (platform.Timeouts.
+	// OpenCodeSSEReconnectInterval) -- deliberately a SEPARATE field from
+	// sseInactivityTimeout (Finding 2: reusing the latter as the
+	// reconnect delay made reconnection structurally unable to ever beat
+	// the per-turn fallback race).
+	reconnectInterval time.Duration
+
+	// requestTimeout bounds every doJSON-routed HTTP call (client.go) via
+	// a per-request context.WithTimeout wrap (Finding 3) --
+	// platform.Timeouts.OpenCodeRequestTimeout. Deliberately NOT applied
+	// as a client-wide http.Client.Timeout: connectAndConsume's own GET
+	// /event call uses this SAME httpClient for the intentionally
+	// long-lived persistent SSE stream, which a client-wide Timeout would
+	// incorrectly kill.
+	requestTimeout time.Duration
+
 	mu               sync.Mutex
 	currentSessionID string
+
+	// disconnectMu guards lastDisconnectAt -- the adapter-level (not
+	// per-turn) record of the last time runEventLoop's own connectAndConsume
+	// call observed a GENUINE connection error (a real outage), set BEFORE
+	// the reconnect-delay wait so it reflects when the outage STARTED, not
+	// when reconnection later succeeds (see recordDisconnect below). Zero
+	// value means no disconnect has ever been observed. Deliberately never
+	// reset on a successful reconnect: shouldFinalizeByFallback's own
+	// disambiguation needs to ask "did a disconnect happen at any point
+	// during THIS turn's own current idle episode", which only a value that
+	// stays put (compared against a per-turn timestamp) can answer --
+	// reconnecting successfully doesn't retroactively prove any given turn
+	// is fine, only that reconnection is now technically possible. A
+	// separate mutex from mu above (which guards the unrelated
+	// currentSessionID) keeps each concern's own lock scoped to exactly
+	// what it protects, matching this file's own existing per-concern-
+	// locking style.
+	disconnectMu     sync.Mutex
+	lastDisconnectAt time.Time
 
 	turnsMu sync.Mutex
 	turns   map[string]*turnState
@@ -99,13 +153,28 @@ var _ ports.AgentRuntime = (*Adapter)(nil)
 // via the type's own errgroup field, never a bare `go` statement"
 // pattern internal/sandboxagent/supervisor.Supervisor.Spawn already
 // establishes for its own reap goroutine.
-func New(baseURL string, sseInactivityTimeout time.Duration) *Adapter {
+//
+// sseInactivityTimeout, reconnectInterval, and requestTimeout are, in
+// production, platform.Timeouts.SSEInactivityTimeout,
+// OpenCodeSSEReconnectInterval, and OpenCodeRequestTimeout respectively:
+// sseInactivityTimeout is the per-turn silence threshold both waitForTurn's
+// own fallback and its own disconnect-during-this-idle-episode
+// disambiguation (disconnectedSince) share; reconnectInterval is how long
+// runEventLoop waits before retrying a dropped GET /event connection
+// (deliberately much shorter than sseInactivityTimeout — Finding 2 — so
+// reconnection has a real chance to win against the fallback); requestTimeout
+// bounds every doJSON-routed HTTP call (Finding 3), applied per-request in
+// client.go, never as a client-wide http.Client.Timeout (which would also
+// incorrectly bound the persistent SSE connection below).
+func New(baseURL string, sseInactivityTimeout, reconnectInterval, requestTimeout time.Duration) *Adapter {
 	bgCtx, cancel := context.WithCancel(context.Background())
 
 	a := &Adapter{
 		baseURL:              strings.TrimSuffix(baseURL, "/"),
 		httpClient:           &http.Client{},
 		sseInactivityTimeout: sseInactivityTimeout,
+		reconnectInterval:    reconnectInterval,
+		requestTimeout:       requestTimeout,
 		pollInterval:         sseInactivityTimeout / ssePollDivisor,
 		turns:                make(map[string]*turnState),
 		connectedCh:          make(chan struct{}),
@@ -175,31 +244,73 @@ func (a *Adapter) lookupTurn(sessionID string) *turnState {
 	return a.turns[sessionID]
 }
 
+// recordDisconnect records that runEventLoop's own connectAndConsume call
+// just observed a GENUINE connection error (a real outage), called BEFORE
+// the reconnect-delay wait so this reflects the moment the outage STARTED,
+// not when reconnection later succeeds — Finding 1/2's own disambiguation
+// (see shouldFinalizeByFallback below) depends on this being the outage's
+// own start time, not a point-in-time "is the stream fresh right now"
+// snapshot.
+func (a *Adapter) recordDisconnect() {
+	a.disconnectMu.Lock()
+	defer a.disconnectMu.Unlock()
+	a.lastDisconnectAt = time.Now()
+}
+
+// disconnectedSince reports whether a genuine disconnect (recordDisconnect
+// above) was observed strictly after t — shouldFinalizeByFallback's own
+// disambiguation passes a turn's own lastActivityTime as t, to ask "did a
+// real outage occur at any point during THIS turn's current idle episode",
+// as opposed to merely asking whether the stream looks fresh RIGHT NOW (a
+// point-in-time snapshot that reconnecting alone flips back to "fresh"
+// without proving anything about what happened during the turn's own
+// silence). The zero value of lastDisconnectAt (no disconnect ever
+// observed) is never After any real t, so this correctly reports false
+// until the first genuine disconnect.
+func (a *Adapter) disconnectedSince(t time.Time) bool {
+	a.disconnectMu.Lock()
+	defer a.disconnectMu.Unlock()
+	return a.lastDisconnectAt.After(t)
+}
+
 // StartTurn implements ports.AgentRuntime — see that interface's own doc
 // comment for the full contract. Dispatches cmd as a turn, streams every
 // translated event to sink live, and always attempts exactly one
-// execution_complete-shaped terminal event before returning.
+// execution_complete-shaped terminal event before returning — including on
+// EVERY early-return path below, not just the common case: a ctx
+// cancellation before resolveSession/postPromptAsync ever completes, or
+// while waitForTurn is still blocked, now correctly finalizes via
+// finalizeCanceled instead of returning silently (Finding 5 — the three
+// gaps this promise used to have).
 func (a *Adapter) StartTurn(ctx context.Context, cmd sandboxws.Prompt, sink ports.EventSink) (string, error) {
+	// Created up front, before resolveSession is ever called, so EVERY
+	// subsequent return path below — including the very first one — has
+	// a valid turnState to finalize through. This does not register it in
+	// a.turns any earlier than today: nothing dispatches SSE events for a
+	// session that doesn't exist yet, so only its own local existence
+	// needs to move up (registerTurn below is unchanged).
+	ts := newTurnState(cmd, sink)
+
 	sessionID, err := a.resolveSession(ctx, cmd)
 	if err != nil {
 		if ctx.Err() != nil {
+			a.finalizeCanceled(ts)
 			return "", ctx.Err()
 		}
 		reason := "opencode: could not start a conversation"
-		ts := newTurnState(cmd, sink)
 		a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeFailed, Reason: &reason})
 		return "", nil
 	}
 
 	a.setCurrentSession(sessionID)
 
-	ts := newTurnState(cmd, sink)
 	a.registerTurn(sessionID, ts)
 	defer a.unregisterTurn(sessionID)
 
 	model := a.resolveModel(ctx, (*string)(cmd.Model))
 	if err := a.postPromptAsync(ctx, sessionID, cmd, model); err != nil {
 		if ctx.Err() != nil {
+			a.finalizeCanceled(ts)
 			return sessionID, ctx.Err()
 		}
 		reason := "opencode: could not dispatch prompt"
@@ -211,12 +322,33 @@ func (a *Adapter) StartTurn(ctx context.Context, cmd sandboxws.Prompt, sink port
 	return sessionID, nil
 }
 
+// finalizeCanceled finalizes ts with a Cancelled outcome and an honest,
+// fixed reason string — used by every one of StartTurn/waitForTurn's own
+// ctx-cancellation early-return paths (Finding 5). Cancelled (rather than
+// Failed) is the correct outcome for an externally-imposed interruption
+// like this, not a genuine execution failure — the same precedent
+// deriveOutcome (outcome.go) already follows for a real
+// MessageAbortedError. Safe to call even if ts is already finalized
+// (finalize's own tryFinalize guard makes every finalize call idempotent),
+// so no caller here needs to reason about whether some OTHER goroutine
+// (e.g. the SSE loop's own session.idle/session.error dispatch) might have
+// already finalized ts first.
+func (a *Adapter) finalizeCanceled(ts *turnState) {
+	reason := "opencode: turn context canceled before completion"
+	a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeCancelled, Reason: &reason})
+}
+
 // waitForTurn blocks until ts.done is closed (the SSE loop's own
 // dispatchEvent already finalized and emitted the turn's terminal event
 // via session.idle/session.error), ctx is canceled, or this turn's own
 // SSE-inactivity fallback fires — polling ts.idleFor rather than a
 // Timer.Reset-based scheme (see turnState.idleFor's own doc comment for
-// why).
+// why). A ctx cancellation now finalizes ts (Cancelled) before returning
+// (Finding 5) rather than leaving the turn's own execution_complete
+// promise unfulfilled — safe even if some OTHER goroutine (the SSE loop,
+// or this turn's own fallback path racing on a near-simultaneous tick)
+// already finalized ts first, since finalizeCanceled's underlying
+// a.finalize call is idempotent.
 func (a *Adapter) waitForTurn(ctx context.Context, sessionID string, ts *turnState) {
 	ticker := time.NewTicker(a.pollInterval)
 	defer ticker.Stop()
@@ -224,16 +356,59 @@ func (a *Adapter) waitForTurn(ctx context.Context, sessionID string, ts *turnSta
 	for {
 		select {
 		case <-ctx.Done():
+			a.finalizeCanceled(ts)
 			return
 		case <-ts.done:
 			return
 		case <-ticker.C:
-			if ts.idleFor(a.sseInactivityTimeout) {
+			if a.shouldFinalizeByFallback(ts) {
 				a.finalizeByFallback(ctx, sessionID, ts)
 				return
 			}
 		}
 	}
+}
+
+// shouldFinalizeByFallback implements Finding 1/2's own liveness
+// disambiguation: ts.idleFor(a.sseInactivityTimeout) alone (the ORIGINAL
+// fallback trigger) cannot tell "this turn is genuinely stuck" apart from
+// "the whole SSE connection dropped, and this turn just went silent as a
+// side effect" — the latter might still resolve normally once runEventLoop
+// reconnects (now happening every a.reconnectInterval, deliberately much
+// shorter than a.sseInactivityTimeout so it has a real chance to win this
+// race), letting the turn's own real session.idle/session.error arrive as
+// usual.
+//
+// This asks "did a genuine disconnect happen at any point DURING this
+// turn's own current idle episode" (a.disconnectedSince(ts.
+// lastActivityTime())), NOT "does the stream look fresh RIGHT NOW" — a
+// point-in-time snapshot a bare reconnect handshake flips back to "fresh"
+// on the very next poll tick, without the turn itself having had any
+// chance yet to receive its own completion event. Reconnecting only proves
+// reconnection is now technically possible, never that THIS turn's own
+// outcome is ready.
+//
+//   - Turn idle, no disconnect ever observed during this turn's own
+//     silence (!a.disconnectedSince(...)): this turn alone stalled on a
+//     continuously healthy connection — the fallback's own original reason
+//     for existing, unchanged. Finalize now.
+//   - Turn idle AND a genuine disconnect occurred at some point during
+//     this turn's own current silence (a.disconnectedSince(...)): do NOT
+//     finalize yet — keep polling, giving the turn's own real outcome a
+//     real chance to arrive normally (whether the stream has already
+//     reconnected or not). Bounded: once the turn has been silent for
+//     fallbackReconnectGraceMultiplier times the normal threshold (a full
+//     extra window beyond the point reconnection should have already
+//     recovered, were it going to), finalize via the fallback anyway —
+//     this wait must never be unbounded.
+func (a *Adapter) shouldFinalizeByFallback(ts *turnState) bool {
+	if !ts.idleFor(a.sseInactivityTimeout) {
+		return false
+	}
+	if a.disconnectedSince(ts.lastActivityTime()) {
+		return ts.idleFor(fallbackReconnectGraceMultiplier * a.sseInactivityTimeout)
+	}
+	return true
 }
 
 // finalizeByFallback implements §7's own "final-state fetch fallback"
@@ -261,16 +436,24 @@ func (a *Adapter) finalizeByFallback(ctx context.Context, sessionID string, ts *
 // package's own doc comment on Adapter for the documented best-effort
 // reasoning) before the turn's own execution_complete, then closes
 // ts.done so waitForTurn's own poll loop returns.
+//
+// Uses ts.emitFinal, NOT ts.emit, for both kinds of terminal emission
+// below (Finding 4): tryFinalize above has already set ts.finalized=true
+// under ts.mu, and emit's own finalized check (turn.go) — reading that SAME
+// flag under that SAME lock — would unconditionally drop anything finalize
+// itself tries to emit here. emitFinal is the one path explicitly entitled
+// to emit despite ts.finalized already being true, since finalize is the
+// only caller of it.
 func (a *Adapter) finalize(ts *turnState, outcome turnOutcome) {
 	if !ts.tryFinalize() {
 		return
 	}
 
 	for _, subTaskID := range ts.drainOpenSubtasks() {
-		ts.emit(translateSubTaskFinish(ts.cmd, subTaskID, outcome.Outcome))
+		ts.emitFinal(translateSubTaskFinish(ts.cmd, subTaskID, outcome.Outcome))
 	}
 
-	ts.emit(translateExecutionComplete(ts.cmd, outcome))
+	ts.emitFinal(translateExecutionComplete(ts.cmd, outcome))
 
 	close(ts.done)
 }

@@ -47,6 +47,17 @@ const (
 	testSSEInactivityTimeout = 45 * time.Second
 	testWait                 = 15 * time.Second
 	testSessionID            = "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a"
+
+	// testReconnectInterval/testRequestTimeout are the two New() params
+	// Batch 5's own audit remediation added (Findings 2/3). These
+	// real-opencode-binary-backed tests (startServer/newAdapter below)
+	// never deliberately drop the SSE connection or stall a request, so
+	// their exact values don't matter for correctness here -- chosen
+	// simply as sane, non-degenerate defaults matching each field's own
+	// production-default order of magnitude (platform.Timeouts.
+	// OpenCodeSSEReconnectInterval/OpenCodeRequestTimeout).
+	testReconnectInterval = 2 * time.Second
+	testRequestTimeout    = 30 * time.Second
 )
 
 // startServer spawns a REAL `opencode serve` process — via
@@ -86,7 +97,7 @@ func startServer(t *testing.T) string {
 // stopping its persistent SSE loop via t.Cleanup.
 func newAdapter(t *testing.T) *Adapter {
 	t.Helper()
-	a := New(startServer(t), testSSEInactivityTimeout)
+	a := New(startServer(t), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout)
 	t.Cleanup(a.Close)
 	return a
 }
