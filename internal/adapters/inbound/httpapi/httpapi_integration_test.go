@@ -238,6 +238,19 @@ func (r testRig) createAuthenticatedUser(ctx context.Context, t *testing.T) (sql
 	return user, token
 }
 
+// sessionCountForUser returns how many rows exist in sessions with
+// created_by = userID -- used by this file's own repo-validation rejection
+// tests to prove a 400 happens strictly BEFORE sessions.WithTx(tx).Create,
+// not merely that the handler returns the right status code.
+func (r testRig) sessionCountForUser(ctx context.Context, t *testing.T, userID pgtype.UUID) int {
+	t.Helper()
+	var count int
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE created_by = $1`, userID).Scan(&count); err != nil {
+		t.Fatalf("count sessions for user: %v", err)
+	}
+	return count
+}
+
 // doJSON issues method against r.server.URL+path with an optional body,
 // decoding the response body into v (if non-nil) and returning the status
 // code. If token is non-empty, it is attached as the narvi_auth_session
@@ -433,6 +446,114 @@ func TestCreateSession_EmptyRepos(t *testing.T) {
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+}
+
+// TestCreateSession_InvalidRepoURL_Rejected proves every one of
+// reposource.ValidateRepoURL's own rejection reasons is checked at this
+// handler's own trust boundary (before any Postgres write), not only much
+// later at actual git-invocation time deep inside the sandbox agent: a
+// non-https scheme, a URL that fails net/url.Parse outright, and a URL
+// that parses but has no host.
+func TestCreateSession_InvalidRepoURL_Rejected(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "non-https scheme", url: "http://example.com"},
+		{name: "git scheme", url: "git://example.com/repo.git"},
+		{name: "fails to parse", url: "https://%zz"},
+		{name: "no host", url: "https://"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+			user, token := rig.createAuthenticatedUser(ctx, t)
+
+			body := []byte(fmt.Sprintf(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":%q,"branch":null}],"modelId":null,"planMode":false}`, tc.url))
+			status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+			if status != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+			}
+			if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+				t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+			}
+		})
+	}
+}
+
+// TestCreateSession_InvalidRepoName_PathTraversal_Rejected proves a repo
+// name shaped like a path-traversal payload is rejected here -- repo.Name
+// later reaches filepath.Join(workspaceDir, repo.Name) inside gitclone, so
+// it is exactly as much a risk as an unvalidated Url/Branch, even though
+// the audit finding's own summary names only url/branch explicitly.
+func TestCreateSession_InvalidRepoName_PathTraversal_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"../escaped","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
+// TestCreateSession_InvalidRepoBranch_DashPrefix_Rejected proves a branch
+// beginning with "-" -- the argument-injection-shaped payload
+// internal/domain/reposource's own tests already use as their canonical
+// example -- is rejected here too.
+func TestCreateSession_InvalidRepoBranch_DashPrefix_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":"--upload-pack=evil"}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
+// TestCreateSession_NilBranch_Succeeds proves a nil branch on an otherwise
+// -valid repo is never accidentally rejected -- nil means "use the repo's
+// own default branch" and must never reach reposource.ValidateBranch at
+// all.
+func TestCreateSession_NilBranch_Succeeds(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusCreated {
+		t.Errorf("status = %d, want %d", status, http.StatusCreated)
+	}
+}
+
+// TestCreateSession_MultipleRepos_SecondInvalid_Rejected proves the repo
+// validation loop actually inspects EVERY repo, in order -- a valid first
+// repo must never cause an invalid second repo to be skipped.
+func TestCreateSession_MultipleRepos_SecondInvalid_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null},{"name":"../escaped","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
 	}
 }
 
