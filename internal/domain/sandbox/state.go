@@ -65,11 +65,39 @@ const (
 	// TriggerRestore is a snapshot restore into a freshly spawned
 	// provider sandbox: Stopped/Failed/Stale -> Spawning. Gen-fenced.
 	TriggerRestore
-	// TriggerResume is a persistent-resume of the SAME provider sandbox
-	// (no new provider object created): Stopped/Stale -> Connecting.
-	// Gen-fenced (§3.2's gen-fencing rule explicitly covers "a
-	// restore/resume out of stopped/stale/failed").
+	// TriggerResume is the FIRST step of a two-step persistent-resume of
+	// the SAME provider sandbox (no new provider object created):
+	// Stopped/Stale -> Spawning. Gen-fenced (§3.2's gen-fencing rule
+	// explicitly covers "a restore/resume out of stopped/stale/failed"),
+	// mirroring TriggerSpawn/TriggerRestore's own identical shape exactly
+	// -- Spawning here is an interim "a resume attempt is claimed and in
+	// flight" marker, reusing Spawning's own already-correct
+	// EvaluateSpawnDecision no-op guard for free: the SAME protection a
+	// concurrent second spawn/restore attempt already gets against racing
+	// the first now also covers a concurrent second resume attempt (e.g.
+	// two different actor instances for the same session during a
+	// stale-epoch/pod-handover takeover, both reading the same
+	// Stopped/Stale row before either one's write commits). TriggerResume
+	// used to jump straight to Connecting in one step; it no longer does
+	// -- see TriggerResumeAck (below) for the second step that completes
+	// the resume once the provider call actually succeeds.
 	TriggerResume
+	// TriggerResumeAck is the second step of TriggerResume's own two-step
+	// shape (see TriggerResume's own doc comment above): the provider's
+	// ResumeSandbox call returning success for the SAME provider object
+	// (no new object created -- unlike TriggerProviderAck, whose own
+	// spawn/restore callers always DO have a genuinely new provider
+	// object to record): Spawning -> Connecting. Deliberately a distinct
+	// trigger kind from TriggerProviderAck, even though both share the
+	// exact same (from, to) edge, so the transition LOG (§5.3) can tell
+	// "a spawn/restore's provider call acked" apart from "a resume's
+	// provider call acked" -- the same reasoning TriggerForceRespawn's
+	// own doc comment already gives for staying distinct from
+	// TriggerSpawn despite sharing a target. Not gen-fenced: gen was
+	// already fenced at TriggerResume's own first step (Gen is required
+	// there, not here) -- exactly like TriggerProviderAck is not
+	// gen-fenced either, for the identical reason.
+	TriggerResumeAck
 	// TriggerForceRespawn abandons a sandbox EvaluateSpawnDecision has
 	// determined is stuck/unreachable -- a spawn/connect interrupted
 	// before the sandbox ever connected (Spawning/Connecting/Booting held
@@ -89,7 +117,7 @@ const (
 var triggerNames = [...]string{
 	"spawn", "provider_ack", "ws_connected", "boot_complete",
 	"snapshot_start", "snapshot_complete", "suspect", "recover",
-	"grace_expired", "restore", "resume", "force_respawn",
+	"grace_expired", "restore", "resume", "resume_ack", "force_respawn",
 }
 
 func (k TriggerKind) String() string {
@@ -160,6 +188,12 @@ func GraceExpiredTrigger(target State) Trigger {
 
 // ProviderAckTrigger builds a TriggerProviderAck trigger.
 func ProviderAckTrigger() Trigger { return Trigger{Kind: TriggerProviderAck} }
+
+// ResumeAckTrigger builds a TriggerResumeAck trigger -- the second step of
+// TriggerResume's own two-step shape (see TriggerResume's own doc comment).
+// Takes no params, mirroring ProviderAckTrigger's own shape exactly: gen
+// was already fenced at the first step, so this second step carries none.
+func ResumeAckTrigger() Trigger { return Trigger{Kind: TriggerResumeAck} }
 
 // WSConnectedTrigger builds a TriggerWSConnected trigger.
 func WSConnectedTrigger() Trigger { return Trigger{Kind: TriggerWSConnected} }
@@ -253,7 +287,13 @@ var transitions = map[State]map[TriggerKind]transitionRule{
 	},
 	StateSpawning: {
 		TriggerProviderAck: {targets: []State{StateConnecting}},
-		TriggerSuspect:     {targets: []State{StateSuspect}},
+		// TriggerResumeAck is resume's own second step (state.go's own
+		// doc comment on TriggerResume/TriggerResumeAck) -- landing on
+		// the exact same target as TriggerProviderAck above, but kept a
+		// distinct trigger kind so the transition log can tell a
+		// resume's own provider-ack apart from a spawn/restore's.
+		TriggerResumeAck: {targets: []State{StateConnecting}},
+		TriggerSuspect:   {targets: []State{StateSuspect}},
 		// A spawn interrupted before the sandbox ever connected
 		// (EvaluateSpawnDecision's own SpawningTimeout carve-out) --
 		// abandon it and spawn fresh, rather than skipping indefinitely.
@@ -303,7 +343,9 @@ var transitions = map[State]map[TriggerKind]transitionRule{
 	StateStopped: {
 		TriggerSpawn:   {targets: []State{StateSpawning}, genFenced: true},
 		TriggerRestore: {targets: []State{StateSpawning}, genFenced: true},
-		TriggerResume:  {targets: []State{StateConnecting}, genFenced: true},
+		// TriggerResume's own first step now lands in Spawning, not
+		// Connecting -- see its own doc comment above.
+		TriggerResume: {targets: []State{StateSpawning}, genFenced: true},
 	},
 	StateFailed: {
 		// "failed + resume-capable" is NOT a plan-stated recovery rule --
@@ -315,7 +357,9 @@ var transitions = map[State]map[TriggerKind]transitionRule{
 	StateStale: {
 		TriggerSpawn:   {targets: []State{StateSpawning}, genFenced: true},
 		TriggerRestore: {targets: []State{StateSpawning}, genFenced: true},
-		TriggerResume:  {targets: []State{StateConnecting}, genFenced: true},
+		// TriggerResume's own first step now lands in Spawning, not
+		// Connecting -- see its own doc comment above.
+		TriggerResume: {targets: []State{StateSpawning}, genFenced: true},
 	},
 }
 

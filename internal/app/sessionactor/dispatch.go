@@ -51,6 +51,60 @@
 // handleTurnDeadlineTimer (timerfired.go) already uses for a turn_deadline
 // expiry (see failDispatchedTurn's own doc comment for exactly why that
 // specific existing edge, not a different one, is reused here).
+//
+// The resume branch (Step 23, "resume") originally needed a genuinely
+// different shape from spawn/restore above: sandbox.TriggerResume used to
+// go STRAIGHT from Stopped/Stale to Connecting, with no interim
+// "Spawning"-like state to write before calling the provider the way
+// planFreshSpawn/planRestore write spawning/gen/token first. An
+// adversarial review found a real, empirically-reproduced concurrency bug
+// in that shape: two DIFFERENT actor instances for the SAME session (a
+// legitimate stale-epoch/pod-handover takeover -- the exact same race
+// executeSpawn/executeRestore already handle correctly for their OWN
+// outcome-recording step) could both read the same Stopped/Stale row,
+// both have EvaluateSpawnDecision return SpawnActionResume, and BOTH call
+// ResumeSandbox for the identical provider object before either call
+// returned -- nothing marked the row as "a resume attempt is already in
+// flight" the way Spawning already does for spawn/restore.
+//
+// The fix (this Step's own follow-up) gives resume the SAME two-step
+// shape spawn/restore already have: sandbox.TriggerResume (state.go) now
+// lands in Spawning, not Connecting -- an interim "claimed, in flight"
+// marker exactly like a fresh spawn's own first step -- reusing
+// Spawning's own already-correct EvaluateSpawnDecision no-op guard for
+// free to close the race. A new sandbox.TriggerResumeAck is the second
+// step, applied once ResumeSandbox actually returns success: Spawning ->
+// Connecting. So the resume branch is now genuinely a third instance of
+// the SAME shape spawn/restore already use, not a special case: (1)
+// tryPlanSpawn's own transact validates the (from, trigger, gen) edge via
+// sandbox.Transition and writes the interim claim (planResume, reusing
+// the SAME UpsertSandboxForSpawn upsert planFreshSpawn/planRestore
+// already share -- its own hardcoded status='spawning' now genuinely
+// matches the Transition-validated target for resume too, not merely a
+// coincidence self-corrected one write later), mints a fresh token/gen
+// (sandbox tokens are hashed at rest, one per gen, per §5.2 -- paraphrased,
+// not verbatim -- applying to a resume's own gen bump exactly as it does
+// to a spawn/restore's), and arms TimerConnectingDeadline, all before
+// this transact commits; (2) OUTSIDE any transaction,
+// SandboxProvider.ResumeSandbox is called against the EXISTING provider
+// object (never a new one -- ResumeSandbox's own port signature returns
+// only an error, so there is no new ref to record); (3) a second, fresh
+// transact (recordResumeOutcome) records the outcome: on success,
+// Spawning -> Connecting via TriggerResumeAck, deliberately never calling
+// UpdateProviderID (the provider object never changed); on failure,
+// recordSpawnFailure is reused UNCHANGED -- a permanent resume failure
+// now behaves identically to a permanent spawn/restore failure (same
+// circuit-breaker increment, same transitionSandboxToSuspect path), since
+// it now has the exact same interim Spawning write to transition out of
+// that a permanent spawn/restore failure already does. See
+// planResume/executeResume/recordResumeOutcome's own doc comments below
+// for the full detail, and this Step's own PR description for the
+// honest, deliberately-deferred gap this still leaves open (unrelated to,
+// and not fixed by, this concurrency fix): ResumeSandbox's own port
+// signature (§4.1) has no CreateSpec/SESSION_CONFIG delivery channel, so
+// there is still no way for the control plane to actually deliver this
+// freshly minted token/gen to the already-running provider instance today
+// -- left for Step 48 (RWX) to resolve for real.
 
 package sessionactor
 
@@ -118,9 +172,20 @@ func hashSandboxToken(token string) string {
 
 // spawnPlan is what planDispatch's own transact hands back to
 // handleEnsureDispatched when (and only when) the spawn branch decided to
-// actually spawn OR restore -- the real provider call itself happens
-// OUTSIDE that transact, in executeSpawn/executeRestore, using exactly
-// this plan.
+// actually spawn, restore, OR resume -- the real provider call itself
+// happens OUTSIDE that transact, in executeSpawn/executeRestore/
+// executeResume, using exactly this plan.
+//
+// Step 23's own concurrency fix folds resume into this SAME type (see the
+// resume/providerObjectID fields below) rather than keeping the separate
+// resumePlan type this Step originally introduced: now that
+// sandbox.TriggerResume's own first-step target is Spawning (state.go),
+// resume's own write genuinely IS the same "commit an interim claim
+// inside tryPlanSpawn's transact, then call the provider outside any
+// transaction" shape spawn/restore already have -- planDispatch's own
+// two-plan return shape (spawnPlan, dispatchPlan) is restored to exactly
+// what it was before resume needed a third, structurally-different plan
+// type at all.
 type spawnPlan struct {
 	gen  int
 	spec ports.CreateSpec
@@ -129,16 +194,36 @@ type spawnPlan struct {
 	// Spawning RESTORE (§3.2: "stopped|stale + snapshot -> restore (new
 	// gen)"), as opposed to a plain fresh spawn (Step 22, "snapshots &
 	// restore", design decision 6). handleEnsureDispatched dispatches
-	// restore==true to executeRestore instead of executeSpawn.
-	// planDispatch's own two-plan return shape (Step 21) is deliberately
-	// unchanged by this addition -- a restore decision is still exactly
-	// branch (a) ("no live sandbox, needs [re]spawning") planDispatch
-	// already recognizes, just restoring from a snapshot instead of
-	// creating fresh.
+	// restore==true to executeRestore instead of executeSpawn. Mutually
+	// exclusive with resume (below) -- EvaluateSpawnDecision's own
+	// priority ordering (spawndecision.go, untouched by this fix) never
+	// returns both kinds for the same call. planDispatch's own two-plan
+	// return shape (Step 21) is deliberately unchanged by this addition --
+	// a restore decision is still exactly branch (a) ("no live sandbox,
+	// needs [re]spawning") planDispatch already recognizes, just
+	// restoring from a snapshot instead of creating fresh.
 	restore bool
 	// snapshotID is set only when restore is true: the snapshot to
 	// restore from (ports.SnapshotID(action.SnapshotImageID)).
 	snapshotID ports.SnapshotID
+
+	// resume is true when this plan is a Stopped/Stale -> Spawning
+	// interim claim for a persistent RESUME of an existing provider
+	// sandbox object (Step 23, "resume") -- reusing the SAME two-step
+	// shape restore/spawn already have, now that TriggerResume's own
+	// target is Spawning rather than a special one-step jump straight to
+	// Connecting. handleEnsureDispatched dispatches resume==true to
+	// executeResume instead of executeSpawn/executeRestore.
+	resume bool
+	// providerObjectID is set only when resume is true: the SAME
+	// provider sandbox instance being resumed (action.ProviderObjectID
+	// from EvaluateSpawnDecision) -- never a new one, unlike spec/
+	// snapshotID above, which ask the provider to CREATE one.
+	// executeResume calls ResumeSandbox with this id directly; spec is
+	// left at its zero value on a resume plan and never read by
+	// executeResume, since ResumeSandbox's own port signature (§4.1)
+	// takes no CreateSpec at all.
+	providerObjectID string
 }
 
 // dispatchPlan is what planDispatch's own transact hands back to
@@ -155,14 +240,20 @@ type dispatchPlan struct {
 }
 
 // handleEnsureDispatched implements the EnsureDispatched command (Step
-// 21, design decision 3): read fresh state, decide whether to spawn a
-// sandbox or dispatch a pending turn (or do nothing this round), and act.
+// 21, design decision 3): read fresh state, decide whether to spawn,
+// resume, or restore a sandbox, or dispatch a pending turn (or do nothing
+// this round), and act. Resume (Step 23) added alongside spawn/restore;
+// spawn.resume is checked before spawn.restore since both are carried on
+// the SAME spawnPlan type (its own doc comment above explains why) and
+// are mutually exclusive by construction.
 func (a *Actor) handleEnsureDispatched(ctx context.Context) error {
 	spawn, dispatch, err := a.planDispatch(ctx)
 	if err != nil {
 		return err
 	}
 	switch {
+	case spawn != nil && spawn.resume:
+		return a.executeResume(ctx, spawn)
 	case spawn != nil && spawn.restore:
 		return a.executeRestore(ctx, spawn)
 	case spawn != nil:
@@ -182,9 +273,11 @@ func (a *Actor) handleEnsureDispatched(ctx context.Context) error {
 // decision depends on must be fenced the same way the write itself is).
 // Returns a non-nil *spawnPlan or *dispatchPlan (never both) only when the
 // corresponding branch decided to act and its own "commit state" half has
-// already committed -- the caller (handleEnsureDispatched) then performs
-// the actual network call (CreateSandbox / SendCommand respectively)
-// outside any transaction.
+// already committed (a resume's own interim Spawning claim, exactly like
+// a fresh spawn/restore's, per this file's own top comment) -- the caller
+// (handleEnsureDispatched) then performs the actual network call
+// (CreateSandbox / RestoreFromSnapshot / ResumeSandbox / SendCommand
+// respectively) outside any transaction.
 func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, error) {
 	var spawn *spawnPlan
 	var dispatch *dispatchPlan
@@ -221,14 +314,14 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 		}
 
 		// Branch (a): no sandbox row yet, or the existing one is dead
-		// (Stopped/Stale/Failed) -- needs a fresh spawn before anything
-		// can be dispatched.
+		// (Stopped/Stale/Failed) -- needs a fresh spawn, restore, or
+		// resume before anything can be dispatched.
 		if !hasSandbox || sandbox.IsDeadSandboxStatus(sandbox.State(sandboxRow.Status)) {
-			p, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
+			sp, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
 			if err != nil {
 				return err
 			}
-			spawn = p
+			spawn = sp
 			return nil
 		}
 
@@ -276,11 +369,11 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 		// real SpawnActionSpawn -> TriggerForceRespawn -> actual respawn.
 		// hasSandbox is always true by the time this branch is reached --
 		// branch (a) above already handles the !hasSandbox case.
-		p, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
+		sp, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
 		if err != nil {
 			return err
 		}
-		spawn = p
+		spawn = sp
 		return nil
 	})
 
@@ -288,9 +381,13 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 }
 
 // tryPlanSpawn implements design decision 3a's own circuit-breaker-then-
-// spawn-decision sequence, and -- on SpawnActionSpawn -- performs the
-// token-mint/upsert/arm-timer write, all still inside the caller's own
-// transact.
+// spawn-decision sequence, and -- on SpawnActionSpawn/SpawnActionRestore/
+// SpawnActionResume -- performs the token-mint/upsert/arm-timer write, all
+// still inside the caller's own transact (Step 23's own concurrency fix:
+// resume now writes its own interim Spawning claim here too, exactly like
+// spawn/restore already did -- see this file's own top comment for why
+// that write is what closes the concurrent-double-ResumeSandbox-call race
+// an adversarial review found in the OLD one-step shape).
 func (a *Actor) tryPlanSpawn(
 	ctx context.Context, tx pgx.Tx,
 	sessionRow sqlcgen.Session, sandboxRow sqlcgen.Sandbox, hasSandbox bool,
@@ -377,17 +474,21 @@ func (a *Actor) tryPlanSpawn(
 		// no-sandbox-row session can have), so sandboxRow is a real,
 		// already-loaded row here, not the zero value.
 		return a.planRestore(ctx, tx, sessionRow, sandboxRow, action.SnapshotImageID, now)
+	case sandbox.SpawnActionResume:
+		// Only reachable when hasSandbox is true (EvaluateSpawnDecision's
+		// own Resume branch requires ProviderObjectID != "" AND status in
+		// {Stopped, Stale} -- none of which a brand-new, no-sandbox-row
+		// session can have), mirroring SpawnActionRestore's own identical
+		// reasoning above.
+		return a.planResume(ctx, tx, sandboxRow, action.ProviderObjectID, now)
 	default:
-		// SpawnActionResume/Skip/Wait: Resume is still Step 23/48's own
-		// job (no persistent-resume provider is wired yet -- caps.Resume
-		// is always false today, so EvaluateSpawnDecision can never
-		// actually return SpawnActionResume in practice, but this branch
-		// handles it the same safe way regardless); Skip/Wait are genuine,
-		// expected outcomes (cooldown, already in progress, circuit
-		// breaker, ...). Restore is now real (handled above) -- this
-		// comment no longer lumps it in with Resume the way this
-		// function's Step 21 version did.
-		a.logger.Info("sessionactor: spawn decision is not Spawn/Restore this round; no-op",
+		// Skip/Wait are genuine, expected outcomes (cooldown, already in
+		// progress, circuit breaker, ...). Spawn, Restore, and Resume are
+		// all handled above (Step 21, Step 22, and Step 23 respectively) --
+		// this default case exists so a future SpawnActionKind addition
+		// fails safely into a no-op (logged) rather than being silently
+		// mishandled by one of the cases above.
+		a.logger.Info("sessionactor: spawn decision is not Spawn/Restore/Resume this round; no-op",
 			"kind", action.Kind.String(), "reason", action.Reason)
 		return nil, nil
 	}
@@ -570,6 +671,93 @@ func (a *Actor) planRestore(
 	return &spawnPlan{gen: int(row.Gen), spec: spec, restore: true, snapshotID: ports.SnapshotID(snapshotImageID)}, nil
 }
 
+// planResume implements Step 23's own resume-specific write -- the FIRST
+// step of the two-step shape sandbox.TriggerResume now has (state.go's
+// own doc comment): an interim "claimed, in flight" write into Spawning,
+// committed inside the caller's own transact, exactly like planFreshSpawn/
+// planRestore's own identical first-step write, before any provider call
+// happens. This is precisely the write whose ABSENCE the adversarial
+// review this fix responds to exploited: without it, nothing marked a
+// Stopped/Stale row as "a resume is already in flight," so a second actor
+// instance for the same session could reach EvaluateSpawnDecision's own
+// Resume branch a second time and call ResumeSandbox concurrently. Once
+// this write commits, that same second actor's own EvaluateSpawnDecision
+// call reads status==Spawning instead of Stopped/Stale and no-ops via its
+// own existing SpawningTimeout-guarded Skip branch (spawndecision.go,
+// untouched by this fix) -- the exact same protection a concurrent second
+// spawn/restore attempt already gets.
+//
+// Reuses the EXACT SAME UpsertSandboxForSpawn upsert planFreshSpawn/
+// planRestore already share -- that query's own doc comment ("every
+// spawn/restore increments sandbox.gen") is now genuinely true of
+// resume's own first step too: the Transition-validated target for
+// TriggerResume IS Spawning now, so this upsert's hardcoded
+// status='spawning' needs no post-hoc correction the way the OLD
+// executeResume's single-transact shape used to need (that self-correcting
+// UpdateStatus call is gone -- see this Step's own PR description for the
+// now-resolved §11 "no ad-hoc status writes" nit this used to represent).
+//
+// Deliberately does NOT build a ports.CreateSpec/SessionConfig the way
+// planFreshSpawn/planRestore do: ResumeSandbox's own port signature
+// (§4.1) takes only (ctx, SandboxRef) -- no CreateSpec parameter -- so
+// there is nothing for a spec to be validated or passed to here. The
+// returned plan's own spec field is left at its zero value; executeResume
+// never reads it. A fresh token/gen is still minted and persisted
+// (sandbox tokens are hashed at rest, one per gen, per §5.2 -- paraphrased,
+// not verbatim -- applying to a resume's own gen bump exactly as it does
+// to a spawn/restore's), even though there is today no channel to deliver
+// the plaintext token to the already-running provider instance (the
+// honest, deliberately-deferred gap this file's own top comment and Step
+// 23's PR description both already document -- unrelated to, and not
+// solved by, this concurrency fix).
+func (a *Actor) planResume(
+	ctx context.Context, tx pgx.Tx,
+	sandboxRow sqlcgen.Sandbox, providerObjectID string,
+	now time.Time,
+) (*spawnPlan, error) {
+	// newGen mirrors exactly what UpsertSandboxForSpawn's own SQL is about
+	// to compute (gen = gen + 1) -- predicted here, in Go, purely so
+	// sandbox.Transition can validate the (from, trigger, gen) edge BEFORE
+	// any write happens, mirroring planRestore's own identical reasoning:
+	// this actor is the session's own single writer (§2), so no
+	// concurrent write can have changed sandboxRow.Gen between
+	// planDispatch's own read and this call.
+	newGen := int(sandboxRow.Gen) + 1
+	if _, err := sandbox.Transition(sandbox.State(sandboxRow.Status), int(sandboxRow.Gen), sandbox.ResumeTrigger(newGen)); err != nil {
+		return nil, fmt.Errorf("sessionactor: sandbox transition resume (stopped/stale->spawning): %w", err)
+	}
+
+	token, err := platform.GenerateToken()
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: generate sandbox token: %w", err)
+	}
+	tokenHash := hashSandboxToken(token)
+
+	row, err := a.stores.sandbox.WithTx(tx).UpsertForSpawn(ctx, sqlcgen.UpsertSandboxForSpawnParams{
+		SessionID: a.sessionID,
+		TokenHash: &tokenHash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: upsert sandbox for resume: %w", err)
+	}
+	if int(row.Gen) != newGen {
+		// Should be unreachable -- this actor is this session's own single
+		// writer, per §2 -- mirroring planRestore's own identical
+		// defensive check.
+		return nil, fmt.Errorf("sessionactor: resume gen mismatch: validated %d, upsert produced %d", newGen, row.Gen)
+	}
+
+	// Same reasoning as planFreshSpawn/planRestore's own identical call: a
+	// resume now lands in the SAME Spawning state a fresh spawn/restore
+	// does, so it needs the SAME watchdog coverage while it waits for
+	// ResumeSandbox to return and the sandbox to reconnect its WS.
+	if err := a.armTimer(ctx, tx, TimerConnectingDeadline, now.Add(a.timeouts.FirstConnectBudget)); err != nil {
+		return nil, err
+	}
+
+	return &spawnPlan{gen: int(row.Gen), resume: true, providerObjectID: providerObjectID}, nil
+}
+
 // executeSpawn performs the actual (possibly slow, network-bound)
 // CreateSandbox call OUTSIDE any transaction, then records the outcome in
 // a SECOND, fresh transact -- design decision 3a's own required
@@ -729,6 +917,122 @@ func (a *Actor) recordSpawnFailure(ctx context.Context, tx pgx.Tx, sandboxRow sq
 	// connecting_deadline no longer applies -- the sandbox is Suspect now,
 	// awaiting terminal_grace's own resolution instead.
 	return a.deleteTimer(ctx, tx, TimerConnectingDeadline)
+}
+
+// executeResume (Step 23, "resume") performs the actual (possibly slow,
+// network-bound) SandboxProvider.ResumeSandbox call OUTSIDE any
+// transaction, exactly like executeSpawn/executeRestore's own network
+// call -- and, following this fix, the REST of its own shape now
+// genuinely matches theirs too, rather than being a special case: by the
+// time this function is ever called, plan's own interim Spawning claim
+// (planResume, above) has ALREADY committed inside tryPlanSpawn's own
+// transact -- exactly like planFreshSpawn/planRestore's own Spawning
+// write already commits before executeSpawn/executeRestore ever call out
+// to the provider. This is precisely what closes the concurrency bug an
+// adversarial review found and empirically reproduced in the OLD shape
+// (killing actor A's advisory-lock connection mid-resume-call, hydrating
+// actor B for the same session, and getting a SECOND ResumeSandbox call
+// while actor A's first call was still blocked): a second actor instance
+// for the same session now reads status==Spawning, not Stopped/Stale, and
+// EvaluateSpawnDecision's own existing guard (spawndecision.go,
+// untouched by this fix) no-ops instead of returning SpawnActionResume a
+// second time.
+//
+// ref.ProviderID is the EXISTING provider object recorded on plan (never
+// a new one, unlike executeSpawn/executeRestore's own ref, which comes
+// back FROM the provider call) -- ResumeSandbox's own port signature
+// returns only an error, so there is no ref to overwrite here, and none
+// is read from the return value.
+func (a *Actor) executeResume(ctx context.Context, plan *spawnPlan) error {
+	ref := ports.SandboxRef{ProviderID: plan.providerObjectID}
+	resumeErr := a.provider.ResumeSandbox(ctx, ref)
+
+	err := a.recordResumeOutcome(ctx, plan.gen, resumeErr)
+
+	if err != nil && resumeErr == nil && errors.Is(err, ErrStaleEpoch) {
+		// Mirrors executeSpawn/executeRestore's own identical stale-epoch
+		// observability log: a real ResumeSandbox call just succeeded, but
+		// the write recording its outcome (Connecting status) was rolled
+		// back by a legitimate stale-epoch takeover -- the resumed
+		// provider instance is real and live, but the control plane's own
+		// bookkeeping for it never got recorded, and has no other channel
+		// to reach it until Step 25's reconciler exists.
+		a.logger.Warn("sessionactor: resumed sandbox's outcome orphaned by stale-epoch takeover; the resume itself succeeded at the provider but was never recorded and will be inconsistent until Step 25's reconciler exists",
+			"session_id", a.sessionID.String(),
+			"provider_id", plan.providerObjectID,
+			"gen", plan.gen,
+		)
+	}
+
+	return err
+}
+
+// recordResumeOutcome is executeResume's own second-transact outcome-
+// recording step -- mirrors recordProviderOutcome (executeSpawn/
+// executeRestore's own shared equivalent) almost exactly, with exactly
+// ONE deliberate difference: it never calls UpdateProviderID. Resume
+// reuses the SAME already-recorded provider object (never a new one), so
+// there is nothing for that write to record that isn't already there --
+// calling it anyway would be a no-op at best and, at worst, a lie about
+// what actually happened (recordProviderOutcome's own UpdateProviderID
+// call exists specifically to record a NEW object CreateSandbox/
+// RestoreFromSnapshot just returned).
+//
+// On success: applies sandbox.ResumeAckTrigger() (Spawning -> Connecting)
+// instead of recordProviderOutcome's sandbox.ProviderAckTrigger() --
+// state.go's own doc comment on TriggerResumeAck explains why this is a
+// distinct trigger kind, not a reuse of TriggerProviderAck, even though
+// both share the exact same (from, to) edge: the transition LOG (§5.3)
+// can tell "a spawn/restore's provider call acked" apart from "a resume's
+// provider call acked" the same way TriggerForceRespawn is already kept
+// distinct from TriggerSpawn despite sharing a target.
+//
+// On failure: reuses recordSpawnFailure UNCHANGED. This is now correct,
+// not merely convenient: a permanent resume failure has, by this fix, had
+// the exact same interim Spawning write a permanent spawn/restore failure
+// has by the time its own outcome is recorded, so it now behaves
+// IDENTICALLY -- same circuit-breaker increment, same
+// transitionSandboxToSuspect path (Spawning -> Suspect, pending
+// terminal_grace, §3.2's "a watchdog never writes failed directly" rule),
+// same connecting_deadline cleanup. There is no longer a genuinely
+// distinct resume-failure code path to maintain, so none is kept: the OLD
+// recordResumeFailure (which left the row completely untouched on a
+// permanent failure, because there was nothing yet to transition out of)
+// is gone.
+func (a *Actor) recordResumeOutcome(ctx context.Context, gen int, resumeErr error) error {
+	return a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		now := time.Now()
+
+		sandboxRow, err := a.stores.sandbox.WithTx(tx).Get(ctx, a.sessionID)
+		if err != nil {
+			return fmt.Errorf("sessionactor: get sandbox: %w", err)
+		}
+
+		if int(sandboxRow.Gen) != gen {
+			// A newer spawn/restore/resume attempt has already superseded
+			// this one -- mirrors recordProviderOutcome's own identical
+			// guard.
+			a.logger.Warn("sessionactor: resume result for a superseded gen; ignoring",
+				"result_gen", gen, "current_gen", sandboxRow.Gen)
+			return nil
+		}
+
+		if resumeErr != nil {
+			return a.recordSpawnFailure(ctx, tx, sandboxRow, resumeErr, now)
+		}
+
+		to, err := sandbox.Transition(sandbox.State(sandboxRow.Status), int(sandboxRow.Gen), sandbox.ResumeAckTrigger())
+		if err != nil {
+			return fmt.Errorf("sessionactor: sandbox transition spawning->connecting (resume ack): %w", err)
+		}
+		if _, err := a.stores.sandbox.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+			SessionID: a.sessionID,
+			Status:    sqlcgen.SandboxStatus(to),
+		}); err != nil {
+			return fmt.Errorf("sessionactor: update sandbox status to connecting (resume ack): %w", err)
+		}
+		return nil
+	})
 }
 
 // tryPlanDispatch implements design decision 3b's own first half, entirely

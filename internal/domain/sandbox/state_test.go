@@ -28,6 +28,13 @@ func TestTransition_LegalEdges(t *testing.T) {
 		{"booting -> ready (boot complete)", sandbox.StateBooting, 1, sandbox.BootCompleteTrigger(), sandbox.StateReady},
 		{"ready -> snapshotting (snapshot start)", sandbox.StateReady, 1, sandbox.SnapshotStartTrigger(), sandbox.StateSnapshotting},
 		{"snapshotting -> ready (snapshot complete)", sandbox.StateSnapshotting, 1, sandbox.SnapshotCompleteTrigger(), sandbox.StateReady},
+		// TriggerResumeAck is resume's own second step (state.go's own
+		// doc comment) -- deliberately NOT gen-fenced, same as
+		// TriggerProviderAck just above: gen=1 here, matching currentGen
+		// exactly (which would be rejected as stale if this WERE
+		// gen-fenced, per TestTransition_GenFencing's own boundary case
+		// below), and it still succeeds.
+		{"spawning -> connecting (resume ack)", sandbox.StateSpawning, 1, sandbox.ResumeAckTrigger(), sandbox.StateConnecting},
 
 		// Watchdog -> suspect, from every live state.
 		{"spawning -> suspect", sandbox.StateSpawning, 1, sandbox.SuspectTrigger(), sandbox.StateSuspect},
@@ -51,12 +58,12 @@ func TestTransition_LegalEdges(t *testing.T) {
 		// Recovery rules out of every terminal state.
 		{"stopped -> spawning (respawn)", sandbox.StateStopped, 1, sandbox.SpawnTrigger(2), sandbox.StateSpawning},
 		{"stopped -> spawning (restore)", sandbox.StateStopped, 1, sandbox.RestoreTrigger(2), sandbox.StateSpawning},
-		{"stopped -> connecting (resume)", sandbox.StateStopped, 1, sandbox.ResumeTrigger(2), sandbox.StateConnecting},
+		{"stopped -> spawning (resume)", sandbox.StateStopped, 1, sandbox.ResumeTrigger(2), sandbox.StateSpawning},
 		{"failed -> spawning (respawn)", sandbox.StateFailed, 1, sandbox.SpawnTrigger(2), sandbox.StateSpawning},
 		{"failed -> spawning (restore)", sandbox.StateFailed, 1, sandbox.RestoreTrigger(2), sandbox.StateSpawning},
 		{"stale -> spawning (respawn)", sandbox.StateStale, 1, sandbox.SpawnTrigger(2), sandbox.StateSpawning},
 		{"stale -> spawning (restore)", sandbox.StateStale, 1, sandbox.RestoreTrigger(2), sandbox.StateSpawning},
-		{"stale -> connecting (resume)", sandbox.StateStale, 1, sandbox.ResumeTrigger(2), sandbox.StateConnecting},
+		{"stale -> spawning (resume)", sandbox.StateStale, 1, sandbox.ResumeTrigger(2), sandbox.StateSpawning},
 
 		// Force-respawn, from every "stuck while live" state
 		// EvaluateSpawnDecision's own two recovery carve-outs can produce
@@ -97,6 +104,7 @@ func TestTransition_IllegalFromTriggerCombos(t *testing.T) {
 	}{
 		{"pending cannot suspect", sandbox.StatePending, sandbox.SuspectTrigger()},
 		{"pending cannot resume", sandbox.StatePending, sandbox.ResumeTrigger(2)},
+		{"pending cannot resume-ack", sandbox.StatePending, sandbox.ResumeAckTrigger()},
 		{"spawning cannot spawn again", sandbox.StateSpawning, sandbox.SpawnTrigger(2)},
 		{"connecting cannot boot-complete", sandbox.StateConnecting, sandbox.BootCompleteTrigger()},
 		{"booting cannot ws-connect", sandbox.StateBooting, sandbox.WSConnectedTrigger()},
@@ -106,9 +114,16 @@ func TestTransition_IllegalFromTriggerCombos(t *testing.T) {
 		{"suspect cannot ws-connect directly", sandbox.StateSuspect, sandbox.WSConnectedTrigger()},
 		{"suspect cannot spawn directly", sandbox.StateSuspect, sandbox.SpawnTrigger(2)},
 		{"stopped cannot boot-complete", sandbox.StateStopped, sandbox.BootCompleteTrigger()},
+		// A resume must land in Spawning first (TriggerResume's own new
+		// first-step target) -- it can never jump straight from Stopped
+		// to Connecting via TriggerResumeAck, which is only legal FROM
+		// Spawning (resume's own second step).
+		{"stopped cannot resume-ack (must claim spawning first)", sandbox.StateStopped, sandbox.ResumeAckTrigger()},
+		{"connecting cannot resume-ack (resume-ack is spawning-only)", sandbox.StateConnecting, sandbox.ResumeAckTrigger()},
 		{"failed cannot resume (not resume-capable per plan)", sandbox.StateFailed, sandbox.ResumeTrigger(2)},
 		{"failed cannot recover (recover is suspect-only)", sandbox.StateFailed, sandbox.RecoverTrigger(sandbox.StateReady)},
 		{"stale cannot suspect directly", sandbox.StateStale, sandbox.SuspectTrigger()},
+		{"stale cannot resume-ack (resume-ack is spawning-only)", sandbox.StateStale, sandbox.ResumeAckTrigger()},
 		{"unknown state is always illegal", sandbox.State("bogus"), sandbox.SpawnTrigger(2)},
 
 		// TriggerForceRespawn is deliberately narrower than TriggerSpawn --
@@ -297,6 +312,7 @@ func TestTriggerKind_String(t *testing.T) {
 		{sandbox.TriggerGraceExpired, "grace_expired"},
 		{sandbox.TriggerRestore, "restore"},
 		{sandbox.TriggerResume, "resume"},
+		{sandbox.TriggerResumeAck, "resume_ack"},
 		{sandbox.TriggerForceRespawn, "force_respawn"},
 		{sandbox.TriggerKind(-1), "TriggerKind(-1)"},
 		{sandbox.TriggerKind(999), "TriggerKind(999)"},
