@@ -40,6 +40,18 @@ type CreateSessionRequest struct {
 	// Null means use the default model catalog entry.
 	ModelId CreateSessionRequestModelId `json:"modelId" yaml:"modelId" mapstructure:"modelId"`
 
+	// Optional (row 10, 'domain: Environment scoping', §14.1). Absent or null means
+	// today's exact unscoped behavior, unchanged: no environments row is created and
+	// the session's environmentId/provenanceTag stay null. A non-empty list of
+	// sparse-checkout glob patterns creates a new, session-scoped Environment row
+	// (internal/domain/environment.ValidatePathScope validates each pattern; the
+	// first invalid pattern is rejected with 400 before any Postgres write). Unlike
+	// every other field on this DTO, this key is genuinely OPTIONAL (may be absent
+	// from the request body entirely), not merely nullable -- there is no
+	// separately-managed, ID-referenced Environment entity to reference here yet (see
+	// this schema's own top-level SCOPE NOTE above).
+	PathScope *CreateSessionRequestPathScope `json:"pathScope,omitempty,omitzero" yaml:"pathScope,omitempty" mapstructure:"pathScope,omitempty"`
+
 	// PlanMode corresponds to the JSON schema field "planMode".
 	PlanMode bool `json:"planMode" yaml:"planMode" mapstructure:"planMode"`
 
@@ -61,6 +73,18 @@ type CreateSessionRequest struct {
 
 // Null means use the default model catalog entry.
 type CreateSessionRequestModelId *string
+
+// Optional (row 10, 'domain: Environment scoping', §14.1). Absent or null means
+// today's exact unscoped behavior, unchanged: no environments row is created and
+// the session's environmentId/provenanceTag stay null. A non-empty list of
+// sparse-checkout glob patterns creates a new, session-scoped Environment row
+// (internal/domain/environment.ValidatePathScope validates each pattern; the first
+// invalid pattern is rejected with 400 before any Postgres write). Unlike every
+// other field on this DTO, this key is genuinely OPTIONAL (may be absent from the
+// request body entirely), not merely nullable -- there is no separately-managed,
+// ID-referenced Environment entity to reference here yet (see this schema's own
+// top-level SCOPE NOTE above).
+type CreateSessionRequestPathScope []string
 
 // Initial prompt text; null to create the session without dispatching a first
 // turn.
