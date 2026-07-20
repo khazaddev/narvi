@@ -119,48 +119,65 @@ func TestReposFromJSON(t *testing.T) {
 	})
 }
 
-// TestAssembleSessionConfig_BootModeAlwaysFresh proves assembleSessionConfig
-// hardcodes BootMode=Fresh (no image-build/snapshot-restore path exists
-// yet this Step needs to support) and wires every other field from its own
-// inputs correctly, using a minimal Actor constructed directly (no
-// Postgres needed -- assembleSessionConfig only reads a.publicBaseURL and
-// its own arguments).
+// TestAssembleSessionConfig proves assembleSessionConfig wires every field
+// from its own inputs correctly (BootMode now threaded through as a
+// caller-supplied argument -- Step 22, "snapshots & restore", design
+// decision 6b -- rather than hardcoded), using a minimal Actor constructed
+// directly (no Postgres needed -- assembleSessionConfig only reads
+// a.publicBaseURL and its own arguments). Sub-tests cover both bootMode
+// values a real caller passes today (Fresh from planFreshSpawn,
+// SnapshotRestore from planRestore); Build/RepoImage stay unused
+// placeholders (Step 26's own job) but assembleSessionConfig itself does
+// not restrict which value it is handed.
 func TestAssembleSessionConfig(t *testing.T) {
 	t.Parallel()
 
-	a := &Actor{publicBaseURL: "https://narvi.example.com"}
-
-	sessionRow := sessionRowWithRepos(t, `[{"name":"widgets","url":"https://github.com/acme/widgets","branch":null}]`)
-	sandboxID := uuid.NewString()
-
-	cfg, err := a.assembleSessionConfig(sessionRow, 3, "plaintext-token", sandboxID)
-	if err != nil {
-		t.Fatalf("assembleSessionConfig() error = %v, want nil", err)
+	tests := []struct {
+		name     string
+		bootMode sessionconfig.SessionConfigBootMode
+	}{
+		{name: "fresh spawn", bootMode: sessionconfig.SessionConfigBootModeFresh},
+		{name: "snapshot restore", bootMode: sessionconfig.SessionConfigBootModeSnapshotRestore},
 	}
 
-	if cfg.BootMode != sessionconfig.SessionConfigBootModeFresh {
-		t.Errorf("BootMode = %q, want %q", cfg.BootMode, sessionconfig.SessionConfigBootModeFresh)
-	}
-	wantWSURL := "wss://narvi.example.com/sessions/" + sessionRow.ID.String() + "/ws?type=sandbox"
-	if cfg.ControlPlaneWsUrl != wantWSURL {
-		t.Errorf("ControlPlaneWsUrl = %q, want %q", cfg.ControlPlaneWsUrl, wantWSURL)
-	}
-	if cfg.CorrelationId != nil {
-		t.Errorf("CorrelationId = %v, want nil", cfg.CorrelationId)
-	}
-	if cfg.Gen != 3 {
-		t.Errorf("Gen = %d, want 3", cfg.Gen)
-	}
-	if len(cfg.Repos) != 1 || cfg.Repos[0].Name != "widgets" {
-		t.Errorf("Repos = %+v, unexpected", cfg.Repos)
-	}
-	if cfg.SandboxId != sandboxID {
-		t.Errorf("SandboxId = %q, want %q (must round-trip the sandboxID argument unmodified)", cfg.SandboxId, sandboxID)
-	}
-	if cfg.SandboxToken != "plaintext-token" {
-		t.Errorf("SandboxToken = %q, want %q", cfg.SandboxToken, "plaintext-token")
-	}
-	if cfg.SessionId != sessionRow.ID.String() {
-		t.Errorf("SessionId = %q, want %q", cfg.SessionId, sessionRow.ID.String())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := &Actor{publicBaseURL: "https://narvi.example.com"}
+			sessionRow := sessionRowWithRepos(t, `[{"name":"widgets","url":"https://github.com/acme/widgets","branch":null}]`)
+			sandboxID := uuid.NewString()
+
+			cfg, err := a.assembleSessionConfig(sessionRow, 3, "plaintext-token", sandboxID, tc.bootMode)
+			if err != nil {
+				t.Fatalf("assembleSessionConfig() error = %v, want nil", err)
+			}
+
+			if cfg.BootMode != tc.bootMode {
+				t.Errorf("BootMode = %q, want %q", cfg.BootMode, tc.bootMode)
+			}
+			wantWSURL := "wss://narvi.example.com/sessions/" + sessionRow.ID.String() + "/ws?type=sandbox"
+			if cfg.ControlPlaneWsUrl != wantWSURL {
+				t.Errorf("ControlPlaneWsUrl = %q, want %q", cfg.ControlPlaneWsUrl, wantWSURL)
+			}
+			if cfg.CorrelationId != nil {
+				t.Errorf("CorrelationId = %v, want nil", cfg.CorrelationId)
+			}
+			if cfg.Gen != 3 {
+				t.Errorf("Gen = %d, want 3", cfg.Gen)
+			}
+			if len(cfg.Repos) != 1 || cfg.Repos[0].Name != "widgets" {
+				t.Errorf("Repos = %+v, unexpected", cfg.Repos)
+			}
+			if cfg.SandboxId != sandboxID {
+				t.Errorf("SandboxId = %q, want %q (must round-trip the sandboxID argument unmodified)", cfg.SandboxId, sandboxID)
+			}
+			if cfg.SandboxToken != "plaintext-token" {
+				t.Errorf("SandboxToken = %q, want %q", cfg.SandboxToken, "plaintext-token")
+			}
+			if cfg.SessionId != sessionRow.ID.String() {
+				t.Errorf("SessionId = %q, want %q", cfg.SessionId, sessionRow.ID.String())
+			}
+		})
 	}
 }

@@ -1,0 +1,78 @@
+-- Step 22 ("snapshots & restore") standalone additions. No single row in
+-- docs/IMPLEMENTATION_PLAN.md explicitly names either column below -- but
+-- making TriggerSnapshotComplete's own outcome durable, and closing a real
+-- message-id-correlation race an independent review confirmed against a
+-- real Postgres instance (see pending_snapshot_message_id's own doc
+-- comment below), genuinely cannot be done without persisting both.
+-- Folded into one migration, mirroring 000018_session_repos.up.sql's own
+-- "small, scoped additions, one file" precedent exactly. Scope note: this
+-- migration deliberately does NOT touch the sandbox_status enum -- see
+-- the comment further below, right where an earlier draft's ALTER TYPE
+-- statement used to be.
+
+-- sandboxes.snapshot_id: the most recently completed real snapshot for
+-- this sandbox (design decisions 1/3, docs/IMPLEMENTATION_PLAN.md row 22).
+-- Set by handleSandboxEvent's new "snapshot_ready" branch once the
+-- sandbox's own real snapshotId is confirmed over the ack'd wire event;
+-- read back as SpawnState.SnapshotImageID (internal/domain/sandbox.
+-- EvaluateSpawnDecision's own restore-eligibility input) on a later spawn
+-- decision (dispatch.go's tryPlanSpawn). Nullable: most sandboxes never
+-- snapshot. Deliberately NOT cleared by a later restore -- a restored
+-- sandbox is free to be snapshotted again later under its own new gen,
+-- and the column is simply overwritten by the NEXT real snapshot_ready,
+-- exactly like provider_id is already handled (see
+-- UpsertSandboxForSpawnParams' own doc comment on that same pattern).
+ALTER TABLE sandboxes ADD COLUMN snapshot_id TEXT;
+
+-- sandboxes.pending_snapshot_message_id: the MessageId of the Snapshot
+-- command this sandbox is currently waiting on a snapshot_ready for (NULL
+-- when no snapshot attempt is outstanding). Fix for a real race an
+-- independent review confirmed against a real Postgres instance: gen
+-- alone cannot distinguish two snapshot attempts within the same live
+-- sandbox (neither TriggerSnapshotStart nor TriggerSnapshotComplete is
+-- gen-fenced, by design -- gen doesn't change within a snapshot cycle),
+-- so an ambiguous SandboxCommander.SendCommand failure (the frame may
+-- already have been flushed to the OS/TCP layer despite the local call
+-- erroring) followed by a compensating revert-to-Ready and a SECOND real
+-- attempt could otherwise let the FIRST attempt's own late, genuine
+-- snapshot_ready be wrongly accepted as completing the second attempt,
+-- stamping a stale snapshot_id with no surfaced error. Set by
+-- triggerSnapshotBestEffort (sandboxevent.go) in the SAME transact that
+-- commits the Ready->Snapshotting transition; cleared back to NULL by
+-- either handleSnapshotReadyEvent's own accept path or
+-- revertSnapshotBestEffort's compensating-write path. handleSnapshotReadyEvent
+-- only accepts a snapshot_ready as completing the CURRENT attempt when its
+-- own commandMessageId (contracts/sandbox-ws/v1/events.schema.json's new
+-- optional field on SnapshotReady) matches this column's current value --
+-- a mismatch, or this column being NULL, is treated exactly like the
+-- existing late/duplicate case.
+ALTER TABLE sandboxes ADD COLUMN pending_snapshot_message_id TEXT;
+
+-- Note: this migration deliberately does NOT add 'stale' to the
+-- sandbox_status enum. An earlier draft of this migration did (paired with
+-- a sandbox_history.snapshot_id mirror column, kept below) on the theory
+-- that EvaluateSpawnDecision's already-built Restore branch
+-- (internal/domain/sandbox/spawndecision.go, not modified by this Step)
+-- needed it to be reachable -- but two independent reviewers confirmed
+-- nothing in this Step's own diff, or anywhere else in this codebase,
+-- ever writes 'stale' to this column in production, and no test here
+-- seeds a real Stale row; the migration's own prior comment claiming test
+-- coverage for it was false. Adding an irreversible enum value (stock
+-- Postgres has no ALTER TYPE ... DROP VALUE) this Step does not itself
+-- use is out of this Step's own scope (docs/IMPLEMENTATION_PLAN.md row
+-- 22, §3.2) -- it belongs to whichever later Step first needs the DB to
+-- genuinely accept a real 'stale' row (domain/sandbox.StateStale already
+-- exists in Go; only the Postgres enum lags behind it, and stays lagging
+-- until that Step lands).
+
+-- sandbox_history.snapshot_id: forward-compatible mirror of
+-- sandboxes.snapshot_id above, added for schema symmetry even though (per
+-- this Step's own research phase, reported in full alongside this Step's
+-- other findings) no real, non-test call site anywhere in this codebase
+-- inserts into sandbox_history at all yet -- Step 21's own dispatch.go
+-- bumps sandboxes.gen in place via UpsertSandboxForSpawn and never
+-- archives the prior row. Adding the column now is cheap and harmless;
+-- populating it is left to whichever later Step first builds real
+-- sandbox_history archival (not this one's own job -- see this Step's own
+-- report for the full reasoning).
+ALTER TABLE sandbox_history ADD COLUMN snapshot_id TEXT;

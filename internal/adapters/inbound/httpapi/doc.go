@@ -68,6 +68,21 @@
 //     side of the wire contract internal/sandboxagent/credentials.
 //     CPClient (Step 15) already built and tested the client side of.
 //
+// # Step 22 ("snapshots & restore") updates
+//
+// A SEVENTH route is added, mounted the SAME way scm-credentials is
+// (outside /api/sessions and outside auth.Middleware entirely):
+//
+//   - POST /sessions/{sessionID}/snapshot -- snapshotmint.go's own
+//     SnapshotMint: another sandbox-bearer-token-authenticated endpoint,
+//     called by cmd/sandbox-agent's real HandleSnapshot (via
+//     internal/sandboxagent/snapshotclient) once the control plane sends
+//     a "snapshot" WS command (design decision 1). Calls the real
+//     ports.SandboxProvider.TakeSnapshot for the session's live sandbox
+//     and hands back the real resulting snapshot id, which the sandbox
+//     then reports back over the WS bridge as a CRITICAL "snapshot_ready"
+//     event (design decision 2's own full round-trip reasoning).
+//
 // Wiring participants/presence (§8.11) is still untouched -- a distinct,
 // not-yet-scoped concern.
 package httpapi

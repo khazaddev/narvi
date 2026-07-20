@@ -62,11 +62,16 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 }
 
 // assembleSessionConfig builds the real SESSION_CONFIG document (§6.4) a
-// freshly spawned sandbox receives -- design decision 6's own exact field
-// mapping:
+// freshly spawned OR restored sandbox receives -- design decision 6's own
+// exact field mapping:
 //
-//   - BootMode: always Fresh (no image-build/snapshot-restore path exists
-//     yet this Step needs to support -- Steps 26/22 respectively).
+//   - BootMode: the caller-supplied bootMode -- Fresh for a plain spawn
+//     (dispatch.go's planFreshSpawn), SnapshotRestore for a restore
+//     (dispatch.go's planRestore, Step 22 "snapshots & restore", design
+//     decision 6b: "thread a boolean/enum parameter through
+//     assembleSessionConfig rather than hardcoding a second copy of this
+//     function"). BootModeBuild/BootModeRepoImage stay unused placeholders
+//     (Step 26's own job).
 //   - ControlPlaneWsUrl: publicWsBaseURL(a.publicBaseURL) +
 //     "/sessions/{id}/ws?type=sandbox".
 //   - CorrelationId: always nil (no ingress webhook exists yet to have
@@ -83,7 +88,9 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 //     handshake (§6.1), instead of always defaulting to "".
 //   - SandboxToken: the freshly minted PLAINTEXT token (never logged).
 //   - SessionId: the session's own id string.
-func (a *Actor) assembleSessionConfig(sessionRow sqlcgen.Session, gen int, plaintextToken, sandboxID string) (sessionconfig.SessionConfig, error) {
+func (a *Actor) assembleSessionConfig(
+	sessionRow sqlcgen.Session, gen int, plaintextToken, sandboxID string, bootMode sessionconfig.SessionConfigBootMode,
+) (sessionconfig.SessionConfig, error) {
 	wsBase, err := publicWsBaseURL(a.publicBaseURL)
 	if err != nil {
 		return sessionconfig.SessionConfig{}, err
@@ -98,7 +105,7 @@ func (a *Actor) assembleSessionConfig(sessionRow sqlcgen.Session, gen int, plain
 	controlPlaneWsURL := strings.TrimSuffix(wsBase, "/") + "/sessions/" + sessionID + "/ws?type=sandbox"
 
 	return sessionconfig.SessionConfig{
-		BootMode:          sessionconfig.SessionConfigBootModeFresh,
+		BootMode:          bootMode,
 		ControlPlaneWsUrl: controlPlaneWsURL,
 		CorrelationId:     nil,
 		Gen:               gen,

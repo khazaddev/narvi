@@ -549,6 +549,22 @@ type Timeouts struct {
 	// hours/days, so hourly cleanup is more than frequent enough. Not
 	// specified in the plan; chosen as 1h.
 	ExpiredCredentialCleanupInterval time.Duration
+
+	// --- Step 22 standalone additions ("snapshots & restore"): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior Step's standalone additions), so -- per those additions' own
+	// precedent -- a plain field with a sensible default, not wired into a
+	// fake invariant link.
+
+	// SnapshotMintTimeout bounds sandbox-agent's own call
+	// (internal/sandboxagent/snapshotclient.Client.Mint) to the control
+	// plane's new snapshot-mint endpoint (design decision 2, POST
+	// /sessions/{id}/snapshot), which itself makes a real, network-bound
+	// SandboxProvider.TakeSnapshot call server-side -- more generous than
+	// CredentialFetchTimeout's own 10s (a lightweight mint call with no
+	// real provider round trip behind it) since a real snapshot operation
+	// can genuinely take longer. Not specified in the plan; chosen as 60s.
+	SnapshotMintTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -621,6 +637,8 @@ func DefaultTimeouts() Timeouts {
 		ClientFetchHistoryMinInterval: 250 * time.Millisecond, // not specified; chosen, generous for real pagination while blocking a tight-loop hammer
 
 		ExpiredCredentialCleanupInterval: time.Hour, // not specified; chosen, comfortably frequent relative to both WSTokenTTL (24h) and UserSessionTTL (30 days)
+
+		SnapshotMintTimeout: 60 * time.Second, // not specified; chosen (a real provider TakeSnapshot round trip, more generous than CredentialFetchTimeout)
 	}
 }
 

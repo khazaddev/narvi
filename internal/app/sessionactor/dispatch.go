@@ -68,6 +68,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
@@ -117,11 +118,27 @@ func hashSandboxToken(token string) string {
 
 // spawnPlan is what planDispatch's own transact hands back to
 // handleEnsureDispatched when (and only when) the spawn branch decided to
-// actually spawn -- the CreateSandbox call itself happens OUTSIDE that
-// transact, in executeSpawn, using exactly this plan.
+// actually spawn OR restore -- the real provider call itself happens
+// OUTSIDE that transact, in executeSpawn/executeRestore, using exactly
+// this plan.
 type spawnPlan struct {
 	gen  int
 	spec ports.CreateSpec
+
+	// restore is true when this plan is a Stopped/Failed/Stale ->
+	// Spawning RESTORE (§3.2: "stopped|stale + snapshot -> restore (new
+	// gen)"), as opposed to a plain fresh spawn (Step 22, "snapshots &
+	// restore", design decision 6). handleEnsureDispatched dispatches
+	// restore==true to executeRestore instead of executeSpawn.
+	// planDispatch's own two-plan return shape (Step 21) is deliberately
+	// unchanged by this addition -- a restore decision is still exactly
+	// branch (a) ("no live sandbox, needs [re]spawning") planDispatch
+	// already recognizes, just restoring from a snapshot instead of
+	// creating fresh.
+	restore bool
+	// snapshotID is set only when restore is true: the snapshot to
+	// restore from (ports.SnapshotID(action.SnapshotImageID)).
+	snapshotID ports.SnapshotID
 }
 
 // dispatchPlan is what planDispatch's own transact hands back to
@@ -146,6 +163,8 @@ func (a *Actor) handleEnsureDispatched(ctx context.Context) error {
 		return err
 	}
 	switch {
+	case spawn != nil && spawn.restore:
+		return a.executeRestore(ctx, spawn)
 	case spawn != nil:
 		return a.executeSpawn(ctx, spawn)
 	case dispatch != nil:
@@ -330,9 +349,14 @@ func (a *Actor) tryPlanSpawn(
 			Status:           sandbox.State(sandboxRow.Status),
 			CreatedAt:        pgTimeOrZero(sandboxRow.CreatedAt),
 			ProviderObjectID: stringOrEmpty(sandboxRow.ProviderID),
-			// SnapshotImageID is always "" -- no snapshot machinery exists
-			// yet (Step 22, "snapshots & restore").
-			LastSeenAt: pgTimeOrZero(sandboxRow.LastSeenAt),
+			// SnapshotImageID is read back from the sandbox row's own real
+			// snapshot_id column (Step 22, "snapshots & restore", design
+			// decision 6) -- "" (no snapshot machinery reached it yet, or
+			// this sandbox was never snapshotted) unless a real
+			// "snapshot_ready" event has previously persisted one (see
+			// sandboxevent.go's own new branch).
+			SnapshotImageID: stringOrEmpty(sandboxRow.SnapshotID),
+			LastSeenAt:      pgTimeOrZero(sandboxRow.LastSeenAt),
 		}
 	}
 
@@ -343,27 +367,52 @@ func (a *Actor) tryPlanSpawn(
 		SpawningTimeout: a.timeouts.SpawnStuckTimeout,
 	}, now, false, caps.Resume)
 
-	if action.Kind != sandbox.SpawnActionSpawn {
-		// Resume/Restore are not implemented by this Step (no
-		// persistent-resume provider is wired -- Step 48; no snapshot
-		// machinery exists yet -- Step 22): EvaluateSpawnDecision is only
-		// ever handed inputs (Resume=false, SnapshotImageID="") that
-		// cannot actually produce those two actions in practice, but this
-		// branch handles them the same safe way it handles a genuine
-		// Skip/Wait -- log and no-op, never panic or misbehave on an
-		// action kind this Step's own wiring doesn't act on.
-		a.logger.Info("sessionactor: spawn decision is not Spawn this round; no-op",
+	switch action.Kind {
+	case sandbox.SpawnActionSpawn:
+		return a.planFreshSpawn(ctx, tx, sessionRow, hasSandbox, sandboxRow, now)
+	case sandbox.SpawnActionRestore:
+		// Only reachable when hasSandbox is true (EvaluateSpawnDecision's
+		// own Restore branch requires SnapshotImageID != "" AND status in
+		// {Stopped, Failed, Stale} -- none of which a brand-new,
+		// no-sandbox-row session can have), so sandboxRow is a real,
+		// already-loaded row here, not the zero value.
+		return a.planRestore(ctx, tx, sessionRow, sandboxRow, action.SnapshotImageID, now)
+	default:
+		// SpawnActionResume/Skip/Wait: Resume is still Step 23/48's own
+		// job (no persistent-resume provider is wired yet -- caps.Resume
+		// is always false today, so EvaluateSpawnDecision can never
+		// actually return SpawnActionResume in practice, but this branch
+		// handles it the same safe way regardless); Skip/Wait are genuine,
+		// expected outcomes (cooldown, already in progress, circuit
+		// breaker, ...). Restore is now real (handled above) -- this
+		// comment no longer lumps it in with Resume the way this
+		// function's Step 21 version did.
+		a.logger.Info("sessionactor: spawn decision is not Spawn/Restore this round; no-op",
 			"kind", action.Kind.String(), "reason", action.Reason)
 		return nil, nil
 	}
+}
 
-	// §11's own hard rule ("every state transition goes through the
-	// machine's transition table") applies here just as much as anywhere
-	// else: EvaluateSpawnDecision above is a pure decision function, not
-	// the state machine's own authority on whether this particular
-	// (from, trigger) edge is actually legal -- that authority is
-	// sandbox.Transition alone. fromState/currentGen are read from the
-	// SAME source spawnState was just built from above (never recomputed
+// planFreshSpawn implements design decision 3a's own write (token mint,
+// upsert, arm connecting_deadline, assemble a Fresh-boot-mode
+// SessionConfig) for the plain SpawnActionSpawn case -- pulled out of
+// tryPlanSpawn's own body so planRestore (below) can share its structure
+// without a blind copy-paste. Also validates the (from, trigger, gen) edge
+// via sandbox.Transition before writing (§11's own hard rule, "every state
+// transition goes through the machine's transition table") -- see
+// planRestore's own doc comment below for why this validation is now
+// shared by both paths.
+func (a *Actor) planFreshSpawn(
+	ctx context.Context, tx pgx.Tx,
+	sessionRow sqlcgen.Session, hasSandbox bool, sandboxRow sqlcgen.Sandbox,
+	now time.Time,
+) (*spawnPlan, error) {
+	// §11's own hard rule applies here just as much as anywhere else:
+	// EvaluateSpawnDecision (tryPlanSpawn, above) is a pure decision
+	// function, not the state machine's own authority on whether this
+	// particular (from, trigger) edge is actually legal -- that authority
+	// is sandbox.Transition alone. fromState/currentGen mirror exactly
+	// what tryPlanSpawn's own spawnState was built from (never recomputed
 	// a second, possibly-inconsistent way); newGen is computed Go-side
 	// but must -- and, by construction, does -- match what
 	// UpsertForSpawn's own SQL (gen = sandboxes.gen + 1, or 1 on a fresh
@@ -373,9 +422,10 @@ func (a *Actor) tryPlanSpawn(
 	// GetActorEpochForUpdate) that serializes every writer of this
 	// session's sandbox row -- no concurrent writer can interleave
 	// between this read and UpsertForSpawn's write below.
-	fromState := spawnState.Status
+	fromState := sandbox.StatePending
 	currentGen := 0
 	if hasSandbox {
+		fromState = sandbox.State(sandboxRow.Status)
 		currentGen = int(sandboxRow.Gen)
 	}
 	newGen := currentGen + 1
@@ -437,7 +487,7 @@ func (a *Actor) tryPlanSpawn(
 		return nil, err
 	}
 
-	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, row.ID.String())
+	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, row.ID.String(), sessionconfig.SessionConfigBootModeFresh)
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}
@@ -448,6 +498,76 @@ func (a *Actor) tryPlanSpawn(
 	}
 
 	return &spawnPlan{gen: int(row.Gen), spec: spec}, nil
+}
+
+// planRestore implements design decision 6's own restore-specific write.
+// It reuses the EXACT SAME UpsertSandboxForSpawn upsert planFreshSpawn
+// uses above -- that query's own doc comment already documents this dual
+// purpose ("every spawn/restore increments sandbox.gen"), so no second,
+// parallel SQL write is built here. The one difference design decision 6
+// calls out: BootMode passed to assembleSessionConfig is SnapshotRestore,
+// not Fresh. Both paths validate their own (from, trigger, gen) edge via
+// sandbox.Transition before writing -- planFreshSpawn via sandbox.
+// SpawnTrigger/ForceRespawnTrigger, this path via sandbox.RestoreTrigger --
+// proving each trigger's own FROM-state/gen-fencing legality genuinely
+// gates the write, rather than trusting EvaluateSpawnDecision's own coarser
+// status check alone.
+func (a *Actor) planRestore(
+	ctx context.Context, tx pgx.Tx,
+	sessionRow sqlcgen.Session, sandboxRow sqlcgen.Sandbox, snapshotImageID string,
+	now time.Time,
+) (*spawnPlan, error) {
+	// newGen mirrors exactly what UpsertSandboxForSpawn's own SQL is about
+	// to compute (gen = gen + 1) -- predicted here, in Go, purely so
+	// sandbox.Transition can validate the (from, trigger, gen) edge BEFORE
+	// any write happens. Safe to predict rather than race: this actor is
+	// the session's own single writer (§2), so no concurrent write can
+	// have changed sandboxRow.Gen between planDispatch's own read and this
+	// call.
+	newGen := int(sandboxRow.Gen) + 1
+	if _, err := sandbox.Transition(sandbox.State(sandboxRow.Status), int(sandboxRow.Gen), sandbox.RestoreTrigger(newGen)); err != nil {
+		return nil, fmt.Errorf("sessionactor: sandbox transition restore (stopped/failed/stale->spawning): %w", err)
+	}
+
+	token, err := platform.GenerateToken()
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: generate sandbox token: %w", err)
+	}
+	tokenHash := hashSandboxToken(token)
+
+	row, err := a.stores.sandbox.WithTx(tx).UpsertForSpawn(ctx, sqlcgen.UpsertSandboxForSpawnParams{
+		SessionID: a.sessionID,
+		TokenHash: &tokenHash,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: upsert sandbox for restore: %w", err)
+	}
+	if int(row.Gen) != newGen {
+		// Should be unreachable (this actor is this session's own single
+		// writer, per §2 -- nothing else can have written to this row
+		// between the Transition validation above and this same upsert) --
+		// defensive, not an expected path.
+		return nil, fmt.Errorf("sessionactor: restore gen mismatch: validated %d, upsert produced %d", newGen, row.Gen)
+	}
+
+	// Same reasoning as planFreshSpawn's own identical call: a restore
+	// lands in the SAME Spawning state a fresh spawn does, so it needs the
+	// SAME watchdog coverage while it waits to connect.
+	if err := a.armTimer(ctx, tx, TimerConnectingDeadline, now.Add(a.timeouts.FirstConnectBudget)); err != nil {
+		return nil, err
+	}
+
+	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, row.ID.String(), sessionconfig.SessionConfigBootModeSnapshotRestore)
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
+	}
+
+	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: placeholderBaseImage}
+	if err := spec.Validate(); err != nil {
+		return nil, fmt.Errorf("sessionactor: invalid create spec: %w", err)
+	}
+
+	return &spawnPlan{gen: int(row.Gen), spec: spec, restore: true, snapshotID: ports.SnapshotID(snapshotImageID)}, nil
 }
 
 // executeSpawn performs the actual (possibly slow, network-bound)
@@ -472,7 +592,65 @@ func (a *Actor) tryPlanSpawn(
 func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
 	ref, createErr := a.provider.CreateSandbox(ctx, plan.spec)
 
-	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	err := a.recordProviderOutcome(ctx, plan.gen, ref, createErr)
+
+	if err != nil && createErr == nil && errors.Is(err, ErrStaleEpoch) {
+		// See this function's own doc comment above: a real cloud sandbox
+		// was just created but the write recording it just got rolled back
+		// by a legitimate stale-epoch takeover -- log everything an
+		// operator would need to find and manually clean this up until
+		// Step 25's reconciler exists.
+		a.logger.Warn("sessionactor: spawned sandbox orphaned by stale-epoch takeover; provider resource was never recorded and will leak until Step 25's reconciler exists",
+			"session_id", a.sessionID.String(),
+			"provider_id", ref.ProviderID,
+			"gen", plan.gen,
+		)
+	}
+
+	return err
+}
+
+// executeRestore mirrors executeSpawn exactly (Step 22, "snapshots &
+// restore", design decision 6), except it calls RestoreFromSnapshot
+// instead of CreateSandbox -- see recordProviderOutcome (below) for the
+// second-transact outcome-recording half both now share, including the
+// SAME recordSpawnFailure/circuit-breaker reuse a permanent
+// RestoreFromSnapshot failure gets (that function's own doc comment
+// explains why a restore failure is still fundamentally "we tried to get
+// a live sandbox and a permanent provider error came back" -- the SAME
+// concern a spawn failure is, not a different one). Shares executeSpawn's
+// own known, documented stale-epoch-orphan limitation too: a real
+// restored provider sandbox can equally leak until Step 25's reconciler
+// exists.
+func (a *Actor) executeRestore(ctx context.Context, plan *spawnPlan) error {
+	ref, restoreErr := a.provider.RestoreFromSnapshot(ctx, plan.snapshotID, plan.spec)
+
+	err := a.recordProviderOutcome(ctx, plan.gen, ref, restoreErr)
+
+	if err != nil && restoreErr == nil && errors.Is(err, ErrStaleEpoch) {
+		a.logger.Warn("sessionactor: restored sandbox orphaned by stale-epoch takeover; provider resource was never recorded and will leak until Step 25's reconciler exists",
+			"session_id", a.sessionID.String(),
+			"provider_id", ref.ProviderID,
+			"gen", plan.gen,
+		)
+	}
+
+	return err
+}
+
+// recordProviderOutcome is executeSpawn/executeRestore's own shared
+// second-transact outcome-recording step (Step 22, design decision 6:
+// "sharing whatever helper logic is genuinely common between the two...
+// rather than duplicating it blindly") -- the exact same transact body
+// Step 21's own executeSpawn used to run inline, unchanged in behavior:
+// given the plan's own gen and the just-returned (ref, providerErr) from
+// the real provider call, either records success (provider_id + the SAME
+// Spawning->Connecting transition both a fresh spawn and a restore land
+// in) or classifies+records a failure via recordSpawnFailure. Returns
+// ErrStaleEpoch unchanged on a legitimate pod-handoff race, exactly like
+// the inline transact this replaces already did.
+func (a *Actor) recordProviderOutcome(ctx context.Context, gen int, ref ports.SandboxRef, providerErr error) error {
+	return a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		now := time.Now()
 
 		sandboxRow, err := a.stores.sandbox.WithTx(tx).Get(ctx, a.sessionID)
@@ -480,17 +658,17 @@ func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
 			return fmt.Errorf("sessionactor: get sandbox: %w", err)
 		}
 
-		if int(sandboxRow.Gen) != plan.gen {
-			// A newer spawn attempt has already superseded this one (e.g.
-			// a stale-spawn recovery elsewhere raced this call) -- this
-			// result no longer applies to anything.
-			a.logger.Warn("sessionactor: spawn result for a superseded gen; ignoring",
-				"result_gen", plan.gen, "current_gen", sandboxRow.Gen)
+		if int(sandboxRow.Gen) != gen {
+			// A newer spawn/restore attempt has already superseded this
+			// one (e.g. a stale-spawn recovery elsewhere raced this call)
+			// -- this result no longer applies to anything.
+			a.logger.Warn("sessionactor: provider result for a superseded gen; ignoring",
+				"result_gen", gen, "current_gen", sandboxRow.Gen)
 			return nil
 		}
 
-		if createErr != nil {
-			return a.recordSpawnFailure(ctx, tx, sandboxRow, createErr, now)
+		if providerErr != nil {
+			return a.recordSpawnFailure(ctx, tx, sandboxRow, providerErr, now)
 		}
 
 		if _, err := a.stores.sandbox.WithTx(tx).UpdateProviderID(ctx, sqlcgen.UpdateSandboxProviderIDParams{
@@ -512,21 +690,6 @@ func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
 		}
 		return nil
 	})
-
-	if err != nil && createErr == nil && errors.Is(err, ErrStaleEpoch) {
-		// See this function's own doc comment above: a real cloud sandbox
-		// was just created but the write recording it just got rolled back
-		// by a legitimate stale-epoch takeover -- log everything an
-		// operator would need to find and manually clean this up until
-		// Step 25's reconciler exists.
-		a.logger.Warn("sessionactor: spawned sandbox orphaned by stale-epoch takeover; provider resource was never recorded and will leak until Step 25's reconciler exists",
-			"session_id", a.sessionID.String(),
-			"provider_id", ref.ProviderID,
-			"gen", plan.gen,
-		)
-	}
-
-	return err
 }
 
 // recordSpawnFailure classifies createErr (ports.IsTransient, §3.2's own

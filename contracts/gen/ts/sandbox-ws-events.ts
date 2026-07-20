@@ -276,6 +276,10 @@ export interface SnapshotReady {
    */
   ackId: string;
   snapshotId: string;
+  /**
+   * Echoes the messageId of the Snapshot command this event is completing (sandbox-agent sets this to the exact MessageId of the Snapshot command it received). Optional and additive: this event has zero real production consumers before its own first implementation, so adding this field now is not a breaking wire-contract change. Exists so the control plane can correlate a snapshot_ready back to the specific attempt it answers -- gen alone cannot, since neither the snapshot-start nor snapshot-complete transition is gen-fenced (a snapshot cycle happens within the same gen). Absent/omitted on any producer that predates this field.
+   */
+  commandMessageId?: string;
 }
 /**
  * §7.1: brackets a spawned sub-task's lifetime. NOT critical (no ackId) — only sub_task_finish closes an 'active' state the ack protocol must guarantee delivery of.

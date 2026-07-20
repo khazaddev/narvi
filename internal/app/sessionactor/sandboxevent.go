@@ -8,9 +8,12 @@
 // per-message half of §3.2's gen-fencing rule ("stale-gen inputs are
 // rejected and logged"), persists every recognized event (append-only),
 // always bumps liveness (last_seen_at = max of all signals), and fires
-// EXACTLY the two state transitions this Step's plan row scopes.
+// the state transitions this Step's plan row (and Step 22's, "snapshots &
+// restore") scope: "ready"/Connecting, "heartbeat"-nil-phase/Booting
+// (both Step 18), and now "snapshot_ready"/Snapshotting (Step 22, design
+// decision 3 -- see handleSnapshotReadyEvent below).
 //
-// # Explicitly out of scope (do not add a third case here)
+// # Explicitly out of scope (do not add a further case here)
 //
 // Suspect-state recovery-during-grace ("any liveness signal during grace
 // returns to previous state", §3.2) is Step 24's own job ("two-phase
@@ -22,19 +25,22 @@
 // sandbox.TriggerRecover needs a Target (which previously-live state to
 // return to) this handler has no mechanism to track/supply. Do not call
 // sandbox.Transition speculatively for any event type/status combination
-// beyond the two named below.
+// beyond the ones named above.
 
 package sessionactor
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
 )
@@ -215,17 +221,33 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			}
 		}
 
-		// Step 21 ("e2e happy path"): a REAL execution_complete completes
-		// whichever turn is currently Processing (§3.3) -- see
-		// completeProcessingTurn's own doc comment (pushpr.go) for the full
-		// reasoning, including why no synthetic execution_complete is ever
-		// appended on this path.
-		if cmd.Type == "execution_complete" {
+		// Step 21 ("e2e happy path")/Step 22 ("snapshots & restore"): per-
+		// type post-persist handling. A tagged switch, not an if/else-if
+		// chain (staticcheck QF1003), since this is a genuine dispatch on
+		// cmd.Type's own value, not a chain of unrelated conditions.
+		switch cmd.Type {
+		case "execution_complete":
+			// A REAL execution_complete completes whichever turn is
+			// currently Processing (§3.3) -- see completeProcessingTurn's
+			// own doc comment (pushpr.go) for the full reasoning, including
+			// why no synthetic execution_complete is ever appended on this
+			// path.
 			sig, err := a.completeProcessingTurn(ctx, tx, row, cmd.Raw)
 			if err != nil {
 				return err
 			}
 			pushAfterCommit = sig
+		case "snapshot_ready":
+			// Step 22, design decision 3: a real snapshot_ready event
+			// finalizes the Snapshotting->Ready transition
+			// triggerSnapshotBestEffort (below) started, and persists the
+			// sandbox's own confirmed snapshotId. Runs INSIDE this SAME
+			// transact, right after appendRawEvent already persisted the
+			// raw event above -- matching execution_complete's own "persist
+			// first, then act" ordering exactly.
+			if err := a.handleSnapshotReadyEvent(ctx, tx, row, cmd.Raw); err != nil {
+				return err
+			}
 		}
 
 		outcome.Persisted = true
@@ -268,6 +290,37 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			a.logger.Warn("sessionactor: ensure-dispatched after sandbox event failed", "error", dispatchErr)
 		}
 
+		// Step 22 ("snapshots & restore"), design decision 1 -- CORRECTED
+		// per independent review: §3.3's own governing rule is "On
+		// terminal event: complete turn, trigger snapshot, re-derive
+		// session status, dispatch next pending" -- i.e. the snapshot
+		// trigger is scoped to a real turn-terminal wire event, not to
+		// every sandbox-WS frame. The CALL is gated on cmd.Type ==
+		// "execution_complete" here, mirroring exactly how
+		// sendPushBestEffort/createPRBestEffort are gated a few lines
+		// below (pushAfterCommit != nil / cmd.Type == "push_complete").
+		// The brief's original text ("do not gate the CALL itself on the
+		// event type... internally a no-op when not applicable") was
+		// wrong: triggerSnapshotBestEffort's own internal eligibility
+		// check is only "status == Ready", which heartbeat (sent every
+		// steady_heartbeat_budget's own 30s interval, §6.1, even on a
+		// completely idle sandbox) also satisfies -- gating on Ready-
+		// status alone let every routine heartbeat on an already-Ready
+		// session re-trigger a full snapshot cycle indefinitely, calling
+		// the real SandboxProvider.TakeSnapshot roughly every 30s forever
+		// with zero turn activity. Gating on cmd.Type == "execution_complete"
+		// fires this exactly once per real terminal event (completed,
+		// failed, or cancelled outcome alike -- §3.3 does not restrict
+		// "trigger snapshot" to successful completions only, unlike the
+		// push signal below which IS success-only) and is naturally
+		// idempotent against a redelivered/duplicate execution_complete:
+		// the first delivery already moved the sandbox off Ready, so
+		// triggerSnapshotBestEffort's own internal check no-ops on the
+		// redelivery.
+		if cmd.Type == "execution_complete" {
+			a.triggerSnapshotBestEffort(ctx)
+		}
+
 		// Step 21 ("e2e happy path"): the two remaining best-effort side
 		// effects this event may trigger, both deliberately run OUTSIDE
 		// (i.e. after) the transact above committed, never inside it --
@@ -284,4 +337,330 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 	}
 
 	return err
+}
+
+// handleSnapshotReadyEvent implements design decision 3's own
+// snapshot_ready handling (Step 22, "snapshots & restore"): transitions
+// Snapshotting -> Ready via sandbox.SnapshotCompleteTrigger() and persists
+// the sandbox's own reported snapshotId onto sandboxes.snapshot_id.
+// Called from INSIDE handleSandboxEvent's own transact, the SAME transact
+// that already ran appendRawEvent for this wire event moments ago (row is
+// the sandbox row as read at the very top of that transact, before this
+// event's own generic status/liveness bump ran -- i.e. its Status field
+// still reflects whatever the sandbox's status genuinely was when this
+// event arrived).
+//
+// A late/duplicate snapshot_ready arriving after the sandbox is no longer
+// Snapshotting (e.g. a liveness watchdog already suspected it in the
+// meantime, or this is a wire-level redelivery of an already-handled
+// critical event) is logged and treated as a no-op, never a transact
+// failure -- matching this codebase's general "a stale or duplicate
+// signal is logged, not fatal" posture (this same function's own
+// stale-gen handling above; completeProcessingTurn's identical "no turn
+// currently Processing" no-op in pushpr.go). This does NOT touch
+// sandbox.gen -- a snapshot cycle happens within the SAME gen; only
+// RestoreFromSnapshot bumps gen (design decision 6, dispatch.go).
+//
+// Fix (message-id correlation): neither TriggerSnapshotStart nor
+// TriggerSnapshotComplete is gen-fenced (by design -- gen doesn't change
+// within a snapshot cycle), so the "is the sandbox's CURRENT status
+// Snapshotting" check alone is satisfiable by a LATER, unrelated snapshot
+// attempt at the same gen -- an independent review constructed and
+// confirmed this exact race against a real Postgres instance: attempt
+// #1's SendCommand appears to fail (but the frame actually got through) ->
+// revertSnapshotBestEffort reverts to Ready -> attempt #2 starts -> attempt
+// #1's real, delayed snapshot_ready arrives and would otherwise be wrongly
+// accepted as completing attempt #2, stamping the STALE snapshotId. So an
+// event is only accepted as completing the CURRENT attempt when its own
+// CommandMessageId matches row.PendingSnapshotMessageID (set by
+// triggerSnapshotBestEffort's own first transact, atomically with the
+// Ready->Snapshotting transition) -- a mismatch, or that column being nil
+// (no attempt outstanding), is treated exactly like the late/duplicate
+// case just above: logged, no-op, never a transact failure.
+func (a *Actor) handleSnapshotReadyEvent(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox, raw json.RawMessage) error {
+	if sandbox.State(row.Status) != sandbox.StateSnapshotting {
+		a.logger.Warn("sessionactor: snapshot_ready arrived while sandbox is not snapshotting; ignoring (late or duplicate delivery)",
+			"status", row.Status)
+		return nil
+	}
+
+	var evt sandboxws.SnapshotReady
+	if err := json.Unmarshal(raw, &evt); err != nil {
+		// Fix (was: log-only, leaving the sandbox permanently stuck
+		// Snapshotting -- no watchdog covers that state, confirmed by both
+		// the implementer and two independent reviewers): "we can't
+		// understand this response" must be treated the same as "we don't
+		// have a usable response," so revert exactly like
+		// revertSnapshotBestEffort's own SendCommand-failure path does
+		// (including clearing pending_snapshot_message_id) -- using the
+		// SAME already-open tx this function was handed (not a second,
+		// separate a.transact call: this function is already running
+		// inside handleSandboxEvent's own transact, which already
+		// persisted this raw event verbatim via appendRawEvent moments
+		// ago; a decode failure here must never retroactively roll that
+		// back, and reverting via a second, independent transaction here
+		// would race the still-open outer one instead of composing with
+		// it).
+		a.logger.Warn("sessionactor: snapshot_ready failed schema decode; persisted verbatim, reverting sandbox to ready instead of leaving it stuck snapshotting",
+			"error", err)
+		return a.revertSnapshotToReady(ctx, tx, row)
+	}
+
+	pending := "<nil>"
+	if row.PendingSnapshotMessageID != nil {
+		pending = *row.PendingSnapshotMessageID
+	}
+	if row.PendingSnapshotMessageID == nil || evt.CommandMessageId == nil || *evt.CommandMessageId != *row.PendingSnapshotMessageID {
+		a.logger.Warn("sessionactor: snapshot_ready commandMessageId does not match the sandbox's own currently-outstanding pending snapshot attempt; ignoring (stale/duplicate delivery from an earlier, already-completed-or-reverted attempt)",
+			"pending_snapshot_message_id", pending)
+		return nil
+	}
+
+	to, err := sandbox.Transition(sandbox.State(row.Status), int(row.Gen), sandbox.SnapshotCompleteTrigger())
+	if err != nil {
+		return fmt.Errorf("sessionactor: sandbox transition snapshotting->ready (snapshot_ready): %w", err)
+	}
+	if _, err := a.stores.sandbox.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: a.sessionID,
+		Status:    sqlcgen.SandboxStatus(to),
+	}); err != nil {
+		return fmt.Errorf("sessionactor: update sandbox status to ready (snapshot complete): %w", err)
+	}
+	// Also clears pending_snapshot_message_id back to nil in this SAME
+	// statement -- see UpdateSandboxSnapshotID's own generated doc
+	// comment (queries/sandboxes.sql).
+	if _, err := a.stores.sandbox.WithTx(tx).UpdateSnapshotID(ctx, sqlcgen.UpdateSandboxSnapshotIDParams{
+		SessionID:  a.sessionID,
+		SnapshotID: &evt.SnapshotId,
+	}); err != nil {
+		return fmt.Errorf("sessionactor: record snapshot id: %w", err)
+	}
+	return nil
+}
+
+// revertSnapshotToReady performs the Snapshotting->Ready compensating
+// transition and clears pending_snapshot_message_id back to nil, using
+// the CALLER's own tx (never opening its own transact) -- shared by
+// revertSnapshotBestEffort (below, which opens its own fresh transact and
+// passes it here) and handleSnapshotReadyEvent's decode-failure path
+// (above, which passes the SAME tx it was itself handed, already open
+// inside handleSandboxEvent's own transact). row is read (and, in the
+// decode-failure caller's case, already known to be Snapshotting) by the
+// caller; this function re-confirms that itself so it is safe to call
+// from either context without a caller-side duplicate check.
+func (a *Actor) revertSnapshotToReady(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox) error {
+	if sandbox.State(row.Status) != sandbox.StateSnapshotting {
+		// Already moved on via some other path (e.g. a liveness watchdog
+		// already suspected it in the meantime) -- nothing to revert.
+		a.logger.Warn("sessionactor: revert snapshot to ready: sandbox no longer snapshotting; ignoring",
+			"status", row.Status)
+		return nil
+	}
+	to, err := sandbox.Transition(sandbox.State(row.Status), int(row.Gen), sandbox.SnapshotCompleteTrigger())
+	if err != nil {
+		return fmt.Errorf("sessionactor: sandbox transition snapshotting->ready (revert): %w", err)
+	}
+	if _, err := a.stores.sandbox.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: a.sessionID,
+		Status:    sqlcgen.SandboxStatus(to),
+	}); err != nil {
+		return fmt.Errorf("sessionactor: update sandbox status to ready (revert): %w", err)
+	}
+	if _, err := a.stores.sandbox.WithTx(tx).UpdatePendingSnapshotMessageID(ctx, sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams{
+		SessionID:                a.sessionID,
+		PendingSnapshotMessageID: nil,
+	}); err != nil {
+		return fmt.Errorf("sessionactor: clear pending snapshot message id (revert): %w", err)
+	}
+	return nil
+}
+
+// snapshotPlan is what triggerSnapshotBestEffort's own first transact
+// hands to itself when (and only when) it actually transitioned the
+// sandbox Ready->Snapshotting -- the real SandboxCommander.SendCommand
+// call happens OUTSIDE that transact, using exactly this plan, mirroring
+// dispatch.go's own spawnPlan/dispatchPlan "commit state, THEN make the
+// real call" shape.
+type snapshotPlan struct {
+	gen              int
+	commandMessageID string
+}
+
+// triggerSnapshotBestEffort implements design decision 1's own post-turn
+// snapshot trigger (Step 22, "snapshots & restore", docs/IMPLEMENTATION_
+// PLAN.md row 22's own "post-turn snapshot" bullet, and §3.3's own "On
+// terminal event: complete turn, trigger snapshot..."). Called from
+// handleSandboxEvent's own post-commit block ONLY when cmd.Type ==
+// "execution_complete" (a real turn-terminal wire event) -- corrected per
+// independent review from this file's own earlier, unconditional-call
+// design, which let every routine heartbeat on an already-Ready session
+// re-trigger a full snapshot cycle indefinitely (see the call site's own
+// comment in handleSandboxEvent for the full reasoning). Its own logic,
+// still worth keeping defensive/idempotent in its own right (a redelivered
+// execution_complete, or any other future caller, must never double-fire
+// a snapshot):
+//
+//  1. Mint the Snapshot command's own MessageId FIRST, before any
+//     transact -- needed both to persist it (step 2) and to build the
+//     real command (step 3).
+//  2. Read the current sandbox row, in a NEW transact. If status != Ready,
+//     no-op: a sandbox that's Suspect/Snapshotting/Booting/etc. is not
+//     eligible (exactly one live sandbox per session, and it must be
+//     idle-and-ready to snapshot). Otherwise transition Ready ->
+//     Snapshotting via sandbox.SnapshotStartTrigger() AND persist the
+//     minted MessageId onto sandboxes.pending_snapshot_message_id, in this
+//     SAME transact (message-id correlation fix, below), commit.
+//  3. OUTSIDE that transact: send a real sandboxws.Snapshot command via
+//     ports.SandboxCommander.SendCommand (the SAME port Step 21 built for
+//     Prompt commands -- reused, not a second sandbox-command channel),
+//     carrying the SAME MessageId just persisted.
+//  4. If SendCommand fails (including ports.ErrNoLiveSandboxConnection):
+//     SendCommand is a context-bounded conn.Write, a classic ambiguous-
+//     write case -- the frame can already have been flushed to the OS/TCP
+//     layer before the local call ever times out or errors, so "SendCommand
+//     failed" does NOT reliably mean "the sandbox will never complete
+//     this." revertSnapshotBestEffort (below) runs a SECOND, small
+//     transact reverting Snapshotting back to Ready via
+//     sandbox.SnapshotCompleteTrigger() AND clearing
+//     pending_snapshot_message_id back to nil (a compensating write; no
+//     gen-fencing concern since neither trigger is gen-fenced) -- so that
+//     IF the frame actually did get through and a real snapshot_ready for
+//     THIS attempt eventually arrives late (e.g. after a second attempt
+//     has since started), handleSnapshotReadyEvent's own commandMessageId
+//     match against the CURRENT pending id (now either nil or a later
+//     attempt's own different id) correctly discards it as stale instead
+//     of wrongly completing whatever attempt happens to be outstanding
+//     when it finally arrives -- this closes a real race an independent
+//     review confirmed against a real Postgres instance (see
+//     migrations/000022_sandbox_snapshot_id.up.sql's own
+//     pending_snapshot_message_id doc comment for the full scenario).
+//     Logged at Warn, never treated as fatal to the turn-completion flow
+//     that triggered it -- matches sendPushBestEffort/createPRBestEffort's
+//     own "BestEffort" naming and never-alters-caller-return-value
+//     discipline exactly (this function returns nothing at all).
+//  5. If SendCommand succeeds: nothing more to do here -- wait for the
+//     snapshot_ready event (handleSnapshotReadyEvent, above). HONEST GAP
+//     (documented, not fixed by this Step -- see cmd/sandbox-agent/
+//     main.go's own HandleSnapshot doc comment for the matching statement
+//     of the same fact): if the command is genuinely lost on the wire
+//     despite SendCommand reporting success (rather than merely delayed),
+//     or the sandbox process itself dies mid-snapshot before ever
+//     reporting snapshot_ready, the sandbox is left stuck Snapshotting --
+//     no watchdog covers that state today, and building one (a dedicated
+//     snapshot-timeout timer, or a broader NACK mechanism) is explicitly
+//     out of this Step's own scope.
+func (a *Actor) triggerSnapshotBestEffort(ctx context.Context) {
+	messageID := uuid.NewString()
+
+	var plan *snapshotPlan
+	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		row, err := a.stores.sandbox.WithTx(tx).Get(ctx, a.sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				// No sandbox row at all -- defensive only: the ONLY
+				// current caller (handleSandboxEvent) already read this
+				// same row successfully moments ago in this very
+				// invocation, so this branch is unreachable in practice
+				// today, but a future caller invoking this unconditionally
+				// with no guaranteed-existing row must not panic or error
+				// loudly here.
+				return nil
+			}
+			return fmt.Errorf("sessionactor: get sandbox: %w", err)
+		}
+		if sandbox.State(row.Status) != sandbox.StateReady {
+			return nil
+		}
+
+		to, err := sandbox.Transition(sandbox.State(row.Status), int(row.Gen), sandbox.SnapshotStartTrigger())
+		if err != nil {
+			return fmt.Errorf("sessionactor: sandbox transition ready->snapshotting: %w", err)
+		}
+		if _, err := a.stores.sandbox.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+			SessionID: a.sessionID,
+			Status:    sqlcgen.SandboxStatus(to),
+		}); err != nil {
+			return fmt.Errorf("sessionactor: update sandbox status to snapshotting: %w", err)
+		}
+		// Message-id correlation fix: persist the freshly-minted command
+		// MessageId in this SAME transact (no extra round trip) --
+		// handleSnapshotReadyEvent only accepts a later snapshot_ready as
+		// completing THIS attempt if its own commandMessageId matches this
+		// column's value.
+		if _, err := a.stores.sandbox.WithTx(tx).UpdatePendingSnapshotMessageID(ctx, sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams{
+			SessionID:                a.sessionID,
+			PendingSnapshotMessageID: &messageID,
+		}); err != nil {
+			return fmt.Errorf("sessionactor: record pending snapshot message id: %w", err)
+		}
+		plan = &snapshotPlan{gen: int(row.Gen), commandMessageID: messageID}
+		return nil
+	})
+	if err != nil {
+		a.logger.Warn("sessionactor: trigger snapshot: transact failed", "error", err)
+		return
+	}
+	if plan == nil {
+		// Not Ready (or no sandbox row at all) -- no snapshot warranted
+		// this round; the common, expected case for most sandbox events.
+		return
+	}
+
+	if a.commander == nil {
+		// Defensive: mirrors tryPlanDispatch/tryPlanSpawn's own identical
+		// nil-port guards exactly -- some tests, and any future caller
+		// genuinely without one, must not panic here. The sandbox is
+		// already committed Snapshotting at this point, so it must be
+		// reverted back to Ready -- there is no live channel to ever
+		// deliver the snapshot command it's waiting for.
+		a.logger.Warn("sessionactor: sandbox is ready to snapshot but no SandboxCommander is configured; reverting to ready")
+		a.revertSnapshotBestEffort(ctx)
+		return
+	}
+
+	cmd := sandboxws.Snapshot{
+		Type:      "snapshot",
+		MessageId: plan.commandMessageID,
+		SessionId: a.sessionID.String(),
+		Gen:       plan.gen,
+	}
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		a.logger.Error("sessionactor: marshal snapshot command failed", "error", err)
+		a.revertSnapshotBestEffort(ctx)
+		return
+	}
+
+	if err := a.commander.SendCommand(a.sessionID.String(), payload); err != nil {
+		// Covers ports.ErrNoLiveSandboxConnection and every other send
+		// failure identically -- see this function's own doc comment,
+		// point 4.
+		a.logger.Warn("sessionactor: send snapshot command failed; reverting sandbox to ready", "error", err)
+		a.revertSnapshotBestEffort(ctx)
+	}
+}
+
+// revertSnapshotBestEffort is triggerSnapshotBestEffort's own compensating
+// write for when the snapshot command never reached the sandbox: opens
+// its OWN fresh transact (unlike handleSnapshotReadyEvent's own decode-
+// failure revert, which reuses an already-open tx it was handed -- see
+// revertSnapshotToReady's own doc comment for why the two calling contexts
+// need different transaction-acquisition strategies), reads the current
+// row, then delegates the actual revert-to-Ready-and-clear-pending-id
+// logic to revertSnapshotToReady so both callers share exactly one
+// implementation of it. A failure of THIS revert is logged at Warn too,
+// never escalated -- there is nothing further this best-effort path can
+// do about it (matches sendPushBestEffort/createPRBestEffort's own
+// terminal, log-only failure handling).
+func (a *Actor) revertSnapshotBestEffort(ctx context.Context) {
+	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		row, err := a.stores.sandbox.WithTx(tx).Get(ctx, a.sessionID)
+		if err != nil {
+			return fmt.Errorf("sessionactor: get sandbox: %w", err)
+		}
+		return a.revertSnapshotToReady(ctx, tx, row)
+	})
+	if err != nil {
+		a.logger.Warn("sessionactor: revert snapshot to ready failed", "error", err)
+	}
 }
