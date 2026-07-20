@@ -40,13 +40,17 @@
 // -> bounded subscribe-frame read -> ws-token verify (close 4001 re-auth /
 // 4002 expired) -> a single `subscribed` reply (SubscribedPayload) ->
 // registration with the shared *Hub for live broadcast -> a read loop
-// handling `fetch_history` cursor-paginated replay). *Hub (also in
+// handling `fetch_history` cursor-paginated replay, rate-limited
+// per-connection via ClientFetchHistoryMinInterval). *Hub (also in
 // client.go) is the in-process, session-keyed connection registry that
 // implements internal/app/ports.EventBroadcaster -- the session actor's
 // own successful transact commits call Hub.Broadcast, which fans a raw
 // stored event payload out to every subscribed connection for that
 // session, sent exactly as stored (§6.2: no wrapper envelope for a live
-// broadcast frame).
+// broadcast frame). A concurrent, periodic server-initiated ping
+// (pingClientLoop, ClientWSPingInterval) is this same handler's own
+// idle-liveness check -- an unanswered ping closes the connection with
+// 4003 ("idle timeout"), the third custom close code alongside 4001/4002.
 //
 // # Honest gaps this package documents rather than papers over
 //

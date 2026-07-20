@@ -40,11 +40,13 @@ type envelope struct {
 // internal/sandboxagent/wsbridge/dispatch.go's own "one malformed frame
 // must not kill the whole connection" precedent.
 //
-// This Step's own outbound capability is ack-only, matching the plan row's
-// own "ack receipt" wording exactly -- actually SENDING prompt/stop/push/
-// snapshot/shutdown/git_sync_complete to a live sandbox connection from the
-// control-plane side is Step 21's own job ("e2e happy path"); no live-
-// connection registry/broadcast mechanism for that is built here.
+// This function's own job is strictly inbound: reading frames off conn and
+// acking them. Actually SENDING prompt/stop/push/snapshot/shutdown/
+// git_sync_complete to a live sandbox connection from the control-plane
+// side is commander.go's own SandboxRegistry.SendCommand (Step 21, "e2e
+// happy path") -- registered against this SAME conn by NewSandboxHandler
+// right before entering this loop (sandbox.go), not built in this
+// function.
 func readLoop(ctx context.Context, conn *websocket.Conn, actor *sessionactor.Actor, sessionIDStr string, gen int, timeouts platform.Timeouts) {
 	logger := platform.Logger(ctx)
 
@@ -67,6 +69,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, actor *sessionactor.Act
 		cmd := sessionactor.SandboxEvent{
 			Type:           env.Type,
 			Gen:            env.Gen,
+			MessageID:      env.MessageID,
 			Raw:            json.RawMessage(data),
 			LastBootPhase:  env.LastBootPhase,
 			ConversationID: env.ConversationID,

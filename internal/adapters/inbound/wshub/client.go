@@ -41,8 +41,12 @@
 //     expired (expires_at before now) -> close 4002 ("token expired").
 //  6. Otherwise: assemble and write a single `subscribed` reply
 //     (SubscribedPayload), register the connection with the shared *Hub
-//     for live broadcast delivery, then run the post-subscribe read loop
-//     (fetch_history) until the connection errs or closes.
+//     for live broadcast delivery, start the idle-liveness ping loop (see
+//     pingClientLoop's own doc comment -- an unanswered ping closes 4003
+//     "idle timeout"), then run the post-subscribe read loop
+//     (fetch_history, rate-limited per-connection via
+//     platform.Timeouts.ClientFetchHistoryMinInterval) until the
+//     connection errs or closes.
 //
 // No registry.GetOrSpawn call belongs anywhere in this handshake: every
 // step above is a plain store read (session/ws-token/turns/sandbox/
@@ -213,8 +217,18 @@ func NewClientHandler(
 			_ = writerGroup.Wait()
 		}()
 
+		// Idle-liveness check (audit-remediation, inbound-hygiene lens): a
+		// periodic server-initiated ping, run on the SAME writerGroup/
+		// writerCtx as the Hub's own writer goroutine above -- both torn
+		// down together by this handler's own deferred cleanup. See
+		// pingClientLoop's own doc comment.
+		writerGroup.Go(func() error {
+			pingClientLoop(writerCtx, conn, timeouts.ClientWSPingInterval, logger)
+			return nil
+		})
+
 		// (8) post-subscribe read loop (fetch_history).
-		readClientLoop(ctx, conn, sessionID, events, logger)
+		readClientLoop(ctx, conn, sessionID, events, timeouts, logger)
 	}
 }
 
@@ -338,7 +352,7 @@ func buildSubscribedPayload(
 	sandboxRow, err := sandboxes.Get(ctx, sessionID)
 	switch {
 	case err == nil:
-		sandboxState = sandboxRow
+		sandboxState = sandboxWireMap(sandboxRow)
 	case errors.Is(err, pgx.ErrNoRows):
 		sandboxState = nil
 	default:
@@ -432,6 +446,29 @@ func artifactWireMap(a sqlcgen.Artifact) map[string]interface{} {
 	}
 }
 
+// sandboxWireMap is eventWireMap/artifactWireMap's own sandbox
+// counterpart: sqlcgen.Sandbox carries several fields with zero
+// legitimate client-side use -- TokenHash (the sandbox's own bearer-token
+// hash, an internal credential-verification artifact), ProviderID,
+// SpawnFailureCount, and LastSpawnFailureAt (internal ops/bookkeeping) --
+// none of which contracts/client-ws/v1/protocol.schema.json's own
+// SubscribedPayload.state requires (that field is deliberately
+// additionalProperties:true, its own doc comment: "shape assembled by
+// later PRs" -- this package's own choice, exactly like eventWireMap/
+// artifactWireMap already exercise for their own siblings). Returns only
+// what a client-side UI legitimately needs: id, gen, status, lastSeenAt,
+// createdAt, updatedAt.
+func sandboxWireMap(s sqlcgen.Sandbox) map[string]interface{} {
+	return map[string]interface{}{
+		"id":         s.ID,
+		"gen":        s.Gen,
+		"status":     s.Status,
+		"lastSeenAt": s.LastSeenAt,
+		"createdAt":  s.CreatedAt,
+		"updatedAt":  s.UpdatedAt,
+	}
+}
+
 func subscribedEventsWire(rows []sqlcgen.Event) []clientws.SubscribedPayloadEventsElem {
 	wire := make([]clientws.SubscribedPayloadEventsElem, len(rows))
 	for i, e := range rows {
@@ -446,6 +483,60 @@ func subscribedArtifactsWire(rows []sqlcgen.Artifact) []clientws.SubscribedPaylo
 		wire[i] = artifactWireMap(a)
 	}
 	return wire
+}
+
+// pingClientLoop runs a periodic, server-initiated liveness check on conn
+// (audit-remediation, inbound-hygiene lens): every interval, it sends a
+// real websocket ping and waits (bounded by that SAME interval, via a
+// context.WithTimeout derived from ctx) for the peer's pong --
+// github.com/coder/websocket's own Conn.Ping doc is explicit that this
+// requires a concurrent Reader call to ever observe the pong ("Ping must
+// be called concurrently with Reader as it does not read from the
+// connection but instead waits for a Reader call to read the pong"):
+// readClientLoop's own already-running conn.Read(ctx) loop (started by
+// this same handler, on a different goroutine) is exactly that concurrent
+// Reader call -- this function deliberately never reads from conn itself.
+//
+// A client that only ever subscribes and passively watches live
+// broadcasts (never sending an application frame) is completely healthy
+// and legitimate; a naive "no application frame within N seconds" timeout
+// would incorrectly kill it. A real ping/pong round trip is the only way
+// to distinguish that legitimate case from a genuinely unresponsive peer.
+//
+// If a Ping ever fails (the peer never answered in time, or the
+// connection is already dead), that proves the connection is genuinely
+// unresponsive: it is closed with the custom status code 4003 ("idle
+// timeout"), the next code after this package's own existing 4001
+// ("re-auth required") / 4002 ("token expired") precedents -- a distinct
+// code because this is a distinct reason. Closing conn here causes
+// readClientLoop's own blocked conn.Read to unblock with an error on its
+// own (matching readSubscribeRequest's own already-established "conn is
+// now closed; the blocked Read above returns an error" precedent in this
+// same package) -- no additional signaling/cancellation plumbing is added
+// here. Returns (rather than being handed an error channel) once ctx is
+// done or the connection has been closed -- the caller (NewClientHandler)
+// runs this via writerGroup.Go, the SAME errgroup/context already used
+// for the Hub's own per-connection writer goroutine, so both share one
+// teardown.
+func pingClientLoop(ctx context.Context, conn *websocket.Conn, interval time.Duration, logger *slog.Logger) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, interval)
+			err := conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				logger.Warn("wshub: client ws ping unanswered; closing as idle", "error", err)
+				_ = conn.Close(websocket.StatusCode(4003), "idle timeout")
+				return
+			}
+		}
+	}
 }
 
 // clientEnvelope peeks just the "type" discriminator every post-subscribe
@@ -463,7 +554,22 @@ type clientEnvelope struct {
 // until conn.Read errors (disconnect) or ctx is done. A read error simply
 // ends the connection -- the caller's own deferred unregister/cancel
 // already handle cleanup.
-func readClientLoop(ctx context.Context, conn *websocket.Conn, sessionID pgtype.UUID, events *postgres.EventStore, logger *slog.Logger) {
+//
+// lastFetchHistoryAt (audit-remediation, inbound-hygiene lens) is a plain
+// local variable, not shared/locked state -- readClientLoop is already a
+// single goroutine processing frames strictly sequentially for this ONE
+// connection, so no synchronization is needed to track "the timestamp
+// handleFetchHistory was last actually invoked ON THIS CONNECTION". A new
+// fetch_history frame arriving before timeouts.ClientFetchHistoryMinInterval
+// has elapsed since that last invocation is logged and dropped (matching
+// this function's own established "log and skip, connection stays open"
+// convention for other invalid input, e.g. handleFetchHistory's own
+// malformed-cursor case) -- events.ListForSession is not called and no
+// reply is written for it. Deliberately per-connection, not per-session or
+// global: this is a rate limit on one connection's own request cadence,
+// not cross-connection/cross-session coordination.
+func readClientLoop(ctx context.Context, conn *websocket.Conn, sessionID pgtype.UUID, events *postgres.EventStore, timeouts platform.Timeouts, logger *slog.Logger) {
+	var lastFetchHistoryAt time.Time
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -478,6 +584,13 @@ func readClientLoop(ctx context.Context, conn *websocket.Conn, sessionID pgtype.
 
 		switch env.Type {
 		case "fetch_history":
+			now := time.Now()
+			if !lastFetchHistoryAt.IsZero() && now.Sub(lastFetchHistoryAt) < timeouts.ClientFetchHistoryMinInterval {
+				logger.Warn("wshub: dropping fetch_history request faster than the per-connection rate limit",
+					"min_interval", timeouts.ClientFetchHistoryMinInterval)
+				continue
+			}
+			lastFetchHistoryAt = now
 			handleFetchHistory(ctx, conn, sessionID, events, data, logger)
 		default:
 			logger.Warn("wshub: ignoring unrecognized client frame type", "type", env.Type)

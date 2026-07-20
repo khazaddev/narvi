@@ -122,6 +122,7 @@ type testRig struct {
 	events       *narvipg.EventStore
 	artifacts    *narvipg.ArtifactStore
 	wsTokens     *narvipg.WSTokenStore
+	environments *narvipg.EnvironmentStore
 	users        *narvipg.UserStore
 	identities   *narvipg.IdentityStore
 	userSessions *narvipg.UserSessionStore
@@ -154,6 +155,7 @@ func newTestRig(t *testing.T) testRig {
 		events:       narvipg.NewEventStore(pool),
 		artifacts:    narvipg.NewArtifactStore(pool),
 		wsTokens:     narvipg.NewWSTokenStore(pool),
+		environments: narvipg.NewEnvironmentStore(pool),
 		users:        narvipg.NewUserStore(pool),
 		identities:   narvipg.NewIdentityStore(pool),
 		userSessions: narvipg.NewUserSessionStore(pool),
@@ -171,7 +173,7 @@ func newTestRig(t *testing.T) testRig {
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.registry))
+		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.environments, rig.registry))
 		r.Get("/{sessionID}", httpapi.GetSession(rig.sessions))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
@@ -247,6 +249,19 @@ func (r testRig) createAuthenticatedUser(ctx context.Context, t *testing.T) (sql
 	}
 
 	return user, token
+}
+
+// sessionCountForUser returns how many rows exist in sessions with
+// created_by = userID -- used by this file's own repo-validation rejection
+// tests to prove a 400 happens strictly BEFORE sessions.WithTx(tx).Create,
+// not merely that the handler returns the right status code.
+func (r testRig) sessionCountForUser(ctx context.Context, t *testing.T, userID pgtype.UUID) int {
+	t.Helper()
+	var count int
+	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE created_by = $1`, userID).Scan(&count); err != nil {
+		t.Fatalf("count sessions for user: %v", err)
+	}
+	return count
 }
 
 // doJSON issues method against r.server.URL+path with an optional body,
@@ -447,6 +462,332 @@ func TestCreateSession_EmptyRepos(t *testing.T) {
 	}
 }
 
+// TestCreateSession_InvalidRepoURL_Rejected proves every one of
+// reposource.ValidateRepoURL's own rejection reasons is checked at this
+// handler's own trust boundary (before any Postgres write), not only much
+// later at actual git-invocation time deep inside the sandbox agent: a
+// non-https scheme, a URL that fails net/url.Parse outright, and a URL
+// that parses but has no host.
+func TestCreateSession_InvalidRepoURL_Rejected(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "non-https scheme", url: "http://example.com"},
+		{name: "git scheme", url: "git://example.com/repo.git"},
+		{name: "fails to parse", url: "https://%zz"},
+		{name: "no host", url: "https://"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+			user, token := rig.createAuthenticatedUser(ctx, t)
+
+			body := []byte(fmt.Sprintf(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":%q,"branch":null}],"modelId":null,"planMode":false}`, tc.url))
+			status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+			if status != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+			}
+			if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+				t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+			}
+		})
+	}
+}
+
+// TestCreateSession_InvalidRepoName_PathTraversal_Rejected proves a repo
+// name shaped like a path-traversal payload is rejected here -- repo.Name
+// later reaches filepath.Join(workspaceDir, repo.Name) inside gitclone, so
+// it is exactly as much a risk as an unvalidated Url/Branch, even though
+// the audit finding's own summary names only url/branch explicitly.
+func TestCreateSession_InvalidRepoName_PathTraversal_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"../escaped","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
+// TestCreateSession_InvalidRepoBranch_DashPrefix_Rejected proves a branch
+// beginning with "-" -- the argument-injection-shaped payload
+// internal/domain/reposource's own tests already use as their canonical
+// example -- is rejected here too.
+func TestCreateSession_InvalidRepoBranch_DashPrefix_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":"--upload-pack=evil"}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
+// TestCreateSession_NilBranch_Succeeds proves a nil branch on an otherwise
+// -valid repo is never accidentally rejected -- nil means "use the repo's
+// own default branch" and must never reach reposource.ValidateBranch at
+// all.
+func TestCreateSession_NilBranch_Succeeds(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusCreated {
+		t.Errorf("status = %d, want %d", status, http.StatusCreated)
+	}
+}
+
+// TestCreateSession_MultipleRepos_SecondInvalid_Rejected proves the repo
+// validation loop actually inspects EVERY repo, in order -- a valid first
+// repo must never cause an invalid second repo to be skipped.
+func TestCreateSession_MultipleRepos_SecondInvalid_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null},{"name":"../escaped","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
+// --- CreateSession: pathScope / Environment (row 10, "domain: Environment
+// scoping", §14.1) ---
+
+// TestCreateSession_InvalidPathScope_Rejected proves a pathScope pattern
+// containing a ".." segment -- internal/domain/environment.
+// ValidatePathScope's own ErrPathTraversal case -- is rejected 400 BEFORE
+// any Postgres write, matching the established repo-validation precedent
+// exactly (assert zero session rows for the calling user).
+func TestCreateSession_InvalidPathScope_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{
+		"spawnSource": "web",
+		"title": null,
+		"prompt": null,
+		"repos": [{"name": "narvi", "url": "https://example.com", "branch": null}],
+		"modelId": null,
+		"planMode": false,
+		"pathScope": ["apps/../etc"]
+	}`)
+
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
+// TestCreateSession_ValidPathScope_CreatesEnvironment proves a valid,
+// non-empty pathScope creates a real environments row (with the exact
+// pattern list persisted), sets the new session's environment_id to that
+// row's id, and sets provenance_tag to CreateSession's own chosen
+// scopedEnvironmentProvenanceTag value.
+func TestCreateSession_ValidPathScope_CreatesEnvironment(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{
+		"spawnSource": "web",
+		"title": null,
+		"prompt": null,
+		"repos": [{"name": "narvi", "url": "https://example.com", "branch": null}],
+		"modelId": null,
+		"planMode": false,
+		"pathScope": ["/apps/web/*", "/apps/api/*"]
+	}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+
+	var environmentID pgtype.UUID
+	var provenanceTag *string
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT environment_id, provenance_tag FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&environmentID, &provenanceTag); err != nil {
+		t.Fatalf("query persisted session: %v", err)
+	}
+	if !environmentID.Valid {
+		t.Fatal("environment_id = NULL, want a real environments row id")
+	}
+	if provenanceTag == nil || *provenanceTag == "" {
+		t.Fatal("provenance_tag = nil/empty, want a non-empty value")
+	}
+
+	var pathScopeJSON []byte
+	var mockConfigured bool
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT path_scope, mock_configured FROM environments WHERE id = $1`, environmentID,
+	).Scan(&pathScopeJSON, &mockConfigured); err != nil {
+		t.Fatalf("query persisted environment: %v", err)
+	}
+	var pathScope []string
+	if err := json.Unmarshal(pathScopeJSON, &pathScope); err != nil {
+		t.Fatalf("unmarshal persisted path_scope: %v", err)
+	}
+	want := []string{"/apps/web/*", "/apps/api/*"}
+	if len(pathScope) != len(want) || pathScope[0] != want[0] || pathScope[1] != want[1] {
+		t.Errorf("persisted path_scope = %v, want %v", pathScope, want)
+	}
+	if mockConfigured {
+		t.Error("mock_configured = true, want false (nothing in this call path sets it)")
+	}
+}
+
+// TestCreateSession_NilPathScope_LeavesEnvironmentUnset proves an
+// absent/nil pathScope leaves both environment_id and provenance_tag NULL,
+// exactly matching pre-existing (pre-this-batch) behavior -- no
+// environments row is created at all.
+func TestCreateSession_NilPathScope_LeavesEnvironmentUnset(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false,"pathScope":null}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+
+	var environmentID pgtype.UUID
+	var provenanceTag *string
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT environment_id, provenance_tag FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&environmentID, &provenanceTag); err != nil {
+		t.Fatalf("query persisted session: %v", err)
+	}
+	if environmentID.Valid {
+		t.Errorf("environment_id = %v, want NULL (pathScope was null)", environmentID)
+	}
+	if provenanceTag != nil {
+		t.Errorf("provenance_tag = %q, want nil (pathScope was null)", *provenanceTag)
+	}
+
+	var environmentCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM environments`).Scan(&environmentCount); err != nil {
+		t.Fatalf("count environments: %v", err)
+	}
+	if environmentCount != 0 {
+		t.Errorf("environments row count = %d, want 0 (no pathScope was supplied)", environmentCount)
+	}
+}
+
+// TestCreateSession_AbsentPathScope_LeavesEnvironmentUnset proves the
+// pathScope key being entirely ABSENT from the request body (not merely
+// present-and-null) behaves identically to TestCreateSession_
+// NilPathScope_LeavesEnvironmentUnset -- pathScope is genuinely optional,
+// not just nullable (unlike every other field on this DTO).
+func TestCreateSession_AbsentPathScope_LeavesEnvironmentUnset(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	// No "pathScope" key at all -- this is TestCreateSession_HappyPath's own
+	// exact request body, re-run unmodified to confirm this batch changed
+	// nothing about it.
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+
+	var environmentID pgtype.UUID
+	var provenanceTag *string
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT environment_id, provenance_tag FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&environmentID, &provenanceTag); err != nil {
+		t.Fatalf("query persisted session: %v", err)
+	}
+	if environmentID.Valid {
+		t.Errorf("environment_id = %v, want NULL (pathScope was absent)", environmentID)
+	}
+	if provenanceTag != nil {
+		t.Errorf("provenance_tag = %q, want nil (pathScope was absent)", *provenanceTag)
+	}
+}
+
+// TestCreateSession_EmptyPathScope_LeavesEnvironmentUnset proves an empty
+// (present, non-null, zero-length) pathScope array is treated the same as
+// nil/absent -- "unscoped" -- never creating an environments row nor
+// calling ValidatePathScope (which would trivially accept an empty slice
+// anyway, but this proves CreateSession's own hasPathScope gate, not just
+// ValidatePathScope's tolerance of it).
+func TestCreateSession_EmptyPathScope_LeavesEnvironmentUnset(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false,"pathScope":[]}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+
+	var environmentID pgtype.UUID
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT environment_id FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&environmentID); err != nil {
+		t.Fatalf("query persisted session: %v", err)
+	}
+	if environmentID.Valid {
+		t.Errorf("environment_id = %v, want NULL (pathScope was empty)", environmentID)
+	}
+}
+
 func TestCreateSession_MalformedBody(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
@@ -528,6 +869,7 @@ func TestListEvents_HappyPath(t *testing.T) {
 		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
 			SessionID: session.ID,
 			Type:      "token",
+			MessageID: fmt.Sprintf("msg-%d", i),
 			Payload:   []byte(fmt.Sprintf(`{"n":%d}`, i)),
 		}); err != nil {
 			t.Fatalf("create event %d: %v", i, err)

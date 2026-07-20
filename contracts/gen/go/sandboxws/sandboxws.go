@@ -237,6 +237,12 @@ type ExecutionComplete struct {
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
+	// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+	// to the turn's main lane; a non-null value is the subTaskId (same id
+	// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+	// to.
+	SubTaskId ExecutionCompleteSubTaskId `json:"subTaskId,omitempty,omitzero" yaml:"subTaskId,omitempty" mapstructure:"subTaskId,omitempty"`
+
 	// Type corresponds to the JSON schema field "type".
 	Type string `json:"type" yaml:"type" mapstructure:"type"`
 }
@@ -274,6 +280,12 @@ func (j *ExecutionCompleteOutcome) UnmarshalJSON(value []byte) error {
 }
 
 type ExecutionCompleteReason *string
+
+// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+// to the turn's main lane; a non-null value is the subTaskId (same id
+// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+// to.
+type ExecutionCompleteSubTaskId *string
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *ExecutionComplete) UnmarshalJSON(value []byte) error {
@@ -1221,6 +1233,12 @@ type StepFinish struct {
 	// StepId corresponds to the JSON schema field "stepId".
 	StepId string `json:"stepId" yaml:"stepId" mapstructure:"stepId"`
 
+	// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+	// to the turn's main lane; a non-null value is the subTaskId (same id
+	// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+	// to.
+	SubTaskId StepFinishSubTaskId `json:"subTaskId,omitempty,omitzero" yaml:"subTaskId,omitempty" mapstructure:"subTaskId,omitempty"`
+
 	// Type corresponds to the JSON schema field "type".
 	Type string `json:"type" yaml:"type" mapstructure:"type"`
 }
@@ -1288,6 +1306,12 @@ func (j *StepFinishCost) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+// to the turn's main lane; a non-null value is the subTaskId (same id
+// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+// to.
+type StepFinishSubTaskId *string
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *StepFinish) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
@@ -1337,9 +1361,21 @@ type StepStart struct {
 	// StepId corresponds to the JSON schema field "stepId".
 	StepId string `json:"stepId" yaml:"stepId" mapstructure:"stepId"`
 
+	// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+	// to the turn's main lane; a non-null value is the subTaskId (same id
+	// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+	// to.
+	SubTaskId StepStartSubTaskId `json:"subTaskId,omitempty,omitzero" yaml:"subTaskId,omitempty" mapstructure:"subTaskId,omitempty"`
+
 	// Type corresponds to the JSON schema field "type".
 	Type string `json:"type" yaml:"type" mapstructure:"type"`
 }
+
+// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+// to the turn's main lane; a non-null value is the subTaskId (same id
+// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+// to.
+type StepStartSubTaskId *string
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *StepStart) UnmarshalJSON(value []byte) error {
@@ -1600,12 +1636,24 @@ type Token struct {
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
+	// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+	// to the turn's main lane; a non-null value is the subTaskId (same id
+	// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+	// to.
+	SubTaskId TokenSubTaskId `json:"subTaskId,omitempty,omitzero" yaml:"subTaskId,omitempty" mapstructure:"subTaskId,omitempty"`
+
 	// The full cumulative text so far for this messageId — replace, do not append.
 	Text string `json:"text" yaml:"text" mapstructure:"text"`
 
 	// Type corresponds to the JSON schema field "type".
 	Type string `json:"type" yaml:"type" mapstructure:"type"`
 }
+
+// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+// to the turn's main lane; a non-null value is the subTaskId (same id
+// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+// to.
+type TokenSubTaskId *string
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *Token) UnmarshalJSON(value []byte) error {
@@ -1656,6 +1704,12 @@ type ToolCall struct {
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
+	// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+	// to the turn's main lane; a non-null value is the subTaskId (same id
+	// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+	// to.
+	SubTaskId ToolCallSubTaskId `json:"subTaskId,omitempty,omitzero" yaml:"subTaskId,omitempty" mapstructure:"subTaskId,omitempty"`
+
 	// ToolName corresponds to the JSON schema field "toolName".
 	ToolName string `json:"toolName" yaml:"toolName" mapstructure:"toolName"`
 
@@ -1665,6 +1719,12 @@ type ToolCall struct {
 
 // Freeform, tool-specific input.
 type ToolCallInput map[string]interface{}
+
+// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+// to the turn's main lane; a non-null value is the subTaskId (same id
+// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+// to.
+type ToolCallSubTaskId *string
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *ToolCall) UnmarshalJSON(value []byte) error {
@@ -1724,12 +1784,24 @@ type ToolResult struct {
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
+	// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+	// to the turn's main lane; a non-null value is the subTaskId (same id
+	// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+	// to.
+	SubTaskId ToolResultSubTaskId `json:"subTaskId,omitempty,omitzero" yaml:"subTaskId,omitempty" mapstructure:"subTaskId,omitempty"`
+
 	// Type corresponds to the JSON schema field "type".
 	Type string `json:"type" yaml:"type" mapstructure:"type"`
 }
 
 // Freeform, tool-specific output.
 type ToolResultOutput map[string]interface{}
+
+// §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs
+// to the turn's main lane; a non-null value is the subTaskId (same id
+// sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs
+// to.
+type ToolResultSubTaskId *string
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *ToolResult) UnmarshalJSON(value []byte) error {

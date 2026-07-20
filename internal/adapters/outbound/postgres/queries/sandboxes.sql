@@ -83,7 +83,7 @@ RETURNING *;
 -- commandMessageId matches that column's current value, so the
 -- outstanding attempt this call completes is, by construction, exactly
 -- the one that column was tracking -- see that column's own migration
--- doc comment (migrations/000019_sandbox_snapshot_id.up.sql) for the full
+-- doc comment (migrations/000022_sandbox_snapshot_id.up.sql) for the full
 -- race this closes.
 UPDATE sandboxes
 SET snapshot_id = $2, pending_snapshot_message_id = NULL, updated_at = now()

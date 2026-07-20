@@ -146,8 +146,9 @@ func TestAssembleSessionConfig(t *testing.T) {
 
 			a := &Actor{publicBaseURL: "https://narvi.example.com"}
 			sessionRow := sessionRowWithRepos(t, `[{"name":"widgets","url":"https://github.com/acme/widgets","branch":null}]`)
+			sandboxID := uuid.NewString()
 
-			cfg, err := a.assembleSessionConfig(sessionRow, 3, "plaintext-token", tc.bootMode)
+			cfg, err := a.assembleSessionConfig(sessionRow, 3, "plaintext-token", sandboxID, tc.bootMode)
 			if err != nil {
 				t.Fatalf("assembleSessionConfig() error = %v, want nil", err)
 			}
@@ -167,6 +168,9 @@ func TestAssembleSessionConfig(t *testing.T) {
 			}
 			if len(cfg.Repos) != 1 || cfg.Repos[0].Name != "widgets" {
 				t.Errorf("Repos = %+v, unexpected", cfg.Repos)
+			}
+			if cfg.SandboxId != sandboxID {
+				t.Errorf("SandboxId = %q, want %q (must round-trip the sandboxID argument unmodified)", cfg.SandboxId, sandboxID)
 			}
 			if cfg.SandboxToken != "plaintext-token" {
 				t.Errorf("SandboxToken = %q, want %q", cfg.SandboxToken, "plaintext-token")

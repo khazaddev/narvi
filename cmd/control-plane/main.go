@@ -166,6 +166,7 @@ func serve() error {
 	eventStore := postgres.NewEventStore(pool)
 	artifactStore := postgres.NewArtifactStore(pool)
 	wsTokenStore := postgres.NewWSTokenStore(pool)
+	environmentStore := postgres.NewEnvironmentStore(pool)
 
 	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
 	// OAuth login, backend-issued session cookies, and route middleware --
@@ -250,7 +251,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, registry))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, registry))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
@@ -280,6 +281,18 @@ func serve() error {
 			// listener goroutine above; only a genuinely different error is
 			// surfaced here.
 			return fmt.Errorf("timer pump: %w", err)
+		}
+		return nil
+	})
+
+	// Audit-remediation (config/platform-hardening batch): purges expired
+	// ws_tokens/user_sessions rows (neither is ever deleted otherwise --
+	// see internal/adapters/outbound/postgres/expiredcleanup.go's own doc
+	// comment). Started/shut down through this SAME errgroup as every
+	// other background loop above -- no naked goroutine (§11).
+	group.Go(func() error {
+		if err := postgres.RunExpiredTokenCleanup(groupCtx, pool, cfg.Timeouts.ExpiredCredentialCleanupInterval); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("expired credential cleanup: %w", err)
 		}
 		return nil
 	})

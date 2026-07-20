@@ -31,7 +31,14 @@ const (
 )
 
 // envVarName is the process environment variable Load reads to select
-// Stage.
+// Stage. Required in every stage -- no default (see Load: an unset value
+// appends a *MissingRequiredEnvError, it is never silently treated as
+// StageDevelopment). A production deploy that simply forgot to set this
+// must fail to boot, not boot as if it were development -- WithAuthSessionCookie
+// (authcookie.go) derives the Secure cookie attribute directly from
+// cfg.Stage != StageDevelopment, so a silent development default would
+// silently omit Secure on every auth cookie a misconfigured production
+// deploy mints.
 const envVarName = "NARVI_STAGE"
 
 // InvalidStageError is returned by Load when NARVI_STAGE is set to a value
@@ -50,8 +57,9 @@ func (e *InvalidStageError) Error() string {
 const logLevelEnvVarName = "NARVI_LOG_LEVEL"
 
 // defaultLogLevelValue is the NARVI_LOG_LEVEL value Load assumes when the
-// variable is unset, mirroring how an unset NARVI_STAGE defaults to
-// StageDevelopment above.
+// variable is unset. Unlike NARVI_STAGE (required, no default -- see
+// envVarName above), a missing log level has a genuinely safe fallback,
+// so this one still defaults quietly.
 const defaultLogLevelValue = "info"
 
 // InvalidLogLevelError is returned by Load when NARVI_LOG_LEVEL is set to a
@@ -98,8 +106,8 @@ const databaseURLEnvVarName = "NARVI_DATABASE_URL"
 const httpAddrEnvVarName = "NARVI_HTTP_ADDR"
 
 // defaultHTTPAddr is the NARVI_HTTP_ADDR value Load assumes when the
-// variable is unset, mirroring how an unset NARVI_STAGE defaults to
-// StageDevelopment above.
+// variable is unset -- a genuinely safe fallback, unlike NARVI_STAGE
+// (required, no default -- see envVarName above).
 const defaultHTTPAddr = ":8080"
 
 // hmacSandboxSecretEnvVarName, hmacBotsSecretEnvVarName, and
@@ -350,15 +358,18 @@ type Config struct {
 // (cmd/control-plane/main.go) call this once at process start.
 func Load() (*Config, error) {
 	stage := Stage(os.Getenv(envVarName))
-	if stage == "" {
-		stage = StageDevelopment
-	}
 
 	var errs []error
 
 	switch stage {
 	case StageDevelopment, StageStaging, StageProduction:
 		// valid
+	case "":
+		// Required, no default -- see envVarName's own doc comment: a
+		// deploy that forgets to set this must fail to boot, not silently
+		// boot as StageDevelopment (which would weaken every auth cookie's
+		// Secure attribute, authcookie.go).
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: envVarName})
 	default:
 		errs = append(errs, &InvalidStageError{Value: string(stage)})
 	}

@@ -6,16 +6,29 @@
 // the result back transactionally) and never reimplementing a decision
 // those packages already make.
 //
-// All 5 named timers are fully wired here -- none needed a SandboxProvider
-// or AgentRuntime (neither exists until Step 12+):
+// All 5 named timers' RE-ARM/handling logic is fully wired here -- none
+// needed a SandboxProvider or AgentRuntime (neither exists until Step
+// 12+). The initial arm (the very first time each timer is ever set) is
+// each timer's OWN concern, not this file's: connecting_deadline and
+// turn_deadline are armed for the first time at spawn/dispatch time
+// (dispatch.go), and liveness_check/inactivity are armed for the first
+// time at the real Booting->Ready transition (sandboxevent.go's
+// handleSandboxEvent) -- see that function's own doc comment for why
+// arming them there, exactly once, rather than here, is correct.
+// terminal_grace is armed for the first time by transitionSandboxToSuspect
+// below, itself called from three different watchdog timeouts (inactivity,
+// connecting_deadline, liveness_check) and from a permanent spawn failure
+// (dispatch.go's recordSpawnFailure) -- never from this file directly
+// either.
 //
 //   - inactivity: domain/sandbox.EvaluateInactivityTimeout. One
 //     deliberate, documented simplification: ConnectedClientCount is
-//     always 0, since the client WS hub that will track connected
-//     participants doesn't exist until Steps 18+ -- see
-//     handleInactivityTimer. This does not stop the timer from being
-//     fully wired; it just means the "clients connected -> extend + warn"
-//     branch is unreachable until that later Step lands.
+//     always 0. The client WS hub itself now exists and does track
+//     connected participants (internal/adapters/inbound/wshub's *Hub,
+//     Step 19), but this package has no port through which to ask it for
+//     a live count -- see handleInactivityTimer. This does not stop the
+//     timer from being fully wired; it just means the "clients connected
+//     -> extend + warn" branch stays unreachable until that wiring lands.
 //   - connecting_deadline / liveness_check: domain/sandbox.
 //     EvaluateConnectingTimeout / EvaluateHeartbeatHealth, respectively.
 //   - terminal_grace: unconditionally treated as a genuine timeout (see
@@ -44,6 +57,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -118,8 +132,10 @@ func (a *Actor) handleInactivityTimer(ctx context.Context) error {
 			LastActivity: pgTimeOrZero(sandboxRow.LastSeenAt),
 			Status:       sandbox.State(sandboxRow.Status),
 			// ConnectedClientCount is always 0 for now: the client WS
-			// hub that will actually track connected participants
-			// doesn't exist until Steps 18+. Until then,
+			// hub itself now exists and does track connected
+			// participants (internal/adapters/inbound/wshub's *Hub,
+			// Step 19), but this actor has no field/port through which
+			// to query it for a live count. Until that wiring lands,
 			// EvaluateInactivityTimeout can never take its "clients
 			// still connected -> extend + warn" branch -- every genuine
 			// inactivity timeout goes straight to
@@ -257,9 +273,35 @@ func (a *Actor) handleLivenessCheckTimer(ctx context.Context) error {
 }
 
 // handleTerminalGraceTimer implements the `terminal_grace` named timer
-// (§2, §3.2).
+// (§2, §3.2). Also closes a confirmed redelivery gap (this batch's own
+// fix): a session whose sandbox NEVER manages to spawn at all has no
+// sandbox event -- and therefore no handleSandboxEvent call -- to ever
+// re-trigger EnsureDispatched (command.go's own doc comment names exactly
+// these two call sites: httpapi.CreateSession, once, at turn creation, and
+// handleSandboxEvent, on every real sandbox event). Reusing THIS timer
+// (rather than inventing a 6th named timer -- command.go's own doc
+// comment is explicit that the 5 named persistent timers are a closed
+// set) as the redelivery trigger is correct because it is the one
+// existing handler that transitions a sandbox into its final Suspect->
+// Failed state while a turn may still be Pending: once terminal_grace's
+// own transact below commits, handleEnsureDispatched is invoked
+// unconditionally -- exactly mirroring handleSandboxEvent's own "re-
+// evaluate dispatch state right after this handler's own transact
+// commits" precedent (sandboxevent.go) -- so tryPlanSpawn/dispatch.go's
+// own already-correct "spawn again from Failed via SpawnTrigger" logic
+// gets a genuine chance to run again, using platform.Timeouts.
+// TerminalGracePeriod's own existing ~60s cadence (plus dispatch.go's own
+// SpawnCooldown, which already gates how soon a fresh attempt is actually
+// allowed) as the natural retry interval.
+//
+// Called even on the two early-return branches below (no sandbox row;
+// sandbox already moved past Suspect via some other path):
+// handleEnsureDispatched is designed as a safe, idempotent "please
+// re-evaluate" signal (see its own doc comment) -- calling it there too is
+// a harmless no-op, not a bug, and special-casing just the Suspect->Failed
+// branch would add complexity for no real benefit.
 func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
-	return a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		sandboxRow, err := a.stores.sandbox.WithTx(tx).Get(ctx, a.sessionID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -314,6 +356,13 @@ func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
 		}
 		return a.deleteTimer(ctx, tx, TimerTerminalGrace)
 	})
+
+	if err == nil {
+		if dispatchErr := a.handleEnsureDispatched(ctx); dispatchErr != nil {
+			a.logger.Warn("sessionactor: ensure-dispatched after terminal grace failed", "error", dispatchErr)
+		}
+	}
+	return err
 }
 
 // handleTurnDeadlineTimer implements the `turn_deadline` named timer (§2,
@@ -495,23 +544,37 @@ func (a *Actor) deleteTimer(ctx context.Context, tx pgx.Tx, name string) error {
 
 // appendEvent inserts a session event row inside tx (§2: appended events
 // always commit in the same transaction as the state change they
-// describe).
+// describe). Unlike appendRawEvent (actor.go), this caller's events are
+// always server-SYNTHESIZED (a fabricated execution_complete on timeout/
+// failure, a "warning" event) with no real wire messageId of their own --
+// so a fresh one is minted here internally (github.com/google/uuid, an
+// already-established import in this package, see dispatch.go/pushpr.go's
+// own precedent) purely to satisfy events.message_id's NOT NULL/unique
+// constraint; no caller of appendEvent needs to supply or know about it.
 func (a *Actor) appendEvent(ctx context.Context, tx pgx.Tx, eventType string, payload map[string]any) error {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("sessionactor: marshal %s event payload: %w", eventType, err)
 	}
-	if _, err := a.stores.event.WithTx(tx).Create(ctx, sqlcgen.CreateEventParams{
+	row, err := a.stores.event.WithTx(tx).Create(ctx, sqlcgen.CreateEventParams{
 		SessionID: a.sessionID,
 		Type:      eventType,
+		MessageID: uuid.NewString(),
 		Payload:   raw,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("sessionactor: append %s event: %w", eventType, err)
 	}
 	// Queue for broadcast AFTER commit -- see actor.go's transact/
 	// broadcastPending doc comments for the full commit-then-broadcast,
-	// discard-on-rollback ordering this is part of.
-	a.pendingBroadcast = append(a.pendingBroadcast, raw)
+	// discard-on-rollback ordering this is part of. A freshly-minted
+	// messageId can never collide with an already-persisted row, so
+	// row.Inserted is always true here in practice -- checked anyway
+	// (rather than assumed) for the same reason appendRawEvent does: this
+	// is the one and only gate that decides broadcast delivery.
+	if row.Inserted {
+		a.pendingBroadcast = append(a.pendingBroadcast, raw)
+	}
 	return nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/khazaddev/narvi/internal/domain/servicemanifest"
+	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/services"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
@@ -50,6 +51,19 @@ func tcpListenerCmd(port int, delaySeconds float64) string {
 	return fmt.Sprintf(
 		`python3 -c "import socket,time;time.sleep(%v);s=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('127.0.0.1', %d));s.listen(1);time.sleep(30)"`,
 		delaySeconds, port,
+	)
+}
+
+// probeEnvAndListenCmd is a real, separate process (python3) that writes
+// NARVI_SESSION_CONFIG's own value as seen by ITS OWN os.environ (or the
+// literal "ABSENT" if unset/empty) to probeFile, then opens a real TCP
+// listener on port -- so the existing Port-readiness path
+// (TestRun_PortReadiness's own technique) can observe it becoming ready
+// without any time.Sleep-based synchronization on the test's own side.
+func probeEnvAndListenCmd(probeFile string, port int) string {
+	return fmt.Sprintf(
+		`python3 -c "import os,socket,time; open('%s','w').write(os.environ.get('NARVI_SESSION_CONFIG') or 'ABSENT'); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1', %d)); s.listen(1); time.sleep(30)"`,
+		probeFile, port,
 	)
 }
 
@@ -174,13 +188,59 @@ func TestRun_PortReadiness(t *testing.T) {
 	}}
 
 	collector := &eventCollector{}
-	err := services.Run(context.Background(), sup, t.TempDir(), manifest, collector.report,
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
 		5*time.Second, 50*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
 
 	assertSequence(t, collector, "web", services.PhaseReady)
+}
+
+// TestRun_EnvExcludesSessionConfig proves the real regression this Step's
+// env-leak remediation fixes: a services.yml command spawned via Run must
+// NOT inherit NARVI_SESSION_CONFIG (the sandbox's own plaintext bearer
+// token) when the caller passes supervisor.EnvWithout(boot.
+// SessionConfigEnvVar) as Run's own env parameter -- exactly what
+// internal/sandboxagent/boot.RunBoot does in production (runboot.go).
+// t.Setenv sets the marker on the TEST process itself; EnvWithout reads it
+// straight from os.Environ() at call time, so this is a real, observed
+// process-level exclusion, not a mock.
+func TestRun_EnvExcludesSessionConfig(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids combining the two.
+	t.Setenv("NARVI_SESSION_CONFIG", "marker-should-not-reach-child")
+
+	port := freePort(t)
+	sup := supervisor.New()
+	stopAllOnCleanup(t, sup)
+
+	probeFile := filepath.Join(t.TempDir(), "probe")
+	manifest := servicemanifest.Manifest{Services: []servicemanifest.Service{
+		{
+			Name:        "probe",
+			Cmd:         probeEnvAndListenCmd(probeFile, port),
+			Readiness:   servicemanifest.Readiness{Port: intPtr(port)},
+			Criticality: servicemanifest.CriticalityPrimary,
+		},
+	}}
+
+	env := supervisor.EnvWithout(boot.SessionConfigEnvVar)
+
+	collector := &eventCollector{}
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, env, collector.report,
+		5*time.Second, 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+	assertSequence(t, collector, "probe", services.PhaseReady)
+
+	got, err := os.ReadFile(probeFile)
+	if err != nil {
+		t.Fatalf("read probe file: %v", err)
+	}
+	if string(got) != "ABSENT" {
+		t.Errorf("probe file = %q, want %q (NARVI_SESSION_CONFIG must not reach the spawned service)", got, "ABSENT")
+	}
 }
 
 func TestRun_HealthReadiness(t *testing.T) {
@@ -201,7 +261,7 @@ func TestRun_HealthReadiness(t *testing.T) {
 	}}
 
 	collector := &eventCollector{}
-	err := services.Run(context.Background(), sup, t.TempDir(), manifest, collector.report,
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
 		5*time.Second, 50*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
@@ -226,7 +286,7 @@ func TestRun_PrimaryCrashIsFatal(t *testing.T) {
 	}}
 
 	collector := &eventCollector{}
-	err := services.Run(context.Background(), sup, t.TempDir(), manifest, collector.report,
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
 		5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Run() error = nil, want a fatal error (primary service crashed before ready)")
@@ -258,7 +318,7 @@ func TestRun_PrimaryCleanExitIsAlsoFatal(t *testing.T) {
 	}}
 
 	collector := &eventCollector{}
-	err := services.Run(context.Background(), sup, t.TempDir(), manifest, collector.report,
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
 		5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Run() error = nil, want a fatal error (a clean exit(0) before readiness is still a crash here)")
@@ -303,7 +363,7 @@ func TestRun_MixedOutcomes_OneCrashesOneSucceeds(t *testing.T) {
 	}}
 
 	collector := &eventCollector{}
-	err := services.Run(context.Background(), sup, t.TempDir(), manifest, collector.report,
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
 		5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Run() error = nil, want a fatal error naming the crashed service")
@@ -339,7 +399,7 @@ func TestRun_SecondaryTimeoutLeavesProcessRunning(t *testing.T) {
 	}}
 
 	collector := &eventCollector{}
-	err := services.Run(context.Background(), sup, t.TempDir(), manifest, collector.report,
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
 		300*time.Millisecond, 30*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil (a secondary service's timeout is only a warning)", err)
@@ -370,7 +430,7 @@ func TestRun_PrimaryTimeoutIsFatal(t *testing.T) {
 	}}
 
 	collector := &eventCollector{}
-	err := services.Run(context.Background(), sup, t.TempDir(), manifest, collector.report,
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
 		300*time.Millisecond, 30*time.Millisecond)
 	if err == nil {
 		t.Fatal("Run() error = nil, want a fatal error (primary service never became ready)")
@@ -423,7 +483,7 @@ func TestRun_ServicesRunConcurrently(t *testing.T) {
 	collector := &eventCollector{}
 
 	start := time.Now()
-	err := services.Run(context.Background(), sup, t.TempDir(), manifest, collector.report,
+	err := services.Run(context.Background(), sup, t.TempDir(), manifest, nil, collector.report,
 		5*time.Second, 50*time.Millisecond)
 	elapsed := time.Since(start)
 

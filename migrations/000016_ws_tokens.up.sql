@@ -5,16 +5,15 @@
 -- (internal/platform.GenerateToken), never stored (§6.2's "hashed at rest"
 -- taken literally).
 --
--- user_id is nullable and, until Step 20 ("auth v1") wires real user
--- identity, ALWAYS NULL -- no auth mechanism exists anywhere in this
--- codebase yet to populate it with (see internal/adapters/inbound/httpapi's
--- own ws-token mint handler doc comment for the full honest-gap writeup).
--- This mirrors sandboxes.token_hash's own (Step 18,
--- migrations/000015_sandbox_token_hash.up.sql) "nullable, unused until a
--- later Step" precedent exactly: once Step 20 gives the mint endpoint a
--- real authenticated caller, that caller's user id is what would populate
--- this column going forward -- the mint endpoint and this column already
--- support it, they are just never given a value today.
+-- user_id is nullable -- ON DELETE SET NULL if the referenced user is ever
+-- removed, and NULL for any row minted before Step 20 ("auth v1") wired
+-- real user identity. Since Step 20, MintWSToken (internal/adapters/
+-- inbound/httpapi/wstoken.go) always scopes a freshly minted token to the
+-- REAL authenticated caller (platform.UserFromContext) -- this mirrors
+-- sandboxes.token_hash's own (Step 18, migrations/000015_sandbox_token_hash.
+-- up.sql) "nullable, unused until a later Step" precedent, now resolved the
+-- same way: the column already supported a real value, and the mint
+-- endpoint now always supplies one.
 CREATE TABLE ws_tokens (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     session_id  UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

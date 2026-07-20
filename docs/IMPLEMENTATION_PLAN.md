@@ -50,7 +50,7 @@ spec of record for behavior.
 | 13 ∥ | sandbox-agent: supervisor | Static binary: boot modes + hook policy, native supervision (process groups, killpg, reaping, drain, bounded shutdown), **boot fingerprint logged first** | §6.4, §5.3 |
 | 14 ∥ | sandbox-agent: services.yml | Declarative multi-service manifest (`.narvi/services.yml`): each service supervised by the **same** process-group/reap/drain machinery as Step 13 (no new supervision code); readiness (port/health) → named `boot_progress` phases; transparent fallback to `setup.sh`/`start.sh` when the manifest is absent | §14.2 |
 | 15 ∥ | sandbox-agent: git + credentials | Ordered multi-repo clones + AGENTS.md, credential helper (flock, expiry buffer, https+host only, never a stale cache) | §6.4, §5.2 |
-| 16 ∥ | sandbox-agent: WS bridge | WS client + **ack protocol** (5 critical types, 1000 buffer, re-send), 30s heartbeats + boot_progress, 401/403/404/410 fatal | §6.1 |
+| 16 ∥ | sandbox-agent: WS bridge | WS client + **ack protocol** (6 critical types, 1000 buffer, re-send), 30s heartbeats + boot_progress, 401/403/404/410 fatal | §6.1 |
 | 17 ∥ | OpenCode adapter | ACL: start server, prompt_async, SSE→AgentEvent translation (quirks §7), **CI contract tests against the pinned binary**, empty-catalog fallback | §7 |
 | 18 | wshub: sandbox socket | Control-plane side: gen check, ack receipt, event persistence, liveness `last_seen_at` = max(signals) | §3.2, §6.1 |
 | 19 | wshub: clients + session REST | subscribe/replay/fetch_history, close codes 4001/4002, 24h hashed ws-token; REST endpoints the UI needs (create/get/events/artifacts) | §6.2, §6.3 |

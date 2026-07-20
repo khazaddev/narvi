@@ -30,15 +30,33 @@ test-integration:
 # dev is a LOCAL DEV convenience only (docker-compose.dev.yml), distinct
 # from the self-host production story (§12.1: "one binary + Postgres") —
 # this just brings up a throwaway local Postgres and runs `narvi serve`
-# against it. The 3 HMAC secrets below are obviously-fake, dev-only values
-# supplied inline by this recipe; Config.Load() still requires all three
-# unconditionally in Go — nothing is made "optional in development" there.
+# against it. Every env var below is an obviously-fake, dev-only value
+# supplied inline by this recipe so platform.Load() (internal/platform/
+# config.go) succeeds: the 3 HMAC secrets, the GitHub OAuth credentials,
+# NARVI_PUBLIC_BASE_URL (matches config.go's own defaultHTTPAddr, ":8080"),
+# NARVI_TOKEN_ENCRYPTION_KEY (a real base64 encoding of exactly 32 random
+# bytes -- Load() rejects anything else for AES-256-GCM), one signup
+# allowlist mechanism (NARVI_ALLOWED_GITHUB_ORGS, satisfying Load()'s
+# OR-of-three-allowlists requirement), and the Modal base URL/auth token
+# (a syntactically valid URL with a real host, but nothing actually
+# listens there -- spawning a real sandbox locally needs further setup;
+# this only restores "make dev boots", not "make dev's Modal calls work").
+# Config.Load() still requires every one of these unconditionally in Go —
+# nothing is made "optional in development" there.
 dev:
 	docker compose -f docker-compose.dev.yml up -d --wait
+	NARVI_STAGE=development \
 	NARVI_DATABASE_URL=postgres://narvi:narvi@localhost:5432/narvi?sslmode=disable \
 	NARVI_HMAC_SANDBOX_SECRET=dev-only-insecure-sandbox-secret \
 	NARVI_HMAC_BOTS_SECRET=dev-only-insecure-bots-secret \
 	NARVI_HMAC_WEBHOOK_SECRET=dev-only-insecure-webhook-secret \
+	NARVI_GITHUB_CLIENT_ID=dev-github-client-id-placeholder \
+	NARVI_GITHUB_CLIENT_SECRET=dev-github-client-secret-placeholder \
+	NARVI_PUBLIC_BASE_URL=http://localhost:8080 \
+	NARVI_TOKEN_ENCRYPTION_KEY=X4x5GAK5D4bwFxg5fEzToXLfPfe2XwZp8U3CR/Pl1Z4= \
+	NARVI_ALLOWED_GITHUB_ORGS=dev-org-placeholder \
+	NARVI_MODAL_BASE_URL=http://localhost:9999 \
+	NARVI_MODAL_AUTH_TOKEN=dev-modal-token-placeholder \
 	go run ./cmd/control-plane serve
 
 # contracts-generate regenerates every codegen target under contracts/gen from

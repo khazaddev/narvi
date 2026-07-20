@@ -100,6 +100,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/opencode"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
@@ -185,7 +186,7 @@ func runCredentialHelper(args []string) error {
 
 	return credentials.RunGet(
 		context.Background(), os.Stdin, os.Stdout, cache, client,
-		cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, timeouts.CredentialExpiryBuffer,
+		cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen, timeouts.CredentialExpiryBuffer,
 	)
 }
 
@@ -338,13 +339,33 @@ func (h *commandHandler) HandlePush(_ context.Context, cmd sandboxws.Push) {
 
 // pushOneRepo runs `git push` for exactly one repo, then reads back the
 // resulting HEAD sha, both via h.sup (never a bare exec.Command).
+//
+// Every one of repoSpec.Name/Branch/Remote is session-controlled
+// (sandboxws.Push.Repos[], relayed from the control plane) and is
+// validated via internal/domain/reposource BEFORE this repo's target
+// directory is even computed (filepath.Join) or any Args are built for
+// h.sup.Spawn -- the exact same argument-injection/path-traversal
+// reasoning internal/sandboxagent/gitclone.CloneAll's own validateRepoSpec
+// closes for clone, applied here for push's own two call-site-specific
+// fields (remote, in addition to name/branch). See reposource's own
+// package doc comment for the full reasoning.
 func (h *commandHandler) pushOneRepo(repoSpec sandboxws.PushReposElem) (string, error) {
-	dir := filepath.Join(h.cfg.WorkspaceDir, repoSpec.Name)
+	if err := reposource.ValidateRepoName(repoSpec.Name); err != nil {
+		return "", fmt.Errorf("invalid repo name: %w", err)
+	}
+	if err := reposource.ValidateBranch(repoSpec.Branch); err != nil {
+		return "", fmt.Errorf("invalid repo branch: %w", err)
+	}
 
 	remote := "origin"
 	if repoSpec.Remote != nil && *repoSpec.Remote != "" {
 		remote = *repoSpec.Remote
 	}
+	if err := reposource.ValidateRemoteName(remote); err != nil {
+		return "", fmt.Errorf("invalid remote: %w", err)
+	}
+
+	dir := filepath.Join(h.cfg.WorkspaceDir, repoSpec.Name)
 
 	credHelperArg, err := gitclone.CredHelperGitArg()
 	if err != nil {
@@ -365,9 +386,31 @@ func (h *commandHandler) pushOneRepo(repoSpec sandboxws.PushReposElem) (string, 
 
 	var stderr bytes.Buffer
 	proc, err := h.sup.Spawn(supervisor.Spec{
-		Path:   "git",
-		Args:   []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "push", remote, repoSpec.Branch},
+		Path: "git",
+		// "--" ends option parsing for everything after it (verified
+		// directly against real `git push` behavior, not assumed) --
+		// defense in depth alongside the validation above: even an
+		// already-validated remote/branch should never be positionally
+		// ambiguous to git's own argument parser.
+		Args:   []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "push", "--", remote, repoSpec.Branch},
 		Stderr: &stderr,
+		// Env is DELIBERATELY left at its zero value (nil, "inherit this
+		// process's own environment") -- a reviewed choice, not an
+		// oversight. git's own credential.helper mechanism re-execs THIS
+		// SAME sandbox-agent binary as `<binary> credential-helper get`,
+		// as git's OWN child process, inheriting whatever env git itself
+		// received here -- i.e. exactly what this Spec.Env carries,
+		// nothing more. runCredentialHelper's own boot.Load() call reads
+		// NARVI_SESSION_CONFIG via os.Getenv and fails outright if it is
+		// absent (see its own "nothing to fetch credentials for" error),
+		// so stripping it here would BREAK git authentication for every
+		// push -- a real functional regression, not a hardening win. A
+		// hand-built allowlist would also risk silently omitting something
+		// the real `git` binary or its transport (http/ssh) legitimately
+		// needs (PATH, HOME, an ssh-agent socket, ...) that isn't yet
+		// enumerated anywhere in this codebase. See gitclone.cloneOne's own
+		// identical comment for the clone-side counterpart of this exact
+		// reasoning.
 	})
 	if err != nil {
 		return "", fmt.Errorf("spawn git push for %s: %w", repoSpec.Name, err)
@@ -407,6 +450,14 @@ func (h *commandHandler) headSHA(dir string) (string, error) {
 		Path:   "git",
 		Args:   []string{"-C", dir, "rev-parse", "HEAD"},
 		Stdout: &stdout,
+		// Unlike pushOneRepo's own git push Spawn call just above (which
+		// deliberately keeps full env inheritance -- see its own comment),
+		// this is a purely local, no-network, no-credential-helper
+		// plumbing command: no `-c credential.helper=...` flag is ever set
+		// for it, so it has no structural need for NARVI_SESSION_CONFIG
+		// (the sandbox's own plaintext bearer token) at all. Tightened for
+		// defense in depth.
+		Env: supervisor.EnvWithout(boot.SessionConfigEnvVar),
 	})
 	if err != nil {
 		return "", fmt.Errorf("spawn git rev-parse HEAD: %w", err)
@@ -618,7 +669,8 @@ func run() error {
 			return fmt.Errorf("sandbox-agent: spawn opencode: %w", spawnErr)
 		}
 
-		agentRuntime = opencode.New(result.BaseURL, timeouts.SSEInactivityTimeout)
+		agentRuntime = opencode.New(result.BaseURL, timeouts.SSEInactivityTimeout,
+			timeouts.OpenCodeSSEReconnectInterval, timeouts.OpenCodeRequestTimeout)
 		defer agentRuntime.Close()
 
 		// §7: "Pin the OpenCode version in the image; record it in the
@@ -637,7 +689,8 @@ func run() error {
 	// bridge/handler are nil exactly when cfg.SessionConfig is nil --
 	// everything below that branches on "bridge != nil" preserves today's
 	// original no-bridge behavior unchanged in that case. sandboxID is
-	// Step 16's own HONEST-GAP value (Config.SandboxID's own doc comment).
+	// boot.Load()'s own resolveSandboxID value -- see Config.SandboxID's
+	// own doc comment for where it really comes from now.
 	//
 	// handler is constructed with adapter already set, passed to
 	// wsbridge.New as the CommandHandler interface value, THEN gets

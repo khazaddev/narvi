@@ -9,17 +9,19 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// setRequiredEnv sets NARVI_DATABASE_URL, the three per-direction HMAC
-// secret env vars (PR-06), and Step 20's ("auth v1") own required vars
-// (GitHub OAuth credentials, PublicBaseURL, a valid 32-byte base64 token
-// encryption key, and one allowlist mechanism) to valid dummy values for
-// the duration of the calling (sub)test, via t.Setenv. Tests that exercise
-// one specific, unrelated env var (NARVI_STAGE, NARVI_LOG_LEVEL, ...) call
-// this first so Load doesn't also fail on these newer required vars; tests
-// that exercise one of these vars themselves call this first and then
-// override that one var with the value under test.
+// setRequiredEnv sets NARVI_STAGE, NARVI_DATABASE_URL, the three
+// per-direction HMAC secret env vars (PR-06), and Step 20's ("auth v1")
+// own required vars (GitHub OAuth credentials, PublicBaseURL, a valid
+// 32-byte base64 token encryption key, and one allowlist mechanism) to
+// valid dummy values for the duration of the calling (sub)test, via
+// t.Setenv. Tests that exercise one specific, unrelated env var
+// (NARVI_LOG_LEVEL, NARVI_DATABASE_URL, ...) call this first so Load
+// doesn't also fail on these other required vars; tests that exercise one
+// of these vars themselves call this first and then override that one var
+// with the value under test.
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
+	t.Setenv("NARVI_STAGE", "development")
 	t.Setenv("NARVI_DATABASE_URL", "postgres://narvi:narvi@localhost:5432/narvi_test?sslmode=disable")
 	t.Setenv("NARVI_HMAC_SANDBOX_SECRET", "test-sandbox-secret")
 	t.Setenv("NARVI_HMAC_BOTS_SECRET", "test-bots-secret")
@@ -37,17 +39,23 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_MODAL_EGRESS_PROXY_URL", "")
 }
 
-// TestLoad is table-driven over NARVI_STAGE values: unset, each of the
-// three valid stages, and an invalid one. Load must succeed for the first
-// four and fail fast with a *platform.InvalidStageError for the last.
+// TestLoad is table-driven over NARVI_STAGE values: each of the three
+// valid stages succeeds, an invalid one fails fast with a
+// *platform.InvalidStageError, and unset fails fast with a
+// *platform.MissingRequiredEnvError (NARVI_STAGE has no safe default --
+// see internal/platform/config.go's own envVarName doc comment: a
+// production deploy that forgets to set it must never silently boot as
+// StageDevelopment, since that would weaken every auth cookie's Secure
+// attribute).
 func TestLoad(t *testing.T) {
 	tests := []struct {
 		name      string
 		envVal    string // value passed to t.Setenv; "" also covers "unset" (os.Getenv returns "" either way)
 		wantStage platform.Stage
 		wantErr   bool
+		wantUnset bool // true only for the "unset" case: expect *MissingRequiredEnvError, not *InvalidStageError
 	}{
-		{name: "unset defaults to development", envVal: "", wantStage: platform.StageDevelopment},
+		{name: "unset fails fast", envVal: "", wantErr: true, wantUnset: true},
 		{name: "development", envVal: "development", wantStage: platform.StageDevelopment},
 		{name: "staging", envVal: "staging", wantStage: platform.StageStaging},
 		{name: "production", envVal: "production", wantStage: platform.StageProduction},
@@ -64,6 +72,19 @@ func TestLoad(t *testing.T) {
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("Load() error = nil, want error for NARVI_STAGE=%q", tc.envVal)
+				}
+				if tc.wantUnset {
+					var missErr *platform.MissingRequiredEnvError
+					if !errors.As(err, &missErr) {
+						t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+					}
+					if missErr.EnvVar != "NARVI_STAGE" {
+						t.Fatalf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, "NARVI_STAGE")
+					}
+					if cfg != nil {
+						t.Fatalf("Load() cfg = %+v, want nil on error", cfg)
+					}
+					return
 				}
 				var invErr *platform.InvalidStageError
 				if !errors.As(err, &invErr) {
@@ -94,6 +115,34 @@ func TestLoad(t *testing.T) {
 				t.Fatalf("Load().LogLevel = %v, want %v (NARVI_LOG_LEVEL unset in this test)", cfg.LogLevel, slog.LevelInfo)
 			}
 		})
+	}
+}
+
+// TestLoadMakeDevEnv proves config.Load() succeeds when called with
+// exactly the env vars the Makefile's own `dev` target sets (including its
+// NARVI_STAGE=development line, added alongside the pre-existing
+// NARVI_DATABASE_URL/NARVI_HMAC_* lines) plus this codebase's own other
+// required vars, supplied here via setRequiredEnv's own generic
+// placeholders rather than the Makefile's real literal values --
+// TestLoadMakefileDevTargetValues below is the one that asserts against the
+// Makefile's own complete, real literal env-var set (GitHub OAuth, Modal,
+// token encryption key, allowlist all included, since a later batch closed
+// the gap this comment used to describe); this test's own narrower job is
+// just confirming NARVI_STAGE itself keeps Load() passing.
+func TestLoadMakeDevEnv(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("NARVI_STAGE", "development")
+	t.Setenv("NARVI_DATABASE_URL", "postgres://narvi:narvi@localhost:5432/narvi?sslmode=disable")
+	t.Setenv("NARVI_HMAC_SANDBOX_SECRET", "dev-only-insecure-sandbox-secret")
+	t.Setenv("NARVI_HMAC_BOTS_SECRET", "dev-only-insecure-bots-secret")
+	t.Setenv("NARVI_HMAC_WEBHOOK_SECRET", "dev-only-insecure-webhook-secret")
+
+	cfg, err := platform.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil (make dev's own env vars must be sufficient)", err)
+	}
+	if cfg.Stage != platform.StageDevelopment {
+		t.Fatalf("Load().Stage = %q, want %q", cfg.Stage, platform.StageDevelopment)
 	}
 }
 
@@ -586,4 +635,53 @@ func TestLoadInitialAdminEmails(t *testing.T) {
 			t.Errorf("Load().InitialAdminEmails = %v, want %v", cfg.InitialAdminEmails, want)
 		}
 	})
+}
+
+// TestLoadMakefileDevTargetValues is the concrete proof "make dev boots
+// again": it sets EXACTLY the Makefile's own `dev:` target env vars (every
+// one of them, verbatim -- not setRequiredEnv's own arbitrary test dummy
+// values) and asserts Load() succeeds. Before this batch, the Makefile's
+// dev target only ever exported 4 of the ~12 vars Load requires
+// (NARVI_DATABASE_URL + the 3 HMAC secrets), so `go run ./cmd/control-plane
+// serve` invoked via `make dev` failed fast at Load() with several distinct
+// *platform.MissingRequiredEnvError/*platform.EmptyAllowlistError values --
+// this test fails the exact same way if the Makefile ever regresses back to
+// that state (or if any one of these dev-only placeholder values stops
+// being individually valid, e.g. the encryption key no longer decoding to
+// 32 bytes).
+func TestLoadMakefileDevTargetValues(t *testing.T) {
+	t.Setenv("NARVI_DATABASE_URL", "postgres://narvi:narvi@localhost:5432/narvi?sslmode=disable")
+	t.Setenv("NARVI_HMAC_SANDBOX_SECRET", "dev-only-insecure-sandbox-secret")
+	t.Setenv("NARVI_HMAC_BOTS_SECRET", "dev-only-insecure-bots-secret")
+	t.Setenv("NARVI_HMAC_WEBHOOK_SECRET", "dev-only-insecure-webhook-secret")
+	t.Setenv("NARVI_STAGE", "development")
+	t.Setenv("NARVI_GITHUB_CLIENT_ID", "dev-github-client-id-placeholder")
+	t.Setenv("NARVI_GITHUB_CLIENT_SECRET", "dev-github-client-secret-placeholder")
+	t.Setenv("NARVI_PUBLIC_BASE_URL", "http://localhost:8080")
+	t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "X4x5GAK5D4bwFxg5fEzToXLfPfe2XwZp8U3CR/Pl1Z4=")
+	t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "dev-org-placeholder")
+	t.Setenv("NARVI_MODAL_BASE_URL", "http://localhost:9999")
+	t.Setenv("NARVI_MODAL_AUTH_TOKEN", "dev-modal-token-placeholder")
+	// Every other allowlist/optional var is deliberately left unset here,
+	// matching the Makefile's dev target exactly (it never sets
+	// NARVI_ALLOWED_EMAIL_DOMAINS, NARVI_ALLOWED_EMAILS,
+	// NARVI_INITIAL_ADMIN_EMAILS, NARVI_MODAL_EGRESS_PROXY_URL,
+	// NARVI_HTTP_ADDR, or NARVI_LOG_LEVEL).
+
+	cfg, err := platform.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil (these are exactly the Makefile dev target's own env vars)", err)
+	}
+	if cfg == nil {
+		t.Fatal("Load() cfg = nil, want non-nil on success")
+	}
+	if len(cfg.TokenEncryptionKey) != 32 {
+		t.Errorf("len(Load().TokenEncryptionKey) = %d, want 32", len(cfg.TokenEncryptionKey))
+	}
+	if len(cfg.AllowedGitHubOrgs) == 0 {
+		t.Error("Load().AllowedGitHubOrgs is empty, want the dev-org-placeholder allowlist entry")
+	}
+	if cfg.ModalBaseURL != "http://localhost:9999" {
+		t.Errorf("Load().ModalBaseURL = %q, want %q", cfg.ModalBaseURL, "http://localhost:9999")
+	}
 }

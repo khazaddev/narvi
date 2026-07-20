@@ -370,12 +370,98 @@ func TestClientHandler_ValidHandshakeSubscribes(t *testing.T) {
 	}
 }
 
+// TestClientHandler_SubscribedPayloadExcludesSandboxTokenHash proves the
+// subscribed reply's own state.sandbox never leaks sandboxes.token_hash
+// (or the other internal-ops-only fields providerId/spawnFailureCount/
+// lastSpawnFailureAt) to the browser -- a confirmed audit finding: the
+// raw sqlcgen.Sandbox row used to be embedded verbatim into the
+// `subscribed` reply. Creates a real sandbox row with a non-empty,
+// distinctive TokenHash via UpsertForSpawn (the SAME production write
+// path a real spawn uses), subscribes, and asserts the RAW JSON bytes of
+// the subscribed reply do not contain that literal value anywhere, while
+// state.sandbox still carries the fields a client-side UI legitimately
+// needs (gen, status).
+func TestClientHandler_SubscribedPayloadExcludesSandboxTokenHash(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+
+	const secretTokenHash = "definitely-secret-sandbox-token-hash-should-never-leak"
+	tokenHash := secretTokenHash
+	if _, err := rig.sandboxes.UpsertForSpawn(ctx, sqlcgen.UpsertSandboxForSpawnParams{
+		SessionID: sessionRow.ID,
+		TokenHash: &tokenHash,
+	}); err != nil {
+		t.Fatalf("create test sandbox with token hash: %v", err)
+	}
+
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	conn, _, err := websocket.Dial(ctx, rig.wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+
+	req := clientws.SubscribeRequest{Token: token, ClientId: "test-client"}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal subscribe request: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, data, err := conn.Read(readCtx)
+	if err != nil {
+		t.Fatalf("Read subscribed reply: %v", err)
+	}
+
+	if strings.Contains(string(data), secretTokenHash) {
+		t.Fatalf("subscribed reply leaks the sandbox token hash: %s", data)
+	}
+
+	var payload clientws.SubscribedPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal SubscribedPayload: %v (%s)", err, data)
+	}
+	sandboxState, ok := payload.State["sandbox"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("state.sandbox = %#v (%T), want a map", payload.State["sandbox"], payload.State["sandbox"])
+	}
+	for _, key := range []string{"gen", "status"} {
+		if _, ok := sandboxState[key]; !ok {
+			t.Errorf("state.sandbox missing key %q: %#v", key, sandboxState)
+		}
+	}
+	for _, key := range []string{
+		"tokenHash", "token_hash",
+		"providerId", "provider_id",
+		"spawnFailureCount", "spawn_failure_count",
+		"lastSpawnFailureAt", "last_spawn_failure_at",
+	} {
+		if _, ok := sandboxState[key]; ok {
+			t.Errorf("state.sandbox unexpectedly contains internal-only key %q: %#v", key, sandboxState)
+		}
+	}
+}
+
 // TestClientHandler_FetchHistoryPagination creates several events, then
 // paginates through them via fetch_history with a small limit, confirming
 // nextCursor is non-nil while more pages remain, produces the remaining
 // events on the follow-up request, and is nil once exhausted.
+//
+// ClientFetchHistoryMinInterval is deliberately disabled (0) for this
+// test: its own concern is cursor-pagination correctness, orthogonal to
+// the per-connection rate limit (covered separately by
+// TestClientHandler_FetchHistoryRateLimited below) -- a real test issuing
+// several genuine page requests back-to-back, faster than any human
+// pagination UI would, must not itself trip that unrelated limit.
 func TestClientHandler_FetchHistoryPagination(t *testing.T) {
-	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ClientFetchHistoryMinInterval = 0
+	rig, sessionRow := newClientTestRig(t, timeouts)
 	ctx := context.Background()
 	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
 
@@ -384,6 +470,7 @@ func TestClientHandler_FetchHistoryPagination(t *testing.T) {
 		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
 			SessionID: sessionRow.ID,
 			Type:      "token",
+			MessageID: fmt.Sprintf("msg-%d", i),
 			Payload:   []byte(fmt.Sprintf(`{"n":%d}`, i)),
 		}); err != nil {
 			t.Fatalf("create event %d: %v", i, err)
@@ -473,6 +560,7 @@ func TestClientHandler_SubscribeSurvivesManyLargeEvents(t *testing.T) {
 		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
 			SessionID: sessionRow.ID,
 			Type:      "token",
+			MessageID: fmt.Sprintf("msg-%d", i),
 			Payload:   []byte(fmt.Sprintf(`{"text":"%s"}`, largePayload)),
 		}); err != nil {
 			t.Fatalf("create event %d: %v", i, err)
@@ -658,6 +746,167 @@ collect:
 	}
 	if received != broadcastCount {
 		t.Errorf("fast connection received %d/%d broadcasts, want all %d despite the slow connection never draining", received, broadcastCount, broadcastCount)
+	}
+
+	cancelRead()
+	_ = readerGroup.Wait()
+}
+
+// TestClientHandler_IdlePingTimeoutClosesUnresponsiveConnection proves the
+// idle-liveness mechanism (audit-remediation, inbound-hygiene lens,
+// client.go's own pingClientLoop) genuinely closes a connection that never
+// answers the server's own ping.
+//
+// This is the achievable form of "simulate an unresponsive-but-not-closed
+// peer" against this library's real API: github.com/coder/websocket's own
+// Conn.Ping doc is explicit that a pong can only ever be observed via a
+// CONCURRENT Reader/Read call on the peer's side ("Ping must be called
+// concurrently with Reader as it does not read from the connection but
+// instead waits for a Reader call to read the pong") -- there is no
+// lower-level knob this library exposes (no exposed access to the
+// underlying net.Conn to half-close the read side) beyond simply never
+// calling Read at all during the window the ping needs to go unanswered.
+// Crucially, that means this test must NOT call conn.Read (directly or
+// via a helper like waitForClose) until well AFTER the timeout has
+// already fired server-side -- an Read call in progress at the wrong
+// moment would itself let this library auto-answer the ping, exactly the
+// healthy-connection behavior this test is deliberately not exercising
+// (that direction is covered separately, immediately below, by
+// TestClientHandler_HealthyConnectionSurvivesFrequentPings). Once the
+// close has already happened on the wire, a single later Read correctly
+// observes it (any single leftover, now-orphaned ping frame preceding the
+// close frame in the stream is transparently absorbed by this library's
+// own Reader loop before it reaches the close frame -- verified directly
+// against this exact dependency version during this test's own design).
+func TestClientHandler_IdlePingTimeoutClosesUnresponsiveConnection(t *testing.T) {
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ClientWSPingInterval = 150 * time.Millisecond
+	rig, sessionRow := newClientTestRig(t, timeouts)
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	conn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	defer func() { _ = conn.CloseNow() }()
+
+	// Deliberately do not read at all during this window -- see this
+	// test's own doc comment above for why that is exactly what makes
+	// this connection unable to ever answer the server's ping. By the
+	// time this sleep elapses (several ping intervals), the server's own
+	// ping must already have gone unanswered and closed the connection.
+	time.Sleep(5 * timeouts.ClientWSPingInterval)
+
+	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if got := waitForClose(readCtx, t, conn); got != websocket.StatusCode(4003) {
+		t.Errorf("close code = %d, want 4003 (idle timeout)", got)
+	}
+}
+
+// TestClientHandler_HealthyConnectionSurvivesFrequentPings proves the
+// idle-liveness mechanism does NOT spuriously kill a live, healthy
+// connection: with ClientWSPingInterval set very short, a real connection
+// that actively answers every ping/pong (via conn.CloseRead, whose own doc
+// comment guarantees it "will ensure that ping, pong and close frames are
+// responded to") survives comfortably past many ping intervals.
+func TestClientHandler_HealthyConnectionSurvivesFrequentPings(t *testing.T) {
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ClientWSPingInterval = 100 * time.Millisecond
+	rig, sessionRow := newClientTestRig(t, timeouts)
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	conn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	defer func() { _ = conn.CloseNow() }()
+
+	closedCtx := conn.CloseRead(ctx)
+
+	select {
+	case <-closedCtx.Done():
+		t.Fatal("connection was closed even though it was actively answering every ping")
+	case <-time.After(10 * timeouts.ClientWSPingInterval):
+		// Survived comfortably past 10 ping intervals -- the mechanism does
+		// not spuriously kill a live, responsive connection.
+	}
+}
+
+// TestClientHandler_FetchHistoryRateLimited proves a burst of fetch_history
+// requests sent faster than ClientFetchHistoryMinInterval only results in
+// the first one being processed (a real reply observed), with the rest of
+// the burst silently dropped -- and that this is a genuine RATE limit, not
+// a permanent block: a follow-up request sent after the interval elapses
+// is processed as normal.
+func TestClientHandler_FetchHistoryRateLimited(t *testing.T) {
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ClientFetchHistoryMinInterval = 300 * time.Millisecond
+	rig, sessionRow := newClientTestRig(t, timeouts)
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	const total = 3
+	for i := 0; i < total; i++ {
+		if _, err := rig.events.Create(ctx, sqlcgen.CreateEventParams{
+			SessionID: sessionRow.ID,
+			Type:      "token",
+			MessageID: fmt.Sprintf("msg-%d", i),
+			Payload:   []byte(fmt.Sprintf(`{"n":%d}`, i)),
+		}); err != nil {
+			t.Fatalf("create event %d: %v", i, err)
+		}
+	}
+
+	conn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	defer func() { _ = conn.CloseNow() }()
+
+	respCh := make(chan struct{}, 16)
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
+	var readerGroup errgroup.Group
+	readerGroup.Go(func() error {
+		for {
+			_, _, err := conn.Read(readCtx)
+			if err != nil {
+				return nil
+			}
+			respCh <- struct{}{}
+		}
+	})
+
+	fetchMsg := fmt.Sprintf(`{"type":"fetch_history","sessionId":%q,"cursor":null,"limit":1}`, sessionRow.ID.String())
+
+	// Burst: several fetch_history frames sent back-to-back with no delay,
+	// deliberately faster than ClientFetchHistoryMinInterval.
+	const burst = 5
+	for i := 0; i < burst; i++ {
+		if err := conn.Write(ctx, websocket.MessageText, []byte(fetchMsg)); err != nil {
+			t.Fatalf("Write burst fetch_history %d: %v", i, err)
+		}
+	}
+
+	// Only the FIRST of the burst should be processed.
+	select {
+	case <-respCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the first fetch_history response")
+	}
+	// The rest of the burst must be dropped outright (not merely delayed):
+	// wait comfortably less than ClientFetchHistoryMinInterval and confirm
+	// nothing else arrives from this same burst.
+	select {
+	case <-respCh:
+		t.Fatal("received a second fetch_history response from the burst; want the rest dropped by the rate limit")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	// After the interval elapses, a FRESH request must still be honored --
+	// proving this is a rate limit, not a permanent block.
+	time.Sleep(timeouts.ClientFetchHistoryMinInterval + 50*time.Millisecond)
+	if err := conn.Write(ctx, websocket.MessageText, []byte(fetchMsg)); err != nil {
+		t.Fatalf("Write follow-up fetch_history: %v", err)
+	}
+	select {
+	case <-respCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the follow-up fetch_history response after the rate-limit interval elapsed")
 	}
 
 	cancelRead()

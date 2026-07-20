@@ -3,6 +3,7 @@ package platform_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/platform"
@@ -89,6 +90,76 @@ func TestCorrelationIDMiddleware(t *testing.T) {
 			t.Fatalf("expected distinct minted ids, got %q twice", first)
 		}
 	})
+}
+
+// TestCorrelationIDMiddlewareRejectsInvalid is table-driven over
+// too-long and control-character-laden presented X-Correlation-Id values:
+// each must be replaced with a freshly minted id (never rejected outright
+// -- this middleware's own contract is "always succeeds"), while a
+// normal, valid presented value is still honored unchanged, proving no
+// regression to the pre-existing "reuse when present" behavior already
+// covered by TestCorrelationIDMiddleware above.
+func TestCorrelationIDMiddlewareRejectsInvalid(t *testing.T) {
+	tests := []struct {
+		name        string
+		presented   string
+		wantReplace bool
+	}{
+		{name: "valid value is honored unchanged", presented: "test-correlation-id-123", wantReplace: false},
+		{name: "empty value is minted (existing absent-header behavior)", presented: "", wantReplace: true},
+		{
+			name:        "too long is replaced",
+			presented:   strings.Repeat("a", platform.MaxCorrelationIDLength+1),
+			wantReplace: true,
+		},
+		{
+			name:        "exactly at the max length is honored unchanged",
+			presented:   strings.Repeat("a", platform.MaxCorrelationIDLength),
+			wantReplace: false,
+		},
+		{name: "control character (newline) is replaced", presented: "abc\ndef", wantReplace: true},
+		{name: "control character (null byte) is replaced", presented: "abc\x00def", wantReplace: true},
+		{name: "DEL byte is replaced", presented: "abc\x7fdef", wantReplace: true},
+		{name: "tab is replaced", presented: "abc\tdef", wantReplace: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var seenInContext string
+
+			handler := platform.CorrelationIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seenInContext, _ = platform.CorrelationIDFromContext(r.Context())
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			if tc.presented != "" {
+				req.Header.Set(platform.CorrelationIDHeader, tc.presented)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("handler status = %d, want %d (middleware must never reject the request)", rec.Code, http.StatusOK)
+			}
+
+			gotHeader := rec.Header().Get(platform.CorrelationIDHeader)
+			if gotHeader == "" {
+				t.Fatal("response header not set")
+			}
+			if gotHeader != seenInContext {
+				t.Fatalf("response header = %q, want it to match context value %q", gotHeader, seenInContext)
+			}
+
+			if tc.wantReplace {
+				if gotHeader == tc.presented {
+					t.Fatalf("expected presented value %q to be replaced with a freshly minted id, got it back unchanged", tc.presented)
+				}
+			} else if gotHeader != tc.presented {
+				t.Fatalf("expected valid presented value %q to be honored unchanged, got %q", tc.presented, gotHeader)
+			}
+		})
+	}
 }
 
 // TestWithCorrelationIDContextHelpers covers the plain context helpers

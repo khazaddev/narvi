@@ -15,6 +15,13 @@ import (
 
 const testExpiryBuffer = 5 * time.Minute
 
+// testGen is the fixed sandbox gen every Get/RunGet call in this file
+// threads through -- its exact value is never asserted on by any test here
+// (that's cpclient_test.go's own job, against a real httptest.Server); it
+// only needs to be A value, so Get/RunGet compile and run with the new
+// gen parameter.
+const testGen = 7
+
 // fakeFetcher is a CredentialFetcher test double: it records every Fetch
 // call, returns fetchResult/fetchErr, and (via failOnFetch) can fail the
 // test outright if Fetch is ever invoked -- used to prove a cache hit
@@ -27,10 +34,10 @@ type fakeFetcher struct {
 	fetchErr    error
 }
 
-func (f *fakeFetcher) Fetch(_ context.Context, sessionID, sandboxToken, host string) (credentials.Credential, error) {
+func (f *fakeFetcher) Fetch(_ context.Context, sessionID, sandboxToken string, gen int, host string) (credentials.Credential, error) {
 	f.calls++
 	if f.failOnFetch {
-		f.t.Fatalf("Fetch(sessionID=%q, sandboxToken=%q, host=%q) called, want it never called", sessionID, sandboxToken, host)
+		f.t.Fatalf("Fetch(sessionID=%q, sandboxToken=%q, gen=%d, host=%q) called, want it never called", sessionID, sandboxToken, gen, host)
 	}
 	return f.fetchResult, f.fetchErr
 }
@@ -51,7 +58,7 @@ func TestGet_NonHTTPSProtocolRefusesSilently(t *testing.T) {
 
 	cred, ok, err := credentials.Get(
 		context.Background(), descriptorReader("ssh", "example.com"), cache, fetcher,
-		"sess-1", "tok", testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer,
 	)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want nil", err)
@@ -80,7 +87,7 @@ func TestGet_CacheHitNeverCallsFetch(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer,
 	)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want nil", err)
@@ -111,7 +118,7 @@ func TestGet_CacheMissCallsFetchAndStores(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer,
 	)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want nil", err)
@@ -160,7 +167,7 @@ func TestGet_StaleWithinExpiryBufferCallsFetch(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer,
 	)
 	if err != nil {
 		t.Fatalf("Get() error = %v, want nil", err)
@@ -199,7 +206,7 @@ func TestGet_FetchFailureNeverReturnsStaleCredential(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer,
 	)
 	if err == nil {
 		t.Fatal("Get() error = nil, want an error when Fetch fails against a stale cache")
@@ -228,7 +235,7 @@ func TestRunGet_WritesUsernamePasswordOnHit(t *testing.T) {
 	var stdout bytes.Buffer
 	err := credentials.RunGet(
 		context.Background(), descriptorReader("https", "example.com"), &stdout, cache, fetcher,
-		"sess-1", "tok", testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer,
 	)
 	if err != nil {
 		t.Fatalf("RunGet() error = %v, want nil", err)
@@ -249,7 +256,7 @@ func TestRunGet_WritesNothingWhenNotOK(t *testing.T) {
 	var stdout bytes.Buffer
 	err := credentials.RunGet(
 		context.Background(), descriptorReader("ssh", "example.com"), &stdout, cache, fetcher,
-		"sess-1", "tok", testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer,
 	)
 	if err != nil {
 		t.Fatalf("RunGet() error = %v, want nil", err)
@@ -285,7 +292,7 @@ func TestRunErase_PurgesEntryAndForcesNextGetToFetch(t *testing.T) {
 
 	got, ok, err := credentials.Get(
 		context.Background(), descriptorReader("https", "example.com"), cache, fetcher,
-		"sess-1", "tok", testExpiryBuffer,
+		"sess-1", "tok", testGen, testExpiryBuffer,
 	)
 	if err != nil {
 		t.Fatalf("Get() after erase error = %v, want nil", err)

@@ -32,6 +32,7 @@ func Get(
 	cache *Cache,
 	client CredentialFetcher,
 	sessionID, sandboxToken string,
+	gen int,
 	expiryBuffer time.Duration,
 ) (Credential, bool, error) {
 	desc, err := ParseDescriptor(r)
@@ -52,7 +53,7 @@ func Get(
 	// disk) is now out of scope forever. The ONLY Credential this
 	// function can return from this point on is `fetched`, produced
 	// fresh below.
-	fetched, err := client.Fetch(ctx, sessionID, sandboxToken, desc.Host)
+	fetched, err := client.Fetch(ctx, sessionID, sandboxToken, gen, desc.Host)
 	if err != nil {
 		return Credential{}, false, fmt.Errorf("credentials: fetch credential for %s: %w", desc.Host, err)
 	}
@@ -101,9 +102,10 @@ func RunGet(
 	cache *Cache,
 	client CredentialFetcher,
 	sessionID, sandboxToken string,
+	gen int,
 	expiryBuffer time.Duration,
 ) error {
-	cred, ok, err := Get(ctx, stdin, cache, client, sessionID, sandboxToken, expiryBuffer)
+	cred, ok, err := Get(ctx, stdin, cache, client, sessionID, sandboxToken, gen, expiryBuffer)
 	if err != nil {
 		return err
 	}

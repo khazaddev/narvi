@@ -147,6 +147,29 @@ func TestRunHooks_NonFatalFailureContinues(t *testing.T) {
 	assertFileExists(t, laterMarker)
 }
 
+// TestRunHooks_EnvExcludesSessionConfig proves the real regression this
+// Step's env-leak remediation fixes: a repo's own setup.sh must NOT
+// inherit NARVI_SESSION_CONFIG (the sandbox's own plaintext bearer token).
+// The hook script itself checks its own environment and exits 9 (a real,
+// observed failure) if the var is present at all; build mode's setup.sh
+// policy is fatal, so RunHooks returning nil here is proof positive the
+// spawned script never saw it -- not merely that nothing crashed.
+func TestRunHooks_EnvExcludesSessionConfig(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids combining the two.
+	t.Setenv("NARVI_SESSION_CONFIG", "marker-should-not-reach-child")
+
+	workspaceDir := t.TempDir()
+	writeScript(t, filepath.Join(workspaceDir, "repo-a", "setup.sh"), `[ -z "$NARVI_SESSION_CONFIG" ] || exit 9`)
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
+
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, 5*time.Second, time.Second)
+	if err != nil {
+		t.Fatalf("RunHooks() error = %v, want nil (the spawned setup.sh must not see NARVI_SESSION_CONFIG)", err)
+	}
+}
+
 func TestRunHooks_TimeoutIsFatalWhenPolicyFatal(t *testing.T) {
 	t.Parallel()
 

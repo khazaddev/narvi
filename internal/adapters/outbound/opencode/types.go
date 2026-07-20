@@ -198,22 +198,60 @@ type toolPart struct {
 // once Status is "completed" — schema-confirmed AND live-verified;
 // Error is a STRING present only once Status is "error" — schema-derived
 // only (ToolStateError's own real /doc shape), not independently observed
-// live (no scripted turn produced a genuine tool error).
+// live (no scripted turn produced a genuine tool error). Metadata is a
+// freeform, tool-specific object (real /doc schema: present on
+// ToolStateRunning/ToolStateCompleted/ToolStateError, absent on
+// ToolStatePending) — VERIFIED LIVE, and load-bearing, for exactly one
+// tool: see taskToolMetadata below and this package's own Adapter doc
+// comment for the §7.1 sub-task correlator this Step's own investigation
+// found on it. For any other tool this adapter does not attempt to
+// interpret it further.
 type toolPartState struct {
-	Status string          `json:"status"`
-	Input  json.RawMessage `json:"input"`
-	Output *string         `json:"output"`
-	Error  *string         `json:"error"`
+	Status   string          `json:"status"`
+	Input    json.RawMessage `json:"input"`
+	Output   *string         `json:"output"`
+	Error    *string         `json:"error"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+}
+
+// taskToolMetadata is the "task" tool's own toolPartState.Metadata shape —
+// VERIFIED LIVE (this Step's own investigation: a real `opencode serve`
+// process, a real scripted prompt instructing the model to delegate via
+// the task tool, the real resulting SSE trace captured and inspected) —
+// §7.1's own "sub-task fan-out" correlator: ParentSessionID is the
+// enclosing turn's own OpenCode session id (matches messageUpdatedProps.
+// SessionID for the turn's own main lane); SessionID is the newly-spawned
+// sub-agent's own, DISTINCT OpenCode session id — every message/part event
+// for the sub-agent's own inner activity (text/tool/step-start/step-finish)
+// subsequently arrives on the SAME global /event stream tagged with THIS
+// session id as its own top-level "sessionID", not the enclosing turn's.
+// Confirmed present once state.status reaches "running", and REMAINS
+// present at "completed" (a real observed field key ordering difference
+// from other camelCase OpenCode fields elsewhere in this file: this
+// object's own keys are "parentSessionId"/"sessionId", lowercase "d", not
+// the "...SessionID" spelling every top-level part/props field uses).
+// See adapter.go's own package doc comment for the full writeup, including
+// the surprising fact that OpenCode's own "subtask" part type (subtaskPart
+// below) did NOT fire at all for this real, live-triggered invocation —
+// this ordinary "tool" part is the mechanism actually observed on the wire
+// for OpenCode 1.17.15's own task-tool sub-agents.
+type taskToolMetadata struct {
+	ParentSessionID string `json:"parentSessionId"`
+	SessionID       string `json:"sessionId"`
 }
 
 // subtaskPart is a `"type":"subtask"` part — SCHEMA-DERIVED ONLY (confirmed
 // present in the real, live /doc OpenAPI schema's own SubtaskPart
-// definition), NOT independently observed live: eliciting one requires the
-// model to actually invoke OpenCode's own "task" tool, which this Step's
-// own research pass did not exercise (non-deterministic, model-dependent).
-// See turn.go's own dispatchSubtaskStart and adapter.go's own package doc
-// comment for how this adapter's own sub-task handling is, in turn,
-// clearly-documented best-effort on TOP of this already-uncertain layer.
+// definition). A LATER Step's own investigation (see adapter.go's own
+// package doc comment) DID actually trigger a real task-tool invocation
+// live — and this part type still never appeared on the wire: the real
+// signal observed was an ordinary "tool" part (tool=="task") carrying
+// taskToolMetadata (toolPartState above), not this one. This part type
+// therefore remains schema-present but unverified-live, kept only as an
+// extra, honestly-labeled fallback path (dispatchSubtaskStart, sse.go) in
+// case some other OpenCode-internal path emits it — the task-tool+metadata
+// mechanism is the PRIMARY, empirically-verified sub-task announcement
+// path this adapter now relies on.
 type subtaskPart struct {
 	ID          string `json:"id"`
 	MessageID   string `json:"messageID"`

@@ -3,16 +3,31 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/environment"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// scopedEnvironmentProvenanceTag is the provenance_tag value (§14.1: "carry
+// a provenance tag ... so the label automation and the handoff sentinel
+// (§14.4) can act on it without re-deriving intent") CreateSession writes
+// onto a session's sessions.provenance_tag column whenever
+// environment.RequiresProvenanceTag reports true for the Environment it just
+// created. §14.1 does not specify an exact wire value, so this is this
+// batch's own concrete choice -- a single fixed constant, not derived from
+// anything about the request, since today there is exactly one reason a
+// session ever carries a provenance tag at all (a non-empty pathScope).
+const scopedEnvironmentProvenanceTag = "scoped_environment"
 
 // CreateSession backs POST /api/sessions (§6.3), mounted (Step 20, "auth
 // v1") behind internal/adapters/inbound/auth.Middleware -- see doc.go's own
@@ -22,6 +37,25 @@ import (
 // failure (malformed JSON) is 400. repos' own schema-level minItems:1 is
 // not enforced by Go's plain json.Unmarshal, so it is checked explicitly
 // here -- 400 on an empty list.
+//
+// Each repo's own Name/Url/Branch is then validated via
+// internal/domain/reposource's exported, plain-string validators -- the
+// SAME package/functions internal/sandboxagent/gitclone's own
+// validateRepoSpec already calls at actual git-invocation time. This is
+// the trust-boundary half of defense in depth: without it, a malformed
+// repo spec sat in Postgres past a 201 and only surfaced as a confusing,
+// delayed spawn failure deep inside the sandbox agent. Validated here, in
+// order, stopping at the first failure (matching validateRepoSpec's own
+// stop-at-first-failure precedent): Name (it later reaches
+// filepath.Join(workspaceDir, repo.Name) in gitclone, so an unvalidated
+// Name is exactly as path-traversal-shaped a risk as an unvalidated Url/
+// Branch), then Url, then Branch -- but ONLY when Branch is non-nil (nil
+// means "use the repo's own default branch", exactly gitclone's own
+// precedent for this identical nullable field). This runs entirely
+// BEFORE pool.Begin below, so a rejected repo spec never reaches Postgres
+// at all. gitclone's own validation at the deep git-invocation site is
+// left completely unchanged -- sandbox-agent must never trust what it
+// receives, even from a layer that validates first.
 //
 // Step 21 ("e2e happy path") update: req.Repos is now actually PERSISTED
 // (marshaled to the sessions.repos JSONB column -- design decision 1,
@@ -40,7 +74,20 @@ import (
 // AFTER this handler has already returned its 201. No naked goroutine is
 // spun up here for that reason -- see this func's own inline comment at
 // the call site.
-func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, registry *sessionactor.Registry) http.HandlerFunc {
+//
+// Row 10 ("domain: Environment scoping", §14.1) update: req.PathScope is
+// OPTIONAL -- absent or null leaves environment_id/provenance_tag both
+// NULL, byte-for-byte today's existing unscoped behavior. When non-empty,
+// internal/domain/environment.ValidatePathScope validates every pattern
+// BEFORE any Postgres write, exactly the same trust-boundary precedent the
+// repo validation above already established (reject with 400 on the
+// first invalid pattern, never call pool.Begin on that path). When valid,
+// a new environments row is inserted in the SAME transaction as the
+// session itself, the session's environment_id is set to that row's id,
+// and provenance_tag is set to scopedEnvironmentProvenanceTag whenever
+// environment.RequiresProvenanceTag (the real domain function, not a
+// re-derived local check) reports true for it.
+func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -68,11 +115,57 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
+		// Validate every repo's Name/Url/Branch BEFORE any Postgres write
+		// (pool.Begin below) -- see this func's own doc comment above.
+		// Stops at the first failure, in order, matching gitclone's own
+		// validateRepoSpec precedent exactly; does not attempt to
+		// collect/report every failure across every repo at once.
+		for i, repo := range req.Repos {
+			if err := reposource.ValidateRepoName(repo.Name); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err))
+				return
+			}
+			if err := reposource.ValidateRepoURL(repo.Url); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err))
+				return
+			}
+			if repo.Branch != nil {
+				if err := reposource.ValidateBranch(*repo.Branch); err != nil {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err))
+					return
+				}
+			}
+		}
+
 		reposJSON, err := json.Marshal(req.Repos)
 		if err != nil {
 			logger.Error("httpapi: marshal repos failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
+		}
+
+		// pathScope is OPTIONAL (contracts/rest/v1/dtos.schema.json's
+		// CreateSessionRequest.pathScope) -- req.PathScope may be nil
+		// (absent) or point at a nil/empty slice (present but null/[]);
+		// either way that means "unscoped", exactly today's existing
+		// behavior. Only a genuinely non-empty pathScope triggers
+		// validation + environment creation below.
+		var pathScope []string
+		if req.PathScope != nil {
+			pathScope = []string(*req.PathScope)
+		}
+		hasPathScope := len(pathScope) > 0
+
+		// Validate every pathScope pattern BEFORE any Postgres write (pool.
+		// Begin below) -- the SAME trust-boundary precedent the repo
+		// validation above already established: reject with 400 on the
+		// first invalid pattern, in order, never reaching pool.Begin on
+		// that path.
+		if hasPathScope {
+			if err := environment.ValidatePathScope(pathScope); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("pathScope: %s", err))
+				return
+			}
 		}
 
 		tx, err := pool.Begin(ctx)
@@ -87,11 +180,46 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 		// own transact.
 		defer func() { _ = tx.Rollback(ctx) }()
 
+		// When a non-empty pathScope was supplied, the new environments row
+		// is inserted in this SAME transaction, BEFORE the session row
+		// itself, so the session insert below can set environment_id to
+		// it directly -- matching this func's own doc comment. environment_id/
+		// provenanceTag both stay their pgtype/Go zero values (NULL) when
+		// hasPathScope is false, identical to every session created before
+		// this batch.
+		var environmentID pgtype.UUID
+		var provenanceTag *string
+		if hasPathScope {
+			pathScopeJSON, marshalErr := json.Marshal(pathScope)
+			if marshalErr != nil {
+				logger.Error("httpapi: marshal pathScope failed", "error", marshalErr)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+
+			env, envErr := environments.WithTx(tx).Create(ctx, pathScopeJSON)
+			if envErr != nil {
+				logger.Error("httpapi: create environment failed", "error", envErr)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			environmentID = env.ID
+
+			// The real domain function, not a re-derived local boolean --
+			// see this func's own doc comment.
+			if environment.RequiresProvenanceTag(environment.Environment{PathScope: pathScope}) {
+				tag := scopedEnvironmentProvenanceTag
+				provenanceTag = &tag
+			}
+		}
+
 		created, err := sessions.WithTx(tx).Create(ctx, sqlcgen.CreateSessionParams{
-			Title:       (*string)(req.Title),
-			SpawnSource: sqlcgen.SessionSpawnSource(req.SpawnSource),
-			CreatedBy:   createdBy,
-			Repos:       reposJSON,
+			Title:         (*string)(req.Title),
+			SpawnSource:   sqlcgen.SessionSpawnSource(req.SpawnSource),
+			CreatedBy:     createdBy,
+			Repos:         reposJSON,
+			EnvironmentID: environmentID,
+			ProvenanceTag: provenanceTag,
 		})
 		if err != nil {
 			logger.Error("httpapi: create session failed", "error", err)

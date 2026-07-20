@@ -8,9 +8,14 @@
     "SessionConfig": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sessionId", "gen", "sandboxToken", "bootMode", "controlPlaneWsUrl", "repos", "correlationId"],
+      "required": ["sessionId", "gen", "sandboxToken", "bootMode", "controlPlaneWsUrl", "repos", "correlationId", "sandboxId"],
       "properties": {
         "sessionId": { "type": "string", "format": "uuid" },
+        "sandboxId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "This sandbox instance's own stable identity (sandboxes.id), delivered to sandbox-agent so it can present itself correctly as the X-Sandbox-ID header on the sandbox WS handshake (§6.1)."
+        },
         "gen": { "type": "integer", "description": "Spawn generation (§3.2 fencing)." },
         "sandboxToken": {
           "type": "string",

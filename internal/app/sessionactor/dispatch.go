@@ -235,6 +235,27 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 		// Branch (b): a live sandbox already exists and is Ready (or
 		// Suspect -- Step 24's own future recovery job either way) -- the
 		// turn can be dispatched to it right now.
+		//
+		// Known, honestly-documented gap: this always routes a Ready
+		// sandbox straight to tryPlanDispatch, regardless of whether it
+		// actually has a live WebSocket connection right now.
+		// EvaluateSpawnDecision already supports recovering a Ready sandbox
+		// whose WebSocket never reconnected (past SpawnConfig.ReadyWait --
+		// see tryPlanSpawn's own ForceRespawn carve-out), but nothing here
+		// ever reaches that path for a Ready status: tryPlanSpawn's own
+		// SpawnState construction has zero wiring for HasActiveWebSocket
+		// today (it is never set to anything but its false zero value; grep
+		// the repo -- no production caller sets it anywhere), so it cannot
+		// yet safely distinguish "Ready with a dead connection, past
+		// ReadyWait" from "Ready with a perfectly live one" here. Wiring
+		// this branch to tryPlanSpawn before that detection exists (via the
+		// sandbox-side connection registry/SandboxCommander) would risk
+		// force-respawning a healthy, actively-connected Ready sandbox out
+		// from under a live session -- worse than leaving this narrower gap
+		// open and documented, matching this project's own established
+		// practice elsewhere (e.g. Step 21/22's own documented, deliberate
+		// gaps) of naming a real, known-open limitation rather than
+		// silently leaving it unstated or attempting a half-solution.
 		status := sandbox.State(sandboxRow.Status)
 		if status == sandbox.StateReady || status == sandbox.StateSuspect {
 			d, err := a.tryPlanDispatch(ctx, tx, sessionRow, sandboxRow, pendingID, turns, now)
@@ -246,9 +267,20 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 		}
 
 		// Branch (c): sandbox exists, is neither dead nor Ready/Suspect
-		// (e.g. still Spawning/Connecting/Booting) -- no-op; a later
-		// EnsureDispatched (the next sandbox event) re-evaluates once it
-		// reaches Ready.
+		// (e.g. still Spawning/Connecting/Booting) -- defer to
+		// EvaluateSpawnDecision's own judgment, exactly like branch (a)
+		// does: for the vast majority of calls (a sandbox still genuinely
+		// booting, well within SpawnStuckTimeout) this is a safe, cheap
+		// no-op via EvaluateSpawnDecision's own Skip guard; only once the
+		// sandbox is genuinely stuck past that window does it produce a
+		// real SpawnActionSpawn -> TriggerForceRespawn -> actual respawn.
+		// hasSandbox is always true by the time this branch is reached --
+		// branch (a) above already handles the !hasSandbox case.
+		p, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
+		if err != nil {
+			return err
+		}
+		spawn = p
 		return nil
 	})
 
@@ -337,7 +369,7 @@ func (a *Actor) tryPlanSpawn(
 
 	switch action.Kind {
 	case sandbox.SpawnActionSpawn:
-		return a.planFreshSpawn(ctx, tx, sessionRow, now)
+		return a.planFreshSpawn(ctx, tx, sessionRow, hasSandbox, sandboxRow, now)
 	case sandbox.SpawnActionRestore:
 		// Only reachable when hasSandbox is true (EvaluateSpawnDecision's
 		// own Restore branch requires SnapshotImageID != "" AND status in
@@ -363,10 +395,75 @@ func (a *Actor) tryPlanSpawn(
 
 // planFreshSpawn implements design decision 3a's own write (token mint,
 // upsert, arm connecting_deadline, assemble a Fresh-boot-mode
-// SessionConfig) for the plain SpawnActionSpawn case -- unchanged from
-// Step 21 except being pulled out of tryPlanSpawn's own body so
-// planRestore (below) can share its structure without a blind copy-paste.
-func (a *Actor) planFreshSpawn(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session, now time.Time) (*spawnPlan, error) {
+// SessionConfig) for the plain SpawnActionSpawn case -- pulled out of
+// tryPlanSpawn's own body so planRestore (below) can share its structure
+// without a blind copy-paste. Also validates the (from, trigger, gen) edge
+// via sandbox.Transition before writing (§11's own hard rule, "every state
+// transition goes through the machine's transition table") -- see
+// planRestore's own doc comment below for why this validation is now
+// shared by both paths.
+func (a *Actor) planFreshSpawn(
+	ctx context.Context, tx pgx.Tx,
+	sessionRow sqlcgen.Session, hasSandbox bool, sandboxRow sqlcgen.Sandbox,
+	now time.Time,
+) (*spawnPlan, error) {
+	// §11's own hard rule applies here just as much as anywhere else:
+	// EvaluateSpawnDecision (tryPlanSpawn, above) is a pure decision
+	// function, not the state machine's own authority on whether this
+	// particular (from, trigger) edge is actually legal -- that authority
+	// is sandbox.Transition alone. fromState/currentGen mirror exactly
+	// what tryPlanSpawn's own spawnState was built from (never recomputed
+	// a second, possibly-inconsistent way); newGen is computed Go-side
+	// but must -- and, by construction, does -- match what
+	// UpsertForSpawn's own SQL (gen = sandboxes.gen + 1, or 1 on a fresh
+	// insert) independently computes for the exact same row, since both
+	// run inside this same already-open transact, which already holds
+	// the FOR UPDATE lock on the session row (transact's own
+	// GetActorEpochForUpdate) that serializes every writer of this
+	// session's sandbox row -- no concurrent writer can interleave
+	// between this read and UpsertForSpawn's write below.
+	fromState := sandbox.StatePending
+	currentGen := 0
+	if hasSandbox {
+		fromState = sandbox.State(sandboxRow.Status)
+		currentGen = int(sandboxRow.Gen)
+	}
+	newGen := currentGen + 1
+
+	var chosenTrigger sandbox.Trigger
+	switch fromState {
+	case sandbox.StatePending, sandbox.StateStopped, sandbox.StateFailed, sandbox.StateStale:
+		// A genuinely fresh/terminal-state respawn -- no snapshot/resume
+		// available (see TriggerSpawn's own doc comment).
+		chosenTrigger = sandbox.SpawnTrigger(newGen)
+	case sandbox.StateSpawning, sandbox.StateConnecting, sandbox.StateBooting, sandbox.StateReady:
+		// EvaluateSpawnDecision's own two recovery carve-outs: a spawn/
+		// connect interrupted before the sandbox ever connected, or a
+		// Ready sandbox whose WebSocket never reconnected. Abandoning a
+		// stuck-but-live sandbox is worth a distinct, observable log line
+		// -- unlike an ordinary spawn, this is giving up on something
+		// that was (or claimed to be) alive.
+		chosenTrigger = sandbox.ForceRespawnTrigger(newGen)
+		a.logger.Warn("sessionactor: sandbox stuck in a live state past its recovery window; force-respawning",
+			"session_id", a.sessionID.String(), "from_status", string(fromState),
+			"gen", currentGen, "new_gen", newGen)
+	default:
+		// StateSuspect can never reach here: EvaluateSpawnDecision's own
+		// Suspect branch always returns Skip (no staleness carve-out), so
+		// action.Kind would already be SpawnActionSkip, not
+		// SpawnActionSpawn, and this function would have returned above.
+		// Any OTHER unrecognized status reaching here means
+		// EvaluateSpawnDecision's own logic and this trigger-selection
+		// switch have drifted out of sync -- fail loudly rather than fall
+		// through to an unvalidated write.
+		return nil, fmt.Errorf("sessionactor: spawn decision returned Spawn from unexpected status %q; no legal trigger for it", fromState)
+	}
+
+	if _, err := sandbox.Transition(fromState, currentGen, chosenTrigger); err != nil {
+		return nil, fmt.Errorf("sessionactor: sandbox transition validation for spawn (from=%s trigger=%s gen=%d->%d): %w",
+			fromState, chosenTrigger.Kind, currentGen, newGen, err)
+	}
+
 	token, err := platform.GenerateToken()
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: generate sandbox token: %w", err)
@@ -390,7 +487,7 @@ func (a *Actor) planFreshSpawn(ctx context.Context, tx pgx.Tx, sessionRow sqlcge
 		return nil, err
 	}
 
-	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, sessionconfig.SessionConfigBootModeFresh)
+	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, row.ID.String(), sessionconfig.SessionConfigBootModeFresh)
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}
@@ -407,18 +504,14 @@ func (a *Actor) planFreshSpawn(ctx context.Context, tx pgx.Tx, sessionRow sqlcge
 // It reuses the EXACT SAME UpsertSandboxForSpawn upsert planFreshSpawn
 // uses above -- that query's own doc comment already documents this dual
 // purpose ("every spawn/restore increments sandbox.gen"), so no second,
-// parallel SQL write is built here. The two differences design decision 6
-// calls out: (a) BootMode passed to assembleSessionConfig is
-// SnapshotRestore, not Fresh; (b) a real, gen-fenced sandbox.Transition
-// call via sandbox.RestoreTrigger runs BEFORE the write, proving
-// TriggerRestore's own FROM-state/gen-fencing legality genuinely gates
-// this restore -- unlike planFreshSpawn's own path (and Step 21's
-// original tryPlanSpawn this was extracted from), which has never called
-// domain/sandbox.Transition explicitly for its OWN write at all
-// (UpsertSandboxForSpawn's SQL just always increments, trusting
-// EvaluateSpawnDecision's own coarser status check alone); this restore
-// path is deliberately MORE rigorous than that existing one, not a copy of
-// it.
+// parallel SQL write is built here. The one difference design decision 6
+// calls out: BootMode passed to assembleSessionConfig is SnapshotRestore,
+// not Fresh. Both paths validate their own (from, trigger, gen) edge via
+// sandbox.Transition before writing -- planFreshSpawn via sandbox.
+// SpawnTrigger/ForceRespawnTrigger, this path via sandbox.RestoreTrigger --
+// proving each trigger's own FROM-state/gen-fencing legality genuinely
+// gates the write, rather than trusting EvaluateSpawnDecision's own coarser
+// status check alone.
 func (a *Actor) planRestore(
 	ctx context.Context, tx pgx.Tx,
 	sessionRow sqlcgen.Session, sandboxRow sqlcgen.Sandbox, snapshotImageID string,
@@ -464,7 +557,7 @@ func (a *Actor) planRestore(
 		return nil, err
 	}
 
-	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, sessionconfig.SessionConfigBootModeSnapshotRestore)
+	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, row.ID.String(), sessionconfig.SessionConfigBootModeSnapshotRestore)
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}

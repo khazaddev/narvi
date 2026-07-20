@@ -33,6 +33,10 @@ type CreateUserSessionParams struct {
 // own verify-by-hash lookup on every gated request.
 // DeleteUserSession is logout's own real revocation -- a genuine DELETE,
 // not merely clearing the browser's cookie.
+// DeleteExpiredUserSessions backs RunExpiredTokenCleanup's own periodic
+// sweep (expiredcleanup.go, audit-remediation config/platform-hardening
+// batch): expires_at is otherwise only ever checked at read/verify time,
+// so nothing else ever purges a row past its own TTL.
 func (q *Queries) CreateUserSession(ctx context.Context, arg CreateUserSessionParams) (UserSession, error) {
 	row := q.db.QueryRow(ctx, createUserSession, arg.UserID, arg.TokenHash, arg.ExpiresAt)
 	var i UserSession
@@ -44,6 +48,19 @@ func (q *Queries) CreateUserSession(ctx context.Context, arg CreateUserSessionPa
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const deleteExpiredUserSessions = `-- name: DeleteExpiredUserSessions :execrows
+DELETE FROM user_sessions
+WHERE expires_at < now()
+`
+
+func (q *Queries) DeleteExpiredUserSessions(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredUserSessions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteUserSession = `-- name: DeleteUserSession :exec

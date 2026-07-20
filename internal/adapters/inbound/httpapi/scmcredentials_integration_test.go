@@ -55,8 +55,26 @@ func createSandboxWithToken(ctx context.Context, t *testing.T, r testRig, sessio
 
 // createSessionWithGitHubIdentity creates a session whose created_by user
 // has a real, encrypted GitHub access token -- the SAME real
-// EncryptToken flow Step 20's own OAuth callback uses, not a shortcut.
+// EncryptToken flow Step 20's own OAuth callback uses, not a shortcut --
+// and whose sessions.repos names a single repo on host "github.com" (the
+// SAME host postScmCredentials' own default request body names), matching
+// the audit remediation's own host-scoping check (design decision 1) so
+// every pre-existing test in this file that relies on this helper keeps
+// proving what it always proved, rather than incidentally tripping the
+// new host check instead of whatever it actually intends to exercise. Use
+// createSessionWithGitHubIdentityAndRepos directly for a test that needs a
+// DIFFERENT repo host (e.g. a host-mismatch test).
 func createSessionWithGitHubIdentity(ctx context.Context, t *testing.T, r testRig, plaintextAccessToken string) sqlcgen.Session {
+	t.Helper()
+	return createSessionWithGitHubIdentityAndRepos(ctx, t, r, plaintextAccessToken,
+		`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`)
+}
+
+// createSessionWithGitHubIdentityAndRepos is createSessionWithGitHubIdentity's
+// general-purpose form: reposJSON is written verbatim into sessions.repos
+// (the same JSONB shape internal/adapters/inbound/httpapi.CreateSession's
+// own real path persists, {branch, name, url} per repo).
+func createSessionWithGitHubIdentityAndRepos(ctx context.Context, t *testing.T, r testRig, plaintextAccessToken, reposJSON string) sqlcgen.Session {
 	t.Helper()
 
 	externalID := fmt.Sprintf("scm-test-github-id-%d", time.Now().UnixNano())
@@ -90,6 +108,7 @@ func createSessionWithGitHubIdentity(ctx context.Context, t *testing.T, r testRi
 	session, err := r.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
 		CreatedBy:   user.ID,
+		Repos:       []byte(reposJSON),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -97,16 +116,72 @@ func createSessionWithGitHubIdentity(ctx context.Context, t *testing.T, r testRi
 	return session
 }
 
+// moveSandboxStatus sets sessionID's sandbox row to status via a plain
+// UpdateStatus call -- mirrors internal/adapters/inbound/wshub's own
+// _test.go helper of the identical name and behavior exactly (that
+// package's own copy is unexported to its own test file; duplicated here
+// rather than shared cross-package, matching every other rig helper this
+// file already keeps as its own copy).
+func moveSandboxStatus(ctx context.Context, t *testing.T, r testRig, sessionID pgtype.UUID, status sqlcgen.SandboxStatus) {
+	t.Helper()
+	if _, err := r.sandboxes.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID,
+		Status:    status,
+	}); err != nil {
+		t.Fatalf("move sandbox to %s: %v", status, err)
+	}
+}
+
+// bumpSandboxGen re-spawns sessionID's own sandbox row via a real
+// UpsertForSpawn call -- which (per that query's own doc comment) bumps
+// gen, resets status to spawning, and rotates token_hash to
+// newPlaintextToken's own hash -- and returns the resulting row. Used to
+// prove the gen check compares against the sandbox row's REAL current gen
+// rather than a hardcoded "1": a freshly created sandbox starts at gen 1
+// (createSandboxWithToken), so this bumps it to gen 2.
+func bumpSandboxGen(ctx context.Context, t *testing.T, r testRig, sessionID pgtype.UUID, newPlaintextToken string) sqlcgen.Sandbox {
+	t.Helper()
+	hash := sha256Hex(newPlaintextToken)
+	row, err := r.sandboxes.UpsertForSpawn(ctx, sqlcgen.UpsertSandboxForSpawnParams{
+		SessionID: sessionID,
+		TokenHash: &hash,
+	})
+	if err != nil {
+		t.Fatalf("bump sandbox gen: %v", err)
+	}
+	return row
+}
+
+// postScmCredentials posts the defaults every PRE-EXISTING test in this
+// file relies on: X-Sandbox-Gen "1" (matching a freshly created sandbox
+// row's own default gen, §3.2) and request body host "github.com"
+// (matching createSessionWithGitHubIdentity's own default repo host) --
+// this audit remediation's own two new checks (host-scoping, gen fencing)
+// must not silently change what those pre-existing tests were already
+// proving. Use postScmCredentialsFull directly for a test that needs a
+// non-default gen/host (or no X-Sandbox-Gen header at all).
 func postScmCredentials(t *testing.T, r testRig, sessionID string, bearer string) (int, scmCredResponse) {
 	t.Helper()
+	return postScmCredentialsFull(t, r, sessionID, bearer, "1", "github.com")
+}
+
+// postScmCredentialsFull is postScmCredentials' general-purpose form: gen
+// is sent as the X-Sandbox-Gen header verbatim, or omitted entirely when
+// gen == "" (matching a real caller that never sends the header at all,
+// not merely an empty one).
+func postScmCredentialsFull(t *testing.T, r testRig, sessionID, bearer, gen, host string) (int, scmCredResponse) {
+	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, r.server.URL+"/sessions/"+sessionID+"/scm-credentials",
-		strings.NewReader(`{"host":"github.com"}`))
+		strings.NewReader(fmt.Sprintf(`{"host":%q}`, host)))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if gen != "" {
+		req.Header.Set("X-Sandbox-Gen", gen)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -207,7 +282,14 @@ func TestScmCredentials_NoCreatedBy(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 
-	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb})
+	// Repos matches postScmCredentials' own default request host
+	// ("github.com") so this test exercises the created_by check it
+	// actually names, rather than incidentally tripping the audit
+	// remediation's own (unrelated) host-scoping check instead.
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -231,8 +313,11 @@ func TestScmCredentials_NoGitHubIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create user: %v", err)
 	}
+	// Repos matches postScmCredentials' own default request host -- see
+	// the identical comment in TestScmCredentials_NoCreatedBy above.
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID,
+		Repos: []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -322,8 +407,11 @@ func TestScmCredentials_NoStoredToken(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create identity: %v", err)
 	}
+	// Repos matches postScmCredentials' own default request host -- see the
+	// identical comment in TestScmCredentials_NoCreatedBy above.
 	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID,
+		Repos: []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
 	})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
@@ -333,5 +421,220 @@ func TestScmCredentials_NoStoredToken(t *testing.T) {
 	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
 	if status != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", status, http.StatusForbidden)
+	}
+}
+
+// --- Host scoping (audit remediation: security-crosscutting &
+// docs-completeness-vs-plan lenses, design decision 1) ---
+
+// TestScmCredentials_HostMismatch_Rejected proves a session whose repos
+// are all on ONE host (gitlab.example.com) is rejected (403) for a request
+// naming a DIFFERENT host (github.com, postScmCredentials' own default) --
+// §5.2 "scoped https+host only": the decrypted token must never be handed
+// back for a host the session's own repos don't actually use.
+func TestScmCredentials_HostMismatch_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentityAndRepos(ctx, t, rig, "gho_realGitHubAccessToken",
+		`[{"name":"other","url":"https://gitlab.example.com/foo/bar","branch":null}]`)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (requested host github.com is not among the session's own repo hosts)", status, http.StatusForbidden)
+	}
+}
+
+// TestScmCredentials_HostMatch_Succeeds proves a session whose repos ARE
+// on the requested host succeeds -- the positive counterpart to
+// TestScmCredentials_HostMismatch_Rejected, and also proves the match is
+// case-insensitive: the persisted repo URL's own host is mixed-case
+// ("GitHub.COM") while the requested host is lowercase ("github.com"),
+// per this batch's own design decision 1 ("matching ordinary HTTP
+// host-header comparison convention").
+func TestScmCredentials_HostMatch_Succeeds(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentityAndRepos(ctx, t, rig, "gho_realGitHubAccessToken",
+		`[{"name":"narvi","url":"https://GitHub.COM/khazaddev/narvi","branch":null}]`)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d (case-insensitive host match)", status, http.StatusOK)
+	}
+	if got.Password != "gho_realGitHubAccessToken" {
+		t.Errorf("Password = %q, want the real decrypted token", got.Password)
+	}
+}
+
+// TestScmCredentials_NoRepos_Rejected proves a session with NO repos at
+// all (an empty list, not merely a mismatched one) is rejected for any
+// requested host -- there is nothing to match against.
+func TestScmCredentials_NoRepos_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentityAndRepos(ctx, t, rig, "gho_x", `[]`)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (no repos to match against)", status, http.StatusForbidden)
+	}
+}
+
+// TestScmCredentials_MalformedReposJSON proves a real, corrupted
+// sessions.repos value (not a mocked failure) is a 500, not a 403 -- the
+// SAME "corrupt a real column directly via raw SQL" technique
+// TestScmCredentials_TamperedCiphertext already established in this file,
+// applied to sessionRepoHosts' own json.Unmarshal error path. sessions.
+// repos is already-trusted, already-persisted data by the time this
+// endpoint runs (see sessionRepoHosts' own doc comment), so corruption
+// here is a genuine server-side anomaly, not a caller-attributable
+// rejection -- it must never be silently folded into the 403 "no usable
+// credential" outcome class.
+func TestScmCredentials_MalformedReposJSON(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	if _, err := rig.pool.Exec(ctx,
+		`UPDATE sessions SET repos = '"not an array"'::jsonb WHERE id = $1`,
+		session.ID,
+	); err != nil {
+		t.Fatalf("corrupt sessions.repos: %v", err)
+	}
+
+	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d (malformed sessions.repos is a server-side anomaly, not a caller-attributable rejection)", status, http.StatusInternalServerError)
+	}
+}
+
+// --- Dead-sandbox check (audit remediation, design decision 2) ---
+
+// TestScmCredentials_DeadSandboxStatus proves a sandbox in a dead status
+// is rejected with 410, even with an otherwise-valid bearer token, gen,
+// and host -- mirrors internal/adapters/inbound/wshub/sandbox.go's own
+// precedent exactly (same status code, same "session stopped" message
+// convention). "Stale" (internal/domain/sandbox.StateStale, the domain's
+// third dead state) is deliberately NOT in this table: migrations/
+// 000006_sandboxes.up.sql's own sandbox_status Postgres ENUM never defines
+// a 'stale' value at all (confirmed directly against that migration
+// before writing this test, not assumed) -- it is a domain-only, computed
+// state that is never literally persisted to this column in production
+// either, matching internal/adapters/inbound/wshub's own sandbox_test.go
+// precedent exactly: despite ITS doc comment also naming all 3 dead
+// statuses, it too only ever exercises Failed against a real row, for the
+// identical reason.
+func TestScmCredentials_DeadSandboxStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status sqlcgen.SandboxStatus
+	}{
+		{"stopped", sqlcgen.SandboxStatusStopped},
+		{"failed", sqlcgen.SandboxStatusFailed},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+
+			session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+			createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+			moveSandboxStatus(ctx, t, rig, session.ID, tc.status)
+
+			status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+			if status != http.StatusGone {
+				t.Errorf("status = %d, want %d (dead sandbox status %s)", status, http.StatusGone, tc.status)
+			}
+		})
+	}
+}
+
+// TestScmCredentials_SuspectSandbox_NotDead proves a Suspect sandbox --
+// deliberately NOT in the dead-status deny-list -- still succeeds, exactly
+// like wshub's own "Suspect is deliberately not dead" precedent: a
+// sandbox merely suspected of having missed a heartbeat must still be
+// able to mint git credentials.
+func TestScmCredentials_SuspectSandbox_NotDead(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+	moveSandboxStatus(ctx, t, rig, session.ID, sqlcgen.SandboxStatusSuspect)
+
+	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want %d (Suspect is not a dead status)", status, http.StatusOK)
+	}
+}
+
+// --- Gen fencing (audit remediation, design decision 2) ---
+
+// TestScmCredentials_GenMismatch_Rejected proves a stale/wrong
+// X-Sandbox-Gen -> 403, mirroring wshub's own gen-mismatch reasoning
+// (§9.3 scenario #6).
+func TestScmCredentials_GenMismatch_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token") // gen 1
+
+	status, _ := postScmCredentialsFull(t, rig, session.ID.String(), "sandbox-bearer-token", "999", "github.com")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (gen mismatch)", status, http.StatusForbidden)
+	}
+}
+
+// TestScmCredentials_MissingGen_Rejected proves an ABSENT X-Sandbox-Gen
+// header -- not merely a mismatched one -- is rejected the SAME way (403):
+// there is nothing to compare against sandboxRow.Gen, so a missing header
+// fails identically to a wrong value rather than surfacing as some other,
+// distinguishable status.
+func TestScmCredentials_MissingGen_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, _ := postScmCredentialsFull(t, rig, session.ID.String(), "sandbox-bearer-token", "" /* no X-Sandbox-Gen header at all */, "github.com")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (missing X-Sandbox-Gen header)", status, http.StatusForbidden)
+	}
+}
+
+// TestScmCredentials_CorrectCurrentGen_Succeeds proves the gen check
+// compares against the sandbox row's REAL current gen, not a hardcoded
+// "1": bumps the sandbox to gen 2 via a real UpsertForSpawn respawn (the
+// SAME query production respawns use), then proves presenting gen "2"
+// succeeds.
+func TestScmCredentials_CorrectCurrentGen_Succeeds(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token") // gen 1
+	bumped := bumpSandboxGen(ctx, t, rig, session.ID, "respawned-bearer-token")
+
+	if bumped.Gen != 2 {
+		t.Fatalf("bumped.Gen = %d, want 2 (test setup assumption: UpsertForSpawn bumps an existing gen-1 row to gen 2)", bumped.Gen)
+	}
+
+	status, got := postScmCredentialsFull(t, rig, session.ID.String(), "respawned-bearer-token", fmt.Sprintf("%d", bumped.Gen), "github.com")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d (correct current gen)", status, http.StatusOK)
+	}
+	if got.Password != "gho_realGitHubAccessToken" {
+		t.Errorf("Password = %q, want the real decrypted token", got.Password)
 	}
 }

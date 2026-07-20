@@ -88,13 +88,30 @@
 //
 // # Honest gaps this package documents rather than papers over
 //
-// New's own sandboxID parameter is this Step's own invented value for the
-// X-Sandbox-ID header -- no Step yet wires a real provider-assigned
-// sandbox-instance id into the sandbox's own environment (see
-// internal/sandboxagent/boot.Config.SandboxID's own doc comment), matching
-// Step 13's NARVI_IMAGE_DIGEST gap exactly. Heartbeat.ConversationId was
-// always nil as of Step 16 (no OpenCode adapter existed yet); Step 17 adds
-// SetConversationID (bridge.go) so cmd/sandbox-agent's own commandHandler
-// can record a real OpenCode conversation id once StartTurn returns one,
-// which the heartbeat loop (run.go) now reports on every subsequent tick.
+// New's own sandboxID parameter is the value internal/sandboxagent/boot.
+// Config.SandboxID resolves (see its own doc comment for the full
+// priority order): the real, control-plane-assigned sandbox identity
+// (sandboxes.id) whenever a live SessionConfig is present -- populated via
+// SessionConfig.SandboxId, the same NARVI_SESSION_CONFIG channel every
+// other session-scoped value already travels on -- falling back to a
+// NARVI_SANDBOX_ID env var override or "" only in the dev/CI-with-no-live-
+// session case. A real production spawn therefore no longer sends an
+// always-empty X-Sandbox-ID header, closing what used to be a real,
+// production-blocking gap: internal/adapters/inbound/wshub/sandbox.go's
+// own handshake step 4 rejects an empty X-Sandbox-ID with a fatal 401, so
+// a sandbox booted on the OLD always-"" default could never complete its
+// own handshake at all.
+//
+// What remains an honest, NOT-this-batch's-job gap: internal/adapters/
+// inbound/wshub/sandbox.go's own step 4 verifies X-Sandbox-ID is merely
+// PRESENT (non-empty) -- it never compares the header's VALUE against
+// sandboxes.id server-side. The value sandbox-agent now sends is finally
+// the real one, not always empty; deeper server-side verification of that
+// value is a separate, deliberately unaddressed hardening step.
+//
+// Heartbeat.ConversationId was always nil as of Step 16 (no OpenCode
+// adapter existed yet); Step 17 adds SetConversationID (bridge.go) so
+// cmd/sandbox-agent's own commandHandler can record a real OpenCode
+// conversation id once StartTurn returns one, which the heartbeat loop
+// (run.go) now reports on every subsequent tick.
 package wsbridge

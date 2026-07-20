@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
 
@@ -58,6 +59,12 @@ func Spawn(
 		Path: "opencode",
 		Args: []string{"serve", "--port", strconv.Itoa(port), "--hostname", "127.0.0.1"},
 		Dir:  workDir,
+		// opencode serve is a separate coding-agent HTTP server with no
+		// legitimate use for NARVI_SESSION_CONFIG (the sandbox's own
+		// plaintext bearer token, among other things) -- excluding it here
+		// closes a real env leak while leaving everything else opencode
+		// might legitimately need (PATH, HOME, ...) untouched.
+		Env: supervisor.EnvWithout(boot.SessionConfigEnvVar),
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("opencodeproc: spawn opencode serve: %w", err)

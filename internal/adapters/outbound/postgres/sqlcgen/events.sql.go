@@ -13,14 +13,26 @@ import (
 
 const createEvent = `-- name: CreateEvent :one
 
-INSERT INTO events (session_id, type, payload) VALUES ($1, $2, $3)
-RETURNING id, session_id, type, payload, created_at
+INSERT INTO events (session_id, type, message_id, payload) VALUES ($1, $2, $3, $4)
+ON CONFLICT (session_id, message_id) DO UPDATE SET type = events.type
+RETURNING id, session_id, type, payload, created_at, message_id, (xmax = 0) AS inserted
 `
 
 type CreateEventParams struct {
 	SessionID pgtype.UUID `json:"session_id"`
 	Type      string      `json:"type"`
+	MessageID string      `json:"message_id"`
 	Payload   []byte      `json:"payload"`
+}
+
+type CreateEventRow struct {
+	ID        int64              `json:"id"`
+	SessionID pgtype.UUID        `json:"session_id"`
+	Type      string             `json:"type"`
+	Payload   []byte             `json:"payload"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	MessageID string             `json:"message_id"`
+	Inserted  bool               `json:"inserted"`
 }
 
 // Queries backing EventStore (§4.3, §6.1's append-only per-session event
@@ -30,21 +42,39 @@ type CreateEventParams struct {
 // 18+)") -- this is that Step, backing both the client WS hub's own
 // fetch_history/replay and the REST GET .../events endpoint (one
 // implementation, two callers).
-func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error) {
-	row := q.db.QueryRow(ctx, createEvent, arg.SessionID, arg.Type, arg.Payload)
-	var i Event
+// Upsert-on-(session_id, message_id) (§6.1: "receiver dedupes by
+// upsert-on-messageId") -- a resend of an already-seen messageId hits the
+// unique index (migrations/000019_events_message_id.up.sql) and this
+// DO UPDATE (a deliberate, self-referential no-op: type is set back to
+// its own current value) guarantees RETURNING always yields exactly one
+// row either way, so callers never need a separate "0 rows means
+// duplicate" branch. `(xmax = 0) AS inserted` is the standard Postgres
+// idiom for "was this row just inserted by THIS statement" (xmax is 0
+// only immediately after a fresh insert, non-zero after any update) --
+// callers use it to decide whether to (re-)broadcast this event to live
+// subscribers.
+func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (CreateEventRow, error) {
+	row := q.db.QueryRow(ctx, createEvent,
+		arg.SessionID,
+		arg.Type,
+		arg.MessageID,
+		arg.Payload,
+	)
+	var i CreateEventRow
 	err := row.Scan(
 		&i.ID,
 		&i.SessionID,
 		&i.Type,
 		&i.Payload,
 		&i.CreatedAt,
+		&i.MessageID,
+		&i.Inserted,
 	)
 	return i, err
 }
 
 const listEventsForSession = `-- name: ListEventsForSession :many
-SELECT id, session_id, type, payload, created_at FROM events
+SELECT id, session_id, type, payload, created_at, message_id FROM events
 WHERE session_id = $1 AND id > $2
 ORDER BY id ASC
 LIMIT $3
@@ -75,6 +105,7 @@ func (q *Queries) ListEventsForSession(ctx context.Context, arg ListEventsForSes
 			&i.Type,
 			&i.Payload,
 			&i.CreatedAt,
+			&i.MessageID,
 		); err != nil {
 			return nil, err
 		}

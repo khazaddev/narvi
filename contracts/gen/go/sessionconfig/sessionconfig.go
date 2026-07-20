@@ -25,6 +25,11 @@ type SessionConfig struct {
 	// mirror.
 	Repos []SessionConfigReposElem `json:"repos" yaml:"repos" mapstructure:"repos"`
 
+	// This sandbox instance's own stable identity (sandboxes.id), delivered to
+	// sandbox-agent so it can present itself correctly as the X-Sandbox-ID header on
+	// the sandbox WS handshake (§6.1).
+	SandboxId string `json:"sandboxId" yaml:"sandboxId" mapstructure:"sandboxId"`
+
 	// §5.2: sandbox tokens are hashed at rest control-plane-side; one per gen. This
 	// is the plaintext bearer value handed to the sandbox at spawn time.
 	SandboxToken string `json:"sandboxToken" yaml:"sandboxToken" mapstructure:"sandboxToken"`
@@ -130,6 +135,9 @@ func (j *SessionConfig) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["repos"]; raw != nil && !ok {
 		return fmt.Errorf("field repos in SessionConfig: required")
+	}
+	if _, ok := raw["sandboxId"]; raw != nil && !ok {
+		return fmt.Errorf("field sandboxId in SessionConfig: required")
 	}
 	if _, ok := raw["sandboxToken"]; raw != nil && !ok {
 		return fmt.Errorf("field sandboxToken in SessionConfig: required")

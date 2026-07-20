@@ -308,6 +308,98 @@ func TestDefaultTimeouts_Step21StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_OpenCodeTurnCompletionStandaloneFields proves the
+// audit-remediation (outbound-adapters lens, turn-completion batch)
+// standalone additions (OpenCodeSSEReconnectInterval, OpenCodeRequestTimeout)
+// ship with sane, non-zero defaults -- and that OpenCodeSSEReconnectInterval
+// is genuinely much shorter than SSEInactivityTimeout, the specific
+// property Adapter.runEventLoop's own reconnect-vs-fallback race fix
+// depends on. These fields have no ordering relationship with either
+// invariant chain, so this only checks their own values -- not Validate,
+// which never touches them.
+func TestDefaultTimeouts_OpenCodeTurnCompletionStandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.OpenCodeSSEReconnectInterval <= 0 {
+		t.Errorf("OpenCodeSSEReconnectInterval = %v, want > 0", to.OpenCodeSSEReconnectInterval)
+	}
+	if to.OpenCodeSSEReconnectInterval != 2*time.Second {
+		t.Errorf("OpenCodeSSEReconnectInterval = %v, want %v", to.OpenCodeSSEReconnectInterval, 2*time.Second)
+	}
+	if to.OpenCodeSSEReconnectInterval >= to.SSEInactivityTimeout {
+		t.Errorf("OpenCodeSSEReconnectInterval = %v, want strictly less than SSEInactivityTimeout = %v "+
+			"(reconnection must have a real chance to beat the per-turn fallback)",
+			to.OpenCodeSSEReconnectInterval, to.SSEInactivityTimeout)
+	}
+
+	if to.OpenCodeRequestTimeout <= 0 {
+		t.Errorf("OpenCodeRequestTimeout = %v, want > 0", to.OpenCodeRequestTimeout)
+	}
+	if to.OpenCodeRequestTimeout != 30*time.Second {
+		t.Errorf("OpenCodeRequestTimeout = %v, want %v", to.OpenCodeRequestTimeout, 30*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (these fields must not disturb either invariant chain)", err)
+	}
+}
+
+// TestDefaultTimeouts_InboundHygieneStandaloneFields proves the
+// audit-remediation (inbound-hygiene lens, WS/REST hygiene batch)
+// standalone additions (ClientWSPingInterval, ClientFetchHistoryMinInterval)
+// ship with sane, non-zero defaults matching their own documented values.
+// These fields have no ordering relationship with either invariant chain,
+// so this only checks their own values -- not Validate, which never
+// touches them.
+func TestDefaultTimeouts_InboundHygieneStandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ClientWSPingInterval <= 0 {
+		t.Errorf("ClientWSPingInterval = %v, want > 0", to.ClientWSPingInterval)
+	}
+	if to.ClientWSPingInterval != 30*time.Second {
+		t.Errorf("ClientWSPingInterval = %v, want %v (matches SandboxWSHeartbeatInterval's own cadence, §6.1)", to.ClientWSPingInterval, 30*time.Second)
+	}
+
+	if to.ClientFetchHistoryMinInterval <= 0 {
+		t.Errorf("ClientFetchHistoryMinInterval = %v, want > 0", to.ClientFetchHistoryMinInterval)
+	}
+	if to.ClientFetchHistoryMinInterval != 250*time.Millisecond {
+		t.Errorf("ClientFetchHistoryMinInterval = %v, want %v", to.ClientFetchHistoryMinInterval, 250*time.Millisecond)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (these fields must not disturb either invariant chain)", err)
+	}
+}
+
+// TestDefaultTimeouts_ExpiredCredentialCleanupStandaloneField proves the
+// audit-remediation (outbound-adapters lens, config/platform-hardening
+// batch) standalone addition (ExpiredCredentialCleanupInterval) ships with
+// a sane, non-zero default matching its own documented value. This field
+// has no ordering relationship with either invariant chain, so this only
+// checks its own value -- not Validate, which never touches it.
+func TestDefaultTimeouts_ExpiredCredentialCleanupStandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ExpiredCredentialCleanupInterval <= 0 {
+		t.Errorf("ExpiredCredentialCleanupInterval = %v, want > 0", to.ExpiredCredentialCleanupInterval)
+	}
+	if to.ExpiredCredentialCleanupInterval != time.Hour {
+		t.Errorf("ExpiredCredentialCleanupInterval = %v, want %v", to.ExpiredCredentialCleanupInterval, time.Hour)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
