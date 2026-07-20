@@ -448,6 +448,39 @@ type Timeouts struct {
 	// exactly when a turn already looks stuck and must never itself be
 	// able to hang forever. Not specified in the plan; chosen as 30s.
 	OpenCodeRequestTimeout time.Duration
+
+	// --- Audit-remediation (inbound-hygiene lens, WS/REST hygiene batch)
+	// standalone additions: no ordering relationship with either
+	// invariant chain above (or with any prior Step's standalone
+	// additions), so -- per those additions' own precedent -- plain
+	// fields with sensible defaults, not wired into a fake invariant
+	// link.
+
+	// ClientWSPingInterval is how often internal/adapters/inbound/wshub's
+	// client-WS handler (client.go, NewClientHandler) sends a real,
+	// server-initiated websocket ping to a subscribed browser connection
+	// and waits (bounded by this SAME duration) for the peer's pong --
+	// the genuine liveness check for a client connection that only ever
+	// passively watches live broadcasts and so never itself sends an
+	// application frame. A Ping that goes unanswered proves the
+	// connection is genuinely unresponsive, closed with custom code 4003
+	// ("idle timeout"). Not specified in the plan; chosen as 30s,
+	// matching SandboxWSHeartbeatInterval's own existing cadence
+	// precedent (§6.1) for the analogous sandbox-side mechanism.
+	ClientWSPingInterval time.Duration
+
+	// ClientFetchHistoryMinInterval is the minimum time internal/adapters/
+	// inbound/wshub's client-WS read loop (client.go, readClientLoop)
+	// requires between two successive fetch_history requests it actually
+	// processes on one connection -- each processed request runs a real
+	// Postgres query (events.ListForSession), so this bounds how often a
+	// single connection can trigger one, independent of the connection's
+	// own liveness. A fetch_history frame arriving before this interval
+	// has elapsed since the last one was processed is logged and dropped;
+	// the connection stays open. Not specified in the plan; chosen as
+	// 250ms -- generous for any real pagination UI (up to 4 requests/sec)
+	// while preventing a tight-loop hammer.
+	ClientFetchHistoryMinInterval time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -515,6 +548,9 @@ func DefaultTimeouts() Timeouts {
 
 		OpenCodeSSEReconnectInterval: 2 * time.Second,  // not specified; chosen, deliberately short relative to SSEInactivityTimeout
 		OpenCodeRequestTimeout:       30 * time.Second, // not specified; chosen, bounds every doJSON call except the persistent SSE connection
+
+		ClientWSPingInterval:          30 * time.Second,       // not specified; chosen, matches SandboxWSHeartbeatInterval's own 30s cadence (§6.1)
+		ClientFetchHistoryMinInterval: 250 * time.Millisecond, // not specified; chosen, generous for real pagination while blocking a tight-loop hammer
 	}
 }
 
