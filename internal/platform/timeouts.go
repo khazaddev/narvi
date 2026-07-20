@@ -415,6 +415,39 @@ type Timeouts struct {
 	// context unbounded. Not specified in the plan; chosen as 30s,
 	// generous for a single GitHub REST API POST.
 	PRCreateTimeout time.Duration
+
+	// --- Audit-remediation (outbound-adapters lens, turn-completion
+	// batch) standalone additions: no ordering relationship with either
+	// invariant chain above (or with any prior Step's standalone
+	// additions), so -- per those additions' own precedent -- plain
+	// fields with sensible defaults, not wired into a fake invariant
+	// link.
+
+	// OpenCodeSSEReconnectInterval is how long
+	// internal/adapters/outbound/opencode.Adapter.runEventLoop waits
+	// before retrying a dropped persistent GET /event connection.
+	// Deliberately much shorter than SSEInactivityTimeout so a dropped
+	// connection has a real chance to reconnect well before any per-turn
+	// SSE-inactivity fallback finalizes a turn based on stale silence --
+	// fixes a confirmed audit finding where reusing SSEInactivityTimeout
+	// itself as the reconnect delay made reconnection structurally
+	// unable to ever win that race. Not specified in the plan; chosen as
+	// 2s.
+	OpenCodeSSEReconnectInterval time.Duration
+
+	// OpenCodeRequestTimeout bounds every internal/adapters/outbound/
+	// opencode.Adapter.doJSON-routed HTTP call (session resolution, model
+	// catalog, prompt_async, abort, and the final-message-fetch fallback)
+	// via a per-request context.WithTimeout wrap -- deliberately NOT
+	// applied to the adapter's own persistent GET /event connection
+	// (connectAndConsume), which is intentionally long-lived for the
+	// adapter's whole lifetime. Generous enough for a legitimately slow
+	// catalog/message-list response, bounded so a hung TCP connection can
+	// never wedge a turn indefinitely -- most critically for the
+	// SSE-inactivity fallback's own final-message fetch, which is called
+	// exactly when a turn already looks stuck and must never itself be
+	// able to hang forever. Not specified in the plan; chosen as 30s.
+	OpenCodeRequestTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -479,6 +512,9 @@ func DefaultTimeouts() Timeouts {
 		SandboxCommandSendTimeout: 10 * time.Second, // not specified; chosen
 		ScmCredentialTTL:          15 * time.Minute, // not specified; chosen (comfortably exceeds a single push + the 5-min sandbox-side cache buffer)
 		PRCreateTimeout:           30 * time.Second, // not specified; chosen (generous for a single GitHub REST API POST)
+
+		OpenCodeSSEReconnectInterval: 2 * time.Second,  // not specified; chosen, deliberately short relative to SSEInactivityTimeout
+		OpenCodeRequestTimeout:       30 * time.Second, // not specified; chosen, bounds every doJSON call except the persistent SSE connection
 	}
 }
 

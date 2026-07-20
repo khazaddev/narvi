@@ -308,6 +308,44 @@ func TestDefaultTimeouts_Step21StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_OpenCodeTurnCompletionStandaloneFields proves the
+// audit-remediation (outbound-adapters lens, turn-completion batch)
+// standalone additions (OpenCodeSSEReconnectInterval, OpenCodeRequestTimeout)
+// ship with sane, non-zero defaults -- and that OpenCodeSSEReconnectInterval
+// is genuinely much shorter than SSEInactivityTimeout, the specific
+// property Adapter.runEventLoop's own reconnect-vs-fallback race fix
+// depends on. These fields have no ordering relationship with either
+// invariant chain, so this only checks their own values -- not Validate,
+// which never touches them.
+func TestDefaultTimeouts_OpenCodeTurnCompletionStandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.OpenCodeSSEReconnectInterval <= 0 {
+		t.Errorf("OpenCodeSSEReconnectInterval = %v, want > 0", to.OpenCodeSSEReconnectInterval)
+	}
+	if to.OpenCodeSSEReconnectInterval != 2*time.Second {
+		t.Errorf("OpenCodeSSEReconnectInterval = %v, want %v", to.OpenCodeSSEReconnectInterval, 2*time.Second)
+	}
+	if to.OpenCodeSSEReconnectInterval >= to.SSEInactivityTimeout {
+		t.Errorf("OpenCodeSSEReconnectInterval = %v, want strictly less than SSEInactivityTimeout = %v "+
+			"(reconnection must have a real chance to beat the per-turn fallback)",
+			to.OpenCodeSSEReconnectInterval, to.SSEInactivityTimeout)
+	}
+
+	if to.OpenCodeRequestTimeout <= 0 {
+		t.Errorf("OpenCodeRequestTimeout = %v, want > 0", to.OpenCodeRequestTimeout)
+	}
+	if to.OpenCodeRequestTimeout != 30*time.Second {
+		t.Errorf("OpenCodeRequestTimeout = %v, want %v", to.OpenCodeRequestTimeout, 30*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (these fields must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

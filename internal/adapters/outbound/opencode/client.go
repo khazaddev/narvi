@@ -27,7 +27,27 @@ const maxResponseBodySize = 4 << 20 // 4 MiB
 // contract of its own (§4.2's interface has no such requirement), so there
 // is nothing this Step's own scope asks this adapter to classify errors
 // into.
+//
+// Wraps ctx in a per-request context.WithTimeout(a.requestTimeout) before
+// building the request (Finding 3) — every doJSON-routed caller
+// (resolveSession, resolveModel, postPromptAsync, postAbort,
+// fetchFinalMessages) is protected uniformly this way, without each call
+// site needing to remember to wrap its own context. Most critically,
+// fetchFinalMessages is called ONLY from finalizeByFallback — i.e. exactly
+// when the SSE-inactivity fallback has already concluded something is
+// wrong and needs a definitive answer; without this bound, a hung TCP
+// connection on THAT call specifically could wedge an already-stuck turn
+// forever. Deliberately a per-request wrap here, NOT a client-wide
+// a.httpClient.Timeout: connectAndConsume's own GET /event call (sse.go)
+// uses this SAME a.httpClient for the intentionally long-lived persistent
+// SSE stream, which does NOT go through doJSON and so is correctly left
+// unaffected by this timeout. context.WithTimeout already takes the
+// tighter of a.requestTimeout and whatever deadline ctx might already
+// carry, with no special-casing needed for that interaction.
 func (a *Adapter) doJSON(ctx context.Context, method, path string, reqBody, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, a.requestTimeout)
+	defer cancel()
+
 	var bodyReader io.Reader
 	if reqBody != nil {
 		encoded, err := json.Marshal(reqBody)

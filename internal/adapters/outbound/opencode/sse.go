@@ -29,28 +29,37 @@ const sseDataPrefix = "data: "
 // StartTurn always registers a turnState BEFORE POSTing prompt_async (see
 // adapter.go), so no live turn's own events can ever race this.
 //
-// Reconnect backoff reuses a.sseInactivityTimeout (already available, no
-// dedicated new value) rather than a fresh platform.Timeouts field or a
-// forbidden time.Duration unit literal (§5.4/§11, enforced by
-// tools/lint/narvichecks/notimeliteral) — this connection is to a
-// same-machine, sandbox-agent-managed process (internal/sandboxagent/
-// opencodeproc), so a drop is expected to be rare/fatal-ish rather than
-// something needing a tuned backoff curve of its own.
+// Reconnect delay uses a.reconnectInterval (platform.Timeouts.
+// OpenCodeSSEReconnectInterval) — a DEDICATED, deliberately short field
+// (Finding 2), NOT a.sseInactivityTimeout: the two used to be the same
+// value, which meant a dropped connection didn't even START reconnecting
+// until waitForTurn's own per-turn fallback had already had its own full
+// window to fire, making reconnection structurally unable to ever win that
+// race. a.reconnectInterval is tuned independently, short enough that a
+// genuine reconnect has a real chance to land well before
+// a.sseInactivityTimeout elapses.
+//
+// Records every GENUINE disconnect via a.recordDisconnect, BEFORE the
+// reconnect-delay wait below — Finding 1/2's own liveness disambiguation
+// (Adapter.shouldFinalizeByFallback) depends on this reflecting the exact
+// moment each outage STARTED, not when reconnection later succeeds.
+// Deliberately guarded by the same ctx.Err() == nil check as the warning
+// log: a connectAndConsume error that coincides with ctx already being
+// canceled (Adapter.Close, or the process shutting down) is an ordinary,
+// expected shutdown, not a genuine outage worth recording.
 func (a *Adapter) runEventLoop(ctx context.Context) error {
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		if err := a.connectAndConsume(ctx); err != nil && ctx.Err() == nil {
-			// A failure that coincides with ctx already being canceled
-			// (Adapter.Close, or the process shutting down) is an
-			// ordinary, expected disconnect -- not worth a warning.
+			a.recordDisconnect()
 			slog.Warn("opencode: event stream connection lost, reconnecting", "error", err)
 		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(a.sseInactivityTimeout):
+		case <-time.After(a.reconnectInterval):
 		}
 	}
 }
@@ -94,6 +103,14 @@ func (a *Adapter) connectAndConsume(ctx context.Context) error {
 // bad frame: a single corrupt/unexpected SSE line from OpenCode must not
 // take down every other in-flight turn sharing this one persistent
 // connection.
+//
+// Deliberately does NOT touch any whole-connection-level liveness signal
+// here (Finding 1/2's own disambiguation moved off of that approach: see
+// runEventLoop's own recordDisconnect call and Adapter.shouldFinalizeByFallback's
+// own doc comment for why a point-in-time "is the stream fresh right now"
+// signal — which a bare reconnect handshake line would immediately refresh
+// — cannot distinguish a turn whose own outcome is actually ready from one
+// that merely shares a just-reconnected connection).
 func (a *Adapter) processSSELine(line string) {
 	line = strings.TrimRight(line, "\r\n")
 	if line == "" {
