@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +12,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -22,6 +24,25 @@ import (
 // failure (malformed JSON) is 400. repos' own schema-level minItems:1 is
 // not enforced by Go's plain json.Unmarshal, so it is checked explicitly
 // here -- 400 on an empty list.
+//
+// Each repo's own Name/Url/Branch is then validated via
+// internal/domain/reposource's exported, plain-string validators -- the
+// SAME package/functions internal/sandboxagent/gitclone's own
+// validateRepoSpec already calls at actual git-invocation time. This is
+// the trust-boundary half of defense in depth: without it, a malformed
+// repo spec sat in Postgres past a 201 and only surfaced as a confusing,
+// delayed spawn failure deep inside the sandbox agent. Validated here, in
+// order, stopping at the first failure (matching validateRepoSpec's own
+// stop-at-first-failure precedent): Name (it later reaches
+// filepath.Join(workspaceDir, repo.Name) in gitclone, so an unvalidated
+// Name is exactly as path-traversal-shaped a risk as an unvalidated Url/
+// Branch), then Url, then Branch -- but ONLY when Branch is non-nil (nil
+// means "use the repo's own default branch", exactly gitclone's own
+// precedent for this identical nullable field). This runs entirely
+// BEFORE pool.Begin below, so a rejected repo spec never reaches Postgres
+// at all. gitclone's own validation at the deep git-invocation site is
+// left completely unchanged -- sandbox-agent must never trust what it
+// receives, even from a layer that validates first.
 //
 // Step 21 ("e2e happy path") update: req.Repos is now actually PERSISTED
 // (marshaled to the sessions.repos JSONB column -- design decision 1,
@@ -66,6 +87,28 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 		if len(req.Repos) < 1 {
 			writeError(w, http.StatusBadRequest, "repos must be non-empty")
 			return
+		}
+
+		// Validate every repo's Name/Url/Branch BEFORE any Postgres write
+		// (pool.Begin below) -- see this func's own doc comment above.
+		// Stops at the first failure, in order, matching gitclone's own
+		// validateRepoSpec precedent exactly; does not attempt to
+		// collect/report every failure across every repo at once.
+		for i, repo := range req.Repos {
+			if err := reposource.ValidateRepoName(repo.Name); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err))
+				return
+			}
+			if err := reposource.ValidateRepoURL(repo.Url); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err))
+				return
+			}
+			if repo.Branch != nil {
+				if err := reposource.ValidateBranch(*repo.Branch); err != nil {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err))
+					return
+				}
+			}
 		}
 
 		reposJSON, err := json.Marshal(req.Repos)
