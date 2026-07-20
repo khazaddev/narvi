@@ -74,9 +74,16 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 //     only when no upstream correlation id exists").
 //   - Gen: the sandbox row's own just-bumped gen.
 //   - Repos: read back from sessions.repos.
+//   - SandboxId: sandboxID, the caller's already-known sandboxes.id
+//     (row.ID.String() at the one production call site, tryPlanSpawn) --
+//     this sandbox's own stable, real identity, closing the env-leak
+//     remediation batch's other honest gap: the ONLY channel into the
+//     sandbox's own environment (NARVI_SESSION_CONFIG) is now how
+//     sandbox-agent learns its own X-Sandbox-ID for the sandbox WS
+//     handshake (§6.1), instead of always defaulting to "".
 //   - SandboxToken: the freshly minted PLAINTEXT token (never logged).
 //   - SessionId: the session's own id string.
-func (a *Actor) assembleSessionConfig(sessionRow sqlcgen.Session, gen int, plaintextToken string) (sessionconfig.SessionConfig, error) {
+func (a *Actor) assembleSessionConfig(sessionRow sqlcgen.Session, gen int, plaintextToken, sandboxID string) (sessionconfig.SessionConfig, error) {
 	wsBase, err := publicWsBaseURL(a.publicBaseURL)
 	if err != nil {
 		return sessionconfig.SessionConfig{}, err
@@ -96,6 +103,7 @@ func (a *Actor) assembleSessionConfig(sessionRow sqlcgen.Session, gen int, plain
 		CorrelationId:     nil,
 		Gen:               gen,
 		Repos:             repos,
+		SandboxId:         sandboxID,
 		SandboxToken:      plaintextToken,
 		SessionId:         sessionID,
 	}, nil

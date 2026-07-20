@@ -23,6 +23,13 @@ import (
 // newCompiler) reused across fixtures that need a sessionId.
 const testSessionID = "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a"
 
+// testSandboxID is a syntactically valid UUID, distinct from testSessionID,
+// reused across fixtures that need a sandboxId (SessionConfig's own
+// "format": "uuid" constraint validates the VALUE, not just key presence --
+// an empty string fails format validation even though the required-key
+// check alone would pass).
+const testSandboxID = "9b1a6b1a-4b1a-9b1a-6b1a-5b1c1e2e6b1a"
+
 // newCompiler returns a compiler with format assertions turned on
 // (uuid/date-time/email/uri), so "format" isn't just documentation here — a
 // malformed value in one of those fields actually fails validation.

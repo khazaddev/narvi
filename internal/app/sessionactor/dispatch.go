@@ -437,7 +437,7 @@ func (a *Actor) tryPlanSpawn(
 		return nil, err
 	}
 
-	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token)
+	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, row.ID.String())
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}

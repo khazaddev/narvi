@@ -385,6 +385,23 @@ func (h *commandHandler) pushOneRepo(repoSpec sandboxws.PushReposElem) (string, 
 		// ambiguous to git's own argument parser.
 		Args:   []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "push", "--", remote, repoSpec.Branch},
 		Stderr: &stderr,
+		// Env is DELIBERATELY left at its zero value (nil, "inherit this
+		// process's own environment") -- a reviewed choice, not an
+		// oversight. git's own credential.helper mechanism re-execs THIS
+		// SAME sandbox-agent binary as `<binary> credential-helper get`,
+		// as git's OWN child process, inheriting whatever env git itself
+		// received here -- i.e. exactly what this Spec.Env carries,
+		// nothing more. runCredentialHelper's own boot.Load() call reads
+		// NARVI_SESSION_CONFIG via os.Getenv and fails outright if it is
+		// absent (see its own "nothing to fetch credentials for" error),
+		// so stripping it here would BREAK git authentication for every
+		// push -- a real functional regression, not a hardening win. A
+		// hand-built allowlist would also risk silently omitting something
+		// the real `git` binary or its transport (http/ssh) legitimately
+		// needs (PATH, HOME, an ssh-agent socket, ...) that isn't yet
+		// enumerated anywhere in this codebase. See gitclone.cloneOne's own
+		// identical comment for the clone-side counterpart of this exact
+		// reasoning.
 	})
 	if err != nil {
 		return "", fmt.Errorf("spawn git push for %s: %w", repoSpec.Name, err)
@@ -424,6 +441,14 @@ func (h *commandHandler) headSHA(dir string) (string, error) {
 		Path:   "git",
 		Args:   []string{"-C", dir, "rev-parse", "HEAD"},
 		Stdout: &stdout,
+		// Unlike pushOneRepo's own git push Spawn call just above (which
+		// deliberately keeps full env inheritance -- see its own comment),
+		// this is a purely local, no-network, no-credential-helper
+		// plumbing command: no `-c credential.helper=...` flag is ever set
+		// for it, so it has no structural need for NARVI_SESSION_CONFIG
+		// (the sandbox's own plaintext bearer token) at all. Tightened for
+		// defense in depth.
+		Env: supervisor.EnvWithout(boot.SessionConfigEnvVar),
 	})
 	if err != nil {
 		return "", fmt.Errorf("spawn git rev-parse HEAD: %w", err)
@@ -590,7 +615,8 @@ func run() error {
 	// bridge/handler are nil exactly when cfg.SessionConfig is nil --
 	// everything below that branches on "bridge != nil" preserves today's
 	// original no-bridge behavior unchanged in that case. sandboxID is
-	// Step 16's own HONEST-GAP value (Config.SandboxID's own doc comment).
+	// boot.Load()'s own resolveSandboxID value -- see Config.SandboxID's
+	// own doc comment for where it really comes from now.
 	//
 	// handler is constructed with adapter already set, passed to
 	// wsbridge.New as the CommandHandler interface value, THEN gets

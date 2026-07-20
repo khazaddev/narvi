@@ -60,7 +60,15 @@ func RunBoot(
 			return fmt.Errorf("boot: load services.yml for %s: %w", repo.Name, err)
 		}
 
-		if err := services.Run(ctx, sup, repoDir, manifest, reporter, readinessTimeout, readinessPollInterval); err != nil {
+		// supervisor.EnvWithout(SessionConfigEnvVar): a repo's own
+		// services.yml command has no more legitimate need to see the
+		// sandbox's own plaintext bearer token than its setup.sh/start.sh
+		// sibling does (runRepoHooks' own runHook call, same reasoning) --
+		// see services.Run's own doc comment for why this package computes
+		// the exclusion itself rather than services.Run importing this
+		// package back (which would create an import cycle, since this
+		// package already imports services).
+		if err := services.Run(ctx, sup, repoDir, manifest, supervisor.EnvWithout(SessionConfigEnvVar), reporter, readinessTimeout, readinessPollInterval); err != nil {
 			return fmt.Errorf("boot: services.yml supervision for %s failed: %w", repo.Name, err)
 		}
 	}

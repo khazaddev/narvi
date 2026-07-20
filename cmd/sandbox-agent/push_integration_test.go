@@ -340,6 +340,7 @@ func runSandboxAgent(t *testing.T, binPath, gitServerURL, workspaceDir string, f
 		"correlationId": null,
 		"gen": 1,
 		"repos": [{"name": "widgets", "url": %q, "branch": null}],
+		"sandboxId": "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a",
 		"sandboxToken": "test-sandbox-token",
 		"sessionId": %q
 	}`, fcp.wsURL(), gitServerURL+"/repo.git", fcp.sessionID)
