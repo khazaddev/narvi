@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -419,9 +420,18 @@ func checkAnyOrgMembership(ctx context.Context, client *http.Client, apiBaseURL,
 // special-case 302 differently from 404: either way, the answer to "is
 // this user a member" is no from this endpoint's own point of view for the
 // one case this function is ever used for.
+//
+// org and username are both escaped via url.PathEscape before being
+// concatenated into the request path: org comes from server-side
+// configured allowlist orgs (trusted), but username comes from GitHub's
+// own OAuth /user response (githubUser.Login) -- attested by GitHub but
+// never independently validated by this codebase's own character-set
+// rules, so relying on an external provider's own username policy as an
+// implicit security boundary against path injection would be fragile
+// defense-in-depth to skip.
 func checkOrgMembership(ctx context.Context, client *http.Client, apiBaseURL, org, username string) bool {
-	url := apiBaseURL + "/orgs/" + org + "/members/" + username
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	reqURL := apiBaseURL + "/orgs/" + url.PathEscape(org) + "/members/" + url.PathEscape(username)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return false
 	}
