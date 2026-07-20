@@ -120,12 +120,15 @@ func TestLoad(t *testing.T) {
 
 // TestLoadMakeDevEnv proves config.Load() succeeds when called with
 // exactly the env vars the Makefile's own `dev` target sets (including its
-// new NARVI_STAGE=development line, added alongside the pre-existing
+// NARVI_STAGE=development line, added alongside the pre-existing
 // NARVI_DATABASE_URL/NARVI_HMAC_* lines) plus this codebase's own other
-// required vars (GitHub OAuth, Modal, token encryption key, allowlist --
-// not yet exported by the Makefile's own dev target, a separate, already-
-// tracked gap outside this batch's scope) -- i.e. `make dev`'s NARVI_STAGE
-// fix keeps Load() passing exactly as intended.
+// required vars, supplied here via setRequiredEnv's own generic
+// placeholders rather than the Makefile's real literal values --
+// TestLoadMakefileDevTargetValues below is the one that asserts against the
+// Makefile's own complete, real literal env-var set (GitHub OAuth, Modal,
+// token encryption key, allowlist all included, since a later batch closed
+// the gap this comment used to describe); this test's own narrower job is
+// just confirming NARVI_STAGE itself keeps Load() passing.
 func TestLoadMakeDevEnv(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("NARVI_STAGE", "development")
@@ -638,9 +641,9 @@ func TestLoadInitialAdminEmails(t *testing.T) {
 // again": it sets EXACTLY the Makefile's own `dev:` target env vars (every
 // one of them, verbatim -- not setRequiredEnv's own arbitrary test dummy
 // values) and asserts Load() succeeds. Before this batch, the Makefile's
-// dev target only ever exported 4 of the ~11 vars Load requires
+// dev target only ever exported 4 of the ~12 vars Load requires
 // (NARVI_DATABASE_URL + the 3 HMAC secrets), so `go run ./cmd/control-plane
-// serve` invoked via `make dev` failed fast at Load() with 7 distinct
+// serve` invoked via `make dev` failed fast at Load() with several distinct
 // *platform.MissingRequiredEnvError/*platform.EmptyAllowlistError values --
 // this test fails the exact same way if the Makefile ever regresses back to
 // that state (or if any one of these dev-only placeholder values stops
@@ -651,6 +654,7 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	t.Setenv("NARVI_HMAC_SANDBOX_SECRET", "dev-only-insecure-sandbox-secret")
 	t.Setenv("NARVI_HMAC_BOTS_SECRET", "dev-only-insecure-bots-secret")
 	t.Setenv("NARVI_HMAC_WEBHOOK_SECRET", "dev-only-insecure-webhook-secret")
+	t.Setenv("NARVI_STAGE", "development")
 	t.Setenv("NARVI_GITHUB_CLIENT_ID", "dev-github-client-id-placeholder")
 	t.Setenv("NARVI_GITHUB_CLIENT_SECRET", "dev-github-client-secret-placeholder")
 	t.Setenv("NARVI_PUBLIC_BASE_URL", "http://localhost:8080")
@@ -662,7 +666,7 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	// matching the Makefile's dev target exactly (it never sets
 	// NARVI_ALLOWED_EMAIL_DOMAINS, NARVI_ALLOWED_EMAILS,
 	// NARVI_INITIAL_ADMIN_EMAILS, NARVI_MODAL_EGRESS_PROXY_URL,
-	// NARVI_HTTP_ADDR, NARVI_LOG_LEVEL, or NARVI_STAGE).
+	// NARVI_HTTP_ADDR, or NARVI_LOG_LEVEL).
 
 	cfg, err := platform.Load()
 	if err != nil {
