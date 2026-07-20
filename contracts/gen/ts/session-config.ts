@@ -12,6 +12,10 @@
 export interface SessionConfig {
   sessionId: string;
   /**
+   * This sandbox instance's own stable identity (sandboxes.id), delivered to sandbox-agent so it can present itself correctly as the X-Sandbox-ID header on the sandbox WS handshake (§6.1).
+   */
+  sandboxId: string;
+  /**
    * Spawn generation (§3.2 fencing).
    */
   gen: number;

@@ -19,6 +19,7 @@ func TestSessionConfigRoundTrip(t *testing.T) {
 		roundTrip(t, sch, sessionconfig.SessionConfig{
 			SessionId:         testSessionID,
 			Gen:               1,
+			SandboxId:         testSandboxID,
 			SandboxToken:      "sandbox-token-plaintext",
 			BootMode:          sessionconfig.SessionConfigBootModeFresh,
 			ControlPlaneWsUrl: "wss://cp.narvi.dev/sessions/" + testSessionID + "/ws?type=sandbox",
@@ -36,6 +37,7 @@ func TestSessionConfigRoundTrip(t *testing.T) {
 		roundTrip(t, sch, sessionconfig.SessionConfig{
 			SessionId:         testSessionID,
 			Gen:               2,
+			SandboxId:         testSandboxID,
 			SandboxToken:      "sandbox-token-plaintext",
 			BootMode:          sessionconfig.SessionConfigBootModeSnapshotRestore,
 			ControlPlaneWsUrl: "wss://cp.narvi.dev/sessions/" + testSessionID + "/ws?type=sandbox",

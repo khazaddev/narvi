@@ -146,6 +146,22 @@ func cloneOne(
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: "git",
 		Args: args,
+		// Env is DELIBERATELY left at its zero value (nil, "inherit this
+		// process's own environment") -- a reviewed choice, not an
+		// oversight. git's own credential.helper mechanism (credHelperArg,
+		// configured above via CredHelperGitArg) re-execs THIS SAME
+		// sandbox-agent binary as `<binary> credential-helper get`, as
+		// git's OWN child process, inheriting whatever env git itself
+		// received here -- i.e. exactly what this Spec.Env carries,
+		// nothing more. cmd/sandbox-agent's own runCredentialHelper calls
+		// boot.Load(), which reads NARVI_SESSION_CONFIG via os.Getenv and
+		// fails outright ("nothing to fetch credentials for") if it is
+		// absent, so stripping it here would BREAK git authentication for
+		// every private repo clone -- a real functional regression, not a
+		// hardening win. A hand-built allowlist would also risk silently
+		// omitting something the real `git` binary or its transport
+		// (http/ssh) legitimately needs (PATH, HOME, an ssh-agent socket,
+		// ...) that isn't yet enumerated anywhere in this codebase.
 	})
 	if err != nil {
 		return fmt.Errorf("spawn git clone for %s: %w", repo.Name, err)

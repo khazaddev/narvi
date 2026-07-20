@@ -37,6 +37,7 @@ func testSessionConfigWithGen(gen int) sessionconfig.SessionConfig {
 	return sessionconfig.SessionConfig{
 		SessionId:         "sess-1",
 		Gen:               gen,
+		SandboxId:         "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a",
 		SandboxToken:      "sandbox-token-plaintext",
 		BootMode:          sessionconfig.SessionConfigBootModeFresh,
 		ControlPlaneWsUrl: "wss://cp.narvi.dev/sessions/sess-1/ws?type=sandbox",
@@ -259,7 +260,7 @@ func TestProvider_CreateSandbox_SessionConfigTravelsAsOneDocument(t *testing.T) 
 	// never spread across top-level fields: exactly {gen, image,
 	// sessionConfig} at the top level, and none of SessionConfig's own
 	// field names leaking to the top level.
-	for _, forbidden := range []string{"sessionId", "bootMode", "sandboxToken", "controlPlaneWsUrl", "repos", "correlationId"} {
+	for _, forbidden := range []string{"sessionId", "bootMode", "sandboxToken", "controlPlaneWsUrl", "repos", "correlationId", "sandboxId"} {
 		if _, ok := gotBody[forbidden]; ok {
 			t.Errorf("request body has top-level key %q — SESSION_CONFIG must travel as one nested document, not spread fragments", forbidden)
 		}

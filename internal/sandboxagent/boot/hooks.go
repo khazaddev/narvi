@@ -134,6 +134,11 @@ func runHook(ctx context.Context, sup *supervisor.Supervisor, scriptPath, dir st
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: scriptPath,
 		Dir:  dir,
+		// A repo's own setup.sh/start.sh comes from the SESSION'S OWN
+		// REPO -- it has no legitimate need to see the sandbox's own
+		// plaintext bearer token (NARVI_SESSION_CONFIG) either, so it is
+		// excluded here exactly like opencodeproc.Spawn's own call.
+		Env: supervisor.EnvWithout(SessionConfigEnvVar),
 	})
 	if err != nil {
 		return fmt.Errorf("spawn %s: %w", scriptPath, err)

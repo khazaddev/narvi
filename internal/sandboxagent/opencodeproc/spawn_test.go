@@ -3,6 +3,8 @@ package opencodeproc_test
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -98,5 +100,62 @@ func TestSpawn_BadBinaryPath(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Errorf("Spawn() took %s to fail, want a fast, bounded failure (LookPath fails immediately)", elapsed)
+	}
+}
+
+// TestSpawn_EnvExcludesSessionConfig proves the real regression this
+// Step's env-leak remediation fixes: the spawned `opencode serve` process
+// must NOT inherit NARVI_SESSION_CONFIG (the sandbox's own plaintext
+// bearer token), while ordinary process environment (PATH, HOME) it
+// genuinely needs to run is left untouched. PATH is overridden (same
+// technique as TestSpawn_BadBinaryPath) to a tempdir containing a real,
+// executable fake "opencode" script that probes its own environment and
+// writes what it finds to PROBE_FILE, then exits 1 immediately -- Spawn's
+// own waitHealthy treats a prompt pre-healthy exit as a fast, bounded
+// failure (TestSpawn_BadBinaryPath's own precedent), so asserting Spawn
+// returns an error here is consistent, not a new pattern.
+func TestSpawn_EnvExcludesSessionConfig(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids combining the two.
+	binDir := t.TempDir()
+	probeFile := filepath.Join(t.TempDir(), "probe")
+
+	script := "#!/bin/sh\n" +
+		`printf '%s\n' "${NARVI_SESSION_CONFIG:-ABSENT}" > "$PROBE_FILE"` + "\n" +
+		`if [ -n "$PATH" ]; then printf 'PATH_PRESENT\n' >> "$PROBE_FILE"; else printf 'PATH_ABSENT\n' >> "$PROBE_FILE"; fi` + "\n" +
+		`if [ -n "$HOME" ]; then printf 'HOME_PRESENT\n' >> "$PROBE_FILE"; else printf 'HOME_ABSENT\n' >> "$PROBE_FILE"; fi` + "\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	t.Setenv("PATH", binDir)
+	t.Setenv("PROBE_FILE", probeFile)
+	t.Setenv("NARVI_SESSION_CONFIG", "marker-should-not-reach-child")
+
+	sup := supervisor.New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), 5*time.Second, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("probe file = %q, want 3 lines", got)
+	}
+	if lines[0] != "ABSENT" {
+		t.Errorf("NARVI_SESSION_CONFIG as seen by the spawned process = %q, want %q (must not be inherited)", lines[0], "ABSENT")
+	}
+	if lines[1] != "PATH_PRESENT" {
+		t.Errorf("PATH as seen by the spawned process = %q, want it present", lines[1])
+	}
+	if lines[2] != "HOME_PRESENT" {
+		t.Errorf("HOME as seen by the spawned process = %q, want it present", lines[2])
 	}
 }

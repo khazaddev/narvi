@@ -21,6 +21,7 @@ const validSessionConfigJSON = `{
 	"correlationId": null,
 	"gen": 1,
 	"repos": [{"name": "repo1", "url": "https://example.com/repo1.git", "branch": null}],
+	"sandboxId": "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a",
 	"sandboxToken": "tok-123",
 	"sessionId": "sess-1"
 }`
@@ -162,19 +163,23 @@ func TestLoad_CredentialCacheDirOverride(t *testing.T) {
 func TestLoad_SandboxIDDefault(t *testing.T) {
 	t.Setenv("NARVI_BOOT_MODE", "fresh")
 	t.Setenv("NARVI_SANDBOX_ID", "")
+	// No live SessionConfig either -- the dev/CI-with-no-live-session case,
+	// where defaultSandboxID ("") remains a correct, valid state.
+	t.Setenv("NARVI_SESSION_CONFIG", "")
 
 	cfg, err := boot.Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
 	if cfg.SandboxID != "" {
-		t.Errorf("SandboxID = %q, want empty string (HONEST GAP default)", cfg.SandboxID)
+		t.Errorf("SandboxID = %q, want empty string (dev/CI-with-no-live-session default)", cfg.SandboxID)
 	}
 }
 
 func TestLoad_SandboxIDOverride(t *testing.T) {
 	t.Setenv("NARVI_BOOT_MODE", "fresh")
 	t.Setenv("NARVI_SANDBOX_ID", "sbx-abc123")
+	t.Setenv("NARVI_SESSION_CONFIG", "")
 
 	cfg, err := boot.Load()
 	if err != nil {
@@ -182,6 +187,76 @@ func TestLoad_SandboxIDOverride(t *testing.T) {
 	}
 	if cfg.SandboxID != "sbx-abc123" {
 		t.Errorf("SandboxID = %q, want %q", cfg.SandboxID, "sbx-abc123")
+	}
+}
+
+// TestLoad_SandboxIDFromSessionConfig proves the actual production bug fix:
+// with NARVI_SANDBOX_ID unset and a valid NARVI_SESSION_CONFIG carrying a
+// real sandboxId, Config.SandboxID now equals that value -- it is no
+// longer always "" (§6.1's X-Sandbox-ID handshake header, previously
+// always empty, would now carry the real, control-plane-assigned sandbox
+// identity).
+func TestLoad_SandboxIDFromSessionConfig(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_SANDBOX_ID", "")
+	t.Setenv("NARVI_SESSION_CONFIG", validSessionConfigJSON) // sandboxId: "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a"
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	want := "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a"
+	if cfg.SandboxID != want {
+		t.Errorf("SandboxID = %q, want %q (from SessionConfig.SandboxId)", cfg.SandboxID, want)
+	}
+}
+
+// TestLoad_SandboxIDEnvOverrideWinsOverSessionConfig proves NARVI_SANDBOX_ID,
+// when explicitly set, still wins over whatever a present SessionConfig
+// carries (a deliberate dev/test override -- see Config.SandboxID's own
+// doc comment) when the two do not genuinely disagree (SessionConfig's own
+// sandboxId here matches the override exactly) -- no error.
+func TestLoad_SandboxIDEnvOverrideWinsOverSessionConfig(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_SANDBOX_ID", "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a")
+	t.Setenv("NARVI_SESSION_CONFIG", validSessionConfigJSON) // sandboxId: "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a"
+
+	cfg, err := boot.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.SandboxID != "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a" {
+		t.Errorf("SandboxID = %q, want %q", cfg.SandboxID, "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a")
+	}
+}
+
+// TestLoad_SandboxIDMismatch proves a genuine disagreement between an
+// explicitly set NARVI_SANDBOX_ID and a present SessionConfig's own
+// non-empty sandboxId is a fail-fast *boot.SandboxIDMismatchError -- the
+// same reconciliation shape as TestLoad_SessionConfigBootModeMismatch's own
+// *boot.ModeMismatchError, never a silent preference of one value.
+func TestLoad_SandboxIDMismatch(t *testing.T) {
+	t.Setenv("NARVI_BOOT_MODE", "fresh")
+	t.Setenv("NARVI_SANDBOX_ID", "sbx-env-value")
+	t.Setenv("NARVI_SESSION_CONFIG", validSessionConfigJSON) // sandboxId: "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a"
+
+	_, err := boot.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want *boot.SandboxIDMismatchError")
+	}
+
+	var mismatchErr *boot.SandboxIDMismatchError
+	if !errors.As(err, &mismatchErr) {
+		t.Fatalf("Load() error = %v (%T), want *boot.SandboxIDMismatchError", err, err)
+	}
+	if mismatchErr.EnvValue != "sbx-env-value" {
+		t.Errorf("EnvValue = %q, want %q", mismatchErr.EnvValue, "sbx-env-value")
+	}
+	if mismatchErr.SessionConfigValue != "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a" {
+		t.Errorf("SessionConfigValue = %q, want %q", mismatchErr.SessionConfigValue, "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a")
+	}
+	if mismatchErr.Error() == "" {
+		t.Errorf("SandboxIDMismatchError.Error() = %q, want a non-empty message", mismatchErr.Error())
 	}
 }
 
@@ -250,6 +325,7 @@ func TestLoad_SessionConfigMissingRequiredField(t *testing.T) {
 		"correlationId": null,
 		"gen": 1,
 		"repos": [{"name": "repo1", "url": "https://example.com/repo1.git", "branch": null}],
+		"sandboxId": "5b1c1e2e-6b1a-4b1a-9b1a-6b1a4b1a9b1a",
 		"sandboxToken": "tok-123"
 	}`)
 

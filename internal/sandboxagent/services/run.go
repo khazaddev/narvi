@@ -94,11 +94,28 @@ type serviceOutcome struct {
 // and returned immediately, regardless of the failing service's own
 // criticality -- Run cannot even begin tracking that service's readiness
 // without a live process to poll.
+//
+// env is assigned verbatim to every spawned service's own
+// supervisor.Spec.Env (nil means inherit -- exec.Cmd's own documented
+// default -- matching every call site's behavior before this parameter
+// existed). This package deliberately stays OBLIVIOUS to which specific
+// env vars a caller chose to exclude: internal/sandboxagent/boot (this
+// Step's real caller, via RunBoot) imports this package already (see
+// doc.go), so THIS package importing boot back -- to reference
+// boot.SessionConfigEnvVar directly, the way opencodeproc.Spawn's own
+// analogous call does -- would create an import cycle. Accepting a plain,
+// already-built env slice sidesteps that entirely: RunBoot computes
+// supervisor.EnvWithout(SessionConfigEnvVar) itself (same package as the
+// constant) and hands the result down here, so a repo's own
+// services.yml command still never inherits the sandbox's own plaintext
+// bearer token, without this package ever needing to know the env var's
+// name.
 func Run(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	repoDir string,
 	manifest servicemanifest.Manifest,
+	env []string,
 	reporter ProgressReporter,
 	readinessTimeout, readinessPollInterval time.Duration,
 ) error {
@@ -108,6 +125,7 @@ func Run(
 			Path: "/bin/sh",
 			Args: []string{"-c", svc.Cmd},
 			Dir:  filepath.Join(repoDir, svc.Cwd),
+			Env:  env,
 		})
 		if err != nil {
 			return fmt.Errorf("services: spawn %q: %w", svc.Name, err)

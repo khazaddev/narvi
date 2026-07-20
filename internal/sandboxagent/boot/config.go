@@ -18,18 +18,24 @@ import (
 // BootMode); the rest are this Step's own invented plumbing, since no
 // other SESSION_CONFIG delivery mechanism is pinned yet.
 //
-// sessionConfigEnvVar (NARVI_SESSION_CONFIG) is Step 15's own answer to
+// SessionConfigEnvVar (NARVI_SESSION_CONFIG) is Step 15's own answer to
 // that gap: an OPTIONAL env var carrying the full SESSION_CONFIG document
 // as JSON. Its absence remains a fully valid, correct state (see Config.
 // SessionConfig's own doc comment) -- dev/CI environments have no live
-// session and are not required to set it.
+// session and are not required to set it. Exported (this Step's own env-
+// leak remediation) so it is the single source of truth for the literal
+// "NARVI_SESSION_CONFIG" string everywhere a caller outside this package
+// needs to name it (e.g. as an argument to
+// internal/sandboxagent/supervisor.EnvWithout, to keep a spawned child
+// from inheriting the sandbox's own plaintext bearer token) instead of
+// duplicating the literal.
 const (
 	bootModeEnvVar           = "NARVI_BOOT_MODE"
 	agentVersionEnvVar       = "NARVI_AGENT_VERSION"
 	imageDigestEnvVar        = "NARVI_IMAGE_DIGEST"
 	workspaceDirEnvVar       = "NARVI_WORKSPACE_DIR"
 	logLevelEnvVar           = "NARVI_LOG_LEVEL"
-	sessionConfigEnvVar      = "NARVI_SESSION_CONFIG"
+	SessionConfigEnvVar      = "NARVI_SESSION_CONFIG"
 	credentialCacheDirEnvVar = "NARVI_CREDENTIAL_CACHE_DIR"
 	sandboxIDEnvVar          = "NARVI_SANDBOX_ID"
 )
@@ -62,12 +68,12 @@ const (
 	// the raw credential cache file (§5.2).
 	defaultCredentialCacheDir = "/tmp/narvi-credentials"
 
-	// defaultSandboxID is used when NARVI_SANDBOX_ID is unset. HONEST GAP,
-	// same shape as defaultImageDigest above: no Step yet wires a real
-	// provider-assigned sandbox-instance id into the sandbox's own
-	// environment, so internal/sandboxagent/wsbridge's X-Sandbox-ID header
-	// value will always default to "" in practice until some later Step
-	// closes that gap.
+	// defaultSandboxID is used when NARVI_SANDBOX_ID is unset AND no
+	// SessionConfig is present at all (the dev/CI-with-no-live-session
+	// case -- see Config.SandboxID's own doc comment for the real,
+	// production path). This remains a correct, valid state on that path:
+	// nothing production-relevant is running with no live session to begin
+	// with.
 	defaultSandboxID = ""
 )
 
@@ -88,10 +94,29 @@ type Config struct {
 	CredentialCacheDir string
 
 	// SandboxID is the value internal/sandboxagent/wsbridge.New sends as
-	// the sandbox WS connection's X-Sandbox-ID header (§6.1). HONEST GAP --
-	// see defaultSandboxID's own doc comment: this defaults to "" until
-	// some later Step wires a real provider-assigned sandbox-instance id
-	// into the sandbox's environment.
+	// the sandbox WS connection's X-Sandbox-ID header (§6.1). Resolved by
+	// Load in this priority order:
+	//
+	//  1. NARVI_SANDBOX_ID, if explicitly non-empty -- a deliberate dev/
+	//     test override, always wins.
+	//  2. Otherwise, when SessionConfig is present, SessionConfig.
+	//     SandboxId -- the real, control-plane-assigned identity
+	//     (sandboxes.id, populated by internal/app/sessionactor.
+	//     assembleSessionConfig from the sandbox row's own already-known
+	//     id, BEFORE CreateSandbox is ever called). This is the real
+	//     production path: NARVI_SESSION_CONFIG is the one existing
+	//     channel into the sandbox's own environment, so this is how
+	//     sandbox-agent learns its own identity for the handshake without
+	//     any new provider-level plumbing.
+	//  3. Otherwise (no env var override, no SessionConfig at all --
+	//     the dev/CI-with-no-live-session case), defaultSandboxID ("") --
+	//     a correct, valid state on that path.
+	//
+	// If NARVI_SANDBOX_ID is explicitly set AND SessionConfig is present
+	// AND SessionConfig.SandboxId is also non-empty, but the two disagree,
+	// Load returns a *SandboxIDMismatchError instead of silently picking
+	// one -- the same fail-fast reconciliation ModeMismatchError already
+	// applies to a diverging NARVI_BOOT_MODE/SessionConfig.BootMode pair.
 	SandboxID string
 
 	// SessionConfig is the full SESSION_CONFIG document (§6.4), parsed
@@ -125,6 +150,24 @@ func (e *ModeMismatchError) Error() string {
 	return fmt.Sprintf(
 		"boot: %s=%q does not match NARVI_SESSION_CONFIG's bootMode=%q",
 		bootModeEnvVar, e.EnvValue, e.SessionConfigValue,
+	)
+}
+
+// SandboxIDMismatchError is returned by Load when NARVI_SANDBOX_ID is
+// explicitly set to a non-empty value AND NARVI_SESSION_CONFIG is present
+// with its own non-empty sandboxId field, but the two disagree -- the same
+// shape and reasoning as ModeMismatchError: a caller-side bug (something
+// set both, inconsistently) must be caught before either value is
+// trusted, rather than silently preferring one over the other.
+type SandboxIDMismatchError struct {
+	EnvValue           string
+	SessionConfigValue string
+}
+
+func (e *SandboxIDMismatchError) Error() string {
+	return fmt.Sprintf(
+		"boot: %s=%q does not match NARVI_SESSION_CONFIG's sandboxId=%q",
+		sandboxIDEnvVar, e.EnvValue, e.SessionConfigValue,
 	)
 }
 
@@ -202,12 +245,15 @@ func Load() (Config, error) {
 		credentialCacheDir = defaultCredentialCacheDir
 	}
 
-	sandboxID := os.Getenv(sandboxIDEnvVar)
-	if sandboxID == "" {
-		sandboxID = defaultSandboxID
+	// sessionConfig is resolved BEFORE sandboxID below -- sandboxID's own
+	// resolution needs to know whether a SessionConfig is present (and,
+	// if so, its own SandboxId) to pick the right value/detect a mismatch.
+	sessionConfig, err := loadSessionConfig(mode)
+	if err != nil {
+		return Config{}, err
 	}
 
-	sessionConfig, err := loadSessionConfig(mode)
+	sandboxID, err := resolveSandboxID(os.Getenv(sandboxIDEnvVar), sessionConfig)
 	if err != nil {
 		return Config{}, err
 	}
@@ -224,6 +270,31 @@ func Load() (Config, error) {
 	}, nil
 }
 
+// resolveSandboxID implements Config.SandboxID's own documented priority
+// order: envValue (NARVI_SANDBOX_ID), if explicitly non-empty, always
+// wins over sessionConfig -- but a non-empty, DISAGREEING pair of the two
+// is a fail-fast *SandboxIDMismatchError, never a silent preference.
+// Otherwise, sessionConfig's own SandboxId is used when sessionConfig is
+// present; otherwise defaultSandboxID.
+func resolveSandboxID(envValue string, sessionConfig *sessionconfig.SessionConfig) (string, error) {
+	if envValue != "" && sessionConfig != nil && sessionConfig.SandboxId != "" && sessionConfig.SandboxId != envValue {
+		return "", &SandboxIDMismatchError{
+			EnvValue:           envValue,
+			SessionConfigValue: sessionConfig.SandboxId,
+		}
+	}
+
+	if envValue != "" {
+		return envValue, nil
+	}
+
+	if sessionConfig != nil {
+		return sessionConfig.SandboxId, nil
+	}
+
+	return defaultSandboxID, nil
+}
+
 // loadSessionConfig reads and parses NARVI_SESSION_CONFIG when present,
 // cross-checking its bootMode field against mode (the already-resolved
 // NARVI_BOOT_MODE value). Returns (nil, nil) when the env var is unset --
@@ -235,14 +306,14 @@ func Load() (Config, error) {
 // scope (SessionConfig's generated json.Unmarshal already validates every
 // required field is present).
 func loadSessionConfig(mode sandboxboot.BootMode) (*sessionconfig.SessionConfig, error) {
-	raw := os.Getenv(sessionConfigEnvVar)
+	raw := os.Getenv(SessionConfigEnvVar)
 	if raw == "" {
 		return nil, nil
 	}
 
 	var sc sessionconfig.SessionConfig
 	if err := json.Unmarshal([]byte(raw), &sc); err != nil {
-		return nil, fmt.Errorf("boot: %s: %w", sessionConfigEnvVar, err)
+		return nil, fmt.Errorf("boot: %s: %w", SessionConfigEnvVar, err)
 	}
 
 	if string(sc.BootMode) != string(mode) {
