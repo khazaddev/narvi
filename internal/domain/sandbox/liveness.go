@@ -22,7 +22,9 @@ type LivenessConfig struct {
 
 // ConnectingTimeoutResult is EvaluateConnectingTimeout's verdict.
 type ConnectingTimeoutResult struct {
-	// IsTimedOut reports whether the sandbox has exceeded its budget.
+	// IsTimedOut reports whether the sandbox has met or exceeded its
+	// budget -- the boundary itself (elapsed == budget) already counts as
+	// timed out, not merely elapsed strictly past it.
 	IsTimedOut bool
 	// Elapsed is how long it's been since the sandbox's last sign of
 	// life (or since CreatedAt, if none yet).
@@ -66,7 +68,9 @@ func EvaluateConnectingTimeout(status State, createdAt, lastSeenAt time.Time, cf
 // HeartbeatHealth is EvaluateHeartbeatHealth's verdict.
 type HeartbeatHealth struct {
 	// IsStale reports whether the sandbox has missed its heartbeat
-	// budget.
+	// budget -- strictly past it (age > budget); reaching the boundary
+	// exactly (age == budget) is NOT yet stale, unlike
+	// EvaluateConnectingTimeout's own inclusive IsTimedOut above.
 	IsStale bool
 	// Age is how long it's been since the last heartbeat. Zero unless
 	// IsStale.

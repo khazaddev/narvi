@@ -6,9 +6,15 @@
 // a pass-through wrapper around *sqlcgen.Queries — no caching, no
 // retries, no business rules.
 //
-// Stores for the other 7 core tables (users, identities, sandbox_history,
-// events, participants, artifacts, audit_log) are still pending: they get
-// built by the PRs that actually consume them (auth/identity for
-// users/identities, PR-18/19 for events, §8.11 multiplayer for
-// participants, PR-21+ for artifacts, PR-39 for audit_log).
+// UserStore, IdentityStore, EventStore, and ArtifactStore have since
+// landed too, exactly as predicted below (auth/identity's Step 20 for
+// users/identities, Step 18/19 for events, Step 19 for artifacts) —
+// alongside UserSessionStore (Step 20's user_sessions table) and
+// WSTokenStore (Step 19's ws_tokens table), on top of this package's
+// original 12-table scope.
+//
+// Stores for the remaining 3 core tables (sandbox_history, participants,
+// audit_log) are still pending: they get built by the PRs that actually
+// consume them (§8.11 multiplayer for participants, PR-39 for audit_log,
+// sandbox_history whenever its own consumer lands).
 package postgres

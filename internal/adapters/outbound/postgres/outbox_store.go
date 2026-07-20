@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -19,6 +20,16 @@ type OutboxStore struct {
 // NewOutboxStore builds an OutboxStore backed by pool.
 func NewOutboxStore(pool *pgxpool.Pool) *OutboxStore {
 	return &OutboxStore{q: sqlcgen.New(pool)}
+}
+
+// WithTx returns an OutboxStore whose queries run on tx instead of the
+// pool this store was built with — mirrors the same WithTx convention
+// every other store in this package already follows (e.g. EventStore),
+// ready for app/sessionactor's transactional-write helper (§2) once a
+// caller starts writing outbox entries inside that transaction; no such
+// caller exists yet.
+func (s *OutboxStore) WithTx(tx pgx.Tx) *OutboxStore {
+	return &OutboxStore{q: s.q.WithTx(tx)}
 }
 
 // Create inserts a new outbox entry and returns it.
