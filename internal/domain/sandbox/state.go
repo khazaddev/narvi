@@ -70,12 +70,26 @@ const (
 	// Gen-fenced (§3.2's gen-fencing rule explicitly covers "a
 	// restore/resume out of stopped/stale/failed").
 	TriggerResume
+	// TriggerForceRespawn abandons a sandbox EvaluateSpawnDecision has
+	// determined is stuck/unreachable -- a spawn/connect interrupted
+	// before the sandbox ever connected (Spawning/Connecting/Booting held
+	// past SpawningTimeout with no sign of life), or a Ready sandbox whose
+	// WebSocket never reconnected (past ReadyWait) -- and spawns a
+	// genuinely fresh one in its place: Spawning/Connecting/Booting/Ready
+	// -> Spawning. Gen-fenced, exactly like TriggerSpawn/TriggerRestore/
+	// TriggerResume. Deliberately a separate trigger kind from
+	// TriggerSpawn (rather than folding these two recovery cases into it)
+	// so the transition LOG (§5.3) can tell "a genuinely fresh/terminal-
+	// state respawn" apart from "we gave up on a stuck live sandbox and
+	// are abandoning it" -- TriggerSpawn's own doc comment above stays
+	// scoped to Pending/Stopped/Failed/Stale, never a live state.
+	TriggerForceRespawn
 )
 
 var triggerNames = [...]string{
 	"spawn", "provider_ack", "ws_connected", "boot_complete",
 	"snapshot_start", "snapshot_complete", "suspect", "recover",
-	"grace_expired", "restore", "resume",
+	"grace_expired", "restore", "resume", "force_respawn",
 }
 
 func (k TriggerKind) String() string {
@@ -121,6 +135,12 @@ func RestoreTrigger(gen int) Trigger { return Trigger{Kind: TriggerRestore, Gen:
 
 // ResumeTrigger builds a TriggerResume trigger carrying the new gen.
 func ResumeTrigger(gen int) Trigger { return Trigger{Kind: TriggerResume, Gen: gen} }
+
+// ForceRespawnTrigger builds a TriggerForceRespawn trigger carrying the new
+// gen -- abandoning a stuck live sandbox (Spawning/Connecting/Booting past
+// SpawningTimeout, or Ready past ReadyWait with no reconnected WebSocket)
+// and spawning a genuinely fresh one in its place.
+func ForceRespawnTrigger(gen int) Trigger { return Trigger{Kind: TriggerForceRespawn, Gen: gen} }
 
 // RecoverTrigger builds a TriggerRecover trigger carrying the state to
 // recover to; Transition validates that target against the legal
@@ -234,18 +254,29 @@ var transitions = map[State]map[TriggerKind]transitionRule{
 	StateSpawning: {
 		TriggerProviderAck: {targets: []State{StateConnecting}},
 		TriggerSuspect:     {targets: []State{StateSuspect}},
+		// A spawn interrupted before the sandbox ever connected
+		// (EvaluateSpawnDecision's own SpawningTimeout carve-out) --
+		// abandon it and spawn fresh, rather than skipping indefinitely.
+		TriggerForceRespawn: {targets: []State{StateSpawning}, genFenced: true},
 	},
 	StateConnecting: {
 		TriggerWSConnected: {targets: []State{StateBooting}},
 		TriggerSuspect:     {targets: []State{StateSuspect}},
+		// Same interrupted-spawn carve-out as StateSpawning above.
+		TriggerForceRespawn: {targets: []State{StateSpawning}, genFenced: true},
 	},
 	StateBooting: {
 		TriggerBootComplete: {targets: []State{StateReady}},
 		TriggerSuspect:      {targets: []State{StateSuspect}},
+		// Same interrupted-spawn carve-out as StateSpawning above.
+		TriggerForceRespawn: {targets: []State{StateSpawning}, genFenced: true},
 	},
 	StateReady: {
 		TriggerSnapshotStart: {targets: []State{StateSnapshotting}},
 		TriggerSuspect:       {targets: []State{StateSuspect}},
+		// Ready but never reconnected (EvaluateSpawnDecision's own
+		// ReadyWait carve-out) -- abandon it and spawn fresh.
+		TriggerForceRespawn: {targets: []State{StateSpawning}, genFenced: true},
 	},
 	StateSnapshotting: {
 		TriggerSnapshotComplete: {targets: []State{StateReady}},

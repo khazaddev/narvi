@@ -57,6 +57,16 @@ func TestTransition_LegalEdges(t *testing.T) {
 		{"stale -> spawning (respawn)", sandbox.StateStale, 1, sandbox.SpawnTrigger(2), sandbox.StateSpawning},
 		{"stale -> spawning (restore)", sandbox.StateStale, 1, sandbox.RestoreTrigger(2), sandbox.StateSpawning},
 		{"stale -> connecting (resume)", sandbox.StateStale, 1, sandbox.ResumeTrigger(2), sandbox.StateConnecting},
+
+		// Force-respawn, from every "stuck while live" state
+		// EvaluateSpawnDecision's own two recovery carve-outs can produce
+		// (SpawningTimeout for Spawning/Connecting/Booting; ReadyWait for
+		// Ready) -- all land back in Spawning with a fresh gen, abandoning
+		// whatever was stuck there.
+		{"spawning -> spawning (force respawn)", sandbox.StateSpawning, 1, sandbox.ForceRespawnTrigger(2), sandbox.StateSpawning},
+		{"connecting -> spawning (force respawn)", sandbox.StateConnecting, 1, sandbox.ForceRespawnTrigger(2), sandbox.StateSpawning},
+		{"booting -> spawning (force respawn)", sandbox.StateBooting, 1, sandbox.ForceRespawnTrigger(2), sandbox.StateSpawning},
+		{"ready -> spawning (force respawn)", sandbox.StateReady, 1, sandbox.ForceRespawnTrigger(2), sandbox.StateSpawning},
 	}
 
 	for _, tc := range tests {
@@ -100,6 +110,18 @@ func TestTransition_IllegalFromTriggerCombos(t *testing.T) {
 		{"failed cannot recover (recover is suspect-only)", sandbox.StateFailed, sandbox.RecoverTrigger(sandbox.StateReady)},
 		{"stale cannot suspect directly", sandbox.StateStale, sandbox.SuspectTrigger()},
 		{"unknown state is always illegal", sandbox.State("bogus"), sandbox.SpawnTrigger(2)},
+
+		// TriggerForceRespawn is deliberately narrower than TriggerSpawn --
+		// only for the four "stuck while live" states (Spawning/Connecting/
+		// Booting/Ready). Every other state -- including every already-
+		// terminal one, which already has its own legal TriggerSpawn edge and
+		// doesn't need this one -- has no TriggerForceRespawn edge at all.
+		{"pending cannot force-respawn", sandbox.StatePending, sandbox.ForceRespawnTrigger(2)},
+		{"suspect cannot force-respawn", sandbox.StateSuspect, sandbox.ForceRespawnTrigger(2)},
+		{"stopped cannot force-respawn", sandbox.StateStopped, sandbox.ForceRespawnTrigger(2)},
+		{"failed cannot force-respawn", sandbox.StateFailed, sandbox.ForceRespawnTrigger(2)},
+		{"stale cannot force-respawn", sandbox.StateStale, sandbox.ForceRespawnTrigger(2)},
+		{"snapshotting cannot force-respawn", sandbox.StateSnapshotting, sandbox.ForceRespawnTrigger(2)},
 	}
 
 	for _, tc := range tests {
@@ -209,6 +231,10 @@ func TestTransition_GenFencing(t *testing.T) {
 		{"stale + spawn", sandbox.StateStale, sandbox.SpawnTrigger},
 		{"stale + restore", sandbox.StateStale, sandbox.RestoreTrigger},
 		{"stale + resume", sandbox.StateStale, sandbox.ResumeTrigger},
+		{"spawning + force-respawn", sandbox.StateSpawning, sandbox.ForceRespawnTrigger},
+		{"connecting + force-respawn", sandbox.StateConnecting, sandbox.ForceRespawnTrigger},
+		{"booting + force-respawn", sandbox.StateBooting, sandbox.ForceRespawnTrigger},
+		{"ready + force-respawn", sandbox.StateReady, sandbox.ForceRespawnTrigger},
 	}
 
 	for _, tc := range tests {
@@ -271,6 +297,7 @@ func TestTriggerKind_String(t *testing.T) {
 		{sandbox.TriggerGraceExpired, "grace_expired"},
 		{sandbox.TriggerRestore, "restore"},
 		{sandbox.TriggerResume, "resume"},
+		{sandbox.TriggerForceRespawn, "force_respawn"},
 		{sandbox.TriggerKind(-1), "TriggerKind(-1)"},
 		{sandbox.TriggerKind(999), "TriggerKind(999)"},
 	}
