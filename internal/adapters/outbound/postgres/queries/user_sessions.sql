@@ -7,6 +7,10 @@
 -- own verify-by-hash lookup on every gated request.
 -- DeleteUserSession is logout's own real revocation -- a genuine DELETE,
 -- not merely clearing the browser's cookie.
+-- DeleteExpiredUserSessions backs RunExpiredTokenCleanup's own periodic
+-- sweep (expiredcleanup.go, audit-remediation config/platform-hardening
+-- batch): expires_at is otherwise only ever checked at read/verify time,
+-- so nothing else ever purges a row past its own TTL.
 
 -- name: CreateUserSession :one
 INSERT INTO user_sessions (user_id, token_hash, expires_at)
@@ -20,3 +24,7 @@ WHERE token_hash = $1;
 -- name: DeleteUserSession :exec
 DELETE FROM user_sessions
 WHERE id = $1;
+
+-- name: DeleteExpiredUserSessions :execrows
+DELETE FROM user_sessions
+WHERE expires_at < now();

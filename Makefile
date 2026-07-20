@@ -35,6 +35,7 @@ test-integration:
 # unconditionally in Go — nothing is made "optional in development" there.
 dev:
 	docker compose -f docker-compose.dev.yml up -d --wait
+	NARVI_STAGE=development \
 	NARVI_DATABASE_URL=postgres://narvi:narvi@localhost:5432/narvi?sslmode=disable \
 	NARVI_HMAC_SANDBOX_SECRET=dev-only-insecure-sandbox-secret \
 	NARVI_HMAC_BOTS_SECRET=dev-only-insecure-bots-secret \

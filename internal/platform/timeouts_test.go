@@ -377,6 +377,29 @@ func TestDefaultTimeouts_InboundHygieneStandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_ExpiredCredentialCleanupStandaloneField proves the
+// audit-remediation (outbound-adapters lens, config/platform-hardening
+// batch) standalone addition (ExpiredCredentialCleanupInterval) ships with
+// a sane, non-zero default matching its own documented value. This field
+// has no ordering relationship with either invariant chain, so this only
+// checks its own value -- not Validate, which never touches it.
+func TestDefaultTimeouts_ExpiredCredentialCleanupStandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ExpiredCredentialCleanupInterval <= 0 {
+		t.Errorf("ExpiredCredentialCleanupInterval = %v, want > 0", to.ExpiredCredentialCleanupInterval)
+	}
+	if to.ExpiredCredentialCleanupInterval != time.Hour {
+		t.Errorf("ExpiredCredentialCleanupInterval = %v, want %v", to.ExpiredCredentialCleanupInterval, time.Hour)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
