@@ -23,11 +23,12 @@
 //
 //   - inactivity: domain/sandbox.EvaluateInactivityTimeout. One
 //     deliberate, documented simplification: ConnectedClientCount is
-//     always 0, since the client WS hub that will track connected
-//     participants doesn't exist until Steps 18+ -- see
-//     handleInactivityTimer. This does not stop the timer from being
-//     fully wired; it just means the "clients connected -> extend + warn"
-//     branch is unreachable until that later Step lands.
+//     always 0. The client WS hub itself now exists and does track
+//     connected participants (internal/adapters/inbound/wshub's *Hub,
+//     Step 19), but this package has no port through which to ask it for
+//     a live count -- see handleInactivityTimer. This does not stop the
+//     timer from being fully wired; it just means the "clients connected
+//     -> extend + warn" branch stays unreachable until that wiring lands.
 //   - connecting_deadline / liveness_check: domain/sandbox.
 //     EvaluateConnectingTimeout / EvaluateHeartbeatHealth, respectively.
 //   - terminal_grace: unconditionally treated as a genuine timeout (see
@@ -131,8 +132,10 @@ func (a *Actor) handleInactivityTimer(ctx context.Context) error {
 			LastActivity: pgTimeOrZero(sandboxRow.LastSeenAt),
 			Status:       sandbox.State(sandboxRow.Status),
 			// ConnectedClientCount is always 0 for now: the client WS
-			// hub that will actually track connected participants
-			// doesn't exist until Steps 18+. Until then,
+			// hub itself now exists and does track connected
+			// participants (internal/adapters/inbound/wshub's *Hub,
+			// Step 19), but this actor has no field/port through which
+			// to query it for a live count. Until that wiring lands,
 			// EvaluateInactivityTimeout can never take its "clients
 			// still connected -> extend + warn" branch -- every genuine
 			// inactivity timeout goes straight to

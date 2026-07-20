@@ -5,6 +5,12 @@
 // check. PR-03 (§5.3) added the structured-logging/OTel envelope:
 // correlation-id context helpers + minting middleware (correlation.go),
 // the slog JSON envelope (logging.go, plus Config.LogLevel), and the OTel
-// SDK bootstrap (otel.go). The HMAC auth helper (PR-06, §5.2) is still
-// pending.
+// SDK bootstrap (otel.go). PR-06 (§5.2) added the single HMAC auth helper
+// (hmacauth.go). Step 19 (§13.1) added the ws-token/user-session
+// hash/mint helpers (tokenhash.go); Step 20 ("auth v1", §13.1) later
+// added this package's remaining auth-adjacent primitives: the
+// request-scoped AuthenticatedUser context helper (authcontext.go), the
+// backend-issued user-session Set-Cookie construction (authcookie.go),
+// and the AES-256-GCM provider-token encrypt/decrypt helpers
+// (tokenencrypt.go).
 package platform

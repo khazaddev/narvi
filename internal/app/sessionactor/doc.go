@@ -26,10 +26,11 @@
 //     epoch-fenced transactional-write helper (§2: "state transition +
 //     appended event + outbox entries commit in ONE Postgres
 //     transaction").
-//   - Command/TimerFired (command.go): the mailbox's message type. Only
-//     one variant exists yet — TimerFired — since this Step has no
-//     command source other than the timer pump; a later Step (the
-//     sandbox/client WS hubs) adds more variants.
+//   - Command (command.go): the mailbox's message type. TimerFired
+//     (delivered by the timer pump) was the only variant at first; the
+//     sandbox WS hub's own SandboxEvent (Step 18, one per inbound sandbox
+//     frame) and EnsureDispatched (Step 21, "please re-evaluate this
+//     session's own spawn/dispatch state now") have since joined it.
 //   - The timer pump (timerpump.go): a single process-wide poll loop
 //     (§2: "A per-pod timer pump polls due timers (SELECT ... FOR UPDATE
 //     SKIP LOCKED) and delivers them as actor commands").
