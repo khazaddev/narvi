@@ -276,6 +276,18 @@ func serve() error {
 		return nil
 	})
 
+	// Audit-remediation (config/platform-hardening batch): purges expired
+	// ws_tokens/user_sessions rows (neither is ever deleted otherwise --
+	// see internal/adapters/outbound/postgres/expiredcleanup.go's own doc
+	// comment). Started/shut down through this SAME errgroup as every
+	// other background loop above -- no naked goroutine (§11).
+	group.Go(func() error {
+		if err := postgres.RunExpiredTokenCleanup(groupCtx, pool, cfg.Timeouts.ExpiredCredentialCleanupInterval); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("expired credential cleanup: %w", err)
+		}
+		return nil
+	})
+
 	group.Go(func() error {
 		<-groupCtx.Done()
 		slog.Info("narvi control-plane: shutting down", "grace_period", cfg.Timeouts.ShutdownGracePeriod.String())

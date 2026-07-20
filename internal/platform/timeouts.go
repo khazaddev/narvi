@@ -48,11 +48,24 @@ type Timeouts struct {
 	// on a running sandbox. §5.4 gives this explicitly: 2h.
 	ProviderHardCap time.Duration
 
-	// SupervisorTurnCap is the control plane's own cap on a single turn,
-	// enforced independently of (and comfortably below) the provider's
-	// hard cap, so the CP always terminates a runaway turn before the
-	// provider would forcibly reclaim the sandbox. Not given an explicit
-	// value in the plan; chosen as 90m, well below the 2h provider cap.
+	// SupervisorTurnCap's CURRENT role is an invariant-chain bound ensuring
+	// config sanity only: Validate below checks ProviderHardCap >
+	// SupervisorTurnCap > TurnDeadline as a pairwise VALUE comparison, and
+	// this field is otherwise referenced nowhere else in the codebase --
+	// there is no real-time code path that reads a turn's own start time
+	// and compares it against this value to actually terminate anything.
+	// TurnDeadline's own already-armed named timer (handleTurnDeadlineTimer,
+	// app/sessionactor/timerfired.go) is what actually terminates a
+	// runaway turn in every case where the timer pump itself is healthy,
+	// since TurnDeadline (60m) always fires strictly before this field's
+	// own value (90m) would. This field remains reserved as a genuine
+	// backstop for the (currently unhandled) case where turn_deadline
+	// itself fails to fire -- a future periodic sweep across active turns
+	// (a reconciler/health-check mechanism, not built today) could use it
+	// for that -- but no such independent, real-time enforcement exists
+	// yet; do not read this field's presence, its value, or its Validate()
+	// check as proof one does. Not given an explicit value in the plan;
+	// chosen as 90m, well below the 2h provider cap.
 	SupervisorTurnCap time.Duration
 
 	// TurnDeadline is the CP's turn_deadline named persistent timer
@@ -80,14 +93,51 @@ type Timeouts struct {
 	ProviderWorstColdStart time.Duration
 
 	// FirstConnectBudget is the liveness budget covering provider cold
-	// start + boot before the first sandbox WS connection. §3.2 gives this
+	// start + boot before the first sign of life (see
+	// internal/domain/sandbox/liveness.go's EvaluateConnectingTimeout: this
+	// single ceiling applies across the whole Spawning/Connecting/Booting
+	// span from spawn until the FIRST liveness signal arrives; every signal
+	// after that -- including a boot-progress report emitted mid-boot --
+	// re-arms the watchdog and switches it onto the shorter
+	// SteadyHeartbeatBudget for all subsequent checks). §3.2 gives this
 	// explicitly: "first_connect_budget (default 240s, covers provider
 	// cold start + boot)".
+	//
+	// Audit-remediation note (config/platform-hardening batch): "cold
+	// start + boot" here is read as ONE ceiling over the whole
+	// pre-first-signal span, not a literal sum of ProviderWorstColdStart
+	// (220s, §4.1's own floor for provider scheduling ALONE) plus
+	// ImagePullBootP99 (90s, this codebase's own invented sub-phase
+	// estimate) stacked sequentially on top of it. Read additively, the
+	// two would total 310s against this field's own 240s value -- but the
+	// plan text does not actually say the two phases are sequential and
+	// non-overlapping, and reading them that way would demand raising this
+	// field past its own §3.2-mandated 240s value, which is not a call to
+	// make unilaterally in a bundled audit batch. See ImagePullBootP99's
+	// own doc comment for the matching note, and Validate()'s
+	// "FirstConnectBudget > ImagePullBootP99" check for the objectively-
+	// correct, deliberately weaker statement this ambiguity leaves
+	// available.
 	FirstConnectBudget time.Duration
 
-	// ImagePullBootP99 is our estimate of the p99 latency of image pull +
-	// container boot that FirstConnectBudget must clear with margin. Not
-	// given an explicit figure in the plan; chosen as 90s.
+	// ImagePullBootP99 is our estimate of the p99 latency of the
+	// image-pull-and-boot sub-phase that FirstConnectBudget's own single
+	// pre-first-signal ceiling must clear with margin. Not given an
+	// explicit figure in the plan; chosen as 90s.
+	//
+	// Audit-remediation note (config/platform-hardening batch):
+	// deliberately NOT modeled as additional time layered on top of
+	// ProviderWorstColdStart's own 220s floor (§4.1: "Modal cold
+	// scheduling alone can take 220s+") -- this codebase has no evidence
+	// the two are sequential/non-overlapping rather than this sub-phase
+	// being nested within (a portion of) that same cold-start window, and
+	// FirstConnectBudget's own 240s value is §3.2-mandated, not something
+	// this invented estimate should be allowed to force upward. Treat this
+	// as an estimate of the boot sub-phase's own worst case, understood to
+	// fit within whatever headroom the single 240s ceiling leaves once
+	// cold start has resolved -- a conservative, self-contained sanity
+	// floor, not one leg of a two-leg sum. See FirstConnectBudget's own
+	// doc comment above for the fuller reasoning.
 	ImagePullBootP99 time.Duration
 
 	// --- PR-06 standalone additions: no ordering relationship with the
@@ -481,6 +531,24 @@ type Timeouts struct {
 	// 250ms -- generous for any real pagination UI (up to 4 requests/sec)
 	// while preventing a tight-loop hammer.
 	ClientFetchHistoryMinInterval time.Duration
+
+	// --- Audit-remediation (outbound-adapters lens, config/platform-
+	// hardening batch) standalone addition: no ordering relationship with
+	// either invariant chain above (or with any prior batch's standalone
+	// additions), so -- per those additions' own precedent -- a plain
+	// field with a sensible default, not wired into a fake invariant link.
+
+	// ExpiredCredentialCleanupInterval is how often
+	// internal/adapters/outbound/postgres.RunExpiredTokenCleanup ticks,
+	// deleting ws_tokens/user_sessions rows whose expires_at has already
+	// passed (migrations/000016_ws_tokens.up.sql,
+	// migrations/000017_auth_v1.up.sql -- both tables check expires_at
+	// only at read/verify time; nothing else ever purges an expired row,
+	// so left alone table growth is unbounded). Both tables' own TTLs
+	// (WSTokenTTL 24h, UserSessionTTL 30 days) are on the order of
+	// hours/days, so hourly cleanup is more than frequent enough. Not
+	// specified in the plan; chosen as 1h.
+	ExpiredCredentialCleanupInterval time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -551,6 +619,8 @@ func DefaultTimeouts() Timeouts {
 
 		ClientWSPingInterval:          30 * time.Second,       // not specified; chosen, matches SandboxWSHeartbeatInterval's own 30s cadence (§6.1)
 		ClientFetchHistoryMinInterval: 250 * time.Millisecond, // not specified; chosen, generous for real pagination while blocking a tight-loop hammer
+
+		ExpiredCredentialCleanupInterval: time.Hour, // not specified; chosen, comfortably frequent relative to both WSTokenTTL (24h) and UserSessionTTL (30 days)
 	}
 }
 
@@ -609,6 +679,13 @@ func (t Timeouts) Validate() error {
 	// Chain B: two independent pairs (§4.1, §3.2).
 	check("ProviderHTTPClientTimeout > ProviderWorstColdStart",
 		"ProviderHTTPClientTimeout", t.ProviderHTTPClientTimeout, "ProviderWorstColdStart", t.ProviderWorstColdStart)
+	// Deliberately the weaker of two possible statements -- "the overall
+	// budget exceeds the boot-sub-phase's own estimate" -- not "the overall
+	// budget exceeds cold-start-plus-boot summed" (which would require
+	// FirstConnectBudget > ProviderWorstColdStart+ImagePullBootP99 instead).
+	// See FirstConnectBudget's and ImagePullBootP99's own doc comments
+	// above for why this codebase does not currently model those two as an
+	// additive sum.
 	check("FirstConnectBudget > ImagePullBootP99",
 		"FirstConnectBudget", t.FirstConnectBudget, "ImagePullBootP99", t.ImagePullBootP99)
 

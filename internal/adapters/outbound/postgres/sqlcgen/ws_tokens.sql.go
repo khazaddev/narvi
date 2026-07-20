@@ -31,6 +31,10 @@ type CreateWSTokenParams struct {
 // caller's own job (internal/platform.GenerateToken / HashToken), this
 // query only ever sees the already-hashed value. GetWSTokenByHash is the
 // client hub's own verify-by-hash lookup at subscribe time (§6.2).
+// DeleteExpiredWSTokens backs RunExpiredTokenCleanup's own periodic sweep
+// (expiredcleanup.go, audit-remediation config/platform-hardening batch):
+// expires_at is otherwise only ever checked at read/verify time, so
+// nothing else ever purges a row past its own TTL.
 func (q *Queries) CreateWSToken(ctx context.Context, arg CreateWSTokenParams) (WsToken, error) {
 	row := q.db.QueryRow(ctx, createWSToken,
 		arg.SessionID,
@@ -48,6 +52,19 @@ func (q *Queries) CreateWSToken(ctx context.Context, arg CreateWSTokenParams) (W
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const deleteExpiredWSTokens = `-- name: DeleteExpiredWSTokens :execrows
+DELETE FROM ws_tokens
+WHERE expires_at < now()
+`
+
+func (q *Queries) DeleteExpiredWSTokens(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredWSTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getWSTokenByHash = `-- name: GetWSTokenByHash :one
