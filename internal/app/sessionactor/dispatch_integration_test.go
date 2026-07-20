@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -590,5 +591,590 @@ func TestExecuteSpawn_StaleEpochOnRecord_PropagatesErrStaleEpoch(t *testing.T) {
 	}
 	if row.ProviderID != nil {
 		t.Errorf("sandbox provider_id = %v, want nil (the record-outcome transact must have rolled back)", *row.ProviderID)
+	}
+}
+
+// planSpawnDirect calls a.tryPlanSpawn directly, inside its own real
+// transact (the same commit/epoch-fencing path planDispatch itself uses),
+// bypassing planDispatch's own branch (a)/(b)/(c) routing entirely. This is
+// required (not merely convenient) for several of the tests below:
+// planDispatch's own branch (a) only ever calls tryPlanSpawn when
+// !hasSandbox or sandbox.IsDeadSandboxStatus(status) -- i.e. Pending (no
+// row) or Stopped/Failed/Stale -- so a sandbox stuck Spawning/Connecting/
+// Booting is routed to branch (c)'s no-op, and a Ready sandbox (with or
+// without a live WebSocket) is always routed to branch (b)'s
+// tryPlanDispatch instead, NEVER to tryPlanSpawn. Driving those two
+// scenarios through the mailbox (EnsureDispatched) would therefore never
+// reach tryPlanSpawn's own new validation gate at all -- exactly like
+// TestExecuteSpawn_StaleEpochOnRecord_PropagatesErrStaleEpoch's own
+// precedent of calling an unexported method directly to reach an otherwise
+// unreachable-via-the-mailbox code path, tryPlanSpawn is called directly
+// here instead.
+func planSpawnDirect(
+	ctx context.Context, a *Actor,
+	sessionRow sqlcgen.Session, sandboxRow sqlcgen.Sandbox, hasSandbox bool, now time.Time,
+) (*spawnPlan, error) {
+	var plan *spawnPlan
+	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		p, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
+		plan = p
+		return err
+	})
+	return plan, err
+}
+
+// TestTryPlanSpawn_FromPending_NoSandboxRow_UsesSpawnTrigger proves the
+// ordinary "no sandbox row yet" spawn path is unchanged by this fix: the
+// FROM state is StatePending, sandbox.SpawnTrigger is the trigger actually
+// used, sandbox.Transition accepts it, and the persisted write is
+// byte-identical to before this batch (gen 1, status spawning) -- querying
+// Postgres directly, not just trusting the returned plan.
+func TestTryPlanSpawn_FromPending_NoSandboxRow_UsesSpawnTrigger(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sessionRow, err := narvipg.NewSessionStore(pool).Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+
+	plan, err := planSpawnDirect(ctx, a, sessionRow, sqlcgen.Sandbox{}, false, time.Now())
+	if err != nil {
+		t.Fatalf("tryPlanSpawn (no sandbox row): unexpected error %v", err)
+	}
+	if plan == nil {
+		t.Fatal("tryPlanSpawn returned no spawn plan, want one")
+	}
+	if plan.gen != 1 {
+		t.Errorf("spawnPlan.gen = %d, want 1", plan.gen)
+	}
+
+	row, err := narvipg.NewSandboxStore(pool).Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusSpawning {
+		t.Errorf("sandbox status = %s, want %s (TriggerSpawn, pending->spawning)", row.Status, sqlcgen.SandboxStatusSpawning)
+	}
+	if row.Gen != 1 {
+		t.Errorf("sandbox gen = %d, want 1", row.Gen)
+	}
+}
+
+// TestTryPlanSpawn_FromDeadStatus_UsesSpawnTrigger proves a sandbox already
+// Stopped or Failed still respawns via sandbox.SpawnTrigger (not the new
+// ForceRespawnTrigger) exactly as before this batch: gen bumped by exactly
+// 1, status written to spawning.
+//
+// Stale is deliberately not exercised here: migrations/000006_sandboxes.up.
+// sql's own sandbox_status Postgres enum does not define a "stale" value
+// (that classification is domain-only until a later Step's own migration
+// adds it) -- StateStale's legal SpawnTrigger/illegal ForceRespawnTrigger
+// edges are proven instead at the pure domain level (state_test.go's
+// TestTransition_LegalEdges "stale -> spawning (respawn)" and
+// TestTransition_GenFencing "stale + spawn").
+func TestTryPlanSpawn_FromDeadStatus_UsesSpawnTrigger(t *testing.T) {
+	tests := []struct {
+		name   string
+		status sqlcgen.SandboxStatus
+	}{
+		{"stopped", sqlcgen.SandboxStatusStopped},
+		{"failed", sqlcgen.SandboxStatusFailed},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTestPool(t)
+			sessionID := createTestSession(ctx, t, pool)
+
+			turnStore := narvipg.NewTurnStore(pool)
+			createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+			sandboxStore := narvipg.NewSandboxStore(pool)
+			if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+				t.Fatalf("create sandbox: %v", err)
+			}
+			if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+				SessionID: sessionID, Status: tc.status,
+			}); err != nil {
+				t.Fatalf("move sandbox to %s: %v", tc.status, err)
+			}
+
+			provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
+			r := newDispatchTestRegistry(ctx, pool, provider, nil)
+			t.Cleanup(func() { _ = r.Shutdown() })
+
+			a, err := r.GetOrSpawn(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("GetOrSpawn: %v", err)
+			}
+
+			sessionRow, err := narvipg.NewSessionStore(pool).Get(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("get session: %v", err)
+			}
+			sandboxRow, err := sandboxStore.Get(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("get sandbox: %v", err)
+			}
+			if sandboxRow.Gen != 1 {
+				t.Fatalf("precondition: sandbox gen = %d, want 1", sandboxRow.Gen)
+			}
+
+			plan, err := planSpawnDirect(ctx, a, sessionRow, sandboxRow, true, time.Now())
+			if err != nil {
+				t.Fatalf("tryPlanSpawn (from %s): unexpected error %v", tc.status, err)
+			}
+			if plan == nil {
+				t.Fatal("tryPlanSpawn returned no spawn plan, want one")
+			}
+			if plan.gen != 2 {
+				t.Errorf("spawnPlan.gen = %d, want 2 (bumped from 1)", plan.gen)
+			}
+
+			row, err := sandboxStore.Get(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("get sandbox: %v", err)
+			}
+			if row.Status != sqlcgen.SandboxStatusSpawning {
+				t.Errorf("sandbox status = %s, want %s (TriggerSpawn respawn)", row.Status, sqlcgen.SandboxStatusSpawning)
+			}
+			if row.Gen != 2 {
+				t.Errorf("sandbox gen = %d, want 2", row.Gen)
+			}
+		})
+	}
+}
+
+// TestTryPlanSpawn_StuckLiveState_PastRecoveryWindow_UsesForceRespawnTrigger
+// proves this fix's central new case: a sandbox stuck Spawning/Connecting/
+// Booting past platform.Timeouts.SpawnStuckTimeout -- EvaluateSpawnDecision's
+// own documented "a spawn interrupted before the sandbox connects... can pin
+// the status ... forever" recovery carve-out -- resolves via the write
+// actually succeeding (gen bumped, status spawning), proven by querying
+// Postgres directly rather than trusting the returned plan alone.
+//
+// The write succeeding at all is itself the proof that ForceRespawnTrigger
+// (not TriggerSpawn) was the trigger genuinely used: state.go's own
+// transition table has NO TriggerSpawn edge from Spawning/Connecting/
+// Booting at all (state_test.go's TestTransition_IllegalFromTriggerCombos
+// "spawning cannot spawn again" proves TriggerSpawn is illegal from
+// Spawning) -- TriggerForceRespawn is the ONLY legal edge from any of these
+// three states, so tryPlanSpawn's own sandbox.Transition call could only
+// have succeeded here via it.
+func TestTryPlanSpawn_StuckLiveState_PastRecoveryWindow_UsesForceRespawnTrigger(t *testing.T) {
+	tests := []struct {
+		name   string
+		status sqlcgen.SandboxStatus
+	}{
+		{"spawning", sqlcgen.SandboxStatusSpawning},
+		{"connecting", sqlcgen.SandboxStatusConnecting},
+		{"booting", sqlcgen.SandboxStatusBooting},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTestPool(t)
+			sessionID := createTestSession(ctx, t, pool)
+
+			turnStore := narvipg.NewTurnStore(pool)
+			createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+			sandboxStore := narvipg.NewSandboxStore(pool)
+			if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+				t.Fatalf("create sandbox: %v", err)
+			}
+			if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+				SessionID: sessionID, Status: tc.status,
+			}); err != nil {
+				t.Fatalf("move sandbox to %s: %v", tc.status, err)
+			}
+
+			// Seed created_at/last_seen_at far enough in the past to clear
+			// SpawnStuckTimeout (120s by default) -- EvaluateSpawnDecision's
+			// own guard measures from max(CreatedAt, LastSeenAt), so both
+			// must move for a "genuinely stuck, no sign of life" sandbox.
+			stuckSince := time.Now().Add(-2 * platform.DefaultTimeouts().SpawnStuckTimeout)
+			if _, err := pool.Exec(ctx,
+				`UPDATE sandboxes SET created_at = $2, last_seen_at = $2 WHERE session_id = $1`,
+				sessionID, stuckSince,
+			); err != nil {
+				t.Fatalf("seed stuck timestamps: %v", err)
+			}
+
+			provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
+			r := newDispatchTestRegistry(ctx, pool, provider, nil)
+			t.Cleanup(func() { _ = r.Shutdown() })
+
+			a, err := r.GetOrSpawn(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("GetOrSpawn: %v", err)
+			}
+
+			sessionRow, err := narvipg.NewSessionStore(pool).Get(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("get session: %v", err)
+			}
+			sandboxRow, err := sandboxStore.Get(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("get sandbox: %v", err)
+			}
+
+			// planDispatch itself would never route this status to
+			// tryPlanSpawn at all (see planSpawnDirect's own doc comment) --
+			// called directly to exercise EvaluateSpawnDecision's documented
+			// recovery carve-out and this fix's validation gate around it.
+			plan, err := planSpawnDirect(ctx, a, sessionRow, sandboxRow, true, time.Now())
+			if err != nil {
+				t.Fatalf("tryPlanSpawn (stuck %s): unexpected error %v", tc.status, err)
+			}
+			if plan == nil {
+				t.Fatal("tryPlanSpawn returned no spawn plan, want one (EvaluateSpawnDecision should return Spawn for a stuck spawn/connect past SpawningTimeout)")
+			}
+			if plan.gen != 2 {
+				t.Errorf("spawnPlan.gen = %d, want 2 (bumped from 1)", plan.gen)
+			}
+
+			row, err := sandboxStore.Get(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("get sandbox: %v", err)
+			}
+			if row.Status != sqlcgen.SandboxStatusSpawning {
+				t.Errorf("sandbox status = %s, want %s (force-respawn)", row.Status, sqlcgen.SandboxStatusSpawning)
+			}
+			if row.Gen != 2 {
+				t.Errorf("sandbox gen = %d, want 2", row.Gen)
+			}
+		})
+	}
+}
+
+// TestTryPlanSpawn_ReadyPastReadyWait_UsesForceRespawnTrigger proves this
+// fix's other new case: a Ready sandbox whose WebSocket never reconnected,
+// past platform.Timeouts.SpawnReadyWait -- EvaluateSpawnDecision's own
+// documented "no WebSocket ... last spawn was Nds ago" -> eventually Spawn
+// carve-out -- also resolves via a genuinely successful write (gen bumped,
+// status spawning), for the same "success itself proves ForceRespawnTrigger
+// was used" reason as the stuck-live-state test above (Ready has no legal
+// TriggerSpawn edge either).
+func TestTryPlanSpawn_ReadyPastReadyWait_UsesForceRespawnTrigger(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	readySince := time.Now().Add(-2 * platform.DefaultTimeouts().SpawnReadyWait)
+	if _, err := pool.Exec(ctx,
+		`UPDATE sandboxes SET created_at = $2 WHERE session_id = $1`,
+		sessionID, readySince,
+	); err != nil {
+		t.Fatalf("seed ready-since timestamp: %v", err)
+	}
+
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sessionRow, err := narvipg.NewSessionStore(pool).Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	sandboxRow, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+
+	// planDispatch itself would ALWAYS route a Ready sandbox to
+	// tryPlanDispatch (branch (b)), regardless of whether a WebSocket is
+	// actually connected -- see planSpawnDirect's own doc comment. Called
+	// directly here for the same reason as the stuck-live-state test above.
+	plan, err := planSpawnDirect(ctx, a, sessionRow, sandboxRow, true, time.Now())
+	if err != nil {
+		t.Fatalf("tryPlanSpawn (ready past ReadyWait): unexpected error %v", err)
+	}
+	if plan == nil {
+		t.Fatal("tryPlanSpawn returned no spawn plan, want one (EvaluateSpawnDecision should return Spawn for Ready past ReadyWait with no WebSocket)")
+	}
+	if plan.gen != 2 {
+		t.Errorf("spawnPlan.gen = %d, want 2 (bumped from 1)", plan.gen)
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusSpawning {
+		t.Errorf("sandbox status = %s, want %s (force-respawn)", row.Status, sqlcgen.SandboxStatusSpawning)
+	}
+	if row.Gen != 2 {
+		t.Errorf("sandbox gen = %d, want 2", row.Gen)
+	}
+}
+
+// TestTryPlanSpawn_Suspect_NeverReachesTransitionGate proves the validation
+// gate is a real, load-bearing check and not a no-op that always happens to
+// succeed: EvaluateSpawnDecision's own Suspect branch always returns Skip
+// (no staleness carve-out, unlike Spawning/Connecting/Booting/Ready above),
+// so tryPlanSpawn returns (nil, nil) -- action.Kind != SpawnActionSpawn --
+// before its own trigger-selection switch/sandbox.Transition call is ever
+// reached at all, and the sandbox row is left completely untouched. This is
+// exactly why no TriggerForceRespawn case exists for Suspect (see
+// tryPlanSpawn's own default case, which would error loudly instead of
+// silently writing if this assumption were ever violated by a future
+// change) -- also proven illegal at the pure domain level directly
+// (state_test.go's "suspect cannot force-respawn"/"suspect cannot spawn
+// directly").
+func TestTryPlanSpawn_Suspect_NeverReachesTransitionGate(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusSuspect,
+	}); err != nil {
+		t.Fatalf("move sandbox to suspect: %v", err)
+	}
+
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sessionRow, err := narvipg.NewSessionStore(pool).Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	sandboxRow, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+
+	plan, err := planSpawnDirect(ctx, a, sessionRow, sandboxRow, true, time.Now())
+	if err != nil {
+		t.Fatalf("tryPlanSpawn (suspect): unexpected error %v (want nil, nil -- EvaluateSpawnDecision should Skip)", err)
+	}
+	if plan != nil {
+		t.Fatal("tryPlanSpawn (suspect) returned a spawn plan, want nil (EvaluateSpawnDecision must Skip Suspect, never reaching the Transition gate)")
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusSuspect {
+		t.Errorf("sandbox status = %s, want unchanged %s", row.Status, sqlcgen.SandboxStatusSuspect)
+	}
+	if row.Gen != 1 {
+		t.Errorf("sandbox gen = %d, want unchanged 1", row.Gen)
+	}
+}
+
+// TestHandleEnsureDispatched_StuckSpawning_ForceRespawnsThroughRealPath
+// proves this batch's own fix to planDispatch's branch (c) actually closes
+// the gap two independent adversarial-review lenses proved: driving the
+// REAL production entry point (a.Send(ctx, EnsureDispatched{}) ->
+// handleEnsureDispatched -> planDispatch), never planSpawnDirect's own
+// direct-call bypass, against a sandbox seeded Spawning/Connecting/Booting
+// with created_at/last_seen_at well past platform.Timeouts.SpawnStuckTimeout
+// and a pending turn now genuinely force-respawns it. Before this fix,
+// branch (c) was an unconditional no-op and tryPlanSpawn/
+// EvaluateSpawnDecision/TriggerForceRespawn were never reached from here at
+// all -- this test mirrors exactly the scenario both review lenses used to
+// prove the bug, but now proves the fix.
+//
+// The fake provider is configured to return a TRANSIENT ports.ProviderError
+// deliberately: recordSpawnFailure's own transient branch leaves the
+// sandbox exactly as tryPlanSpawn's own write already committed it (gen
+// bumped, status spawning), with no further transition -- giving this test
+// a durable, race-free postcondition to assert on directly via Postgres,
+// rather than racing the real CreateSandbox call's own success path
+// (Spawning->Connecting) which would otherwise need to be observed at
+// exactly the right moment. provider.callCount() == 1 still proves the real
+// network call genuinely happened, not just the state write.
+func TestHandleEnsureDispatched_StuckSpawning_ForceRespawnsThroughRealPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		status sqlcgen.SandboxStatus
+	}{
+		{"spawning", sqlcgen.SandboxStatusSpawning},
+		{"connecting", sqlcgen.SandboxStatusConnecting},
+		{"booting", sqlcgen.SandboxStatusBooting},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTestPool(t)
+			sessionID := createTestSession(ctx, t, pool)
+
+			turnStore := narvipg.NewTurnStore(pool)
+			createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+			sandboxStore := narvipg.NewSandboxStore(pool)
+			if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+				t.Fatalf("create sandbox: %v", err)
+			}
+			if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+				SessionID: sessionID, Status: tc.status,
+			}); err != nil {
+				t.Fatalf("move sandbox to %s: %v", tc.status, err)
+			}
+
+			// Seed created_at/last_seen_at far enough in the past to clear
+			// SpawnStuckTimeout (120s by default) -- a genuinely stuck spawn
+			// with no sign of life, exactly like the scenario both review
+			// lenses used to prove branch (c) never invoked tryPlanSpawn at
+			// all.
+			stuckSince := time.Now().Add(-2 * platform.DefaultTimeouts().SpawnStuckTimeout)
+			if _, err := pool.Exec(ctx,
+				`UPDATE sandboxes SET created_at = $2, last_seen_at = $2 WHERE session_id = $1`,
+				sessionID, stuckSince,
+			); err != nil {
+				t.Fatalf("seed stuck timestamps: %v", err)
+			}
+
+			provider := &fakeSpawnProvider{nextErr: &ports.ProviderError{
+				Transient: true, Code: "http_503", Op: ports.OpCreateSandbox, Err: errors.New("temporarily unavailable"),
+			}}
+			r := newDispatchTestRegistry(ctx, pool, provider, nil)
+			t.Cleanup(func() { _ = r.Shutdown() })
+
+			a, err := r.GetOrSpawn(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("GetOrSpawn: %v", err)
+			}
+
+			// The real production entry point -- NOT planSpawnDirect's own
+			// bypass -- so this proves planDispatch's branch (c) itself
+			// (not just tryPlanSpawn in isolation) now reaches
+			// EvaluateSpawnDecision/TriggerForceRespawn for a stuck
+			// Spawning/Connecting/Booting sandbox.
+			sendEnsureDispatched(ctx, t, a)
+
+			waitUntil(t, 5*time.Second, func() bool {
+				return provider.callCount() == 1
+			})
+			// Give executeSpawn's own second transact (recording the
+			// transient failure) a moment to land.
+			time.Sleep(300 * time.Millisecond)
+
+			row, err := sandboxStore.Get(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("get sandbox: %v", err)
+			}
+			if row.Gen != 2 {
+				t.Errorf("sandbox gen = %d, want 2 (a genuine force-respawn bumped it from 1 -- branch (c) reached tryPlanSpawn/TriggerForceRespawn for real)", row.Gen)
+			}
+			if row.Status != sqlcgen.SandboxStatusSpawning {
+				t.Errorf("sandbox status = %s, want %s (force-respawn writes spawning; the transient CreateSandbox failure leaves it there for a later retry)", row.Status, sqlcgen.SandboxStatusSpawning)
+			}
+		})
+	}
+}
+
+// TestHandleEnsureDispatched_HealthySpawning_WithinStuckTimeout_NoChange
+// proves the OTHER half of this fix's own safety requirement: a sandbox
+// that is merely a few seconds into Spawning (well within
+// platform.Timeouts.SpawnStuckTimeout, i.e. a perfectly healthy in-progress
+// boot) driven through the SAME real production entry point
+// (a.Send(ctx, EnsureDispatched{})) produces NO change at all --
+// EvaluateSpawnDecision's own existing Skip guard ("already spawning")
+// still correctly protects it, exactly as it already did for branch (a) 's
+// own cooldown case before this fix. No CreateSandbox call, no gen bump, no
+// status change.
+func TestHandleEnsureDispatched_HealthySpawning_WithinStuckTimeout_NoChange(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	created, err := sandboxStore.Create(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusSpawning,
+	}); err != nil {
+		t.Fatalf("move sandbox to spawning: %v", err)
+	}
+	// created_at/last_seen_at are left at their real "just now" values from
+	// Create above -- a genuinely healthy, just-started boot, nowhere near
+	// SpawnStuckTimeout (120s by default).
+
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-should-never-be-used"}}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	// Mirrors TestHandleEnsureDispatched_CircuitBreakerOpen_DoesNotSpawn's
+	// own pattern: there is no positive DB signal to poll FOR when
+	// asserting something did NOT happen, so give the mailbox a moment to
+	// process, then assert nothing changed.
+	time.Sleep(300 * time.Millisecond)
+
+	if got := provider.callCount(); got != 0 {
+		t.Errorf("provider.CreateSandbox called %d times, want 0 (a healthy in-progress boot within SpawnStuckTimeout must not be disturbed)", got)
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusSpawning {
+		t.Errorf("sandbox status = %s, want unchanged %s", row.Status, sqlcgen.SandboxStatusSpawning)
+	}
+	if row.Gen != created.Gen {
+		t.Errorf("sandbox gen = %d, want unchanged %d", row.Gen, created.Gen)
 	}
 }
