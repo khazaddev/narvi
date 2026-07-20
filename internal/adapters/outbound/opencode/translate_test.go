@@ -66,7 +66,7 @@ func TestTranslateToolResult_WrapsStringOutputAsObject(t *testing.T) {
 			ID: "prt_1", MessageID: "msg_1", Tool: "bash", CallID: "call_1",
 			State: toolPartState{Status: "completed", Output: &output},
 		}
-		result := translateToolResult(cmd, p)
+		result := translateToolResult(cmd, p, "")
 		if result.IsError {
 			t.Error("IsError = true, want false for a completed call")
 		}
@@ -75,6 +75,9 @@ func TestTranslateToolResult_WrapsStringOutputAsObject(t *testing.T) {
 		}
 		if result.SessionId != cmd.SessionId || result.Gen != cmd.Gen {
 			t.Errorf("SessionId/Gen not stamped from cmd: got %q/%d", result.SessionId, result.Gen)
+		}
+		if result.SubTaskId != nil {
+			t.Errorf("SubTaskId = %v, want nil for a main-lane (subTaskID==\"\") call", result.SubTaskId)
 		}
 	})
 
@@ -85,7 +88,7 @@ func TestTranslateToolResult_WrapsStringOutputAsObject(t *testing.T) {
 			ID: "prt_2", MessageID: "msg_1", Tool: "bash", CallID: "call_2",
 			State: toolPartState{Status: "error", Error: &errMsg},
 		}
-		result := translateToolResult(cmd, p)
+		result := translateToolResult(cmd, p, "")
 		if !result.IsError {
 			t.Error("IsError = false, want true for an error call")
 		}
@@ -106,7 +109,7 @@ func TestTranslateStepFinish_CostTokensIsObjectShaped(t *testing.T) {
 		Tokens: stepFinishTokens{Input: 100, Output: 50, Cache: stepFinishCache{Read: 12}},
 	}
 
-	got := translateStepFinish(cmd, part)
+	got := translateStepFinish(cmd, part, "")
 	if got.Cost.Tokens.Input != 100 || got.Cost.Tokens.Output != 50 {
 		t.Errorf("Cost.Tokens = %#v, want Input=100 Output=50", got.Cost.Tokens)
 	}

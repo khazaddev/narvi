@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 )
 
 // sseDataPrefix is the one SSE field this adapter cares about — VERIFIED
@@ -133,7 +135,13 @@ func (a *Adapter) processSSELine(line string) {
 
 // dispatchEvent routes one parsed SSE envelope by its own "type" field —
 // the concrete shapes and verification status of each are documented on
-// their own properties struct in types.go.
+// their own properties struct in types.go. Every case below resolves
+// props.SessionID via a.resolveEvent, NOT a.lookupTurn directly, so an
+// event whose sessionID belongs to a registered SUB-TASK's own child
+// OpenCode session (see registerSubtaskSession/maybeStartTaskSubtask,
+// this file, and Adapter's own package doc comment for the real correlator
+// this implements) is routed to the same enclosing turnState instead of
+// being silently dropped as "no registered turn for this session".
 func (a *Adapter) dispatchEvent(env sseEnvelope) {
 	switch env.Type {
 	case "server.connected":
@@ -145,14 +153,27 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			slog.Warn("opencode: malformed message.updated event, skipping", "error", err)
 			return
 		}
-		ts := a.lookupTurn(props.SessionID)
-		if ts == nil {
+		ts, subTaskID, ok := a.resolveEvent(props.SessionID)
+		if !ok {
 			return
 		}
 		ts.touch()
 		if props.Info.Role == "assistant" {
-			ts.setLastAssistantError(props.Info.Error)
+			// markAssistantMessageID is shared across the main lane and
+			// every sub-task lane alike -- dispatchPart's own
+			// isAssistantMessage gate (keyed by messageID, globally
+			// unique across OpenCode) needs a sub-task's own assistant
+			// messages marked too, or its own text parts would never
+			// translate. lastAssistantError, in contrast, feeds the
+			// ENCLOSING turn's own deriveOutcome (below) -- a sub-task's
+			// own internal error must NOT leak into the main turn's own
+			// outcome (see maybeFinishTaskSubtask for the real signal
+			// that governs a sub-task's OWN outcome instead), so that is
+			// only set for the main lane.
 			ts.markAssistantMessageID(props.Info.ID)
+			if subTaskID == "" {
+				ts.setLastAssistantError(props.Info.Error)
+			}
 		}
 
 	case "message.part.updated":
@@ -161,12 +182,12 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			slog.Warn("opencode: malformed message.part.updated event, skipping", "error", err)
 			return
 		}
-		ts := a.lookupTurn(props.SessionID)
-		if ts == nil {
+		ts, subTaskID, ok := a.resolveEvent(props.SessionID)
+		if !ok {
 			return
 		}
 		ts.touch()
-		a.dispatchPart(ts, props.Part)
+		a.dispatchPart(ts, subTaskID, props.Part)
 
 	case "session.idle":
 		var props sessionIdleProps
@@ -174,11 +195,21 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			slog.Warn("opencode: malformed session.idle event, skipping", "error", err)
 			return
 		}
-		ts := a.lookupTurn(props.SessionID)
-		if ts == nil {
+		ts, subTaskID, ok := a.resolveEvent(props.SessionID)
+		if !ok {
 			return
 		}
 		ts.touch()
+		if subTaskID != "" {
+			// A sub-task's own child session going idle is NOT this
+			// turn's own terminal signal -- see maybeFinishTaskSubtask
+			// (this file) for the real, per-sub-task completion signal
+			// this adapter uses instead (the enclosing "task" tool
+			// call's own "completed"/"error" transition, delivered on
+			// the MAIN lane). touch() above already recorded this turn
+			// as still alive.
+			return
+		}
 		hasText, hasToolCall := ts.outcomeInputs()
 		a.finalize(ts, deriveOutcome(ts.errorForOutcome(), hasText, hasToolCall))
 
@@ -188,11 +219,18 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			slog.Warn("opencode: malformed session.error event, skipping", "error", err)
 			return
 		}
-		ts := a.lookupTurn(props.SessionID)
-		if ts == nil {
+		ts, subTaskID, ok := a.resolveEvent(props.SessionID)
+		if !ok {
 			return
 		}
 		ts.touch()
+		if subTaskID != "" {
+			// Mirrors session.idle above -- a sub-task's own internal
+			// error must not set the ENCLOSING turn's own sessionError;
+			// the task tool call's own "error" status is the real signal
+			// (maybeFinishTaskSubtask).
+			return
+		}
 		ts.setSessionError(props.Error)
 
 	default:
@@ -210,8 +248,11 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 
 // dispatchPart decodes one message.part.updated's own "part" object by its
 // "type" discriminator (partEnvelope) and translates it, when a wire event
-// slot exists for that part type.
-func (a *Adapter) dispatchPart(ts *turnState, raw json.RawMessage) {
+// slot exists for that part type. subTaskID is "" for the turn's own main
+// lane, or the enclosing sub-task's own subTaskId (see
+// Adapter.resolveEvent) — threaded into every translate* call for the six
+// event types Finding 1's own schema change gave a subTaskId field to.
+func (a *Adapter) dispatchPart(ts *turnState, subTaskID string, raw json.RawMessage) {
 	var env partEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
 		slog.Warn("opencode: malformed part envelope, skipping", "error", err)
@@ -234,12 +275,17 @@ func (a *Adapter) dispatchPart(ts *turnState, raw json.RawMessage) {
 			return
 		}
 		if p.Text != "" {
+			// Shared across the main lane and every sub-task lane alike:
+			// a turn that delegated its whole real output to a sub-task
+			// genuinely did produce output, so it must count toward
+			// deriveOutcome's own "treat no output as failure" check
+			// (§7) exactly as if the main lane had produced it directly.
 			ts.markSawText()
 		}
-		ts.emit(translateToken(ts.cmd, p))
+		ts.emit(translateToken(ts.cmd, p, subTaskID))
 
 	case "step-start":
-		ts.emit(translateStepStart(ts.cmd, env))
+		ts.emit(translateStepStart(ts.cmd, env, subTaskID))
 
 	case "step-finish":
 		var p stepFinishPart
@@ -247,7 +293,7 @@ func (a *Adapter) dispatchPart(ts *turnState, raw json.RawMessage) {
 			slog.Warn("opencode: malformed step-finish part, skipping", "error", err)
 			return
 		}
-		ts.emit(translateStepFinish(ts.cmd, p))
+		ts.emit(translateStepFinish(ts.cmd, p, subTaskID))
 
 	case "tool":
 		var p toolPart
@@ -255,7 +301,7 @@ func (a *Adapter) dispatchPart(ts *turnState, raw json.RawMessage) {
 			slog.Warn("opencode: malformed tool part, skipping", "error", err)
 			return
 		}
-		a.dispatchTool(ts, p)
+		a.dispatchTool(ts, p, subTaskID)
 
 	case "subtask":
 		var p subtaskPart
@@ -273,7 +319,10 @@ func (a *Adapter) dispatchPart(ts *turnState, raw json.RawMessage) {
 		// room mid-turn) is an operationally meaningful degradation this
 		// adapter surfaces as a wire warning (translateCompactionOverflow)
 		// — the closest existing slot, since the wire contract has no
-		// dedicated compaction event.
+		// dedicated compaction event. "warning" is one of the session/
+		// connection-lifecycle event types §6.1 explicitly excludes from
+		// ever carrying subTaskId, so no subTaskID is threaded here even
+		// when this fires for a sub-task's own compaction.
 		var p compactionPart
 		if err := json.Unmarshal(raw, &p); err != nil {
 			slog.Warn("opencode: malformed compaction part, skipping", "error", err)
@@ -296,30 +345,51 @@ func (a *Adapter) dispatchPart(ts *turnState, raw json.RawMessage) {
 // non-empty (skipping the empty-input "pending" state), and tool_result
 // exactly ONCE, on the first "completed" or "error" status for that
 // callID, ignoring every intermediate "running" update in between.
-func (a *Adapter) dispatchTool(ts *turnState, p toolPart) {
+// subTaskID (see dispatchPart) is threaded onto the emitted tool_call/
+// tool_result. When p.Tool == "task", this ALSO drives the real §7.1
+// sub-task lifecycle (maybeStartTaskSubtask/maybeFinishTaskSubtask below)
+// — see Adapter's own package doc comment for the full writeup of the
+// correlator this implements.
+func (a *Adapter) dispatchTool(ts *turnState, p toolPart, subTaskID string) {
 	switch p.State.Status {
 	case "pending":
 		// Nothing real to report yet (§7: empty input).
 
 	case "running":
+		if p.Tool == "task" {
+			a.maybeStartTaskSubtask(ts, p)
+		}
 		if ts.alreadySentCall(p.CallID) || toolInputEmpty(p.State.Input) {
 			return
 		}
-		a.emitToolCall(ts, p)
+		a.emitToolCall(ts, p, subTaskID)
 
 	case "completed", "error":
+		if p.Tool == "task" {
+			// Covers the symmetric "resolved so fast we never saw
+			// running" case for the sub-task's own lifecycle too -- a
+			// call that jumps straight from "pending" to
+			// "completed"/"error" still owes a sub_task_start (idempotent
+			// regardless: see ts.subtaskAlreadyStarted's own doc comment)
+			// BEFORE its own enclosing tool_call, matching the "running"
+			// branch's own ordering above.
+			a.maybeStartTaskSubtask(ts, p)
+		}
 		if !ts.alreadySentCall(p.CallID) {
 			// This call resolved so fast we never saw a non-empty
 			// "running" state first -- still owe a tool_call (the wire
 			// contract pairs call+result) using this same final state's
 			// own input.
-			a.emitToolCall(ts, p)
+			a.emitToolCall(ts, p, subTaskID)
 		}
 		if ts.alreadySentResult(p.CallID) {
 			return
 		}
 		ts.markResultSent(p.CallID)
-		ts.emit(translateToolResult(ts.cmd, p))
+		if p.Tool == "task" {
+			a.maybeFinishTaskSubtask(ts, p)
+		}
+		ts.emit(translateToolResult(ts.cmd, p, subTaskID))
 
 	default:
 		slog.Warn("opencode: unrecognized tool state status, skipping",
@@ -327,8 +397,8 @@ func (a *Adapter) dispatchTool(ts *turnState, p toolPart) {
 	}
 }
 
-func (a *Adapter) emitToolCall(ts *turnState, p toolPart) {
-	event, err := translateToolCall(ts.cmd, p)
+func (a *Adapter) emitToolCall(ts *turnState, p toolPart, subTaskID string) {
+	event, err := translateToolCall(ts.cmd, p, subTaskID)
 	if err != nil {
 		slog.Warn("opencode: malformed tool input, skipping tool_call", "callID", p.CallID, "error", err)
 		return
@@ -338,13 +408,101 @@ func (a *Adapter) emitToolCall(ts *turnState, p toolPart) {
 	ts.emit(event)
 }
 
-// dispatchSubtaskStart implements §7.1's own sub-task fan-out — see
-// adapter.go's own package doc comment for the honest, documented
-// best-effort limits of this adapter's sub-task handling.
+// dispatchSubtaskStart implements the LEGACY, still-unverified-live
+// "subtask" part path — see types.go's own subtaskPart doc comment and
+// Adapter's own package doc comment for why maybeStartTaskSubtask/
+// maybeFinishTaskSubtask below are now the PRIMARY, empirically-verified
+// §7.1 sub-task path. Kept as an extra fallback in case some other
+// OpenCode-internal path emits this part type; harmless to keep alongside
+// the task-tool path since the two use disjoint id spaces (a subtaskPart's
+// own "prt_..." id here vs. a task tool call's own spawned "ses_..." child
+// session id there).
 func (a *Adapter) dispatchSubtaskStart(ts *turnState, p subtaskPart) {
 	if ts.subtaskAlreadyStarted(p.ID) {
 		return
 	}
 	ts.markSubtaskStarted(p.ID)
 	ts.emit(translateSubTaskStart(ts.cmd, p))
+}
+
+// maybeStartTaskSubtask implements the "sub_task_start" half of §7.1's
+// sub-task fan-out for OpenCode's own "task" tool — the REAL,
+// empirically-verified correlator this Step's own live investigation found
+// (see Adapter's own package doc comment for the full writeup): the task
+// tool's own toolPart.State carries a "metadata" object once status
+// reaches "running" (taskToolMetadata, types.go), naming the freshly-
+// spawned sub-agent's own distinct OpenCode session id — used directly as
+// this sub-task's own subTaskId (the same "derived from whatever
+// correlator the engine itself exposes" convention SubTaskStart's own
+// wire-schema doc comment already establishes). Idempotent via
+// ts.subtaskAlreadyStarted/markSubtaskStarted: repeated "running"
+// deliveries for the same call (or a "completed"/"error" one, for a call
+// that resolved before any "running" update ever arrived — see
+// dispatchTool's own "completed","error" branch) only start it once.
+// Registers the child session's own routing entry (registerSubtaskSession)
+// so its own subsequent inner events (dispatchEvent, via resolveEvent) get
+// tagged with this same subTaskId -- ONLY once ts.emit itself confirms this
+// turn hasn't already finalized on a concurrent goroutine (ts.emit's own
+// return value, gating this exact race -- see its own doc comment): a
+// "running" delivery processed after a concurrent finalize has already
+// drained this turn's open sub-tasks must not leave behind a routing entry
+// finalize will never revisit, on an Adapter-lifetime map nothing else
+// would ever clean up.
+func (a *Adapter) maybeStartTaskSubtask(ts *turnState, p toolPart) {
+	meta, ok := decodeTaskMetadata(p.State.Metadata)
+	if !ok || ts.subtaskAlreadyStarted(meta.SessionID) {
+		return
+	}
+	ts.markSubtaskStarted(meta.SessionID)
+	if !ts.emit(translateSubTaskStartFromTask(ts.cmd, p, meta.SessionID)) {
+		return
+	}
+	a.registerSubtaskSession(meta.SessionID, ts, meta.SessionID)
+}
+
+// maybeFinishTaskSubtask implements the "sub_task_finish" half — called
+// from dispatchTool's own "completed"/"error" branch, gated by the SAME
+// per-callID alreadySentResult/markResultSent dedup ordinary tool_result
+// already uses (§7's "dedupe tool states by sid:callID:status" quirk), so
+// a repeated terminal delivery for the same call can never double-close
+// the same sub-task. This is a genuinely MORE PRECISE signal than the
+// enclosing turn's own eventual finalize (still the fallback for a
+// sub-task whose own task tool call never reaches a terminal status
+// before the turn itself ends — see Adapter.finalize's own
+// drainOpenSubtasks call): "error" maps to SubTaskFinish's own "failed"
+// outcome, anything else ("completed") to "completed" — there is no
+// "cancelled" outcome from here, since a genuinely cancelled TURN closes
+// its own still-open sub-tasks via the turn-level finalize path instead,
+// and a task tool call reaching "error"/"completed" on its own is never
+// itself a cancellation. No-ops if this subTaskId was never (or is no
+// longer) open — e.g. metadata absent/malformed, or already closed.
+func (a *Adapter) maybeFinishTaskSubtask(ts *turnState, p toolPart) {
+	meta, ok := decodeTaskMetadata(p.State.Metadata)
+	if !ok || !ts.subtaskAlreadyStarted(meta.SessionID) {
+		return
+	}
+	outcome := sandboxws.ExecutionCompleteOutcomeCompleted
+	if p.State.Status == "error" {
+		outcome = sandboxws.ExecutionCompleteOutcomeFailed
+	}
+	ts.markSubtaskFinished(meta.SessionID)
+	a.unregisterSubtaskSession(meta.SessionID)
+	ts.emit(translateSubTaskFinish(ts.cmd, meta.SessionID, outcome))
+}
+
+// decodeTaskMetadata best-effort decodes a task toolPart's own
+// State.Metadata into taskToolMetadata, reporting ok=false for absent,
+// malformed, or session-id-less metadata (a NON-task tool's own
+// differently-shaped, or entirely absent, metadata included) — never an
+// error path, since metadata is a schema-generic `object` field this
+// adapter has no business rejecting a whole event over.
+func decodeTaskMetadata(raw json.RawMessage) (taskToolMetadata, bool) {
+	if len(raw) == 0 {
+		return taskToolMetadata{}, false
+	}
+	var meta taskToolMetadata
+	if err := json.Unmarshal(raw, &meta); err != nil || meta.SessionID == "" {
+		return taskToolMetadata{}, false
+	}
+	return meta, true
 }

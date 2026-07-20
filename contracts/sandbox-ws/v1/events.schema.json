@@ -56,7 +56,8 @@
         "messageId": { "type": "string" },
         "sessionId": { "type": "string", "format": "uuid" },
         "gen": { "type": "integer" },
-        "text": { "type": "string", "description": "The full cumulative text so far for this messageId — replace, do not append." }
+        "text": { "type": "string", "description": "The full cumulative text so far for this messageId — replace, do not append." },
+        "subTaskId": { "type": ["string", "null"], "description": "§6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to." }
       }
     },
     "ToolCall": {
@@ -70,7 +71,8 @@
         "gen": { "type": "integer" },
         "callId": { "type": "string" },
         "toolName": { "type": "string" },
-        "input": { "type": "object", "additionalProperties": true, "description": "Freeform, tool-specific input." }
+        "input": { "type": "object", "additionalProperties": true, "description": "Freeform, tool-specific input." },
+        "subTaskId": { "type": ["string", "null"], "description": "§6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to." }
       }
     },
     "ToolResult": {
@@ -84,7 +86,8 @@
         "gen": { "type": "integer" },
         "callId": { "type": "string" },
         "output": { "type": "object", "additionalProperties": true, "description": "Freeform, tool-specific output." },
-        "isError": { "type": "boolean" }
+        "isError": { "type": "boolean" },
+        "subTaskId": { "type": ["string", "null"], "description": "§6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to." }
       }
     },
     "StepStart": {
@@ -96,7 +99,8 @@
         "messageId": { "type": "string" },
         "sessionId": { "type": "string", "format": "uuid" },
         "gen": { "type": "integer" },
-        "stepId": { "type": "string" }
+        "stepId": { "type": "string" },
+        "subTaskId": { "type": ["string", "null"], "description": "§6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to." }
       }
     },
     "StepFinish": {
@@ -110,6 +114,7 @@
         "sessionId": { "type": "string", "format": "uuid" },
         "gen": { "type": "integer" },
         "stepId": { "type": "string" },
+        "subTaskId": { "type": ["string", "null"], "description": "§6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to." },
         "cost": {
           "type": "object",
           "additionalProperties": false,
@@ -176,7 +181,8 @@
           "description": "Deterministic ackId = 'execution_complete:{messageId}' (§6.1)."
         },
         "outcome": { "type": "string", "enum": ["completed", "failed", "cancelled"] },
-        "reason": { "type": ["string", "null"] }
+        "reason": { "type": ["string", "null"] },
+        "subTaskId": { "type": ["string", "null"], "description": "§6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to." }
       }
     },
     "PushComplete": {
