@@ -166,6 +166,7 @@ func serve() error {
 	eventStore := postgres.NewEventStore(pool)
 	artifactStore := postgres.NewArtifactStore(pool)
 	wsTokenStore := postgres.NewWSTokenStore(pool)
+	environmentStore := postgres.NewEnvironmentStore(pool)
 
 	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
 	// OAuth login, backend-issued session cookies, and route middleware --
@@ -241,7 +242,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, registry))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, registry))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))

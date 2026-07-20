@@ -9,8 +9,14 @@
 -- and behaving identically: a nil/absent []byte param binds SQL NULL, and
 -- COALESCE(NULL, '[]'::jsonb) resolves to the same empty-list default a
 -- bare column-default insert would have produced.
-INSERT INTO sessions (title, spawn_source, created_by, repos)
-VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb))
+--
+-- environment_id/provenance_tag (row 10, "domain: Environment scoping",
+-- §14.1) are both sqlc.narg -- nullable, optional params -- so every
+-- EXISTING call site that never sets them (every session created before
+-- this batch) keeps compiling and behaving identically: both stay NULL,
+-- byte-for-byte today's unscoped behavior.
+INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag)
+VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb), sqlc.narg('environment_id'), sqlc.narg('provenance_tag'))
 RETURNING *;
 
 -- name: GetSession :one

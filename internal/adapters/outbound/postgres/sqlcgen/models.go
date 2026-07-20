@@ -476,6 +476,13 @@ type AuditLog struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type Environment struct {
+	ID             pgtype.UUID        `json:"id"`
+	PathScope      []byte             `json:"path_scope"`
+	MockConfigured bool               `json:"mock_configured"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type Event struct {
 	ID        int64              `json:"id"`
 	SessionID pgtype.UUID        `json:"session_id"`
@@ -554,6 +561,8 @@ type Session struct {
 	ActorEpoch             int64                 `json:"actor_epoch"`
 	Repos                  []byte                `json:"repos"`
 	OpencodeConversationID *string               `json:"opencode_conversation_id"`
+	EnvironmentID          pgtype.UUID           `json:"environment_id"`
+	ProvenanceTag          *string               `json:"provenance_tag"`
 }
 
 type SessionTimer struct {
