@@ -482,6 +482,7 @@ type Event struct {
 	Type      string             `json:"type"`
 	Payload   []byte             `json:"payload"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	MessageID string             `json:"message_id"`
 }
 
 type Identity struct {

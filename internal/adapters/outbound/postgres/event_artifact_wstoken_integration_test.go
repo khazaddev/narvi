@@ -119,11 +119,12 @@ func TestEventStore_ListForSession(t *testing.T) {
 
 	events := narvipg.NewEventStore(pool)
 
-	var created []sqlcgen.Event
+	var created []sqlcgen.CreateEventRow
 	for i := 0; i < 5; i++ {
 		row, err := events.Create(ctx, sqlcgen.CreateEventParams{
 			SessionID: sessionID,
 			Type:      "token",
+			MessageID: fmt.Sprintf("msg-%d", i),
 			Payload:   []byte(fmt.Sprintf(`{"n":%d}`, i)),
 		})
 		if err != nil {
@@ -178,6 +179,91 @@ func TestEventStore_ListForSession(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Errorf("other session's events = %d, want 0", len(none))
+	}
+}
+
+// TestEventStore_Create_DedupesOnSessionIDAndMessageID proves Finding 2's
+// own upsert contract end to end against a real Postgres instance: two
+// CreateEvent calls carrying the SAME (session_id, message_id) return the
+// identical row (same id and created_at) both times -- never a duplicate
+// row, never a unique-constraint-violation error surfacing to the caller
+// -- with Inserted true on the genuinely-fresh first call and false on the
+// resend. Also proves the dedupe key is scoped to (session_id,
+// message_id) together, not message_id alone: the SAME message_id under a
+// DIFFERENT session_id is a distinct row entirely.
+func TestEventStore_Create_DedupesOnSessionIDAndMessageID(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	events := narvipg.NewEventStore(pool)
+
+	first, err := events.Create(ctx, sqlcgen.CreateEventParams{
+		SessionID: sessionID,
+		Type:      "heartbeat",
+		MessageID: "dup-msg-1",
+		Payload:   []byte(`{"n":1}`),
+	})
+	if err != nil {
+		t.Fatalf("create first: %v", err)
+	}
+	if !first.Inserted {
+		t.Error("first.Inserted = false, want true (a genuinely fresh row)")
+	}
+
+	// A resend of the SAME (session_id, message_id) -- e.g. the sandbox
+	// never saw the original's ack and retried it verbatim -- must return
+	// the SAME row, not error and not create a second one, even though the
+	// payload/type given this time differ (the DO UPDATE is a deliberate
+	// no-op on type; whichever payload arrived first is what persists).
+	second, err := events.Create(ctx, sqlcgen.CreateEventParams{
+		SessionID: sessionID,
+		Type:      "heartbeat",
+		MessageID: "dup-msg-1",
+		Payload:   []byte(`{"n":2}`),
+	})
+	if err != nil {
+		t.Fatalf("create second (resend): %v", err)
+	}
+	if second.Inserted {
+		t.Error("second.Inserted = true, want false (a deduped resend, not a fresh insert)")
+	}
+	if second.ID != first.ID {
+		t.Errorf("second.ID = %d, want %d (same row as the first insert)", second.ID, first.ID)
+	}
+	if !second.CreatedAt.Time.Equal(first.CreatedAt.Time) {
+		t.Errorf("second.CreatedAt = %v, want %v (same row, created_at must not change)", second.CreatedAt.Time, first.CreatedAt.Time)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM events WHERE session_id = $1 AND message_id = $2`,
+		sessionID, "dup-msg-1",
+	).Scan(&count); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("event count for this (session_id, message_id) = %d, want 1 (no duplicate row)", count)
+	}
+
+	// The SAME message_id under a DIFFERENT session is a genuinely
+	// distinct event, not a dedupe collision -- the unique index is on
+	// (session_id, message_id) together, not message_id alone.
+	otherSessionID := createTestSession(ctx, t, pool)
+	third, err := events.Create(ctx, sqlcgen.CreateEventParams{
+		SessionID: otherSessionID,
+		Type:      "heartbeat",
+		MessageID: "dup-msg-1",
+		Payload:   []byte(`{"n":3}`),
+	})
+	if err != nil {
+		t.Fatalf("create third (same message_id, different session): %v", err)
+	}
+	if !third.Inserted {
+		t.Error("third.Inserted = false, want true (a different session's own row, not a dedupe)")
+	}
+	if third.ID == first.ID {
+		t.Error("third.ID == first.ID, want a distinct row for a different session_id")
 	}
 }
 

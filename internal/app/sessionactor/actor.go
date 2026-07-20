@@ -282,19 +282,31 @@ func (a *Actor) drainMailbox() {
 // map[string]any this package would otherwise have to marshal itself --
 // skipping that round-trip means the append-only event log holds precisely
 // what the sandbox sent, not a lossy re-encoding through an intermediate Go
-// value.
-func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string, raw json.RawMessage) error {
-	if _, err := a.stores.event.WithTx(tx).Create(ctx, sqlcgen.CreateEventParams{
+// value. messageID is the wire event's own top-level "messageId" (cmd.
+// MessageID, command.go) -- CreateEvent upserts on (session_id, messageID)
+// (§6.1), so a genuine resend of an already-persisted event is deduped
+// (Inserted false) rather than appended as an indistinguishable duplicate
+// row; see this function's own broadcast-queueing guard below for why a
+// deduped resend must never reach a.pendingBroadcast twice.
+func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string, messageID string, raw json.RawMessage) error {
+	row, err := a.stores.event.WithTx(tx).Create(ctx, sqlcgen.CreateEventParams{
 		SessionID: a.sessionID,
 		Type:      eventType,
+		MessageID: messageID,
 		Payload:   raw,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("sessionactor: append raw %s event: %w", eventType, err)
 	}
 	// Queue for broadcast AFTER commit (§6.2's "→ broadcast stream", made
 	// generic rather than per-handler -- see transact's own doc comment
-	// for the commit-then-broadcast, discard-on-rollback ordering).
-	a.pendingBroadcast = append(a.pendingBroadcast, raw)
+	// for the commit-then-broadcast, discard-on-rollback ordering) -- only
+	// when this call genuinely inserted a fresh row: a deduped resend
+	// (Inserted false) must never cause the SAME event to be broadcast
+	// twice to live subscribers.
+	if row.Inserted {
+		a.pendingBroadcast = append(a.pendingBroadcast, raw)
+	}
 	return nil
 }
 

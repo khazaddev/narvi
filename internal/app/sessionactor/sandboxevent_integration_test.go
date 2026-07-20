@@ -10,9 +10,12 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -97,7 +100,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 	}
 
 	tokenRaw := json.RawMessage(`{"type":"token","messageId":"tok-1","sessionId":"s","gen":1}`)
-	outcome := send(t, SandboxEvent{Type: "token", Gen: 1, Raw: tokenRaw})
+	outcome := send(t, SandboxEvent{Type: "token", Gen: 1, MessageID: "tok-1", Raw: tokenRaw})
 	if !outcome.Persisted {
 		t.Error("token event: Persisted = false, want true")
 	}
@@ -125,7 +128,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 	// --- (b) a critical event persists AND its outcome carries the ackId
 	// verbatim. ---
 	critRaw := json.RawMessage(`{"type":"execution_complete","messageId":"m1","sessionId":"s","gen":1,"ackId":"execution_complete:m1","outcome":"completed"}`)
-	outcome = send(t, SandboxEvent{Type: "execution_complete", Gen: 1, Raw: critRaw})
+	outcome = send(t, SandboxEvent{Type: "execution_complete", Gen: 1, MessageID: "m1", Raw: critRaw})
 	if !outcome.Persisted {
 		t.Error("execution_complete: Persisted = false, want true")
 	}
@@ -139,7 +142,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 	// --- (c) "ready" while Connecting transitions to Booting. ---
 	moveTo(sqlcgen.SandboxStatusConnecting)
 	readyRaw := json.RawMessage(`{"type":"ready","messageId":"r1","sessionId":"s","gen":1}`)
-	outcome = send(t, SandboxEvent{Type: "ready", Gen: 1, Raw: readyRaw})
+	outcome = send(t, SandboxEvent{Type: "ready", Gen: 1, MessageID: "r1", Raw: readyRaw})
 	if !outcome.Persisted {
 		t.Error("ready: Persisted = false, want true")
 	}
@@ -154,7 +157,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 	// --- (d) "heartbeat" with nil lastBootPhase while Booting transitions
 	// to Ready. ---
 	hbRaw := json.RawMessage(`{"type":"heartbeat","messageId":"h1","sessionId":"s","gen":1,"conversationId":null,"lastBootPhase":null}`)
-	outcome = send(t, SandboxEvent{Type: "heartbeat", Gen: 1, Raw: hbRaw, LastBootPhase: nil})
+	outcome = send(t, SandboxEvent{Type: "heartbeat", Gen: 1, MessageID: "h1", Raw: hbRaw, LastBootPhase: nil})
 	if !outcome.Persisted {
 		t.Error("heartbeat: Persisted = false, want true")
 	}
@@ -174,7 +177,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 	}
 	time.Sleep(5 * time.Millisecond) // ensure a distinguishable later timestamp
 	readyAgainRaw := json.RawMessage(`{"type":"ready","messageId":"r2","sessionId":"s","gen":1}`)
-	outcome = send(t, SandboxEvent{Type: "ready", Gen: 1, Raw: readyAgainRaw})
+	outcome = send(t, SandboxEvent{Type: "ready", Gen: 1, MessageID: "r2", Raw: readyAgainRaw})
 	if !outcome.Persisted {
 		t.Error("second ready: Persisted = false, want true")
 	}
@@ -199,7 +202,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 		t.Fatalf("get sandbox: %v", err)
 	}
 	staleRaw := json.RawMessage(`{"type":"heartbeat","messageId":"h-stale","sessionId":"s","gen":0}`)
-	outcome = send(t, SandboxEvent{Type: "heartbeat", Gen: 0, Raw: staleRaw})
+	outcome = send(t, SandboxEvent{Type: "heartbeat", Gen: 0, MessageID: "h-stale", Raw: staleRaw})
 	if outcome.Persisted {
 		t.Error("stale-gen event: Persisted = true, want false")
 	}
@@ -292,7 +295,7 @@ func TestHandleSandboxEvent_ArmsLivenessAndInactivityOnceOnBootingToReady(t *tes
 	// First heartbeat, nil lastBootPhase, while Booting -> transitions to
 	// Ready (sandboxTransitionTrigger's own documented (b) mapping).
 	hbRaw := json.RawMessage(`{"type":"heartbeat","messageId":"h1","sessionId":"s","gen":1,"conversationId":null,"lastBootPhase":null}`)
-	outcome := send(t, SandboxEvent{Type: "heartbeat", Gen: int(created.Gen), Raw: hbRaw, LastBootPhase: nil})
+	outcome := send(t, SandboxEvent{Type: "heartbeat", Gen: int(created.Gen), MessageID: "h1", Raw: hbRaw, LastBootPhase: nil})
 	if !outcome.Persisted {
 		t.Fatal("first heartbeat: Persisted = false, want true")
 	}
@@ -330,7 +333,7 @@ func TestHandleSandboxEvent_ArmsLivenessAndInactivityOnceOnBootingToReady(t *tes
 	// the once-only guard, not a re-arm-every-heartbeat regression that
 	// would starve liveness_check of ever actually firing.
 	hb2Raw := json.RawMessage(`{"type":"heartbeat","messageId":"h2","sessionId":"s","gen":1,"conversationId":null,"lastBootPhase":null}`)
-	outcome = send(t, SandboxEvent{Type: "heartbeat", Gen: int(created.Gen), Raw: hb2Raw, LastBootPhase: nil})
+	outcome = send(t, SandboxEvent{Type: "heartbeat", Gen: int(created.Gen), MessageID: "h2", Raw: hb2Raw, LastBootPhase: nil})
 	if !outcome.Persisted {
 		t.Fatal("second heartbeat: Persisted = false, want true")
 	}
@@ -357,6 +360,117 @@ func TestHandleSandboxEvent_ArmsLivenessAndInactivityOnceOnBootingToReady(t *tes
 	if !inactivityFiresAt2.Equal(inactivityFiresAt) {
 		t.Errorf("inactivity fires_at changed on a second, already-Ready heartbeat: before=%v after=%v (must stay untouched)", inactivityFiresAt, inactivityFiresAt2)
 	}
+}
+
+// blockingCommander is a test-only ports.SandboxCommander whose
+// SendCommand call closes started (the FIRST time it is ever called, only)
+// and then blocks until release is closed -- a controllable synchronization
+// point, not a sleep/timing guess, for proving a happens-before ordering
+// between two goroutines-in-effect (here: the actor's own single
+// mailbox-processing goroutine, at two different points in its own
+// sequential execution of handleSandboxEvent).
+type blockingCommander struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+var _ ports.SandboxCommander = (*blockingCommander)(nil)
+
+func newBlockingCommander() *blockingCommander {
+	return &blockingCommander{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (c *blockingCommander) SendCommand(string, json.RawMessage) error {
+	close(c.started)
+	<-c.release
+	return nil
+}
+
+// TestHandleSandboxEvent_AckReplySentBeforeSlowPostCommitSideEffects proves
+// Finding 1's own fix: cmd.Reply already carries an outcome BEFORE the
+// slow best-effort post-commit side effect a real execution_complete
+// triggers (sendPushBestEffort's own SandboxCommander.SendCommand call)
+// is ever invoked -- not merely before it returns. The proof is a real
+// happens-before relationship established via channels, not a sleep or
+// timing guess (matching internal/adapters/outbound/opencode's own
+// TestFinalize_LateSubtaskEmitIsDroppedNotRacedPastExecutionComplete
+// precedent for this kind of controllable-blocking-point test):
+// blockingCommander.SendCommand only closes `started` the instant it is
+// entered, then blocks indefinitely on `release`. Since handleSandboxEvent
+// runs entirely on the actor's own single command-processing goroutine,
+// `started` being closed proves SendCommand has genuinely been reached --
+// and, under the OLD (wrong) ordering this batch fixes, cmd.Reply would
+// not have been sent yet at that exact instant (it ran AFTER
+// sendPushBestEffort returned); under the fixed ordering, the reply was
+// already placed on the buffered reply channel strictly before
+// handleEnsureDispatched/sendPushBestEffort ever ran, so a non-blocking
+// receive on reply must already succeed the moment `started` fires.
+func TestHandleSandboxEvent_AckReplySentBeforeSlowPostCommitSideEffects(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{},
+		"repo1", "https://github.com/acme/repo1.git", "feature-x")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createProcessingTurn(ctx, t, turnStore, sessionID)
+
+	commander := newBlockingCommander()
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	reply := make(chan SandboxEventOutcome, 1)
+	cmd := SandboxEvent{
+		Type:  "execution_complete",
+		Gen:   1,
+		Raw:   executionCompleteRaw(t, sessionID.String(), 1, sandboxws.ExecutionCompleteOutcomeCompleted),
+		Reply: reply,
+	}
+	if err := a.Send(ctx, cmd); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	// Wait for SendCommand to have genuinely been entered -- proof that
+	// handleSandboxEvent's own transact already committed (a "completed"
+	// execution_complete only ever reaches sendPushBestEffort's
+	// commander.SendCommand call AFTER its transact commits, pushpr.go),
+	// and that handleEnsureDispatched has already run too (it runs first,
+	// per the fix's own ordering).
+	select {
+	case <-commander.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the blocking SandboxCommander.SendCommand to be invoked")
+	}
+
+	// At this EXACT instant, SendCommand is still blocked on release (never
+	// closed yet below) -- so if cmd.Reply already has a value ready RIGHT
+	// NOW, it was necessarily placed there strictly before SendCommand was
+	// ever called, since both run sequentially on the same goroutine.
+	select {
+	case outcome := <-reply:
+		if !outcome.Persisted {
+			t.Error("outcome.Persisted = false, want true")
+		}
+		if outcome.AckID == "" {
+			t.Error("outcome.AckID is empty, want a real ack for this critical event")
+		}
+	default:
+		t.Fatal("cmd.Reply had no value ready while the slow post-commit side effect (SandboxCommander.SendCommand) was still blocked -- the ack is being delayed by a side effect, the exact regression this batch fixes")
+	}
+
+	// Release the blocked SendCommand so the actor can finish handling
+	// this command and shut down cleanly.
+	close(commander.release)
 }
 
 // absDuration returns d's absolute value.

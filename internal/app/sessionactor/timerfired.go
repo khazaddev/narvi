@@ -56,6 +56,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -269,9 +270,35 @@ func (a *Actor) handleLivenessCheckTimer(ctx context.Context) error {
 }
 
 // handleTerminalGraceTimer implements the `terminal_grace` named timer
-// (§2, §3.2).
+// (§2, §3.2). Also closes a confirmed redelivery gap (this batch's own
+// fix): a session whose sandbox NEVER manages to spawn at all has no
+// sandbox event -- and therefore no handleSandboxEvent call -- to ever
+// re-trigger EnsureDispatched (command.go's own doc comment names exactly
+// these two call sites: httpapi.CreateSession, once, at turn creation, and
+// handleSandboxEvent, on every real sandbox event). Reusing THIS timer
+// (rather than inventing a 6th named timer -- command.go's own doc
+// comment is explicit that the 5 named persistent timers are a closed
+// set) as the redelivery trigger is correct because it is the one
+// existing handler that transitions a sandbox into its final Suspect->
+// Failed state while a turn may still be Pending: once terminal_grace's
+// own transact below commits, handleEnsureDispatched is invoked
+// unconditionally -- exactly mirroring handleSandboxEvent's own "re-
+// evaluate dispatch state right after this handler's own transact
+// commits" precedent (sandboxevent.go) -- so tryPlanSpawn/dispatch.go's
+// own already-correct "spawn again from Failed via SpawnTrigger" logic
+// gets a genuine chance to run again, using platform.Timeouts.
+// TerminalGracePeriod's own existing ~60s cadence (plus dispatch.go's own
+// SpawnCooldown, which already gates how soon a fresh attempt is actually
+// allowed) as the natural retry interval.
+//
+// Called even on the two early-return branches below (no sandbox row;
+// sandbox already moved past Suspect via some other path):
+// handleEnsureDispatched is designed as a safe, idempotent "please
+// re-evaluate" signal (see its own doc comment) -- calling it there too is
+// a harmless no-op, not a bug, and special-casing just the Suspect->Failed
+// branch would add complexity for no real benefit.
 func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
-	return a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		sandboxRow, err := a.stores.sandbox.WithTx(tx).Get(ctx, a.sessionID)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -326,6 +353,13 @@ func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
 		}
 		return a.deleteTimer(ctx, tx, TimerTerminalGrace)
 	})
+
+	if err == nil {
+		if dispatchErr := a.handleEnsureDispatched(ctx); dispatchErr != nil {
+			a.logger.Warn("sessionactor: ensure-dispatched after terminal grace failed", "error", dispatchErr)
+		}
+	}
+	return err
 }
 
 // handleTurnDeadlineTimer implements the `turn_deadline` named timer (§2,
@@ -507,23 +541,37 @@ func (a *Actor) deleteTimer(ctx context.Context, tx pgx.Tx, name string) error {
 
 // appendEvent inserts a session event row inside tx (§2: appended events
 // always commit in the same transaction as the state change they
-// describe).
+// describe). Unlike appendRawEvent (actor.go), this caller's events are
+// always server-SYNTHESIZED (a fabricated execution_complete on timeout/
+// failure, a "warning" event) with no real wire messageId of their own --
+// so a fresh one is minted here internally (github.com/google/uuid, an
+// already-established import in this package, see dispatch.go/pushpr.go's
+// own precedent) purely to satisfy events.message_id's NOT NULL/unique
+// constraint; no caller of appendEvent needs to supply or know about it.
 func (a *Actor) appendEvent(ctx context.Context, tx pgx.Tx, eventType string, payload map[string]any) error {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("sessionactor: marshal %s event payload: %w", eventType, err)
 	}
-	if _, err := a.stores.event.WithTx(tx).Create(ctx, sqlcgen.CreateEventParams{
+	row, err := a.stores.event.WithTx(tx).Create(ctx, sqlcgen.CreateEventParams{
 		SessionID: a.sessionID,
 		Type:      eventType,
+		MessageID: uuid.NewString(),
 		Payload:   raw,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("sessionactor: append %s event: %w", eventType, err)
 	}
 	// Queue for broadcast AFTER commit -- see actor.go's transact/
 	// broadcastPending doc comments for the full commit-then-broadcast,
-	// discard-on-rollback ordering this is part of.
-	a.pendingBroadcast = append(a.pendingBroadcast, raw)
+	// discard-on-rollback ordering this is part of. A freshly-minted
+	// messageId can never collide with an already-persisted row, so
+	// row.Inserted is always true here in practice -- checked anyway
+	// (rather than assumed) for the same reason appendRawEvent does: this
+	// is the one and only gate that decides broadcast delivery.
+	if row.Inserted {
+		a.pendingBroadcast = append(a.pendingBroadcast, raw)
+	}
 	return nil
 }
 

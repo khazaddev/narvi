@@ -67,6 +67,7 @@ func readLoop(ctx context.Context, conn *websocket.Conn, actor *sessionactor.Act
 		cmd := sessionactor.SandboxEvent{
 			Type:           env.Type,
 			Gen:            env.Gen,
+			MessageID:      env.MessageID,
 			Raw:            json.RawMessage(data),
 			LastBootPhase:  env.LastBootPhase,
 			ConversationID: env.ConversationID,

@@ -98,8 +98,14 @@ func sandboxTransitionTrigger(eventType string, lastBootPhase *string, status sa
 // wshub's read loop. Whatever a.transact's own closure decides, the
 // resulting outcome is ALWAYS sent on cmd.Reply (via a non-blocking
 // select-with-default -- the buffered channel wshub constructs makes this
-// always succeed immediately) before this function returns transact's own
-// error upward unchanged, so run()'s existing ErrStaleEpoch-is-fatal /
+// always succeed immediately) the INSTANT that transact returns -- before
+// handleEnsureDispatched or either of this event's own best-effort push/PR
+// side effects ever run (see the reply's own inline comment below for
+// why: those side effects can each individually exceed
+// platform.Timeouts.SandboxEventAckTimeout on real network latency, and
+// must never be able to delay a critical event's own ack past its 5s
+// window) -- and this function then returns transact's own error upward
+// unchanged, so run()'s existing ErrStaleEpoch-is-fatal /
 // other-errors-are-logged-not-fatal behavior (actor.go) keeps working
 // exactly as it does today.
 func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error {
@@ -138,7 +144,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// Persist ALWAYS, for every recognized event type -- this is the
 		// append-only per-session event log Step 19's client hub will
 		// replay from, not limited to the 6 critical types.
-		if err := a.appendRawEvent(ctx, tx, cmd.Type, cmd.Raw); err != nil {
+		if err := a.appendRawEvent(ctx, tx, cmd.Type, cmd.MessageID, cmd.Raw); err != nil {
 			return err
 		}
 
@@ -227,6 +233,25 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		return nil
 	})
 
+	// Reply IMMEDIATELY once transact has committed (or deliberately
+	// skipped persisting a stale-gen event) -- BEFORE any of the
+	// best-effort post-commit side effects below ever run. This ordering
+	// is deliberate and load-bearing: wshub's own readLoop
+	// (internal/adapters/inbound/wshub/dispatch.go) is racing
+	// platform.Timeouts.SandboxEventAckTimeout (5s) waiting on this exact
+	// reply to write the ack back to the sandbox, and the side effects
+	// below -- a full spawn/dispatch re-evaluation, a real git push, a
+	// real GitHub API call -- can each individually take longer than
+	// that budget on real network latency. Sending the reply here, before
+	// any of them run, means a slow/failing side effect can never cause a
+	// critical event's own ack to miss its window. The non-blocking
+	// select-with-default is safe regardless: the buffered channel wshub
+	// constructs makes this send always succeed immediately.
+	select {
+	case cmd.Reply <- outcome:
+	default:
+	}
+
 	// Design decision 3: unconditionally re-evaluate spawn/dispatch state
 	// right after this event's own transact commits successfully -- e.g.
 	// a "ready"/heartbeat-driven transition to Booting/Ready is
@@ -256,11 +281,6 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		if cmd.Type == "push_complete" {
 			a.createPRBestEffort(ctx, cmd.Raw)
 		}
-	}
-
-	select {
-	case cmd.Reply <- outcome:
-	default:
 	}
 
 	return err

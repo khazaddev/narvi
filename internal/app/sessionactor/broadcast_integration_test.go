@@ -47,10 +47,10 @@ func TestActorTransact_BroadcastsOnlyAfterCommit(t *testing.T) {
 		if len(fb.calls) != 0 {
 			t.Fatalf("broadcaster already called %d times DURING fn (before commit) -- want 0", len(fb.calls))
 		}
-		if err := a.appendRawEvent(ctx, tx, "token", json.RawMessage(`{"text":"hello"}`)); err != nil {
+		if err := a.appendRawEvent(ctx, tx, "token", "msg-hello", json.RawMessage(`{"text":"hello"}`)); err != nil {
 			return err
 		}
-		return a.appendRawEvent(ctx, tx, "token", json.RawMessage(`{"text":"world"}`))
+		return a.appendRawEvent(ctx, tx, "token", "msg-world", json.RawMessage(`{"text":"world"}`))
 	})
 	if err != nil {
 		t.Fatalf("transact: %v", err)
@@ -76,7 +76,7 @@ func TestActorTransact_BroadcastsOnlyAfterCommit(t *testing.T) {
 	fb.calls = nil
 	wantErr := errors.New("boom")
 	err = a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if err := a.appendRawEvent(ctx, tx, "token", json.RawMessage(`{"text":"never broadcast"}`)); err != nil {
+		if err := a.appendRawEvent(ctx, tx, "token", "msg-never-broadcast", json.RawMessage(`{"text":"never broadcast"}`)); err != nil {
 			return err
 		}
 		return wantErr
@@ -95,7 +95,7 @@ func TestActorTransact_BroadcastsOnlyAfterCommit(t *testing.T) {
 	// failed one -- the discarded queue from (b) must not have corrupted
 	// anything for later attempts.
 	err = a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		return a.appendRawEvent(ctx, tx, "token", json.RawMessage(`{"text":"after failure"}`))
+		return a.appendRawEvent(ctx, tx, "token", "msg-after-failure", json.RawMessage(`{"text":"after failure"}`))
 	})
 	if err != nil {
 		t.Fatalf("transact after a prior failure: %v", err)
@@ -124,7 +124,7 @@ func TestActorTransact_NilBroadcasterNeverPanics(t *testing.T) {
 	}
 
 	err = a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		return a.appendRawEvent(ctx, tx, "token", json.RawMessage(`{"text":"hi"}`))
+		return a.appendRawEvent(ctx, tx, "token", "msg-hi", json.RawMessage(`{"text":"hi"}`))
 	})
 	if err != nil {
 		t.Fatalf("transact with nil broadcaster: %v", err)
