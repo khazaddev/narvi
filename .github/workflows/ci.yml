@@ -76,7 +76,10 @@ jobs:
       # against, npm/cli#9457) -- the actual fix for a one-off `-g`
       # install is the --allow-scripts=<pkg> flag.
       - name: Install OpenCode
-        run: npm install -g --allow-scripts=opencode-ai opencode-ai
+        # Deliberate pin (§7 "Pin the OpenCode version"): bump only via a
+        # dedicated future PR once a newer version has itself been validated,
+        # never an automatic floating install.
+        run: npm install -g --allow-scripts=opencode-ai opencode-ai@1.17.15
 
       - name: Vet
         run: make vet

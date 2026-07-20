@@ -60,28 +60,74 @@ const fallbackReconnectGraceMultiplier = 2
 // text/step-start/step-finish/tool part progressions (including a genuine
 // abort producing session.error{MessageAbortedError}) were all directly
 // observed against the real, installed OpenCode 1.17.15 binary during this
-// Step's own research pass. The "subtask" part type is schema-derived only
-// (confirmed present in the real, live /doc OpenAPI spec, not independently
-// elicited — that requires the model to invoke OpenCode's own "task" tool,
-// non-deterministic and not exercised here).
+// Step's own research pass. The "subtask" part type was schema-derived
+// only at the time — a later Step's own investigation DID go on to
+// exercise OpenCode's own "task" tool live (see "Sub-task handling" below)
+// and found that this part type still never fires; that section is the
+// up-to-date, empirically-verified account of this adapter's own §7.1
+// sub-task handling.
 //
-// # Sub-task handling is a documented best-effort simplification (§7.1)
+// # Sub-task handling (§7.1): the real correlator, found by live investigation
 //
-// This adapter emits sub_task_start the first time it sees a "subtask"
-// part. OpenCode's own nested-completion signal for a sub-task
-// specifically — as opposed to the enclosing turn's own session.idle — is
-// NOT independently verified (ground truth explicitly flags this exact
-// piece as unverified territory to treat as best-effort). Rather than
-// build unverified nested-session-tracking logic on top of an already-
-// uncertain schema, this adapter guarantees the CRITICAL sub_task_finish
-// event is never leaked (§6.1's own rationale: a dropped, never-
-// redelivered sub_task_finish would leave a UI sub-lane stuck active
-// forever) by closing every still-open sub-task using the ENCLOSING turn's
-// own outcome at the moment that turn itself finalizes (see finalize
-// below) — at the cost of a sub-task's own reported outcome potentially
-// reflecting the whole turn's fate rather than a truly isolated one. This
-// trade-off, and the reasoning behind it, is intentional and documented
-// here rather than silently guessed at.
+// A later Step's own investigation set out to find OpenCode's real,
+// live wire correlator for §7.1's "subTaskId" fan-out (which event tells
+// this adapter that a batch of subsequent events belongs to a spawned
+// sub-agent, not the turn's own main lane) — starting a real `opencode
+// serve` process, scripting a prompt that explicitly delegates via
+// OpenCode's own "task" tool, and inspecting the real resulting SSE trace.
+// Two things came out of that investigation:
+//
+//  1. The "subtask" part type (subtaskPart, types.go) — the ONLY signal
+//     this adapter originally watched for — never appeared on the wire at
+//     all for a real, live-triggered task-tool invocation. It remains
+//     schema-present (confirmed in /doc) but is now further confirmed
+//     unverified-live even after a genuine attempt to trigger it; kept
+//     only as an extra fallback path (dispatchSubtaskStart, sse.go) in
+//     case some other OpenCode-internal path emits it.
+//  2. The REAL signal observed: an ordinary "tool" part (tool=="task") —
+//     going through the SAME dispatchTool machinery every other tool call
+//     already does — whose own toolPartState carries a "metadata" object
+//     (taskToolMetadata, types.go: {"parentSessionId","sessionId"}) once
+//     status reaches "running" (confirmed still present at "completed").
+//     sessionId is the newly-spawned sub-agent's own DISTINCT OpenCode
+//     session id — every one of ITS OWN inner text/tool/step-start/
+//     step-finish parts subsequently arrives on the SAME global /event
+//     stream tagged with THAT session id as its own top-level
+//     "sessionID", never the enclosing turn's.
+//
+// This is genuinely more information than §7.1 assumed was available when
+// it was written ("OpenCode's own nested-task id" was documented as the
+// correlator in the abstract, without having independently confirmed a
+// concrete field for it): maybeStartTaskSubtask/maybeFinishTaskSubtask
+// (sse.go) use meta.SessionID directly as this sub-task's own subTaskId,
+// and Adapter.registerSubtaskSession/resolveEvent route that CHILD
+// session's own subsequent events back to the SAME turnState, tagged with
+// that subTaskId, via translateToken/translateStepStart/
+// translateStepFinish/translateToolCall/translateToolResult (translate.go)
+// — each of the six event types Finding 1's own schema change added
+// subTaskId to.
+//
+// This ALSO gives this adapter a genuinely more precise sub_task_finish
+// than before: the task tool call's own "completed"/"error" transition
+// (maybeFinishTaskSubtask) is a real, per-sub-task completion signal, not
+// just the enclosing turn's own eventual outcome. finalize's own
+// drainOpenSubtasks (below) is kept as the fallback for the one case that
+// signal can't cover: a sub-task whose own task tool call never reaches a
+// terminal status before the turn itself ends (e.g. the turn is
+// cancelled while the task tool call is still "running") — that sub-task
+// is still closed out using the ENCLOSING turn's own outcome, exactly as
+// documented before this investigation.
+//
+// What remains genuinely unverified/best-effort, honestly, after this
+// investigation: a sub-agent's own INTERNAL failure (e.g. an assistant
+// error inside its own conversation, as opposed to the task tool call
+// itself reporting "error") is not separately modeled — only the task
+// tool's own reported status governs a sub-task's own outcome, mirroring
+// how an ordinary tool_result's own isError already works. The model
+// stays flat (§7.1: a sub-task cannot itself spawn a further-nested
+// sub-task) — nothing here defends against or specially handles a nested
+// "task" tool call occurring INSIDE a sub-agent's own conversation, since
+// OpenCode's own real task-tool contract does not appear to allow one.
 type Adapter struct {
 	baseURL    string
 	httpClient *http.Client
@@ -131,6 +177,19 @@ type Adapter struct {
 	turnsMu sync.Mutex
 	turns   map[string]*turnState
 
+	// subtasksMu/subtaskSessions extend the turns registry above to ALSO
+	// route a sub-task's own distinct child OpenCode session id back to
+	// the SAME enclosing turnState, tagged with that sub-task's own
+	// subTaskId — see maybeStartTaskSubtask (sse.go) and this type's own
+	// doc comment for the real, empirically-verified §7.1 correlator this
+	// implements. A separate mutex/map (rather than folding this into
+	// turns/turnsMu itself) keeps "which turn does this MAIN session
+	// belong to" and "which turn/sub-task does this CHILD session belong
+	// to" independently scoped, matching this file's own existing
+	// per-concern-locking style (see disconnectMu above).
+	subtasksMu      sync.Mutex
+	subtaskSessions map[string]subtaskSession
+
 	connectOnce sync.Once
 	connectedCh chan struct{}
 
@@ -177,6 +236,7 @@ func New(baseURL string, sseInactivityTimeout, reconnectInterval, requestTimeout
 		requestTimeout:       requestTimeout,
 		pollInterval:         sseInactivityTimeout / ssePollDivisor,
 		turns:                make(map[string]*turnState),
+		subtaskSessions:      make(map[string]subtaskSession),
 		connectedCh:          make(chan struct{}),
 		bgCancel:             cancel,
 	}
@@ -242,6 +302,51 @@ func (a *Adapter) lookupTurn(sessionID string) *turnState {
 	a.turnsMu.Lock()
 	defer a.turnsMu.Unlock()
 	return a.turns[sessionID]
+}
+
+// subtaskSession is one registered sub-task's own routing entry:
+// register/unregisterSubtaskSession/lookupSubtaskSession below.
+type subtaskSession struct {
+	ts        *turnState
+	subTaskID string
+}
+
+// registerSubtaskSession/unregisterSubtaskSession/lookupSubtaskSession
+// implement the child-session routing this type's own subtaskSessions
+// field documents — called by maybeStartTaskSubtask/maybeFinishTaskSubtask
+// (sse.go) and by finalize's own drainOpenSubtasks loop below.
+func (a *Adapter) registerSubtaskSession(childSessionID string, ts *turnState, subTaskID string) {
+	a.subtasksMu.Lock()
+	defer a.subtasksMu.Unlock()
+	a.subtaskSessions[childSessionID] = subtaskSession{ts: ts, subTaskID: subTaskID}
+}
+
+func (a *Adapter) unregisterSubtaskSession(childSessionID string) {
+	a.subtasksMu.Lock()
+	defer a.subtasksMu.Unlock()
+	delete(a.subtaskSessions, childSessionID)
+}
+
+func (a *Adapter) lookupSubtaskSession(childSessionID string) (*turnState, string, bool) {
+	a.subtasksMu.Lock()
+	defer a.subtasksMu.Unlock()
+	sub, ok := a.subtaskSessions[childSessionID]
+	return sub.ts, sub.subTaskID, ok
+}
+
+// resolveEvent resolves sessionID to whichever turnState it belongs to —
+// the turn's own main OpenCode session (subTaskID == "", the overwhelming
+// common case) or a sub-task's own distinct child session (subTaskID !=
+// "", see registerSubtaskSession above) — for dispatchEvent (sse.go) to
+// route by uniformly, regardless of which lane an incoming SSE event's own
+// top-level sessionID belongs to. ok is false when sessionID matches
+// neither — the existing "no registered turn for this session, silently
+// drop" case dispatchEvent's own doc comment already documents.
+func (a *Adapter) resolveEvent(sessionID string) (ts *turnState, subTaskID string, ok bool) {
+	if ts := a.lookupTurn(sessionID); ts != nil {
+		return ts, "", true
+	}
+	return a.lookupSubtaskSession(sessionID)
 }
 
 // recordDisconnect records that runEventLoop's own connectAndConsume call
@@ -433,9 +538,15 @@ func (a *Adapter) finalizeByFallback(ctx context.Context, sessionID string, ts *
 // events: guarded by ts.tryFinalize so a stray duplicate session.idle (or
 // one arriving after the inactivity fallback already ran) can never
 // double-emit. Closes out every still-open sub-task (§7.1, see this
-// package's own doc comment on Adapter for the documented best-effort
-// reasoning) before the turn's own execution_complete, then closes
-// ts.done so waitForTurn's own poll loop returns.
+// package's own doc comment on Adapter for the full sub-task-fidelity
+// writeup) before the turn's own execution_complete, unregistering each
+// one's own child-session routing entry too (a subtask closed via the
+// real per-sub-task completion signal, maybeFinishTaskSubtask, already
+// unregistered and removed itself before ever reaching here — see
+// markSubtaskFinished's own doc comment, turn.go — so this loop only ever
+// runs for a sub-task whose own completion was never observed, e.g. the
+// turn was cancelled while its task tool call was still running), then
+// closes ts.done so waitForTurn's own poll loop returns.
 //
 // Uses ts.emitFinal, NOT ts.emit, for both kinds of terminal emission
 // below (Finding 4): tryFinalize above has already set ts.finalized=true
@@ -450,10 +561,11 @@ func (a *Adapter) finalize(ts *turnState, outcome turnOutcome) {
 	}
 
 	for _, subTaskID := range ts.drainOpenSubtasks() {
+		a.unregisterSubtaskSession(subTaskID)
 		ts.emitFinal(translateSubTaskFinish(ts.cmd, subTaskID, outcome.Outcome))
 	}
 
-	ts.emitFinal(translateExecutionComplete(ts.cmd, outcome))
+	ts.emitFinal(translateExecutionComplete(ts.cmd, outcome, ""))
 
 	close(ts.done)
 }

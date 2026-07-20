@@ -239,7 +239,7 @@ These run as automated scenarios against a real (or provider-faked) stack. Minim
 4. `execution_complete` arrives AFTER terminalization → state reconciled, automation counters corrected.
 5. Two concurrent spawns (double-click / retry race) → single winner by gen fencing; loser sandbox reaped by GC.
 6. Stale sandbox from old gen reconnects → rejected 403, logged, session unaffected.
-7. WS drop during event stream → ack protocol redelivers the 5 critical events exactly once.
+7. WS drop during event stream → ack protocol redelivers the 6 critical events exactly once.
 8. Provider API down during spawn → typed transient error, retry with backoff, circuit breaker only on permanent.
 9. Outbox: Slack API 500s for 10 min → notification eventually delivered, no loss.
 10. Concurrent @mentions on one PR → exactly one review session (atomic claim).

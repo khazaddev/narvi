@@ -32,8 +32,16 @@ type turnState struct {
 	toolResultSent map[string]bool
 
 	// subtasksOpen tracks every subTaskId this turn has emitted
-	// sub_task_start for but not yet sub_task_finish — see finalize's own
-	// doc comment (adapter.go) for how these are closed out.
+	// sub_task_start for but not yet sub_task_finish — keyed by whichever
+	// id space started it (the legacy, unverified "subtask" part's own
+	// "prt_..." id, or — the real, empirically-verified path, see
+	// maybeStartTaskSubtask in sse.go — a task tool call's own spawned
+	// child session's "ses_..." id; the two never collide). A sub-task
+	// closed via the real per-sub-task completion signal
+	// (maybeFinishTaskSubtask) is removed here immediately
+	// (markSubtaskFinished); anything still left here when the ENCLOSING
+	// turn itself finalizes is drained by finalize's own doc comment
+	// (adapter.go) as the documented best-effort fallback.
 	subtasksOpen map[string]bool
 
 	// assistantMessageIDs tracks which OpenCode message ids belong to an
@@ -110,17 +118,30 @@ func newTurnState(cmd sandboxws.Prompt, sink ports.EventSink) *turnState {
 // path (dispatchEvent, dispatchPart, dispatchTool, dispatchSubtaskStart,
 // ...) — Adapter.finalize uses the separate emitFinal below instead, which
 // is deliberately NOT subject to this same check.
-func (ts *turnState) emit(payload any) {
+//
+// The returned bool reports whether the event was actually sent (true) or
+// dropped because this turn had already finalized (false) — a caller with
+// its own side effect to perform ONLY when the turn is still genuinely
+// live (maybeStartTaskSubtask's own registerSubtaskSession call, sse.go)
+// must gate that side effect on this same return value rather than
+// performing it unconditionally before/after calling emit: doing it
+// unconditionally would reopen exactly the check-then-act race this
+// function's own ts.mu-guarded check exists to close, just one level up
+// (a task's own "running" event processed after a concurrent finalize has
+// already drained this turn's open sub-tasks would otherwise register a
+// routing entry nothing will ever remove).
+func (ts *turnState) emit(payload any) bool {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
 	if ts.finalized {
 		slog.Warn("opencode: dropping event emitted after finalize", "type", fmt.Sprintf("%T", payload))
-		return
+		return false
 	}
 
 	critical, ackID := ports.ClassifyAgentEvent(payload)
 	ts.sink(ports.AgentEvent{Payload: payload, Critical: critical, AckID: ackID})
+	return true
 }
 
 // emitFinal is used ONLY by Adapter.finalize (adapter.go), for its own two
@@ -265,11 +286,11 @@ func (ts *turnState) markResultSent(callID string) {
 }
 
 // subtaskAlreadyStarted/markSubtaskStarted guard sub_task_start against
-// OpenCode ever repeating the same subtask part id across multiple
-// message.part.updated events (parts in general DO repeat with updated
-// content, e.g. text/tool — a subtask part's own fields are static once
-// created, per its schema, but this guard costs nothing and keeps
-// sub_task_start genuinely "first sight only" regardless).
+// OpenCode ever repeating the same subtask id across multiple updates for
+// its own underlying signal (a "subtask" part's own fields are static once
+// created, per its schema; a "task" tool call's own "running" state can
+// likewise repeat — this guard keeps sub_task_start genuinely "first sight
+// only" regardless of which signal or how many times it repeats).
 func (ts *turnState) subtaskAlreadyStarted(subTaskID string) bool {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -282,11 +303,26 @@ func (ts *turnState) markSubtaskStarted(subTaskID string) {
 	ts.subtasksOpen[subTaskID] = true
 }
 
+// markSubtaskFinished removes subTaskID from the open set — called by
+// maybeFinishTaskSubtask (sse.go) once it has ALREADY emitted that
+// sub-task's own sub_task_finish via the real, per-sub-task completion
+// signal (the task tool call's own "completed"/"error" transition), so
+// Adapter.finalize's own drainOpenSubtasks below (still the fallback for a
+// sub-task whose own completion signal never arrived before the turn
+// itself ended, e.g. cancellation) never double-closes it.
+func (ts *turnState) markSubtaskFinished(subTaskID string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	delete(ts.subtasksOpen, subTaskID)
+}
+
 // drainOpenSubtasks returns every subTaskId still open (sub_task_start
 // emitted, sub_task_finish not yet) and clears the set — called exactly
 // once, by Adapter.finalize, so every subtask this turn ever started is
 // guaranteed a matching sub_task_finish (§6.1's own critical-delivery
-// rationale for that event type).
+// rationale for that event type). Only ever contains a subtask the real
+// per-sub-task completion signal (markSubtaskFinished above) has not
+// already closed out.
 func (ts *turnState) drainOpenSubtasks() []string {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()

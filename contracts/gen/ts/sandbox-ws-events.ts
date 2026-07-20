@@ -81,6 +81,10 @@ export interface Token {
    * The full cumulative text so far for this messageId — replace, do not append.
    */
   text: string;
+  /**
+   * §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to.
+   */
+  subTaskId?: string | null;
 }
 export interface ToolCall {
   type: 'tool_call';
@@ -95,6 +99,10 @@ export interface ToolCall {
   input: {
     [k: string]: unknown;
   };
+  /**
+   * §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to.
+   */
+  subTaskId?: string | null;
 }
 export interface ToolResult {
   type: 'tool_result';
@@ -109,6 +117,10 @@ export interface ToolResult {
     [k: string]: unknown;
   };
   isError: boolean;
+  /**
+   * §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to.
+   */
+  subTaskId?: string | null;
 }
 export interface StepStart {
   type: 'step_start';
@@ -116,6 +128,10 @@ export interface StepStart {
   sessionId: string;
   gen: number;
   stepId: string;
+  /**
+   * §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to.
+   */
+  subTaskId?: string | null;
 }
 /**
  * THE CRITICAL SCHEMA (§6.1 / §9.1 dedicated test): cost.tokens is an OBJECT, never a bare number. A number-vs-object mismatch here silently zeroes cost tracking downstream, so this shape is pinned by a dedicated round-trip + rejection test in contracts/contractstest.
@@ -126,6 +142,10 @@ export interface StepFinish {
   sessionId: string;
   gen: number;
   stepId: string;
+  /**
+   * §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to.
+   */
+  subTaskId?: string | null;
   cost: {
     /**
      * NOTE: tokens is an object, not a number (§6.1 explicit warning).
@@ -177,6 +197,10 @@ export interface ExecutionComplete {
   ackId: string;
   outcome: 'completed' | 'failed' | 'cancelled';
   reason: string | null;
+  /**
+   * §6.1/§7.1 sub-task fan-out: OPTIONAL — absent or null means this event belongs to the turn's main lane; a non-null value is the subTaskId (same id sub_task_start/sub_task_finish carry) of the sub-task lane this event belongs to.
+   */
+  subTaskId?: string | null;
 }
 /**
  * CRITICAL (requires ackId).
