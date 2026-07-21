@@ -148,3 +148,121 @@ func (a *Adapter) CreatePR(ctx context.Context, spec ports.CreatePRSpec) (ports.
 
 	return ports.PRRef{Number: parsed.Number, URL: parsed.HTMLURL}, nil
 }
+
+// repoInfoResponse is the subset of GitHub's real GET /repos/{owner}/{repo}
+// response shape this adapter needs (https://docs.github.com/rest/repos/repos#get-a-repository).
+type repoInfoResponse struct {
+	DefaultBranch string `json:"default_branch"`
+}
+
+// commitResponse is the subset of GitHub's real GET
+// /repos/{owner}/{repo}/commits/{ref} response shape this adapter needs
+// (https://docs.github.com/rest/commits/commits#get-a-commit) -- the
+// top-level "sha" field IS the commit's own SHA for whatever ref was
+// requested (a branch name resolves to its current HEAD commit).
+type commitResponse struct {
+	SHA string `json:"sha"`
+}
+
+// ResolveBranchSHAError is the error ResolveBranchSHA returns for any
+// non-2xx GitHub response -- mirrors CreatePRError exactly (a plain,
+// structured error; see ports.SourceControl's own doc comment for why
+// neither method invents a transient/permanent classification).
+type ResolveBranchSHAError struct {
+	Status  int
+	Message string
+}
+
+func (e *ResolveBranchSHAError) Error() string {
+	return fmt.Sprintf("githubapi: resolve branch sha: http %d: %s", e.Status, e.Message)
+}
+
+// doGet performs one authenticated GET against a.apiBaseURL+path, returning
+// the raw response body on any 2xx status -- the shared request-building/
+// auth/bounded-read/error-envelope-parse logic CreatePR's own inline block
+// duplicates once; factored out here since ResolveBranchSHA below needs the
+// IDENTICAL sequence twice (repo info, then a commit) rather than a THIRD
+// verbatim copy of it.
+func (a *Adapter) doGet(ctx context.Context, path, token string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: build get request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: get request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: read get response: %w", err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		message := "no error body"
+		var parsed githubErrorBody
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Message != "" {
+			message = parsed.Message
+		} else if len(body) > 0 {
+			message = "error body did not match GitHub's expected error envelope"
+		}
+		return nil, &ResolveBranchSHAError{Status: resp.StatusCode, Message: message}
+	}
+
+	return body, nil
+}
+
+// ResolveBranchSHA implements ports.SourceControl (Step 26, "image
+// builds"): resolves spec.Branch's current commit SHA via a real GET
+// https://api.github.com/repos/{owner}/{repo}/commits/{branch} call. When
+// spec.Branch is empty ("the repo's own default branch" -- ports.
+// ResolveBranchSHASpec's own doc comment), this FIRST resolves the repo's
+// real default_branch via GET https://api.github.com/repos/{owner}/{repo},
+// then uses THAT as the ref -- "main"/"master" is never hardcoded or
+// guessed.
+//
+// This is the concrete implementation of the design decision already made
+// for this Step: the control plane resolves each repo's own current SHA
+// directly via a real GitHub API call, BEFORE assembling a spawn's
+// CreateSpec -- not by waiting for a sandbox to report anything back (that
+// would need a new wire message; deliberately not built, see this Step's
+// own PR description).
+func (a *Adapter) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranchSHASpec) (string, error) {
+	branch := spec.Branch
+	if branch == "" {
+		repoPath := fmt.Sprintf("%s/repos/%s/%s", a.apiBaseURL, spec.Owner, spec.Repo)
+		body, err := a.doGet(ctx, repoPath, spec.Token)
+		if err != nil {
+			return "", fmt.Errorf("githubapi: resolve default branch: %w", err)
+		}
+
+		var repoInfo repoInfoResponse
+		if err := json.Unmarshal(body, &repoInfo); err != nil {
+			return "", fmt.Errorf("githubapi: decode repo info response: %w", err)
+		}
+		if repoInfo.DefaultBranch == "" {
+			return "", fmt.Errorf("githubapi: repo %s/%s reported an empty default_branch", spec.Owner, spec.Repo)
+		}
+		branch = repoInfo.DefaultBranch
+	}
+
+	commitPath := fmt.Sprintf("%s/repos/%s/%s/commits/%s", a.apiBaseURL, spec.Owner, spec.Repo, branch)
+	body, err := a.doGet(ctx, commitPath, spec.Token)
+	if err != nil {
+		return "", fmt.Errorf("githubapi: resolve commit sha for branch %q: %w", branch, err)
+	}
+
+	var commit commitResponse
+	if err := json.Unmarshal(body, &commit); err != nil {
+		return "", fmt.Errorf("githubapi: decode commit response: %w", err)
+	}
+	if commit.SHA == "" {
+		return "", fmt.Errorf("githubapi: repo %s/%s branch %q reported an empty commit sha", spec.Owner, spec.Repo, branch)
+	}
+
+	return commit.SHA, nil
+}

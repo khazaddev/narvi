@@ -635,6 +635,49 @@ type Timeouts struct {
 	// tick intervals (120s worst case), meaningfully faster than leaving
 	// it uncleaned indefinitely.
 	ReconcilerOrphanConfirmationPeriod time.Duration
+
+	// --- Step 26 standalone additions ("image builds", §8.5-note/§10-P2):
+	// no ordering relationship with either invariant chain above (or with
+	// any prior Step's standalone additions), so -- per those additions'
+	// own precedent -- plain fields with sensible defaults, not wired into
+	// a fake invariant link.
+
+	// RepoSHAResolutionTimeout bounds a single internal/app/ports.
+	// SourceControl.ResolveBranchSHA call (app/sessionactor's own
+	// resolveAndSetImage, dispatch.go/imageresolve.go) -- one or two real
+	// outbound GitHub API GETs per repo (the repo's default branch, then
+	// its HEAD commit), called once per repo IN A LOOP, each bounded
+	// individually so one slow/hanging repo can't stall the others
+	// indefinitely. Not specified in the plan; chosen as 10s, matching
+	// CredentialFetchTimeout's own reasoning exactly ("a lightweight...
+	// call, not a large data transfer").
+	RepoSHAResolutionTimeout time.Duration
+
+	// ImageBuildPumpInterval is how often the process-wide background
+	// image-build loop (internal/app/imagebuild, mirroring app/reconciler's
+	// own ReconcilerInterval-driven ticker shape) polls image_builds for
+	// rows eligible to (re)attempt now. Not specified in the plan; chosen
+	// as 60s, matching ReconcilerInterval's own precedent -- image builds
+	// are a slow, infrequent background maintenance concern, not a
+	// latency-sensitive one.
+	ImageBuildPumpInterval time.Duration
+
+	// ImageBuildBackoffBase is domain/imagebuild.BackoffConfig.BaseDelay:
+	// the retry delay scheduled after a fingerprint's FIRST failed build
+	// attempt. Not specified in the plan; chosen as 1min -- see
+	// domain/imagebuild.EvaluateBackoff's own doc comment for the full
+	// schedule this produces alongside ImageBuildBackoffMax below.
+	ImageBuildBackoffBase time.Duration
+
+	// ImageBuildBackoffMax is domain/imagebuild.BackoffConfig.MaxDelay: the
+	// ceiling the exponential schedule above plateaus at. Not specified in
+	// the plan; chosen as 30min -- deliberately the SAME cadence §3.5's own
+	// language ("not fixed 30 min") explicitly rejects as a FIRST-failure
+	// delay, but a reasonable EVENTUAL steady-state ceiling once a build is
+	// confirmed persistently broken: this is the cap the schedule grows
+	// INTO after repeated failures, never the delay applied from the very
+	// first one, so it does not contradict §3.5.
+	ImageBuildBackoffMax time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -713,6 +756,12 @@ func DefaultTimeouts() Timeouts {
 		ReconcilerInterval: 60 * time.Second, // IMPLEMENTATION_PLAN.md row 25, explicit ("60s loop")
 
 		ReconcilerOrphanConfirmationPeriod: 30 * time.Second, // not specified; chosen, comfortably above the realistic sub-second spawn-commit race window; exactly MinTimeoutMargin below ReconcilerInterval (the minimum Validate allows, zero slack beyond it) so the two-tick guarantee holds under the shipped default
+
+		RepoSHAResolutionTimeout: 10 * time.Second, // not specified; chosen, matches CredentialFetchTimeout's own "lightweight call" reasoning
+
+		ImageBuildPumpInterval: 60 * time.Second, // not specified; chosen, matches ReconcilerInterval's own cadence
+		ImageBuildBackoffBase:  1 * time.Minute,  // not specified; chosen -- see EvaluateBackoff's own doc comment for the schedule this produces
+		ImageBuildBackoffMax:   30 * time.Minute, // not specified; chosen -- the eventual steady-state ceiling, never the first-failure delay (§3.5)
 	}
 }
 

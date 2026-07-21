@@ -53,7 +53,7 @@ func TestTurnDeadlineTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("move turn to processing: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -147,7 +147,7 @@ func TestLivenessCheckTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("seed overdue liveness_check timer: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -222,7 +222,7 @@ func TestInactivityTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("seed overdue inactivity timer: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -302,7 +302,7 @@ func TestConnectingDeadlineHandoff_ToLivenessCheck(t *testing.T) {
 		t.Fatalf("seed connecting_deadline timer: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)

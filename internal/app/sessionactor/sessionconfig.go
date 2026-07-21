@@ -70,8 +70,25 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 //     (dispatch.go's planRestore, Step 22 "snapshots & restore", design
 //     decision 6b: "thread a boolean/enum parameter through
 //     assembleSessionConfig rather than hardcoding a second copy of this
-//     function"). BootModeBuild/BootModeRepoImage stay unused placeholders
-//     (Step 26's own job).
+//     function"). Step 26 ("image builds") upgrades a Fresh value to
+//     RepoImage AFTER this function returns (dispatch.go's own
+//     resolveAndSetImage, imageresolve.go), once -- and only once -- a
+//     real, ready, matching prebuilt image is actually found for that
+//     spawn's own fingerprint: internal/domain/sandboxboot.EvaluateHook's
+//     own hook policy (§6.4) treats repo_image as "setup.sh already ran at
+//     build time and does not run again", which is exactly the case a real
+//     prebuilt-image spawn is; reporting Fresh in that case would make
+//     sandbox-agent redundantly re-run setup.sh at every boot regardless,
+//     defeating the entire point of image prebuilding. A restore's own
+//     BootMode is deliberately never upgraded this way (see
+//     resolveAndSetImage's own doc comment for why). BootModeBuild remains
+//     an unused placeholder even after Step 26 -- ports.SandboxProvider.
+//     BuildImage's own signature (§4.1) carries no SessionConfig at all, so
+//     there is no SessionConfig for this control plane to ever stamp
+//     BootModeBuild onto; that value is reserved for whatever
+//     provider-internal (or future) mechanism actually drives a real
+//     image-baking boot sequence, out of this Step's own scope since it
+//     doesn't go through CreateSandbox/assembleSessionConfig at all.
 //   - ControlPlaneWsUrl: publicWsBaseURL(a.publicBaseURL) +
 //     "/sessions/{id}/ws?type=sandbox".
 //   - CorrelationId: always nil (no ingress webhook exists yet to have

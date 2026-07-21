@@ -232,6 +232,33 @@ const (
 	modalEgressProxyURLEnvVarName = "NARVI_MODAL_EGRESS_PROXY_URL"
 )
 
+// openCodeRuntimeVersionEnvVarName is the env var Load reads for Step 26's
+// ("image builds", §8.5-note/§10-P2) own RuntimeVersion fingerprint input
+// (domain/imagebuild.Fingerprint's third argument) -- the pinned OpenCode
+// version this control plane assumes every base/prebuilt sandbox image
+// carries. Optional: defaults to defaultOpenCodeRuntimeVersion.
+//
+// Residual drift risk, named honestly rather than silently accepted: this
+// default is a SEPARATE literal from .github/workflows/ci.yml's own
+// `opencode-ai@1.17.15` pin (confirmed by a repo-wide grep before this Step
+// started: nothing today centralizes the OpenCode version pin as a single
+// Go-level constant/config value that CI and this default could both read
+// from) -- nothing mechanically keeps the two in sync, so a future version
+// bump that updates ci.yml without ALSO updating either this default or a
+// deploy's own NARVI_OPENCODE_RUNTIME_VERSION override would silently
+// fingerprint every image against a stale runtime version. Wiring CI to
+// read this same value (or vice versa) is a natural follow-up, not built
+// here (this Step's own scope is the fingerprint mechanism, not a build-
+// tooling refactor of an unrelated, already-merged CI workflow).
+const openCodeRuntimeVersionEnvVarName = "NARVI_OPENCODE_RUNTIME_VERSION"
+
+// defaultOpenCodeRuntimeVersion is the NARVI_OPENCODE_RUNTIME_VERSION value
+// Load assumes when the variable is unset -- kept equal to ci.yml's own
+// current pin at the time this Step was written; see
+// openCodeRuntimeVersionEnvVarName's own doc comment for the drift risk
+// this equality is not mechanically guaranteed to survive.
+const defaultOpenCodeRuntimeVersion = "1.17.15"
+
 // initialAdminEmailsEnvVarName is the env var Load reads for the
 // first-run-seeding initial-admin list (§13.4: "initial admins set by
 // config"). Optional — an empty list simply means every first-time
@@ -350,6 +377,14 @@ type Config struct {
 	// egress proxy (§4.1), read from NARVI_MODAL_EGRESS_PROXY_URL. Empty
 	// (the default) means a direct connection.
 	ModalEgressProxyURL string
+
+	// OpenCodeRuntimeVersion is Step 26's ("image builds") own
+	// RuntimeVersion fingerprint input, read from
+	// NARVI_OPENCODE_RUNTIME_VERSION. Optional: defaults to
+	// defaultOpenCodeRuntimeVersion (see that constant's own doc comment
+	// for the residual drift risk against .github/workflows/ci.yml's own
+	// separate pin).
+	OpenCodeRuntimeVersion string
 }
 
 // Load reads process configuration and validates it fail-fast, returning
@@ -469,29 +504,35 @@ func Load() (*Config, error) {
 
 	modalEgressProxyURL := os.Getenv(modalEgressProxyURLEnvVarName)
 
+	openCodeRuntimeVersion := os.Getenv(openCodeRuntimeVersionEnvVarName)
+	if openCodeRuntimeVersion == "" {
+		openCodeRuntimeVersion = defaultOpenCodeRuntimeVersion
+	}
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
 
 	return &Config{
-		Stage:               stage,
-		Timeouts:            timeouts,
-		LogLevel:            logLevel,
-		DatabaseURL:         databaseURL,
-		HTTPAddr:            httpAddr,
-		HMACSandboxSecret:   hmacSandboxSecret,
-		HMACBotsSecret:      hmacBotsSecret,
-		HMACWebhookSecret:   hmacWebhookSecret,
-		GitHubClientID:      gitHubClientID,
-		GitHubClientSecret:  gitHubClientSecret,
-		PublicBaseURL:       publicBaseURL,
-		TokenEncryptionKey:  tokenEncryptionKey,
-		AllowedEmailDomains: allowedEmailDomains,
-		AllowedGitHubOrgs:   allowedGitHubOrgs,
-		AllowedEmails:       allowedEmails,
-		InitialAdminEmails:  initialAdminEmails,
-		ModalBaseURL:        modalBaseURL,
-		ModalAuthToken:      modalAuthToken,
-		ModalEgressProxyURL: modalEgressProxyURL,
+		Stage:                  stage,
+		Timeouts:               timeouts,
+		LogLevel:               logLevel,
+		DatabaseURL:            databaseURL,
+		HTTPAddr:               httpAddr,
+		HMACSandboxSecret:      hmacSandboxSecret,
+		HMACBotsSecret:         hmacBotsSecret,
+		HMACWebhookSecret:      hmacWebhookSecret,
+		GitHubClientID:         gitHubClientID,
+		GitHubClientSecret:     gitHubClientSecret,
+		PublicBaseURL:          publicBaseURL,
+		TokenEncryptionKey:     tokenEncryptionKey,
+		AllowedEmailDomains:    allowedEmailDomains,
+		AllowedGitHubOrgs:      allowedGitHubOrgs,
+		AllowedEmails:          allowedEmails,
+		InitialAdminEmails:     initialAdminEmails,
+		ModalBaseURL:           modalBaseURL,
+		ModalAuthToken:         modalAuthToken,
+		ModalEgressProxyURL:    modalEgressProxyURL,
+		OpenCodeRuntimeVersion: openCodeRuntimeVersion,
 	}, nil
 }

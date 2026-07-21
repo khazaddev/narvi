@@ -70,7 +70,6 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // placeholderPRBaseBranch is the CreatePRSpec.Base value this Step uses
@@ -327,7 +326,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		return
 	}
 
-	token, ok := a.decryptCreatorGitHubToken(ctx, sessionRow)
+	token, ok := a.decryptCreatorGitHubToken(ctx, sessionRow.CreatedBy)
 	if !ok {
 		return // already logged by decryptCreatorGitHubToken
 	}
@@ -378,43 +377,6 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			a.logger.Error("sessionactor: record PR artifact failed", "repo", pushed.Name, "error", err)
 		}
 	}
-}
-
-// decryptCreatorGitHubToken mirrors internal/adapters/inbound/httpapi's own
-// scmcredentials.go ScmCredentials handler outcome table exactly (design
-// decision 8) -- the SAME "no created_by user, or no github identity, or
-// no stored token, or a decrypt failure -> no usable credential" class of
-// absence, just logged rather than turned into an HTTP response, since
-// this caller is an internal, best-effort side effect, not a request
-// awaiting a status code. This is the honest "no bot/service-account
-// fallback exists" gap named in this Step's own brief (§8.11's fallback
-// half), not a bug to work around by inventing one.
-func (a *Actor) decryptCreatorGitHubToken(ctx context.Context, sessionRow sqlcgen.Session) (string, bool) {
-	if !sessionRow.CreatedBy.Valid {
-		a.logger.Warn("sessionactor: session has no created_by user; no bot fallback exists (§8.11); skipping PR creation")
-		return "", false
-	}
-
-	identity, err := a.stores.identity.GetByUserAndProvider(ctx, sessionRow.CreatedBy, sqlcgen.IdentityProviderGithub)
-	if err != nil {
-		a.logger.Warn("sessionactor: no usable github identity for PR creation; skipping", "error", err)
-		return "", false
-	}
-	if identity.AccessTokenEncrypted == nil {
-		a.logger.Warn("sessionactor: github identity has no stored access token; skipping PR creation")
-		return "", false
-	}
-
-	plaintext, err := platform.DecryptToken(a.tokenEncryptionKey, identity.AccessTokenEncrypted)
-	if err != nil {
-		// The decrypt error itself is safe to log (it never contains the
-		// ciphertext/plaintext, see platform.DecryptToken's own doc
-		// comment) -- the plaintext token it would have produced is NEVER
-		// logged, here or anywhere else.
-		a.logger.Error("sessionactor: decrypt access token for PR creation failed", "error", err)
-		return "", false
-	}
-	return string(plaintext), true
 }
 
 // recordPRArtifact persists a successfully created PR as a "pr"-typed

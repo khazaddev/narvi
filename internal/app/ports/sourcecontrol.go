@@ -39,6 +39,31 @@ type PRRef struct {
 	URL    string
 }
 
+// ResolveBranchSHASpec is what SourceControl.ResolveBranchSHA (Step 26,
+// "image builds") needs to resolve a repo's current commit SHA for
+// fingerprinting (§10 Phase 2: "fingerprint = repo SHAs + runtime
+// version"). Owner/Repo are the same generic source-control concepts
+// CreatePRSpec already uses, not GitHub-specific field names.
+type ResolveBranchSHASpec struct {
+	// Owner is the repo owner/organization.
+	Owner string
+	// Repo is the repo name (without owner prefix).
+	Repo string
+	// Branch is the branch to resolve. Empty means "the repo's own
+	// default branch" -- mirroring how a null/empty
+	// SessionConfigReposElem.Branch is already handled elsewhere for this
+	// session's own repos (domain/gitstate's "checkout session branch,
+	// create from base if absent" semantics): a not-yet-existing session
+	// branch does not exist to resolve a SHA for in the first place, so
+	// this always resolves the repo's OWN default branch's current SHA
+	// instead -- the branch a fresh session branch would be created FROM.
+	Branch string
+	// Token is the same plaintext, decrypted OAuth access token shape
+	// CreatePRSpec.Token already uses. Never logged by any caller or
+	// implementation of this port.
+	Token string
+}
+
 // SourceControl is the port that creates a pull request against a source-
 // control host (§4.3). internal/adapters/outbound/githubapi (Step 21) is
 // the first real implementation; internal/adapters/outbound/gitlabapi
@@ -52,4 +77,19 @@ type SourceControl interface {
 	// no caller of this port needs one yet: PR creation is not retried by
 	// any circuit-breaker-style mechanism this Step builds).
 	CreatePR(ctx context.Context, spec CreatePRSpec) (PRRef, error)
+
+	// ResolveBranchSHA returns spec.Branch's current commit SHA (or the
+	// repo's own default branch's, if spec.Branch is empty) -- Step 26's
+	// ("image builds") own real, control-plane-side fingerprint input,
+	// resolved directly via the source-control host's API rather than
+	// waiting for a sandbox to report anything back (a deliberate design
+	// decision: the control plane resolves SHAs itself, independently, see
+	// internal/adapters/outbound/githubapi's own implementation doc
+	// comment). Errors are plain, exactly like CreatePR above -- no
+	// caller of this port retries or trips a circuit-breaker on a
+	// resolution failure; a failure here means the caller falls back to
+	// the base image for this spawn (§10 Phase 2: "always fall back to
+	// base image on any miss -- never block a session"), never a fatal
+	// condition.
+	ResolveBranchSHA(ctx context.Context, spec ResolveBranchSHASpec) (string, error)
 }

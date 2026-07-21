@@ -55,6 +55,15 @@ import (
 // reproduction shape the adversarial review this fix responds to used.
 // nil (the zero value) for every OTHER test in this file, so
 // ResumeSandbox returns immediately for all of them, unchanged.
+//
+// Step 26 ("image builds") extends this same fake once more with the
+// identical recording shape for BuildImage (buildCalls/nextBuildRef/
+// nextBuildErr) -- imagebuild_integration_test.go's own end-to-end test
+// (dispatch -> pending image_builds row -> internal/app/imagebuild.
+// Builder.PumpOnce -> a LATER dispatch reading the now-ready row) drives a
+// real Builder against this SAME fake provider instance, so BuildImage
+// needs the same configurable-success/failure shape every other provider
+// method here already has.
 type fakeSpawnProvider struct {
 	mu      sync.Mutex
 	calls   []ports.CreateSpec
@@ -69,6 +78,15 @@ type fakeSpawnProvider struct {
 	resumeCalls     []ports.SandboxRef
 	nextResumeErr   error
 	resumeBlock     chan struct{}
+
+	// buildCalls/nextBuildRef/nextBuildErr are Step 26's ("image builds")
+	// own extension to this same fake, mirroring the restore/resume
+	// extensions above exactly: a mutex-guarded recorded-calls slice plus
+	// a caller-configured (ref, err) pair, narrowed to the one additional
+	// provider method internal/app/imagebuild.Builder's own attempt calls.
+	buildCalls   []ports.ImageSpec
+	nextBuildRef ports.BuildRef
+	nextBuildErr error
 }
 
 // fakeRestoreCall records one RestoreFromSnapshot invocation's own
@@ -126,8 +144,17 @@ func (f *fakeSpawnProvider) RestoreFromSnapshot(_ context.Context, id ports.Snap
 	f.restoreCalls = append(f.restoreCalls, fakeRestoreCall{snapshotID: id, spec: spec})
 	return f.nextRestoreRef, f.nextRestoreErr
 }
-func (f *fakeSpawnProvider) BuildImage(context.Context, ports.ImageSpec) (ports.BuildRef, error) {
-	return "", errors.New("not implemented")
+func (f *fakeSpawnProvider) BuildImage(_ context.Context, spec ports.ImageSpec) (ports.BuildRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buildCalls = append(f.buildCalls, spec)
+	return f.nextBuildRef, f.nextBuildErr
+}
+
+func (f *fakeSpawnProvider) buildCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.buildCalls)
 }
 func (f *fakeSpawnProvider) DeleteImage(context.Context, ports.ImageRef) error {
 	return errors.New("not implemented")
@@ -205,7 +232,7 @@ func (f *fakeSendCommander) lastPayload() json.RawMessage {
 // fakes and a real publicBaseURL (needed for assembleSessionConfig's own
 // ws-scheme derivation).
 func newDispatchTestRegistry(ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, commander ports.SandboxCommander) *Registry {
-	return NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, provider, "http://localhost:8080", nil, nil)
+	return NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, provider, "http://localhost:8080", nil, nil, "")
 }
 
 // createPendingTurn inserts a Pending turn carrying prompt for sessionID.
@@ -1986,7 +2013,7 @@ func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t
 
 	// --- Step 2: pod A hydrates and genuinely owns this session. ---
 	providerA := &fakeSpawnProvider{resumeSupported: true, resumeBlock: make(chan struct{})}
-	registryA := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil)
+	registryA := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil, "")
 	actorA, err := registryA.GetOrSpawn(ctx, sessionID)
 	if err != nil {
 		t.Fatalf("registryA.GetOrSpawn: %v", err)
@@ -2025,7 +2052,7 @@ func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t
 	// --- Step 5: pod B, a genuinely fresh pool, hydrates its own actor
 	// for the SAME session. ---
 	providerB := &fakeSpawnProvider{resumeSupported: true}
-	registryB := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil)
+	registryB := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil, "")
 	t.Cleanup(poolB.Close)
 	t.Cleanup(func() { _ = registryB.Shutdown() })
 

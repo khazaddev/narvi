@@ -34,17 +34,27 @@ type storeBundle struct {
 	// with no new wire contract needed).
 	identity *postgres.IdentityStore
 	artifact *postgres.ArtifactStore
+
+	// imageBuild is Step 26's ("image builds") own addition -- used by
+	// dispatch.go/imageresolve.go's resolveAndSetImage to look up an
+	// already-built image by fingerprint, and to best-effort upsert a
+	// pending tracking row on any miss (internal/app/imagebuild's own
+	// background loop is this table's OTHER writer, via its own
+	// independently-constructed *postgres.ImageBuildStore -- see
+	// cmd/control-plane/main.go).
+	imageBuild *postgres.ImageBuildStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 	return storeBundle{
-		session:  postgres.NewSessionStore(pool),
-		turn:     postgres.NewTurnStore(pool),
-		sandbox:  postgres.NewSandboxStore(pool),
-		timer:    postgres.NewTimerStore(pool),
-		event:    postgres.NewEventStore(pool),
-		identity: postgres.NewIdentityStore(pool),
-		artifact: postgres.NewArtifactStore(pool),
+		session:    postgres.NewSessionStore(pool),
+		turn:       postgres.NewTurnStore(pool),
+		sandbox:    postgres.NewSandboxStore(pool),
+		timer:      postgres.NewTimerStore(pool),
+		event:      postgres.NewEventStore(pool),
+		identity:   postgres.NewIdentityStore(pool),
+		artifact:   postgres.NewArtifactStore(pool),
+		imageBuild: postgres.NewImageBuildStore(pool),
 	}
 }
 
@@ -94,6 +104,17 @@ type Registry struct {
 	sourceControl      ports.SourceControl
 	tokenEncryptionKey []byte
 
+	// openCodeRuntimeVersion is Step 26's ("image builds") own remaining
+	// addition, threaded through to every Actor this Registry hydrates
+	// exactly like sourceControl/tokenEncryptionKey already are: the
+	// RuntimeVersion input to domain/imagebuild.Fingerprint (dispatch.go/
+	// imageresolve.go's own resolveAndSetImage), sourced from
+	// platform.Config.OpenCodeRuntimeVersion. May be empty (tests that
+	// never exercise the image-resolution path) -- an empty runtime
+	// version still fingerprints deterministically, it just means every
+	// session's own fingerprint shares that one (test-only) value.
+	openCodeRuntimeVersion string
+
 	// group tracks every actor's mailbox-loop goroutine, so evicted/
 	// crashed actors are cleanly reaped and Shutdown can wait on all of
 	// them. Deliberately the zero value, NOT errgroup.WithContext(...) --
@@ -135,9 +156,12 @@ type Registry struct {
 // decision 9): sourceControl is the ports.SourceControl every Actor's
 // createPRBestEffort (pushpr.go) calls CreatePR on; tokenEncryptionKey
 // decrypts the session creator's own stored GitHub OAuth access token for
-// that same call. All five may be nil/empty -- callers that never
-// exercise the spawn/dispatch/push/PR path (e.g. the resilience test,
-// design decision 12) can safely omit them.
+// that same call. openCodeRuntimeVersion is Step 26's ("image builds") own
+// addition: the RuntimeVersion input to every Actor's own image-fingerprint
+// computation (dispatch.go/imageresolve.go). All six may be nil/empty --
+// callers that never exercise the spawn/dispatch/push/PR/image-resolution
+// path (e.g. the resilience test, design decision 12) can safely omit
+// them.
 func NewRegistry(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -148,21 +172,23 @@ func NewRegistry(
 	publicBaseURL string,
 	sourceControl ports.SourceControl,
 	tokenEncryptionKey []byte,
+	openCodeRuntimeVersion string,
 ) *Registry {
 	lifecycleCtx, cancel := context.WithCancel(ctx)
 	return &Registry{
-		actors:             make(map[pgtype.UUID]*Actor),
-		pool:               pool,
-		timeouts:           timeouts,
-		stores:             newStoreBundle(pool),
-		broadcaster:        broadcaster,
-		commander:          commander,
-		provider:           provider,
-		publicBaseURL:      publicBaseURL,
-		sourceControl:      sourceControl,
-		tokenEncryptionKey: tokenEncryptionKey,
-		lifecycleCtx:       lifecycleCtx,
-		cancel:             cancel,
+		actors:                 make(map[pgtype.UUID]*Actor),
+		pool:                   pool,
+		timeouts:               timeouts,
+		stores:                 newStoreBundle(pool),
+		broadcaster:            broadcaster,
+		commander:              commander,
+		provider:               provider,
+		publicBaseURL:          publicBaseURL,
+		sourceControl:          sourceControl,
+		tokenEncryptionKey:     tokenEncryptionKey,
+		openCodeRuntimeVersion: openCodeRuntimeVersion,
+		lifecycleCtx:           lifecycleCtx,
+		cancel:                 cancel,
 	}
 }
 
