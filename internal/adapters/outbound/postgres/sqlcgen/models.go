@@ -644,16 +644,17 @@ type SessionTimer struct {
 }
 
 type Turn struct {
-	ID             pgtype.UUID        `json:"id"`
-	SessionID      pgtype.UUID        `json:"session_id"`
-	Status         TurnStatus         `json:"status"`
-	ConversationID *string            `json:"conversation_id"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	DispatchedAt   pgtype.Timestamptz `json:"dispatched_at"`
-	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
-	Prompt         *string            `json:"prompt"`
-	ModelID        *string            `json:"model_id"`
-	PlanMode       bool               `json:"plan_mode"`
+	ID                   pgtype.UUID        `json:"id"`
+	SessionID            pgtype.UUID        `json:"session_id"`
+	Status               TurnStatus         `json:"status"`
+	ConversationID       *string            `json:"conversation_id"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	DispatchedAt         pgtype.Timestamptz `json:"dispatched_at"`
+	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
+	Prompt               *string            `json:"prompt"`
+	ModelID              *string            `json:"model_id"`
+	PlanMode             bool               `json:"plan_mode"`
+	DispatchedSandboxGen *int32             `json:"dispatched_sandbox_gen"`
 }
 
 type User struct {

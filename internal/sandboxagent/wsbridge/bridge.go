@@ -82,6 +82,19 @@ type Bridge struct {
 	// lastBootPhase above.
 	convMu         sync.Mutex
 	conversationID *string
+
+	// forceHeartbeat is Step 28's ("turn recovery") own out-of-band
+	// signal: SetConversationID sends on it (non-blocking) the first time
+	// it is called with a genuinely NEW, non-nil conversation id (§3.3:
+	// "at turn start... never lazily") -- heartbeatLoop's own select
+	// (run.go) also listens on this, sending an immediate heartbeat
+	// rather than waiting for its own next b.heartbeatInterval tick.
+	// Capacity 1, not 0: a burst of SetConversationID calls between two
+	// regular ticks must wake the loop at most once (the SAME already-
+	// current value is all a second signal would report anyway), never
+	// block the calling goroutine (cmd/sandbox-agent's own
+	// commandHandler.HandlePrompt, which must never be delayed by this).
+	forceHeartbeat chan struct{}
 }
 
 // New builds a Bridge for one session, from its full SessionConfig (dial
@@ -110,6 +123,8 @@ func New(
 		reconnectMaxBackoff: reconnectMaxBackoff,
 
 		buffer: newOutboundBuffer(),
+
+		forceHeartbeat: make(chan struct{}, 1),
 	}
 }
 
@@ -156,10 +171,34 @@ func (b *Bridge) MarkBootComplete() {
 // yet" (there is no scenario that currently does this, but the method
 // accepts it for the same reason SendBootProgress/heartbeat's own
 // LastBootPhase is nilable).
+//
+// Step 28 ("turn recovery") extends this: when id is a genuinely NEW,
+// non-nil value (different from whatever was recorded before -- a nil id,
+// or a different string), this ALSO triggers an immediate, out-of-band
+// heartbeat send via forceHeartbeat, rather than leaving the new
+// conversation id to wait for the next regular b.heartbeatInterval tick
+// (§3.3: "at turn start... never lazily" -- cmd/sandbox-agent's own
+// commandHandler now calls this the INSTANT StartTurn resolves a real id,
+// long before a turn's own, possibly-minutes-long execution completes, so
+// this method must propagate that urgency onward to the wire, not just to
+// this in-memory field). Called with the SAME id again (e.g. a later turn
+// resuming the same conversation) does NOT re-trigger one -- only a real
+// change is worth an early heartbeat. The non-blocking select-with-default
+// is safe regardless of whether heartbeatLoop is currently between ticks
+// or not: forceHeartbeat's own capacity-1 buffer already coalesces a burst
+// of calls into a single wakeup (see that field's own doc comment).
 func (b *Bridge) SetConversationID(id *string) {
 	b.convMu.Lock()
-	defer b.convMu.Unlock()
+	prev := b.conversationID
 	b.conversationID = id
+	b.convMu.Unlock()
+
+	if id != nil && (prev == nil || *prev != *id) {
+		select {
+		case b.forceHeartbeat <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (b *Bridge) getConversationID() *string {

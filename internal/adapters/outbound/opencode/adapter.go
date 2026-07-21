@@ -387,7 +387,17 @@ func (a *Adapter) disconnectedSince(t time.Time) bool {
 // while waitForTurn is still blocked, now correctly finalizes via
 // finalizeCanceled instead of returning silently (Finding 5 — the three
 // gaps this promise used to have).
-func (a *Adapter) StartTurn(ctx context.Context, cmd sandboxws.Prompt, sink ports.EventSink) (string, error) {
+//
+// Step 28 ("turn recovery") adds onConversationID: invoked immediately
+// after resolveSession succeeds below — BEFORE registerTurn/
+// postPromptAsync/waitForTurn, i.e. well before this call's own long
+// block for the rest of the turn — with the real, resolved sessionID.
+// Guarded against nil (some callers/tests have no need for early
+// reporting) and never called on the resolveSession failure path (no real
+// id was ever resolved there — see ConversationIDReporter's own doc
+// comment: it fires "at most once... with a real, non-empty, resolved
+// conversation id").
+func (a *Adapter) StartTurn(ctx context.Context, cmd sandboxws.Prompt, sink ports.EventSink, onConversationID ports.ConversationIDReporter) (string, error) {
 	// Created up front, before resolveSession is ever called, so EVERY
 	// subsequent return path below — including the very first one — has
 	// a valid turnState to finalize through. This does not register it in
@@ -405,6 +415,14 @@ func (a *Adapter) StartTurn(ctx context.Context, cmd sandboxws.Prompt, sink port
 		reason := "opencode: could not start a conversation"
 		a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeFailed, Reason: &reason})
 		return "", nil
+	}
+
+	// §3.3 "at turn start... never lazily": report the resolved
+	// conversation id THE MOMENT it's known, not once this whole
+	// (possibly minutes-long) call eventually returns it — see this
+	// method's own doc comment above.
+	if onConversationID != nil {
+		onConversationID(sessionID)
 	}
 
 	a.setCurrentSession(sessionID)

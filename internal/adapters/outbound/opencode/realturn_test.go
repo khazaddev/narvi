@@ -44,7 +44,7 @@ func TestRealTurn_PlainTextPrompt(t *testing.T) {
 		Text: "Reply with exactly the word OK and nothing else.",
 	}
 
-	convID, err := a.StartTurn(ctx, cmd, collector.sink)
+	convID, err := a.StartTurn(ctx, cmd, collector.sink, nil)
 	if err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRealTurn_ToolInvokingPrompt(t *testing.T) {
 		Text: fmt.Sprintf("Use the bash tool to run exactly this command: echo %s", marker),
 	}
 
-	if _, err := a.StartTurn(ctx, cmd, collector.sink); err != nil {
+	if _, err := a.StartTurn(ctx, cmd, collector.sink, nil); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 
@@ -209,7 +209,7 @@ func TestRealTurn_Aborted(t *testing.T) {
 
 	var group errgroup.Group
 	group.Go(func() error {
-		_, err := a.StartTurn(ctx, cmd, collector.sink)
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
 		return err
 	})
 

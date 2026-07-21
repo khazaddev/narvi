@@ -89,6 +89,36 @@ func TestCreateSessionRequestRoundTrip_NullOptionals(t *testing.T) {
 	})
 }
 
+func TestCreateTurnRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateTurnRequest")
+
+	modelID := "claude-sonnet-5"
+	roundTrip(t, sch, restdtos.CreateTurnRequest{
+		Prompt:   "continue where we left off",
+		ModelId:  &modelID,
+		PlanMode: true,
+	})
+}
+
+func TestCreateTurnRequestRoundTrip_NullModelId(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateTurnRequest")
+
+	roundTrip(t, sch, restdtos.CreateTurnRequest{
+		Prompt:   "do the thing",
+		ModelId:  nil,
+		PlanMode: false,
+	})
+}
+
+func TestCreateTurnResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateTurnResponse")
+
+	roundTrip(t, sch, restdtos.CreateTurnResponse{
+		Id:     testSessionID,
+		Status: restdtos.CreateTurnResponseStatusPending,
+	})
+}
+
 func TestWSTokenResponseRoundTrip(t *testing.T) {
 	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/WSTokenResponse")
 

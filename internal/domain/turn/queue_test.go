@@ -95,3 +95,85 @@ func TestNextToDispatch(t *testing.T) {
 		})
 	}
 }
+
+// TestInFlightTurn is table-driven over: no turns, no in-flight turn (all
+// terminal or all pending), a lone Dispatched turn, a lone Processing
+// turn, and an in-flight turn buried among terminal ones -- mirroring
+// TestHasInFlightTurn's own case selection, but asserting WHICH id comes
+// back, not merely whether one does.
+func TestInFlightTurn(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		turns  []turn.QueueEntry[string]
+		wantID string
+		wantOK bool
+	}{
+		{"empty", nil, "", false},
+		{"no in-flight turn (all terminal)", []turn.QueueEntry[string]{
+			{ID: "a", Status: turn.StateCompleted},
+			{ID: "b", Status: turn.StateFailed},
+		}, "", false},
+		{"no in-flight turn (a lone pending one)", []turn.QueueEntry[string]{
+			{ID: "a", Status: turn.StatePending},
+		}, "", false},
+		{"lone dispatched turn is in-flight", []turn.QueueEntry[string]{
+			{ID: "a", Status: turn.StateDispatched},
+		}, "a", true},
+		{"lone processing turn is in-flight", []turn.QueueEntry[string]{
+			{ID: "a", Status: turn.StateProcessing},
+		}, "a", true},
+		{"in-flight turn buried after completed ones", []turn.QueueEntry[string]{
+			{ID: "a", Status: turn.StateCompleted},
+			{ID: "b", Status: turn.StateProcessing},
+			{ID: "c", Status: turn.StateCancelled},
+		}, "b", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotID, gotOK := turn.InFlightTurn(tc.turns)
+			if gotOK != tc.wantOK {
+				t.Errorf("InFlightTurn(%+v) ok = %v, want %v", tc.turns, gotOK, tc.wantOK)
+			}
+			if gotID != tc.wantID {
+				t.Errorf("InFlightTurn(%+v) id = %q, want %q", tc.turns, gotID, tc.wantID)
+			}
+		})
+	}
+}
+
+// TestNeedsReenqueue is table-driven over: a matching gen (must NOT
+// re-enqueue -- the single most safety-critical case in this whole Step),
+// a stale (lower) gen after a respawn, and a nil dispatched_sandbox_gen
+// (a turn dispatched before this column existed, or otherwise never
+// stamped -- treated identically to a genuine mismatch).
+func TestNeedsReenqueue(t *testing.T) {
+	t.Parallel()
+
+	gen1 := 1
+	gen2 := 2
+
+	tests := []struct {
+		name          string
+		dispatchedGen *int
+		currentGen    int
+		want          bool
+	}{
+		{"matching gen -> already correctly dispatched, must not re-enqueue", &gen1, 1, false},
+		{"stale gen after a respawn -> needs re-enqueue", &gen1, 2, true},
+		{"nil dispatched_sandbox_gen -> treated as needing re-enqueue", nil, 1, true},
+		{"matching higher gen -> must not re-enqueue", &gen2, 2, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := turn.NeedsReenqueue(tc.dispatchedGen, tc.currentGen); got != tc.want {
+				t.Errorf("NeedsReenqueue(%v, %d) = %v, want %v", tc.dispatchedGen, tc.currentGen, got, tc.want)
+			}
+		})
+	}
+}

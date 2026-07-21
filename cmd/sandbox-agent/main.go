@@ -80,6 +80,20 @@
 // decision 4) -- see HandleSnapshot's own doc comment for the full round
 // trip and its one honest, documented failure-reporting gap (no NACK
 // event exists on the wire for a failed snapshot attempt).
+//
+// Step 28 ("turn recovery", §3.3) fixes commandHandler.HandlePrompt's own
+// conversation-id reporting to genuinely happen "at turn start... never
+// lazily": it now passes a ports.ConversationIDReporter callback into
+// StartTurn (adapter.go invokes it immediately once resolveSession
+// resolves a real id, well before the rest of a turn's own, possibly-
+// minutes-long execution), calling h.bridge.SetConversationID from inside
+// that callback -- replacing the old Step-17 wiring, which only ever read
+// StartTurn's own RETURN value, meaning the first report of a real
+// conversation id used to happen only after a turn had basically already
+// ended. wsbridge.Bridge.SetConversationID itself (internal/sandboxagent/
+// wsbridge) now also triggers an immediate, out-of-band heartbeat send the
+// first time it observes a genuinely new, non-nil id, rather than waiting
+// for its own next regular tick.
 package main
 
 import (
@@ -272,11 +286,25 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 			}
 		}
 
-		conversationID, err := h.adapter.StartTurn(h.runCtx, cmd, sink)
-		if conversationID != "" {
-			h.bridge.SetConversationID(&conversationID)
+		// Step 28 ("turn recovery"), §3.3 "at turn start... never lazily":
+		// report the conversation id to the bridge THE INSTANT StartTurn
+		// itself resolves it (adapter.go's own resolveSession, called
+		// long before the rest of a turn's own, possibly-minutes-long
+		// execution) via this callback -- moved out of its old Step-17
+		// position of reading StartTurn's own RETURN value only after the
+		// whole call completed (which meant the FIRST report of a real
+		// conversation id used to only ever happen after a turn had
+		// basically already ended, directly contradicting §3.3). That old
+		// post-return read is gone entirely: onConversationID's callback
+		// already covers every path that ever resolves a real id (see
+		// ports.ConversationIDReporter's own doc comment), so a second
+		// read of StartTurn's own return value here would be redundant,
+		// dead code, not a genuinely different case.
+		onConversationID := func(id string) {
+			h.bridge.SetConversationID(&id)
 		}
-		if err != nil {
+
+		if _, err := h.adapter.StartTurn(h.runCtx, cmd, sink, onConversationID); err != nil {
 			slog.Warn("sandbox-agent: StartTurn returned an error", "messageId", cmd.MessageId, "error", err)
 		}
 		// Never propagate a per-turn error into this shared group -- one

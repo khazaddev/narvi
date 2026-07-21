@@ -35,6 +35,26 @@ type AgentEvent struct {
 	AckID string
 }
 
+// ConversationIDReporter is StartTurn's early-conversation-id-reporting
+// callback (Step 28, "turn recovery", §3.3: "The turn records the OpenCode
+// conversation id at turn start... so follow-up prompts on a fresh sandbox
+// resume the same conversation — never lazily"). StartTurn's own final
+// string return value cannot, by itself, satisfy that requirement: it is
+// only available once the ENTIRE call returns, and StartTurn blocks for
+// the WHOLE turn (waitForTurn, internal/adapters/outbound/opencode/
+// adapter.go) — by which point the turn has, for all practical purposes,
+// already ended. The conversation id is actually known much earlier
+// though — the moment the implementation resolves/creates it (well before
+// any long-blocking wait for the agent engine's own output) — so this
+// callback exists purely to let the caller act on it AT THAT EARLIER
+// MOMENT: reporting it over the very next heartbeat
+// (wsbridge.Bridge.SetConversationID) rather than only once the turn is
+// basically already over. Invoked at most once per StartTurn call, with a
+// real, non-empty, resolved conversation id — never on a path that never
+// resolves one. A nil callback is legal and MUST be tolerated: some
+// callers/tests have no need to observe it.
+type ConversationIDReporter func(conversationID string)
+
 // EventSink receives each AgentEvent as it is produced, in real time — an
 // AgentRuntime implementation MUST NOT buffer a whole turn before invoking
 // this (the caller, cmd/sandbox-agent's own commandHandler, forwards each
@@ -69,14 +89,23 @@ type AgentRuntime interface {
 	// has reached a terminal outcome or ctx is canceled.
 	//
 	// When cmd.ConversationId is nil/absent, the implementation starts a
-	// brand-new conversation and returns its freshly-minted id; when set,
-	// the implementation resumes that exact conversation and returns the
-	// same id back unchanged. The turn records this id at turn start (§3.3:
-	// "The turn records the OpenCode conversation id at turn start... so
-	// follow-up prompts on a fresh sandbox resume the same conversation —
-	// never lazily") — the caller is expected to thread the returned id
-	// into wsbridge.Bridge.SetConversationID so the next heartbeat reports
-	// it (§6.1: Heartbeat.conversationId).
+	// brand-new conversation; when set, the implementation resumes that
+	// exact conversation. Either way, the moment the implementation
+	// resolves the conversation id it will use — BEFORE doing anything
+	// else that could block for the turn's own duration — it invokes
+	// onConversationID with it (if onConversationID is non-nil), and ALSO
+	// returns that same id as its own final conversationID return value
+	// once the whole call eventually completes (§3.3: "The turn records
+	// the OpenCode conversation id at turn start... so follow-up prompts
+	// on a fresh sandbox resume the same conversation — never lazily";
+	// see ConversationIDReporter's own doc comment for why the final
+	// return value ALONE cannot satisfy that "at turn start" requirement,
+	// and onConversationID exists specifically to close that gap). The
+	// caller is expected to thread whichever value it observes first
+	// (onConversationID's callback, in practice — it always fires no
+	// later than the return value does) into
+	// wsbridge.Bridge.SetConversationID so the next heartbeat reports it
+	// (§6.1: Heartbeat.conversationId).
 	//
 	// StartTurn always attempts to deliver exactly one execution_complete-
 	// shaped terminal event via sink before returning — even when the
@@ -87,7 +116,7 @@ type AgentRuntime interface {
 	// ctx was canceled before that could happen (an ordinary shutdown, not
 	// a wire-reportable failure); the caller may log it, but owes sink
 	// nothing further.
-	StartTurn(ctx context.Context, cmd sandboxws.Prompt, sink EventSink) (conversationID string, err error)
+	StartTurn(ctx context.Context, cmd sandboxws.Prompt, sink EventSink, onConversationID ConversationIDReporter) (conversationID string, err error)
 
 	// Stop aborts whichever turn is currently in flight (§3.3: a
 	// Stop-initiated cancellation surfaces as an

@@ -2108,3 +2108,267 @@ func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t
 	// gracefully close either). ---
 	close(providerA.resumeBlock)
 }
+
+// --- Step 28 ("turn recovery") own tests -----------------------------------
+
+// TestHandleEnsureDispatched_ProcessingOnCurrentGenSandbox_NeverReDispatched
+// is THIS Step's own single most safety-critical regression test (per its
+// own brief): a turn that is Processing, correctly, on its own current-gen,
+// live, healthy sandbox must NEVER be re-dispatched a second time by any
+// subsequent EnsureDispatched trigger (e.g. an unrelated heartbeat or
+// liveness-check firing while the turn is genuinely still in progress).
+// Dispatches a turn through the REAL tryPlanDispatch path first (so
+// dispatched_sandbox_gen is genuinely stamped to match the sandbox's own
+// current gen, exactly like production), then fires EnsureDispatched
+// several MORE times and proves SandboxCommander.SendCommand was called
+// EXACTLY ONCE across all of them, never twice -- re-sending an
+// in-progress turn's prompt a second time to a sandbox already correctly
+// working on it would corrupt/duplicate its execution (this file's own
+// brief).
+func TestHandleEnsureDispatched_ProcessingOnCurrentGenSandbox_NeverReDispatched(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	created := createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	commander := &fakeSendCommander{}
+	r := newDispatchTestRegistry(t, ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	// The FIRST, real dispatch: Pending -> Dispatched -> Processing,
+	// dispatched_sandbox_gen stamped to the sandbox's own gen 1.
+	sendEnsureDispatched(ctx, t, a)
+	waitUntil(t, 5*time.Second, func() bool {
+		return commander.callCount() == 1
+	})
+
+	gotAfterFirst, err := turnStore.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get turn: %v", err)
+	}
+	if gotAfterFirst.Status != sqlcgen.TurnStatusProcessing {
+		t.Fatalf("turn status = %s, want %s", gotAfterFirst.Status, sqlcgen.TurnStatusProcessing)
+	}
+	if gotAfterFirst.DispatchedSandboxGen == nil || *gotAfterFirst.DispatchedSandboxGen != 1 {
+		t.Fatalf("dispatched_sandbox_gen = %v, want 1", gotAfterFirst.DispatchedSandboxGen)
+	}
+
+	// Fire several MORE EnsureDispatched rounds, simulating unrelated
+	// heartbeat/liveness-check-triggered re-evaluations while the turn is
+	// genuinely still in progress on its own correct-gen, live sandbox --
+	// planReenqueueOrRespawn's own (b') branch must recognize
+	// NeedsReenqueue is false here and no-op every single time.
+	for i := 0; i < 5; i++ {
+		sendEnsureDispatched(ctx, t, a)
+	}
+	// No positive DB signal to poll FOR when asserting nothing further
+	// happened -- mirrors this file's own established circuit-breaker-test
+	// precedent (TestHandleEnsureDispatched_CircuitBreakerOpen_DoesNotSpawn).
+	time.Sleep(300 * time.Millisecond)
+
+	if got := commander.callCount(); got != 1 {
+		t.Fatalf("commander.callCount() = %d, want exactly 1 (a Processing turn on its own current-gen, live sandbox must never be re-dispatched)", got)
+	}
+
+	gotAfter, err := turnStore.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get turn: %v", err)
+	}
+	if gotAfter.Status != sqlcgen.TurnStatusProcessing {
+		t.Errorf("turn status = %s, want still %s (never re-transitioned)", gotAfter.Status, sqlcgen.TurnStatusProcessing)
+	}
+	if gotAfter.DispatchedSandboxGen == nil || *gotAfter.DispatchedSandboxGen != 1 {
+		t.Errorf("dispatched_sandbox_gen = %v, want still 1 (untouched)", gotAfter.DispatchedSandboxGen)
+	}
+}
+
+// TestHandleEnsureDispatched_ProcessingOnStaleGenReadySandbox_Reenqueues
+// proves planReenqueueOrRespawn's own (b') branch directly: an in-flight
+// Processing turn whose dispatched_sandbox_gen (1) does not match the
+// CURRENT live sandbox's own gen (2, simulating a respawn that already
+// happened) gets RE-dispatched -- via tryPlanReenqueue, never
+// turn.Transition (the turn stays Processing throughout) -- with a fresh
+// turn_deadline and dispatched_sandbox_gen updated to 2.
+func TestHandleEnsureDispatched_ProcessingOnStaleGenReadySandbox_Reenqueues(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sessionStore := narvipg.NewSessionStore(pool)
+	existingConversationID := "conv-reenqueue-1"
+	if _, err := sessionStore.UpdateConversationID(ctx, sqlcgen.UpdateSessionConversationIDParams{
+		ID: sessionID, OpencodeConversationID: &existingConversationID,
+	}); err != nil {
+		t.Fatalf("seed existing conversation id: %v", err)
+	}
+
+	turnStore := narvipg.NewTurnStore(pool)
+	created, err := turnStore.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID: sessionID,
+		Status:    sqlcgen.TurnStatusProcessing,
+		Prompt:    stringPtrForTest("finish the job"),
+	})
+	if err != nil {
+		t.Fatalf("create processing turn: %v", err)
+	}
+	staleGen := int32(1)
+	if _, err := turnStore.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
+		ID: created.ID, Status: sqlcgen.TurnStatusProcessing, DispatchedSandboxGen: &staleGen,
+	}); err != nil {
+		t.Fatalf("stamp stale dispatched_sandbox_gen: %v", err)
+	}
+
+	// The CURRENT sandbox is at gen 2 (a respawn already happened) --
+	// upsert twice to bump gen from 1 to 2, exactly like a real
+	// spawn->respawn sequence would (mirrors UpsertSandboxForSpawn's own
+	// "gen = gen + 1" semantics, not hand-set).
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	tokenHash := "irrelevant-token-hash"
+	if _, err := sandboxStore.UpsertForSpawn(ctx, sqlcgen.UpsertSandboxForSpawnParams{SessionID: sessionID, TokenHash: &tokenHash}); err != nil {
+		t.Fatalf("upsert sandbox for spawn (gen 1): %v", err)
+	}
+	if _, err := sandboxStore.UpsertForSpawn(ctx, sqlcgen.UpsertSandboxForSpawnParams{SessionID: sessionID, TokenHash: &tokenHash}); err != nil {
+		t.Fatalf("upsert sandbox for spawn (gen 2): %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+	preReenqueue, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if preReenqueue.Gen != 2 {
+		t.Fatalf("precondition: sandbox gen = %d, want 2", preReenqueue.Gen)
+	}
+
+	commander := &fakeSendCommander{}
+	r := newDispatchTestRegistry(t, ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return commander.callCount() == 1
+	})
+
+	gotTurn, err := turnStore.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get turn: %v", err)
+	}
+	if gotTurn.Status != sqlcgen.TurnStatusProcessing {
+		t.Errorf("turn status = %s, want still %s (re-enqueue never re-transitions)", gotTurn.Status, sqlcgen.TurnStatusProcessing)
+	}
+	if gotTurn.DispatchedSandboxGen == nil || *gotTurn.DispatchedSandboxGen != 2 {
+		t.Errorf("dispatched_sandbox_gen = %v, want 2 (updated to the current sandbox's own gen)", gotTurn.DispatchedSandboxGen)
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM session_timers WHERE session_id = $1 AND name = $2`,
+		sessionID, TimerTurnDeadline,
+	).Scan(&n); err != nil {
+		t.Fatalf("count turn_deadline timers: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("turn_deadline timer count = %d, want 1 (re-armed fresh)", n)
+	}
+
+	var prompt sandboxws.Prompt
+	if err := json.Unmarshal(commander.lastPayload(), &prompt); err != nil {
+		t.Fatalf("unmarshal dispatched payload as sandboxws.Prompt: %v", err)
+	}
+	if prompt.ConversationId == nil || *prompt.ConversationId != existingConversationID {
+		t.Errorf("dispatched Prompt.ConversationId = %v, want %q (the same, already-existing conversation)",
+			prompt.ConversationId, existingConversationID)
+	}
+	if prompt.Gen != 2 {
+		t.Errorf("dispatched Prompt.Gen = %d, want 2 (the CURRENT sandbox's own gen)", prompt.Gen)
+	}
+	if prompt.Text != "finish the job" {
+		t.Errorf("dispatched Prompt.Text = %q, want %q", prompt.Text, "finish the job")
+	}
+}
+
+// TestHandleEnsureDispatched_ProcessingOnDeadSandboxNoPendingTurn_TriggersRespawn
+// proves planReenqueueOrRespawn's own (a') branch: NO Pending turn exists
+// at all, but there IS an in-flight (Processing) turn whose sandbox is
+// definitively dead (Failed) -- a real spawn attempt must still fire
+// (reusing tryPlanSpawn unchanged), even though NextToDispatch itself
+// reports nothing dispatchable. Before Step 28's own fix, planDispatch's
+// old early-return bailed out here with no action at all -- exactly the
+// gap that left handleTerminalGraceTimer's own already-present
+// handleEnsureDispatched call a silent no-op.
+func TestHandleEnsureDispatched_ProcessingOnDeadSandboxNoPendingTurn_TriggersRespawn(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createProcessingTurn(ctx, t, turnStore, sessionID)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusFailed,
+	}); err != nil {
+		t.Fatalf("move sandbox to failed: %v", err)
+	}
+
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "respawn-no-pending-provider-object"}}
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return provider.callCount() == 1
+	})
+
+	waitUntil(t, 5*time.Second, func() bool {
+		got, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && got.Status == sqlcgen.SandboxStatusConnecting
+	})
+
+	gotSandbox, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if gotSandbox.Gen != 2 {
+		t.Errorf("sandbox gen = %d, want 2 (a genuinely fresh respawn)", gotSandbox.Gen)
+	}
+}
+
+// stringPtrForTest returns a pointer to s -- a plain, local convenience for
+// table/literal construction in this file's own tests, mirroring the
+// existing &prompt/&providerID inline-variable pattern used elsewhere in
+// this file (a Go string literal is not itself addressable).
+func stringPtrForTest(s string) *string { return &s }

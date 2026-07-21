@@ -869,6 +869,161 @@ func TestHeartbeat_TracksConversationID(t *testing.T) {
 	}
 }
 
+// TestHeartbeat_SetConversationIDTriggersImmediateHeartbeat proves Step
+// 28's ("turn recovery") own §3.3 "at turn start... never lazily" fix: a
+// heartbeat carrying a genuinely NEW, non-nil conversation id arrives well
+// under the configured heartbeat interval, not only once that interval's
+// own next regular tick happens to come due. Uses a deliberately LONG
+// heartbeat interval (testLongHeartbeat, 10s): if SetConversationID's own
+// immediate-trigger path did NOT work, the ONLY way a heartbeat carrying
+// the new id could arrive within this test's own testWait window (2s)
+// would be the regular ticker -- which isn't due for another 10s. Observing
+// one within testWait therefore proves the immediate (forceHeartbeat) path
+// fired, not the regular cadence.
+func TestHeartbeat_SetConversationIDTriggersImmediateHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	msgCh := make(chan []byte, 32)
+
+	script := func(conn *websocket.Conn) {
+		for {
+			_, data, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			msgCh <- data
+		}
+	}
+
+	fake := &stepServer{steps: []func(*websocket.Conn){script}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	bridge := wsbridge.New(testSessionConfig(server.URL), "sbx-1", noopHandler{},
+		testDialTimeout, testLongHeartbeat, testMinBackoff, testMaxBackoff)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wait := runInBackground(ctx, bridge)
+
+	// First message is "ready"; drain it.
+	readyData := waitChan(t, msgCh, testWait)
+	var readyEnv testEnvelope
+	if err := json.Unmarshal(readyData, &readyEnv); err != nil || readyEnv.Type != "ready" {
+		t.Fatalf("first message = %s, want a ready event", readyData)
+	}
+
+	convID := "ses_immediate_1"
+	bridge.SetConversationID(&convID)
+
+	var sawImmediateHeartbeat bool
+	deadline := time.Now().Add(testWait)
+	for time.Now().Before(deadline) && !sawImmediateHeartbeat {
+		data := waitChan(t, msgCh, testWait)
+		var env testEnvelope
+		if err := json.Unmarshal(data, &env); err != nil {
+			t.Fatalf("malformed message: %v", err)
+		}
+		if env.Type == "heartbeat" && env.ConversationID != nil && *env.ConversationID == convID {
+			sawImmediateHeartbeat = true
+		}
+	}
+	if !sawImmediateHeartbeat {
+		t.Fatalf("never observed an immediate heartbeat with conversationId = %q within %s (well under the %s regular interval)",
+			convID, testWait, testLongHeartbeat)
+	}
+
+	cancel()
+	if err := wait(); err != nil {
+		t.Errorf("Run() error = %v, want nil after ctx cancellation", err)
+	}
+}
+
+// TestHeartbeat_SetConversationIDUnchanged_NoRepeatedImmediateHeartbeat
+// proves the OTHER half of Step 28's own requirement: SetConversationID
+// only triggers an immediate heartbeat when the value GENUINELY changes,
+// not on every call -- a second call carrying the SAME already-current id
+// (e.g. a later turn resuming the same conversation) must not trigger a
+// second one. Uses the SAME long-heartbeat-interval technique as the test
+// above: with the regular ticker 10s away, any heartbeat observed within
+// a short bounded window after the second, unchanged-value call can only
+// be explained by an (incorrect) second immediate trigger.
+func TestHeartbeat_SetConversationIDUnchanged_NoRepeatedImmediateHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	msgCh := make(chan []byte, 32)
+
+	script := func(conn *websocket.Conn) {
+		for {
+			_, data, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+			msgCh <- data
+		}
+	}
+
+	fake := &stepServer{steps: []func(*websocket.Conn){script}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+
+	bridge := wsbridge.New(testSessionConfig(server.URL), "sbx-1", noopHandler{},
+		testDialTimeout, testLongHeartbeat, testMinBackoff, testMaxBackoff)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wait := runInBackground(ctx, bridge)
+
+	readyData := waitChan(t, msgCh, testWait)
+	var readyEnv testEnvelope
+	if err := json.Unmarshal(readyData, &readyEnv); err != nil || readyEnv.Type != "ready" {
+		t.Fatalf("first message = %s, want a ready event", readyData)
+	}
+
+	convID := "ses_stable_1"
+	bridge.SetConversationID(&convID)
+
+	// Drain until the first immediate heartbeat carrying it -- confirms
+	// the forceHeartbeat signal from THIS call has already been consumed
+	// by heartbeatLoop before this test calls SetConversationID again
+	// below.
+	var sawFirstImmediate bool
+	deadline := time.Now().Add(testWait)
+	for time.Now().Before(deadline) && !sawFirstImmediate {
+		data := waitChan(t, msgCh, testWait)
+		var env testEnvelope
+		if err := json.Unmarshal(data, &env); err != nil {
+			t.Fatalf("malformed message: %v", err)
+		}
+		if env.Type == "heartbeat" && env.ConversationID != nil && *env.ConversationID == convID {
+			sawFirstImmediate = true
+		}
+	}
+	if !sawFirstImmediate {
+		t.Fatal("never observed the first immediate heartbeat")
+	}
+
+	// Calling SetConversationID again with an equal (but distinct pointer)
+	// value must NOT trigger a second immediate send -- only a genuine
+	// CHANGE does.
+	sameValue := convID
+	bridge.SetConversationID(&sameValue)
+
+	select {
+	case data := <-msgCh:
+		var env testEnvelope
+		if err := json.Unmarshal(data, &env); err == nil && env.Type == "heartbeat" {
+			t.Fatalf("observed an unexpected extra heartbeat after SetConversationID with an unchanged value: %s", data)
+		}
+	case <-time.After(300 * time.Millisecond):
+		// Expected: nothing else arrives (the regular ticker is still
+		// testLongHeartbeat=10s away).
+	}
+
+	cancel()
+	if err := wait(); err != nil {
+		t.Errorf("Run() error = %v, want nil after ctx cancellation", err)
+	}
+}
+
 // --- shutdown command convergence ----------------------------------------
 
 func TestRun_ShutdownCommandReturnsErrShutdownRequested(t *testing.T) {
