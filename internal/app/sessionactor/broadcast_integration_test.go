@@ -34,7 +34,10 @@ func TestActorTransact_BroadcastsOnlyAfterCommit(t *testing.T) {
 	sessionID := createTestSession(ctx, t, pool)
 
 	fb := &fakeBroadcaster{}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), fb, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), fb, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -115,7 +118,10 @@ func TestActorTransact_NilBroadcasterNeverPanics(t *testing.T) {
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)

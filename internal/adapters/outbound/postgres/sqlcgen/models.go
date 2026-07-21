@@ -520,11 +520,19 @@ type AuditLog struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type ContractDriftSnapshot struct {
+	RepoKey                  string             `json:"repo_key"`
+	LastRepoSha              string             `json:"last_repo_sha"`
+	LastContractsFingerprint string             `json:"last_contracts_fingerprint"`
+	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Environment struct {
 	ID             pgtype.UUID        `json:"id"`
 	PathScope      []byte             `json:"path_scope"`
 	MockConfigured bool               `json:"mock_configured"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ContractsPath  *string            `json:"contracts_path"`
 }
 
 type Event struct {

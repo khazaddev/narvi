@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/contractdrift"
 )
 
 // defaultAPIBaseURL is GitHub's own real REST API base -- the ONLY place
@@ -164,25 +166,34 @@ type commitResponse struct {
 	SHA string `json:"sha"`
 }
 
-// ResolveBranchSHAError is the error ResolveBranchSHA returns for any
-// non-2xx GitHub response -- mirrors CreatePRError exactly (a plain,
-// structured error; see ports.SourceControl's own doc comment for why
-// neither method invents a transient/permanent classification).
-type ResolveBranchSHAError struct {
+// APIError is the error doGet returns for any non-2xx GitHub response --
+// mirrors CreatePRError exactly (a plain, structured error; see
+// ports.SourceControl's own doc comment for why neither method invents a
+// transient/permanent classification). Originally named
+// ResolveBranchSHAError (Step 26, "image builds") back when ResolveBranchSHA
+// was doGet's only caller; generalized here (Step 27, "mocking + contract
+// drift") once ResolveContractsFingerprint became doGet's second caller --
+// a small, mechanical, internal-only rename (this type is never part of any
+// wire contract), preferred over adding a second, near-duplicate error
+// struct for the same shared underlying signal.
+type APIError struct {
 	Status  int
 	Message string
 }
 
-func (e *ResolveBranchSHAError) Error() string {
-	return fmt.Sprintf("githubapi: resolve branch sha: http %d: %s", e.Status, e.Message)
+func (e *APIError) Error() string {
+	return fmt.Sprintf("githubapi: http %d: %s", e.Status, e.Message)
 }
 
 // doGet performs one authenticated GET against a.apiBaseURL+path, returning
 // the raw response body on any 2xx status -- the shared request-building/
 // auth/bounded-read/error-envelope-parse logic CreatePR's own inline block
-// duplicates once; factored out here since ResolveBranchSHA below needs the
-// IDENTICAL sequence twice (repo info, then a commit) rather than a THIRD
-// verbatim copy of it.
+// duplicates once; factored out here since ResolveBranchSHA and
+// ResolveContractsFingerprint both need the IDENTICAL sequence (repo info/
+// commit/contents-listing GETs) rather than each keeping their own verbatim
+// copy of it. Returns *APIError on any non-2xx response -- callers that
+// need to distinguish a 404 from every other failure (ResolveContractsFingerprint
+// below) do so via errors.As against this one shared type.
 func (a *Adapter) doGet(ctx context.Context, path, token string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
 	if err != nil {
@@ -210,7 +221,7 @@ func (a *Adapter) doGet(ctx context.Context, path, token string) ([]byte, error)
 		} else if len(body) > 0 {
 			message = "error body did not match GitHub's expected error envelope"
 		}
-		return nil, &ResolveBranchSHAError{Status: resp.StatusCode, Message: message}
+		return nil, &APIError{Status: resp.StatusCode, Message: message}
 	}
 
 	return body, nil
@@ -265,4 +276,67 @@ func (a *Adapter) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranch
 	}
 
 	return commit.SHA, nil
+}
+
+// contentsEntry is the subset of GitHub's real GET
+// /repos/{owner}/{repo}/contents/{path} response shape this adapter needs
+// (https://docs.github.com/rest/repos/contents#get-repository-content) --
+// requested WITHOUT a trailing filename (i.e. path names a directory),
+// this endpoint returns a JSON ARRAY of these, one per immediate entry
+// (file or subdirectory) -- never a single object. Type is "file" or
+// "dir"; this adapter does not need to branch on it (see
+// ResolveContractsFingerprint's own doc comment: a subdirectory's own Sha
+// is already the recursive git tree hash of everything nested under it,
+// so every entry's Sha is used identically regardless of Type).
+type contentsEntry struct {
+	Path string `json:"path"`
+	Sha  string `json:"sha"`
+	Type string `json:"type"`
+}
+
+// ResolveContractsFingerprint implements ports.SourceControl (Step 27,
+// "mocking + contract drift", §14.3): fingerprints spec.Path's directory
+// listing at spec.Ref via a real GET
+// https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}
+// call (GitHub's Contents API), reusing doGet exactly like ResolveBranchSHA
+// above.
+//
+// A 404 (no directory at that path/ref -- the common case: most repos/refs
+// have no contracts directory) is detected by checking doGet's returned
+// error via errors.As against *APIError and its own Status field -- the
+// SAME typed-error signal ResolveBranchSHA's own callers could already use,
+// reused here rather than inventing a second, differently-shaped error
+// path. On a 404, this returns ("", false, nil): exists=false, err=nil,
+// per ports.SourceControl's own doc comment ("a legitimate, expected
+// outcome... NOT an error"). Any OTHER non-2xx status, or a transport
+// failure, is a real error: ("", false, err).
+//
+// On success, the response is parsed as a JSON array of contentsEntry (a
+// non-recursive directory listing -- GitHub's Contents API gives every
+// entry, including subdirectories, its own "sha" field already covering
+// everything nested under it, so this adapter never recurses into a
+// subdirectory entry itself); the path->sha map built from it is handed to
+// contractdrift.Fingerprint, and (digest, true, nil) is returned.
+func (a *Adapter) ResolveContractsFingerprint(ctx context.Context, spec ports.ResolveContractsFingerprintSpec) (string, bool, error) {
+	contentsPath := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", a.apiBaseURL, spec.Owner, spec.Repo, spec.Path, spec.Ref)
+	body, err := a.doGet(ctx, contentsPath, spec.Token)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("githubapi: resolve contracts fingerprint: %w", err)
+	}
+
+	var entries []contentsEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return "", false, fmt.Errorf("githubapi: decode contents response: %w", err)
+	}
+
+	shas := make(map[string]string, len(entries))
+	for _, e := range entries {
+		shas[e.Path] = e.Sha
+	}
+
+	return contractdrift.Fingerprint(shas), true, nil
 }

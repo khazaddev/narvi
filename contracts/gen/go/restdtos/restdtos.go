@@ -37,6 +37,20 @@ func (j *ArtifactsResponse) UnmarshalJSON(value []byte) error {
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
+	// Optional (row 27, 'mocking + contract drift', §14.3). Like pathScope above,
+	// this key is genuinely OPTIONAL (may be absent from the request body entirely)
+	// and independent of it -- an Environment can be path-scoped, mock-configured,
+	// both, or neither (§14.1: 'an optional path_scope ... and an optional
+	// mock_config'). Presence of this key in the request body -- even as {} with
+	// contractsPath absent/null -- means: mark this session's Environment
+	// mock_configured=true, and store a contracts path, resolved as literal
+	// "contracts/api" when contractsPath is absent/null, otherwise the caller's own
+	// exact value. Absence of this key entirely leaves mock_configured=false and
+	// contracts_path=NULL, today's exact behavior, unchanged. A non-empty pathScope
+	// is NOT required for mockConfig to be accepted -- either optional attribute
+	// alone is sufficient to create a new, session-scoped Environment row.
+	MockConfig *CreateSessionRequestMockConfig `json:"mockConfig,omitempty,omitzero" yaml:"mockConfig,omitempty" mapstructure:"mockConfig,omitempty"`
+
 	// Null means use the default model catalog entry.
 	ModelId CreateSessionRequestModelId `json:"modelId" yaml:"modelId" mapstructure:"modelId"`
 
@@ -70,6 +84,32 @@ type CreateSessionRequest struct {
 	// Title corresponds to the JSON schema field "title".
 	Title CreateSessionRequestTitle `json:"title" yaml:"title" mapstructure:"title"`
 }
+
+// Optional (row 27, 'mocking + contract drift', §14.3). Like pathScope above, this
+// key is genuinely OPTIONAL (may be absent from the request body entirely) and
+// independent of it -- an Environment can be path-scoped, mock-configured, both,
+// or neither (§14.1: 'an optional path_scope ... and an optional mock_config').
+// Presence of this key in the request body -- even as {} with contractsPath
+// absent/null -- means: mark this session's Environment mock_configured=true, and
+// store a contracts path, resolved as literal "contracts/api" when contractsPath
+// is absent/null, otherwise the caller's own exact value. Absence of this key
+// entirely leaves mock_configured=false and contracts_path=NULL, today's exact
+// behavior, unchanged. A non-empty pathScope is NOT required for mockConfig to be
+// accepted -- either optional attribute alone is sufficient to create a new,
+// session-scoped Environment row.
+type CreateSessionRequestMockConfig struct {
+	// Repo-relative path to the contract-driven mock spec directory (§14.3: 'a shared
+	// contracts/api/*.{yaml,json} spec'). Absent or null means the literal default
+	// "contracts/api"; a non-null value is stored verbatim, with no validation beyond
+	// what mockConfig's own containing object already requires.
+	ContractsPath CreateSessionRequestMockConfigContractsPath `json:"contractsPath,omitempty,omitzero" yaml:"contractsPath,omitempty" mapstructure:"contractsPath,omitempty"`
+}
+
+// Repo-relative path to the contract-driven mock spec directory (§14.3: 'a shared
+// contracts/api/*.{yaml,json} spec'). Absent or null means the literal default
+// "contracts/api"; a non-null value is stored verbatim, with no validation beyond
+// what mockConfig's own containing object already requires.
+type CreateSessionRequestMockConfigContractsPath *string
 
 // Null means use the default model catalog entry.
 type CreateSessionRequestModelId *string

@@ -46,6 +46,13 @@ var testTokenEncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 // second, parallel fake -- this package's own imageresolve tests need the
 // exact same CreatePR-call-recording precedent, just for the other
 // SourceControl method dispatch.go's resolveAndSetImage now calls.
+//
+// Step 27 ("mocking + contract drift") extends this SAME fake again, the
+// identical way, for ResolveContractsFingerprint (fingerprintCalls/
+// nextFingerprint/nextFingerprintExists/nextFingerprintErr, plus an
+// optional per-repo fingerprintFor map) -- this package's own
+// contractdrift tests need the exact same recording precedent for the
+// third SourceControl method checkContractDrift (contractdrift.go) calls.
 type fakeSourceControl struct {
 	mu      sync.Mutex
 	calls   []ports.CreatePRSpec
@@ -56,6 +63,13 @@ type fakeSourceControl struct {
 	shaFor     map[string]string // keyed by repo name; falls back to nextSHA if absent
 	nextSHA    string
 	nextSHAErr error
+
+	fingerprintCalls      []ports.ResolveContractsFingerprintSpec
+	fingerprintFor        map[string]string // keyed by repo name; overrides nextFingerprint if present
+	existsFor             map[string]bool   // keyed by repo name; overrides nextFingerprintExists if present
+	nextFingerprint       string
+	nextFingerprintExists bool
+	nextFingerprintErr    error
 }
 
 var _ ports.SourceControl = (*fakeSourceControl)(nil)
@@ -96,6 +110,30 @@ func (f *fakeSourceControl) shaCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.shaCalls)
+}
+
+func (f *fakeSourceControl) ResolveContractsFingerprint(_ context.Context, spec ports.ResolveContractsFingerprintSpec) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fingerprintCalls = append(f.fingerprintCalls, spec)
+	if f.nextFingerprintErr != nil {
+		return "", false, f.nextFingerprintErr
+	}
+	fingerprint := f.nextFingerprint
+	if fp, ok := f.fingerprintFor[spec.Repo]; ok {
+		fingerprint = fp
+	}
+	exists := f.nextFingerprintExists
+	if e, ok := f.existsFor[spec.Repo]; ok {
+		exists = e
+	}
+	return fingerprint, exists, nil
+}
+
+func (f *fakeSourceControl) fingerprintCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.fingerprintCalls)
 }
 
 // reposJSONForTest builds the sessions.repos JSONB shape (design decision
@@ -239,7 +277,10 @@ func TestHandleSandboxEvent_ExecutionCompleteCompleted_CompletesTurnAndSendsPush
 	}
 
 	commander := &fakeSendCommander{}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -323,7 +364,10 @@ func TestHandleSandboxEvent_ExecutionCompleteFailed_NoPush(t *testing.T) {
 	created := createProcessingTurn(ctx, t, turnStore, sessionID)
 
 	commander := &fakeSendCommander{}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -409,7 +453,10 @@ func TestHandleSandboxEvent_PushComplete_CreatesPRArtifact(t *testing.T) {
 	}
 
 	sourceControl := &fakeSourceControl{nextRef: ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"}}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -479,7 +526,10 @@ func TestHandleSandboxEvent_PushComplete_NoCreatedBy_SkipsHonestly(t *testing.T)
 	}
 
 	sourceControl := &fakeSourceControl{}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)

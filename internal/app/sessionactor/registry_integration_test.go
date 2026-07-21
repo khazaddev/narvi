@@ -25,8 +25,14 @@ func TestConcurrentGetOrSpawn_ExactlyOneWins(t *testing.T) {
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
 
-	r1 := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
-	r2 := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r1, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	r2, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r1.Shutdown() })
 	t.Cleanup(func() { _ = r2.Shutdown() })
 
@@ -85,7 +91,10 @@ func TestActorTransact_StaleEpochEvictsSelf(t *testing.T) {
 	pool := newTestPool(t)
 	sessionID := createTestSession(ctx, t, pool)
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -151,7 +160,10 @@ func TestActorIdleEviction_ReleasesLock(t *testing.T) {
 	timeouts := platform.DefaultTimeouts()
 	timeouts.ActorIdleTTL = 100 * time.Millisecond
 
-	r := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a1, err := r.GetOrSpawn(ctx, sessionID)

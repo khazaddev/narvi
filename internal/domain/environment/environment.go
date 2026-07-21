@@ -19,12 +19,25 @@ type Environment struct {
 	// ValidatePathScope; nothing in this package re-validates it.
 	PathScope []string
 
-	// MockConfigured records only whether a mock_config is attached to
-	// this Environment -- a bare presence marker. The config's own shape
-	// (contract-driven mock server declaration, drift detection) is
-	// §14.3's design, several Steps away (Step 27); this field invents
-	// nothing about that shape.
+	// MockConfigured records whether a mock_config is attached to this
+	// Environment (§14.3: "The mock is a versioned repo artifact... never
+	// something an agent invents per session"). An Environment can be
+	// path-scoped without being mock-configured, or vice versa -- the two
+	// are independent optional attributes (§14.1: "an optional path_scope
+	// ... and an optional mock_config"), not a package deal.
 	MockConfigured bool
+
+	// ContractsPath is the repo-relative path to the contract-driven mock
+	// spec directory this Environment's sessions check for drift against
+	// (§14.3: "a shared contracts/api/*.{yaml,json} spec... drives a
+	// generated mock server"). Empty when MockConfigured is false --
+	// there is nothing to point at without a mock_config attached in the
+	// first place. When MockConfigured is true, this is either the
+	// caller's own explicit path or the literal "contracts/api" default
+	// (httpapi.CreateSession's own resolution, see its doc comment);
+	// app/sessionactor/contractdrift.go's own checkContractDrift is the
+	// one real reader.
+	ContractsPath string
 }
 
 // Sentinel errors ValidatePathScope can return, each naming a distinct

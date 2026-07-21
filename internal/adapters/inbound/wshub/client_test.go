@@ -84,7 +84,10 @@ func newClientTestRigImpl(t *testing.T, timeouts platform.Timeouts, wireBroadcas
 	if wireBroadcaster {
 		broadcaster = hub
 	}
-	registry := sessionactor.NewRegistry(ctx, pool, timeouts, broadcaster, nil, nil, "", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, timeouts, broadcaster, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
 	rig := clientTestRig{

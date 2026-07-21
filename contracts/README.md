@@ -85,7 +85,7 @@ on this).
 **Secrets, environments, automations, and uploads DTOs are still
 deliberately not modeled here** — this remains a scope decision, not an
 oversight. They belong to the PRs that actually define those features and
-can schema them honestly: environments (PR-10/26), automations (PR-46/47),
+can schema them honestly: environments (PR-10/26/27), automations (PR-46/47),
 uploads (PR-49), and so on. Do not invent field shapes for those ahead of
 the PRs that own them; extend `rest/v1/dtos.schema.json` (or add a new
 versioned sibling) when that PR lands instead.

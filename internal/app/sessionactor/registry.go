@@ -2,16 +2,25 @@ package sessionactor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// meterName is this package's own OTel meter name (Step 27, "mocking +
+// contract drift" -- the contract_drift_detected counter, below, is the
+// first metric this package registers) -- mirrors app/reconciler's and
+// app/imagebuild's own "narvi/<package>" convention exactly.
+const meterName = "narvi/sessionactor"
 
 // storeBundle bundles the store handles this package's Registry and every
 // Actor it hydrates share -- built once in NewRegistry, then referenced
@@ -43,18 +52,30 @@ type storeBundle struct {
 	// independently-constructed *postgres.ImageBuildStore -- see
 	// cmd/control-plane/main.go).
 	imageBuild *postgres.ImageBuildStore
+
+	// environment and contractDrift are Step 27's ("mocking + contract
+	// drift") own additions, mirroring imageBuild's own addition for Step
+	// 26 exactly: environment is used by dispatch.go/contractdrift.go's
+	// checkContractDrift to read a spawn/restore plan's own Environment
+	// row (MockConfigured, ContractsPath) back by id; contractDrift reads/
+	// best-effort-upserts the per-repo contract_drift_snapshots row that
+	// same function compares against.
+	environment   *postgres.EnvironmentStore
+	contractDrift *postgres.ContractDriftStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 	return storeBundle{
-		session:    postgres.NewSessionStore(pool),
-		turn:       postgres.NewTurnStore(pool),
-		sandbox:    postgres.NewSandboxStore(pool),
-		timer:      postgres.NewTimerStore(pool),
-		event:      postgres.NewEventStore(pool),
-		identity:   postgres.NewIdentityStore(pool),
-		artifact:   postgres.NewArtifactStore(pool),
-		imageBuild: postgres.NewImageBuildStore(pool),
+		session:       postgres.NewSessionStore(pool),
+		turn:          postgres.NewTurnStore(pool),
+		sandbox:       postgres.NewSandboxStore(pool),
+		timer:         postgres.NewTimerStore(pool),
+		event:         postgres.NewEventStore(pool),
+		identity:      postgres.NewIdentityStore(pool),
+		artifact:      postgres.NewArtifactStore(pool),
+		imageBuild:    postgres.NewImageBuildStore(pool),
+		environment:   postgres.NewEnvironmentStore(pool),
+		contractDrift: postgres.NewContractDriftStore(pool),
 	}
 }
 
@@ -115,6 +136,17 @@ type Registry struct {
 	// session's own fingerprint shares that one (test-only) value.
 	openCodeRuntimeVersion string
 
+	// contractDriftDetected is Step 27's ("mocking + contract drift", §14.3)
+	// own OTel counter, constructed exactly once here (NewRegistry), then
+	// threaded through to every Actor this Registry hydrates -- mirroring
+	// how every other Actor-shared field above is threaded, and mirroring
+	// app/reconciler.NewReconciler's/app/imagebuild.NewBuilder's own
+	// "construct the counter once, at construction time" precedent for the
+	// counter itself. Incremented by dispatch.go/contractdrift.go's own
+	// checkContractDrift whenever contractdrift.HasDrifted reports true for
+	// a mock-configured Environment's repo.
+	contractDriftDetected metric.Int64Counter
+
 	// group tracks every actor's mailbox-loop goroutine, so evicted/
 	// crashed actors are cleanly reaped and Shutdown can wait on all of
 	// them. Deliberately the zero value, NOT errgroup.WithContext(...) --
@@ -162,6 +194,15 @@ type Registry struct {
 // callers that never exercise the spawn/dispatch/push/PR/image-resolution
 // path (e.g. the resilience test, design decision 12) can safely omit
 // them.
+//
+// Step 27 ("mocking + contract drift") adds the contract_drift_detected
+// OTel counter's construction here -- exactly once per Registry, mirroring
+// app/reconciler.NewReconciler's/app/imagebuild.NewBuilder's own identical
+// precedent (see each of their own doc comments) -- which is why NewRegistry
+// now returns an error: construction can fail exactly the same way theirs
+// can (an invalid/misconfigured MeterProvider), and that failure is
+// propagated up through whatever already handles Reconciler/Builder
+// construction errors today (cmd/control-plane/main.go).
 func NewRegistry(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -173,7 +214,18 @@ func NewRegistry(
 	sourceControl ports.SourceControl,
 	tokenEncryptionKey []byte,
 	openCodeRuntimeVersion string,
-) *Registry {
+) (*Registry, error) {
+	meter := otel.Meter(meterName)
+
+	contractDriftDetected, err := meter.Int64Counter(
+		"contract_drift_detected",
+		metric.WithDescription("Number of times a mock-configured Environment's repo was found to have drifted from its own declared contracts/api spec (§14.3)."),
+		metric.WithUnit("{repo}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: construct contract_drift_detected counter: %w", err)
+	}
+
 	lifecycleCtx, cancel := context.WithCancel(ctx)
 	return &Registry{
 		actors:                 make(map[pgtype.UUID]*Actor),
@@ -187,9 +239,10 @@ func NewRegistry(
 		sourceControl:          sourceControl,
 		tokenEncryptionKey:     tokenEncryptionKey,
 		openCodeRuntimeVersion: openCodeRuntimeVersion,
+		contractDriftDetected:  contractDriftDetected,
 		lifecycleCtx:           lifecycleCtx,
 		cancel:                 cancel,
-	}
+	}, nil
 }
 
 // GetOrSpawn returns the live local Actor for sessionID if this process

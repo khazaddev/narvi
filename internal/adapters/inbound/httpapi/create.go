@@ -29,6 +29,13 @@ import (
 // session ever carries a provenance tag at all (a non-empty pathScope).
 const scopedEnvironmentProvenanceTag = "scoped_environment"
 
+// defaultContractsPath is the contracts_path value CreateSession stores
+// when a request's mockConfig is present but omits (or nulls)
+// contractsPath -- Row 27's ("mocking + contract drift", §14.3) own
+// concrete choice, matching §14.3's own "a shared contracts/api/*.{yaml,json}
+// spec" example path exactly.
+const defaultContractsPath = "contracts/api"
+
 // CreateSession backs POST /api/sessions (§6.3), mounted (Step 20, "auth
 // v1") behind internal/adapters/inbound/auth.Middleware -- see doc.go's own
 // updated writeup. Decodes restdtos.CreateSessionRequest from a body
@@ -87,6 +94,24 @@ const scopedEnvironmentProvenanceTag = "scoped_environment"
 // and provenance_tag is set to scopedEnvironmentProvenanceTag whenever
 // environment.RequiresProvenanceTag (the real domain function, not a
 // re-derived local check) reports true for it.
+//
+// Row 27 ("mocking + contract drift", §14.3) update: req.MockConfig is a
+// SECOND, independent optional Environment attribute alongside PathScope
+// (§14.1: "an optional path_scope ... and an optional mock_config" -- two
+// separate optional fields, not a package deal). An environments row is
+// now created whenever EITHER hasPathScope OR hasMockConfig (mockConfig
+// key present in the request body at all, even as {}) is true -- the
+// pre-existing hasPathScope-only gate is widened to an OR, never narrowed.
+// When hasMockConfig, contractsPath resolves to req.MockConfig.
+// ContractsPath's own value when non-nil, otherwise the literal
+// defaultContractsPath ("contracts/api") -- mock_configured is set true and
+// contracts_path is set to that resolved value on the SAME environments
+// row pathScope's own block already creates (or a freshly-created one, if
+// mockConfig was supplied with no pathScope). provenance_tag's own
+// RequiresProvenanceTag check is untouched -- it only ever depends on
+// PathScope (environment.RequiresProvenanceTag's own doc comment), so a
+// mockConfig-only Environment does not, by itself, cause a session to
+// carry a provenance tag.
 func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -168,6 +193,18 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			}
 		}
 
+		// mockConfig is OPTIONAL and INDEPENDENT of pathScope (row 27,
+		// "mocking + contract drift", §14.3 -- see this func's own doc
+		// comment). hasMockConfig is true whenever the request body carried
+		// a "mockConfig" key at all (req.MockConfig != nil), even as {} --
+		// contractsPath resolves to the caller's own value when supplied,
+		// otherwise defaultContractsPath.
+		hasMockConfig := req.MockConfig != nil
+		contractsPath := defaultContractsPath
+		if hasMockConfig && req.MockConfig.ContractsPath != nil {
+			contractsPath = *req.MockConfig.ContractsPath
+		}
+
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			logger.Error("httpapi: begin create-session tx failed", "error", err)
@@ -180,24 +217,38 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 		// own transact.
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		// When a non-empty pathScope was supplied, the new environments row
-		// is inserted in this SAME transaction, BEFORE the session row
-		// itself, so the session insert below can set environment_id to
-		// it directly -- matching this func's own doc comment. environment_id/
-		// provenanceTag both stay their pgtype/Go zero values (NULL) when
-		// hasPathScope is false, identical to every session created before
-		// this batch.
+		// An environments row is inserted in this SAME transaction, BEFORE
+		// the session row itself, so the session insert below can set
+		// environment_id to it directly, whenever EITHER a non-empty
+		// pathScope OR a present mockConfig was supplied -- matching this
+		// func's own doc comment (row 27's "either" gate, not "both
+		// required"). environment_id/provenanceTag both stay their
+		// pgtype/Go zero values (NULL) when NEITHER is present, identical
+		// to every session created before this batch.
 		var environmentID pgtype.UUID
 		var provenanceTag *string
-		if hasPathScope {
-			pathScopeJSON, marshalErr := json.Marshal(pathScope)
-			if marshalErr != nil {
-				logger.Error("httpapi: marshal pathScope failed", "error", marshalErr)
-				writeError(w, http.StatusInternalServerError, "internal error")
-				return
+		if hasPathScope || hasMockConfig {
+			var pathScopeJSON []byte
+			if hasPathScope {
+				var marshalErr error
+				pathScopeJSON, marshalErr = json.Marshal(pathScope)
+				if marshalErr != nil {
+					logger.Error("httpapi: marshal pathScope failed", "error", marshalErr)
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
+				}
 			}
 
-			env, envErr := environments.WithTx(tx).Create(ctx, pathScopeJSON)
+			var contractsPathCol *string
+			if hasMockConfig {
+				contractsPathCol = &contractsPath
+			}
+
+			env, envErr := environments.WithTx(tx).Create(ctx, sqlcgen.CreateEnvironmentParams{
+				PathScope:      pathScopeJSON,
+				MockConfigured: hasMockConfig,
+				ContractsPath:  contractsPathCol,
+			})
 			if envErr != nil {
 				logger.Error("httpapi: create environment failed", "error", envErr)
 				writeError(w, http.StatusInternalServerError, "internal error")
@@ -206,7 +257,9 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			environmentID = env.ID
 
 			// The real domain function, not a re-derived local boolean --
-			// see this func's own doc comment.
+			// see this func's own doc comment. Depends only on PathScope,
+			// exactly like RequiresProvenanceTag's own doc comment says --
+			// a mockConfig-only Environment never causes this to fire.
 			if environment.RequiresProvenanceTag(environment.Environment{PathScope: pathScope}) {
 				tag := scopedEnvironmentProvenanceTag
 				provenanceTag = &tag

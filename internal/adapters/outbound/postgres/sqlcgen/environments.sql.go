@@ -7,34 +7,72 @@ package sqlcgen
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const createEnvironment = `-- name: CreateEnvironment :one
 
-INSERT INTO environments (path_scope)
-VALUES ($1)
-RETURNING id, path_scope, mock_configured, created_at
+INSERT INTO environments (path_scope, mock_configured, contracts_path)
+VALUES ($1, $2, $3)
+RETURNING id, path_scope, mock_configured, created_at, contracts_path
 `
 
-// Queries backing the environments table (§14.1, migrations/000021_environments.up.sql).
-// Environment rows are created INLINE by httpapi.CreateSession only, when a
-// caller supplies a non-empty pathScope -- there is no standalone
-// create/list/update Environment endpoint in this codebase (see this
-// migration's own doc comment for the scope decision). This is the only
-// query this table needs today.
+type CreateEnvironmentParams struct {
+	PathScope      []byte  `json:"path_scope"`
+	MockConfigured bool    `json:"mock_configured"`
+	ContractsPath  *string `json:"contracts_path"`
+}
+
+// Queries backing the environments table (§14.1, migrations/000021_environments.up.sql,
+// migrations/000025_mock_config_contract_drift.up.sql). Environment rows are
+// created INLINE by httpapi.CreateSession only, when a caller supplies a
+// non-empty pathScope AND/OR a mockConfig -- there is no standalone
+// create/list/update Environment endpoint in this codebase (see
+// migrations/000021_environments.up.sql's own scope decision).
 // path_scope is the caller-supplied pathScope, already validated by
 // internal/domain/environment.ValidatePathScope BEFORE this is ever
-// called -- this query performs no validation of its own. mock_configured
-// stays at its column default (false): nothing in this call path attaches
-// a mock_config.
-func (q *Queries) CreateEnvironment(ctx context.Context, pathScope []byte) (Environment, error) {
-	row := q.db.QueryRow(ctx, createEnvironment, pathScope)
+// called -- this query performs no validation of its own. mock_configured/
+// contracts_path (Step 27, "mocking + contract drift") are the caller's
+// own resolved mockConfig presence/path -- mock_configured=false and
+// contracts_path=NULL (the ordinary, unscoped-mock case) when the
+// request's mockConfig key was absent; see httpapi.CreateSession's own
+// doc comment for exactly how these three are resolved from one request.
+// Extended in place, as a single INSERT accepting all three columns,
+// rather than adding a second UPDATE query: environments rows are ALWAYS
+// created inline at session-creation time (this table's own doc comment),
+// never updated afterward, so there is no separate "attach a mock_config
+// later" path for a second query to serve.
+func (q *Queries) CreateEnvironment(ctx context.Context, arg CreateEnvironmentParams) (Environment, error) {
+	row := q.db.QueryRow(ctx, createEnvironment, arg.PathScope, arg.MockConfigured, arg.ContractsPath)
 	var i Environment
 	err := row.Scan(
 		&i.ID,
 		&i.PathScope,
 		&i.MockConfigured,
 		&i.CreatedAt,
+		&i.ContractsPath,
+	)
+	return i, err
+}
+
+const getEnvironment = `-- name: GetEnvironment :one
+SELECT id, path_scope, mock_configured, created_at, contracts_path FROM environments
+WHERE id = $1
+`
+
+// app/sessionactor/contractdrift.go's own checkContractDrift reads a
+// spawn/restore plan's environment_id back via this lookup, to check
+// MockConfigured and read ContractsPath.
+func (q *Queries) GetEnvironment(ctx context.Context, id pgtype.UUID) (Environment, error) {
+	row := q.db.QueryRow(ctx, getEnvironment, id)
+	var i Environment
+	err := row.Scan(
+		&i.ID,
+		&i.PathScope,
+		&i.MockConfigured,
+		&i.CreatedAt,
+		&i.ContractsPath,
 	)
 	return i, err
 }
