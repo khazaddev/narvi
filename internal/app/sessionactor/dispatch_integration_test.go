@@ -33,6 +33,28 @@ import (
 // restore-path tests below need the exact same CreateSandbox-call-recording
 // precedent, just for the other provider method dispatch.go's executeRestore
 // now calls.
+//
+// Step 23 ("resume") extends this same fake again with the identical
+// recording shape for ResumeSandbox (resumeCalls/nextResumeErr -- no
+// "nextResumeRef" counterpart, since ports.SandboxProvider.ResumeSandbox
+// returns only an error, no SandboxRef: it resumes the SAME provider
+// object already on the sandbox row, rather than minting a new one), plus
+// a resumeSupported field so a test can flip Capabilities().Resume on a
+// per-test basis (defaulting to false -- the SAME value Capabilities()
+// already hardcoded before this Step, so every pre-existing test's
+// behavior is unchanged).
+//
+// Step 23's own concurrency-fix follow-up adds resumeBlock: an optional,
+// test-supplied channel that, when non-nil, ResumeSandbox blocks on
+// (after recording the call) until the test closes it or ctx is done --
+// this is what lets TestResilience_ConcurrentResumeAcrossActors_
+// ResumeSandboxCalledAtMostOnce (below) hold a real ResumeSandbox call
+// "in flight" for actor A while it hydrates a second actor instance for
+// the same session and proves that second actor's own EnsureDispatched
+// does NOT call ResumeSandbox a second time -- exactly the live
+// reproduction shape the adversarial review this fix responds to used.
+// nil (the zero value) for every OTHER test in this file, so
+// ResumeSandbox returns immediately for all of them, unchanged.
 type fakeSpawnProvider struct {
 	mu      sync.Mutex
 	calls   []ports.CreateSpec
@@ -42,6 +64,11 @@ type fakeSpawnProvider struct {
 	restoreCalls   []fakeRestoreCall
 	nextRestoreRef ports.SandboxRef
 	nextRestoreErr error
+
+	resumeSupported bool
+	resumeCalls     []ports.SandboxRef
+	nextResumeErr   error
+	resumeBlock     chan struct{}
 }
 
 // fakeRestoreCall records one RestoreFromSnapshot invocation's own
@@ -56,7 +83,7 @@ type fakeRestoreCall struct {
 var _ ports.SandboxProvider = (*fakeSpawnProvider)(nil)
 
 func (f *fakeSpawnProvider) Capabilities() ports.Capabilities {
-	return ports.Capabilities{Snapshots: true, Resume: false, ExplicitStop: false, ImageBuilds: false}
+	return ports.Capabilities{Snapshots: true, Resume: f.resumeSupported, ExplicitStop: false, ImageBuilds: false}
 }
 
 func (f *fakeSpawnProvider) CreateSandbox(_ context.Context, spec ports.CreateSpec) (ports.SandboxRef, error) {
@@ -67,8 +94,27 @@ func (f *fakeSpawnProvider) CreateSandbox(_ context.Context, spec ports.CreateSp
 }
 
 func (f *fakeSpawnProvider) StopSandbox(context.Context, ports.SandboxRef) error { return nil }
-func (f *fakeSpawnProvider) ResumeSandbox(context.Context, ports.SandboxRef) error {
-	return errors.New("not implemented")
+func (f *fakeSpawnProvider) ResumeSandbox(ctx context.Context, ref ports.SandboxRef) error {
+	f.mu.Lock()
+	f.resumeCalls = append(f.resumeCalls, ref)
+	block := f.resumeBlock
+	err := f.nextResumeErr
+	f.mu.Unlock()
+
+	// The call is already recorded (above) BEFORE any blocking -- a test
+	// polling resumeCallCount() sees this call the instant it starts, not
+	// only once it returns, which is exactly what lets
+	// TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce
+	// (below) know actor A's own call has genuinely started before it goes
+	// on to hydrate a second actor instance.
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
 }
 func (f *fakeSpawnProvider) TakeSnapshot(context.Context, ports.SandboxRef) (ports.SnapshotID, error) {
 	return "", errors.New("not implemented")
@@ -110,6 +156,18 @@ func (f *fakeSpawnProvider) lastRestoreCall() fakeRestoreCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.restoreCalls[len(f.restoreCalls)-1]
+}
+
+func (f *fakeSpawnProvider) resumeCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.resumeCalls)
+}
+
+func (f *fakeSpawnProvider) lastResumeCall() ports.SandboxRef {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.resumeCalls[len(f.resumeCalls)-1]
 }
 
 // fakeSendCommander is a test-only ports.SandboxCommander recording every
@@ -599,6 +657,9 @@ func TestExecuteSpawn_StaleEpochOnRecord_PropagatesErrStaleEpoch(t *testing.T) {
 	if spawn == nil {
 		t.Fatal("planDispatch returned no spawn plan, want one (no sandbox row + a pending turn + circuit breaker allowing)")
 	}
+	if spawn.resume {
+		t.Fatal("planDispatch returned a resume plan, want a plain spawn plan (no sandbox row exists yet, not resume-eligible)")
+	}
 
 	// Simulate a legitimate pod-handoff race: a newer actor has since
 	// taken over this session (bumping actor_epoch), exactly like
@@ -877,8 +938,8 @@ func planSpawnDirect(
 ) (*spawnPlan, error) {
 	var plan *spawnPlan
 	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		p, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
-		plan = p
+		sp, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
+		plan = sp
 		return err
 	})
 	return plan, err
@@ -1438,4 +1499,574 @@ func TestHandleEnsureDispatched_HealthySpawning_WithinStuckTimeout_NoChange(t *t
 	if row.Gen != created.Gen {
 		t.Errorf("sandbox gen = %d, want unchanged %d", row.Gen, created.Gen)
 	}
+}
+
+// --- Step 23 ("resume"), §3.2/§8.7: executeResume's own decision-tree
+// coverage, mirroring this file's own existing spawn/restore-path tests
+// exactly (same rig helpers, same fakeSpawnProvider, same
+// waitUntil/fixed-sleep conventions) for the Resume path
+// EvaluateSpawnDecision's own "resume takes priority over restore" branch
+// (already built, dispatch.go's own new caller) makes reachable for the
+// first time.
+//
+// Stale is deliberately not exercised here either, for the exact same
+// reason TestTryPlanSpawn_FromDeadStatus_UsesSpawnTrigger's own comment
+// already gives for the parallel spawn-trigger tests: migrations/
+// 000006_sandboxes.up.sql's own sandbox_status Postgres enum still has no
+// 'stale' value at the Postgres level (confirmed by re-reading that
+// migration file before writing these tests), so every scenario below is
+// scoped to Stopped only -- StateStale's own legal TriggerResume edge is
+// proven instead at the pure domain level (state_test.go).
+
+// seedStoppedSandboxWithProviderID creates a sandbox row, moves it to
+// Stopped, and records providerID on it (via UpdateProviderID, the SAME
+// write recordProviderOutcome's own success path already uses) -- the
+// (status, provider_id) precondition EvaluateSpawnDecision's Resume branch
+// requires (Stopped/Stale + ProviderObjectID != ""). Returns the store so
+// callers can re-Get afterward -- mirrors seedStoppedSandboxWithSnapshot's
+// own shape exactly, just for the other eligibility column.
+func seedStoppedSandboxWithProviderID(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID, providerID string) *narvipg.SandboxStore {
+	t.Helper()
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusStopped,
+	}); err != nil {
+		t.Fatalf("move sandbox to stopped: %v", err)
+	}
+	if _, err := sandboxStore.UpdateProviderID(ctx, sqlcgen.UpdateSandboxProviderIDParams{
+		SessionID: sessionID, ProviderID: &providerID,
+	}); err != nil {
+		t.Fatalf("seed provider_id: %v", err)
+	}
+	return sandboxStore
+}
+
+// TestHandleEnsureDispatched_StoppedWithProviderID_ResumeCapable_Resumes
+// proves the full real Resume path: a Stopped sandbox carrying a real
+// provider_id (no snapshot needed) + a resume-capable fake provider + a
+// pending turn -> EvaluateSpawnDecision's Resume branch fires -> a real
+// ResumeSandbox call (never CreateSandbox, never RestoreFromSnapshot) with
+// the sandbox's own existing ProviderObjectID -- gen bumps by exactly 1,
+// and status ends up Connecting.
+//
+// Following this fix, the sandbox row IS genuinely, durably observable at
+// Spawning in between (planResume's own interim-claim transact commits
+// BEFORE ResumeSandbox is ever called -- this file's own top comment and
+// planResume/executeResume's own doc comments explain why: that write is
+// what closes the concurrency bug an adversarial review found). This
+// particular test does not assert on that interim state directly (the
+// fake provider here returns immediately, so the window is too narrow to
+// observe deterministically without flaking) --
+// TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce
+// (this file, below) is the test that holds ResumeSandbox deliberately
+// blocked specifically to observe and exploit that interim state. TokenHash
+// is also proven to go from NULL to non-NULL (a fresh token minted per
+// §5.2 -- sandbox tokens are hashed at rest, one per gen, paraphrased not
+// verbatim), and TimerConnectingDeadline ends up armed exactly once.
+func TestHandleEnsureDispatched_StoppedWithProviderID_ResumeCapable_Resumes(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithProviderID(ctx, t, pool, sessionID, "resume-provider-object-1")
+
+	provider := &fakeSpawnProvider{resumeSupported: true}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return provider.resumeCallCount() == 1
+	})
+
+	if got := provider.callCount(); got != 0 {
+		t.Errorf("provider.CreateSandbox called %d times, want 0 (resume must call ResumeSandbox, never CreateSandbox)", got)
+	}
+	if got := provider.restoreCallCount(); got != 0 {
+		t.Errorf("provider.RestoreFromSnapshot called %d times, want 0 (resume must call ResumeSandbox, never RestoreFromSnapshot)", got)
+	}
+
+	lastCall := provider.lastResumeCall()
+	if lastCall.ProviderID != "resume-provider-object-1" {
+		t.Errorf("ResumeSandbox ref.ProviderID = %q, want %q", lastCall.ProviderID, "resume-provider-object-1")
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && row.Status == sqlcgen.SandboxStatusConnecting
+	})
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusConnecting {
+		t.Errorf("sandbox status = %s, want %s (TriggerResumeAck lands the resume on connecting once ResumeSandbox acks)", row.Status, sqlcgen.SandboxStatusConnecting)
+	}
+	if row.Gen != 2 {
+		t.Errorf("sandbox gen = %d, want 2 (bumped from the Stopped row's own gen 1)", row.Gen)
+	}
+	if row.ProviderID == nil || *row.ProviderID != "resume-provider-object-1" {
+		t.Errorf("sandbox provider_id = %v, want unchanged %q (resume reuses the SAME provider object, never mints a new one)", row.ProviderID, "resume-provider-object-1")
+	}
+	if row.TokenHash == nil {
+		t.Error("sandbox token_hash is nil, want set (a fresh token minted per §5.2 -- sandbox tokens are hashed at rest, one per gen)")
+	}
+
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM session_timers WHERE session_id = $1 AND name = $2`,
+		sessionID, TimerConnectingDeadline,
+	).Scan(&n); err != nil {
+		t.Fatalf("count connecting_deadline timers: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("connecting_deadline timer count = %d, want 1", n)
+	}
+}
+
+// TestHandleEnsureDispatched_ResumeAndRestoreBothEligible_ResumeWins proves
+// spawndecision.go's own already-documented "resume takes priority over
+// restore" priority ordering (EvaluateSpawnDecision's own comment: "reuses
+// the SAME provider sandbox, so it's cheaper and preserves more state than
+// a snapshot restore") for the FIRST time at the application-integration
+// level, not just the pure domain level: a Stopped sandbox carrying BOTH a
+// real provider_id (resume-eligible) AND a snapshot_id (restore-eligible),
+// with a provider reporting BOTH capabilities, resumes -- RestoreFromSnapshot
+// is never called.
+func TestHandleEnsureDispatched_ResumeAndRestoreBothEligible_ResumeWins(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithSnapshot(ctx, t, pool, sessionID, "snap-and-resume-1")
+	providerID := "resume-provider-object-2"
+	if _, err := sandboxStore.UpdateProviderID(ctx, sqlcgen.UpdateSandboxProviderIDParams{
+		SessionID: sessionID, ProviderID: &providerID,
+	}); err != nil {
+		t.Fatalf("seed provider_id: %v", err)
+	}
+
+	// Snapshots: true (via the embedded default) AND Resume: true -- both
+	// capabilities the provider could act on; EvaluateSpawnDecision's own
+	// priority ordering must pick Resume.
+	provider := &fakeSpawnProvider{resumeSupported: true}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return provider.resumeCallCount() == 1
+	})
+	// Give a moment for anything else (e.g. an errant RestoreFromSnapshot
+	// call) to have happened too, before asserting it did not.
+	time.Sleep(300 * time.Millisecond)
+
+	if got := provider.restoreCallCount(); got != 0 {
+		t.Errorf("provider.RestoreFromSnapshot called %d times, want 0 (resume must win over restore when both are eligible)", got)
+	}
+	if got := provider.callCount(); got != 0 {
+		t.Errorf("provider.CreateSandbox called %d times, want 0", got)
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.SnapshotID == nil || *row.SnapshotID != "snap-and-resume-1" {
+		t.Errorf("sandbox snapshot_id = %v, want unchanged %q (resume does not touch it)", row.SnapshotID, "snap-and-resume-1")
+	}
+}
+
+// TestExecuteResume_PermanentProviderError_IncrementsCircuitBreakerAndSuspects
+// proves resume's own permanent-failure behavior now matches spawn/
+// restore's IDENTICALLY -- the direct consequence of this fix's own
+// two-step shape: planResume's own interim Spawning write (gen bumped,
+// status spawning) has ALREADY committed by the time ResumeSandbox is
+// ever called, so a permanent failure has exactly the same live state to
+// transition OUT of a permanent spawn/restore failure already does.
+// recordResumeOutcome reuses recordSpawnFailure UNCHANGED (dispatch.go's
+// own doc comment on recordResumeOutcome explains why this reuse is now
+// correct, not merely convenient) -- so this test asserts EXACTLY what
+// TestHandleEnsureDispatched_PermanentProviderError_IncrementsCircuitBreaker
+// (the plain-spawn precedent for this same shape) already asserts: the
+// circuit breaker increments, and the sandbox moves to Suspect (never
+// straight to Failed -- §3.2's "a watchdog never writes failed directly"
+// rule) via transitionSandboxToSuspect, with connecting_deadline deleted
+// in favor of terminal_grace.
+//
+// This SUPERSEDES this test's own OLD assertion (before this fix) that
+// gen/status were left completely UNCHANGED on a permanent resume
+// failure -- that was only true because the OLD one-step TriggerResume
+// wrote nothing before calling the provider; this fix's whole point is
+// that it now writes the SAME interim claim spawn/restore already do, so
+// a permanent failure now shows the SAME gen bump and Suspect transition
+// theirs already does.
+func TestExecuteResume_PermanentProviderError_IncrementsCircuitBreakerAndSuspects(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithProviderID(ctx, t, pool, sessionID, "resume-provider-object-3")
+
+	provider := &fakeSpawnProvider{
+		resumeSupported: true,
+		nextResumeErr: &ports.ProviderError{
+			Transient: false, Code: "RESUME_UNSUPPORTED_STATE", Op: ports.OpResumeSandbox, Err: errors.New("boom"),
+		},
+	}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && row.Status == sqlcgen.SandboxStatusSuspect
+	})
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.SpawnFailureCount != 1 {
+		t.Errorf("spawn_failure_count = %d, want 1 (the SAME circuit-breaker columns a permanent spawn/restore failure uses)", row.SpawnFailureCount)
+	}
+	if !row.LastSpawnFailureAt.Valid {
+		t.Error("last_spawn_failure_at not set")
+	}
+	if row.Status != sqlcgen.SandboxStatusSuspect {
+		t.Errorf("sandbox status = %s, want %s (permanent resume failure now behaves identically to a permanent spawn/restore failure: Spawning -> Suspect via transitionSandboxToSuspect, never straight to Failed)",
+			row.Status, sqlcgen.SandboxStatusSuspect)
+	}
+	if row.Gen != 2 {
+		t.Errorf("sandbox gen = %d, want 2 (planResume's own interim claim already bumped it BEFORE the failed ResumeSandbox call -- this fix's whole point, unlike the OLD one-step shape's gen==1)", row.Gen)
+	}
+	if row.ProviderID == nil || *row.ProviderID != "resume-provider-object-3" {
+		t.Errorf("sandbox provider_id = %v, want unchanged %q (a permanent resume failure must not touch it)", row.ProviderID, "resume-provider-object-3")
+	}
+	if got := provider.resumeCallCount(); got != 1 {
+		t.Errorf("provider.ResumeSandbox called %d times, want 1", got)
+	}
+
+	var timerCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM session_timers WHERE session_id = $1 AND name = $2`,
+		sessionID, TimerConnectingDeadline,
+	).Scan(&timerCount); err != nil {
+		t.Fatalf("count connecting_deadline timers: %v", err)
+	}
+	if timerCount != 0 {
+		t.Errorf("connecting_deadline timer count = %d, want 0 (recordSpawnFailure deletes it in favor of terminal_grace, exactly like a permanent spawn/restore failure)", timerCount)
+	}
+}
+
+// TestHandleEnsureDispatched_ResumeCircuitBreakerOpen_DoesNotResume mirrors
+// TestHandleEnsureDispatched_RestoreCircuitBreakerOpen_DoesNotRestore
+// exactly (same seeded-3-prior-failures-then-a-4th-is-blocked precedent),
+// but on a Stopped+provider_id (resume-eligible) sandbox -- proving the
+// circuit breaker gate in tryPlanSpawn runs BEFORE EvaluateSpawnDecision is
+// ever consulted, so it blocks a would-be Resume exactly as completely as
+// it blocks a would-be Spawn/Restore: ResumeSandbox is never called, and
+// the sandbox row (status, gen, provider_id, circuit breaker columns) is
+// left completely untouched by this 4th attempt.
+func TestHandleEnsureDispatched_ResumeCircuitBreakerOpen_DoesNotResume(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithProviderID(ctx, t, pool, sessionID, "resume-provider-object-4")
+	if _, err := sandboxStore.UpdateCircuitBreaker(ctx, sqlcgen.UpdateSandboxCircuitBreakerParams{
+		SessionID:          sessionID,
+		SpawnFailureCount:  3,
+		LastSpawnFailureAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatalf("seed circuit breaker: %v", err)
+	}
+
+	provider := &fakeSpawnProvider{resumeSupported: true}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	// Same fixed-sleep-then-assert-nothing-happened shape this file's own
+	// circuit-breaker tests already use -- there is no positive DB signal
+	// to poll FOR when asserting something did NOT happen.
+	time.Sleep(300 * time.Millisecond)
+
+	if got := provider.resumeCallCount(); got != 0 {
+		t.Errorf("provider.ResumeSandbox called %d times, want 0 (circuit breaker should have blocked the 4th attempt)", got)
+	}
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusStopped {
+		t.Errorf("sandbox status = %s, want unchanged %s", row.Status, sqlcgen.SandboxStatusStopped)
+	}
+	if row.Gen != 1 {
+		t.Errorf("sandbox gen = %d, want unchanged 1 (no resume attempt should have run at all)", row.Gen)
+	}
+	if row.SpawnFailureCount != 3 {
+		t.Errorf("spawn_failure_count = %d, want unchanged 3", row.SpawnFailureCount)
+	}
+}
+
+// TestHandleEnsureDispatched_ProviderWithoutResumeCapability_FallsBackToRestore
+// proves EvaluateSpawnDecision's own supportsPersistentResume gate is
+// correctly wired end to end from a real provider's Capabilities() through
+// to the real write path (not just trusted at the pure domain-unit-test
+// level): a provider that does NOT support resume (Capabilities().Resume
+// == false, matching Modal's own real, permanent, documented choice --
+// internal/adapters/outbound/modal's own doc.go) faced with a Stopped
+// sandbox carrying BOTH a provider_id and a snapshot_id chooses Restore,
+// never Resume -- ResumeSandbox is never called.
+func TestHandleEnsureDispatched_ProviderWithoutResumeCapability_FallsBackToRestore(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithSnapshot(ctx, t, pool, sessionID, "snap-no-resume-1")
+	providerID := "provider-object-no-resume"
+	if _, err := sandboxStore.UpdateProviderID(ctx, sqlcgen.UpdateSandboxProviderIDParams{
+		SessionID: sessionID, ProviderID: &providerID,
+	}); err != nil {
+		t.Fatalf("seed provider_id: %v", err)
+	}
+
+	// resumeSupported defaults to false -- the SAME default fakeSpawnProvider
+	// already had before this Step (Capabilities().Resume == false),
+	// mirroring Modal's own real, permanent design choice.
+	provider := &fakeSpawnProvider{nextRestoreRef: ports.SandboxRef{ProviderID: "restored-provider-object-no-resume"}}
+	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return provider.restoreCallCount() == 1
+	})
+	time.Sleep(300 * time.Millisecond)
+
+	if got := provider.resumeCallCount(); got != 0 {
+		t.Errorf("provider.ResumeSandbox called %d times, want 0 (a provider without Resume capability must never have it called)", got)
+	}
+
+	call := provider.lastRestoreCall()
+	if call.snapshotID != "snap-no-resume-1" {
+		t.Errorf("RestoreFromSnapshot snapshotID = %q, want %q", call.snapshotID, "snap-no-resume-1")
+	}
+}
+
+// TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce
+// is a genuine, PERMANENT regression test for the concurrency bug an
+// adversarial review found and empirically reproduced in the OLD
+// one-step TriggerResume shape (see dispatch.go's own top comment, and
+// state.go's own doc comments on TriggerResume/TriggerResumeAck, for the
+// full account): the review killed actor A's advisory-lock connection
+// mid-resume-call, hydrated actor B for the SAME session, and got a
+// SECOND ResumeSandbox call for the identical provider object while actor
+// A's own first call was still blocked -- because nothing marked the row
+// as "a resume attempt is already in flight" the way Spawning already
+// does for spawn/restore.
+//
+// This test reproduces the EXACT SAME shape, reusing resilience_killpod_
+// integration_test.go's own newTestPoolPair/killAdvisoryLockHolder
+// harness (two independent pools against one shared Postgres, "kill pod
+// A" by terminating the real backend holding its advisory lock, never
+// pool.Close() -- see that file's own doc comments for why each of those
+// choices is deliberate), and proves the fix actually closes the race:
+// once actor A's own interim Spawning write (planResume) has genuinely
+// committed -- proven by waiting for the fake provider's own
+// ResumeSandbox call to have STARTED, which cannot happen before that
+// commit, since executeResume is only ever invoked with an already-
+// committed plan (dispatch.go's own top comment) -- actor B's OWN
+// EnsureDispatched, driven through the REAL production entry point
+// (a.Send, never a direct planDispatch/tryPlanSpawn bypass), reads that
+// same row back as Spawning (not Stopped) and EvaluateSpawnDecision's own
+// existing guard (spawndecision.go, untouched by this fix) no-ops instead
+// of returning SpawnActionResume a second time -- so ResumeSandbox is
+// called AT MOST ONCE across both actors for this scenario. Before this
+// fix, this same sequence would have produced a SECOND ResumeSandbox
+// call from actor B (EvaluateSpawnDecision reading the still-Stopped row,
+// since the old TriggerResume wrote nothing before calling the
+// provider) -- see this test's own final section (temporarily revert the
+// fix to confirm) for how this was verified to actually fail without it.
+//
+// Sequencing:
+//  1. Seed a Stopped, resume-eligible sandbox row (real provider_id, no
+//     snapshot) + a pending turn, directly via the stores -- exactly like
+//     every other resume test in this file.
+//  2. Hydrate actor A on poolA (registryA.GetOrSpawn) -- a genuine owner
+//     holding the real Postgres advisory lock on a real poolA connection,
+//     exactly like the killpod test's own step 2.
+//  3. Drive actor A's own EnsureDispatched through the real mailbox
+//     (a.Send). Its fake provider's ResumeSandbox call is configured to
+//     BLOCK (resumeBlock) once called, so this call: (a) is proven to
+//     have started (resumeCallCount()==1, polled), which can only happen
+//     AFTER planResume's own interim-claim transact has already committed
+//     (dispatch.go's own sequencing), and (b) stays "in flight" for the
+//     rest of this test, exactly like the review's own reproduction.
+//  4. "Kill pod A": terminate the exact Postgres backend holding the
+//     advisory lock (killAdvisoryLockHolder), WITHOUT calling
+//     registryA.Shutdown() first -- see resilience_killpod_integration_
+//     test.go's own extensive doc comment on why this, not Pool.Close(),
+//     is the faithful simulation, and why Shutdown() first would test the
+//     wrong (already-proven) path.
+//  5. Hydrate actor B on a genuinely FRESH pool (poolB, registryB) for the
+//     SAME session -- this only succeeds because step 4 released the
+//     advisory lock; BumpActorEpoch (hydrateAndAcquire) fences out actor
+//     A's own eventual outcome-recording transact, exactly like
+//     TestExecuteSpawn_StaleEpochOnRecord_PropagatesErrStaleEpoch's own
+//     precedent, though that fencing is incidental to what this test
+//     actually proves (the READ-DECIDE race, not the write-fencing one).
+//  6. Drive actor B's own EnsureDispatched through the SAME real mailbox
+//     entry point. Give it a moment to run (there is no positive DB
+//     signal to poll FOR when asserting something did NOT happen, exactly
+//     like this file's own circuit-breaker tests), then assert:
+//     ResumeSandbox was called EXACTLY ONCE total (actor A's own call,
+//     never a second one from actor B), and the sandbox row's gen is
+//     STILL exactly what actor A's own interim write left it at (actor B
+//     made no write of its own at all).
+//  7. Release actor A's own blocked ResumeSandbox call (close the
+//     channel) so its goroutine does not leak past this test -- mirroring
+//     this file's own general hygiene, even though (like the killpod
+//     test) this test never calls registryA.Shutdown() itself.
+func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t *testing.T) {
+	ctx := context.Background()
+	poolA, poolB := newTestPoolPair(t)
+
+	sessionID := createTestSession(ctx, t, poolA)
+
+	turnStore := narvipg.NewTurnStore(poolA)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	sandboxStore := seedStoppedSandboxWithProviderID(ctx, t, poolA, sessionID, "concurrent-resume-provider-object")
+
+	// --- Step 2: pod A hydrates and genuinely owns this session. ---
+	providerA := &fakeSpawnProvider{resumeSupported: true, resumeBlock: make(chan struct{})}
+	registryA := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil)
+	actorA, err := registryA.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("registryA.GetOrSpawn: %v", err)
+	}
+
+	// --- Step 3: actor A's own EnsureDispatched starts a real
+	// ResumeSandbox call, deliberately held in flight. ---
+	sendEnsureDispatched(ctx, t, actorA)
+	waitUntil(t, 5*time.Second, func() bool {
+		return providerA.resumeCallCount() == 1
+	})
+
+	// By the time ResumeSandbox has been observed to have started, actor
+	// A's own interim Spawning claim (planResume) has ALREADY committed --
+	// dispatch.go's own sequencing guarantees the transact commits before
+	// executeResume is ever invoked. Confirm this durably, from Postgres,
+	// via a completely independent connection (poolB) -- not merely
+	// trusted as an implication.
+	rowAfterClaim, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox after actor A's resume claim: %v", err)
+	}
+	if rowAfterClaim.Status != sqlcgen.SandboxStatusSpawning {
+		t.Fatalf("sandbox status = %s, want %s (actor A's own interim resume claim must have committed before ResumeSandbox was ever called)",
+			rowAfterClaim.Status, sqlcgen.SandboxStatusSpawning)
+	}
+	if rowAfterClaim.Gen != 2 {
+		t.Fatalf("sandbox gen = %d, want 2 (actor A's own interim claim bumps it from the Stopped row's own gen 1)", rowAfterClaim.Gen)
+	}
+
+	// --- Step 4: kill pod A (see this test's own doc comment, and
+	// resilience_killpod_integration_test.go's own, for why this exact
+	// mechanism and not Pool.Close()). ---
+	killAdvisoryLockHolder(ctx, t, poolB)
+
+	// --- Step 5: pod B, a genuinely fresh pool, hydrates its own actor
+	// for the SAME session. ---
+	providerB := &fakeSpawnProvider{resumeSupported: true}
+	registryB := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil)
+	t.Cleanup(poolB.Close)
+	t.Cleanup(func() { _ = registryB.Shutdown() })
+
+	actorB, err := registryB.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("registryB.GetOrSpawn: %v", err)
+	}
+
+	// --- Step 6: actor B's own EnsureDispatched, through the real
+	// production entry point -- must NOT call ResumeSandbox a second
+	// time. ---
+	sendEnsureDispatched(ctx, t, actorB)
+	// No positive DB signal exists to poll FOR when asserting something
+	// did NOT happen (mirrors this file's own circuit-breaker tests) --
+	// give the mailbox a generous moment to process.
+	time.Sleep(500 * time.Millisecond)
+
+	if got := providerB.resumeCallCount(); got != 0 {
+		t.Errorf("actor B's own provider.ResumeSandbox called %d times, want 0 (EvaluateSpawnDecision must read the row as Spawning, not Stopped, and no-op)", got)
+	}
+	totalResumeCalls := providerA.resumeCallCount() + providerB.resumeCallCount()
+	if totalResumeCalls != 1 {
+		t.Errorf("total ResumeSandbox calls across both actors = %d, want 1 (at most once for this scenario -- this is the exact concurrency bug this fix closes: before it, this would be 2)", totalResumeCalls)
+	}
+
+	rowAfterActorB, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox after actor B's own EnsureDispatched: %v", err)
+	}
+	if rowAfterActorB.Gen != 2 {
+		t.Errorf("sandbox gen = %d, want unchanged 2 (actor B must have made no write of its own at all -- EvaluateSpawnDecision's own Skip guard fired before any write path was ever reached)",
+			rowAfterActorB.Gen)
+	}
+	if rowAfterActorB.Status != sqlcgen.SandboxStatusSpawning {
+		t.Errorf("sandbox status = %s, want unchanged %s (actor B must not have touched it)", rowAfterActorB.Status, sqlcgen.SandboxStatusSpawning)
+	}
+
+	// --- Step 7: release actor A's own blocked ResumeSandbox call so its
+	// goroutine does not leak past this test (poolA/registryA are
+	// otherwise deliberately never gracefully shut down, exactly like the
+	// killpod test's own precedent -- a real killed pod leaves nothing to
+	// gracefully close either). ---
+	close(providerA.resumeBlock)
 }
