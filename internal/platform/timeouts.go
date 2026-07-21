@@ -565,6 +565,76 @@ type Timeouts struct {
 	// real provider round trip behind it) since a real snapshot operation
 	// can genuinely take longer. Not specified in the plan; chosen as 60s.
 	SnapshotMintTimeout time.Duration
+
+	// --- Step 25 standalone addition ("reconciler + GC"): no ordering
+	// relationship with either invariant chain above (or with any prior
+	// Step's standalone additions), so -- per those additions' own
+	// precedent -- a plain field with a sensible default, not wired into a
+	// fake invariant link.
+
+	// ReconcilerInterval is how often the process-wide reconciler
+	// (internal/app/reconciler, §5.3) ticks: one ports.SandboxProvider.List
+	// call compared against Postgres's own expected-alive set, reaping any
+	// orphaned provider-side sandbox instance found. IMPLEMENTATION_PLAN.md
+	// row 25 gives this explicitly: "60s loop against the provider API".
+	ReconcilerInterval time.Duration
+
+	// --- Step 25 fix (reconciler orphan-GC debounce): a real,
+	// empirically-reproduced race, not covered by either invariant chain
+	// above -- but DOES need its own pairwise check against
+	// ReconcilerInterval (see Validate() below) for the guarantee it
+	// exists to provide to actually hold, so it is not a plain standalone
+	// addition either.
+
+	// ReconcilerOrphanConfirmationPeriod is the minimum wall-clock time a
+	// provider-side ref found in provider.List() with no matching row in
+	// Postgres's own expected-alive set (SandboxStore.ListLiveProviderIDs)
+	// must remain CONTINUOUSLY unexplained, across separate ReconcileOnce
+	// ticks, before app/reconciler.Reconciler actually calls StopSandbox on
+	// it -- a debounce/minimum-confirmation-count grace period closing a
+	// real race: internal/app/sessionactor/dispatch.go's own deliberate
+	// three-step spawn sequencing (see that file's own top "# Sequencing"
+	// comment) commits a sandboxes row already in a LIVE status
+	// (status='spawning') with provider_id still NULL, THEN calls the
+	// real, network-bound SandboxProvider.CreateSandbox OUTSIDE any
+	// transaction, THEN commits a SECOND, LATER transact
+	// (recordProviderOutcome) that finally records provider_id.
+	// ListLiveSandboxProviderIDs requires provider_id IS NOT NULL, so that
+	// row is invisible to the reconciler's own expected-alive set for the
+	// whole window between CreateSandbox returning success and
+	// provider_id actually being committed, even though status is already
+	// genuinely live. A reconciler tick landing in exactly that window
+	// would, without this debounce, see the real, already-created, wanted
+	// cloud object as an "unexplained" ref and kill a legitimate, in-flight
+	// spawn on its very first sighting -- requiring no race with a second
+	// actor, no double-click: inherent to every successful spawn's own
+	// normal timing.
+	//
+	// The real window this must comfortably exceed is bounded, at the
+	// absolute outside, by ProviderHTTPClientTimeout (5m -- CreateSandbox's
+	// own worst-case duration) but is realistically sub-second (ordinary
+	// network latency plus one small Postgres commit). This field is
+	// deliberately NOT set anywhere near that 5m theoretical ceiling:
+	// app/reconciler.Reconciler's own tick-by-tick structure already
+	// guarantees a ref is NEVER reaped on its first sighting regardless of
+	// this value (see ReconcileOnce's own doc comment) -- under normal
+	// ticking, the gap between a ref's first sighting and its second is
+	// ALREADY a full ReconcilerInterval (60s), dwarfing the sub-second real
+	// race window on its own. This field's actual job is a second,
+	// independent safety margin against ticks landing unusually close
+	// together (a slow ReconcileOnce call delaying the ticker, a
+	// misconfigured smaller ReconcilerInterval in some future environment,
+	// or a test driving ticks back-to-back) -- chosen as 30s: comfortably
+	// above any realistic sub-second race window, matching
+	// MinTimeoutMargin's own existing 30s floor elsewhere in this struct,
+	// and (deliberately, see Validate() below) at least MinTimeoutMargin
+	// below ReconcilerInterval's own 60s so the "reaped on the SECOND
+	// consecutive tick, never the first" guarantee this whole mechanism
+	// promises actually holds under the shipped default, not merely on
+	// average -- a real orphan is still fully reaped within at most two
+	// tick intervals (120s worst case), meaningfully faster than leaving
+	// it uncleaned indefinitely.
+	ReconcilerOrphanConfirmationPeriod time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -639,6 +709,10 @@ func DefaultTimeouts() Timeouts {
 		ExpiredCredentialCleanupInterval: time.Hour, // not specified; chosen, comfortably frequent relative to both WSTokenTTL (24h) and UserSessionTTL (30 days)
 
 		SnapshotMintTimeout: 60 * time.Second, // not specified; chosen (a real provider TakeSnapshot round trip, more generous than CredentialFetchTimeout)
+
+		ReconcilerInterval: 60 * time.Second, // IMPLEMENTATION_PLAN.md row 25, explicit ("60s loop")
+
+		ReconcilerOrphanConfirmationPeriod: 30 * time.Second, // not specified; chosen, comfortably above the realistic sub-second spawn-commit race window; exactly MinTimeoutMargin below ReconcilerInterval (the minimum Validate allows, zero slack beyond it) so the two-tick guarantee holds under the shipped default
 	}
 }
 
@@ -706,6 +780,16 @@ func (t Timeouts) Validate() error {
 	// additive sum.
 	check("FirstConnectBudget > ImagePullBootP99",
 		"FirstConnectBudget", t.FirstConnectBudget, "ImagePullBootP99", t.ImagePullBootP99)
+
+	// Step 25 fix (reconciler orphan-GC debounce): ReconcilerOrphanConfirmationPeriod
+	// must stay at least MinTimeoutMargin below ReconcilerInterval, or the
+	// "reaped on the SECOND consecutive tick, never the first" guarantee
+	// app/reconciler.Reconciler's own debounce promises silently degrades
+	// to "third tick" (or later) instead -- see that field's own doc
+	// comment for the full reasoning. The shipped defaults (60s/30s) sit
+	// exactly at that minimum margin, not with extra slack beyond it.
+	check("ReconcilerInterval > ReconcilerOrphanConfirmationPeriod",
+		"ReconcilerInterval", t.ReconcilerInterval, "ReconcilerOrphanConfirmationPeriod", t.ReconcilerOrphanConfirmationPeriod)
 
 	return errors.Join(errs...)
 }

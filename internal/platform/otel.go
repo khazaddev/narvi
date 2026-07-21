@@ -14,6 +14,14 @@
 // never carry). Batching/export
 // intervals use the OTel SDK's own library defaults (no Timeouts field
 // added for them — nothing in the technical plan specifies values here).
+//
+// PR-25 ("reconciler + GC") has now landed: §5.3's "orphan GC count" is
+// the orphans_reaped Int64Counter internal/app/reconciler.NewReconciler
+// constructs via otel.Meter("narvi/reconciler") — this codebase's first
+// custom OTel instrument built on top of the MeterProvider this file
+// registers globally. See that package's own doc.go for the full writeup;
+// this file's own scope is still unchanged — bootstrap only, no
+// instruments defined here.
 
 package platform
 

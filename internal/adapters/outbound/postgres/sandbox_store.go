@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -91,6 +92,41 @@ func (s *SandboxStore) UpdateCircuitBreaker(ctx context.Context, arg sqlcgen.Upd
 // generated doc comment.
 func (s *SandboxStore) UpdateSnapshotID(ctx context.Context, arg sqlcgen.UpdateSandboxSnapshotIDParams) (sqlcgen.Sandbox, error) {
 	return s.q.UpdateSandboxSnapshotID(ctx, arg)
+}
+
+// ListLiveProviderIDs returns the provider_id of every sandboxes row
+// currently in a LIVE status, across ALL sessions -- Step 25 ("reconciler
+// + GC", §5.3), app/reconciler's own "expected still alive" set. Unlike
+// every other SandboxStore method (each scoped to one session_id), this is
+// the one deliberately cross-session query the reconciler needs -- see
+// ListLiveSandboxProviderIDs's own generated doc comment for exactly which
+// statuses are included/excluded and why.
+//
+// sqlc types provider_id as *string (it's a nullable column in general),
+// but this query's own WHERE clause already guarantees every row it
+// returns has one -- sqlc's postgresql engine does not narrow a column's
+// generated Go type from a query's own IS NOT NULL predicate, so this
+// method dereferences here rather than exposing that always-non-nil
+// pointer to callers.
+func (s *SandboxStore) ListLiveProviderIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.q.ListLiveSandboxProviderIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]string, 0, len(rows))
+	for _, id := range rows {
+		if id == nil {
+			// Unreachable given the query's own "AND provider_id IS NOT
+			// NULL" -- guarded rather than silently skipped so a future
+			// change to the query that drops that guard fails loudly
+			// here instead of quietly starving the reconciler's own
+			// expected-alive set of a real row.
+			return nil, fmt.Errorf("postgres: ListLiveSandboxProviderIDs returned a nil provider_id despite its own IS NOT NULL filter")
+		}
+		ids = append(ids, *id)
+	}
+	return ids, nil
 }
 
 // UpdatePendingSnapshotMessageID sets (or clears, via nil) the MessageId
