@@ -3,6 +3,7 @@ package githubapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -133,4 +134,122 @@ func asCreatePRError(err error, target **githubapi.CreatePRError) bool {
 	}
 	*target = pe
 	return true
+}
+
+// TestResolveBranchSHA_ExplicitBranch proves an explicit branch resolves
+// directly via GET /repos/{owner}/{repo}/commits/{branch}, with NO call to
+// the repo-info endpoint at all (the default-branch lookup is only ever
+// needed when Branch is empty).
+func TestResolveBranchSHA_ExplicitBranch(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"sha": "abc123def456"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	sha, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
+		Owner:  "acme",
+		Repo:   "widgets",
+		Branch: "feature-x",
+		Token:  "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBranchSHA() error = %v, want nil", err)
+	}
+	if sha != "abc123def456" {
+		t.Errorf("ResolveBranchSHA() = %q, want %q", sha, "abc123def456")
+	}
+	if gotPath != "/repos/acme/widgets/commits/feature-x" {
+		t.Errorf("request path = %q, want %q", gotPath, "/repos/acme/widgets/commits/feature-x")
+	}
+	if gotAuth != "Bearer gho_realtoken" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer gho_realtoken")
+	}
+}
+
+// TestResolveBranchSHA_EmptyBranchResolvesDefault proves an empty Branch
+// first resolves the repo's own REAL default_branch (never a hardcoded
+// "main"/"master" guess), then resolves THAT branch's commit SHA.
+func TestResolveBranchSHA_EmptyBranchResolvesDefault(t *testing.T) {
+	t.Parallel()
+
+	var gotPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/repos/acme/widgets":
+			_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "trunk"})
+		case "/repos/acme/widgets/commits/trunk":
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": "def789"})
+		default:
+			t.Errorf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	sha, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Token: "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBranchSHA() error = %v, want nil", err)
+	}
+	if sha != "def789" {
+		t.Errorf("ResolveBranchSHA() = %q, want %q", sha, "def789")
+	}
+	wantPaths := []string{"/repos/acme/widgets", "/repos/acme/widgets/commits/trunk"}
+	if len(gotPaths) != len(wantPaths) || gotPaths[0] != wantPaths[0] || gotPaths[1] != wantPaths[1] {
+		t.Errorf("requested paths = %v, want %v (in order)", gotPaths, wantPaths)
+	}
+}
+
+// TestResolveBranchSHA_4xxMapsToRealError proves a realistic GitHub 4xx
+// failure (e.g. repo not found / no access) maps to a real, structured
+// *githubapi.ResolveBranchSHAError, never a panic or a silently-empty SHA
+// mistaken for success.
+func TestResolveBranchSHA_4xxMapsToRealError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
+		Owner:  "acme",
+		Repo:   "widgets",
+		Branch: "main",
+		Token:  "gho_realtoken",
+	})
+	if err == nil {
+		t.Fatal("ResolveBranchSHA() error = nil, want a *githubapi.ResolveBranchSHAError")
+	}
+
+	var shaErr *githubapi.ResolveBranchSHAError
+	if !errors.As(err, &shaErr) {
+		t.Fatalf("ResolveBranchSHA() error = %v (%T), want *githubapi.ResolveBranchSHAError", err, err)
+	}
+	if shaErr.Status != http.StatusNotFound {
+		t.Errorf("ResolveBranchSHAError.Status = %d, want %d", shaErr.Status, http.StatusNotFound)
+	}
+	if shaErr.Message == "" {
+		t.Error("ResolveBranchSHAError.Message is empty, want GitHub's own error message")
+	}
 }

@@ -37,6 +37,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_MODAL_BASE_URL", "https://modal.example.test")
 	t.Setenv("NARVI_MODAL_AUTH_TOKEN", "test-modal-auth-token")
 	t.Setenv("NARVI_MODAL_EGRESS_PROXY_URL", "")
+	t.Setenv("NARVI_OPENCODE_RUNTIME_VERSION", "")
 }
 
 // TestLoad is table-driven over NARVI_STAGE values: each of the three
@@ -486,6 +487,39 @@ func TestLoadModalConfig(t *testing.T) {
 		}
 		if cfg.ModalEgressProxyURL != "" {
 			t.Errorf("Load().ModalEgressProxyURL = %q, want empty (unset in this test)", cfg.ModalEgressProxyURL)
+		}
+	})
+}
+
+// TestLoadOpenCodeRuntimeVersion covers Step 26's ("image builds") own
+// optional NARVI_OPENCODE_RUNTIME_VERSION: unset defaults to
+// defaultOpenCodeRuntimeVersion (pinned equal to .github/workflows/ci.yml's
+// own opencode-ai pin at the time this Step was written -- see that
+// constant's own doc comment for the residual, honestly-named drift risk),
+// and an explicit override threads through verbatim.
+func TestLoadOpenCodeRuntimeVersion(t *testing.T) {
+	t.Run("unset defaults to the pinned CI version", func(t *testing.T) {
+		setRequiredEnv(t)
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.OpenCodeRuntimeVersion != "1.17.15" {
+			t.Errorf("Load().OpenCodeRuntimeVersion = %q, want %q", cfg.OpenCodeRuntimeVersion, "1.17.15")
+		}
+	})
+
+	t.Run("explicit override threads through verbatim", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OPENCODE_RUNTIME_VERSION", "1.18.0")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.OpenCodeRuntimeVersion != "1.18.0" {
+			t.Errorf("Load().OpenCodeRuntimeVersion = %q, want %q", cfg.OpenCodeRuntimeVersion, "1.18.0")
 		}
 	})
 }

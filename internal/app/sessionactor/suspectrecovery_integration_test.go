@@ -87,7 +87,7 @@ func TestHandleSandboxEvent_SuspectRecovery_ReturnsToPreSuspectStatus(t *testing
 		t.Fatalf("precondition: pre_suspect_status = %v, want %s", before.PreSuspectStatus, sqlcgen.SandboxStatusReady)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 	a, err := r.GetOrSpawn(ctx, sessionID)
 	if err != nil {
@@ -178,7 +178,7 @@ func TestHandleSandboxEvent_LateExecutionComplete_RecoversSandboxTurnAndSession(
 		t.Fatalf("arm turn_deadline: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 	a, err := r.GetOrSpawn(ctx, sessionID)
 	if err != nil {
@@ -274,7 +274,7 @@ func TestHandleSandboxEvent_SuspectNoPreSuspectStatus_NoRecoveryAttempted(t *tes
 		t.Fatalf("precondition: pre_suspect_status = %v, want nil", *before.PreSuspectStatus)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 	a, err := r.GetOrSpawn(ctx, sessionID)
 	if err != nil {
@@ -339,7 +339,7 @@ func TestHandleSandboxEvent_FailedSandbox_NoRecoveryAttemptedEvenWithStalePreSus
 		t.Fatalf("precondition: pre_suspect_status = nil, want a stale non-nil value left over from before terminalization")
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 	a, err := r.GetOrSpawn(ctx, sessionID)
 	if err != nil {

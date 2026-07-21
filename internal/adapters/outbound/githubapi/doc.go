@@ -7,6 +7,17 @@
 // exactly ports.SourceControl.CreatePR: a real POST https://api.github.com/
 // repos/{owner}/{repo}/pulls call.
 //
+// Step 26 ("image builds", §8.5-note/§10-P2) adds ResolveBranchSHA: a real
+// GET https://api.github.com/repos/{owner}/{repo}/commits/{branch} call
+// (first resolving the repo's own real default_branch via GET
+// https://api.github.com/repos/{owner}/{repo} when no explicit branch is
+// given -- "main"/"master" is never hardcoded). This is the concrete
+// implementation of an already-made design decision: the control plane
+// resolves each repo's own current SHA directly via the GitHub API, BEFORE
+// assembling a spawn's CreateSpec, rather than waiting for a sandbox to
+// report its own locally-discovered boot fingerprint back over the wire
+// (no new wire message is added for this).
+//
 // Adapter accepts an apiBaseURL constructor parameter (defaulting to
 // "https://api.github.com" in production wiring, cmd/control-plane/main.go)
 // so tests can override it with a local httptest.Server standing in for

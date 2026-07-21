@@ -44,7 +44,7 @@ func TestTimerPump_ClaimsDueTimerWithoutRedelivering(t *testing.T) {
 		t.Fatalf("seed due timer: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	beforeFirstTick := time.Now()

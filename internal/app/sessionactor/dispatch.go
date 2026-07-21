@@ -130,15 +130,26 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// placeholderBaseImage is the CreateSpec.Image value used until Step 26
-// ("image builds") makes real per-session image construction a thing --
-// see ports.CreateSpec.Image's own doc comment ("Empty means the
-// provider's own default base image"). A non-empty, clearly-named
-// placeholder is used instead of leaving Image empty, so a real
-// SandboxProvider's own request log unambiguously shows which image narvi
-// asked for, even though nothing today builds or publishes an image under
-// this exact tag.
-const placeholderBaseImage = "narvi/sandbox-agent:placeholder"
+// defaultBaseImage is the CreateSpec.Image value every spawn/restore falls
+// back to whenever no real, ready, matching built image exists yet for its
+// own fingerprint (§10 Phase 2: "always fall back to base image on any
+// miss -- never block a session") -- renamed from Step 21's own
+// placeholderBaseImage (its doc comment: "the CreateSpec.Image value used
+// until Step 26 ... makes real per-session image construction a thing")
+// now that Step 26 ("image builds") is genuinely that thing: this is no
+// longer merely a placeholder pending a later Step, it is the REQUIRED,
+// permanent fallback value dispatch.go/imageresolve.go's resolveAndSetImage
+// leaves untouched on any miss. Also doubles as ports.ImageSpec.Base for
+// every fingerprint this control plane computes (domain/imagebuild.
+// Fingerprint's first argument) and for the background builder's own
+// BuildImage calls (internal/app/imagebuild) -- a single, system-wide base
+// image today; per-Environment base image selection is a natural future
+// extension, out of this Step's own scope. See ports.CreateSpec.Image's
+// own doc comment ("Empty means the provider's own default base image") --
+// a non-empty, clearly-named value is used instead of leaving Image empty,
+// so a real SandboxProvider's own request log unambiguously shows which
+// image narvi asked for.
+const defaultBaseImage = "narvi/sandbox-agent:placeholder"
 
 // scmCommitName/scmCommitEmail are the currently-unused-anywhere-in-git
 // placeholder git author identity values Step 17's own gap already
@@ -224,6 +235,17 @@ type spawnPlan struct {
 	// executeResume, since ResumeSandbox's own port signature (§4.1)
 	// takes no CreateSpec at all.
 	providerObjectID string
+
+	// createdBy is sessionRow.CreatedBy (Step 26, "image builds") --
+	// populated only on a fresh-spawn or restore plan (planFreshSpawn/
+	// planRestore both already have sessionRow in scope); left at its zero
+	// value on a resume plan, which never needs it (resolveAndSetImage,
+	// imageresolve.go, is never called for resume -- see
+	// handleEnsureDispatched below). Threaded through here rather than
+	// re-fetching sessionRow a second time in resolveAndSetImage, which
+	// runs AFTER this plan's own transact has already committed and
+	// returned.
+	createdBy pgtype.UUID
 }
 
 // dispatchPlan is what planDispatch's own transact hands back to
@@ -246,6 +268,18 @@ type dispatchPlan struct {
 // spawn.resume is checked before spawn.restore since both are carried on
 // the SAME spawnPlan type (its own doc comment above explains why) and
 // are mutually exclusive by construction.
+//
+// Step 26 ("image builds") adds resolveAndSetImage on the spawn/restore
+// branches ONLY (never resume, which has no CreateSpec at all -- see
+// planResume's own doc comment) -- called here, AFTER planDispatch's own
+// transact has already committed and returned, exactly like executeSpawn/
+// executeRestore's own real provider call already runs OUTSIDE any
+// transaction (this file's own top "# Sequencing" comment): resolving a
+// fingerprint is ANOTHER network-bound step (a GitHub API call per repo,
+// plus a Postgres read), inserted into that SAME outside-any-transaction
+// zone, immediately before the provider is ever called -- never inside
+// planDispatch's own transact. See imageresolve.go's own doc comment for
+// the full "never block a spawn" design.
 func (a *Actor) handleEnsureDispatched(ctx context.Context) error {
 	spawn, dispatch, err := a.planDispatch(ctx)
 	if err != nil {
@@ -255,8 +289,10 @@ func (a *Actor) handleEnsureDispatched(ctx context.Context) error {
 	case spawn != nil && spawn.resume:
 		return a.executeResume(ctx, spawn)
 	case spawn != nil && spawn.restore:
+		a.resolveAndSetImage(ctx, spawn)
 		return a.executeRestore(ctx, spawn)
 	case spawn != nil:
+		a.resolveAndSetImage(ctx, spawn)
 		return a.executeSpawn(ctx, spawn)
 	case dispatch != nil:
 		return a.executeDispatch(ctx, dispatch)
@@ -601,12 +637,12 @@ func (a *Actor) planFreshSpawn(
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}
 
-	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: placeholderBaseImage}
+	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: defaultBaseImage}
 	if err := spec.Validate(); err != nil {
 		return nil, fmt.Errorf("sessionactor: invalid create spec: %w", err)
 	}
 
-	return &spawnPlan{gen: int(row.Gen), spec: spec}, nil
+	return &spawnPlan{gen: int(row.Gen), spec: spec, createdBy: sessionRow.CreatedBy}, nil
 }
 
 // planRestore implements design decision 6's own restore-specific write.
@@ -671,12 +707,15 @@ func (a *Actor) planRestore(
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}
 
-	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: placeholderBaseImage}
+	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: defaultBaseImage}
 	if err := spec.Validate(); err != nil {
 		return nil, fmt.Errorf("sessionactor: invalid create spec: %w", err)
 	}
 
-	return &spawnPlan{gen: int(row.Gen), spec: spec, restore: true, snapshotID: ports.SnapshotID(snapshotImageID)}, nil
+	return &spawnPlan{
+		gen: int(row.Gen), spec: spec, restore: true,
+		snapshotID: ports.SnapshotID(snapshotImageID), createdBy: sessionRow.CreatedBy,
+	}, nil
 }
 
 // planResume implements Step 23's own resume-specific write -- the FIRST

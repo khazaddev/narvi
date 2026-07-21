@@ -164,7 +164,7 @@ func newTestRig(t *testing.T) testRig {
 		// what the full spawn/dispatch decision tree then does with it --
 		// internal/app/sessionactor's own dispatch_integration_test.go
 		// covers that decision tree exhaustively.
-		registry:           sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil),
+		registry:           sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, ""),
 		tokenEncryptionKey: []byte("01234567890123456789012345678901"), // exactly 32 bytes
 		provider:           &fakeSnapshotProvider{},
 	}

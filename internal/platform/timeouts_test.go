@@ -411,6 +411,50 @@ func TestDefaultTimeouts_ExpiredCredentialCleanupStandaloneField(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step26StandaloneFields proves the Step 26 ("image
+// builds") standalone additions ship with sane, non-zero defaults matching
+// their own documented values, and that ImageBuildBackoffBase is strictly
+// less than ImageBuildBackoffMax (the property domain/imagebuild.
+// EvaluateBackoff's own exponential-growth-then-plateau schedule depends
+// on). These fields have no ordering relationship with either invariant
+// chain, so this only checks their own values -- not Validate, which never
+// touches them.
+func TestDefaultTimeouts_Step26StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.RepoSHAResolutionTimeout <= 0 {
+		t.Errorf("RepoSHAResolutionTimeout = %v, want > 0", to.RepoSHAResolutionTimeout)
+	}
+	if to.RepoSHAResolutionTimeout != 10*time.Second {
+		t.Errorf("RepoSHAResolutionTimeout = %v, want %v", to.RepoSHAResolutionTimeout, 10*time.Second)
+	}
+
+	if to.ImageBuildPumpInterval <= 0 {
+		t.Errorf("ImageBuildPumpInterval = %v, want > 0", to.ImageBuildPumpInterval)
+	}
+	if to.ImageBuildPumpInterval != 60*time.Second {
+		t.Errorf("ImageBuildPumpInterval = %v, want %v", to.ImageBuildPumpInterval, 60*time.Second)
+	}
+
+	if to.ImageBuildBackoffBase <= 0 {
+		t.Errorf("ImageBuildBackoffBase = %v, want > 0", to.ImageBuildBackoffBase)
+	}
+	if to.ImageBuildBackoffMax <= 0 {
+		t.Errorf("ImageBuildBackoffMax = %v, want > 0", to.ImageBuildBackoffMax)
+	}
+	if to.ImageBuildBackoffBase >= to.ImageBuildBackoffMax {
+		t.Errorf("ImageBuildBackoffBase = %v, want strictly less than ImageBuildBackoffMax = %v "+
+			"(the schedule must actually grow before plateauing)",
+			to.ImageBuildBackoffBase, to.ImageBuildBackoffMax)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (Step 26 fields must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

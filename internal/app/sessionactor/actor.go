@@ -95,6 +95,14 @@ type Actor struct {
 	// never exercise the push/PR path).
 	tokenEncryptionKey []byte
 
+	// openCodeRuntimeVersion is Step 26's ("image builds") own addition:
+	// the pinned OpenCode runtime version (platform.Config.
+	// OpenCodeRuntimeVersion) fed into domain/imagebuild.Fingerprint
+	// alongside a spawn's own resolved repo SHAs (dispatch.go/
+	// imageresolve.go's resolveAndSetImage). May be empty (tests that
+	// never exercise the image-resolution path).
+	openCodeRuntimeVersion string
+
 	// pendingBroadcast queues each event appended (via appendEvent/
 	// appendRawEvent) during the CURRENT transact attempt, in order. Safe
 	// unsynchronized: Actor.handle processes exactly one command at a time

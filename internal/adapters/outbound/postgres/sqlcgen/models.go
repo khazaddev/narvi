@@ -141,6 +141,50 @@ func (ns NullIdentityProvider) Value() (driver.Value, error) {
 	return string(ns.IdentityProvider), nil
 }
 
+type ImageBuildStatus string
+
+const (
+	ImageBuildStatusPending  ImageBuildStatus = "pending"
+	ImageBuildStatusBuilding ImageBuildStatus = "building"
+	ImageBuildStatusReady    ImageBuildStatus = "ready"
+	ImageBuildStatusFailed   ImageBuildStatus = "failed"
+)
+
+func (e *ImageBuildStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ImageBuildStatus(s)
+	case string:
+		*e = ImageBuildStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ImageBuildStatus: %T", src)
+	}
+	return nil
+}
+
+type NullImageBuildStatus struct {
+	ImageBuildStatus ImageBuildStatus `json:"image_build_status"`
+	Valid            bool             `json:"valid"` // Valid is true if ImageBuildStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullImageBuildStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.ImageBuildStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ImageBuildStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullImageBuildStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ImageBuildStatus), nil
+}
+
 type OutboxStatus string
 
 const (
@@ -502,6 +546,20 @@ type Identity struct {
 	LinkedVia            IdentityLinkedVia  `json:"linked_via"`
 	CreatedAt            pgtype.Timestamptz `json:"created_at"`
 	AccessTokenEncrypted []byte             `json:"access_token_encrypted"`
+}
+
+type ImageBuild struct {
+	Fingerprint    string             `json:"fingerprint"`
+	Base           string             `json:"base"`
+	RepoShas       []byte             `json:"repo_shas"`
+	RuntimeVersion string             `json:"runtime_version"`
+	ImageRef       *string            `json:"image_ref"`
+	Status         ImageBuildStatus   `json:"status"`
+	AttemptCount   int32              `json:"attempt_count"`
+	LastAttemptAt  pgtype.Timestamptz `json:"last_attempt_at"`
+	NextRetryAt    pgtype.Timestamptz `json:"next_retry_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Outbox struct {

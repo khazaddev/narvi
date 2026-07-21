@@ -33,6 +33,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/imagebuild"
 	"github.com/khazaddev/narvi/internal/app/reconciler"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -160,7 +161,7 @@ func serve() error {
 	// internal/app/sessionactor.NewRegistry's own doc comment for what
 	// each is used for.
 	registry := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
-		sourceControl, cfg.TokenEncryptionKey)
+		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion)
 	sessionStore := postgres.NewSessionStore(pool)
 	turnStore := postgres.NewTurnStore(pool)
 	sandboxStore := postgres.NewSandboxStore(pool)
@@ -168,6 +169,7 @@ func serve() error {
 	artifactStore := postgres.NewArtifactStore(pool)
 	wsTokenStore := postgres.NewWSTokenStore(pool)
 	environmentStore := postgres.NewEnvironmentStore(pool)
+	imageBuildStore := postgres.NewImageBuildStore(pool)
 
 	// recon is Step 25's ("reconciler + GC", §5.3) process-wide
 	// provider-reconciliation/orphan-GC loop, run below via the errgroup
@@ -179,6 +181,17 @@ func serve() error {
 	recon, err := reconciler.NewReconciler(sandboxStore, sandboxProvider, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct reconciler: %w", err)
+	}
+
+	// builder is Step 26's ("image builds", §8.5-note/§10-P2) own
+	// process-wide background image-build loop, run below via the
+	// errgroup exactly once per process -- constructed from the SAME
+	// sandboxProvider/cfg.Timeouts already built above, mirroring recon's
+	// own construction immediately above exactly. See internal/app/
+	// imagebuild's own doc.go for what it does and why.
+	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, sandboxProvider, cfg.Timeouts)
+	if err != nil {
+		return fmt.Errorf("construct image builder: %w", err)
 	}
 
 	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
@@ -318,6 +331,18 @@ func serve() error {
 	group.Go(func() error {
 		if err := recon.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("reconciler: %w", err)
+		}
+		return nil
+	})
+
+	// Step 26 ("image builds"): started/shut down through this SAME
+	// errgroup as every other background loop above -- no naked goroutine
+	// (§11) -- with the identical context.Canceled carve-out RunTimerPump/
+	// RunExpiredTokenCleanup/recon.Run each already establish for normal
+	// shutdown.
+	group.Go(func() error {
+		if err := builder.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("image builder: %w", err)
 		}
 		return nil
 	})

@@ -38,11 +38,24 @@ var testTokenEncryptionKey = []byte("0123456789abcdef0123456789abcdef")
 // fakeSourceControl is a test-only ports.SourceControl recording every
 // CreatePR call it receives and returning a caller-configured (ref, err)
 // pair.
+//
+// Step 26 ("image builds") extends this same fake with an identical
+// recording shape for ResolveBranchSHA (shaCalls/nextSHA/nextSHAErr, plus
+// an optional per-repo shaFor map so a test can return DIFFERENT SHAs for
+// different repos in one multi-repo session) rather than introducing a
+// second, parallel fake -- this package's own imageresolve tests need the
+// exact same CreatePR-call-recording precedent, just for the other
+// SourceControl method dispatch.go's resolveAndSetImage now calls.
 type fakeSourceControl struct {
 	mu      sync.Mutex
 	calls   []ports.CreatePRSpec
 	nextRef ports.PRRef
 	nextErr error
+
+	shaCalls   []ports.ResolveBranchSHASpec
+	shaFor     map[string]string // keyed by repo name; falls back to nextSHA if absent
+	nextSHA    string
+	nextSHAErr error
 }
 
 var _ ports.SourceControl = (*fakeSourceControl)(nil)
@@ -64,6 +77,25 @@ func (f *fakeSourceControl) lastSpec() ports.CreatePRSpec {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.calls[len(f.calls)-1]
+}
+
+func (f *fakeSourceControl) ResolveBranchSHA(_ context.Context, spec ports.ResolveBranchSHASpec) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shaCalls = append(f.shaCalls, spec)
+	if f.nextSHAErr != nil {
+		return "", f.nextSHAErr
+	}
+	if sha, ok := f.shaFor[spec.Repo]; ok {
+		return sha, nil
+	}
+	return f.nextSHA, nil
+}
+
+func (f *fakeSourceControl) shaCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.shaCalls)
 }
 
 // reposJSONForTest builds the sessions.repos JSONB shape (design decision
@@ -207,7 +239,7 @@ func TestHandleSandboxEvent_ExecutionCompleteCompleted_CompletesTurnAndSendsPush
 	}
 
 	commander := &fakeSendCommander{}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -291,7 +323,7 @@ func TestHandleSandboxEvent_ExecutionCompleteFailed_NoPush(t *testing.T) {
 	created := createProcessingTurn(ctx, t, turnStore, sessionID)
 
 	commander := &fakeSendCommander{}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -377,7 +409,7 @@ func TestHandleSandboxEvent_PushComplete_CreatesPRArtifact(t *testing.T) {
 	}
 
 	sourceControl := &fakeSourceControl{nextRef: ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"}}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -447,7 +479,7 @@ func TestHandleSandboxEvent_PushComplete_NoCreatedBy_SkipsHonestly(t *testing.T)
 	}
 
 	sourceControl := &fakeSourceControl{}
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey)
+	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
