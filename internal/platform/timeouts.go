@@ -678,6 +678,27 @@ type Timeouts struct {
 	// INTO after repeated failures, never the delay applied from the very
 	// first one, so it does not contradict §3.5.
 	ImageBuildBackoffMax time.Duration
+
+	// --- Step 27 standalone addition ("mocking + contract drift", §14.3):
+	// no ordering relationship with either invariant chain above (or with
+	// any prior Step's standalone additions), so -- per those additions'
+	// own precedent -- a plain field with a sensible default, not wired
+	// into a fake invariant link.
+
+	// ContractsFingerprintResolutionTimeout bounds a single internal/app/
+	// ports.SourceControl.ResolveContractsFingerprint call (app/
+	// sessionactor's own checkContractDrift, contractdrift.go) -- one real
+	// outbound GitHub Contents API GET per repo, called once per repo IN A
+	// LOOP, each bounded individually so one slow/hanging repo can't stall
+	// the others indefinitely -- mirrors RepoSHAResolutionTimeout's own
+	// identical reasoning and value exactly (this codebase's own
+	// convention is one named timeout per distinct network-call type, even
+	// when two types happen to share the same chosen value -- see
+	// RepoSHAResolutionTimeout's own addition in Step 26 for the precedent
+	// this repeats rather than reuses). Not specified in the plan; chosen
+	// as 10s, matching RepoSHAResolutionTimeout/CredentialFetchTimeout's
+	// own "lightweight call, not a large data transfer" reasoning.
+	ContractsFingerprintResolutionTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -762,6 +783,8 @@ func DefaultTimeouts() Timeouts {
 		ImageBuildPumpInterval: 60 * time.Second, // not specified; chosen, matches ReconcilerInterval's own cadence
 		ImageBuildBackoffBase:  1 * time.Minute,  // not specified; chosen -- see EvaluateBackoff's own doc comment for the schedule this produces
 		ImageBuildBackoffMax:   30 * time.Minute, // not specified; chosen -- the eventual steady-state ceiling, never the first-failure delay (§3.5)
+
+		ContractsFingerprintResolutionTimeout: 10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/contractdrift"
 )
 
 // TestCreatePR_Success proves CreatePR posts the right shape to
@@ -218,8 +219,8 @@ func TestResolveBranchSHA_EmptyBranchResolvesDefault(t *testing.T) {
 
 // TestResolveBranchSHA_4xxMapsToRealError proves a realistic GitHub 4xx
 // failure (e.g. repo not found / no access) maps to a real, structured
-// *githubapi.ResolveBranchSHAError, never a panic or a silently-empty SHA
-// mistaken for success.
+// *githubapi.APIError, never a panic or a silently-empty SHA mistaken for
+// success.
 func TestResolveBranchSHA_4xxMapsToRealError(t *testing.T) {
 	t.Parallel()
 
@@ -239,17 +240,195 @@ func TestResolveBranchSHA_4xxMapsToRealError(t *testing.T) {
 		Token:  "gho_realtoken",
 	})
 	if err == nil {
-		t.Fatal("ResolveBranchSHA() error = nil, want a *githubapi.ResolveBranchSHAError")
+		t.Fatal("ResolveBranchSHA() error = nil, want a *githubapi.APIError")
 	}
 
-	var shaErr *githubapi.ResolveBranchSHAError
+	var shaErr *githubapi.APIError
 	if !errors.As(err, &shaErr) {
-		t.Fatalf("ResolveBranchSHA() error = %v (%T), want *githubapi.ResolveBranchSHAError", err, err)
+		t.Fatalf("ResolveBranchSHA() error = %v (%T), want *githubapi.APIError", err, err)
 	}
 	if shaErr.Status != http.StatusNotFound {
-		t.Errorf("ResolveBranchSHAError.Status = %d, want %d", shaErr.Status, http.StatusNotFound)
+		t.Errorf("APIError.Status = %d, want %d", shaErr.Status, http.StatusNotFound)
 	}
 	if shaErr.Message == "" {
-		t.Error("ResolveBranchSHAError.Message is empty, want GitHub's own error message")
+		t.Error("APIError.Message is empty, want GitHub's own error message")
+	}
+}
+
+// TestResolveContractsFingerprint_DirectoryExists proves a real contents
+// listing (several files) fingerprints to EXACTLY contractdrift.
+// Fingerprint's own output over the identical path->sha map -- proving
+// this adapter builds that map correctly, not re-implementing its own
+// hashing.
+func TestResolveContractsFingerprint_DirectoryExists(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path + "?" + r.URL.RawQuery
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"path": "contracts/api/openapi.yaml", "sha": "sha-openapi", "type": "file"},
+			{"path": "contracts/api/README.md", "sha": "sha-readme", "type": "file"},
+		})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	fingerprint, exists, err := adapter.ResolveContractsFingerprint(context.Background(), ports.ResolveContractsFingerprintSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Ref:   "abc123",
+		Path:  "contracts/api",
+		Token: "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("ResolveContractsFingerprint() error = %v, want nil", err)
+	}
+	if !exists {
+		t.Fatal("ResolveContractsFingerprint() exists = false, want true")
+	}
+
+	want := contractdrift.Fingerprint(map[string]string{
+		"contracts/api/openapi.yaml": "sha-openapi",
+		"contracts/api/README.md":    "sha-readme",
+	})
+	if fingerprint != want {
+		t.Errorf("ResolveContractsFingerprint() fingerprint = %q, want %q", fingerprint, want)
+	}
+
+	if gotPath != "/repos/acme/widgets/contents/contracts/api?ref=abc123" {
+		t.Errorf("request path = %q, want %q", gotPath, "/repos/acme/widgets/contents/contracts/api?ref=abc123")
+	}
+	if gotAuth != "Bearer gho_realtoken" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer gho_realtoken")
+	}
+}
+
+// TestResolveContractsFingerprint_404_ExistsFalseNoError proves a 404 (no
+// contracts directory at that path/ref -- the common case) maps to
+// (exists=false, err=nil), never a real error -- per ports.SourceControl's
+// own doc comment, callers MUST be able to tell this apart from a genuine
+// API failure.
+func TestResolveContractsFingerprint_404_ExistsFalseNoError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	fingerprint, exists, err := adapter.ResolveContractsFingerprint(context.Background(), ports.ResolveContractsFingerprintSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Ref:   "abc123",
+		Path:  "contracts/api",
+		Token: "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("ResolveContractsFingerprint() error = %v, want nil on a 404", err)
+	}
+	if exists {
+		t.Error("ResolveContractsFingerprint() exists = true, want false on a 404")
+	}
+	if fingerprint != "" {
+		t.Errorf("ResolveContractsFingerprint() fingerprint = %q, want empty on a 404", fingerprint)
+	}
+}
+
+// TestResolveContractsFingerprint_NonNotFoundErrorPropagates proves a
+// non-404 failure (e.g. a real 500, or no access at all) is a genuine
+// error -- exists=false AND err != nil, never silently treated the same
+// as "no directory here".
+func TestResolveContractsFingerprint_NonNotFoundErrorPropagates(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Internal Server Error"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, exists, err := adapter.ResolveContractsFingerprint(context.Background(), ports.ResolveContractsFingerprintSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Ref:   "abc123",
+		Path:  "contracts/api",
+		Token: "gho_realtoken",
+	})
+	if err == nil {
+		t.Fatal("ResolveContractsFingerprint() error = nil, want a real error on a 500")
+	}
+	if exists {
+		t.Error("ResolveContractsFingerprint() exists = true, want false on a real error")
+	}
+
+	var apiErr *githubapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("ResolveContractsFingerprint() error = %v (%T), want *githubapi.APIError", err, err)
+	}
+	if apiErr.Status != http.StatusInternalServerError {
+		t.Errorf("APIError.Status = %d, want %d", apiErr.Status, http.StatusInternalServerError)
+	}
+}
+
+// TestResolveContractsFingerprint_NestedSubdirectoryNotRecursedInto proves
+// a listing containing a nested subdirectory entry is fingerprinted using
+// THAT entry's own sha as-is -- never recursed into -- by asserting the
+// server sees exactly ONE request even though the fake listing includes a
+// "dir"-typed entry, and that the resulting fingerprint matches
+// contractdrift.Fingerprint's own direct computation over the identical
+// flat map (which itself never recurses either).
+func TestResolveContractsFingerprint_NestedSubdirectoryNotRecursedInto(t *testing.T) {
+	t.Parallel()
+
+	var requestCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"path": "contracts/api/openapi.yaml", "sha": "sha-openapi", "type": "file"},
+			{"path": "contracts/api/schemas", "sha": "sha-subdir-tree-hash", "type": "dir"},
+		})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	fingerprint, exists, err := adapter.ResolveContractsFingerprint(context.Background(), ports.ResolveContractsFingerprintSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Ref:   "abc123",
+		Path:  "contracts/api",
+		Token: "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("ResolveContractsFingerprint() error = %v, want nil", err)
+	}
+	if !exists {
+		t.Fatal("ResolveContractsFingerprint() exists = false, want true")
+	}
+
+	if requestCount != 1 {
+		t.Errorf("server received %d requests, want exactly 1 (no recursion into the subdirectory entry)", requestCount)
+	}
+
+	want := contractdrift.Fingerprint(map[string]string{
+		"contracts/api/openapi.yaml": "sha-openapi",
+		"contracts/api/schemas":      "sha-subdir-tree-hash",
+	})
+	if fingerprint != want {
+		t.Errorf("ResolveContractsFingerprint() fingerprint = %q, want %q (the subdirectory's own sha used as-is)", fingerprint, want)
 	}
 }

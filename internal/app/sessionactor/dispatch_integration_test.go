@@ -231,8 +231,13 @@ func (f *fakeSendCommander) lastPayload() json.RawMessage {
 // newDispatchTestRegistry builds a Registry wired with provider/commander
 // fakes and a real publicBaseURL (needed for assembleSessionConfig's own
 // ws-scheme derivation).
-func newDispatchTestRegistry(ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, commander ports.SandboxCommander) *Registry {
-	return NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, provider, "http://localhost:8080", nil, nil, "")
+func newDispatchTestRegistry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, commander ports.SandboxCommander) *Registry {
+	t.Helper()
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, provider, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	return r
 }
 
 // createPendingTurn inserts a Pending turn carrying prompt for sessionID.
@@ -270,7 +275,7 @@ func TestHandleEnsureDispatched_NoSandbox_Spawns(t *testing.T) {
 	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
 
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -340,7 +345,7 @@ func TestHandleEnsureDispatched_CircuitBreakerOpen_DoesNotSpawn(t *testing.T) {
 	}
 
 	provider := &fakeSpawnProvider{}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -393,7 +398,7 @@ func TestHandleEnsureDispatched_SandboxReady_DispatchesTurn(t *testing.T) {
 	}
 
 	commander := &fakeSendCommander{}
-	r := newDispatchTestRegistry(ctx, pool, nil, commander)
+	r := newDispatchTestRegistry(t, ctx, pool, nil, commander)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -480,7 +485,7 @@ func TestHandleEnsureDispatched_SendCommandNoLiveConnection_FailsTurnForward(t *
 	}
 
 	commander := &fakeSendCommander{nextErr: ports.ErrNoLiveSandboxConnection}
-	r := newDispatchTestRegistry(ctx, pool, nil, commander)
+	r := newDispatchTestRegistry(t, ctx, pool, nil, commander)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -559,7 +564,7 @@ func TestHandleEnsureDispatched_PermanentProviderError_IncrementsCircuitBreaker(
 	provider := &fakeSpawnProvider{nextErr: &ports.ProviderError{
 		Transient: false, Code: "INVALID_IMAGE", Op: ports.OpCreateSandbox, Err: errors.New("boom"),
 	}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -602,7 +607,7 @@ func TestHandleEnsureDispatched_TransientProviderError_DoesNotIncrementCircuitBr
 	provider := &fakeSpawnProvider{nextErr: &ports.ProviderError{
 		Transient: true, Code: "http_503", Op: ports.OpCreateSandbox, Err: errors.New("temporarily unavailable"),
 	}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -657,7 +662,7 @@ func TestExecuteSpawn_StaleEpochOnRecord_PropagatesErrStaleEpoch(t *testing.T) {
 	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
 
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "orphaned-provider-object"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -771,7 +776,7 @@ func TestHandleEnsureDispatched_StoppedWithSnapshot_Restores(t *testing.T) {
 	sandboxStore := seedStoppedSandboxWithSnapshot(ctx, t, pool, sessionID, "snap-restore-1")
 
 	provider := &fakeSpawnProvider{nextRestoreRef: ports.SandboxRef{ProviderID: "restored-provider-object-1"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -851,7 +856,7 @@ func TestExecuteRestore_PermanentProviderError_IncrementsCircuitBreaker(t *testi
 	provider := &fakeSpawnProvider{nextRestoreErr: &ports.ProviderError{
 		Transient: false, Code: "INVALID_SNAPSHOT", Op: ports.OpRestoreFromSnapshot, Err: errors.New("boom"),
 	}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -910,7 +915,7 @@ func TestHandleEnsureDispatched_RestoreCircuitBreakerOpen_DoesNotRestore(t *test
 	}
 
 	provider := &fakeSpawnProvider{}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -987,7 +992,7 @@ func TestTryPlanSpawn_FromPending_NoSandboxRow_UsesSpawnTrigger(t *testing.T) {
 	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
 
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1064,7 +1069,7 @@ func TestTryPlanSpawn_FromDeadStatus_UsesSpawnTrigger(t *testing.T) {
 			}
 
 			provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
-			r := newDispatchTestRegistry(ctx, pool, provider, nil)
+			r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 			t.Cleanup(func() { _ = r.Shutdown() })
 
 			a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1167,7 +1172,7 @@ func TestTryPlanSpawn_StuckLiveState_PastRecoveryWindow_UsesForceRespawnTrigger(
 			}
 
 			provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
-			r := newDispatchTestRegistry(ctx, pool, provider, nil)
+			r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 			t.Cleanup(func() { _ = r.Shutdown() })
 
 			a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1248,7 +1253,7 @@ func TestTryPlanSpawn_ReadyPastReadyWait_UsesForceRespawnTrigger(t *testing.T) {
 	}
 
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1324,7 +1329,7 @@ func TestTryPlanSpawn_Suspect_NeverReachesTransitionGate(t *testing.T) {
 	}
 
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-1"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1428,7 +1433,7 @@ func TestHandleEnsureDispatched_StuckSpawning_ForceRespawnsThroughRealPath(t *te
 			provider := &fakeSpawnProvider{nextErr: &ports.ProviderError{
 				Transient: true, Code: "http_503", Op: ports.OpCreateSandbox, Err: errors.New("temporarily unavailable"),
 			}}
-			r := newDispatchTestRegistry(ctx, pool, provider, nil)
+			r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 			t.Cleanup(func() { _ = r.Shutdown() })
 
 			a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1497,7 +1502,7 @@ func TestHandleEnsureDispatched_HealthySpawning_WithinStuckTimeout_NoChange(t *t
 	// SpawnStuckTimeout (120s by default).
 
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-should-never-be-used"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1604,7 +1609,7 @@ func TestHandleEnsureDispatched_StoppedWithProviderID_ResumeCapable_Resumes(t *t
 	sandboxStore := seedStoppedSandboxWithProviderID(ctx, t, pool, sessionID, "resume-provider-object-1")
 
 	provider := &fakeSpawnProvider{resumeSupported: true}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1692,7 +1697,7 @@ func TestHandleEnsureDispatched_ResumeAndRestoreBothEligible_ResumeWins(t *testi
 	// capabilities the provider could act on; EvaluateSpawnDecision's own
 	// priority ordering must pick Resume.
 	provider := &fakeSpawnProvider{resumeSupported: true}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1764,7 +1769,7 @@ func TestExecuteResume_PermanentProviderError_IncrementsCircuitBreakerAndSuspect
 			Transient: false, Code: "RESUME_UNSUPPORTED_STATE", Op: ports.OpResumeSandbox, Err: errors.New("boom"),
 		},
 	}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1841,7 +1846,7 @@ func TestHandleEnsureDispatched_ResumeCircuitBreakerOpen_DoesNotResume(t *testin
 	}
 
 	provider := &fakeSpawnProvider{resumeSupported: true}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -1902,7 +1907,7 @@ func TestHandleEnsureDispatched_ProviderWithoutResumeCapability_FallsBackToResto
 	// already had before this Step (Capabilities().Resume == false),
 	// mirroring Modal's own real, permanent design choice.
 	provider := &fakeSpawnProvider{nextRestoreRef: ports.SandboxRef{ProviderID: "restored-provider-object-no-resume"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -2013,7 +2018,10 @@ func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t
 
 	// --- Step 2: pod A hydrates and genuinely owns this session. ---
 	providerA := &fakeSpawnProvider{resumeSupported: true, resumeBlock: make(chan struct{})}
-	registryA := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil, "")
+	registryA, err := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	actorA, err := registryA.GetOrSpawn(ctx, sessionID)
 	if err != nil {
 		t.Fatalf("registryA.GetOrSpawn: %v", err)
@@ -2052,7 +2060,10 @@ func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t
 	// --- Step 5: pod B, a genuinely fresh pool, hydrates its own actor
 	// for the SAME session. ---
 	providerB := &fakeSpawnProvider{resumeSupported: true}
-	registryB := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil, "")
+	registryB, err := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(poolB.Close)
 	t.Cleanup(func() { _ = registryB.Shutdown() })
 

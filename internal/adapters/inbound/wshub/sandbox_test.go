@@ -86,7 +86,10 @@ func TestSandboxHandler_HandshakeRejections(t *testing.T) {
 	sessionID := createTestSession(ctx, t, pool)
 	createTestSandbox(ctx, t, pool, sessionID) // gen 1, Pending
 
-	registry := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 	sandboxStore := narvipg.NewSandboxStore(pool)
 
@@ -183,7 +186,10 @@ func TestSandboxHandler_SessionNotFound(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 
-	registry := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 	sandboxStore := narvipg.NewSandboxStore(pool)
 
@@ -207,7 +213,10 @@ func TestSandboxHandler_DeadSandboxStatus(t *testing.T) {
 	createTestSandbox(ctx, t, pool, sessionID)
 	moveSandboxStatus(ctx, t, pool, sessionID, sqlcgen.SandboxStatusFailed)
 
-	registry := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 	sandboxStore := narvipg.NewSandboxStore(pool)
 
@@ -228,7 +237,10 @@ func TestSandboxHandler_GenMismatch(t *testing.T) {
 	sessionID := createTestSession(ctx, t, pool)
 	createTestSandbox(ctx, t, pool, sessionID) // gen 1
 
-	registry := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 	sandboxStore := narvipg.NewSandboxStore(pool)
 
@@ -253,7 +265,10 @@ func TestSandboxHandler_BadToken(t *testing.T) {
 	createTestSandbox(ctx, t, pool, sessionID)
 	setSandboxTokenHash(ctx, t, pool, sessionID, wshub.HashSandboxToken("correct-token"))
 
-	registry := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 	sandboxStore := narvipg.NewSandboxStore(pool)
 
@@ -277,7 +292,10 @@ func TestSandboxHandler_ValidHandshakeUpgrades(t *testing.T) {
 	sessionID := createTestSession(ctx, t, pool)
 	createTestSandbox(ctx, t, pool, sessionID)
 
-	registry := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 	sandboxStore := narvipg.NewSandboxStore(pool)
 

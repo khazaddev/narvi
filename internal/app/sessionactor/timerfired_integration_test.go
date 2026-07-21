@@ -53,7 +53,10 @@ func TestTurnDeadlineTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("move turn to processing: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -147,7 +150,10 @@ func TestLivenessCheckTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("seed overdue liveness_check timer: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -222,7 +228,10 @@ func TestInactivityTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("seed overdue inactivity timer: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -302,7 +311,10 @@ func TestConnectingDeadlineHandoff_ToLivenessCheck(t *testing.T) {
 		t.Fatalf("seed connecting_deadline timer: %v", err)
 	}
 
-	r := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
@@ -428,7 +440,7 @@ func TestTerminalGraceTimerFired_RedeliversEnsureDispatched_FreshSpawnAttempt(t 
 	}
 
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-object-redelivery"}}
-	r := newDispatchTestRegistry(ctx, pool, provider, nil)
+	r := newDispatchTestRegistry(t, ctx, pool, provider, nil)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	a, err := r.GetOrSpawn(ctx, sessionID)

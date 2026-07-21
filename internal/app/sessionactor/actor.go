@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
@@ -102,6 +103,14 @@ type Actor struct {
 	// imageresolve.go's resolveAndSetImage). May be empty (tests that
 	// never exercise the image-resolution path).
 	openCodeRuntimeVersion string
+
+	// contractDriftDetected is Step 27's ("mocking + contract drift",
+	// §14.3) own OTel counter -- the SAME instance every Actor this
+	// Registry hydrates shares, constructed exactly once by NewRegistry
+	// and threaded through at hydration time (hydrate.go), never
+	// reconstructed per-Actor. Incremented by dispatch.go/contractdrift.go's
+	// own checkContractDrift.
+	contractDriftDetected metric.Int64Counter
 
 	// pendingBroadcast queues each event appended (via appendEvent/
 	// appendRawEvent) during the CURRENT transact attempt, in order. Safe

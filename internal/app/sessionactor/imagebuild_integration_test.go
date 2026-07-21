@@ -37,9 +37,14 @@ const testRuntimeVersion = "1.0.0-test"
 // 26's own image-resolution path reads: provider (for CreateSandbox/
 // BuildImage), sourceControl (for ResolveBranchSHA), testTokenEncryptionKey
 // (pushpr_integration_test.go's own fixed test key), and testRuntimeVersion.
-func newImageBuildTestRegistry(ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, sourceControl ports.SourceControl) *Registry {
-	return NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, provider, "http://localhost:8080",
+func newImageBuildTestRegistry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, sourceControl ports.SourceControl) *Registry {
+	t.Helper()
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, provider, "http://localhost:8080",
 		sourceControl, testTokenEncryptionKey, testRuntimeVersion)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	return r
 }
 
 // createTestUserWithGitHubToken creates a real user + a real (encrypted)
@@ -99,7 +104,7 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 
 	sourceControl := &fakeSourceControl{nextSHA: "sha-scenario-a"}
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-a"}}
-	r := newImageBuildTestRegistry(ctx, pool, provider, sourceControl)
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	turnStore := narvipg.NewTurnStore(pool)
@@ -163,7 +168,7 @@ func TestResolveAndSetImage_NoUsableGitHubToken_StillSpawnsOnBaseImage(t *testin
 
 	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-d"}}
-	r := newImageBuildTestRegistry(ctx, pool, provider, sourceControl)
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	turnStore := narvipg.NewTurnStore(pool)
@@ -215,7 +220,7 @@ func TestImageBuildPipeline_BackgroundBuilderPicksUpPendingRow_LaterSpawnGetsRea
 
 	sourceControl := &fakeSourceControl{nextSHA: "sha-scenario-b"}
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-b1"}}
-	r := newImageBuildTestRegistry(ctx, pool, provider, sourceControl)
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
 	turnStore := narvipg.NewTurnStore(pool)
@@ -287,7 +292,7 @@ func TestImageBuildPipeline_BackgroundBuilderPicksUpPendingRow_LaterSpawnGetsRea
 	createPendingTurn(ctx, t, turnStore, session2, "prompt 2")
 
 	provider2 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-b2"}}
-	r2 := newImageBuildTestRegistry(ctx, pool, provider2, sourceControl)
+	r2 := newImageBuildTestRegistry(t, ctx, pool, provider2, sourceControl)
 	t.Cleanup(func() { _ = r2.Shutdown() })
 
 	a2, err := r2.GetOrSpawn(ctx, session2)

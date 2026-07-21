@@ -159,9 +159,15 @@ func serve() error {
 	// endpoints need. Step 21 adds commander/sandboxProvider/
 	// cfg.PublicBaseURL/sourceControl/cfg.TokenEncryptionKey -- see
 	// internal/app/sessionactor.NewRegistry's own doc comment for what
-	// each is used for.
-	registry := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
+	// each is used for. Step 27 ("mocking + contract drift") makes
+	// NewRegistry fallible (constructs the contract_drift_detected OTel
+	// counter), mirroring recon/builder's own identical error handling
+	// immediately below.
+	registry, err := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
 		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion)
+	if err != nil {
+		return fmt.Errorf("construct session actor registry: %w", err)
+	}
 	sessionStore := postgres.NewSessionStore(pool)
 	turnStore := postgres.NewTurnStore(pool)
 	sandboxStore := postgres.NewSandboxStore(pool)

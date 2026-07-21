@@ -455,6 +455,28 @@ func TestDefaultTimeouts_Step26StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step27StandaloneFields proves the Step 27 ("mocking +
+// contract drift") standalone addition ships with a sane, non-zero default
+// matching its own documented value. This field has no ordering
+// relationship with either invariant chain, so this only checks its own
+// value -- not Validate, which never touches it.
+func TestDefaultTimeouts_Step27StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ContractsFingerprintResolutionTimeout <= 0 {
+		t.Errorf("ContractsFingerprintResolutionTimeout = %v, want > 0", to.ContractsFingerprintResolutionTimeout)
+	}
+	if to.ContractsFingerprintResolutionTimeout != 10*time.Second {
+		t.Errorf("ContractsFingerprintResolutionTimeout = %v, want %v", to.ContractsFingerprintResolutionTimeout, 10*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

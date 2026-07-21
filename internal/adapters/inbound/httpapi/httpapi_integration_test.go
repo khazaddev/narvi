@@ -147,24 +147,29 @@ func newTestRig(t *testing.T) testRig {
 	ctx := context.Background()
 	pool := newTestPool(t)
 
+	// nil provider/commander: this rig's own tests only assert that
+	// EnsureDispatched is correctly TRIGGERED by CreateSession, not what
+	// the full spawn/dispatch decision tree then does with it --
+	// internal/app/sessionactor's own dispatch_integration_test.go covers
+	// that decision tree exhaustively.
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
 	rig := testRig{
-		pool:         pool,
-		sessions:     narvipg.NewSessionStore(pool),
-		turns:        narvipg.NewTurnStore(pool),
-		sandboxes:    narvipg.NewSandboxStore(pool),
-		events:       narvipg.NewEventStore(pool),
-		artifacts:    narvipg.NewArtifactStore(pool),
-		wsTokens:     narvipg.NewWSTokenStore(pool),
-		environments: narvipg.NewEnvironmentStore(pool),
-		users:        narvipg.NewUserStore(pool),
-		identities:   narvipg.NewIdentityStore(pool),
-		userSessions: narvipg.NewUserSessionStore(pool),
-		// nil provider/commander: this rig's own tests only assert that
-		// EnsureDispatched is correctly TRIGGERED by CreateSession, not
-		// what the full spawn/dispatch decision tree then does with it --
-		// internal/app/sessionactor's own dispatch_integration_test.go
-		// covers that decision tree exhaustively.
-		registry:           sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, ""),
+		pool:               pool,
+		sessions:           narvipg.NewSessionStore(pool),
+		turns:              narvipg.NewTurnStore(pool),
+		sandboxes:          narvipg.NewSandboxStore(pool),
+		events:             narvipg.NewEventStore(pool),
+		artifacts:          narvipg.NewArtifactStore(pool),
+		wsTokens:           narvipg.NewWSTokenStore(pool),
+		environments:       narvipg.NewEnvironmentStore(pool),
+		users:              narvipg.NewUserStore(pool),
+		identities:         narvipg.NewIdentityStore(pool),
+		userSessions:       narvipg.NewUserSessionStore(pool),
+		registry:           registry,
 		tokenEncryptionKey: []byte("01234567890123456789012345678901"), // exactly 32 bytes
 		provider:           &fakeSnapshotProvider{},
 	}
@@ -785,6 +790,199 @@ func TestCreateSession_EmptyPathScope_LeavesEnvironmentUnset(t *testing.T) {
 	}
 	if environmentID.Valid {
 		t.Errorf("environment_id = %v, want NULL (pathScope was empty)", environmentID)
+	}
+}
+
+// TestCreateSession_MockConfigPresent_ContractsPathOmitted_DefaultsAndCreatesEnvironment
+// proves row 27's ("mocking + contract drift", §14.3) own core semantics:
+// a present "mockConfig" key (even as {}, contractsPath absent) creates an
+// environments row with mock_configured=true and contracts_path defaulting
+// to the literal "contracts/api".
+func TestCreateSession_MockConfigPresent_ContractsPathOmitted_DefaultsAndCreatesEnvironment(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{
+		"spawnSource": "web",
+		"title": null,
+		"prompt": null,
+		"repos": [{"name": "narvi", "url": "https://example.com", "branch": null}],
+		"modelId": null,
+		"planMode": false,
+		"mockConfig": {}
+	}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+
+	var environmentID pgtype.UUID
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT environment_id FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&environmentID); err != nil {
+		t.Fatalf("query persisted session: %v", err)
+	}
+	if !environmentID.Valid {
+		t.Fatal("environment_id = NULL, want a real environments row id")
+	}
+
+	var mockConfigured bool
+	var contractsPath *string
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT mock_configured, contracts_path FROM environments WHERE id = $1`, environmentID,
+	).Scan(&mockConfigured, &contractsPath); err != nil {
+		t.Fatalf("query persisted environment: %v", err)
+	}
+	if !mockConfigured {
+		t.Error("mock_configured = false, want true")
+	}
+	if contractsPath == nil || *contractsPath != "contracts/api" {
+		t.Errorf("contracts_path = %v, want %q", contractsPath, "contracts/api")
+	}
+}
+
+// TestCreateSession_MockConfigPresent_ContractsPathSet_StoredVerbatim
+// proves an explicit mockConfig.contractsPath is stored verbatim, not
+// defaulted.
+func TestCreateSession_MockConfigPresent_ContractsPathSet_StoredVerbatim(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{
+		"spawnSource": "web",
+		"title": null,
+		"prompt": null,
+		"repos": [{"name": "narvi", "url": "https://example.com", "branch": null}],
+		"modelId": null,
+		"planMode": false,
+		"mockConfig": {"contractsPath": "services/mock-api/contracts"}
+	}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+
+	var environmentID pgtype.UUID
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT environment_id FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&environmentID); err != nil {
+		t.Fatalf("query persisted session: %v", err)
+	}
+	if !environmentID.Valid {
+		t.Fatal("environment_id = NULL, want a real environments row id")
+	}
+
+	var mockConfigured bool
+	var contractsPath *string
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT mock_configured, contracts_path FROM environments WHERE id = $1`, environmentID,
+	).Scan(&mockConfigured, &contractsPath); err != nil {
+		t.Fatalf("query persisted environment: %v", err)
+	}
+	if !mockConfigured {
+		t.Error("mock_configured = false, want true")
+	}
+	if contractsPath == nil || *contractsPath != "services/mock-api/contracts" {
+		t.Errorf("contracts_path = %v, want %q", contractsPath, "services/mock-api/contracts")
+	}
+}
+
+// TestCreateSession_MockConfigPresent_PathScopeAbsent_StillCreatesEnvironment
+// proves the "either" gate (row 27's own doc comment on CreateSession):
+// mockConfig ALONE, with pathScope entirely absent, is sufficient to
+// create a new, session-scoped Environment row -- pathScope is NOT
+// required.
+func TestCreateSession_MockConfigPresent_PathScopeAbsent_StillCreatesEnvironment(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false,"mockConfig":{}}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+
+	var environmentID pgtype.UUID
+	var provenanceTag *string
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT environment_id, provenance_tag FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&environmentID, &provenanceTag); err != nil {
+		t.Fatalf("query persisted session: %v", err)
+	}
+	if !environmentID.Valid {
+		t.Fatal("environment_id = NULL, want a real environments row id (mockConfig alone must be sufficient)")
+	}
+	// RequiresProvenanceTag depends only on PathScope (environment.
+	// RequiresProvenanceTag's own doc comment) -- a mockConfig-only
+	// Environment must NOT cause a provenance tag to be set.
+	if provenanceTag != nil {
+		t.Errorf("provenance_tag = %q, want nil (mockConfig alone does not require a provenance tag)", *provenanceTag)
+	}
+
+	var pathScope []byte
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT path_scope FROM environments WHERE id = $1`, environmentID,
+	).Scan(&pathScope); err != nil {
+		t.Fatalf("query persisted environment: %v", err)
+	}
+	if pathScope != nil {
+		t.Errorf("path_scope = %s, want NULL (pathScope was absent)", pathScope)
+	}
+}
+
+// TestCreateSession_NeitherPathScopeNorMockConfig_NoEnvironmentRow is a
+// regression guard: a request carrying NEITHER pathScope nor mockConfig
+// behaves exactly as before this batch -- no environments row at all.
+func TestCreateSession_NeitherPathScopeNorMockConfig_NoEnvironmentRow(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+
+	var environmentID pgtype.UUID
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT environment_id FROM sessions WHERE id = $1`, sessionID,
+	).Scan(&environmentID); err != nil {
+		t.Fatalf("query persisted session: %v", err)
+	}
+	if environmentID.Valid {
+		t.Errorf("environment_id = %v, want NULL (neither pathScope nor mockConfig was supplied)", environmentID)
 	}
 }
 

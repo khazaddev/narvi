@@ -19,12 +19,14 @@
 //
 //   - Environment (environment.go) carries path_scope as PathScope --
 //     nil/empty meaning full access, unchanged behavior, exactly as
-//     §14.1 specifies -- and MockConfigured, a bare presence marker for
-//     whether a mock_config is attached. MockConfigured's own shape
-//     (contract-driven mock server declaration, drift detection) is
-//     §14.3's design, landing in a later Step (27); recording anything
-//     more than presence here would be guessing at a design this package
-//     has no business inventing.
+//     §14.1 specifies -- and MockConfigured/ContractsPath, together
+//     recording whether a mock_config is attached and, if so, the
+//     repo-relative path to the contract-driven mock spec directory its
+//     sessions check for drift against (§14.3, landed in Step 27: "a
+//     shared contracts/api/*.{yaml,json} spec... drives a generated mock
+//     server"). ContractsPath is empty exactly when MockConfigured is
+//     false -- the two are set together, at session-creation time, by
+//     httpapi.CreateSession.
 //   - ValidatePathScope (environment.go) validates a candidate path_scope
 //     before it is accepted onto an Environment, rejecting each of three
 //     independent problems as its own named sentinel error

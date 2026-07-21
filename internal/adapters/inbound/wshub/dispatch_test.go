@@ -115,7 +115,10 @@ func TestDispatch_EndToEnd(t *testing.T) {
 	createTestSandbox(ctx, t, pool, sessionID) // gen 1, Pending
 	moveSandboxStatus(ctx, t, pool, sessionID, sqlcgen.SandboxStatusConnecting)
 
-	registry := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 	sandboxStore := narvipg.NewSandboxStore(pool)
 

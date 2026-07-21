@@ -1,0 +1,556 @@
+//go:build integration
+
+package sessionactor
+
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
+)
+
+// This file proves Step 27's ("mocking + contract drift", §14.3) own
+// end-to-end wiring: dispatch.go's checkContractDrift, called from
+// handleEnsureDispatched at the same post-transact hook point as Step 26's
+// resolveAndSetImage, against a REAL Postgres instance -- mirroring
+// imagebuild_integration_test.go's own conventions exactly (newTestPool,
+// fakeSpawnProvider, fakeSourceControl, sendEnsureDispatched, waitUntil).
+
+// otelReader is the SINGLE ManualReader backing the SINGLE, GLOBAL SDK
+// MeterProvider TestMain (below) registers for this whole test binary --
+// mirrors internal/app/reconciler/reconciler_integration_test.go's own
+// identical TestMain/otelReader precedent exactly (see that file's own doc
+// comment for the full "why exactly once, not once per test" reasoning:
+// otel.SetMeterProvider's own contract only honors the FIRST call in the
+// process). Every NewRegistry call in this file therefore resolves to the
+// exact SAME underlying contract_drift_detected instrument, so its value
+// ACCUMULATES across this whole test binary's lifetime -- each test below
+// reads the counter BEFORE and AFTER its own action and asserts on the
+// DELTA, never an absolute value.
+var otelReader *sdkmetric.ManualReader
+
+// TestMain wires exactly ONE global OTel MeterProvider for this whole
+// package's integration-test binary. If a future sibling _test.go file in
+// this package (also built under the "integration" tag) ever adds its own
+// TestMain, the two will conflict (Go only allows one TestMain per test
+// binary) -- this repo has none today (grepped).
+func TestMain(m *testing.M) {
+	otelReader = sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(otelReader))
+	otel.SetMeterProvider(mp)
+
+	code := m.Run()
+
+	_ = mp.Shutdown(context.Background())
+	os.Exit(code)
+}
+
+// readContractDriftDetected collects reader's current metrics and sums
+// every data point of the narvi/sessionactor meter's own
+// contract_drift_detected counter (registry.go's own unexported meterName
+// constant -- hardcoded here since it isn't exported; a future rename of
+// that constant must update this literal too). Returns 0 if the
+// instrument has not recorded anything yet.
+//
+// The returned value is CUMULATIVE across every test in this binary (see
+// this file's own TestMain doc comment for why) -- callers must diff a
+// "before" and "after" reading around their own action rather than
+// asserting on the absolute value.
+func readContractDriftDetected(ctx context.Context, t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		if sm.Scope.Name != "narvi/sessionactor" {
+			continue
+		}
+		for _, m := range sm.Metrics {
+			if m.Name != "contract_drift_detected" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("contract_drift_detected metric data = %T, want metricdata.Sum[int64]", m.Data)
+			}
+			var total int64
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+			return total
+		}
+	}
+	return 0
+}
+
+// createTestEnvironment inserts an environments row directly (bypassing
+// httpapi.CreateSession, which this package never imports) with the given
+// mock_configured/contracts_path -- pathScope stays NULL (nil []byte),
+// this file's own tests never exercise path scoping.
+func createTestEnvironment(ctx context.Context, t *testing.T, pool *pgxpool.Pool, mockConfigured bool, contractsPath *string) pgtype.UUID {
+	t.Helper()
+
+	env, err := narvipg.NewEnvironmentStore(pool).Create(ctx, sqlcgen.CreateEnvironmentParams{
+		MockConfigured: mockConfigured,
+		ContractsPath:  contractsPath,
+	})
+	if err != nil {
+		t.Fatalf("create test environment: %v", err)
+	}
+	return env.ID
+}
+
+// createTestSessionWithRepoAndEnvironment mirrors createTestSessionWithRepos
+// (pushpr_integration_test.go) exactly, with one addition: environmentID is
+// set on the created session, so dispatch.go's planFreshSpawn/planRestore
+// populate spawnPlan.environmentID from it (the same field checkContractDrift's
+// own first early-return checks).
+func createTestSessionWithRepoAndEnvironment(ctx context.Context, t *testing.T, pool *pgxpool.Pool, createdBy, environmentID pgtype.UUID, name, url, branch string) pgtype.UUID {
+	t.Helper()
+
+	created, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource:   sqlcgen.SessionSpawnSourceWeb,
+		CreatedBy:     createdBy,
+		Repos:         reposJSONForTest(t, name, url, branch),
+		EnvironmentID: environmentID,
+	})
+	if err != nil {
+		t.Fatalf("create test session with repo and environment: %v", err)
+	}
+	return created.ID
+}
+
+// contractsPathPtr is a tiny helper so test bodies can inline a *string
+// literal without a separate local variable each time.
+func contractsPathPtr(s string) *string { return &s }
+
+// TestCheckContractDrift_NoMockConfig_NeverTouchesSnapshots proves the
+// critical scope-boundary guarantee: spawning an ORDINARY session (no
+// environment_id at all) never creates or touches any
+// contract_drift_snapshots row, and never even calls
+// ResolveContractsFingerprint -- ordinary, unscoped sessions are
+// completely unaffected by this Step.
+func TestCheckContractDrift_NoMockConfig_NeverTouchesSnapshots(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-no-mock-config")
+	sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
+		"repo-no-mock", "https://github.com/acme/repo-no-mock.git", "main")
+
+	sourceControl := &fakeSourceControl{nextSHA: "sha-1", nextFingerprint: "fp-1", nextFingerprintExists: true}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-no-mock"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	// checkContractDrift runs synchronously, before executeSpawn's own
+	// CreateSandbox call, inside the SAME handleEnsureDispatched
+	// invocation (dispatch.go) -- by the time provider.callCount() == 1
+	// has been observed, checkContractDrift has already run to completion
+	// for this spawn attempt, so no extra wait is needed here.
+	if got := sourceControl.fingerprintCallCount(); got != 0 {
+		t.Errorf("ResolveContractsFingerprint call count = %d, want 0 (ordinary session must never check contract drift)", got)
+	}
+
+	contractDriftStore := narvipg.NewContractDriftStore(pool)
+	if _, err := contractDriftStore.Get(ctx, "acme/repo-no-mock"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("contract_drift_snapshots row for acme/repo-no-mock: err = %v, want pgx.ErrNoRows (no row must ever be created)", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM contract_drift_snapshots`).Scan(&count); err != nil {
+		t.Fatalf("count contract_drift_snapshots: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("contract_drift_snapshots row count = %d, want 0", count)
+	}
+}
+
+// TestCheckContractDrift_MockConfigured_FirstSpawn_RecordsBaselineNoDrift
+// proves a mock-configured Environment's FIRST spawn records a baseline
+// contract_drift_snapshots row and does NOT flag drift (first sighting --
+// contractdrift.HasDrifted's own "previous.RepoSHA == ''" case).
+func TestCheckContractDrift_MockConfigured_FirstSpawn_RecordsBaselineNoDrift(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-baseline")
+	sessionID := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-baseline", "https://github.com/acme/repo-baseline.git", "main")
+
+	sourceControl := &fakeSourceControl{nextSHA: "sha-1", nextFingerprint: "fp-1", nextFingerprintExists: true}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-baseline"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	contractDriftStore := narvipg.NewContractDriftStore(pool)
+	var row sqlcgen.ContractDriftSnapshot
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err = contractDriftStore.Get(ctx, "acme/repo-baseline")
+		return err == nil
+	})
+
+	if row.LastRepoSha != "sha-1" {
+		t.Errorf("last_repo_sha = %q, want %q", row.LastRepoSha, "sha-1")
+	}
+	if row.LastContractsFingerprint != "fp-1" {
+		t.Errorf("last_contracts_fingerprint = %q, want %q", row.LastContractsFingerprint, "fp-1")
+	}
+
+	// A brief settle window: the snapshot write above already proves
+	// checkContractDrift ran to completion for this repo, so the drift
+	// decision (made just before that same write) is already final.
+	after := readContractDriftDetected(ctx, t, otelReader)
+	if after != before {
+		t.Errorf("contract_drift_detected counter delta = %d, want 0 (first sighting must never flag drift)", after-before)
+	}
+}
+
+// TestCheckContractDrift_SecondSpawn_SameFingerprint_FlagsDrift proves the
+// actual drift signal (§14.3): a SECOND spawn (a different session naming
+// the SAME repo) whose SourceControl returns a DIFFERENT branch SHA but
+// the SAME contracts fingerprint as before increments the
+// contract_drift_detected counter and updates the snapshot's own
+// last_repo_sha (fingerprint unchanged).
+func TestCheckContractDrift_SecondSpawn_SameFingerprint_FlagsDrift(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-drift")
+	turnStore := narvipg.NewTurnStore(pool)
+	contractDriftStore := narvipg.NewContractDriftStore(pool)
+
+	const repoURL = "https://github.com/acme/repo-drift.git"
+	const repoKey = "acme/repo-drift"
+
+	// First spawn: records the baseline (sha-1, fp-1).
+	session1 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-drift", repoURL, "main")
+	createPendingTurn(ctx, t, turnStore, session1, "prompt 1")
+
+	sourceControl1 := &fakeSourceControl{nextSHA: "sha-1", nextFingerprint: "fp-1", nextFingerprintExists: true}
+	provider1 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-drift-1"}}
+	r1 := newImageBuildTestRegistry(t, ctx, pool, provider1, sourceControl1)
+	t.Cleanup(func() { _ = r1.Shutdown() })
+
+	a1, err := r1.GetOrSpawn(ctx, session1)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(session1): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a1)
+	waitUntil(t, 5*time.Second, func() bool { return provider1.callCount() == 1 })
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := contractDriftStore.Get(ctx, repoKey)
+		return getErr == nil && row.LastRepoSha == "sha-1"
+	})
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	// Second spawn: a DIFFERENT session naming the SAME repo, a DIFFERENT
+	// sha, the SAME fingerprint.
+	session2 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-drift", repoURL, "main")
+	createPendingTurn(ctx, t, turnStore, session2, "prompt 2")
+
+	sourceControl2 := &fakeSourceControl{nextSHA: "sha-2", nextFingerprint: "fp-1", nextFingerprintExists: true}
+	provider2 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-drift-2"}}
+	r2 := newImageBuildTestRegistry(t, ctx, pool, provider2, sourceControl2)
+	t.Cleanup(func() { _ = r2.Shutdown() })
+
+	a2, err := r2.GetOrSpawn(ctx, session2)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(session2): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a2)
+	waitUntil(t, 5*time.Second, func() bool { return provider2.callCount() == 1 })
+
+	var row sqlcgen.ContractDriftSnapshot
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err = contractDriftStore.Get(ctx, repoKey)
+		return err == nil && row.LastRepoSha == "sha-2"
+	})
+	if row.LastContractsFingerprint != "fp-1" {
+		t.Errorf("last_contracts_fingerprint = %q, want %q (unchanged)", row.LastContractsFingerprint, "fp-1")
+	}
+
+	after := readContractDriftDetected(ctx, t, otelReader)
+	if after-before != 1 {
+		t.Errorf("contract_drift_detected counter delta = %d, want 1 (repo changed, contract fingerprint did not)", after-before)
+	}
+}
+
+// TestCheckContractDrift_SecondSpawn_DifferentFingerprint_NoDrift proves
+// the adversarial "properly updated together" case (§14.3, the easiest row
+// to get backwards): a second spawn whose SourceControl returns BOTH a
+// different sha AND a different contracts fingerprint records the new
+// snapshot but must NOT flag drift.
+func TestCheckContractDrift_SecondSpawn_DifferentFingerprint_NoDrift(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-no-drift")
+	turnStore := narvipg.NewTurnStore(pool)
+	contractDriftStore := narvipg.NewContractDriftStore(pool)
+
+	const repoURL = "https://github.com/acme/repo-no-drift.git"
+	const repoKey = "acme/repo-no-drift"
+
+	session1 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-no-drift", repoURL, "main")
+	createPendingTurn(ctx, t, turnStore, session1, "prompt 1")
+
+	sourceControl1 := &fakeSourceControl{nextSHA: "sha-1", nextFingerprint: "fp-1", nextFingerprintExists: true}
+	provider1 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-no-drift-1"}}
+	r1 := newImageBuildTestRegistry(t, ctx, pool, provider1, sourceControl1)
+	t.Cleanup(func() { _ = r1.Shutdown() })
+
+	a1, err := r1.GetOrSpawn(ctx, session1)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(session1): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a1)
+	waitUntil(t, 5*time.Second, func() bool { return provider1.callCount() == 1 })
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := contractDriftStore.Get(ctx, repoKey)
+		return getErr == nil && row.LastRepoSha == "sha-1"
+	})
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	// Second spawn: repo changed AND its own contract fingerprint ALSO
+	// changed -- the backend and its contract were updated together.
+	session2 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-no-drift", repoURL, "main")
+	createPendingTurn(ctx, t, turnStore, session2, "prompt 2")
+
+	sourceControl2 := &fakeSourceControl{nextSHA: "sha-2", nextFingerprint: "fp-2", nextFingerprintExists: true}
+	provider2 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-no-drift-2"}}
+	r2 := newImageBuildTestRegistry(t, ctx, pool, provider2, sourceControl2)
+	t.Cleanup(func() { _ = r2.Shutdown() })
+
+	a2, err := r2.GetOrSpawn(ctx, session2)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(session2): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a2)
+	waitUntil(t, 5*time.Second, func() bool { return provider2.callCount() == 1 })
+
+	var row sqlcgen.ContractDriftSnapshot
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err = contractDriftStore.Get(ctx, repoKey)
+		return err == nil && row.LastRepoSha == "sha-2"
+	})
+	if row.LastContractsFingerprint != "fp-2" {
+		t.Errorf("last_contracts_fingerprint = %q, want %q", row.LastContractsFingerprint, "fp-2")
+	}
+
+	after := readContractDriftDetected(ctx, t, otelReader)
+	if after != before {
+		t.Errorf("contract_drift_detected counter delta = %d, want 0 (repo AND contract both changed together -- not drift)", after-before)
+	}
+}
+
+// TestCheckContractDrift_NoContractsDirectory_FingerprintStoredEmptyNeverDrifts
+// proves a repo where ResolveContractsFingerprint's fake reports
+// exists=false (no contracts directory at that path/ref): the snapshot's
+// own fingerprint is stored as the "" sentinel, and drift is never flagged
+// for that repo regardless of how many times its SHA changes across
+// spawns.
+func TestCheckContractDrift_NoContractsDirectory_FingerprintStoredEmptyNeverDrifts(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-no-contracts-dir")
+	turnStore := narvipg.NewTurnStore(pool)
+	contractDriftStore := narvipg.NewContractDriftStore(pool)
+
+	const repoURL = "https://github.com/acme/repo-no-contracts-dir.git"
+	const repoKey = "acme/repo-no-contracts-dir"
+
+	session1 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-no-contracts-dir", repoURL, "main")
+	createPendingTurn(ctx, t, turnStore, session1, "prompt 1")
+
+	sourceControl1 := &fakeSourceControl{nextSHA: "sha-a", nextFingerprintExists: false}
+	provider1 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-no-contracts-dir-1"}}
+	r1 := newImageBuildTestRegistry(t, ctx, pool, provider1, sourceControl1)
+	t.Cleanup(func() { _ = r1.Shutdown() })
+
+	a1, err := r1.GetOrSpawn(ctx, session1)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(session1): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a1)
+	waitUntil(t, 5*time.Second, func() bool { return provider1.callCount() == 1 })
+
+	var row sqlcgen.ContractDriftSnapshot
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err = contractDriftStore.Get(ctx, repoKey)
+		return err == nil && row.LastRepoSha == "sha-a"
+	})
+	if row.LastContractsFingerprint != "" {
+		t.Errorf("last_contracts_fingerprint = %q, want empty (no contracts directory exists)", row.LastContractsFingerprint)
+	}
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	// Second spawn, a genuinely different sha, contracts dir STILL absent.
+	session2 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-no-contracts-dir", repoURL, "main")
+	createPendingTurn(ctx, t, turnStore, session2, "prompt 2")
+
+	sourceControl2 := &fakeSourceControl{nextSHA: "sha-b", nextFingerprintExists: false}
+	provider2 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-no-contracts-dir-2"}}
+	r2 := newImageBuildTestRegistry(t, ctx, pool, provider2, sourceControl2)
+	t.Cleanup(func() { _ = r2.Shutdown() })
+
+	a2, err := r2.GetOrSpawn(ctx, session2)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(session2): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a2)
+	waitUntil(t, 5*time.Second, func() bool { return provider2.callCount() == 1 })
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, err = contractDriftStore.Get(ctx, repoKey)
+		return err == nil && row.LastRepoSha == "sha-b"
+	})
+	if row.LastContractsFingerprint != "" {
+		t.Errorf("last_contracts_fingerprint = %q, want empty (still no contracts directory)", row.LastContractsFingerprint)
+	}
+
+	after := readContractDriftDetected(ctx, t, otelReader)
+	if after != before {
+		t.Errorf("contract_drift_detected counter delta = %d, want 0 (no contracts dir at current ref -- nothing to drift from)", after-before)
+	}
+}
+
+// TestCheckContractDrift_NilSourceControl_StillSpawnsSuccessfully proves a
+// mock-configured session whose Registry has NO SourceControl configured
+// at all still spawns successfully -- checkContractDrift's own early
+// return never blocks or fails a spawn, mirroring resolveAndSetImage's own
+// already-tested "never blocks a spawn" precedent exactly.
+func TestCheckContractDrift_NilSourceControl_StillSpawnsSuccessfully(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-nil-sc")
+	sessionID := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-nil-sc", "https://github.com/acme/repo-nil-sc.git", "main")
+
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-nil-sc"}}
+	// No SourceControl at all (nil), unlike every other test in this file.
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, nil)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := sandboxStore.Get(ctx, sessionID)
+		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
+	})
+
+	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-nil-sc"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("contract_drift_snapshots row: err = %v, want pgx.ErrNoRows (nil SourceControl means nothing was ever checked)", err)
+	}
+}
+
+// TestCheckContractDrift_NoUsableGitHubToken_StillSpawnsSuccessfully proves
+// a mock-configured session whose creator has no usable GitHub token still
+// spawns successfully -- mirrors TestCheckContractDrift_
+// NilSourceControl_StillSpawnsSuccessfully exactly, except SourceControl
+// IS configured (proving the early return is specifically the token check,
+// not an incidental nil-SourceControl skip).
+func TestCheckContractDrift_NoUsableGitHubToken_StillSpawnsSuccessfully(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	sessionID := createTestSessionWithRepoAndEnvironment(ctx, t, pool, pgtype.UUID{}, // no created_by
+		environmentID, "repo-no-token", "https://github.com/acme/repo-no-token.git", "main")
+
+	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used", nextFingerprint: "fp-should-never-be-used", nextFingerprintExists: true}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-no-token"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := sandboxStore.Get(ctx, sessionID)
+		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
+	})
+
+	if got := sourceControl.fingerprintCallCount(); got != 0 {
+		t.Errorf("ResolveContractsFingerprint call count = %d, want 0 (no usable token -> never attempted)", got)
+	}
+	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-no-token"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("contract_drift_snapshots row: err = %v, want pgx.ErrNoRows", err)
+	}
+}

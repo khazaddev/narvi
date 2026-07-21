@@ -64,6 +64,34 @@ type ResolveBranchSHASpec struct {
 	Token string
 }
 
+// ResolveContractsFingerprintSpec is what SourceControl.
+// ResolveContractsFingerprint (Step 27, "mocking + contract drift", §14.3)
+// needs to fingerprint a repo's configured contracts directory at one ref.
+// Owner/Repo/Token are the same generic source-control concepts
+// CreatePRSpec/ResolveBranchSHASpec already use, not GitHub-specific field
+// names.
+type ResolveContractsFingerprintSpec struct {
+	// Owner is the repo owner/organization.
+	Owner string
+	// Repo is the repo name (without owner prefix).
+	Repo string
+	// Ref is the commit SHA (or branch/tag) to resolve the contracts
+	// directory listing AT -- app/sessionactor's own checkContractDrift
+	// (contractdrift.go) always passes the repo's own just-resolved
+	// current commit SHA here, never a branch name, so drift detection
+	// compares fingerprints at precise, stable commits rather than a
+	// moving branch ref.
+	Ref string
+	// Path is the repo-relative path to the contracts directory (e.g.
+	// "contracts/api") -- internal/domain/environment.Environment's own
+	// ContractsPath field, resolved by the caller.
+	Path string
+	// Token is the same plaintext, decrypted OAuth access token shape
+	// CreatePRSpec.Token/ResolveBranchSHASpec.Token already use. Never
+	// logged by any caller or implementation of this port.
+	Token string
+}
+
 // SourceControl is the port that creates a pull request against a source-
 // control host (§4.3). internal/adapters/outbound/githubapi (Step 21) is
 // the first real implementation; internal/adapters/outbound/gitlabapi
@@ -92,4 +120,18 @@ type SourceControl interface {
 	// base image on any miss -- never block a session"), never a fatal
 	// condition.
 	ResolveBranchSHA(ctx context.Context, spec ResolveBranchSHASpec) (string, error)
+
+	// ResolveContractsFingerprint fingerprints spec.Path's directory
+	// listing at spec.Ref (Step 27, "mocking + contract drift", §14.3).
+	// exists=false, err=nil means "no directory exists at that path/ref"
+	// -- a legitimate, expected outcome (most repos/refs have no
+	// contracts directory at all), NOT an error: callers MUST be able to
+	// tell that apart from "the API call itself failed" (exists=false,
+	// err!=nil never happens -- on any real failure, fingerprint is ""
+	// and exists is false, but err is the one and only signal a caller
+	// checks first). On success (err == nil), exists and fingerprint
+	// together are authoritative: exists=true means fingerprint is
+	// contractdrift.Fingerprint's own real, non-guessed output over the
+	// directory's actual current contents.
+	ResolveContractsFingerprint(ctx context.Context, spec ResolveContractsFingerprintSpec) (fingerprint string, exists bool, err error)
 }

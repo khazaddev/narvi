@@ -4,18 +4,22 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // EnvironmentStore is a thin, pass-through wrapper around the sqlc-generated
-// environments query (§14.1, migrations/000021_environments.up.sql). No
-// caching, no retries, no business rules. httpapi.CreateSession is its only
-// caller today -- an environments row is created INLINE, at session-creation
-// time, only when the request carries a non-empty pathScope; there is no
-// standalone create/list/update Environment endpoint (see this migration's
-// own doc comment for the scope decision).
+// environments queries (§14.1, migrations/000021_environments.up.sql,
+// migrations/000025_mock_config_contract_drift.up.sql). No caching, no
+// retries, no business rules. httpapi.CreateSession is Create's only caller
+// today -- an environments row is created INLINE, at session-creation
+// time, only when the request carries a non-empty pathScope and/or a
+// mockConfig; there is no standalone create/list/update Environment
+// endpoint (see migrations/000021_environments.up.sql's own scope
+// decision). Get is app/sessionactor/contractdrift.go's own checkContractDrift
+// reading a spawn/restore plan's environment_id back.
 type EnvironmentStore struct {
 	q *sqlcgen.Queries
 }
@@ -34,10 +38,17 @@ func (s *EnvironmentStore) WithTx(tx pgx.Tx) *EnvironmentStore {
 	return &EnvironmentStore{q: s.q.WithTx(tx)}
 }
 
-// Create inserts a new environments row and returns it. pathScope is the
-// caller-supplied pathScope, already marshaled to JSON and already
-// validated by internal/domain/environment.ValidatePathScope -- this method
-// performs no validation of its own.
-func (s *EnvironmentStore) Create(ctx context.Context, pathScope []byte) (sqlcgen.Environment, error) {
-	return s.q.CreateEnvironment(ctx, pathScope)
+// Create inserts a new environments row and returns it. arg's fields are
+// the caller's own already-validated/resolved values: pathScope already
+// marshaled to JSON and already validated by internal/domain/environment.
+// ValidatePathScope, mockConfigured/contractsPath already resolved from the
+// request's own optional mockConfig key (httpapi.CreateSession's own doc
+// comment) -- this method performs no validation of its own.
+func (s *EnvironmentStore) Create(ctx context.Context, arg sqlcgen.CreateEnvironmentParams) (sqlcgen.Environment, error) {
+	return s.q.CreateEnvironment(ctx, arg)
+}
+
+// Get fetches the environments row for id.
+func (s *EnvironmentStore) Get(ctx context.Context, id pgtype.UUID) (sqlcgen.Environment, error) {
+	return s.q.GetEnvironment(ctx, id)
 }

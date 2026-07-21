@@ -246,6 +246,16 @@ type spawnPlan struct {
 	// runs AFTER this plan's own transact has already committed and
 	// returned.
 	createdBy pgtype.UUID
+
+	// environmentID is sessionRow.EnvironmentID (Step 27, "mocking +
+	// contract drift") -- populated in BOTH planFreshSpawn and planRestore,
+	// mirroring createdBy's own identical population exactly (same
+	// reasoning: both already have sessionRow in scope; a resume plan does
+	// not, and does not need it -- checkContractDrift, contractdrift.go, is
+	// never called for resume, same as resolveAndSetImage). Invalid
+	// (pgtype.UUID{}.Valid == false) for an ordinary, unscoped session --
+	// checkContractDrift's own first early-return checks exactly this.
+	environmentID pgtype.UUID
 }
 
 // dispatchPlan is what planDispatch's own transact hands back to
@@ -280,6 +290,18 @@ type dispatchPlan struct {
 // zone, immediately before the provider is ever called -- never inside
 // planDispatch's own transact. See imageresolve.go's own doc comment for
 // the full "never block a spawn" design.
+//
+// Step 27 ("mocking + contract drift", §14.3) adds checkContractDrift
+// immediately alongside resolveAndSetImage, on the SAME spawn/restore
+// branches, at the SAME hook point, for the SAME reason: it is ALSO
+// network-bound (a GitHub API call per repo, plus a Postgres read/best-
+// effort upsert), scoped to mock-configured Environments only (its own
+// first real check, contractdrift.go), and must never block a spawn --
+// see that file's own doc comment for the full design. Order between the
+// two calls does not matter functionally (each only reads plan.spec/
+// plan.createdBy/plan.environmentID and mutates its own disjoint state),
+// but they are kept adjacent here since they share this exact hook point
+// for the exact same structural reason.
 func (a *Actor) handleEnsureDispatched(ctx context.Context) error {
 	spawn, dispatch, err := a.planDispatch(ctx)
 	if err != nil {
@@ -290,9 +312,11 @@ func (a *Actor) handleEnsureDispatched(ctx context.Context) error {
 		return a.executeResume(ctx, spawn)
 	case spawn != nil && spawn.restore:
 		a.resolveAndSetImage(ctx, spawn)
+		a.checkContractDrift(ctx, spawn)
 		return a.executeRestore(ctx, spawn)
 	case spawn != nil:
 		a.resolveAndSetImage(ctx, spawn)
+		a.checkContractDrift(ctx, spawn)
 		return a.executeSpawn(ctx, spawn)
 	case dispatch != nil:
 		return a.executeDispatch(ctx, dispatch)
@@ -642,7 +666,7 @@ func (a *Actor) planFreshSpawn(
 		return nil, fmt.Errorf("sessionactor: invalid create spec: %w", err)
 	}
 
-	return &spawnPlan{gen: int(row.Gen), spec: spec, createdBy: sessionRow.CreatedBy}, nil
+	return &spawnPlan{gen: int(row.Gen), spec: spec, createdBy: sessionRow.CreatedBy, environmentID: sessionRow.EnvironmentID}, nil
 }
 
 // planRestore implements design decision 6's own restore-specific write.
@@ -715,6 +739,7 @@ func (a *Actor) planRestore(
 	return &spawnPlan{
 		gen: int(row.Gen), spec: spec, restore: true,
 		snapshotID: ports.SnapshotID(snapshotImageID), createdBy: sessionRow.CreatedBy,
+		environmentID: sessionRow.EnvironmentID,
 	}, nil
 }
 
