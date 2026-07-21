@@ -8,8 +8,6 @@ Narvi runs autonomous coding agents inside isolated cloud sandboxes. A person �
 
 This project was started after running [OpenInspect](https://github.com/ColeMurray/background-agents) in production at [Fountain](https://github.com/onboardiq/background-agents). Narvi draws on that experience, but is an independent project — not a fork or a rewrite of OpenInspect, and shares no code with it.
 
-> **Private.** Internal project. Do not make this repository public.
-
 ## Architecture at a glance
 
 - **Two Go services** — a control plane and an in-sandbox agent — packaged as containers that run on any Kubernetes cluster or plain Docker/VMs, with **Postgres as the single source of truth**. Host it wherever you like; no cloud lock-in.
@@ -36,3 +34,9 @@ make build   # go build ./...
 make lint    # golangci-lint + the project's custom static-analysis checks
 make test    # go test -race ./...
 ```
+
+## License
+
+Copyright (C) 2026 Benoît LELEVÉ.
+
+Licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
