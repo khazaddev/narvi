@@ -90,6 +90,54 @@ SET snapshot_id = $2, pending_snapshot_message_id = NULL, updated_at = now()
 WHERE session_id = $1
 RETURNING *;
 
+-- name: UpdateSandboxStatusToSuspect :one
+-- Step 24 ("two-phase terminalization"): the single write
+-- transitionSandboxToSuspect (internal/app/sessionactor/timerfired.go)
+-- performs when a watchdog moves a sandbox into Suspect. Sets status =
+-- 'suspect' as a hardcoded literal -- mirroring UpsertSandboxForSpawn's
+-- own hardcoded 'spawning' literal precedent exactly: this query has
+-- exactly one legal target status, by construction of its own single call
+-- site -- AND persists pre_suspect_status = the state being left, in the
+-- SAME statement, so §3.2's own "any liveness signal during grace returns
+-- to previous state" rule has somewhere to read that state back from
+-- later (handleSandboxEvent's own recovery branch, sandboxevent.go,
+-- RecoverSandboxFromSuspect below). Deliberately does NOT touch
+-- last_seen_at -- entering Suspect is a watchdog's own classification of
+-- silence, never itself a liveness signal.
+UPDATE sandboxes
+SET status = 'suspect',
+    pre_suspect_status = $2,
+    updated_at = now()
+WHERE session_id = $1
+RETURNING *;
+
+-- name: RecoverSandboxFromSuspect :one
+-- Step 24 ("two-phase terminalization"): the single write
+-- handleSandboxEvent's own recovery branch (sandboxevent.go) performs
+-- when ANY recognized inbound sandbox event arrives for a Suspect sandbox
+-- that still carries a pre_suspect_status -- i.e. "any liveness signal
+-- during grace returns to previous state" (§3.2), the event itself being
+-- that liveness signal. Sets status = $2 (the recovered, previously-live
+-- state sandbox.Transition(StateSuspect, gen, RecoverTrigger(...)) already
+-- validated), clears pre_suspect_status back to NULL (no longer needed --
+-- mirrors UpdateSandboxSnapshotID's own "clear the now-satisfied
+-- outstanding column in the same statement" precedent), and sets
+-- last_seen_at to the event's own arrival time -- unlike
+-- UpdateSandboxStatusToSuspect above, THIS write is itself the liveness
+-- signal that caused the recovery, so last_seen_at moves forward exactly
+-- like the general per-event UpdateSandboxStatus write already does for
+-- every other recognized event. Deliberately a direct SET (not
+-- COALESCE'd), mirroring UpdateSandboxProviderID/UpdateSandboxSnapshotID's
+-- own precedent: this call site always has a real, just-observed
+-- timestamp to write.
+UPDATE sandboxes
+SET status = $2,
+    pre_suspect_status = NULL,
+    last_seen_at = $3,
+    updated_at = now()
+WHERE session_id = $1
+RETURNING *;
+
 -- name: UpdateSandboxPendingSnapshotMessageID :one
 -- Step 22 fix (message-id correlation): sets or clears (pass NULL)
 -- pending_snapshot_message_id -- the MessageId of whichever Snapshot

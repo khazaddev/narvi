@@ -8,13 +8,18 @@ import (
 )
 
 // TestSandboxTransitionTrigger is table-driven over every (event type,
-// LastBootPhase, status) combination that matters: the two in-scope
-// mappings this Step implements, each exercised both ON its precondition
-// and OFF it (proving the precondition check, not just the trigger kind,
+// LastBootPhase, status) combination that matters: the two mappings this
+// function itself implements, each exercised both ON its precondition and
+// OFF it (proving the precondition check, not just the trigger kind,
 // gates the decision), plus a handful of event types/status pairs this
-// Step deliberately does not map (including a Suspect status, proving no
-// recovery transition is ever speculatively attempted for it -- Step 24's
-// own job, see this file's top comment).
+// function deliberately does not map -- including a Suspect status,
+// proving sandboxTransitionTrigger ITSELF never speculatively fires a
+// recovery transition. Suspect-recovery (Step 24, "two-phase
+// terminalization") is real and wired, but lives entirely in
+// handleSandboxEvent's own dedicated branch (sandboxevent.go, see that
+// file's top comment), which runs BEFORE this function is ever called and
+// uses sandbox.RecoverTrigger with a stored pre_suspect_status -- not a
+// third case added to this function's own two-mapping table.
 func TestSandboxTransitionTrigger(t *testing.T) {
 	t.Parallel()
 
@@ -42,7 +47,7 @@ func TestSandboxTransitionTrigger(t *testing.T) {
 			wantOK:    false,
 		},
 		{
-			name:      "ready while suspect is a no-op (no speculative recovery, Step 24)",
+			name:      "ready while suspect is a no-op (recovery, if any, is handled elsewhere -- see this file's own doc comment)",
 			eventType: "ready",
 			status:    sandbox.StateSuspect,
 			wantOK:    false,

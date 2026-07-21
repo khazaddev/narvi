@@ -325,9 +325,17 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 			return nil
 		}
 
-		// Branch (b): a live sandbox already exists and is Ready (or
-		// Suspect -- Step 24's own future recovery job either way) -- the
-		// turn can be dispatched to it right now.
+		// Branch (b): a live sandbox already exists and is Ready or Suspect
+		// -- the turn can be dispatched to it right now. Suspect is
+		// deliberately included here, not just Ready: a Suspect sandbox is
+		// still within its terminal_grace window and may yet recover (Step
+		// 24, "two-phase terminalization", sandboxevent.go's own
+		// handleSandboxEvent), so a real dispatch attempt to it is allowed
+		// to proceed rather than waiting idle -- if the underlying
+		// SandboxCommander.SendCommand genuinely fails because the
+		// sandbox is truly gone, that failure path already fails the turn
+		// forward (executeDispatch/failDispatchedTurn) independently of
+		// whatever the sandbox's own grace timer later decides.
 		//
 		// Known, honestly-documented gap: this always routes a Ready
 		// sandbox straight to tryPlanDispatch, regardless of whether it

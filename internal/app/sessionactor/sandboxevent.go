@@ -10,22 +10,88 @@
 // always bumps liveness (last_seen_at = max of all signals), and fires
 // the state transitions this Step's plan row (and Step 22's, "snapshots &
 // restore") scope: "ready"/Connecting, "heartbeat"-nil-phase/Booting
-// (both Step 18), and now "snapshot_ready"/Snapshotting (Step 22, design
-// decision 3 -- see handleSnapshotReadyEvent below).
+// (both Step 18), "snapshot_ready"/Snapshotting (Step 22, design decision
+// 3 -- see handleSnapshotReadyEvent below), and now Suspect-recovery
+// (Step 24, "two-phase terminalization" -- see the section right below).
 //
-// # Explicitly out of scope (do not add a further case here)
+// # Suspect-state recovery-during-grace (Step 24, "two-phase terminalization")
 //
-// Suspect-state recovery-during-grace ("any liveness signal during grace
-// returns to previous state", §3.2) is Step 24's own job ("two-phase
-// terminalization"). A Suspect sandbox reconnecting through this handler is
-// correctly ALLOWED (domain/sandbox.IsDeadSandboxStatus(Suspect) is false,
-// so wshub's own handshake let the connection through) and its events DO
-// get persisted and DO bump last_seen_at -- both genuinely useful and
-// correct per this Step's own scope -- but no recovery TRANSITION fires:
-// sandbox.TriggerRecover needs a Target (which previously-live state to
-// return to) this handler has no mechanism to track/supply. Do not call
-// sandbox.Transition speculatively for any event type/status combination
-// beyond the ones named above.
+// §3.2: "Any liveness signal during grace returns to previous state." A
+// Suspect sandbox reconnecting through this handler is correctly ALLOWED
+// (domain/sandbox.IsDeadSandboxStatus(Suspect) is false, so wshub's own
+// handshake let the connection through) -- this is exactly the moment
+// that rule fires. Right after this event's own raw persistence
+// (appendRawEvent, below) and BEFORE computing whatever further
+// transition cmd.Type itself drives, handleSandboxEvent checks: is
+// row.Status genuinely Suspect, AND does it still carry a
+// pre_suspect_status (set by transitionSandboxToSuspect, timerfired.go,
+// in the SAME write that entered Suspect -- migrations/000023_sandbox_
+// pre_suspect_status.up.sql)? If so, ANY recognized inbound event counts
+// as the liveness signal the rule names -- deliberately NOT narrowed to
+// specific event types, since the rule's own wording is unconditional --
+// and sandbox.Transition(StateSuspect, gen, sandbox.RecoverTrigger(
+// preSuspectStatus)) is attempted. On success: the recovered status is
+// written, pre_suspect_status is cleared back to NULL, and
+// TimerTerminalGrace is deleted, all in one statement
+// (RecoverSandboxFromSuspect, queries/sandboxes.sql, plus deleteTimer) --
+// that grace window no longer applies once the sandbox is provably alive
+// again. row itself is reassigned to the freshly-read recovered row, so
+// every line below (the sandboxTransitionTrigger check, the
+// snapshot_ready/execution_complete switch) sees the NOW-RECOVERED
+// status, never the stale "suspect" one.
+//
+// This is deliberately NOT an early return: the SAME event that just
+// recovered the sandbox is allowed to ALSO drive a further transition or
+// turn-completion in the same pass -- e.g. a genuinely late
+// execution_complete arriving while Suspect recovers the sandbox AND
+// completes whichever turn is Processing, in ONE commit (§9.3 scenario
+// #4: "execution_complete arrives AFTER terminalization -> state
+// reconciled"; §3.2's own "a genuinely late success... reconciles: turn
+// marked completed, session status re-derived, automation run counters
+// corrected"). The turn/session half of that sentence needs no new code
+// of its own: turn.EvaluateTurnDeadline's own turn_deadline budget vastly
+// exceeds the sandbox's Suspect-grace window, so the turn is still
+// Processing when this fires, and completeProcessingTurn (pushpr.go)
+// already drives Processing->Completed via the already-legal edge once
+// this recovery makes the sandbox live again -- see internal/domain/turn/
+// state.go's own top comment for why that package needed no change to
+// make this true. The THIRD clause -- "automation run counters
+// corrected" -- is honestly NOT addressed by this Step: automations are
+// not a built feature anywhere in this codebase yet (IMPLEMENTATION_PLAN.md
+// row 31+, Phase 3) -- there is no automation_runs table, no automation
+// domain package, nothing to correct. This is a genuine, currently-
+// inapplicable gap in this Step's own delivery of §3.2's full sentence,
+// not a silent omission: whichever future Step first builds automation
+// run tracking will need its own equivalent late-success correction, the
+// same way this Step's own turn/session correction was already free
+// once Suspect-recovery existed.
+//
+// A Suspect row with no pre_suspect_status set is a defensive,
+// practically-unreachable case (transitionSandboxToSuspect always sets it
+// in the SAME write that enters Suspect) -- handled as a safe no-op,
+// falling through to the pre-Step-24 behavior (persisted, liveness
+// bumped, left Suspect, no recovery transition attempted). Likewise, a
+// pre_suspect_status naming an illegal recovery target (should never
+// happen: it is only ever written from a state TriggerSuspect's own
+// transition table already validated) is logged and left Suspect, never
+// treated as a fatal error for this event. Do not call sandbox.Transition
+// speculatively for any OTHER event type/status combination beyond the
+// ones named here and in sandboxTransitionTrigger's own doc comment
+// below.
+//
+// Honest gap, out of this Step's own scope: a sandbox that recovers
+// DIRECTLY back to Ready (pre_suspect_status was Ready) does not itself
+// re-arm liveness_check/inactivity in this same pass -- both were
+// deleted by their own respective timeout handlers (timerfired.go) on the
+// way INTO Suspect, and the guard below that re-arms them only fires on
+// a genuine before/after Booting->Ready transition within THIS event,
+// which a direct-to-Ready recovery never produces. The sandbox stays
+// fully live and functional either way (last_seen_at keeps advancing on
+// every subsequent event) -- it simply has no ACTIVE watchdog re-armed
+// until some later event happens to cross a boundary the existing guard
+// already recognizes, or a future Step adds explicit re-arming for every
+// recovery-landing state. Not fixed here: this Step's own brief scopes
+// the recovery write itself, not a broader watchdog-rearming pass.
 
 package sessionactor
 
@@ -154,6 +220,41 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			return err
 		}
 
+		// Step 24 ("two-phase terminalization"): Suspect-recovery-during-
+		// grace -- see this file's own top comment for the full reasoning.
+		// row is reassigned to the freshly-recovered row on success, so
+		// every line below sees the NOW-RECOVERED status rather than the
+		// stale "suspect" one.
+		if sandbox.State(row.Status) == sandbox.StateSuspect && row.PreSuspectStatus != nil {
+			recoveredTo, recErr := sandbox.Transition(sandbox.StateSuspect, int(row.Gen),
+				sandbox.RecoverTrigger(sandbox.State(*row.PreSuspectStatus)))
+			if recErr != nil {
+				// Defensive only -- see this file's own top comment for why
+				// this should be unreachable in practice. Logged, not
+				// fatal: the sandbox is simply left Suspect for this event.
+				a.logger.Warn("sessionactor: suspect recovery rejected; leaving sandbox suspect",
+					"pre_suspect_status", *row.PreSuspectStatus, "error", recErr)
+			} else {
+				recovered, err := a.stores.sandbox.WithTx(tx).RecoverFromSuspect(ctx, sqlcgen.RecoverSandboxFromSuspectParams{
+					SessionID:  a.sessionID,
+					Status:     sqlcgen.SandboxStatus(recoveredTo),
+					LastSeenAt: pgtype.Timestamptz{Time: now, Valid: true},
+				})
+				if err != nil {
+					return fmt.Errorf("sessionactor: recover sandbox from suspect: %w", err)
+				}
+				row = recovered
+				if err := a.deleteTimer(ctx, tx, TimerTerminalGrace); err != nil {
+					return err
+				}
+			}
+		}
+		// If row.Status has no pre_suspect_status set (defensive-only, see
+		// this file's own top comment): nothing above ran, row is
+		// untouched, and this falls straight through to the liveness-only
+		// bump below exactly like every other unrecognized-transition
+		// event does.
+
 		target := row.Status
 		if trig, ok := sandboxTransitionTrigger(cmd.Type, cmd.LastBootPhase, sandbox.State(row.Status)); ok {
 			to, err := sandbox.Transition(sandbox.State(row.Status), int(row.Gen), trig)
@@ -164,10 +265,10 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		}
 		// If !ok: NOT an error (see sandboxTransitionTrigger's own doc) --
 		// target stays row.Status unchanged, falling straight through to
-		// the liveness-only bump below. This is also the path a Suspect
-		// sandbox's own reconnect/replay traffic takes: persisted, liveness
-		// bumped, no recovery transition attempted (Step 24's own job, see
-		// this file's top comment).
+		// the liveness-only bump below. This is also the path a sandbox
+		// that just recovered above (or failed to, and is still Suspect)
+		// takes when this SAME event names no further transition of its
+		// own: still persisted, liveness bumped.
 
 		if _, err := a.stores.sandbox.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
 			SessionID:  a.sessionID,

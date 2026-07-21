@@ -447,15 +447,29 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 // step every watchdog-style timer (inactivity, connecting_deadline,
 // liveness_check) performs identically on timeout, per §3.2's two-phase
 // design: "a watchdog never writes failed directly. It writes suspect and
-// arms terminal_grace."
+// arms terminal_grace." Step 24 ("two-phase terminalization") extends this
+// shared step to ALSO persist row.Status -- the live state being left,
+// always one of the five states TriggerSuspect's own transition-table
+// entries allow (Spawning/Connecting/Booting/Ready/Snapshotting) -- as
+// pre_suspect_status, in the SAME statement (UpdateSandboxStatusToSuspect,
+// queries/sandboxes.sql): §3.2's own recovery rule ("any liveness signal
+// during grace returns to previous state") needs this value later
+// (handleSandboxEvent's own recovery branch, sandboxevent.go), and by the
+// time a recovery signal arrives, the sandbox row's own status column
+// would otherwise already read 'suspect' with no memory of what it
+// recovered FROM.
 func (a *Actor) transitionSandboxToSuspect(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox, now time.Time) error {
-	to, err := sandbox.Transition(sandbox.State(row.Status), int(row.Gen), sandbox.SuspectTrigger())
-	if err != nil {
+	// The returned target is always sandbox.StateSuspect (TriggerSuspect's
+	// own single target, state.go) -- this call's own value is discarded;
+	// what matters is Transition's validation that (row.Status, Suspect)
+	// is a legal edge at all, exactly as before this Step.
+	if _, err := sandbox.Transition(sandbox.State(row.Status), int(row.Gen), sandbox.SuspectTrigger()); err != nil {
 		return fmt.Errorf("sessionactor: sandbox transition to suspect: %w", err)
 	}
-	if _, err := a.stores.sandbox.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
-		SessionID: a.sessionID,
-		Status:    sqlcgen.SandboxStatus(to),
+	preSuspect := sqlcgen.SandboxStatus(row.Status)
+	if _, err := a.stores.sandbox.WithTx(tx).UpdateStatusToSuspect(ctx, sqlcgen.UpdateSandboxStatusToSuspectParams{
+		SessionID:        a.sessionID,
+		PreSuspectStatus: &preSuspect,
 	}); err != nil {
 		return fmt.Errorf("sessionactor: update sandbox status to suspect: %w", err)
 	}

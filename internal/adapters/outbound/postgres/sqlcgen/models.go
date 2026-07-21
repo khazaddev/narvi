@@ -539,6 +539,7 @@ type Sandbox struct {
 	LastSpawnFailureAt       pgtype.Timestamptz `json:"last_spawn_failure_at"`
 	SnapshotID               *string            `json:"snapshot_id"`
 	PendingSnapshotMessageID *string            `json:"pending_snapshot_message_id"`
+	PreSuspectStatus         *SandboxStatus     `json:"pre_suspect_status"`
 }
 
 type SandboxHistory struct {
