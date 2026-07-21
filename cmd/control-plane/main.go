@@ -33,6 +33,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/reconciler"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
@@ -168,6 +169,18 @@ func serve() error {
 	wsTokenStore := postgres.NewWSTokenStore(pool)
 	environmentStore := postgres.NewEnvironmentStore(pool)
 
+	// recon is Step 25's ("reconciler + GC", §5.3) process-wide
+	// provider-reconciliation/orphan-GC loop, run below via the errgroup
+	// exactly once per process -- constructed from the SAME sandboxStore/
+	// sandboxProvider/cfg.Timeouts already built above for everything
+	// else, mirroring how registry/commander were threaded through rather
+	// than built twice. See internal/app/reconciler's own doc.go for what
+	// it does and why.
+	recon, err := reconciler.NewReconciler(sandboxStore, sandboxProvider, cfg.Timeouts)
+	if err != nil {
+		return fmt.Errorf("construct reconciler: %w", err)
+	}
+
 	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
 	// OAuth login, backend-issued session cookies, and route middleware --
 	// see internal/adapters/inbound/auth's own doc.go for the full writeup.
@@ -293,6 +306,18 @@ func serve() error {
 	group.Go(func() error {
 		if err := postgres.RunExpiredTokenCleanup(groupCtx, pool, cfg.Timeouts.ExpiredCredentialCleanupInterval); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("expired credential cleanup: %w", err)
+		}
+		return nil
+	})
+
+	// Step 25 ("reconciler + GC", §5.3): started/shut down through this
+	// SAME errgroup as every other background loop above -- no naked
+	// goroutine (§11) -- with the identical context.Canceled carve-out
+	// RunTimerPump/RunExpiredTokenCleanup already establish for normal
+	// shutdown.
+	group.Go(func() error {
+		if err := recon.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("reconciler: %w", err)
 		}
 		return nil
 	})

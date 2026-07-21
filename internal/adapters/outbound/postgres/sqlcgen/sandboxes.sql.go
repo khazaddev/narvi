@@ -70,6 +70,51 @@ func (q *Queries) GetSandbox(ctx context.Context, sessionID pgtype.UUID) (Sandbo
 	return i, err
 }
 
+const listLiveSandboxProviderIDs = `-- name: ListLiveSandboxProviderIDs :many
+SELECT provider_id FROM sandboxes
+WHERE status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting', 'suspect')
+  AND provider_id IS NOT NULL
+`
+
+// Step 25 ("reconciler + GC", §5.3): the reconciler's own "expected still
+// alive" set -- the provider_id of every sandbox row currently in a LIVE
+// status, across ALL sessions. Unlike every OTHER query in this file
+// (each scoped to one session_id via WHERE session_id = $1), this one
+// genuinely needs to scan the whole table -- by design, not oversight:
+// app/reconciler.Reconciler.ReconcileOnce compares this set against
+// ports.SandboxProvider.List's real, currently-live provider-side refs,
+// and any ref with no corresponding row here is a genuine orphan (see
+// that method's own doc comment for the two ways one arises).
+//
+// 'pending' is excluded: a pending sandbox has no provider object yet
+// (UpsertSandboxForSpawn only ever creates a row already in 'spawning').
+// 'stopped'/'failed' are excluded DELIBERATELY, not merely omitted: they
+// are exactly the terminal statuses whose own leaked provider objects
+// this reconciler exists to catch (StopSandbox has had no real caller
+// anywhere in this codebase before this Step), so a stale provider_id
+// still lingering on a terminal row (UpsertSandboxForSpawn's own doc
+// comment notes provider_id is never cleared on respawn) must NOT count
+// as "expected alive" here.
+func (q *Queries) ListLiveSandboxProviderIDs(ctx context.Context) ([]*string, error) {
+	rows, err := q.db.Query(ctx, listLiveSandboxProviderIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []*string
+	for rows.Next() {
+		var provider_id *string
+		if err := rows.Scan(&provider_id); err != nil {
+			return nil, err
+		}
+		items = append(items, provider_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recoverSandboxFromSuspect = `-- name: RecoverSandboxFromSuspect :one
 UPDATE sandboxes
 SET status = $2,

@@ -20,16 +20,20 @@ func TestDefaultTimeouts_Valid(t *testing.T) {
 }
 
 // TestValidate_CatchesEachBrokenLink is table-driven over every pairwise
-// relationship the two invariant chains define (§5.4's "provider cap >
-// supervisor > bridge > SSE" chain contributes 3 adjacent links; the
-// independent "providerHTTPClientTimeout > cold start" and
-// "first_connect_budget > image pull + boot p99" pairs contribute one
-// link each -- 5 links total from the 8-field design in this PR). Each
-// case starts from DefaultTimeouts (known-valid) and mutates exactly one
-// field so exactly one link breaks, then asserts Validate reports a
-// *TimeoutInvariantError naming that exact chain -- so the test actually
-// catches someone breaking one specific link later, not merely "some
-// error happened".
+// relationship Validate checks (§5.4's "provider cap > supervisor >
+// bridge > SSE" chain contributes 3 adjacent links; the independent
+// "providerHTTPClientTimeout > cold start" and "first_connect_budget >
+// image pull + boot p99" pairs contribute one link each -- 5 links total
+// from the 8-field design in the original PR-02; Step 25's own reconciler
+// orphan-GC debounce fix adds a 6th, independent link:
+// "ReconcilerInterval > ReconcilerOrphanConfirmationPeriod", needed for
+// app/reconciler.Reconciler's own "confirmed on the SECOND consecutive
+// tick" guarantee to actually hold under the shipped defaults -- see that
+// field's own doc comment). Each case starts from DefaultTimeouts
+// (known-valid) and mutates exactly one field so exactly one link breaks,
+// then asserts Validate reports a *TimeoutInvariantError naming that
+// exact chain -- so the test actually catches someone breaking one
+// specific link later, not merely "some error happened".
 func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 	t.Parallel()
 
@@ -72,6 +76,13 @@ func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 				to.ImagePullBootP99 = to.FirstConnectBudget
 			},
 			wantChain: "FirstConnectBudget > ImagePullBootP99",
+		},
+		{
+			name: "ReconcilerInterval not > ReconcilerOrphanConfirmationPeriod",
+			mutate: func(to *platform.Timeouts) {
+				to.ReconcilerOrphanConfirmationPeriod = to.ReconcilerInterval
+			},
+			wantChain: "ReconcilerInterval > ReconcilerOrphanConfirmationPeriod",
 		},
 	}
 

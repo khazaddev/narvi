@@ -329,10 +329,20 @@ func (a *Actor) handleTerminalGraceTimer(ctx context.Context) error {
 		// terminal outcomes domain/sandbox.Transition allows for
 		// TriggerGraceExpired, but neither is reachable from this
 		// handler yet -- Stopped needs an HTTP stop endpoint (a later
-		// Step) to have recorded that a stop was explicitly requested,
-		// and Stale needs Step 25's reconciler to have classified this
-		// sandbox as orphaned. Both are genuinely absent from the
-		// codebase today, not merely unwired here.
+		// Step) to have recorded that a stop was explicitly requested.
+		// Stale remains genuinely unreachable too, but NOT for lack of a
+		// reconciler any more: internal/app/reconciler (Step 25,
+		// "reconciler + GC") exists now, but is deliberately PURE
+		// cloud-side orphan reaping -- it calls ports.SandboxProvider.
+		// StopSandbox on a provider ref with no live Postgres owner, and
+		// never writes to any sandboxes row's own status column (see that
+		// package's own doc.go). Classifying an ALREADY-Suspect row like
+		// THIS one as Stale once a reconciler independently confirms its
+		// cloud resource is gone is a distinct, currently-hypothetical
+		// concept -- domain/sandbox's own three-way TriggerGraceExpired
+		// target already supports it structurally, should some FUTURE
+		// Step ever decide to build it, but nothing in this codebase does
+		// today.
 		to, err := sandbox.Transition(sandbox.StateSuspect, int(sandboxRow.Gen), sandbox.GraceExpiredTrigger(sandbox.StateFailed))
 		if err != nil {
 			return fmt.Errorf("sessionactor: sandbox transition suspect->failed: %w", err)

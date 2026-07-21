@@ -771,20 +771,24 @@ func (a *Actor) planResume(
 // a SECOND, fresh transact -- design decision 3a's own required
 // sequencing.
 //
-// Known, documented limitation pending Step 25's reconciler (docs/
-// IMPLEMENTATION_PLAN.md row 25, "reconciler + GC ... orphan harvesting"):
-// if CreateSandbox above genuinely succeeds (createErr == nil, a real
-// cloud resource now exists under ref.ProviderID) but this actor's own
-// epoch has gone stale by the time the transact below runs (a legitimate
-// pod-handoff race -- a newer actor already took over and bumped
-// actor_epoch), transact's own epoch-fencing check correctly rolls back
-// this whole write, INCLUDING the UpdateProviderID call that would have
-// been the only durable record of ref.ProviderID anywhere. Building a full
-// reconciler (ports.SandboxProvider.List is shaped for exactly this, but
-// has zero production callers yet) is explicitly Step 25's own job, not
-// this one's -- the scoped-down fix here is to log loudly rather than
-// silently swallow the leak, so it is at least observable/actionable by an
-// operator until Step 25 lands.
+// This was a known, documented limitation pending Step 25's reconciler
+// (docs/IMPLEMENTATION_PLAN.md row 25, "reconciler + GC ... orphan
+// reaping"), which now exists (internal/app/reconciler): if CreateSandbox
+// above genuinely succeeds (createErr == nil, a real cloud resource now
+// exists under ref.ProviderID) but this actor's own epoch has gone stale
+// by the time the transact below runs (a legitimate pod-handoff race -- a
+// newer actor already took over and bumped actor_epoch), transact's own
+// epoch-fencing check correctly rolls back this whole write, INCLUDING the
+// UpdateProviderID call that would have been the only durable record of
+// ref.ProviderID anywhere. reconciler.Reconciler.ReconcileOnce (§9.3
+// scenario 5: "two concurrent spawns ... loser sandbox reaped by GC") now
+// catches exactly this: its own provider.List call sees this real,
+// orphaned cloud resource with no corresponding live Postgres row and
+// reaps it on a later tick -- covering every SUCH ORPHAN CREATED FROM NOW
+// ON. It has no way to retroactively find/reap a resource that leaked
+// before this reconciler existed; the log below remains as an immediate,
+// session/gen-correlatable signal alongside the reconciler's own
+// coarser-grained, provider-id-only reaping log.
 func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
 	ref, createErr := a.provider.CreateSandbox(ctx, plan.spec)
 
@@ -793,10 +797,10 @@ func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
 	if err != nil && createErr == nil && errors.Is(err, ErrStaleEpoch) {
 		// See this function's own doc comment above: a real cloud sandbox
 		// was just created but the write recording it just got rolled back
-		// by a legitimate stale-epoch takeover -- log everything an
-		// operator would need to find and manually clean this up until
-		// Step 25's reconciler exists.
-		a.logger.Warn("sessionactor: spawned sandbox orphaned by stale-epoch takeover; provider resource was never recorded and will leak until Step 25's reconciler exists",
+		// by a legitimate stale-epoch takeover -- internal/app/reconciler
+		// now reaps this automatically on a later tick; this log remains as
+		// an immediate, session/gen-correlatable signal alongside that.
+		a.logger.Warn("sessionactor: spawned sandbox orphaned by stale-epoch takeover; provider resource was never recorded here and will be reaped by the reconciler's own next tick",
 			"session_id", a.sessionID.String(),
 			"provider_id", ref.ProviderID,
 			"gen", plan.gen,
@@ -815,16 +819,17 @@ func (a *Actor) executeSpawn(ctx context.Context, plan *spawnPlan) error {
 // explains why a restore failure is still fundamentally "we tried to get
 // a live sandbox and a permanent provider error came back" -- the SAME
 // concern a spawn failure is, not a different one). Shares executeSpawn's
-// own known, documented stale-epoch-orphan limitation too: a real
-// restored provider sandbox can equally leak until Step 25's reconciler
-// exists.
+// own stale-epoch-orphan case too: a real restored provider sandbox that
+// gets orphaned this way is caught by internal/app/reconciler exactly
+// like a spawned one is -- see executeSpawn's own doc comment above for
+// the full writeup.
 func (a *Actor) executeRestore(ctx context.Context, plan *spawnPlan) error {
 	ref, restoreErr := a.provider.RestoreFromSnapshot(ctx, plan.snapshotID, plan.spec)
 
 	err := a.recordProviderOutcome(ctx, plan.gen, ref, restoreErr)
 
 	if err != nil && restoreErr == nil && errors.Is(err, ErrStaleEpoch) {
-		a.logger.Warn("sessionactor: restored sandbox orphaned by stale-epoch takeover; provider resource was never recorded and will leak until Step 25's reconciler exists",
+		a.logger.Warn("sessionactor: restored sandbox orphaned by stale-epoch takeover; provider resource was never recorded here and will be reaped by the reconciler's own next tick",
 			"session_id", a.sessionID.String(),
 			"provider_id", ref.ProviderID,
 			"gen", plan.gen,
@@ -963,9 +968,17 @@ func (a *Actor) executeResume(ctx context.Context, plan *spawnPlan) error {
 		// the write recording its outcome (Connecting status) was rolled
 		// back by a legitimate stale-epoch takeover -- the resumed
 		// provider instance is real and live, but the control plane's own
-		// bookkeeping for it never got recorded, and has no other channel
-		// to reach it until Step 25's reconciler exists.
-		a.logger.Warn("sessionactor: resumed sandbox's outcome orphaned by stale-epoch takeover; the resume itself succeeded at the provider but was never recorded and will be inconsistent until Step 25's reconciler exists",
+		// bookkeeping for it never got recorded. Same reconciler coverage
+		// as executeSpawn/executeRestore's own equivalent case: whichever
+		// actor instance eventually WINS this session's own takeover race
+		// records ITS OWN provider_id on this row (UpsertSandboxForSpawn's
+		// own doc comment: "provider_id is deliberately NOT cleared" on a
+		// fresh spawn -- it is simply overwritten by the next successful
+		// UpdateProviderID call), so this resumed instance's provider_id
+		// stops being referenced by ANY row at all once that happens --
+		// internal/app/reconciler's own provider.List-vs-Postgres
+		// comparison reaps it exactly like a spawn/restore orphan.
+		a.logger.Warn("sessionactor: resumed sandbox's outcome orphaned by stale-epoch takeover; the resume itself succeeded at the provider but was never recorded here and will be reaped by the reconciler's own next tick",
 			"session_id", a.sessionID.String(),
 			"provider_id", plan.providerObjectID,
 			"gen", plan.gen,

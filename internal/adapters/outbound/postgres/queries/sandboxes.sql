@@ -138,6 +138,30 @@ SET status = $2,
 WHERE session_id = $1
 RETURNING *;
 
+-- name: ListLiveSandboxProviderIDs :many
+-- Step 25 ("reconciler + GC", §5.3): the reconciler's own "expected still
+-- alive" set -- the provider_id of every sandbox row currently in a LIVE
+-- status, across ALL sessions. Unlike every OTHER query in this file
+-- (each scoped to one session_id via WHERE session_id = $1), this one
+-- genuinely needs to scan the whole table -- by design, not oversight:
+-- app/reconciler.Reconciler.ReconcileOnce compares this set against
+-- ports.SandboxProvider.List's real, currently-live provider-side refs,
+-- and any ref with no corresponding row here is a genuine orphan (see
+-- that method's own doc comment for the two ways one arises).
+--
+-- 'pending' is excluded: a pending sandbox has no provider object yet
+-- (UpsertSandboxForSpawn only ever creates a row already in 'spawning').
+-- 'stopped'/'failed' are excluded DELIBERATELY, not merely omitted: they
+-- are exactly the terminal statuses whose own leaked provider objects
+-- this reconciler exists to catch (StopSandbox has had no real caller
+-- anywhere in this codebase before this Step), so a stale provider_id
+-- still lingering on a terminal row (UpsertSandboxForSpawn's own doc
+-- comment notes provider_id is never cleared on respawn) must NOT count
+-- as "expected alive" here.
+SELECT provider_id FROM sandboxes
+WHERE status IN ('spawning', 'connecting', 'booting', 'ready', 'snapshotting', 'suspect')
+  AND provider_id IS NOT NULL;
+
 -- name: UpdateSandboxPendingSnapshotMessageID :one
 -- Step 22 fix (message-id correlation): sets or clears (pass NULL)
 -- pending_snapshot_message_id -- the MessageId of whichever Snapshot
