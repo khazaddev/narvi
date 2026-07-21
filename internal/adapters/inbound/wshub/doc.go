@@ -86,12 +86,16 @@
 //     live OAuth credential on success, a materially higher-stakes
 //     endpoint than gating a WS connection).
 //   - Suspect-state recovery-during-grace ("any liveness signal during
-//     grace returns to previous state", §3.2) is Step 24's own job
-//     ("two-phase terminalization") -- a Suspect sandbox reconnecting
+//     grace returns to previous state", §3.2) is now real (Step 24,
+//     "two-phase terminalization") -- a Suspect sandbox reconnecting
 //     through this package IS allowed (IsDeadSandboxStatus(Suspect) is
-//     false) and its events DO get persisted/bump liveness
-//     (internal/app/sessionactor's own handleSandboxEvent), but no
-//     recovery transition fires for it.
+//     false), and internal/app/sessionactor's own handleSandboxEvent now
+//     both persists/bumps liveness for its events AND, when the row still
+//     carries a pre_suspect_status, attempts the real recovery transition
+//     back to that previously-live state in the same pass -- see that
+//     file's own top comment for the full mechanics. This package itself
+//     needed no change for that: it already let a Suspect reconnect
+//     through unmodified.
 //   - Real user auth/identity now exists (Step 20, "auth v1") -- REST
 //     ws-token minting (internal/adapters/inbound/httpapi's own
 //     MintWSToken) is gated behind internal/adapters/inbound/auth.

@@ -1,0 +1,30 @@
+-- Step 24 ("two-phase terminalization") standalone addition. §3.2's own
+-- recovery rule -- "Any liveness signal during grace returns to previous
+-- state" -- needs somewhere to persist WHICH previously-live state a
+-- Suspect sandbox should recover back to: by the time a recovery signal
+-- arrives, the sandbox row's own `status` column already reads 'suspect'
+-- and no longer carries that information itself.
+
+-- sandboxes.pre_suspect_status: the live status (one of Spawning,
+-- Connecting, Booting, Ready, Snapshotting -- domain/sandbox.TriggerSuspect's
+-- own legal FROM set, internal/domain/sandbox/state.go) a sandbox was in
+-- immediately before transitionSandboxToSuspect
+-- (internal/app/sessionactor/timerfired.go) moved it to Suspect. Reuses
+-- the EXISTING sandbox_status enum verbatim -- no new value added here
+-- (this Step does not touch the enum's own value set; see
+-- migrations/000022_sandbox_snapshot_id.up.sql's own precedent for why
+-- adding 'stale' stays a separate, later Step's job).
+--
+-- Set by transitionSandboxToSuspect, in the SAME statement that moves
+-- status to 'suspect' (UpdateSandboxStatusToSuspect, queries/sandboxes.sql).
+-- Cleared back to NULL by handleSandboxEvent's own recovery branch
+-- (sandboxevent.go, RecoverSandboxFromSuspect query) once
+-- sandbox.TriggerRecover successfully returns the sandbox to this value.
+--
+-- Deliberately left AS IS (not cleared) when terminal_grace genuinely
+-- expires to Failed (handleTerminalGraceTimer, unchanged by this Step) --
+-- harmless: the recovery branch is gated on status == Suspect, which no
+-- longer holds once terminalized, and this column is unconditionally
+-- overwritten with a fresh value the next time this same sandbox (after a
+-- later respawn/restore/resume) is ever suspected again.
+ALTER TABLE sandboxes ADD COLUMN pre_suspect_status sandbox_status;

@@ -49,6 +49,22 @@ func (s *SandboxStore) UpdateStatus(ctx context.Context, arg sqlcgen.UpdateSandb
 	return s.q.UpdateSandboxStatus(ctx, arg)
 }
 
+// UpdateStatusToSuspect moves a sandbox into Suspect and persists the live
+// status being left as pre_suspect_status, in the same statement -- Step
+// 24 ("two-phase terminalization"), see UpdateSandboxStatusToSuspect's own
+// generated doc comment.
+func (s *SandboxStore) UpdateStatusToSuspect(ctx context.Context, arg sqlcgen.UpdateSandboxStatusToSuspectParams) (sqlcgen.Sandbox, error) {
+	return s.q.UpdateSandboxStatusToSuspect(ctx, arg)
+}
+
+// RecoverFromSuspect returns a Suspect sandbox to a previously-live state,
+// clearing pre_suspect_status back to NULL and bumping last_seen_at in the
+// same statement -- Step 24 ("two-phase terminalization"), see
+// RecoverSandboxFromSuspect's own generated doc comment.
+func (s *SandboxStore) RecoverFromSuspect(ctx context.Context, arg sqlcgen.RecoverSandboxFromSuspectParams) (sqlcgen.Sandbox, error) {
+	return s.q.RecoverSandboxFromSuspect(ctx, arg)
+}
+
 // UpsertForSpawn creates the sandbox row (if none exists) or bumps its gen
 // and resets it to spawning (if one already does) -- see
 // UpsertSandboxForSpawnParams' generated doc comment (Step 21, design

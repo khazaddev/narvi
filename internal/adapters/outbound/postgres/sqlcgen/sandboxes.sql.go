@@ -15,7 +15,7 @@ const createSandbox = `-- name: CreateSandbox :one
 
 INSERT INTO sandboxes (session_id)
 VALUES ($1)
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
 `
 
 // Queries backing SandboxStore (§4.3). Just enough to prove the pipeline
@@ -38,12 +38,13 @@ func (q *Queries) CreateSandbox(ctx context.Context, sessionID pgtype.UUID) (San
 		&i.LastSpawnFailureAt,
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
 	)
 	return i, err
 }
 
 const getSandbox = `-- name: GetSandbox :one
-SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id FROM sandboxes
+SELECT id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status FROM sandboxes
 WHERE session_id = $1
 `
 
@@ -64,6 +65,63 @@ func (q *Queries) GetSandbox(ctx context.Context, sessionID pgtype.UUID) (Sandbo
 		&i.LastSpawnFailureAt,
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
+	)
+	return i, err
+}
+
+const recoverSandboxFromSuspect = `-- name: RecoverSandboxFromSuspect :one
+UPDATE sandboxes
+SET status = $2,
+    pre_suspect_status = NULL,
+    last_seen_at = $3,
+    updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+`
+
+type RecoverSandboxFromSuspectParams struct {
+	SessionID  pgtype.UUID        `json:"session_id"`
+	Status     SandboxStatus      `json:"status"`
+	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
+}
+
+// Step 24 ("two-phase terminalization"): the single write
+// handleSandboxEvent's own recovery branch (sandboxevent.go) performs
+// when ANY recognized inbound sandbox event arrives for a Suspect sandbox
+// that still carries a pre_suspect_status -- i.e. "any liveness signal
+// during grace returns to previous state" (§3.2), the event itself being
+// that liveness signal. Sets status = $2 (the recovered, previously-live
+// state sandbox.Transition(StateSuspect, gen, RecoverTrigger(...)) already
+// validated), clears pre_suspect_status back to NULL (no longer needed --
+// mirrors UpdateSandboxSnapshotID's own "clear the now-satisfied
+// outstanding column in the same statement" precedent), and sets
+// last_seen_at to the event's own arrival time -- unlike
+// UpdateSandboxStatusToSuspect above, THIS write is itself the liveness
+// signal that caused the recovery, so last_seen_at moves forward exactly
+// like the general per-event UpdateSandboxStatus write already does for
+// every other recognized event. Deliberately a direct SET (not
+// COALESCE'd), mirroring UpdateSandboxProviderID/UpdateSandboxSnapshotID's
+// own precedent: this call site always has a real, just-observed
+// timestamp to write.
+func (q *Queries) RecoverSandboxFromSuspect(ctx context.Context, arg RecoverSandboxFromSuspectParams) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, recoverSandboxFromSuspect, arg.SessionID, arg.Status, arg.LastSeenAt)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+		&i.SnapshotID,
+		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
 	)
 	return i, err
 }
@@ -72,7 +130,7 @@ const updateSandboxCircuitBreaker = `-- name: UpdateSandboxCircuitBreaker :one
 UPDATE sandboxes
 SET spawn_failure_count = $2, last_spawn_failure_at = $3, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
 `
 
 type UpdateSandboxCircuitBreakerParams struct {
@@ -106,6 +164,7 @@ func (q *Queries) UpdateSandboxCircuitBreaker(ctx context.Context, arg UpdateSan
 		&i.LastSpawnFailureAt,
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
 	)
 	return i, err
 }
@@ -114,7 +173,7 @@ const updateSandboxPendingSnapshotMessageID = `-- name: UpdateSandboxPendingSnap
 UPDATE sandboxes
 SET pending_snapshot_message_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
 `
 
 type UpdateSandboxPendingSnapshotMessageIDParams struct {
@@ -152,6 +211,7 @@ func (q *Queries) UpdateSandboxPendingSnapshotMessageID(ctx context.Context, arg
 		&i.LastSpawnFailureAt,
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
 	)
 	return i, err
 }
@@ -160,7 +220,7 @@ const updateSandboxProviderID = `-- name: UpdateSandboxProviderID :one
 UPDATE sandboxes
 SET provider_id = $2, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
 `
 
 type UpdateSandboxProviderIDParams struct {
@@ -190,6 +250,7 @@ func (q *Queries) UpdateSandboxProviderID(ctx context.Context, arg UpdateSandbox
 		&i.LastSpawnFailureAt,
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
 	)
 	return i, err
 }
@@ -198,7 +259,7 @@ const updateSandboxSnapshotID = `-- name: UpdateSandboxSnapshotID :one
 UPDATE sandboxes
 SET snapshot_id = $2, pending_snapshot_message_id = NULL, updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
 `
 
 type UpdateSandboxSnapshotIDParams struct {
@@ -239,6 +300,7 @@ func (q *Queries) UpdateSandboxSnapshotID(ctx context.Context, arg UpdateSandbox
 		&i.LastSpawnFailureAt,
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
 	)
 	return i, err
 }
@@ -249,7 +311,7 @@ SET status = $2,
     last_seen_at = COALESCE($3, last_seen_at),
     updated_at = now()
 WHERE session_id = $1
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
 `
 
 type UpdateSandboxStatusParams struct {
@@ -280,6 +342,56 @@ func (q *Queries) UpdateSandboxStatus(ctx context.Context, arg UpdateSandboxStat
 		&i.LastSpawnFailureAt,
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
+	)
+	return i, err
+}
+
+const updateSandboxStatusToSuspect = `-- name: UpdateSandboxStatusToSuspect :one
+UPDATE sandboxes
+SET status = 'suspect',
+    pre_suspect_status = $2,
+    updated_at = now()
+WHERE session_id = $1
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
+`
+
+type UpdateSandboxStatusToSuspectParams struct {
+	SessionID        pgtype.UUID    `json:"session_id"`
+	PreSuspectStatus *SandboxStatus `json:"pre_suspect_status"`
+}
+
+// Step 24 ("two-phase terminalization"): the single write
+// transitionSandboxToSuspect (internal/app/sessionactor/timerfired.go)
+// performs when a watchdog moves a sandbox into Suspect. Sets status =
+// 'suspect' as a hardcoded literal -- mirroring UpsertSandboxForSpawn's
+// own hardcoded 'spawning' literal precedent exactly: this query has
+// exactly one legal target status, by construction of its own single call
+// site -- AND persists pre_suspect_status = the state being left, in the
+// SAME statement, so §3.2's own "any liveness signal during grace returns
+// to previous state" rule has somewhere to read that state back from
+// later (handleSandboxEvent's own recovery branch, sandboxevent.go,
+// RecoverSandboxFromSuspect below). Deliberately does NOT touch
+// last_seen_at -- entering Suspect is a watchdog's own classification of
+// silence, never itself a liveness signal.
+func (q *Queries) UpdateSandboxStatusToSuspect(ctx context.Context, arg UpdateSandboxStatusToSuspectParams) (Sandbox, error) {
+	row := q.db.QueryRow(ctx, updateSandboxStatusToSuspect, arg.SessionID, arg.PreSuspectStatus)
+	var i Sandbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Gen,
+		&i.Status,
+		&i.LastSeenAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TokenHash,
+		&i.ProviderID,
+		&i.SpawnFailureCount,
+		&i.LastSpawnFailureAt,
+		&i.SnapshotID,
+		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
 	)
 	return i, err
 }
@@ -292,7 +404,7 @@ SET gen = sandboxes.gen + 1,
     status = 'spawning',
     token_hash = $2,
     updated_at = now()
-RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id
+RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
 `
 
 type UpsertSandboxForSpawnParams struct {
@@ -326,6 +438,7 @@ func (q *Queries) UpsertSandboxForSpawn(ctx context.Context, arg UpsertSandboxFo
 		&i.LastSpawnFailureAt,
 		&i.SnapshotID,
 		&i.PendingSnapshotMessageID,
+		&i.PreSuspectStatus,
 	)
 	return i, err
 }
