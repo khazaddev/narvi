@@ -242,21 +242,21 @@ func (a *Adapter) doGet(ctx context.Context, path, token string) ([]byte, error)
 // CreateSpec -- not by waiting for a sandbox to report anything back (that
 // would need a new wire message; deliberately not built, see this Step's
 // own PR description).
-func (a *Adapter) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranchSHASpec) (string, error) {
+func (a *Adapter) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranchSHASpec) (string, string, error) {
 	branch := spec.Branch
 	if branch == "" {
 		repoPath := fmt.Sprintf("%s/repos/%s/%s", a.apiBaseURL, spec.Owner, spec.Repo)
 		body, err := a.doGet(ctx, repoPath, spec.Token)
 		if err != nil {
-			return "", fmt.Errorf("githubapi: resolve default branch: %w", err)
+			return "", "", fmt.Errorf("githubapi: resolve default branch: %w", err)
 		}
 
 		var repoInfo repoInfoResponse
 		if err := json.Unmarshal(body, &repoInfo); err != nil {
-			return "", fmt.Errorf("githubapi: decode repo info response: %w", err)
+			return "", "", fmt.Errorf("githubapi: decode repo info response: %w", err)
 		}
 		if repoInfo.DefaultBranch == "" {
-			return "", fmt.Errorf("githubapi: repo %s/%s reported an empty default_branch", spec.Owner, spec.Repo)
+			return "", "", fmt.Errorf("githubapi: repo %s/%s reported an empty default_branch", spec.Owner, spec.Repo)
 		}
 		branch = repoInfo.DefaultBranch
 	}
@@ -264,18 +264,18 @@ func (a *Adapter) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranch
 	commitPath := fmt.Sprintf("%s/repos/%s/%s/commits/%s", a.apiBaseURL, spec.Owner, spec.Repo, branch)
 	body, err := a.doGet(ctx, commitPath, spec.Token)
 	if err != nil {
-		return "", fmt.Errorf("githubapi: resolve commit sha for branch %q: %w", branch, err)
+		return "", "", fmt.Errorf("githubapi: resolve commit sha for branch %q: %w", branch, err)
 	}
 
 	var commit commitResponse
 	if err := json.Unmarshal(body, &commit); err != nil {
-		return "", fmt.Errorf("githubapi: decode commit response: %w", err)
+		return "", "", fmt.Errorf("githubapi: decode commit response: %w", err)
 	}
 	if commit.SHA == "" {
-		return "", fmt.Errorf("githubapi: repo %s/%s branch %q reported an empty commit sha", spec.Owner, spec.Repo, branch)
+		return "", "", fmt.Errorf("githubapi: repo %s/%s branch %q reported an empty commit sha", spec.Owner, spec.Repo, branch)
 	}
 
-	return commit.SHA, nil
+	return commit.SHA, branch, nil
 }
 
 // contentsEntry is the subset of GitHub's real GET

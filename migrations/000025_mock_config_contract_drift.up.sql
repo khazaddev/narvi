@@ -13,17 +13,31 @@
 -- here.
 ALTER TABLE environments ADD COLUMN contracts_path TEXT;
 
--- contract_drift_snapshots: one row per repo (keyed by "owner/repo", the
--- SAME derivation internal/app/sessionactor/imageresolve.go's own
--- parseOwnerRepo helper already produces from a repo's clone URL --
--- reused as-is by app/sessionactor/contractdrift.go's own checkContractDrift,
--- never re-derived a second way), recording the LAST (repo_sha,
--- contracts_fingerprint) pair observed for that repo, across ALL sessions
--- that name it -- mirroring image_builds' own "no session/environment
--- ever owns a row here" precedent (migrations/000024_image_builds.up.sql):
--- several unrelated mock-configured sessions naming the same repo
+-- contract_drift_snapshots: one row per (repo, branch) (keyed by
+-- "owner/repo@branch" -- owner/repo is the SAME derivation
+-- internal/app/sessionactor/imageresolve.go's own parseOwnerRepo helper
+-- already produces from a repo's clone URL, reused as-is by
+-- app/sessionactor/contractdrift.go's own checkContractDrift; branch is
+-- ports.SourceControl.ResolveBranchSHA's own RESOLVED branch name -- the
+-- second return of that call, never the raw/possibly-nil
+-- SessionConfigReposElem.Branch -- so a session left with no explicit
+-- branch and one that explicitly names the repo's actual default branch
+-- both key on that same real name, rather than splitting into "owner/
+-- repo@" vs. "owner/repo@main" for what is actually one branch's drift
+-- state), recording the LAST (repo_sha, contracts_fingerprint)
+-- pair observed for that repo+branch, across ALL sessions that name it --
+-- mirroring image_builds' own "no session/environment ever owns a row
+-- here" precedent (migrations/000024_image_builds.up.sql): several
+-- unrelated mock-configured sessions naming the same repo+branch
 -- legitimately share one snapshot row, since drift is a property of the
--- REPO, not of any one session.
+-- REPO at a given BRANCH (repo_sha is inherently branch-specific), not of
+-- any one session. A bare "owner/repo" key (this table's original shape)
+-- would wrongly conflate two different branches of the same repo, each
+-- seeing the other's SHA as "previous" and reporting drift though nothing
+-- drifted (audit finding F5) -- fixed in application code only (this
+-- column stays a bare TEXT primary key; old "owner/repo"-shaped rows from
+-- before this fix simply become permanently stale/orphaned, harmless,
+-- matching this table's own precedent of having no GC today either).
 --
 -- last_contracts_fingerprint uses the empty string "" as an EXPLICIT
 -- sentinel meaning "no contracts directory was found at that repo's own
