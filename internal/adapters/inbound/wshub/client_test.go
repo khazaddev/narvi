@@ -671,6 +671,41 @@ func TestHandler_DispatchesByType(t *testing.T) {
 	}
 }
 
+// TestClientHandler_SubscribedReplyImpliesAlreadyRegistered proves the
+// real ordering bug this file's own client.go top comment documents is
+// fixed: registering for live broadcast delivery happens BEFORE the
+// "subscribed" reply is ever written, so a client observing that reply
+// can rely on being already registered -- not merely "probably, on a fast
+// enough machine". Deliberately fires exactly ONE broadcast immediately
+// after subscribeClient returns (i.e. immediately after the client has
+// already read the "subscribed" reply) and requires it to arrive well
+// within a short, ordinary deadline: with the ordering fixed this is a
+// deterministic happens-before guarantee, not a race that widening a
+// deadline would only make less likely to lose -- unlike
+// TestClientHandler_SlowConnectionDoesNotBlockOthers below, which tests a
+// different property (many broadcasts, non-blocking on a slow peer) and
+// still needs a generous deadline for that separate reason.
+func TestClientHandler_SubscribedReplyImpliesAlreadyRegistered(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	conn := subscribeClient(ctx, t, rig.wsURL, sessionRow.ID.String(), token)
+	defer func() { _ = conn.CloseNow() }()
+
+	rig.hub.Broadcast(sessionRow.ID.String(), json.RawMessage(`{"type":"tick","n":0}`))
+
+	rc, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_, data, err := conn.Read(rc)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if string(data) != `{"type":"tick","n":0}` {
+		t.Errorf("got %s, want the broadcast payload verbatim", data)
+	}
+}
+
 // TestClientHandler_SlowConnectionDoesNotBlockOthers proves a slow/
 // non-draining client connection does not block a broadcast from
 // reaching OTHER connections subscribed to the same session -- the
@@ -727,9 +762,21 @@ func TestClientHandler_SlowConnectionDoesNotBlockOthers(t *testing.T) {
 		return nil
 	})
 
+	// Both deadlines below are deliberately generous -- they exist only to
+	// bound the test if the non-blocking property under test were ever
+	// violated (Broadcast genuinely stuck waiting on the slow connection),
+	// not to assert anything about real-world timing. A tight bound here
+	// previously produced a real, observed CI flake (0/50 received) on a
+	// resource-contended runner where the reader goroutine's own
+	// scheduling was delayed well past a tighter deadline, despite
+	// Broadcast/Register (client.go) being provably non-blocking per
+	// connection -- confirmed by 10 clean local reruns immediately after
+	// that failure. Widening these is the fix: it does not change what
+	// this test proves, only how much CI scheduling jitter it tolerates
+	// before that proof's own bookkeeping times out.
 	select {
 	case <-completed:
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("broadcasting with a slow/non-draining connection present took too long -- want it to never block on one slow subscriber")
 	}
 	if err := burstGroup.Wait(); err != nil {
@@ -737,7 +784,7 @@ func TestClientHandler_SlowConnectionDoesNotBlockOthers(t *testing.T) {
 	}
 
 	received := 0
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(20 * time.Second)
 collect:
 	for received < broadcastCount {
 		select {
