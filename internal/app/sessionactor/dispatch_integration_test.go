@@ -64,11 +64,26 @@ import (
 // real Builder against this SAME fake provider instance, so BuildImage
 // needs the same configurable-success/failure shape every other provider
 // method here already has.
+// Step 30's own follow-up PR ("resilience suite", §9.3 scenario #5's
+// plain-SPAWN race variant) extends this same fake once more with
+// createBlock: an optional, test-supplied channel that, when non-nil,
+// CreateSandbox blocks on (after recording the call) until the test
+// closes it or ctx is done -- mirroring resumeBlock's own exact shape and
+// purpose (see that field's own doc comment above) but for the plain
+// spawn path instead of resume. This is what lets
+// TestResilience_ConcurrentPlainSpawnAcrossActors_CreateSandboxCalledAtMostOnce
+// (dispatch_integration_test.go) hold a real CreateSandbox call "in
+// flight" for actor A while it hydrates a second actor instance for the
+// same session and proves that second actor's own EnsureDispatched does
+// NOT call CreateSandbox a second time. nil (the zero value) for every
+// OTHER test in this file, so CreateSandbox returns immediately for all
+// of them, unchanged.
 type fakeSpawnProvider struct {
-	mu      sync.Mutex
-	calls   []ports.CreateSpec
-	nextRef ports.SandboxRef
-	nextErr error
+	mu          sync.Mutex
+	calls       []ports.CreateSpec
+	nextRef     ports.SandboxRef
+	nextErr     error
+	createBlock chan struct{}
 
 	restoreCalls   []fakeRestoreCall
 	nextRestoreRef ports.SandboxRef
@@ -104,11 +119,28 @@ func (f *fakeSpawnProvider) Capabilities() ports.Capabilities {
 	return ports.Capabilities{Snapshots: true, Resume: f.resumeSupported, ExplicitStop: false, ImageBuilds: false}
 }
 
-func (f *fakeSpawnProvider) CreateSandbox(_ context.Context, spec ports.CreateSpec) (ports.SandboxRef, error) {
+func (f *fakeSpawnProvider) CreateSandbox(ctx context.Context, spec ports.CreateSpec) (ports.SandboxRef, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, spec)
-	return f.nextRef, f.nextErr
+	block := f.createBlock
+	ref := f.nextRef
+	err := f.nextErr
+	f.mu.Unlock()
+
+	// The call is already recorded (above) BEFORE any blocking -- a test
+	// polling callCount() sees this call the instant it starts, not only
+	// once it returns, exactly mirroring ResumeSandbox's own createBlock
+	// counterpart (resumeBlock, below) and for the identical reason: it
+	// lets a test know actor A's own call has genuinely started before
+	// going on to hydrate a second actor instance.
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return ports.SandboxRef{}, ctx.Err()
+		}
+	}
+	return ref, err
 }
 
 func (f *fakeSpawnProvider) StopSandbox(context.Context, ports.SandboxRef) error { return nil }
@@ -2107,6 +2139,181 @@ func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t
 	// killpod test's own precedent -- a real killed pod leaves nothing to
 	// gracefully close either). ---
 	close(providerA.resumeBlock)
+}
+
+// TestResilience_ConcurrentPlainSpawnAcrossActors_CreateSandboxCalledAtMostOnce
+// is §9.3 scenario #5's ("two concurrent spawns") own plain-SPAWN race
+// variant -- the counterpart
+// TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce
+// (above) proves for RESUME, but for a genuinely brand-new session with NO
+// sandbox row at all yet, so tryPlanSpawn's own SpawnActionSpawn branch
+// (planFreshSpawn -> executeSpawn -> provider.CreateSandbox) is what races,
+// not SpawnActionResume (planResume -> executeResume -> provider.
+// ResumeSandbox). See test/resilience/README.md's own #5 entry: this variant
+// was the one piece of scenario #5 left unproven by the RESUME test alone.
+//
+// This test reuses every one of that test's own helpers, fixtures, and
+// sequencing unchanged (newTestPoolPair/killAdvisoryLockHolder from
+// resilience_killpod_integration_test.go; createTestSession/waitUntil from
+// integration_helpers_test.go; createPendingTurn/sendEnsureDispatched from
+// this file) -- only the seeded starting state (no sandbox row, mirroring
+// TestHandleEnsureDispatched_NoSandbox_Spawns's own setup, instead of a
+// Stopped row carrying a real provider_id) and the blocked provider call
+// (fakeSpawnProvider's own createBlock, mirroring resumeBlock exactly --
+// see that field's own doc comment above) differ.
+//
+// Sequencing:
+//  1. Seed a session + a pending turn, directly via the stores -- no
+//     sandbox row at all, so EvaluateSpawnDecision has nothing to read but
+//     the zero SpawnState (StatePending), and its only legal action is
+//     SpawnActionSpawn.
+//  2. Hydrate actor A on poolA (registryA.GetOrSpawn) -- a genuine owner
+//     holding the real Postgres advisory lock on a real poolA connection.
+//  3. Drive actor A's own EnsureDispatched through the real mailbox
+//     (a.Send). Its fake provider's CreateSandbox call is configured to
+//     BLOCK (createBlock) once called, so this call: (a) is proven to have
+//     started (callCount()==1, polled -- this fake's own pre-existing
+//     accessor for CreateSandbox's own calls slice already does exactly
+//     what a "createCallCount()" would, so no redundant second accessor is
+//     added), which can only happen AFTER planFreshSpawn's own interim-claim
+//     transact has already committed (dispatch.go's own sequencing,
+//     identical in shape to planResume's), and (b) stays "in flight" for
+//     the rest of this test.
+//  4. Confirm, via a completely independent connection (poolB), that the
+//     sandbox row is durably committed as Spawning at gen 1 -- this is the
+//     FIRST spawn for this session, so (unlike the resume variant's gen
+//     1->2 bump) there is no prior row to bump from: UpsertForSpawn's own
+//     "gen = gen + 1, or 1 on a fresh insert" semantics (planFreshSpawn's
+//     own doc comment) land squarely on the "fresh insert" branch here.
+//  5. "Kill pod A": terminate the exact Postgres backend holding the
+//     advisory lock (killAdvisoryLockHolder), WITHOUT calling
+//     registryA.Shutdown() first -- identical reasoning to the resume
+//     variant and to resilience_killpod_integration_test.go's own doc
+//     comment.
+//  6. Hydrate actor B on a genuinely FRESH pool (poolB, registryB) for the
+//     SAME session, with its OWN fresh fakeSpawnProvider (providerB) --
+//     this only succeeds because step 5 released the advisory lock.
+//  7. Drive actor B's own EnsureDispatched through the SAME real mailbox
+//     entry point. Give it a moment to run (there is no positive DB signal
+//     to poll FOR when asserting something did NOT happen, exactly like
+//     this file's own circuit-breaker tests), then assert: CreateSandbox
+//     was called EXACTLY ONCE total (actor A's own call, never a second one
+//     from actor B) -- actor B's own EvaluateSpawnDecision, reading the row
+//     as already-Spawning at gen 1 in-progress (not the zero SpawnState),
+//     must correctly no-op rather than double-spawn -- and the sandbox
+//     row's gen/status are STILL exactly what actor A's own interim write
+//     left them at (actor B made no write of its own at all).
+//  8. Release actor A's own blocked CreateSandbox call (close the channel)
+//     so its goroutine does not leak past this test -- mirroring the resume
+//     variant's own hygiene.
+func TestResilience_ConcurrentPlainSpawnAcrossActors_CreateSandboxCalledAtMostOnce(t *testing.T) {
+	ctx := context.Background()
+	poolA, poolB := newTestPoolPair(t)
+
+	sessionID := createTestSession(ctx, t, poolA)
+
+	turnStore := narvipg.NewTurnStore(poolA)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	// Deliberately NO sandbox row seeded here (mirrors
+	// TestHandleEnsureDispatched_NoSandbox_Spawns's own setup exactly) --
+	// this is what makes actor A's own EnsureDispatched take the
+	// SpawnActionSpawn branch (planFreshSpawn/executeSpawn/CreateSandbox),
+	// not SpawnActionResume.
+	sandboxStore := narvipg.NewSandboxStore(poolA)
+
+	// --- Step 2: pod A hydrates and genuinely owns this session. ---
+	providerA := &fakeSpawnProvider{createBlock: make(chan struct{})}
+	registryA, err := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	actorA, err := registryA.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("registryA.GetOrSpawn: %v", err)
+	}
+
+	// --- Step 3: actor A's own EnsureDispatched starts a real
+	// CreateSandbox call, deliberately held in flight. ---
+	sendEnsureDispatched(ctx, t, actorA)
+	waitUntil(t, 5*time.Second, func() bool {
+		return providerA.callCount() == 1
+	})
+
+	// By the time CreateSandbox has been observed to have started, actor
+	// A's own interim Spawning claim (planFreshSpawn) has ALREADY committed
+	// -- dispatch.go's own sequencing guarantees the transact commits before
+	// executeSpawn is ever invoked. Confirm this durably, from Postgres, via
+	// a completely independent connection (poolB) -- not merely trusted as
+	// an implication.
+	rowAfterClaim, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox after actor A's spawn claim: %v", err)
+	}
+	if rowAfterClaim.Status != sqlcgen.SandboxStatusSpawning {
+		t.Fatalf("sandbox status = %s, want %s (actor A's own interim spawn claim must have committed before CreateSandbox was ever called)",
+			rowAfterClaim.Status, sqlcgen.SandboxStatusSpawning)
+	}
+	if rowAfterClaim.Gen != 1 {
+		t.Fatalf("sandbox gen = %d, want 1 (this is the FIRST spawn for this session -- no prior row to bump from)", rowAfterClaim.Gen)
+	}
+
+	// --- Step 5: kill pod A (see the resume variant's own doc comment,
+	// and resilience_killpod_integration_test.go's own, for why this exact
+	// mechanism and not Pool.Close()). ---
+	killAdvisoryLockHolder(ctx, t, poolB)
+
+	// --- Step 6: pod B, a genuinely fresh pool, hydrates its own actor for
+	// the SAME session, with its own fresh fake provider. ---
+	providerB := &fakeSpawnProvider{}
+	registryB, err := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(poolB.Close)
+	t.Cleanup(func() { _ = registryB.Shutdown() })
+
+	actorB, err := registryB.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("registryB.GetOrSpawn: %v", err)
+	}
+
+	// --- Step 7: actor B's own EnsureDispatched, through the real
+	// production entry point -- must NOT call CreateSandbox a second
+	// time. ---
+	sendEnsureDispatched(ctx, t, actorB)
+	// No positive DB signal exists to poll FOR when asserting something did
+	// NOT happen (mirrors this file's own circuit-breaker tests and the
+	// resume variant above) -- give the mailbox a generous moment to
+	// process.
+	time.Sleep(500 * time.Millisecond)
+
+	if got := providerB.callCount(); got != 0 {
+		t.Errorf("actor B's own provider.CreateSandbox called %d times, want 0 (EvaluateSpawnDecision must read the row as already-Spawning, not the zero SpawnState, and no-op)", got)
+	}
+	totalCreateCalls := providerA.callCount() + providerB.callCount()
+	if totalCreateCalls != 1 {
+		t.Errorf("total CreateSandbox calls across both actors = %d, want 1 (at most once for this scenario -- the plain-SPAWN counterpart of the same concurrency fix the RESUME variant proves)", totalCreateCalls)
+	}
+
+	rowAfterActorB, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox after actor B's own EnsureDispatched: %v", err)
+	}
+	if rowAfterActorB.Gen != 1 {
+		t.Errorf("sandbox gen = %d, want unchanged 1 (actor B must have made no write of its own at all -- EvaluateSpawnDecision's own Skip guard fired before any write path was ever reached)",
+			rowAfterActorB.Gen)
+	}
+	if rowAfterActorB.Status != sqlcgen.SandboxStatusSpawning {
+		t.Errorf("sandbox status = %s, want unchanged %s (actor B must not have touched it)", rowAfterActorB.Status, sqlcgen.SandboxStatusSpawning)
+	}
+
+	// --- Step 8: release actor A's own blocked CreateSandbox call so its
+	// goroutine does not leak past this test (poolA/registryA are otherwise
+	// deliberately never gracefully shut down, exactly like the killpod
+	// test's own precedent -- a real killed pod leaves nothing to
+	// gracefully close either). ---
+	close(providerA.createBlock)
 }
 
 // --- Step 28 ("turn recovery") own tests -----------------------------------
