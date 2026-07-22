@@ -1,10 +1,12 @@
 package gitclone
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
@@ -122,10 +124,30 @@ func CloneAll(
 }
 
 // applySparseCheckout runs `git -C <dir> sparse-checkout set --no-cone --
-// <patterns...>` for one already-cloned repo (§14.1: "domain/gitstate's
-// clone step runs `git sparse-checkout set <globs>` per repo when
-// path_scope is present"). Excluded paths never materialize on the
-// sandbox filesystem afterward -- §14.1's own enforcement guarantee.
+// <patterns...>` for one already-cloned OR already-existing repo (§14.1:
+// "domain/gitstate's clone step runs `git sparse-checkout set <globs>` per
+// repo when path_scope is present"). Excluded paths never materialize on
+// the sandbox filesystem afterward -- §14.1's own enforcement guarantee --
+// with exactly one caveat, verified directly against real git behavior
+// (sync_test.go), that this function itself now closes: a real `git
+// sparse-checkout set` exits 0 (success) yet LEAVES an out-of-scope path on
+// disk, untouched, whenever that path carries uncommitted local changes at
+// the moment the patterns are applied -- git's own documented reluctance to
+// discard dirty content, not a bug in this codebase. That path is reachable
+// today ONLY via SyncAll's own stash -> checkout -> pop sequence
+// (sync.go), never via CloneAll's fresh, guaranteed-clean checkout -- but
+// letting it pass silently here would be exactly the §14.1 bypass this
+// whole function exists to prevent, so this is guarded here, once, for
+// every caller: stderr is captured, and this call is forced to the "C"
+// locale (LC_ALL=C, appended so it wins over any ambient value -- see
+// exec.Cmd's own "last duplicate wins" documented Env behavior) so that
+// git's own warning text is captured deterministically rather than
+// depending on the sandbox's ambient locale. Any stderr output at all,
+// alongside a successful (0) exit code, is treated as this exact failure
+// mode and returned as a real error -- git's own sparse-checkout set
+// produces NO stderr output at all on an unqualified success (verified
+// directly, sync_test.go), so this never false-positives on the ordinary
+// path.
 //
 // --no-cone is required -- verified directly against real git behavior,
 // not assumed (sync_test.go's own house style, applied here too): git's
@@ -144,7 +166,20 @@ func CloneAll(
 func applySparseCheckout(ctx context.Context, sup *supervisor.Supervisor, dir string, patterns []string, timeout, stopGrace time.Duration) error {
 	args := append([]string{"-C", dir, "sparse-checkout", "set", "--no-cone", "--"}, patterns...)
 
-	proc, err := sup.Spawn(supervisor.Spec{Path: "git", Args: args})
+	var stderr bytes.Buffer
+	proc, err := sup.Spawn(supervisor.Spec{
+		Path: "git",
+		Args: args,
+		// Inherit the ambient environment (matching every other call site
+		// in this package -- see cloneOne's own doc comment for the full
+		// "why nil/inherit is deliberate" reasoning) EXCEPT locale: LC_ALL=C
+		// is appended last so it always wins (exec.Cmd's own documented
+		// "last duplicate key wins" Env behavior), forcing git's own
+		// warning text below to a known, stable, English string regardless
+		// of the sandbox's ambient locale.
+		Env:    append(os.Environ(), "LC_ALL=C"),
+		Stderr: &stderr,
+	})
 	if err != nil {
 		return fmt.Errorf("spawn git sparse-checkout set: %w", err)
 	}
@@ -162,6 +197,20 @@ func applySparseCheckout(ctx context.Context, sup *supervisor.Supervisor, dir st
 	}
 	if result.ExitCode != 0 {
 		return fmt.Errorf("git sparse-checkout set: exited %d", result.ExitCode)
+	}
+	// A successful (0) exit code is NOT sufficient on its own -- see this
+	// function's own doc comment above: git leaves a dirty out-of-scope
+	// path on disk, untouched, and merely warns on stderr, rather than
+	// failing outright. Any stderr output at all here means at least one
+	// path did not actually leave the sandbox filesystem despite being out
+	// of pathScope -- exactly the §14.1 bypass this whole function exists
+	// to prevent -- so this is reported as a real, fatal error rather than
+	// accepted silently.
+	if stderr.Len() > 0 {
+		return fmt.Errorf(
+			"git sparse-checkout set: succeeded but left at least one out-of-scope path on disk (uncommitted local changes prevented removal): %s",
+			strings.TrimSpace(stderr.String()),
+		)
 	}
 	return nil
 }

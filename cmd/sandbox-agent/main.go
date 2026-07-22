@@ -113,7 +113,11 @@
 // snapshot a clean tree"). CloneAll itself also gained sparse-checkout
 // support (§14.1): a session's own Environment.PathScope, now threaded
 // through SessionConfig's own new optional pathScope field, restricts a
-// freshly-cloned repo's working tree to exactly those patterns.
+// freshly-cloned repo's working tree to exactly those patterns. SyncAll
+// (gitclone) re-applies that same pathScope against an already-existing
+// workspace too -- see runBootSequence's own comment, below, for why a
+// repo_image/snapshot_restore boot needs this every bit as much as a fresh
+// clone does.
 package main
 
 import (
@@ -961,9 +965,29 @@ func runBootSequence(
 	if cfg.SessionConfig != nil {
 		var manifestInput []gitclone.CloneResult
 
+		// pathScope (§14.1) is extracted ONCE, here, before the switch below
+		// -- it is NOT fresh-clone-specific. A repo_image/snapshot_restore
+		// boot's own fingerprint/ImageSpec is (base, repoSHAs,
+		// runtimeVersion) ONLY -- scope-independent -- so the exact same
+		// prebuilt image (or restored snapshot) can be shared across
+		// sessions with different path_scope values, or none at all. That
+		// means the on-disk sparse-checkout state a SyncAll boot finds
+		// reflects whatever scope (or lack of one) happened to produce that
+		// image/snapshot, NOT necessarily THIS session's own scope --
+		// relying on "git preserves a working tree's sparse-checkout config"
+		// would silently carry over the WRONG session's scope (or a full,
+		// unscoped checkout) rather than enforce this session's own. Both
+		// switch cases below therefore need pathScope: CloneAll applies it
+		// to a brand-new clone, and SyncAll re-applies/re-narrows it against
+		// whatever already exists on disk, so the two never drift.
+		var pathScope []string
+		if cfg.SessionConfig.PathScope != nil {
+			pathScope = []string(*cfg.SessionConfig.PathScope)
+		}
+
 		switch cfg.BootMode {
 		case sandboxboot.BootModeRepoImage, sandboxboot.BootModeSnapshotRestore:
-			results, syncErr := gitclone.SyncAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos,
+			results, syncErr := gitclone.SyncAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos, pathScope,
 				cfg.SessionConfig.SessionId, timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod, onGitSync)
 			if syncErr != nil {
 				return fmt.Errorf("sync repos: %w", syncErr)
@@ -982,19 +1006,6 @@ func runBootSequence(
 			// already rejected anything outside the four §6.4 values by the
 			// time cfg reaches here, so falling through to the existing,
 			// pre-Step-29 behavior is the correct, conservative default).
-			//
-			// pathScope (§14.1) is wired into ONLY this fresh-clone path --
-			// a repo_image/snapshot_restore boot (the other switch case,
-			// above) reuses an already-cloned, already-sparse-configured
-			// workspace: git preserves a working tree's own sparse-checkout
-			// config across subsequent checkouts within that same repo, so
-			// re-invoking it there would be redundant, not wrong, but
-			// unnecessary complexity this Step's own brief explicitly
-			// declines to add.
-			var pathScope []string
-			if cfg.SessionConfig.PathScope != nil {
-				pathScope = []string(*cfg.SessionConfig.PathScope)
-			}
 			results, cloneErr := gitclone.CloneAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos, pathScope,
 				timeouts.RepoCloneTimeout, timeouts.ProcessStopGracePeriod)
 			if cloneErr != nil {

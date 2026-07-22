@@ -55,7 +55,7 @@ func TestSyncAll_CleanTree_CreatesSessionBranchFromHead(t *testing.T) {
 
 	var events []gitSyncEvent
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, sessionID,
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
 		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
@@ -112,7 +112,7 @@ func TestSyncAll_DirtyTree_StashCheckoutPop_PreservesEditsByteForByte(t *testing
 
 	var events []gitSyncEvent
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, sessionID,
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
 		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
@@ -189,7 +189,7 @@ func TestResilienceScenario11_DirtyWorkingTree_RelaunchWithDifferentBranch_ZeroL
 
 	var events []gitSyncEvent
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "resilience-session-11",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "resilience-session-11",
 		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
@@ -268,7 +268,7 @@ func TestSyncAll_UntrackedFileOnly_StashCheckoutPop_PreservesEditsByteForByte(t 
 
 	var events []gitSyncEvent
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-untracked-only",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-untracked-only",
 		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (an untracked-only tree must not be a fatal failure)", err)
@@ -329,7 +329,7 @@ func TestSyncAll_StagedChange_StashCheckoutPop_PreservesStagedStatus(t *testing.
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-staged",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-staged",
 		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
@@ -380,7 +380,7 @@ func TestSyncAll_BranchAlreadyExists_PlainCheckout(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-x",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-x",
 		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
@@ -430,7 +430,7 @@ func TestSyncAll_PopFailureDetectedNotFatal(t *testing.T) {
 
 	var events []gitSyncEvent
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-y",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-y",
 		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's pop failed)")
@@ -483,7 +483,7 @@ func TestSyncAll_PrimaryFailureStopsImmediately(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-z",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-z",
 		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error for the failed primary repo")
@@ -510,7 +510,7 @@ func TestSyncAll_SecondaryFailureContinues(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-w",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-w",
 		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (a secondary failure is a warning, not fatal)", err)
@@ -544,7 +544,7 @@ func TestSyncAll_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-v",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-v",
 		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal validation error for the malicious repo name")
@@ -583,7 +583,7 @@ func TestSyncAll_MaliciousBranchRejectedBeforeAnySpawn(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-u",
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-u",
 		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal validation error for the malicious branch")
@@ -744,6 +744,278 @@ func TestCleanForImageBuild_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T
 
 	if _, statErr := os.Stat(outsideUntracked); statErr != nil {
 		t.Errorf("outside untracked file stat = %v, want nil -- a path-traversal name must never reach `git clean`", statErr)
+	}
+}
+
+// TestSyncAll_FullUnscopedCheckoutOnDisk_ReAppliesSparseCheckout is the
+// core regression test for audit finding F1 (§14.1, "Scoped-environment
+// image-boot bypass"): a workspace that is a FULL, unscoped checkout on
+// disk -- simulating a shared repo_image baked WITHOUT any path_scope,
+// exactly the scenario F1 names (an image's own fingerprint/ImageSpec is
+// (base, repoSHAs, runtimeVersion) only -- never path_scope -- so the SAME
+// prebuilt image can be reused by a scoped session) -- must have every
+// out-of-scope path actually REMOVED from disk once SyncAll runs with a
+// non-empty pathScope. Before this fix, SyncAll never called
+// applySparseCheckout at all, so a repo_image/snapshot_restore boot of a
+// scoped session left the full, unscoped tree materialized on the sandbox
+// filesystem -- exactly the bypass F1 reports.
+func TestSyncAll_FullUnscopedCheckoutOnDisk_ReAppliesSparseCheckout(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	// initRepo alone already produces exactly what this test needs to
+	// simulate: a real, FULL, never-sparse-configured checkout -- precisely
+	// what a shared, unscoped repo_image would have baked.
+	initRepo(t, repoDir)
+
+	for _, dir := range []string{"apps/web", "apps/api"} {
+		if err := os.MkdirAll(filepath.Join(repoDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "apps/web/index.js"), []byte("web\n"), 0o644); err != nil {
+		t.Fatalf("write apps/web/index.js: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "apps/api/index.js"), []byte("api\n"), 0o644); err != nil {
+		t.Fatalf("write apps/api/index.js: %v", err)
+	}
+	runGit(t, repoDir, "add", ".")
+	runGit(t, repoDir, "commit", "-m", "add apps/web and apps/api")
+
+	// Precondition sanity check: BEFORE SyncAll runs, this really is a full,
+	// unscoped checkout -- the out-of-scope file genuinely materializes.
+	if _, statErr := os.Stat(filepath.Join(repoDir, "apps/api/index.js")); statErr != nil {
+		t.Fatalf("precondition failed: apps/api/index.js missing before SyncAll: %v", statErr)
+	}
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+	pathScope := []string{"/apps/web/*"}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-scoped-image",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+	if results[0].Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", results[0].Err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "apps/web/index.js")); statErr != nil {
+		t.Errorf("expected apps/web/index.js to remain on disk (in scope): %v", statErr)
+	}
+	for _, wantAbsent := range []string{"apps/api/index.js", "README.md"} {
+		if _, statErr := os.Stat(filepath.Join(repoDir, wantAbsent)); !os.IsNotExist(statErr) {
+			t.Errorf("expected %s to be ABSENT from disk after SyncAll re-applies sparse-checkout (out of scope) -- stat = %v -- this is F1's own core bypass", wantAbsent, statErr)
+		}
+	}
+}
+
+// TestSyncAll_InvalidPathScopeRejectedBeforeAnySync mirrors
+// TestCloneAll_InvalidPathScopeRejectedBeforeAnyClone (clone_test.go)
+// exactly: SyncAll validates pathScope (environment.ValidatePathScope)
+// ONCE, before any repo is even attempted -- same guarantee, same
+// validator, as CloneAll.
+func TestSyncAll_InvalidPathScopeRejectedBeforeAnySync(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	initRepo(t, filepath.Join(workspaceDir, "repo1"))
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+	pathScope := []string{"../escape"}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-invalid-scope",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal validation error for the invalid path scope")
+	}
+	if len(results) != 0 {
+		t.Fatalf("len(results) = %d, want 0 (no repo should have been attempted)", len(results))
+	}
+}
+
+// initRepoWithDirtyOutOfScopeFile seeds an apps/web (in scope) + apps/api
+// (out of scope, left DIRTY) layout -- the exact shape
+// TestSyncAll_DirtyOutOfScopeFile_SparseCheckoutDetectsAndFailsLoudly,
+// below, documents empirically as a real, deterministic sparse-checkout
+// failure trigger. Reused by the primary/secondary criticality tests below
+// it as a reliable way to force a failure specifically AT the
+// sparse-checkout step, as opposed to some earlier, unrelated failure.
+func initRepoWithDirtyOutOfScopeFile(t *testing.T, dir string) {
+	t.Helper()
+
+	initRepo(t, dir)
+	if err := os.MkdirAll(filepath.Join(dir, "apps/web"), 0o755); err != nil {
+		t.Fatalf("mkdir apps/web: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "apps/api"), 0o755); err != nil {
+		t.Fatalf("mkdir apps/api: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "apps/web/index.js"), []byte("web\n"), 0o644); err != nil {
+		t.Fatalf("write apps/web/index.js: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "apps/api/index.js"), []byte("api\n"), 0o644); err != nil {
+		t.Fatalf("write apps/api/index.js: %v", err)
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", "add apps/web and apps/api")
+
+	// A real, uncommitted, OUT-OF-SCOPE edit -- dirty at sync start, so it
+	// takes the stash-push -> checkout -> stash-pop path before
+	// sparse-checkout ever runs.
+	if err := os.WriteFile(filepath.Join(dir, "apps/api/index.js"), []byte("dirty out-of-scope edit\n"), 0o644); err != nil {
+		t.Fatalf("write dirty out-of-scope edit: %v", err)
+	}
+}
+
+// TestSyncAll_DirtyOutOfScopeFile_SparseCheckoutDetectsAndFailsLoudly
+// covers F1's own dirty-content edge case: a path OUTSIDE pathScope that is
+// DIRTY (uncommitted local changes) at sync start, so it goes through the
+// real stash-push -> checkout -> stash-pop sequence before sparse-checkout
+// is ever applied.
+//
+// EMPIRICAL FINDING (verified directly against real git, not assumed --
+// git 2.42, both the system's own ambient locale and LC_ALL=C): `git
+// sparse-checkout set --no-cone` on a path carrying uncommitted local
+// changes EXITS 0 (success) but LEAVES that path on disk, UNTOUCHED,
+// printing only "warning: The following paths are not up to date and were
+// left despite sparse patterns" to stderr -- git's own documented
+// reluctance to discard dirty content, not a bug in this codebase. Left
+// unguarded, that is a residual instance of the exact F1 bypass this Step
+// exists to close: an apparently-successful SyncAll silently leaving an
+// out-of-scope path materialized on the sandbox filesystem.
+//
+// applySparseCheckout (clone.go) now closes this gap for every caller: any
+// stderr output from `sparse-checkout set`, even alongside a 0 exit code,
+// is treated as this exact failure mode and returned as a real, reported
+// error -- proven here end to end via SyncAll (never silently accepted).
+func TestSyncAll_DirtyOutOfScopeFile_SparseCheckoutDetectsAndFailsLoudly(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepoWithDirtyOutOfScopeFile(t, repoDir)
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+	pathScope := []string{"/apps/web/*"}
+
+	var events []gitSyncEvent
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-dirty-out-of-scope",
+		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal error -- a dirty out-of-scope file must be detected, never silently accepted")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].Err == nil {
+		t.Fatal("results[0].Err = nil, want a sparse-checkout error")
+	}
+	// The stash/checkout/pop sequence itself succeeds (State reaches
+	// Ready) -- the failure is specifically the LATER sparse-checkout
+	// re-narrowing step, deliberately orthogonal to gitstate's own
+	// transition table (see syncOne's own comment, sync.go, and
+	// applySparseCheckout's, clone.go).
+	if results[0].State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready (a sparse-checkout failure must not perturb gitstate's own terminal state)", results[0].State)
+	}
+
+	// Document the empirical finding precisely: the dirty, out-of-scope
+	// edit DOES survive on disk after this failure (git's own real
+	// behavior) -- exactly why this must be treated as a fatal, reported
+	// error rather than silently accepted as a successful sync.
+	data, readErr := os.ReadFile(filepath.Join(repoDir, "apps/api/index.js"))
+	if readErr != nil {
+		t.Fatalf("read apps/api/index.js: %v", readErr)
+	}
+	if string(data) != "dirty out-of-scope edit\n" {
+		t.Errorf("apps/api/index.js content = %q, want the dirty edit preserved (documenting git's real, empirically-verified behavior)", data)
+	}
+
+	wantStatuses := []string{"stash", "checkout", "pop"}
+	if len(events) != len(wantStatuses) {
+		t.Fatalf("events = %#v, want exactly %v (the git-sync sequence itself completes before sparse-checkout ever runs)", events, wantStatuses)
+	}
+}
+
+// TestSyncAll_SparseCheckoutFailure_PrimaryStopsImmediately and
+// TestSyncAll_SparseCheckoutFailure_SecondaryContinues prove SyncAll's
+// existing primary-fatal/secondary-warn criticality split (see
+// TestSyncAll_PrimaryFailureStopsImmediately/
+// TestSyncAll_SecondaryFailureContinues, above) holds for a failure at the
+// NEW sparse-checkout step too. SyncAll's outer loop treats result.Err
+// uniformly regardless of which step inside syncOne produced it, so this
+// confirms EXISTING, correct behavior extends through the new code path --
+// it is not new branching logic.
+func TestSyncAll_SparseCheckoutFailure_PrimaryStopsImmediately(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	initRepoWithDirtyOutOfScopeFile(t, filepath.Join(workspaceDir, "bad-primary"))
+	initRepo(t, filepath.Join(workspaceDir, "never-attempted"))
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "bad-primary", Url: "https://example.invalid/never.git"},
+		{Name: "never-attempted", Url: "https://example.invalid/never.git"},
+	}
+	pathScope := []string{"/apps/web/*"}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-sparse-primary",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal error for the primary repo's sparse-checkout failure")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1 (only the primary should have been attempted)", len(results))
+	}
+	if results[0].Err == nil {
+		t.Error("results[0].Err = nil, want a sparse-checkout error")
+	}
+}
+
+func TestSyncAll_SparseCheckoutFailure_SecondaryContinues(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	initRepo(t, filepath.Join(workspaceDir, "primary"))
+	initRepoWithDirtyOutOfScopeFile(t, filepath.Join(workspaceDir, "bad-secondary"))
+	initRepo(t, filepath.Join(workspaceDir, "later"))
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "primary", Url: "https://example.invalid/primary.git"},
+		{Name: "bad-secondary", Url: "https://example.invalid/never.git"},
+		{Name: "later", Url: "https://example.invalid/later.git"},
+	}
+	pathScope := []string{"/apps/web/*"}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-sparse-secondary",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil (a secondary sparse-checkout failure is a warning, not fatal)", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("len(results) = %d, want 3 (every repo attempted)", len(results))
+	}
+	if results[0].Err != nil {
+		t.Errorf("results[0] (primary) Err = %v, want nil", results[0].Err)
+	}
+	if results[1].Err == nil {
+		t.Error("results[1] (bad secondary) Err = nil, want a sparse-checkout error")
+	}
+	if results[2].Err != nil {
+		t.Errorf("results[2] (later) Err = %v, want nil -- loop must continue past the secondary's sparse-checkout failure", results[2].Err)
 	}
 }
 
