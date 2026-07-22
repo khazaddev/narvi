@@ -50,3 +50,56 @@ func NextToDispatch[ID any](turns []QueueEntry[ID]) (ID, bool) {
 
 	return zero, false
 }
+
+// InFlightTurn returns the ID of the (at most one, per
+// turns_one_processing_per_session/HasInFlightTurn's own invariant)
+// currently in-flight (Dispatched or Processing) turn in turns, or (zero
+// value, false) if none. Step 28 ("turn recovery") adds this alongside
+// HasInFlightTurn/NextToDispatch (unchanged, per this package's own
+// established convention of never modifying an existing pure helper's
+// behavior) to identify WHICH turn is in flight, not merely whether one
+// is -- planDispatch (internal/app/sessionactor/dispatch.go) needs the
+// concrete id to look up that turn's own row (for its
+// dispatched_sandbox_gen, checked via NeedsReenqueue below) once
+// NextToDispatch itself reports no dispatchable Pending turn.
+//
+// By construction (NextToDispatch's own HasInFlightTurn gate),
+// InFlightTurn and NextToDispatch never BOTH report true for the same
+// turns slice: either a Pending turn is dispatchable (no in-flight turn
+// exists), or an in-flight turn already occupies the session's one
+// dispatch slot (no Pending turn is dispatchable) -- never both.
+func InFlightTurn[ID any](turns []QueueEntry[ID]) (ID, bool) {
+	var zero ID
+	for _, t := range turns {
+		if t.Status == StateDispatched || t.Status == StateProcessing {
+			return t.ID, true
+		}
+	}
+	return zero, false
+}
+
+// NeedsReenqueue reports whether an in-flight turn last (re)dispatched to
+// sandbox gen dispatchedGen (nil if never stamped at all -- see
+// migrations/000026_turn_dispatch_gen.up.sql's own doc comment for when
+// that arises) needs its prompt re-sent to a sandbox now at currentGen
+// (§9.3 scenario #2: "Kill the sandbox mid-turn -> suspect -> grace ->
+// respawn+resume").
+//
+// true means "this turn's prompt was sent to a PREVIOUS, now-superseded
+// sandbox incarnation (or never stamped at all) -- the CURRENT sandbox has
+// never seen it, so it must be (re-)sent." false means "this turn's
+// prompt was already sent to the CURRENTLY live sandbox -- a normal,
+// healthy, in-progress turn that must NOT be re-sent" (re-sending it would
+// duplicate/corrupt an already-in-progress execution -- the single most
+// safety-critical property this function's own callers depend on).
+//
+// dispatchedGen == nil is deliberately treated the SAME as a genuine
+// mismatch, not as "unknown, skip": the only way an in-flight turn can
+// have a nil dispatched_sandbox_gen is if it was dispatched by code that
+// pre-dates this column's own stamping (every current call site --
+// tryPlanDispatch/tryPlanReenqueue, internal/app/sessionactor/dispatch.go
+// -- always stamps a real value at dispatch time), which is itself exactly
+// the kind of stuck/orphaned dispatch this function exists to recover.
+func NeedsReenqueue(dispatchedGen *int, currentGen int) bool {
+	return dispatchedGen == nil || *dispatchedGen != currentGen
+}

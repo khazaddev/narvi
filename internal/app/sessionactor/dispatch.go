@@ -368,8 +368,24 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 		// turn exists" -- both branches (a) and (b) below need exactly
 		// that same predicate, just gated on a different sandbox-status
 		// condition.
-		pendingID, hasPending := turn.NextToDispatch(toQueueEntries(turns))
+		entries := toQueueEntries(turns)
+		pendingID, hasPending := turn.NextToDispatch(entries)
 		if !hasPending {
+			// Step 28 ("turn recovery", §9.3 scenario #2): no dispatchable
+			// Pending turn -- but there may still be an in-flight
+			// (Dispatched/Processing) turn whose prompt was sent to a
+			// PREVIOUS sandbox incarnation that has since died (a respawn
+			// happened since, or is about to). InFlightTurn/NextToDispatch
+			// are mutually exclusive by construction (both are gated on
+			// the SAME HasInFlightTurn predicate), so this branch and the
+			// three below it never both fire for the same planDispatch
+			// call.
+			sp, d, err := a.planReenqueueOrRespawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, entries, turns, now)
+			if err != nil {
+				return err
+			}
+			spawn = sp
+			dispatch = d
 			return nil
 		}
 
@@ -446,6 +462,145 @@ func (a *Actor) planDispatch(ctx context.Context) (*spawnPlan, *dispatchPlan, er
 	})
 
 	return spawn, dispatch, err
+}
+
+// planReenqueueOrRespawn implements Step 28's ("turn recovery", §9.3
+// scenario #2) own extension to planDispatch: called ONLY when
+// NextToDispatch reported no dispatchable Pending turn, this checks
+// whether there is instead an in-flight (Dispatched/Processing) turn that
+// needs its prompt re-sent, mirroring planDispatch's own three branches
+// (a/b/c) exactly -- just gated on the in-flight turn's own
+// dispatched_sandbox_gen instead of a Pending turn's mere existence:
+//
+//   - (a') no sandbox row at all, or a definitively dead one -- the
+//     in-flight turn's own sandbox incarnation is gone; reuses
+//     tryPlanSpawn UNCHANGED (spawning is spawning, regardless of whether
+//     a Pending or an in-flight turn is what ultimately needs it).
+//   - (b') a live sandbox, Ready or Suspect: if the in-flight turn's own
+//     dispatched_sandbox_gen already matches this sandbox's CURRENT gen
+//     (turn.NeedsReenqueue reports false), this is a turn being
+//     correctly, actively processed by its own current-gen sandbox RIGHT
+//     NOW -- a strict, hard no-op (see TestHandleEnsureDispatched_
+//     ProcessingOnCurrentGenSandbox_NeverReDispatched, dispatch_
+//     integration_test.go, for the regression proof this can never
+//     regress). Otherwise, tryPlanReenqueue re-sends it to the current
+//     sandbox.
+//   - (c') sandbox exists, neither dead nor Ready/Suspect (still
+//     Spawning/Connecting/Booting/Snapshotting) -- defers to
+//     EvaluateSpawnDecision's own judgment exactly like branch (c) does:
+//     a genuine respawn already in progress (from a prior (a') round) is
+//     left alone (Skip) unless it's genuinely stuck past its own recovery
+//     window.
+//
+// hasSandbox/entries/turns/now are exactly what planDispatch's own
+// transact already loaded -- no second read.
+func (a *Actor) planReenqueueOrRespawn(
+	ctx context.Context, tx pgx.Tx,
+	sessionRow sqlcgen.Session, sandboxRow sqlcgen.Sandbox, hasSandbox bool,
+	entries []turn.QueueEntry[pgtype.UUID], turns []sqlcgen.Turn,
+	now time.Time,
+) (*spawnPlan, *dispatchPlan, error) {
+	inFlightID, hasInFlight := turn.InFlightTurn(entries)
+	if !hasInFlight {
+		// No turn at all, or every turn is already terminal -- nothing
+		// for this session to do this round, exactly like planDispatch's
+		// own pre-Step-28 early return.
+		return nil, nil, nil
+	}
+
+	if !hasSandbox || sandbox.IsDeadSandboxStatus(sandbox.State(sandboxRow.Status)) {
+		sp, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
+		return sp, nil, err
+	}
+
+	target, ok := findTurnByID(turns, inFlightID)
+	if !ok {
+		return nil, nil, fmt.Errorf("sessionactor: in-flight turn %s not found among loaded turns", inFlightID.String())
+	}
+
+	status := sandbox.State(sandboxRow.Status)
+	if status == sandbox.StateReady || status == sandbox.StateSuspect {
+		var dispatchedGen *int
+		if target.DispatchedSandboxGen != nil {
+			g := int(*target.DispatchedSandboxGen)
+			dispatchedGen = &g
+		}
+		if !turn.NeedsReenqueue(dispatchedGen, int(sandboxRow.Gen)) {
+			// CRITICAL no-op: this turn is already correctly, actively
+			// being processed by its own current-gen, live sandbox --
+			// re-dispatching it here would send its prompt a SECOND time
+			// to a sandbox already working on it. See this function's own
+			// doc comment above for the regression test proving this.
+			return nil, nil, nil
+		}
+		d, err := a.tryPlanReenqueue(ctx, tx, sessionRow, sandboxRow, target, now)
+		return nil, d, err
+	}
+
+	sp, err := a.tryPlanSpawn(ctx, tx, sessionRow, sandboxRow, hasSandbox, now)
+	return sp, nil, err
+}
+
+// tryPlanReenqueue implements Step 28's ("turn recovery") own re-enqueue
+// write: re-sends target's prompt to sandboxRow (the CURRENT, live
+// sandbox incarnation), WITHOUT calling turn.Transition at all -- unlike
+// tryPlanDispatch, this must NOT re-transition the turn: it is already,
+// validly, Processing, and from the turn's OWN domain perspective its
+// execution never stopped -- only its underlying sandbox did (mirroring
+// Step 24's own "late-success reconciliation needed no new domain-turn
+// edge" precedent, per this Step's own brief -- see internal/domain/
+// turn/state.go's own top comment for that precedent's full writeup).
+//
+// Re-arms turn_deadline fresh from now -- a fair, full new budget on the
+// new sandbox, rather than leaving a stale deadline still ticking down
+// from the turn's ORIGINAL dispatch attempt (now irrelevant: that
+// sandbox incarnation is gone). Stamps dispatched_sandbox_gen to
+// sandboxRow's own current gen (the SAME UpdateTurnStatus query
+// tryPlanDispatch uses, passing target's own CURRENT status back
+// unchanged -- never Transition's output, since none was computed).
+// Builds the SAME buildPromptPayload tryPlanDispatch uses, which
+// automatically carries sessionRow.OpencodeConversationID (§3.3) -- so
+// the re-enqueued turn resumes the SAME OpenCode conversation with no
+// special-cased "resume" logic needed here at all.
+func (a *Actor) tryPlanReenqueue(
+	ctx context.Context, tx pgx.Tx,
+	sessionRow sqlcgen.Session, sandboxRow sqlcgen.Sandbox, target sqlcgen.Turn,
+	now time.Time,
+) (*dispatchPlan, error) {
+	if a.commander == nil {
+		// Defensive: mirrors tryPlanDispatch's own identical nil-commander
+		// guard exactly -- some tests, and any future caller genuinely
+		// without one, must not panic here.
+		a.logger.Warn("sessionactor: reenqueue decision would proceed but no SandboxCommander is configured; skipping")
+		return nil, nil
+	}
+
+	if err := a.armTimer(ctx, tx, TimerTurnDeadline, now.Add(a.timeouts.TurnDeadline)); err != nil {
+		return nil, err
+	}
+
+	dispatchedGen := sandboxRow.Gen
+	if _, err := a.stores.turn.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
+		ID: target.ID,
+		// The turn's own CURRENT status, passed back unchanged -- this is
+		// NOT a transition (no turn.Transition call; see this function's
+		// own doc comment above for why one must never happen here), just
+		// this shared query's own required, non-COALESCE'd Status column.
+		Status:               target.Status,
+		DispatchedSandboxGen: &dispatchedGen,
+	}); err != nil {
+		return nil, fmt.Errorf("sessionactor: stamp dispatched_sandbox_gen for reenqueue: %w", err)
+	}
+
+	payload, err := buildPromptPayload(a.sessionID.String(), sessionRow, sandboxRow, target)
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: build prompt payload (reenqueue): %w", err)
+	}
+
+	a.logger.Info("sessionactor: re-enqueuing in-flight turn to a respawned sandbox incarnation",
+		"turn_id", target.ID.String(), "gen", sandboxRow.Gen)
+
+	return &dispatchPlan{turnID: target.ID, payload: payload}, nil
 }
 
 // tryPlanSpawn implements design decision 3a's own circuit-breaker-then-
@@ -1153,10 +1308,19 @@ func (a *Actor) tryPlanDispatch(
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: turn transition pending->dispatched: %w", err)
 	}
+	// dispatched_sandbox_gen (Step 28, "turn recovery") is stamped here,
+	// alongside dispatched_at, with the sandbox's CURRENT gen -- the
+	// fencing value planDispatch's own new re-enqueue gate later compares
+	// against the sandbox row's live gen to tell "already correctly
+	// dispatched to this sandbox incarnation" from "sent to a
+	// now-superseded one" (see migrations/000026_turn_dispatch_gen.up.sql's
+	// own doc comment for the full reasoning).
+	dispatchedGen := sandboxRow.Gen
 	if _, err := a.stores.turn.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
-		ID:           turnID,
-		Status:       sqlcgen.TurnStatus(toDispatched),
-		DispatchedAt: pgtype.Timestamptz{Time: now, Valid: true},
+		ID:                   turnID,
+		Status:               sqlcgen.TurnStatus(toDispatched),
+		DispatchedAt:         pgtype.Timestamptz{Time: now, Valid: true},
+		DispatchedSandboxGen: &dispatchedGen,
 	}); err != nil {
 		return nil, fmt.Errorf("sessionactor: update turn status to dispatched: %w", err)
 	}

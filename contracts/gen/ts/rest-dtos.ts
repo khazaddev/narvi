@@ -103,6 +103,36 @@ export interface CreateSessionRequest {
   } | null;
 }
 /**
+ * POST /api/sessions/:id/turns (Step 28, 'turn recovery', §8.7 'relaunch-and-resume: conversation id replay'). Enqueues a new turn on an EXISTING session -- mirrors CreateSessionRequest's own prompt/modelId/planMode fields exactly (same shape, not reinvented) for the turn's own dispatch-time inputs. Deliberately has NO 'resume'/'conversationId' field of its own: sessions.opencode_conversation_id (already persisted across turns, §3.3) is threaded into every dispatched Prompt automatically by the control plane's own dispatch logic, so a new turn on a session that already has one continues that same OpenCode conversation with no separate request field needed.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "CreateTurnRequest".
+ */
+export interface CreateTurnRequest {
+  /**
+   * The turn's prompt text. Unlike CreateSessionRequest.prompt, this is required and non-null: this request's entire purpose is enqueuing one new turn, so there is no 'no turn' case to support here.
+   */
+  prompt: string;
+  /**
+   * Null means use the default model catalog entry -- same convention as CreateSessionRequest.modelId.
+   */
+  modelId: string | null;
+  planMode: boolean;
+}
+/**
+ * 201 response body for POST /api/sessions/:id/turns: the newly created turn's own id/status only -- callers already have the full session state via GET /api/sessions/:id or the WS stream, so this endpoint's own job is confirming the enqueue, not re-describing the whole session.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "CreateTurnResponse".
+ */
+export interface CreateTurnResponse {
+  id: string;
+  /**
+   * Matches Postgres turn_status exactly (migrations/000005_turns.up.sql) -- always "pending" for a freshly created turn today, but modeled as the full enum for forward-compatibility rather than a literal, matching Session.status's own precedent above.
+   */
+  status: 'pending' | 'dispatched' | 'processing' | 'completed' | 'failed' | 'cancelled';
+}
+/**
  * §6.2: per-participant, hashed at rest, 24h TTL, minted via POST /api/sessions/:id/ws-token.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema

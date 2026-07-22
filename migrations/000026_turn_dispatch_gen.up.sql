@@ -1,0 +1,31 @@
+-- Step 28 ("turn recovery", §3.3, §9.3 scenario #2) adds
+-- turns.dispatched_sandbox_gen: the sandbox gen a turn's prompt was
+-- actually (re)dispatched to, stamped by internal/app/sessionactor's own
+-- tryPlanDispatch (the normal Pending->Dispatched->Processing path) and
+-- the new tryPlanReenqueue (dispatch.go) at the moment a Prompt payload is
+-- built and about to be sent -- reusing sandboxes.gen (migrations/
+-- 000006_sandboxes.up.sql), the fencing idiom already bumped by the app on
+-- every spawn/restore/resume, rather than inventing a second, parallel
+-- mechanism.
+--
+-- Nullable -- NULL before a turn's first real dispatch (every existing
+-- turns row, and every existing CreateTurnParams call site, stays valid
+-- completely unchanged). This is the column planDispatch (dispatch.go)
+-- compares against the sandbox row's own LIVE gen to distinguish "this
+-- Processing turn's prompt was already sent to the CURRENTLY live sandbox"
+-- (dispatched_sandbox_gen == sandboxes.gen -- a normal, healthy,
+-- in-progress turn; must NOT be re-sent) from "this Processing turn's
+-- prompt was sent to a PREVIOUS, now-dead sandbox incarnation"
+-- (dispatched_sandbox_gen is NULL or < sandboxes.gen -- needs re-enqueue
+-- to whatever sandbox is live now). Getting this distinction wrong risks a
+-- severe bug: re-sending an in-progress turn's prompt a second time to a
+-- sandbox already correctly working on it, corrupting/duplicating
+-- execution -- see internal/domain/turn/queue.go's own NeedsReenqueue doc
+-- comment for the full reasoning this column exists to serve.
+--
+-- turns.conversation_id (migration 000005_turns.up.sql) stays exactly as
+-- unused as it already was before this Step -- this Step's own
+-- conversation-id work reads/writes sessions.opencode_conversation_id
+-- exclusively (migration 000018_session_repos.up.sql's own doc comment
+-- already establishes why), and does not revisit that precedent.
+ALTER TABLE turns ADD COLUMN dispatched_sandbox_gen INTEGER;

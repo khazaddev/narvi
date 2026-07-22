@@ -243,6 +243,134 @@ func (j *CreateSessionRequest) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// POST /api/sessions/:id/turns (Step 28, 'turn recovery', §8.7
+// 'relaunch-and-resume: conversation id replay'). Enqueues a new turn on an
+// EXISTING session -- mirrors CreateSessionRequest's own prompt/modelId/planMode
+// fields exactly (same shape, not reinvented) for the turn's own dispatch-time
+// inputs. Deliberately has NO 'resume'/'conversationId' field of its own:
+// sessions.opencode_conversation_id (already persisted across turns, §3.3) is
+// threaded into every dispatched Prompt automatically by the control plane's own
+// dispatch logic, so a new turn on a session that already has one continues that
+// same OpenCode conversation with no separate request field needed.
+type CreateTurnRequest struct {
+	// Null means use the default model catalog entry -- same convention as
+	// CreateSessionRequest.modelId.
+	ModelId CreateTurnRequestModelId `json:"modelId" yaml:"modelId" mapstructure:"modelId"`
+
+	// PlanMode corresponds to the JSON schema field "planMode".
+	PlanMode bool `json:"planMode" yaml:"planMode" mapstructure:"planMode"`
+
+	// The turn's prompt text. Unlike CreateSessionRequest.prompt, this is required
+	// and non-null: this request's entire purpose is enqueuing one new turn, so there
+	// is no 'no turn' case to support here.
+	Prompt string `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
+}
+
+// Null means use the default model catalog entry -- same convention as
+// CreateSessionRequest.modelId.
+type CreateTurnRequestModelId *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateTurnRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["modelId"]; raw != nil && !ok {
+		return fmt.Errorf("field modelId in CreateTurnRequest: required")
+	}
+	if _, ok := raw["planMode"]; raw != nil && !ok {
+		return fmt.Errorf("field planMode in CreateTurnRequest: required")
+	}
+	if _, ok := raw["prompt"]; raw != nil && !ok {
+		return fmt.Errorf("field prompt in CreateTurnRequest: required")
+	}
+	type Plain CreateTurnRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if v, ok := raw["planMode"]; !ok || v == nil {
+		plain.PlanMode = false
+	}
+	*j = CreateTurnRequest(plain)
+	return nil
+}
+
+// 201 response body for POST /api/sessions/:id/turns: the newly created turn's own
+// id/status only -- callers already have the full session state via GET
+// /api/sessions/:id or the WS stream, so this endpoint's own job is confirming the
+// enqueue, not re-describing the whole session.
+type CreateTurnResponse struct {
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Matches Postgres turn_status exactly (migrations/000005_turns.up.sql) -- always
+	// "pending" for a freshly created turn today, but modeled as the full enum for
+	// forward-compatibility rather than a literal, matching Session.status's own
+	// precedent above.
+	Status CreateTurnResponseStatus `json:"status" yaml:"status" mapstructure:"status"`
+}
+
+type CreateTurnResponseStatus string
+
+const CreateTurnResponseStatusCancelled CreateTurnResponseStatus = "cancelled"
+const CreateTurnResponseStatusCompleted CreateTurnResponseStatus = "completed"
+const CreateTurnResponseStatusDispatched CreateTurnResponseStatus = "dispatched"
+const CreateTurnResponseStatusFailed CreateTurnResponseStatus = "failed"
+const CreateTurnResponseStatusPending CreateTurnResponseStatus = "pending"
+const CreateTurnResponseStatusProcessing CreateTurnResponseStatus = "processing"
+
+var enumValues_CreateTurnResponseStatus = []interface{}{
+	"pending",
+	"dispatched",
+	"processing",
+	"completed",
+	"failed",
+	"cancelled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateTurnResponseStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CreateTurnResponseStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CreateTurnResponseStatus, v)
+	}
+	*j = CreateTurnResponseStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateTurnResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in CreateTurnResponse: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in CreateTurnResponse: required")
+	}
+	type Plain CreateTurnResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = CreateTurnResponse(plain)
+	return nil
+}
+
 // GET /api/sessions/:id/events (§6.3). Mirrors client-ws/v1's own
 // FetchHistoryResponse shape exactly, for the same reason that schema gives: the
 // full event-payload shape is assembled by later PRs, and REST/WS should not

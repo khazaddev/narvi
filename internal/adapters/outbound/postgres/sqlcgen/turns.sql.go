@@ -15,7 +15,7 @@ const createTurn = `-- name: CreateTurn :one
 
 INSERT INTO turns (session_id, status, prompt, model_id, plan_mode)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen
 `
 
 type CreateTurnParams struct {
@@ -55,12 +55,13 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.Prompt,
 		&i.ModelID,
 		&i.PlanMode,
+		&i.DispatchedSandboxGen,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen FROM turns
 WHERE id = $1
 `
 
@@ -78,12 +79,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.Prompt,
 		&i.ModelID,
 		&i.PlanMode,
+		&i.DispatchedSandboxGen,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -111,6 +113,7 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.Prompt,
 			&i.ModelID,
 			&i.PlanMode,
+			&i.DispatchedSandboxGen,
 		); err != nil {
 			return nil, err
 		}
@@ -126,29 +129,45 @@ const updateTurnStatus = `-- name: UpdateTurnStatus :one
 UPDATE turns
 SET status = $2,
     dispatched_at = COALESCE($3, dispatched_at),
-    completed_at = COALESCE($4, completed_at)
+    completed_at = COALESCE($4, completed_at),
+    dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen
 `
 
 type UpdateTurnStatusParams struct {
-	ID           pgtype.UUID        `json:"id"`
-	Status       TurnStatus         `json:"status"`
-	DispatchedAt pgtype.Timestamptz `json:"dispatched_at"`
-	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+	ID                   pgtype.UUID        `json:"id"`
+	Status               TurnStatus         `json:"status"`
+	DispatchedAt         pgtype.Timestamptz `json:"dispatched_at"`
+	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
+	DispatchedSandboxGen *int32             `json:"dispatched_sandbox_gen"`
 }
 
-// Sets a turn's status, plus dispatched_at/completed_at when the caller
-// supplies one (sqlc.narg + COALESCE: an absent/NULL argument leaves the
-// existing column value untouched, matching dispatched_at/completed_at's
-// own nullability -- each is set at most once, at the (from, trigger)
-// transition that reaches Dispatched or a terminal state respectively).
+// Sets a turn's status, plus dispatched_at/completed_at/
+// dispatched_sandbox_gen when the caller supplies one (sqlc.narg +
+// COALESCE: an absent/NULL argument leaves the existing column value
+// untouched, matching dispatched_at/completed_at's own nullability --
+// each is set at most once, at the (from, trigger) transition that
+// reaches Dispatched or a terminal state respectively).
+//
+// dispatched_sandbox_gen (migration 000026_turn_dispatch_gen.up.sql, Step
+// 28 "turn recovery") is stamped by TWO distinct call sites sharing this
+// SAME query, both at the moment a Prompt payload is built and about to be
+// sent: tryPlanDispatch (internal/app/sessionactor/dispatch.go), alongside
+// the SAME status=dispatched write that already sets dispatched_at, for
+// the normal Pending->Dispatched->Processing path; and tryPlanReenqueue
+// (same file), which passes the CURRENT status back unchanged (the turn
+// is already, validly, Processing -- this call re-stamps
+// dispatched_sandbox_gen only, never re-transitions status) for a
+// Processing turn whose prompt needs re-sending to a respawned sandbox
+// incarnation.
 func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusParams) (Turn, error) {
 	row := q.db.QueryRow(ctx, updateTurnStatus,
 		arg.ID,
 		arg.Status,
 		arg.DispatchedAt,
 		arg.CompletedAt,
+		arg.DispatchedSandboxGen,
 	)
 	var i Turn
 	err := row.Scan(
@@ -162,6 +181,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.Prompt,
 		&i.ModelID,
 		&i.PlanMode,
+		&i.DispatchedSandboxGen,
 	)
 	return i, err
 }

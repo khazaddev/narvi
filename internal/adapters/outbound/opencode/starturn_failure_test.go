@@ -34,12 +34,16 @@ func TestStartTurn_ResolveSessionGenuineFailureEmitsFailedTerminalEvent(t *testi
 	sink, events := spyEventSink(t)
 	cmd := sandboxws.Prompt{Type: "prompt", MessageId: "m1", SessionId: "sess-1", Gen: 1, Text: "hi"}
 
-	convID, err := a.StartTurn(context.Background(), cmd, sink)
+	var onConversationIDCalls int
+	convID, err := a.StartTurn(context.Background(), cmd, sink, func(string) { onConversationIDCalls++ })
 	if err != nil {
 		t.Fatalf("StartTurn() error = %v, want nil (a genuine resolveSession failure finalizes internally and returns nil, not an error)", err)
 	}
 	if convID != "" {
 		t.Errorf("StartTurn() conversationID = %q, want empty", convID)
+	}
+	if onConversationIDCalls != 0 {
+		t.Errorf("onConversationID called %d times, want 0 (resolveSession never resolved a real id on this path)", onConversationIDCalls)
 	}
 
 	final := lastExecutionComplete(t, events())
@@ -73,12 +77,29 @@ func TestStartTurn_PostPromptAsyncGenuineFailureEmitsFailedTerminalEvent(t *test
 	sink, events := spyEventSink(t)
 	cmd := sandboxws.Prompt{Type: "prompt", MessageId: "m1", SessionId: "sess-1", Gen: 1, Text: "hi"}
 
-	convID, err := a.StartTurn(context.Background(), cmd, sink)
+	var reportedID string
+	var onConversationIDCalls int
+	onConversationID := func(id string) {
+		onConversationIDCalls++
+		reportedID = id
+	}
+
+	convID, err := a.StartTurn(context.Background(), cmd, sink, onConversationID)
 	if err != nil {
 		t.Fatalf("StartTurn() error = %v, want nil (a genuine postPromptAsync failure finalizes internally and returns nil, not an error)", err)
 	}
 	if convID != "ses_fake" {
 		t.Errorf("StartTurn() conversationID = %q, want %q (resolveSession succeeded before prompt_async failed)", convID, "ses_fake")
+	}
+	// resolveSession DID succeed on this path (unlike the sibling test
+	// above) -- onConversationID must have fired exactly once, with the
+	// SAME resolved id, even though the turn as a whole still ends in a
+	// genuine failure moments later.
+	if onConversationIDCalls != 1 {
+		t.Errorf("onConversationID called %d times, want exactly 1", onConversationIDCalls)
+	}
+	if reportedID != "ses_fake" {
+		t.Errorf("onConversationID reported %q, want %q", reportedID, "ses_fake")
 	}
 
 	final := lastExecutionComplete(t, events())

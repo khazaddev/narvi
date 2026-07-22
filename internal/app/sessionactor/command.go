@@ -105,12 +105,17 @@ func (SandboxEvent) isCommand() {}
 // EnsureDispatched is a fire-and-forget "please re-evaluate this
 // session's own spawn/dispatch state right now" signal (Step 21, "e2e
 // happy path", design decision 3) -- no payload, mirroring TimerFired's
-// own zero-payload shape. Sent from exactly two places: (a)
-// httpapi.CreateSession, right after a turn is created; (b) this
-// package's own handleSandboxEvent, unconditionally, right after its own
-// transact commits successfully (so a heartbeat-driven transition to
-// Booting/Ready is immediately followed by a fresh dispatch evaluation).
-// handleEnsureDispatched (dispatch.go) is its handler.
+// own zero-payload shape. Sent (via Actor.Send, from OUTSIDE the actor's
+// own goroutine) from exactly three places: (a) httpapi.CreateSession,
+// right after a turn is created; (b) httpapi.CreateTurn (Step 28, "turn
+// recovery"), right after a NEW turn is created on an existing session,
+// the same way; (c) this package's own handleSandboxEvent, unconditionally,
+// right after its own transact commits successfully (so a heartbeat-driven
+// transition to Booting/Ready is immediately followed by a fresh dispatch
+// evaluation). handleEnsureDispatched (dispatch.go) is its handler --
+// timerfired.go's own handleTerminalGraceTimer also reaches that SAME
+// handler, but by calling it DIRECTLY (not via Send), since it already
+// runs on the actor's own single command-processing goroutine.
 type EnsureDispatched struct{}
 
 func (EnsureDispatched) isCommand() {}

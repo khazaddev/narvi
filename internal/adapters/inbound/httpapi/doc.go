@@ -83,6 +83,24 @@
 //     then reports back over the WS bridge as a CRITICAL "snapshot_ready"
 //     event (design decision 2's own full round-trip reasoning).
 //
+// # Step 28 ("turn recovery") update
+//
+// An EIGHTH route is added, INSIDE the /api/sessions group (so it shares
+// that group's own auth.Middleware gate, unlike scm-credentials/snapshot
+// above):
+//
+//   - POST /api/sessions/{sessionID}/turns -- turn.go's own CreateTurn:
+//     §8.7's "relaunch-and-resume" REST API. Enqueues a new Pending turn
+//     on an EXISTING session (404 if it doesn't exist; 409 if a turn is
+//     already in flight for it), then fires the SAME GetOrSpawn +
+//     Send(EnsureDispatched{}) sequencing CreateSession already uses for
+//     its own optional first turn. No "resume" flag exists anywhere on
+//     this route: sessions.opencode_conversation_id already persists
+//     across turns, and dispatch.go's own buildPromptPayload already
+//     carries it on every Prompt automatically -- so the new turn
+//     transparently continues whatever OpenCode conversation the session
+//     already has, the instant it dispatches.
+//
 // Wiring participants/presence (§8.11) is still untouched -- a distinct,
 // not-yet-scoped concern.
 package httpapi

@@ -145,7 +145,7 @@ func TestWaitForTurn_ReconnectWinsRaceAgainstFallback(t *testing.T) {
 
 	var group errgroup.Group
 	group.Go(func() error {
-		_, err := a.StartTurn(ctx, cmd, collector.sink)
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
 		return err
 	})
 
@@ -263,7 +263,7 @@ func TestWaitForTurn_GenuinelyStuckTurnStillFallsBackWithinOriginalTimeout(t *te
 	defer cancel()
 
 	start := time.Now()
-	if _, err := a.StartTurn(ctx, cmd, collector.sink); err != nil {
+	if _, err := a.StartTurn(ctx, cmd, collector.sink, nil); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	elapsed := time.Since(start)
@@ -316,7 +316,7 @@ func TestWaitForTurn_ConnectionNeverReturnsFallsBackWithinBoundedWait(t *testing
 
 	var group errgroup.Group
 	group.Go(func() error {
-		_, err := a.StartTurn(ctx, cmd, collector.sink)
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
 		return err
 	})
 

@@ -33,7 +33,7 @@ func TestStartTurn_ResolveSessionCanceledEmitsCancelledTerminalEvent(t *testing.
 	sink, events := spyEventSink(t)
 	cmd := sandboxws.Prompt{Type: "prompt", MessageId: "m1", SessionId: "sess-1", Gen: 1, Text: "hi"}
 
-	convID, err := a.StartTurn(ctx, cmd, sink)
+	convID, err := a.StartTurn(ctx, cmd, sink, nil)
 	if err == nil {
 		t.Fatal("StartTurn() error = nil, want ctx.Err() (canceled before resolveSession could succeed)")
 	}
@@ -63,7 +63,7 @@ func TestStartTurn_PostPromptAsyncCanceledEmitsCancelledTerminalEvent(t *testing
 		ConversationId: &existingConversationID,
 	}
 
-	convID, err := a.StartTurn(ctx, cmd, sink)
+	convID, err := a.StartTurn(ctx, cmd, sink, nil)
 	if err == nil {
 		t.Fatal("StartTurn() error = nil, want ctx.Err() (canceled before postPromptAsync could succeed)")
 	}
@@ -112,7 +112,7 @@ func TestStartTurn_WaitForTurnCtxDoneEmitsCancelledTerminalEvent(t *testing.T) {
 
 	var group errgroup.Group
 	group.Go(func() error {
-		_, err := a.StartTurn(ctx, cmd, collector.sink)
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
 		return err
 	})
 

@@ -288,6 +288,10 @@ func serve() error {
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(sessionStore, wsTokenStore, cfg.Timeouts))
+		// turns (Step 28, "turn recovery", §8.7): the relaunch-and-resume
+		// REST API -- enqueues a new turn on an existing session, 409 if
+		// one is already in flight. See httpapi/turn.go's own doc comment.
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, registry))
 	})
 
 	srv := &http.Server{

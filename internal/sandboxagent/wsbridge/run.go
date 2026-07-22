@@ -181,12 +181,47 @@ func (b *Bridge) flushBuffer(ctx context.Context, conn *websocket.Conn) error {
 	return nil
 }
 
+// sendHeartbeatNow builds and sends exactly one heartbeat frame directly
+// on conn -- pulled out of heartbeatLoop's own `case <-ticker.C:` arm
+// (Step 28, "turn recovery") so the new `case <-b.forceHeartbeat:` arm
+// below can send the SAME shape out-of-band, without duplicating the
+// build-and-send logic.
+func (b *Bridge) sendHeartbeatNow(ctx context.Context, conn *websocket.Conn) error {
+	msg := sandboxws.Heartbeat{
+		Type:      "heartbeat",
+		MessageId: b.newMessageID(),
+		SessionId: b.sessionID,
+		Gen:       b.sessionGen,
+		// ConversationId reflects whatever SetConversationID last
+		// recorded -- nil until the first turn's own StartTurn call
+		// (internal/adapters/outbound/opencode.Adapter, Step 17)
+		// resolves a real OpenCode conversation id.
+		ConversationId: b.getConversationID(),
+		LastBootPhase:  b.getLastBootPhase(),
+		Timestamp:      time.Now(),
+	}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("wsbridge: marshal heartbeat: %w", err)
+	}
+	return conn.Write(ctx, websocket.MessageText, payload)
+}
+
 // heartbeatLoop sends a heartbeat every b.heartbeatInterval (§6.1: 30s)
 // directly on conn -- deliberately NOT routed through the outbound buffer:
 // a heartbeat is a point-in-time liveness signal, and a stale one replayed
 // after a reconnect would carry a stale timestamp with no informational
 // value a FRESH heartbeat (already due within one more interval) doesn't
-// already supersede.
+// already supersede. Step 28 ("turn recovery") adds a SECOND trigger
+// alongside the regular ticker: b.forceHeartbeat, which SetConversationID
+// sends on (non-blocking) the first time it observes a genuinely new,
+// non-nil conversation id (§3.3: "at turn start... never lazily") -- both
+// arms call the SAME sendHeartbeatNow helper, so the wire shape is
+// identical regardless of which one fired. The regular ticker is NOT
+// reset when the forceHeartbeat arm fires -- its own cadence keeps running
+// independently; an extra, slightly-early heartbeat is harmless (§6.1's
+// heartbeat carries no ack/dedup concern at all, unlike the 6 critical
+// event types the outbound buffer exists for).
 func (b *Bridge) heartbeatLoop(ctx context.Context, conn *websocket.Conn) error {
 	ticker := time.NewTicker(b.heartbeatInterval)
 	defer ticker.Stop()
@@ -196,24 +231,11 @@ func (b *Bridge) heartbeatLoop(ctx context.Context, conn *websocket.Conn) error 
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			msg := sandboxws.Heartbeat{
-				Type:      "heartbeat",
-				MessageId: b.newMessageID(),
-				SessionId: b.sessionID,
-				Gen:       b.sessionGen,
-				// ConversationId reflects whatever SetConversationID last
-				// recorded -- nil until the first turn's own StartTurn call
-				// (internal/adapters/outbound/opencode.Adapter, Step 17)
-				// returns a real OpenCode conversation id.
-				ConversationId: b.getConversationID(),
-				LastBootPhase:  b.getLastBootPhase(),
-				Timestamp:      time.Now(),
+			if err := b.sendHeartbeatNow(ctx, conn); err != nil {
+				return err
 			}
-			payload, err := json.Marshal(msg)
-			if err != nil {
-				return fmt.Errorf("wsbridge: marshal heartbeat: %w", err)
-			}
-			if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
+		case <-b.forceHeartbeat:
+			if err := b.sendHeartbeatNow(ctx, conn); err != nil {
 				return err
 			}
 		}
