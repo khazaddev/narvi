@@ -39,9 +39,22 @@
 //     (both are treated as "not a valid credential for THIS session",
 //     never leaking which case it was). Found, for this session, but
 //     expired (expires_at before now) -> close 4002 ("token expired").
-//  6. Otherwise: assemble and write a single `subscribed` reply
-//     (SubscribedPayload), register the connection with the shared *Hub
-//     for live broadcast delivery, start the idle-liveness ping loop (see
+//  6. Otherwise: register the connection with the shared *Hub for live
+//     broadcast delivery FIRST, THEN assemble and write the single
+//     `subscribed` reply (SubscribedPayload) -- deliberately in that
+//     order, not the reverse. Registering after the reply would leave a
+//     real window, between the client observing "subscribed" and this
+//     goroutine actually completing Hub.Register, during which any
+//     broadcast for this session is silently and permanently lost for
+//     this connection (Hub.Broadcast never replays -- a connection not
+//     yet registered simply isn't there to receive it). That window is
+//     normally too narrow to matter on an unloaded machine, but widens
+//     under real scheduling contention -- confirmed in CI
+//     (TestClientHandler_SlowConnectionDoesNotBlockOthers failed there
+//     with 0/50 broadcasts received, never locally reproduced). Registering
+//     first makes "client observed the subscribed reply" unconditionally
+//     imply "already registered", closing the race outright rather than
+//     merely narrowing it. Then: start the idle-liveness ping loop (see
 //     pingClientLoop's own doc comment -- an unanswered ping closes 4003
 //     "idle timeout"), then run the post-subscribe read loop
 //     (fetch_history, rate-limited per-connection via
@@ -183,7 +196,24 @@ func NewClientHandler(
 			return // verifyClientToken already closed the connection (4001/4002).
 		}
 
-		// (6) assemble + write the single `subscribed` reply.
+		// (6) register for live broadcast delivery BEFORE the client can
+		// ever observe the "subscribed" reply below -- see this file's own
+		// top comment for why this ordering, not the reverse, is required.
+		// The writer goroutine this starts is scoped to
+		// writerCtx/writerGroup, both torn down (canceled + joined) before
+		// this handler returns (including on every early-return path
+		// below), so no goroutine outlives the connection it serves.
+		writerCtx, cancelWriter := context.WithCancel(ctx)
+		defer cancelWriter()
+		var writerGroup errgroup.Group
+		unregister := hub.Register(writerCtx, &writerGroup, sessionID.String(), conn)
+		defer func() {
+			unregister()
+			cancelWriter()
+			_ = writerGroup.Wait()
+		}()
+
+		// (7) assemble + write the single `subscribed` reply.
 		payload, err := buildSubscribedPayload(ctx, sessionID, sessionRow, turns, sandboxes, events, artifacts)
 		if err != nil {
 			logger.Error("wshub: assembling subscribed payload failed", "error", err)
@@ -202,20 +232,6 @@ func NewClientHandler(
 		}
 
 		logger.Info("wshub: client ws subscribed", "client_id", req.ClientId)
-
-		// (7) register for live broadcast delivery -- the writer goroutine
-		// this starts is scoped to writerCtx/writerGroup, both torn down
-		// (canceled + joined) before this handler returns, so no goroutine
-		// outlives the connection it serves.
-		writerCtx, cancelWriter := context.WithCancel(ctx)
-		defer cancelWriter()
-		var writerGroup errgroup.Group
-		unregister := hub.Register(writerCtx, &writerGroup, sessionID.String(), conn)
-		defer func() {
-			unregister()
-			cancelWriter()
-			_ = writerGroup.Wait()
-		}()
 
 		// Idle-liveness check (audit-remediation, inbound-hygiene lens): a
 		// periodic server-initiated ping, run on the SAME writerGroup/
