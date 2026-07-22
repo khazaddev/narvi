@@ -85,12 +85,12 @@ func fallbackModelRef() *promptModelRef {
 // scmName/scmEmail for git attribution") are deliberately NOT threaded
 // into this request or anywhere else in this package -- this Step's live
 // research against the real /doc OpenAPI spec found no prompt_async (or
-// any other OpenCode endpoint) accepting a git-author override, and
-// commit-authorship wiring is Step 29's job ("gitstate in-sandbox"), not
-// this Step's. cmd carries both fields end to end (they arrive on the
+// any other OpenCode endpoint) accepting a git-author override. Real
+// per-user git identity (attributing a commit to the actual prompting
+// human) is explicitly out of scope for this Step and remains
+// unscheduled -- cmd carries both fields end to end (they arrive on the
 // wire Prompt command and reach this function unused), so no information
-// is lost — a future Step can wire them once Step 29's own git-attribution
-// mechanism exists to receive them.
+// is lost; a future Step can wire them once such a mechanism exists.
 func (a *Adapter) postPromptAsync(ctx context.Context, sessionID string, cmd sandboxws.Prompt, model *promptModelRef) error {
 	body := promptAsyncRequest{
 		Model: model,
