@@ -79,19 +79,22 @@
 // ones named here and in sandboxTransitionTrigger's own doc comment
 // below.
 //
-// Honest gap, out of this Step's own scope: a sandbox that recovers
-// DIRECTLY back to Ready (pre_suspect_status was Ready) does not itself
-// re-arm liveness_check/inactivity in this same pass -- both were
-// deleted by their own respective timeout handlers (timerfired.go) on the
-// way INTO Suspect, and the guard below that re-arms them only fires on
-// a genuine before/after Booting->Ready transition within THIS event,
-// which a direct-to-Ready recovery never produces. The sandbox stays
-// fully live and functional either way (last_seen_at keeps advancing on
-// every subsequent event) -- it simply has no ACTIVE watchdog re-armed
-// until some later event happens to cross a boundary the existing guard
-// already recognizes, or a future Step adds explicit re-arming for every
-// recovery-landing state. Not fixed here: this Step's own brief scopes
-// the recovery write itself, not a broader watchdog-rearming pass.
+// Formerly an honest, documented gap (left open by this Step's own
+// original brief, which scoped only the recovery write itself): a sandbox
+// that recovers DIRECTLY back to Ready (pre_suspect_status was Ready)
+// does not get caught by the Booting->Ready guard below, because row is
+// already reassigned to the freshly-recovered (already-Ready) row BEFORE
+// that guard's own before/after comparison runs a few lines down -- so
+// row.Status != target is always false for this path, no matter what.
+// Audit finding F2 ("liveness/inactivity watchdogs not re-armed on every
+// real ->Ready edge") covers this path too, on reflection: both timers
+// were deleted by their own respective timeout handlers (timerfired.go)
+// on the way INTO Suspect, and this recovery is exactly as genuine a
+// ->Ready edge as Booting->Ready or either snapshot path. Closed now: the
+// recovery branch below calls armReadyWatchdogs directly whenever
+// recoveredTo is Ready, since it can never rely on the generic guard
+// catching it. See that branch's own inline comment for why this is
+// reachable at most once per real edge (no double-arm risk).
 
 package sessionactor
 
@@ -172,7 +175,9 @@ func sandboxTransitionTrigger(eventType string, lastBootPhase *string, status sa
 // handleInactivityTimer, timerfired.go) -- the single shared definition of
 // "what happens when a sandbox becomes Ready", called from every call site
 // in this file that lands a real transition on sandbox.StateReady: the
-// Booting->Ready guard below (handleSandboxEvent), handleSnapshotReadyEvent's
+// Booting->Ready guard below (handleSandboxEvent), the Suspect-recovery-
+// directly-to-Ready branch a few lines above that guard (also
+// handleSandboxEvent -- see this file's own top comment), handleSnapshotReadyEvent's
 // own snapshot-success path, and revertSnapshotToReady's own compensating
 // write (covering both of ITS callers, revertSnapshotBestEffort and
 // handleSnapshotReadyEvent's own decode-failure branch).
@@ -289,6 +294,23 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 				if err := a.deleteTimer(ctx, tx, TimerTerminalGrace); err != nil {
 					return err
 				}
+				// F2 fix: a recovery landing directly back on Ready is a
+				// genuine ->Ready edge that the before/after guard a few
+				// lines below can never catch on its own -- row is already
+				// reassigned to this (already-Ready) recovered row above,
+				// so that guard's own row.Status != target comparison is
+				// always false for this path. Reachable at most once per
+				// real edge: this whole branch is gated on row.Status
+				// genuinely being Suspect with a real pre_suspect_status on
+				// entry (checked above), and recErr == nil here means
+				// RecoverFromSuspect's own write just committed that exact
+				// edge moments ago -- not a re-check of an already-Ready
+				// sandbox on some later, unrelated event.
+				if recoveredTo == sandbox.StateReady {
+					if err := a.armReadyWatchdogs(ctx, tx, now); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		// If row.Status has no pre_suspect_status set (defensive-only, see
@@ -343,14 +365,18 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// fires: liveness_check is already live and watching by then.
 		//
 		// Delegates to armReadyWatchdogs (below) -- the SAME shared
-		// helper handleSnapshotReadyEvent's own success path and
-		// revertSnapshotToReady's own compensating write now also call, so
-		// every real transition INTO Ready, by whichever path, re-arms
-		// identically (audit finding F2's own fix: a snapshot_ready-driven
-		// Snapshotting->Ready never went through this guard at all, since
-		// sandboxTransitionTrigger never maps "snapshot_ready" and
-		// handleSnapshotReadyEvent/revertSnapshotToReady each write
-		// row.Status directly, bypassing target/row.Status entirely).
+		// helper handleSnapshotReadyEvent's own success path,
+		// revertSnapshotToReady's own compensating write, and the
+		// Suspect-recovery-directly-to-Ready branch a few lines above (this
+		// same function -- that branch cannot rely on THIS guard at all,
+		// since it reassigns row before this comparison ever runs; see its
+		// own inline comment) now also call, so every real transition INTO
+		// Ready, by whichever path, re-arms identically (audit finding F2's
+		// own fix: a snapshot_ready-driven Snapshotting->Ready never went
+		// through this guard at all, since sandboxTransitionTrigger never
+		// maps "snapshot_ready" and handleSnapshotReadyEvent/
+		// revertSnapshotToReady each write row.Status directly, bypassing
+		// target/row.Status entirely).
 		if sandbox.State(row.Status) != sandbox.State(target) && sandbox.State(target) == sandbox.StateReady {
 			if err := a.armReadyWatchdogs(ctx, tx, now); err != nil {
 				return err
