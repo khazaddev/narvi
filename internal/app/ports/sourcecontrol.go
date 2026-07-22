@@ -83,8 +83,10 @@ type ResolveContractsFingerprintSpec struct {
 	// moving branch ref.
 	Ref string
 	// Path is the repo-relative path to the contracts directory (e.g.
-	// "contracts/api") -- internal/domain/environment.Environment's own
-	// ContractsPath field, resolved by the caller.
+	// "contracts/api") -- the Postgres Environment row's own
+	// contracts_path column (sqlcgen.Environment.ContractsPath), resolved
+	// by the caller (app/sessionactor/contractdrift.go's
+	// checkContractDrift).
 	Path string
 	// Token is the same plaintext, decrypted OAuth access token shape
 	// CreatePRSpec.Token/ResolveBranchSHASpec.Token already use. Never
