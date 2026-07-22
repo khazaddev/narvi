@@ -112,6 +112,17 @@ const defaultContractsPath = "contracts/api"
 // PathScope (environment.RequiresProvenanceTag's own doc comment), so a
 // mockConfig-only Environment does not, by itself, cause a session to
 // carry a provenance tag.
+//
+// Audit remediation (security-crosscutting lens): a caller-supplied
+// mockConfig.contractsPath previously reached Postgres (and, downstream,
+// a real outbound GitHub API request built by internal/adapters/outbound/
+// githubapi.ResolveContractsFingerprint) with ZERO validation -- unlike
+// pathScope, which ValidatePathScope already gated. Fixed below by running
+// the newly added environment.ValidateContractsPath (this same batch's own
+// addition, mirroring ValidatePathScope's own ".." rejection at minimum,
+// plus rejecting "?"/"#" -- see that function's own doc comment) BEFORE
+// pool.Begin, the SAME trust-boundary precedent every other request field
+// this handler validates already follows.
 func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -203,6 +214,21 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 		contractsPath := defaultContractsPath
 		if hasMockConfig && req.MockConfig.ContractsPath != nil {
 			contractsPath = *req.MockConfig.ContractsPath
+
+			// Validate a caller-supplied contractsPath BEFORE any Postgres
+			// write (pool.Begin below) -- the SAME trust-boundary precedent
+			// pathScope's own ValidatePathScope call above already
+			// established (audit remediation: contractsPath previously had
+			// NO validation at all, unlike pathScope, even though it is
+			// later interpolated into a real outbound GitHub API request,
+			// internal/adapters/outbound/githubapi.
+			// ResolveContractsFingerprint). defaultContractsPath itself is
+			// never run through this check -- it is this handler's own
+			// fixed, known-safe constant, not caller input.
+			if err := environment.ValidateContractsPath(contractsPath); err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("mockConfig.contractsPath: %s", err))
+				return
+			}
 		}
 
 		tx, err := pool.Begin(ctx)

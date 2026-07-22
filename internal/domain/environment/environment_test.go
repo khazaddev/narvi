@@ -243,3 +243,97 @@ func TestRequiresProvenanceTag(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateContractsPath is table-driven over every shape this audit
+// remediation's own validation rule cares about: an empty string, ".." as
+// a full path segment (both alone and buried in a longer path), ".." as
+// part of a longer segment (must NOT be rejected, mirroring
+// TestValidatePathScope's own identical "foo..bar" case), a "?" or "#"
+// (the exact two characters that could otherwise rewrite/truncate the
+// outbound githubapi request this value is later interpolated into), and a
+// valid nested path.
+func TestValidateContractsPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		in         string
+		wantErr    bool
+		wantReason error
+	}{
+		{
+			name:       "empty string is rejected",
+			in:         "",
+			wantErr:    true,
+			wantReason: environment.ErrContractsPathEmpty,
+		},
+		{
+			name:       "bare .. is rejected",
+			in:         "..",
+			wantErr:    true,
+			wantReason: environment.ErrContractsPathTraversal,
+		},
+		{
+			name:       ".. as a leading segment is rejected",
+			in:         "../etc/passwd",
+			wantErr:    true,
+			wantReason: environment.ErrContractsPathTraversal,
+		},
+		{
+			name:       ".. as a buried segment is rejected",
+			in:         "contracts/../etc",
+			wantErr:    true,
+			wantReason: environment.ErrContractsPathTraversal,
+		},
+		{
+			name: "foo..bar is NOT rejected (not a full .. segment)",
+			in:   "contracts/foo..bar",
+		},
+		{
+			name:       "a ? is rejected (query-injection shape)",
+			in:         "contracts/api?ref=attacker",
+			wantErr:    true,
+			wantReason: environment.ErrContractsPathInvalidChars,
+		},
+		{
+			name:       "a # is rejected (fragment-truncation shape)",
+			in:         "contracts/api#evil",
+			wantErr:    true,
+			wantReason: environment.ErrContractsPathInvalidChars,
+		},
+		{
+			name: "a valid nested path is allowed",
+			in:   "services/mock-api/contracts",
+		},
+		{
+			name: "the plain default path is allowed",
+			in:   "contracts/api",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := environment.ValidateContractsPath(tc.in)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("ValidateContractsPath(%q) = %v, want nil", tc.in, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ValidateContractsPath(%q) = nil, want error wrapping %v", tc.in, tc.wantReason)
+			}
+			if !errors.Is(err, tc.wantReason) {
+				t.Errorf("ValidateContractsPath(%q) = %v, want error wrapping %v", tc.in, err, tc.wantReason)
+			}
+			var pathErr *environment.InvalidContractsPathError
+			if !errors.As(err, &pathErr) {
+				t.Fatalf("ValidateContractsPath(%q) error is not *InvalidContractsPathError: %v", tc.in, err)
+			}
+			if pathErr.Error() == "" {
+				t.Error("InvalidContractsPathError.Error() is empty")
+			}
+		})
+	}
+}

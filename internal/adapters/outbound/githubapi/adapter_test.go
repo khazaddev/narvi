@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
@@ -114,6 +115,188 @@ func TestCreatePR_4xxMapsToRealError(t *testing.T) {
 	}
 	if prErr.Message == "" {
 		t.Error("CreatePRError.Message is empty, want GitHub's own error message")
+	}
+}
+
+// --- URL escaping (audit remediation: security-crosscutting lens) ---
+//
+// Each test below asserts against the real *http.Request.URL the server
+// actually received (via r.URL.EscapedPath(), the exact wire-encoded path,
+// and r.URL.Query(), the real parsed query values) -- not merely that the
+// call returned no error -- so a regression that silently stopped escaping
+// (e.g. reverting to a bare fmt.Sprintf) would fail these tests even
+// though the fake server itself never rejects any request shape.
+
+// TestCreatePR_EscapesOwnerAndRepo proves a malicious Owner/Repo containing
+// a "/" and a "#" cannot inject an extra path segment or truncate the
+// request via an unintended URL fragment.
+func TestCreatePR_EscapesOwnerAndRepo(t *testing.T) {
+	t.Parallel()
+
+	var gotEscapedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"number": 1, "html_url": "https://github.com/x/y/pull/1"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, err := adapter.CreatePR(context.Background(), ports.CreatePRSpec{
+		Owner: "acme/evil",
+		Repo:  "widgets#v1",
+		Head:  "narvi/session-123",
+		Base:  "main",
+		Title: "t",
+		Token: "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("CreatePR() error = %v, want nil", err)
+	}
+
+	want := "/repos/acme%2Fevil/widgets%23v1/pulls"
+	if gotEscapedPath != want {
+		t.Errorf("request EscapedPath = %q, want %q (owner/repo must be escaped, not interpolated raw)", gotEscapedPath, want)
+	}
+}
+
+// TestResolveBranchSHA_EscapesOwnerRepoAndBranch proves a malicious
+// Owner/Repo/Branch is escaped on BOTH request paths ResolveBranchSHA can
+// build: the repo-info lookup (only reached when Branch is empty) and the
+// commits lookup, whose OWN ref segment is the resolved default_branch
+// value in this path -- itself attacker-shaped here, since a real GitHub
+// default_branch is caller-controlled from ResolveBranchSHA's own point of
+// view.
+func TestResolveBranchSHA_EscapesOwnerRepoAndBranch(t *testing.T) {
+	t.Parallel()
+
+	var gotEscapedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPaths = append(gotEscapedPaths, r.URL.EscapedPath())
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch {
+		case len(gotEscapedPaths) == 1:
+			_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "release/1.0#x"})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"sha": "abc123"})
+		}
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	sha, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
+		Owner: "acme/evil",
+		Repo:  "widgets#v1",
+		Token: "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBranchSHA() error = %v, want nil", err)
+	}
+	if sha != "abc123" {
+		t.Errorf("ResolveBranchSHA() = %q, want %q", sha, "abc123")
+	}
+
+	if len(gotEscapedPaths) != 2 {
+		t.Fatalf("server received %d requests, want 2", len(gotEscapedPaths))
+	}
+	wantRepoPath := "/repos/acme%2Fevil/widgets%23v1"
+	if gotEscapedPaths[0] != wantRepoPath {
+		t.Errorf("repo-info request EscapedPath = %q, want %q", gotEscapedPaths[0], wantRepoPath)
+	}
+	// branch (the resolved default_branch "release/1.0#x") is escaped as a
+	// single opaque path segment -- GitHub's own commits/{ref} endpoint
+	// requires a "/" WITHIN a ref to be percent-encoded (%2F) to
+	// disambiguate it from a route-segment boundary, exactly what
+	// url.PathEscape produces here.
+	wantCommitPath := "/repos/acme%2Fevil/widgets%23v1/commits/release%2F1.0%23x"
+	if gotEscapedPaths[1] != wantCommitPath {
+		t.Errorf("commit request EscapedPath = %q, want %q", gotEscapedPaths[1], wantCommitPath)
+	}
+}
+
+// TestResolveContractsFingerprint_EscapesOwnerRepoPathAndRef proves the
+// sharpest case the audit named: a spec.Path containing "?ref=attacker&"
+// must not rewrite the request's real query string (the actual spec.Ref
+// must still win), and a spec.Path containing "#" must not truncate the
+// request via an unintended URL fragment -- while a real, multi-segment
+// spec.Path (containing legitimate "/" directory separators) must still
+// resolve to a real, correctly nested GitHub Contents API path, not a
+// single mangled segment.
+func TestResolveContractsFingerprint_EscapesOwnerRepoPathAndRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		path            string
+		ref             string
+		wantEscapedTail string
+		wantRefQuery    string
+	}{
+		{
+			name:            "query-injection attempt via path is neutralized",
+			path:            "x?ref=attacker&",
+			ref:             "realref",
+			wantEscapedTail: "/contents/x%3Fref=attacker&",
+			wantRefQuery:    "realref",
+		},
+		{
+			name:            "fragment-truncation attempt via path is neutralized",
+			path:            "x#evilfragment",
+			ref:             "realref",
+			wantEscapedTail: "/contents/x%23evilfragment",
+			wantRefQuery:    "realref",
+		},
+		{
+			name:            "a real multi-segment path still resolves as nested directories",
+			path:            "services/mock-api/contracts",
+			ref:             "abc123",
+			wantEscapedTail: "/contents/services/mock-api/contracts",
+			wantRefQuery:    "abc123",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotEscapedPath string
+			var gotQuery url.Values
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotEscapedPath = r.URL.EscapedPath()
+				gotQuery = r.URL.Query()
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode([]map[string]any{})
+			}))
+			defer server.Close()
+
+			adapter := githubapi.New(server.Client(), server.URL)
+
+			_, _, err := adapter.ResolveContractsFingerprint(context.Background(), ports.ResolveContractsFingerprintSpec{
+				Owner: "acme",
+				Repo:  "widgets",
+				Ref:   tc.ref,
+				Path:  tc.path,
+				Token: "gho_realtoken",
+			})
+			if err != nil {
+				t.Fatalf("ResolveContractsFingerprint() error = %v, want nil", err)
+			}
+
+			wantEscapedPath := "/repos/acme/widgets" + tc.wantEscapedTail
+			if gotEscapedPath != wantEscapedPath {
+				t.Errorf("request EscapedPath = %q, want %q", gotEscapedPath, wantEscapedPath)
+			}
+			// len == 1 proves the malicious path never smuggled in a SECOND
+			// query key/value the attacker controlled (e.g. its own "ref").
+			if len(gotQuery["ref"]) != 1 || gotQuery.Get("ref") != tc.wantRefQuery {
+				t.Errorf("request query ref = %v, want exactly one value %q", gotQuery["ref"], tc.wantRefQuery)
+			}
+		})
 	}
 }
 

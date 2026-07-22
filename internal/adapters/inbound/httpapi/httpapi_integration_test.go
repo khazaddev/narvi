@@ -988,6 +988,95 @@ func TestCreateSession_NeitherPathScopeNorMockConfig_NoEnvironmentRow(t *testing
 	}
 }
 
+// --- CreateSession: mockConfig.contractsPath validation (audit
+// remediation: security-crosscutting lens) ---
+
+// TestCreateSession_ContractsPathTraversal_Rejected proves a
+// mockConfig.contractsPath containing a ".." segment -- environment.
+// ValidateContractsPath's own ErrContractsPathTraversal case -- is
+// rejected 400 BEFORE any Postgres write, mirroring
+// TestCreateSession_InvalidPathScope_Rejected's own identical precedent
+// exactly (assert zero session rows for the calling user).
+func TestCreateSession_ContractsPathTraversal_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{
+		"spawnSource": "web",
+		"title": null,
+		"prompt": null,
+		"repos": [{"name": "narvi", "url": "https://example.com", "branch": null}],
+		"modelId": null,
+		"planMode": false,
+		"mockConfig": {"contractsPath": "contracts/../etc"}
+	}`)
+
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
+// TestCreateSession_ContractsPathQueryChar_Rejected proves a
+// mockConfig.contractsPath containing a "?" -- the exact query-injection
+// shape the githubapi adapter's own audit remediation independently
+// guards against too -- is rejected 400 BEFORE any Postgres write.
+func TestCreateSession_ContractsPathQueryChar_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{
+		"spawnSource": "web",
+		"title": null,
+		"prompt": null,
+		"repos": [{"name": "narvi", "url": "https://example.com", "branch": null}],
+		"modelId": null,
+		"planMode": false,
+		"mockConfig": {"contractsPath": "contracts/api?ref=attacker"}
+	}`)
+
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
+// TestCreateSession_ContractsPathFragmentChar_Rejected proves a
+// mockConfig.contractsPath containing a "#" is ALSO rejected 400 BEFORE
+// any Postgres write -- the fragment-truncation counterpart to the "?"
+// case above.
+func TestCreateSession_ContractsPathFragmentChar_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{
+		"spawnSource": "web",
+		"title": null,
+		"prompt": null,
+		"repos": [{"name": "narvi", "url": "https://example.com", "branch": null}],
+		"modelId": null,
+		"planMode": false,
+		"mockConfig": {"contractsPath": "contracts/api#evil"}
+	}`)
+
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+	if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+		t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write)", count)
+	}
+}
+
 func TestCreateSession_MalformedBody(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
