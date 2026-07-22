@@ -759,6 +759,122 @@ func TestHandleSandboxEvent_ExecutionComplete_TriggersSnapshotOnReadySandbox(t *
 	}
 }
 
+// TestHandleSandboxEvent_ExecutionComplete_SnapshotRunsBeforeNextTurnDispatch
+// is the regression test for audit finding F4 ("post-turn snapshot fires
+// after dispatch-next, inverting section 3.3"): a real execution_complete
+// event, with a pending NEXT turn already queued, must trigger
+// triggerSnapshotBestEffort (Ready -> Snapshotting) BEFORE
+// handleEnsureDispatched ever gets a chance to dispatch that next turn --
+// so the next turn is left Pending (not dispatched, no prompt command
+// sent) until the snapshot cycle later completes and returns the sandbox
+// to Ready. Under the OLD (pre-fix) ordering, handleEnsureDispatched ran
+// FIRST while the sandbox was still Ready, dispatched the next turn
+// immediately (moving it to Processing and sending it a real prompt
+// command), and only THEN did triggerSnapshotBestEffort run -- snapshotting
+// a sandbox that had just been handed brand-new work, and leaving the new
+// turn's own later, legitimate snapshot attempt to find the sandbox still
+// Snapshotting and silently no-op.
+func TestHandleSandboxEvent_ExecutionComplete_SnapshotRunsBeforeNextTurnDispatch(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	turnStore := narvipg.NewTurnStore(pool)
+	completingTurn := createProcessingTurn(ctx, t, turnStore, sessionID)
+	nextTurn := createPendingTurn(ctx, t, turnStore, sessionID, "the next queued prompt")
+
+	commander := &fakeSendCommander{}
+	provider := &fakeSpawnProvider{}
+	r := newDispatchTestRegistry(t, ctx, pool, provider, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	outcome := sendSandboxEvent(ctx, t, a, SandboxEvent{
+		Type: "execution_complete",
+		Gen:  1,
+		Raw:  executionCompleteRaw(t, sessionID.String(), 1, sandboxws.ExecutionCompleteOutcomeCompleted),
+	})
+	if !outcome.Persisted {
+		t.Fatal("execution_complete: Persisted = false, want true")
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		got, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && got.Status == sqlcgen.SandboxStatusSnapshotting
+	})
+
+	// Force strict synchronization with the actor's own single mailbox
+	// goroutine: the transition just observed above is committed by a
+	// post-commit block that runs entirely synchronously (same goroutine,
+	// no intervening yield) inside the FIRST event's own handleSandboxEvent
+	// call. Sending a SECOND SandboxEvent and waiting for ITS OWN reply
+	// guarantees the first event's entire handler -- including both
+	// triggerSnapshotBestEffort AND handleEnsureDispatched -- has already
+	// run to completion, since the actor's mailbox processes exactly one
+	// command at a time, start to finish, before it ever starts the next.
+	// A plain heartbeat is inert here: it matches no transition case for a
+	// Snapshotting sandbox and (cmd.Type != "execution_complete") never
+	// re-triggers the snapshot call.
+	settle := sendSandboxEvent(ctx, t, a, SandboxEvent{
+		Type: "heartbeat", Gen: 1,
+		Raw: json.RawMessage(`{"type":"heartbeat","messageId":"settle-1","sessionId":"s","gen":1,"conversationId":null,"lastBootPhase":null}`),
+	})
+	if !settle.Persisted {
+		t.Fatal("settle heartbeat: Persisted = false, want true")
+	}
+
+	// The core F4 assertion: the next turn was NOT dispatched -- it is
+	// still Pending, never touched by handleEnsureDispatched, because by
+	// the time that call ran the sandbox was already Snapshotting (neither
+	// Ready nor Suspect), so planDispatch's own dispatch branch never fired
+	// for it.
+	nextTurnRow, err := turnStore.Get(ctx, nextTurn.ID)
+	if err != nil {
+		t.Fatalf("get next turn: %v", err)
+	}
+	if nextTurnRow.Status != sqlcgen.TurnStatusPending {
+		t.Errorf("next turn status = %s, want %s (F4: the snapshot must be given a chance to run BEFORE the next turn is dispatched)",
+			nextTurnRow.Status, sqlcgen.TurnStatusPending)
+	}
+
+	// The completed turn really did complete (sanity: proves this is a
+	// genuine execution_complete, not some other no-op path).
+	completingTurnRow, err := turnStore.Get(ctx, completingTurn.ID)
+	if err != nil {
+		t.Fatalf("get completing turn: %v", err)
+	}
+	if completingTurnRow.Status != sqlcgen.TurnStatusCompleted {
+		t.Errorf("completing turn status = %s, want %s", completingTurnRow.Status, sqlcgen.TurnStatusCompleted)
+	}
+
+	// The ONLY SendCommand call so far is the Snapshot one -- never a
+	// prompt/dispatch payload for the next turn.
+	if got := commander.callCount(); got != 1 {
+		t.Fatalf("SendCommand called %d times, want 1 (the Snapshot command only -- the next turn must not have been dispatched yet)", got)
+	}
+	var snap sandboxws.Snapshot
+	if err := json.Unmarshal(commander.lastPayload(), &snap); err != nil {
+		t.Fatalf("unmarshal SendCommand payload as sandboxws.Snapshot: %v", err)
+	}
+	if snap.Type != "snapshot" {
+		t.Errorf("SendCommand payload Type = %q, want %q (the ordering fix means this must be the Snapshot call, not a turn-dispatch prompt)", snap.Type, "snapshot")
+	}
+}
+
 // TestHandleSnapshotReadyEvent_LateOrDuplicate_NoOp proves the late/duplicate
 // case: a snapshot_ready event arriving while the sandbox is NO LONGER
 // Snapshotting (here: already Ready, e.g. because a liveness watchdog
