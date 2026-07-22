@@ -152,9 +152,23 @@ func TestSandboxEventsRoundTrip(t *testing.T) {
 			MessageId: "e9",
 			SessionId: testSessionID,
 			Gen:       1,
+			Repo:      "narvi",
 			Status:    sandboxws.GitSyncStatusCheckout,
 			Branch:    "session/abc",
 		})
+	})
+
+	// TestSandboxEventsGitSyncRepoRequired is this batch's own schema change
+	// (Step 29, "gitstate in-sandbox", §3.4/§14.1 design section 6): GitSync
+	// now REQUIRES a "repo" field disambiguating which of a session's
+	// (always-a-list, §3.4) repos a given stash/checkout/pop phase is
+	// about. Omitting it must fail validation.
+	t.Run("GitSync_MissingRepoRejected", func(t *testing.T) {
+		payload := []byte(`{"type":"git_sync","messageId":"e9b","sessionId":"` + testSessionID +
+			`","gen":1,"status":"checkout","branch":"session/abc"}`)
+		if err := validateJSON(t, sch, payload); err == nil {
+			t.Fatal("expected missing repo on git_sync to fail validation, got nil error")
+		}
 	})
 
 	t.Run("Artifact", func(t *testing.T) {

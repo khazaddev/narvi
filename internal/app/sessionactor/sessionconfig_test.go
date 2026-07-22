@@ -1,6 +1,7 @@
 package sessionactor
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/uuid"
@@ -148,9 +149,17 @@ func TestAssembleSessionConfig(t *testing.T) {
 			sessionRow := sessionRowWithRepos(t, `[{"name":"widgets","url":"https://github.com/acme/widgets","branch":null}]`)
 			sandboxID := uuid.NewString()
 
-			cfg, err := a.assembleSessionConfig(sessionRow, 3, "plaintext-token", sandboxID, tc.bootMode)
+			// sessionRow.EnvironmentID is left at its zero value (invalid)
+			// by sessionRowWithRepos -- environmentPathScope's own first
+			// check short-circuits before ever touching tx, so a nil tx is
+			// safe here (no Postgres needed, matching this test's own doc
+			// comment above).
+			cfg, err := a.assembleSessionConfig(context.Background(), nil, sessionRow, 3, "plaintext-token", sandboxID, tc.bootMode)
 			if err != nil {
 				t.Fatalf("assembleSessionConfig() error = %v, want nil", err)
+			}
+			if cfg.PathScope != nil {
+				t.Errorf("PathScope = %v, want nil (no Environment attached)", cfg.PathScope)
 			}
 
 			if cfg.BootMode != tc.bootMode {

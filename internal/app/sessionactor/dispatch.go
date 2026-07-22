@@ -811,7 +811,7 @@ func (a *Actor) planFreshSpawn(
 		return nil, err
 	}
 
-	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, row.ID.String(), sessionconfig.SessionConfigBootModeFresh)
+	cfg, err := a.assembleSessionConfig(ctx, tx, sessionRow, int(row.Gen), token, row.ID.String(), sessionconfig.SessionConfigBootModeFresh)
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}
@@ -881,7 +881,7 @@ func (a *Actor) planRestore(
 		return nil, err
 	}
 
-	cfg, err := a.assembleSessionConfig(sessionRow, int(row.Gen), token, row.ID.String(), sessionconfig.SessionConfigBootModeSnapshotRestore)
+	cfg, err := a.assembleSessionConfig(ctx, tx, sessionRow, int(row.Gen), token, row.ID.String(), sessionconfig.SessionConfigBootModeSnapshotRestore)
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}

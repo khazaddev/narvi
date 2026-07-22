@@ -6,10 +6,14 @@
 package sessionactor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -61,6 +65,46 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 	return repos, nil
 }
 
+// environmentPathScope resolves the session's own Environment.PathScope
+// (§14.1), when one is attached, for threading into the assembled
+// SessionConfig's own optional pathScope field (Step 29, "gitstate
+// in-sandbox" -- §14.1's own clone-step enforcement needs the sandbox
+// process to actually receive these glob patterns, since sandbox-agent is
+// a separate process from the control plane and only knows what it's told
+// via NARVI_SESSION_CONFIG). Returns (nil, nil) when environmentID is
+// invalid (pgtype.UUID's own zero value) -- the overwhelming common,
+// unscoped case -- WITHOUT ever querying the environments table at all,
+// mirroring contractdrift.go's own checkContractDrift precedent ("no
+// environment_id, ... a plain, logged, no-op") for the identical "no
+// Environment attached" gate. Uses tx (the SAME already-open transact
+// planFreshSpawn/planRestore run this from), not a's own pool, since this
+// runs inside their transact, not after it.
+func (a *Actor) environmentPathScope(ctx context.Context, tx pgx.Tx, environmentID pgtype.UUID) ([]string, error) {
+	if !environmentID.Valid {
+		return nil, nil
+	}
+
+	env, err := a.stores.environment.WithTx(tx).Get(ctx, environmentID)
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: get environment for path scope: %w", err)
+	}
+
+	if len(env.PathScope) == 0 {
+		// An Environment can be created for its mock_config alone, with no
+		// path_scope attached (§14.1: "an optional path_scope ... and an
+		// optional mock_config" -- two independent optional attributes,
+		// same reasoning as contractdrift.go's own MockConfigured check) --
+		// nothing to unmarshal, nothing to report.
+		return nil, nil
+	}
+
+	var pathScope []string
+	if err := json.Unmarshal(env.PathScope, &pathScope); err != nil {
+		return nil, fmt.Errorf("sessionactor: unmarshal environment path_scope: %w", err)
+	}
+	return pathScope, nil
+}
+
 // assembleSessionConfig builds the real SESSION_CONFIG document (§6.4) a
 // freshly spawned OR restored sandbox receives -- design decision 6's own
 // exact field mapping:
@@ -95,6 +139,10 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 //     minted one -- SessionConfig.CorrelationId's own doc comment: "Null
 //     only when no upstream correlation id exists").
 //   - Gen: the sandbox row's own just-bumped gen.
+//   - PathScope: Step 29's own addition -- environmentPathScope(ctx, tx,
+//     sessionRow.EnvironmentID), above; nil (absent from the wire document
+//     entirely, via its own omitempty) for the overwhelming common,
+//     unscoped case.
 //   - Repos: read back from sessions.repos.
 //   - SandboxId: sandboxID, the caller's already-known sandboxes.id
 //     (row.ID.String() at the one production call site, tryPlanSpawn) --
@@ -106,6 +154,7 @@ func reposFromJSON(raw []byte) ([]sessionconfig.SessionConfigReposElem, error) {
 //   - SandboxToken: the freshly minted PLAINTEXT token (never logged).
 //   - SessionId: the session's own id string.
 func (a *Actor) assembleSessionConfig(
+	ctx context.Context, tx pgx.Tx,
 	sessionRow sqlcgen.Session, gen int, plaintextToken, sandboxID string, bootMode sessionconfig.SessionConfigBootMode,
 ) (sessionconfig.SessionConfig, error) {
 	wsBase, err := publicWsBaseURL(a.publicBaseURL)
@@ -118,6 +167,16 @@ func (a *Actor) assembleSessionConfig(
 		return sessionconfig.SessionConfig{}, err
 	}
 
+	pathScope, err := a.environmentPathScope(ctx, tx, sessionRow.EnvironmentID)
+	if err != nil {
+		return sessionconfig.SessionConfig{}, err
+	}
+	var pathScopeField *sessionconfig.SessionConfigPathScope
+	if len(pathScope) > 0 {
+		typed := sessionconfig.SessionConfigPathScope(pathScope)
+		pathScopeField = &typed
+	}
+
 	sessionID := sessionRow.ID.String()
 	controlPlaneWsURL := strings.TrimSuffix(wsBase, "/") + "/sessions/" + sessionID + "/ws?type=sandbox"
 
@@ -126,6 +185,7 @@ func (a *Actor) assembleSessionConfig(
 		ControlPlaneWsUrl: controlPlaneWsURL,
 		CorrelationId:     nil,
 		Gen:               gen,
+		PathScope:         pathScopeField,
 		Repos:             repos,
 		SandboxId:         sandboxID,
 		SandboxToken:      plaintextToken,

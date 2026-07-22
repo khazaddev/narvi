@@ -166,6 +166,10 @@ export interface GitSync {
   messageId: string;
   sessionId: string;
   gen: number;
+  /**
+   * §3.4: repos are always a list -- names which repo (SessionConfig.repos[].name) this phase is about, so a multi-repo session reconciling several repos concurrently/sequentially can be disambiguated.
+   */
+  repo: string;
   status: 'stash' | 'checkout' | 'pop';
   branch: string;
 }

@@ -94,6 +94,26 @@
 // wsbridge) now also triggers an immediate, out-of-band heartbeat send the
 // first time it observes a genuinely new, non-nil id, rather than waiting
 // for its own next regular tick.
+//
+// Step 29 ("gitstate in-sandbox", §3.4) gives runBootSequence real
+// boot-mode-aware dispatch: BootModeBuild/BootModeFresh keep calling
+// gitclone.CloneAll (a fresh clone into an empty directory) unchanged;
+// BootModeRepoImage/BootModeSnapshotRestore instead call the new
+// gitclone.SyncAll against the workspace's own ALREADY-EXISTING repo
+// (baked into the image or restored from a snapshot) -- the real
+// "stash-if-dirty -> checkout session branch (create from base if absent)
+// -> stash pop" sequence, driven through internal/domain/gitstate's own
+// Transition table. Each real phase fires a best-effort sandboxws.GitSync
+// event over the WS bridge (onGitSync, run()); HandleGitSyncComplete's own
+// log-only behavior is now documented as deliberate, final behavior, not a
+// stub. A BootModeBuild boot additionally runs gitclone.CleanForImageBuild
+// once RunBoot itself succeeds, discarding untracked/modified residue
+// setup.sh may have left behind, so the tree is guaranteed clean by the
+// time a provider is free to snapshot it (§3.4: "Image builds must
+// snapshot a clean tree"). CloneAll itself also gained sparse-checkout
+// support (§14.1): a session's own Environment.PathScope, now threaded
+// through SessionConfig's own new optional pathScope field, restricts a
+// freshly-cloned repo's working tree to exactly those patterns.
 package main
 
 import (
@@ -115,6 +135,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/opencode"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/boot"
 	"github.com/khazaddev/narvi/internal/sandboxagent/credentials"
@@ -617,8 +638,19 @@ func (h *commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapsho
 	}
 }
 
+// HandleGitSyncComplete observes the control plane's own best-effort
+// acknowledgment of a git_sync event (§3.4, Step 29 "gitstate in-sandbox").
+// This sandbox's own git-sync reconciliation (internal/sandboxagent/
+// gitclone.SyncAll, driven from runBootSequence below) is entirely
+// sandbox-local -- git doesn't need CP permission to run stash/checkout/
+// pop -- and git_sync itself carries no ackId (it is a best-effort event,
+// not one of the 6 critical types per events.schema.json), so the sandbox
+// runs its own reconciliation sequence at its own pace and never blocks or
+// waits for this reply before proceeding to the next phase. Log-only is
+// this handler's deliberate, final behavior, not a stub: there is nothing
+// further for it to do.
 func (*commandHandler) HandleGitSyncComplete(_ context.Context, cmd sandboxws.GitSyncComplete) {
-	slog.Info("sandbox-agent: received git_sync_complete, not yet implemented (Step 29: gitstate in-sandbox)",
+	slog.Info("sandbox-agent: received git_sync_complete (observational only; sandbox-side git-sync does not gate on it)",
 		"messageId", cmd.MessageId)
 }
 
@@ -790,7 +822,42 @@ func run() error {
 		})
 	}
 
-	bootErr := runBootSequence(ctx, sup, cfg, timeouts, reportBootProgress)
+	// onGitSync translates each internal/sandboxagent/gitclone.SyncAll phase
+	// (§3.4, Step 29 "gitstate in-sandbox") into an outbound sandboxws.
+	// GitSync event, mirroring reportBootProgress's own "forward over the
+	// bridge when one exists, always log locally too" shape immediately
+	// above. git_sync is a best-effort event with no ackId (events.
+	// schema.json's own GitSync def), sent via the SAME Bridge.
+	// SendBestEffort every other non-critical event already uses
+	// (SendBootProgress just above, HandlePrompt's own sink closure) --
+	// SyncAll itself never blocks or waits on this call's own outcome
+	// before proceeding to its next phase. Only ever invoked from within
+	// runBootSequence's own cfg.SessionConfig != nil branch (below), so
+	// cfg.SessionConfig is always non-nil here in practice; the nil guards
+	// below mirror reportBootProgress's own defensive style even though,
+	// by that exact same construction, neither bridge nor cfg.SessionConfig
+	// is ever nil whenever this closure is actually invoked.
+	onGitSync := func(repoName, status, branch string) {
+		slog.Info("sandbox-agent: git_sync", "repo", repoName, "status", status, "branch", branch)
+		if bridge == nil || cfg.SessionConfig == nil {
+			return
+		}
+		msg := sandboxws.GitSync{
+			Type:      "git_sync",
+			MessageId: uuid.NewString(),
+			SessionId: cfg.SessionConfig.SessionId,
+			Gen:       cfg.SessionConfig.Gen,
+			Status:    sandboxws.GitSyncStatus(status),
+			Branch:    branch,
+			Repo:      repoName,
+		}
+		if sendErr := bridge.SendBestEffort(ctx, msg); sendErr != nil {
+			slog.Warn("sandbox-agent: send git_sync over WS bridge failed",
+				"repo", repoName, "status", status, "error", sendErr)
+		}
+	}
+
+	bootErr := runBootSequence(ctx, sup, cfg, timeouts, reportBootProgress, onGitSync)
 	if bootErr != nil {
 		// A boot failure needs the same graceful convergence a fatal WS
 		// status or an OS signal gets -- cancel ctx (stop is a genuine
@@ -804,7 +871,7 @@ func run() error {
 		if bridge != nil {
 			bridge.MarkBootComplete()
 		}
-		slog.Info("sandbox-agent: boot sequence complete (git_sync_complete: Step 29)")
+		slog.Info("sandbox-agent: boot sequence complete")
 	}
 
 	runErr := group.Wait()
@@ -863,53 +930,105 @@ func run() error {
 	return stopErr
 }
 
-// runBootSequence clones every repo cfg.SessionConfig names (in order),
+// runBootSequence prepares every repo cfg.SessionConfig names (in order),
 // writes the generated AGENTS.md manifest (§6.4), then runs boot.RunBoot
-// against the successfully-cloned subset. repos/cloning is skipped
+// against the successfully-prepared subset. repos/preparation is skipped
 // entirely when cfg.SessionConfig is nil (the common dev/test case) --
 // boot.RunBoot's own documented, correct no-op on an empty repo list
 // handles that unchanged from Step 14.
+//
+// Step 29 ("gitstate in-sandbox", §3.4) splits "prepare every repo" on
+// cfg.BootMode, the exact, principled dispatch point internal/domain/
+// sandboxboot.BootMode already names: BootModeBuild/BootModeFresh mean "no
+// prior image/snapshot to build on" -- the workspace does NOT yet exist on
+// disk -- so this is the existing gitclone.CloneAll path, UNCHANGED, a
+// real `git clone` into an empty directory. BootModeRepoImage/
+// BootModeSnapshotRestore mean the workspace's own real git repo ALREADY
+// EXISTS on disk (baked into the image at build time, or restored from a
+// snapshot), so this instead calls the NEW gitclone.SyncAll (§3.4:
+// "stash-if-dirty -> checkout session branch -> stash pop") -- CloneAll is
+// never called on this path at all; cloning again into a non-empty
+// directory would conflict with what is already there.
 func runBootSequence(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	cfg boot.Config,
 	timeouts platform.Timeouts,
 	reportBootProgress services.ProgressReporter,
+	onGitSync gitclone.OnGitSync,
 ) error {
 	var repos []boot.RepoInfo
 	if cfg.SessionConfig != nil {
-		results, cloneErr := gitclone.CloneAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos,
-			timeouts.RepoCloneTimeout, timeouts.ProcessStopGracePeriod)
-		if cloneErr != nil {
-			return fmt.Errorf("clone repos: %w", cloneErr)
+		var manifestInput []gitclone.CloneResult
+
+		switch cfg.BootMode {
+		case sandboxboot.BootModeRepoImage, sandboxboot.BootModeSnapshotRestore:
+			results, syncErr := gitclone.SyncAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos,
+				cfg.SessionConfig.SessionId, timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod, onGitSync)
+			if syncErr != nil {
+				return fmt.Errorf("sync repos: %w", syncErr)
+			}
+			manifestInput = make([]gitclone.CloneResult, len(results))
+			for i, result := range results {
+				manifestInput[i] = result.ToCloneResult()
+				if result.Err != nil {
+					continue
+				}
+				repos = append(repos, boot.RepoInfo{Name: result.Repo.Name, Primary: result.Primary})
+			}
+		default:
+			// BootModeBuild/BootModeFresh (and any future mode this switch
+			// does not yet know about -- boot.Load()'s own ParseBootMode has
+			// already rejected anything outside the four §6.4 values by the
+			// time cfg reaches here, so falling through to the existing,
+			// pre-Step-29 behavior is the correct, conservative default).
+			//
+			// pathScope (§14.1) is wired into ONLY this fresh-clone path --
+			// a repo_image/snapshot_restore boot (the other switch case,
+			// above) reuses an already-cloned, already-sparse-configured
+			// workspace: git preserves a working tree's own sparse-checkout
+			// config across subsequent checkouts within that same repo, so
+			// re-invoking it there would be redundant, not wrong, but
+			// unnecessary complexity this Step's own brief explicitly
+			// declines to add.
+			var pathScope []string
+			if cfg.SessionConfig.PathScope != nil {
+				pathScope = []string(*cfg.SessionConfig.PathScope)
+			}
+			results, cloneErr := gitclone.CloneAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos, pathScope,
+				timeouts.RepoCloneTimeout, timeouts.ProcessStopGracePeriod)
+			if cloneErr != nil {
+				return fmt.Errorf("clone repos: %w", cloneErr)
+			}
+			manifestInput = results
+			for _, result := range results {
+				if result.Err != nil {
+					continue
+				}
+				repos = append(repos, boot.RepoInfo{Name: result.Repo.Name, Primary: result.Primary})
+			}
 		}
 
-		if err := gitclone.WriteAgentsManifest(cfg.WorkspaceDir, results); err != nil {
+		if err := gitclone.WriteAgentsManifest(cfg.WorkspaceDir, manifestInput); err != nil {
 			return fmt.Errorf("write AGENTS.md: %w", err)
 		}
 
 		// The FIRST boot-fingerprint line (in run(), above this function)
 		// necessarily reported repo_shas as empty -- §5.3 requires it
-		// logged first, and nothing was cloned yet at that point. Now that
-		// cloning has happened, re-collect and log an updated fingerprint
-		// so repo_shas actually carries the information §5.3 asks for on
-		// this exact path; nothing about the original "logs first" line is
-		// changed or replaced, this is a second, supplementary log line.
-		// openCodeVersion is passed as "" here -- this log line's own
-		// purpose is repo_shas specifically (run()'s own separate
-		// "post-opencode-spawn" supplementary line already covers that
-		// field, logged before runBootSequence is ever called).
+		// logged first, and nothing was cloned/synced yet at that point. Now
+		// that this repo preparation has happened (via either branch above),
+		// re-collect and log an updated fingerprint so repo_shas actually
+		// carries the information §5.3 asks for on this exact path; nothing
+		// about the original "logs first" line is changed or replaced, this
+		// is a second, supplementary log line. openCodeVersion is passed as
+		// "" here -- this log line's own purpose is repo_shas specifically
+		// (run()'s own separate "post-opencode-spawn" supplementary line
+		// already covers that field, logged before runBootSequence is ever
+		// called).
 		postCloneFingerprint := boot.CollectFingerprint(cfg, timeouts.RepoSHADiscoveryTimeout, "")
 		slog.Info("sandbox-agent: boot fingerprint (post-clone)",
 			"repo_shas", postCloneFingerprint.RepoSHAs,
 		)
-
-		for _, result := range results {
-			if result.Err != nil {
-				continue
-			}
-			repos = append(repos, boot.RepoInfo{Name: result.Repo.Name, Primary: result.Primary})
-		}
 	}
 
 	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, reportBootProgress,
@@ -917,5 +1036,31 @@ func runBootSequence(
 		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval); err != nil {
 		return fmt.Errorf("boot: %w", err)
 	}
+
+	// §3.4 ("Image builds must snapshot a clean tree") / Step 29's own
+	// Part E: ONLY for a BootModeBuild boot, and ONLY once RunBoot itself
+	// has already returned successfully -- a failed setup.sh in build mode
+	// is already fatal per BootModeBuild's own existing primary-fatal
+	// semantics (sandboxboot.EvaluateHook), so this point is never reached
+	// on that failure path at all; there is nothing to gate here beyond
+	// "did RunBoot succeed". This runs BEFORE this function returns --
+	// i.e. before whatever the existing boot-sequence-complete signal is
+	// (run()'s own "boot sequence complete" log line and bridge.
+	// MarkBootComplete call, immediately after runBootSequence returns) --
+	// so that by the time the provider is free to snapshot, the tree is
+	// guaranteed clean. repos is empty (a correct no-op) whenever
+	// cfg.SessionConfig was nil, exactly like every other repos-driven step
+	// above.
+	if cfg.BootMode == sandboxboot.BootModeBuild {
+		repoNames := make([]string, len(repos))
+		for i, r := range repos {
+			repoNames[i] = r.Name
+		}
+		if err := gitclone.CleanForImageBuild(ctx, sup, cfg.WorkspaceDir, repoNames,
+			timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod); err != nil {
+			return fmt.Errorf("clean workspace before snapshot: %w", err)
+		}
+	}
+
 	return nil
 }

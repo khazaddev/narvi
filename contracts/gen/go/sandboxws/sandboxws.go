@@ -340,6 +340,11 @@ type GitSync struct {
 	// MessageId corresponds to the JSON schema field "messageId".
 	MessageId string `json:"messageId" yaml:"messageId" mapstructure:"messageId"`
 
+	// §3.4: repos are always a list -- names which repo (SessionConfig.repos[].name)
+	// this phase is about, so a multi-repo session reconciling several repos
+	// concurrently/sequentially can be disambiguated.
+	Repo string `json:"repo" yaml:"repo" mapstructure:"repo"`
+
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
@@ -442,6 +447,9 @@ func (j *GitSync) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["messageId"]; raw != nil && !ok {
 		return fmt.Errorf("field messageId in GitSync: required")
+	}
+	if _, ok := raw["repo"]; raw != nil && !ok {
+		return fmt.Errorf("field repo in GitSync: required")
 	}
 	if _, ok := raw["sessionId"]; raw != nil && !ok {
 		return fmt.Errorf("field sessionId in GitSync: required")

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/khazaddev/narvi/internal/domain/environment"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
@@ -39,21 +40,40 @@ type CloneResult struct {
 // already exist, since `git clone` itself requires its target's PARENT
 // directory to already exist.
 //
-// On a primary (repos[0]) clone failure, CloneAll returns immediately with
-// a fatal error -- no repo after it is attempted, matching RunHooks' own
-// "any fatal failure stops immediately" semantics exactly. A secondary
-// repo's clone failure is logged as a warning and does not stop the loop;
-// subsequent repos still get cloned. results always reflects every repo
-// actually attempted (in order), regardless of outcome.
+// pathScope is the session's own Environment.PathScope (§14.1), when one
+// is attached -- nil or empty means unscoped, the overwhelming common
+// case, and produces ZERO behavior change: no sparse-checkout invocation
+// at all. When non-empty, EVERY repo's clone (§3.4/§14.1: a session's
+// Environment applies uniformly across its always-a-list repos, there is
+// no per-repo scoping concept anywhere in this codebase) is immediately
+// followed by `git sparse-checkout set --no-cone -- <patterns...>` --
+// applySparseCheckout's own doc comment explains why --no-cone is
+// required. pathScope is validated (internal/domain/environment.
+// ValidatePathScope) ONCE, before any repo is even attempted: an invalid
+// session-wide setting is a fatal configuration error for the whole spawn,
+// not a single repo's problem.
+//
+// On a primary (repos[0]) clone (or, when scoped, sparse-checkout)
+// failure, CloneAll returns immediately with a fatal error -- no repo
+// after it is attempted, matching RunHooks' own "any fatal failure stops
+// immediately" semantics exactly. A secondary repo's failure is logged as
+// a warning and does not stop the loop; subsequent repos still get
+// cloned. results always reflects every repo actually attempted (in
+// order), regardless of outcome.
 func CloneAll(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	workspaceDir string,
 	repos []sessionconfig.SessionConfigReposElem,
+	pathScope []string,
 	cloneTimeout, stopGrace time.Duration,
 ) ([]CloneResult, error) {
 	if len(repos) == 0 {
 		return nil, nil
+	}
+
+	if err := environment.ValidatePathScope(pathScope); err != nil {
+		return nil, fmt.Errorf("gitclone: invalid path scope: %w", err)
 	}
 
 	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
@@ -64,6 +84,8 @@ func CloneAll(
 	if err != nil {
 		return nil, fmt.Errorf("gitclone: determine credential helper: %w", err)
 	}
+
+	scoped := len(pathScope) > 0
 
 	results := make([]CloneResult, 0, len(repos))
 	for i, repo := range repos {
@@ -80,6 +102,9 @@ func CloneAll(
 			dir = filepath.Join(workspaceDir, repo.Name)
 			cloneErr = cloneOne(ctx, sup, credHelperArg, repo, dir, cloneTimeout, stopGrace)
 		}
+		if cloneErr == nil && scoped {
+			cloneErr = applySparseCheckout(ctx, sup, dir, pathScope, cloneTimeout, stopGrace)
+		}
 		results = append(results, CloneResult{Repo: repo, Primary: primary, Dir: dir, Err: cloneErr})
 
 		if cloneErr == nil {
@@ -94,6 +119,51 @@ func CloneAll(
 	}
 
 	return results, nil
+}
+
+// applySparseCheckout runs `git -C <dir> sparse-checkout set --no-cone --
+// <patterns...>` for one already-cloned repo (§14.1: "domain/gitstate's
+// clone step runs `git sparse-checkout set <globs>` per repo when
+// path_scope is present"). Excluded paths never materialize on the
+// sandbox filesystem afterward -- §14.1's own enforcement guarantee.
+//
+// --no-cone is required -- verified directly against real git behavior,
+// not assumed (sync_test.go's own house style, applied here too): git's
+// default cone mode REJECTS exactly the gitignore-style glob syntax
+// internal/domain/environment.ValidatePathScope already validates (e.g. a
+// leading "/" combined with a "*" wildcard, such as "/apps/web/*"),
+// demanding directory-only patterns instead ("specify directories rather
+// than patterns"); non-cone mode is the one that actually supports
+// arbitrary path.Match-syntax globs. "--" ends option parsing for
+// everything after it, mirroring cloneOne's own exact defense-in-depth
+// convention: even an already-validated pattern should never be
+// positionally ambiguous to git's own argument parser -- a pattern
+// beginning with "-" passes ValidatePathScope's own glob-SYNTAX check
+// (path.Match's own grammar does not forbid a leading "-"), so this is a
+// real, not merely theoretical, defense-in-depth gap were "--" omitted.
+func applySparseCheckout(ctx context.Context, sup *supervisor.Supervisor, dir string, patterns []string, timeout, stopGrace time.Duration) error {
+	args := append([]string{"-C", dir, "sparse-checkout", "set", "--no-cone", "--"}, patterns...)
+
+	proc, err := sup.Spawn(supervisor.Spec{Path: "git", Args: args})
+	if err != nil {
+		return fmt.Errorf("spawn git sparse-checkout set: %w", err)
+	}
+
+	stepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	result, waitErr := proc.Wait(stepCtx)
+	if waitErr != nil {
+		_ = proc.Stop(ctx, stopGrace)
+		return fmt.Errorf("git sparse-checkout set: did not complete within %s: %w", timeout, waitErr)
+	}
+	if result.Err != nil {
+		return fmt.Errorf("git sparse-checkout set: %w", result.Err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("git sparse-checkout set: exited %d", result.ExitCode)
+	}
+	return nil
 }
 
 // validateRepoSpec runs every internal/domain/reposource validator this
