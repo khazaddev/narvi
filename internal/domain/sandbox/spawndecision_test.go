@@ -136,6 +136,41 @@ func TestEvaluateSpawnDecision(t *testing.T) {
 			wantKind: sandbox.SpawnActionSpawn,
 		},
 		{
+			// Audit finding F3 regression: models the row EXACTLY as
+			// postgres/queries/sandboxes.sql's own fixed UpsertSandboxForSpawn
+			// leaves it right after a resume-style claim on a box that sat
+			// terminal (Stopped) for far longer than SpawningTimeout --
+			// CreatedAt/LastSeenAt both reset to "now" by that SAME upsert
+			// call, not still reflecting however long the box sat idle
+			// beforehand. A concurrent second actor reading this row
+			// genuinely Skips (the guard's own "no-op for free" purpose),
+			// which it would NOT do if LastSeenAt/CreatedAt still carried
+			// the original, long-stale spawn time (see this package's
+			// sibling postgres integration test for the query-level half
+			// of this fix).
+			name: "F3: resume-style claim resets last-sign-of-life, so a concurrent second read genuinely skips",
+			state: sandbox.SpawnState{
+				Status:     sandbox.StateSpawning,
+				CreatedAt:  now,
+				LastSeenAt: now,
+			},
+			wantKind:     sandbox.SpawnActionSkip,
+			wantContains: "spawning",
+		},
+		{
+			// The pre-fix counterpart of the case above: if a resume claim
+			// left CreatedAt/LastSeenAt at their ORIGINAL, long-stale
+			// values (as the query did before the F3 fix), the guard does
+			// NOT skip -- this is the exact bug the fix closes.
+			name: "F3 (pre-fix shape, documents the bug): stale last-sign-of-life on a just-claimed spawning row fails to skip",
+			state: sandbox.SpawnState{
+				Status:     sandbox.StateSpawning,
+				CreatedAt:  now.Add(-10 * time.Minute),
+				LastSeenAt: now.Add(-10 * time.Minute),
+			},
+			wantKind: sandbox.SpawnActionSpawn,
+		},
+		{
 			name: "still skips a stale spawning when a spawn is in progress in-memory",
 			state: sandbox.SpawnState{
 				Status: sandbox.StateSpawning, CreatedAt: now.Add(-(cfg.SpawningTimeout + time.Second)),
