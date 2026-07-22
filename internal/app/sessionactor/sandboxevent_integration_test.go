@@ -479,6 +479,139 @@ func TestHandleSnapshotReadyEvent_Normal_TransitionsToReadyAndPersistsID(t *test
 	}
 }
 
+// TestPostTurnSnapshotCycle_RearmsLivenessAndInactivityWatchdogsOnReturnToReady
+// is the core regression test for audit finding F2 ("A routine post-turn
+// snapshot permanently disarms the fast liveness_check watchdog for a
+// sandbox generation"). It drives a REAL, full post-turn cycle end to end,
+// through Actor.Send exactly as production traffic would: a Ready sandbox
+// receives a genuine "execution_complete" SandboxEvent (turn-terminal, §3.3)
+// -> handleSandboxEvent's own post-commit block calls the real
+// triggerSnapshotBestEffort, which transitions Ready->Snapshotting and sends
+// a real sandboxws.Snapshot command via the fake commander -> a real
+// "snapshot_ready" SandboxEvent, carrying that exact command's own
+// MessageId back as commandMessageId (message-id correlation, §22 design
+// decision 3), completes Snapshotting->Ready via handleSnapshotReadyEvent.
+//
+// Before this fix: liveness_check/inactivity were never armed by ANY of
+// this (they are only armed by the Booting->Ready guard in
+// handleSandboxEvent, which sandboxTransitionTrigger never maps
+// "snapshot_ready" onto, and handleSnapshotReadyEvent wrote row.Status
+// directly, bypassing that guard entirely) -- so if either timer happened
+// to already be armed from an earlier Booting->Ready transition and then
+// fired while the sandbox was Snapshotting, handleLivenessCheckTimer's own
+// "status != Ready -> delete, no re-arm" branch would delete it here with
+// nothing to ever bring it back, even once the sandbox returned to Ready.
+// This test seeds BOTH timers already armed (mirroring a sandbox that
+// really did go through a real Booting->Ready transition earlier in its
+// life) and asserts that after this full cycle they are not merely still
+// present, but re-armed with a FRESH fires_at strictly after the cycle
+// began -- proving armReadyWatchdogs' own call from handleSnapshotReadyEvent
+// genuinely fired, not that some stale earlier arm merely survived by
+// accident.
+func TestPostTurnSnapshotCycle_RearmsLivenessAndInactivityWatchdogsOnReturnToReady(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createProcessingTurn(ctx, t, turnStore, sessionID)
+
+	timerStore := narvipg.NewTimerStore(pool)
+	// Seed both watchdogs already armed, as a real earlier Booting->Ready
+	// transition would have left them -- with a STALE fires_at, so a fresh
+	// arm from this cycle is unambiguously distinguishable from "it was
+	// simply never touched".
+	staleFiresAt := time.Now().Add(-1 * time.Hour)
+	for _, name := range []string{TimerLivenessCheck, TimerInactivity} {
+		if _, err := timerStore.Upsert(ctx, sqlcgen.UpsertSessionTimerParams{
+			SessionID: sessionID, Name: name,
+			FiresAt: pgtype.Timestamptz{Time: staleFiresAt, Valid: true},
+		}); err != nil {
+			t.Fatalf("seed stale %s timer: %v", name, err)
+		}
+	}
+
+	commander := &fakeSendCommander{}
+	r := newDispatchTestRegistry(t, ctx, pool, nil, commander)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	cycleStart := time.Now()
+
+	// --- Turn completes: a real execution_complete drives the post-commit
+	// triggerSnapshotBestEffort call, Ready -> Snapshotting. ---
+	outcome := sendSandboxEvent(ctx, t, a, SandboxEvent{
+		Type: "execution_complete",
+		Gen:  1,
+		Raw:  executionCompleteRaw(t, sessionID.String(), 1, sandboxws.ExecutionCompleteOutcomeCompleted),
+	})
+	if !outcome.Persisted {
+		t.Fatal("execution_complete: Persisted = false, want true")
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return commander.callCount() == 1
+	})
+
+	var snapshotCmd sandboxws.Snapshot
+	if err := json.Unmarshal(commander.lastPayload(), &snapshotCmd); err != nil {
+		t.Fatalf("unmarshal Snapshot command: %v", err)
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		got, err := sandboxStore.Get(ctx, sessionID)
+		return err == nil && got.Status == sqlcgen.SandboxStatusSnapshotting
+	})
+
+	// --- The sandbox's own real snapshot_ready reply, correlated to the
+	// Snapshot command's own MessageId, completes Snapshotting -> Ready. ---
+	snapshotReadyRaw := json.RawMessage(`{"type":"snapshot_ready","messageId":"sr-cycle-1","sessionId":"` +
+		sessionID.String() + `","gen":1,"ackId":"snapshot_ready:sr-cycle-1","snapshotId":"snap-cycle-1","commandMessageId":"` +
+		snapshotCmd.MessageId + `"}`)
+	outcome = sendSandboxEvent(ctx, t, a, SandboxEvent{Type: "snapshot_ready", Gen: 1, Raw: snapshotReadyRaw})
+	if !outcome.Persisted {
+		t.Fatal("snapshot_ready: Persisted = false, want true")
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Fatalf("sandbox status = %s, want %s (snapshot_ready must complete the cycle back to ready)", row.Status, sqlcgen.SandboxStatusReady)
+	}
+
+	// --- The core F2 assertion: both watchdogs are armed with a FRESH
+	// fires_at, not deleted and not left at their stale seeded value. ---
+	for _, name := range []string{TimerLivenessCheck, TimerInactivity} {
+		timerRow, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: name})
+		if errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("%s timer was deleted with no re-arm after the post-turn snapshot cycle returned to ready -- this is exactly audit finding F2", name)
+		}
+		if err != nil {
+			t.Fatalf("get %s timer: %v", name, err)
+		}
+		if !timerRow.FiresAt.Time.After(cycleStart) {
+			t.Errorf("%s fires_at = %v, want strictly after this cycle's own start %v (stale seed value was never actually re-armed)",
+				name, timerRow.FiresAt.Time, cycleStart)
+		}
+	}
+}
+
 // TestHandleSandboxEvent_HeartbeatOnReadySandbox_DoesNotTriggerSnapshot
 // reproduces, and proves fixed, the defect an independent review of this
 // Step found: a routine "heartbeat" event arriving on an already-Ready,
@@ -901,6 +1034,94 @@ func TestHandleSnapshotReadyEvent_DecodeFailure_RevertsToReadyInsteadOfWedging(t
 	}
 	if n != 1 {
 		t.Errorf("snapshot_ready event count = %d, want 1 (persisted verbatim despite the decode failure)", n)
+	}
+}
+
+// TestHandleSnapshotReadyEvent_DecodeFailureRevert_RearmsLivenessAndInactivityWatchdogs
+// covers audit finding F2's second landing-on-ready path: revertSnapshotToReady's
+// own compensating write (here reached via handleSnapshotReadyEvent's
+// decode-failure branch -- the same malformed-payload repro
+// TestHandleSnapshotReadyEvent_DecodeFailure_RevertsToReadyInsteadOfWedging
+// above already proves reverts Snapshotting->Ready) must ALSO re-arm both
+// watchdogs, exactly like the success path does -- since
+// revertSnapshotToReady is the single shared helper behind BOTH of its own
+// callers (this decode-failure branch, and revertSnapshotBestEffort's own
+// SendCommand-failure path), one passing test here covers both by
+// construction.
+func TestHandleSnapshotReadyEvent_DecodeFailureRevert_RearmsLivenessAndInactivityWatchdogs(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxStore.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: sessionID, Status: sqlcgen.SandboxStatusSnapshotting,
+	}); err != nil {
+		t.Fatalf("move sandbox to snapshotting: %v", err)
+	}
+	pendingID := "pending-msg-revert-rearm"
+	if _, err := sandboxStore.UpdatePendingSnapshotMessageID(ctx, sqlcgen.UpdateSandboxPendingSnapshotMessageIDParams{
+		SessionID: sessionID, PendingSnapshotMessageID: &pendingID,
+	}); err != nil {
+		t.Fatalf("seed pending snapshot message id: %v", err)
+	}
+
+	timerStore := narvipg.NewTimerStore(pool)
+	staleFiresAt := time.Now().Add(-1 * time.Hour)
+	for _, name := range []string{TimerLivenessCheck, TimerInactivity} {
+		if _, err := timerStore.Upsert(ctx, sqlcgen.UpsertSessionTimerParams{
+			SessionID: sessionID, Name: name,
+			FiresAt: pgtype.Timestamptz{Time: staleFiresAt, Valid: true},
+		}); err != nil {
+			t.Fatalf("seed stale %s timer: %v", name, err)
+		}
+	}
+
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	revertStart := time.Now()
+
+	// Same genuinely-malformed-per-schema payload as the sibling test above
+	// (missing "ackId"/"snapshotId") -- drives the exact same decode-failure
+	// -> revertSnapshotToReady path.
+	malformedRaw := json.RawMessage(`{"type":"snapshot_ready","messageId":"m-bad-rearm","sessionId":"s","gen":1}`)
+	outcome := sendSandboxEvent(ctx, t, a, SandboxEvent{Type: "snapshot_ready", Gen: 1, Raw: malformedRaw})
+	if !outcome.Persisted {
+		t.Fatal("malformed snapshot_ready: Persisted = false, want true")
+	}
+
+	row, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if row.Status != sqlcgen.SandboxStatusReady {
+		t.Fatalf("sandbox status = %s, want %s (decode failure must revert to ready)", row.Status, sqlcgen.SandboxStatusReady)
+	}
+
+	for _, name := range []string{TimerLivenessCheck, TimerInactivity} {
+		timerRow, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: name})
+		if errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("%s timer was deleted with no re-arm after the decode-failure revert landed back on ready -- audit finding F2", name)
+		}
+		if err != nil {
+			t.Fatalf("get %s timer: %v", name, err)
+		}
+		if !timerRow.FiresAt.Time.After(revertStart) {
+			t.Errorf("%s fires_at = %v, want strictly after this revert's own start %v (stale seed value was never actually re-armed)",
+				name, timerRow.FiresAt.Time, revertStart)
+		}
 	}
 }
 

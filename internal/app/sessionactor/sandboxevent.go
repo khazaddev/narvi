@@ -166,6 +166,41 @@ func sandboxTransitionTrigger(eventType string, lastBootPhase *string, status sa
 	}
 }
 
+// armReadyWatchdogs arms BOTH liveness_check and inactivity, using the
+// exact same budget constants each timer's own handler already reuses for
+// its own steady-state re-arm (handleLivenessCheckTimer/
+// handleInactivityTimer, timerfired.go) -- the single shared definition of
+// "what happens when a sandbox becomes Ready", called from every call site
+// in this file that lands a real transition on sandbox.StateReady: the
+// Booting->Ready guard below (handleSandboxEvent), handleSnapshotReadyEvent's
+// own snapshot-success path, and revertSnapshotToReady's own compensating
+// write (covering both of ITS callers, revertSnapshotBestEffort and
+// handleSnapshotReadyEvent's own decode-failure branch).
+//
+// Audit finding F2: liveness_check is only ever re-armed by the Booting->
+// Ready guard's own before/after transition check, or by its own handler's
+// self-re-arm while already Ready -- and its handler deletes it, with no
+// re-arm, the instant it fires while status != Ready (by design: it only
+// watches the steady Ready state). Snapshotting is one of the statuses
+// that "!= Ready" branch covers, and every turn spends up to
+// SnapshotMintTimeout (~60s, a large fraction of the 90s
+// SteadyHeartbeatBudget cadence) in Snapshotting -- so a liveness_check
+// fire landing during that window got silently, permanently deleted with
+// no re-arm anywhere, degrading detection of a genuinely dead sandbox down
+// to the ~10-minute InactivityTimeout backstop for the rest of that
+// generation. Every caller of THIS helper must only call it immediately
+// after a transition that has ALREADY committed a genuine ->Ready edge
+// (never unconditionally on every call/heartbeat while already Ready --
+// that would keep pushing fires_at forward and the timer would never get
+// a real chance to fire); each call site's own doc comment states why its
+// own call satisfies that.
+func (a *Actor) armReadyWatchdogs(ctx context.Context, tx pgx.Tx, now time.Time) error {
+	if err := a.armTimer(ctx, tx, TimerLivenessCheck, now.Add(a.timeouts.SteadyHeartbeatBudget)); err != nil {
+		return err
+	}
+	return a.armTimer(ctx, tx, TimerInactivity, now.Add(a.timeouts.InactivityMinCheckInterval))
+}
+
 // handleSandboxEvent processes one inbound sandbox-WS event delivered by
 // wshub's read loop. Whatever a.transact's own closure decides, the
 // resulting outcome is ALWAYS sent on cmd.Reply (via a non-blocking
@@ -306,11 +341,18 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// own already-correct delete-on-non-connecting-phase logic
 		// (timerfired.go) hands off cleanly the next time that stale timer
 		// fires: liveness_check is already live and watching by then.
+		//
+		// Delegates to armReadyWatchdogs (below) -- the SAME shared
+		// helper handleSnapshotReadyEvent's own success path and
+		// revertSnapshotToReady's own compensating write now also call, so
+		// every real transition INTO Ready, by whichever path, re-arms
+		// identically (audit finding F2's own fix: a snapshot_ready-driven
+		// Snapshotting->Ready never went through this guard at all, since
+		// sandboxTransitionTrigger never maps "snapshot_ready" and
+		// handleSnapshotReadyEvent/revertSnapshotToReady each write
+		// row.Status directly, bypassing target/row.Status entirely).
 		if sandbox.State(row.Status) != sandbox.State(target) && sandbox.State(target) == sandbox.StateReady {
-			if err := a.armTimer(ctx, tx, TimerLivenessCheck, now.Add(a.timeouts.SteadyHeartbeatBudget)); err != nil {
-				return err
-			}
-			if err := a.armTimer(ctx, tx, TimerInactivity, now.Add(a.timeouts.InactivityMinCheckInterval)); err != nil {
+			if err := a.armReadyWatchdogs(ctx, tx, now); err != nil {
 				return err
 			}
 		}
@@ -353,7 +395,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			// transact, right after appendRawEvent already persisted the
 			// raw event above -- matching execution_complete's own "persist
 			// first, then act" ordering exactly.
-			if err := a.handleSnapshotReadyEvent(ctx, tx, row, cmd.Raw); err != nil {
+			if err := a.handleSnapshotReadyEvent(ctx, tx, row, cmd.Raw, now); err != nil {
 				return err
 			}
 		case "git_sync":
@@ -506,7 +548,22 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 // Ready->Snapshotting transition) -- a mismatch, or that column being nil
 // (no attempt outstanding), is treated exactly like the late/duplicate
 // case just above: logged, no-op, never a transact failure.
-func (a *Actor) handleSnapshotReadyEvent(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox, raw json.RawMessage) error {
+//
+// Fix (audit finding F2): the Snapshotting->Ready transition below used to
+// leave BOTH liveness_check and inactivity un-re-armed -- neither
+// handleLivenessCheckTimer nor handleInactivityTimer (timerfired.go) ever
+// re-arms itself once it fires while status != Ready (by design: see
+// handleLivenessCheckTimer's own doc comment), and this snapshot_ready path
+// writes row.Status directly, never going through the generic before/after
+// Booting->Ready guard a few lines up in handleSandboxEvent -- so a
+// liveness_check fire landing during ANY Snapshotting window (every turn,
+// §3.3's post-turn snapshot) silently and permanently disarmed the fast
+// steady_heartbeat_budget watchdog for the rest of that sandbox generation.
+// armReadyWatchdogs (below) is now called right after this function's own
+// Snapshotting->Ready transition actually commits -- reachable only once
+// per real edge, since the early-return above already guarantees row.Status
+// genuinely WAS Snapshotting when this call started.
+func (a *Actor) handleSnapshotReadyEvent(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox, raw json.RawMessage, now time.Time) error {
 	if sandbox.State(row.Status) != sandbox.StateSnapshotting {
 		a.logger.Warn("sessionactor: snapshot_ready arrived while sandbox is not snapshotting; ignoring (late or duplicate delivery)",
 			"status", row.Status)
@@ -532,7 +589,7 @@ func (a *Actor) handleSnapshotReadyEvent(ctx context.Context, tx pgx.Tx, row sql
 		// it).
 		a.logger.Warn("sessionactor: snapshot_ready failed schema decode; persisted verbatim, reverting sandbox to ready instead of leaving it stuck snapshotting",
 			"error", err)
-		return a.revertSnapshotToReady(ctx, tx, row)
+		return a.revertSnapshotToReady(ctx, tx, row, now)
 	}
 
 	pending := "<nil>"
@@ -564,7 +621,12 @@ func (a *Actor) handleSnapshotReadyEvent(ctx context.Context, tx pgx.Tx, row sql
 	}); err != nil {
 		return fmt.Errorf("sessionactor: record snapshot id: %w", err)
 	}
-	return nil
+	// F2 fix: this Snapshotting->Ready transition just committed above -- a
+	// genuine edge, since the early-return at the top of this function
+	// already confirmed row.Status WAS Snapshotting -- so both watchdogs
+	// must be re-armed here exactly as the Booting->Ready guard in
+	// handleSandboxEvent does for its own edge.
+	return a.armReadyWatchdogs(ctx, tx, now)
 }
 
 // revertSnapshotToReady performs the Snapshotting->Ready compensating
@@ -577,7 +639,7 @@ func (a *Actor) handleSnapshotReadyEvent(ctx context.Context, tx pgx.Tx, row sql
 // decode-failure caller's case, already known to be Snapshotting) by the
 // caller; this function re-confirms that itself so it is safe to call
 // from either context without a caller-side duplicate check.
-func (a *Actor) revertSnapshotToReady(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox) error {
+func (a *Actor) revertSnapshotToReady(ctx context.Context, tx pgx.Tx, row sqlcgen.Sandbox, now time.Time) error {
 	if sandbox.State(row.Status) != sandbox.StateSnapshotting {
 		// Already moved on via some other path (e.g. a liveness watchdog
 		// already suspected it in the meantime) -- nothing to revert.
@@ -601,7 +663,13 @@ func (a *Actor) revertSnapshotToReady(ctx context.Context, tx pgx.Tx, row sqlcge
 	}); err != nil {
 		return fmt.Errorf("sessionactor: clear pending snapshot message id (revert): %w", err)
 	}
-	return nil
+	// F2 fix: this compensating write just landed Snapshotting->Ready too
+	// (reachable only on a genuine edge -- the early-return at the top of
+	// this function already confirmed row.Status WAS Snapshotting) -- both
+	// of THIS function's own two callers (handleSnapshotReadyEvent's
+	// decode-failure branch and revertSnapshotBestEffort, covering its
+	// SendCommand-failure path) get the re-arm for free from this one call.
+	return a.armReadyWatchdogs(ctx, tx, now)
 }
 
 // snapshotPlan is what triggerSnapshotBestEffort's own first transact
@@ -787,7 +855,7 @@ func (a *Actor) revertSnapshotBestEffort(ctx context.Context) {
 		if err != nil {
 			return fmt.Errorf("sessionactor: get sandbox: %w", err)
 		}
-		return a.revertSnapshotToReady(ctx, tx, row)
+		return a.revertSnapshotToReady(ctx, tx, row, time.Now())
 	})
 	if err != nil {
 		a.logger.Warn("sessionactor: revert snapshot to ready failed", "error", err)
