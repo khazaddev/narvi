@@ -23,7 +23,7 @@ following is true, and stated plainly rather than overstated —
   because what it exercises doesn't exist yet (named by exact Step/PR
   number).
 
-## The harness (this PR)
+## The harness
 
 `harness_test.go` builds a real, reusable "mini control plane" — one
 throwaway Postgres (via testcontainers, every embedded migration
@@ -38,19 +38,22 @@ internal-package integration tests — appropriate for scenarios that
 genuinely span multiple packages, not one package's own internals in
 isolation.
 
-It is kept intentionally minimal: built only as far as scenario #12 (the
-one scenario this PR adds) actually needs. A follow-up PR is expected to
-extend it once scenarios #3, #5's plain-SPAWN race variant, and #7's own
-real needs are known — see those entries below for what that will likely
-require: a way to inject boot delay (#3); a real/fake
-`ports.SandboxProvider` (#5, mirroring `dispatch_integration_test.go`'s
-own `fakeSpawnProvider` precedent); or a live commander plus a way to
-simulate a dropped WS connection against this same rig (#7).
-`Harness.NewRegistry` currently wires commander/provider/sourceControl as
-nil, which is only sufficient for scenario #12 and a future #3 — #5 and
-#7 will need a sibling constructor (or a direct `sessionactor.NewRegistry`
-call reusing this harness's pool/timeouts/hub) rather than reusing
-`NewRegistry` as-is.
+It was originally kept intentionally minimal: built only as far as
+scenario #12 (this PR's own first addition) actually needed.
+`Harness.NewRegistry` still wires commander/provider/sourceControl as nil,
+which remains sufficient for scenario #12 and #3 (neither ever exercises
+spawn/dispatch/push). A follow-up PR (§9.3 #5's plain-SPAWN race variant,
+#7) has since extended it exactly as predicted here: #5's variant turned
+out to belong in `internal/app/sessionactor/dispatch_integration_test.go`
+instead (see that scenario's own entry below for why), so it needed no
+harness change at all; #7 needed a real, live commander, added as a
+genuinely new, separate constructor —
+`Harness.NewRegistryWithCommander` — rather than changing `NewRegistry`'s
+own existing signature, so scenario #12's (and #3's) own simplest case,
+and every existing caller of `NewRegistry`, stayed completely unaffected.
+`Harness.Events` (a plain `*postgres.EventStore`, mirroring Sessions/Turns/
+Sandboxes/Timers above) was added alongside it, for #7's own events-table
+dedupe assertion.
 
 ## The 12 scenarios
 
@@ -92,23 +95,35 @@ turn is re-dispatched to gen 2 carrying the session's own recorded
 > Slow boot (inject 5-min delay in deps install) → boot_progress keeps
 > session alive; no false kill.
 
-**Status: reserved for a follow-up PR.** Only narrow, domain-decision-level
-coverage exists today — no real end-to-end "a session survives a slow
-boot because boot_progress events keep resetting its liveness deadline"
-test exists anywhere in this repo:
+**Status: covered.** A real, sustained-survival end-to-end test now exists,
+built on this package's own harness with a short `platform.Timeouts`
+override (only `FirstConnectBudget`/`SteadyHeartbeatBudget`/
+`InactivityMinCheckInterval` matter for this code path): a sandbox seeded
+in `Booting`, driven through 4 real rounds of (sleep ~half the steady
+budget → real `boot_progress` `SandboxEvent` → real
+`TimerFired{Name: TimerConnectingDeadline}`), each round re-confirming from
+Postgres that the sandbox is still `Booting` and `connecting_deadline` is
+still armed with a genuinely NEW `fires_at` — and asserting the test's own
+cumulative elapsed wall-clock time genuinely exceeds `FirstConnectBudget`,
+proving this is really "kept alive by repeated pings", not "finished
+within the first window regardless". Finally drives a real heartbeat to
+`Ready` and confirms the clean hand-off (`connecting_deadline` deletes
+itself, `liveness_check` takes over) — the SAME transition
+`TestConnectingDeadlineHandoff_ToLivenessCheck` already proves in
+isolation, now shown surviving many prior pings first, not merely
+reachable in a vacuum.
 
+- `TestResilienceScenario3_SlowBoot_SurvivesRepeatedBootProgressPings_NeverFalselyKilled`
+  — `test/resilience/scenario3_slow_boot_test.go`
 - `TestEvaluateConnectingTimeout` —
-  `internal/domain/sandbox/liveness_test.go` (proves the pure timeout
-  decision function in isolation)
+  `internal/domain/sandbox/liveness_test.go` (the pure timeout decision
+  function this scenario's own real behavior is built on, still proven in
+  isolation too)
 - `TestConnectingDeadlineHandoff_ToLivenessCheck` —
-  `internal/app/sessionactor/timerfired_integration_test.go` (proves the
-  handoff from the connecting-deadline timer to the steady-state liveness
-  check, not a real sustained slow-boot survival)
-
-The harness this PR builds (`harness_test.go`) is intended to carry this:
-a fresh scenario file driving a sandbox through repeated `boot_progress`
-events with injected delays between them, asserting the session is never
-falsely killed.
+  `internal/app/sessionactor/timerfired_integration_test.go` (the
+  connecting-deadline → liveness-check hand-off this scenario's own final
+  step re-exercises against a session that has already survived several
+  slow-boot rounds)
 
 ### #4 — late `execution_complete`
 
@@ -134,17 +149,31 @@ found freshly.
 > Two concurrent spawns (double-click / retry race) → single winner by
 > gen fencing; loser sandbox reaped by GC.
 
-**Status: covered for RESUME; the plain-SPAWN race variant is reserved for
-a follow-up PR.** A genuine two-actor race is proven for the RESUME path
-(two actors, same session, concurrently attempting to resume the same
-sandbox — only one call to the provider's `ResumeSandbox` actually
-happens), plus the epoch-fencing primitive that makes any such race safe
-and the reconciler's own orphan-reaping half. What is NOT yet proven is
-the same double-actor race for a plain SPAWN (as opposed to resume) —
-that variant is reserved for the follow-up PR, not attempted here.
+**Status: covered**, for both the RESUME path and the plain-SPAWN path. A
+genuine two-actor race is proven for RESUME (two actors, same session,
+concurrently attempting to resume the same sandbox — only one call to the
+provider's `ResumeSandbox` actually happens) and, as of this same PR, an
+identical genuine two-actor race for a plain SPAWN (a brand-new session
+with no sandbox row at all — only one call to the provider's
+`CreateSandbox` actually happens, actor B's own `EvaluateSpawnDecision`
+correctly reading the row as already-`Spawning` at gen 1 and no-opping
+rather than double-spawning) — plus the epoch-fencing primitive that makes
+either race safe and the reconciler's own orphan-reaping half. Both
+concurrency tests live together in `internal/app/sessionactor/
+dispatch_integration_test.go`, not in this package: a genuine two-actor
+race needs exactly the white-box helpers already built and proven there
+(`newTestPoolPair`, `killAdvisoryLockHolder`, `fakeSpawnProvider`, ...),
+which this package's own separate `resilience_test` package cannot import
+(unexported) — duplicating that whole harness here for one more variant
+of an already-covered scenario would be needless, not "genuinely
+multi-package orchestration" the way #7 below actually is.
 
 - `TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce`
   — `internal/app/sessionactor/dispatch_integration_test.go`
+- `TestResilience_ConcurrentPlainSpawnAcrossActors_CreateSandboxCalledAtMostOnce`
+  — `internal/app/sessionactor/dispatch_integration_test.go` (this PR's own
+  addition: the plain-SPAWN variant, mirroring the RESUME test above
+  step-for-step)
 - `TestExecuteSpawn_StaleEpochOnRecord_PropagatesErrStaleEpoch` —
   `internal/app/sessionactor/dispatch_integration_test.go` (the fencing
   primitive both spawn and resume rely on)
@@ -173,28 +202,46 @@ scm-credentials bearer-token endpoint a sandbox agent separately calls.
 > WS drop during event stream → ack protocol redelivers the 6 critical
 > events exactly once.
 
-**Status: reserved for a follow-up PR.** The 6 critical types
+**Status: covered**, end to end, for all 6 critical types
 (`execution_complete`, `error`, `snapshot_ready`, `push_complete`,
 `push_error`, `sub_task_finish` — `contracts/sandbox-ws/v1/events.schema.json`'s
-own description) are real, and each half of the ack protocol has *some*
-coverage today, but not the full inbound pipeline end to end:
+own description, confirmed exhaustive against `internal/sandboxagent/
+wsbridge/doc.go` too). A table-driven test builds this package's own
+harness with a REAL commander (`wshub.NewSandboxRegistry`) and a REAL
+`wshub.NewSandboxHandler` behind an `httptest.Server`, then dials a REAL,
+unmodified `internal/sandboxagent/wsbridge.Bridge` against it through a
+small message-relaying proxy (`wsProxy`, this file's own addition) that
+can sever the connection at an exact, deterministic point — adapting
+`TestSendCritical_ResendUntilAckedThenNeverAgain`'s own scripted-fake-server
+mechanism to a real backend instead of a fake one. For each of the 6
+types: the critical event is sent via a real `Bridge.SendCritical` call,
+the proxy forces the connection closed BEFORE any ack can ever come back,
+the bridge genuinely resends the identical event after reconnecting, the
+`events` table shows exactly ONE row for that `(session_id, message_id)`
+pair despite the resend (the same upsert-dedupe primitive
+`TestEventStore_Create_DedupesOnSessionIDAndMessageID` already proves at
+the store level, now exercised through the full inbound WS pipeline), and
+— for the two types with a real, confirmable idempotent side effect —
+`execution_complete` completes a Processing turn exactly once and
+`snapshot_ready` sets the sandbox's own `snapshot_id` exactly once
+(correlated via its own `PendingSnapshotMessageID` guard). The other 4
+types have no bespoke per-type DB-mutation case in `sandboxevent.go`
+today, so the events-table dedupe assertion alone is this codebase's own
+correct and sufficient proof of "redelivered exactly once" for those — no
+fake per-type side effect was invented just to have something more to
+assert.
 
+- `TestResilienceScenario7_WSDropAckRedelivery_CriticalEventsRedeliveredExactlyOnce`
+  — `test/resilience/scenario7_ack_redelivery_test.go` (table-driven over
+  all 6 critical types, one subtest each)
 - `TestSendCritical_ResendUntilAckedThenNeverAgain` —
-  `internal/sandboxagent/wsbridge/bridge_test.go` (sender-side: proves
-  resend-until-acked, but only for ONE of the 6 critical types,
-  `execution_complete`, against a fake `httptest` WS server, not a real
-  control-plane inbound handler)
+  `internal/sandboxagent/wsbridge/bridge_test.go` (sender-side
+  resend-until-acked against a scripted fake WS server, for one critical
+  type — the mechanism this PR's own `wsProxy` adapts to a real backend)
 - `TestEventStore_Create_DedupesOnSessionIDAndMessageID` —
   `internal/adapters/outbound/postgres/event_artifact_wstoken_integration_test.go`
-  (receiver-side dedupe, but only at the Postgres-store level — an
-  upsert-on-`(session_id, message_id)` unit, not exercised through the
-  full inbound WS handler pipeline)
-
-Genuinely proving this scenario means a harness-driven test that drops a
-real WS connection mid-stream and confirms redelivery-exactly-once
-through the FULL pipeline (sandbox agent → control plane → Postgres),
-for more than the one critical type already covered piecemeal — reserved
-for the follow-up PR.
+  (the store-level dedupe primitive the scenario test above now proves
+  through the full inbound WS pipeline too)
 
 ### #8 — provider API down during spawn
 
@@ -305,11 +352,11 @@ resumable, not merely "not yet marked failed".
 |---|---|---|
 | 1 | Kill CP pod mid-turn | Covered (fails-with-reason half only, documented since Step 21) |
 | 2 | Kill sandbox mid-turn | Covered |
-| 3 | Slow boot | Reserved for follow-up PR |
+| 3 | Slow boot | Covered |
 | 4 | Late `execution_complete` | Covered (automation-counter correction deferred to Phase 3+) |
-| 5 | Concurrent spawns | Covered for RESUME; plain-SPAWN race reserved for follow-up PR |
+| 5 | Concurrent spawns | Covered (RESUME and plain-SPAWN both) |
 | 6 | Stale-gen reconnect | Covered |
-| 7 | WS-drop ack redelivery | Reserved for follow-up PR |
+| 7 | WS-drop ack redelivery | Covered (all 6 critical types) |
 | 8 | Provider down during spawn | Covered (backoff-retry mechanism an accepted, user-confirmed gap) |
 | 9 | Outbox: Slack API 500s | Deferred — needs Step 33 + Step 35 (Phase 3) |
 | 10 | Concurrent @mentions | Deferred — needs Step 32 (Phase 3) + Step 40/41 (Phase 4) |

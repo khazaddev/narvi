@@ -26,6 +26,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -39,6 +40,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
@@ -71,6 +73,15 @@ type Harness struct {
 	Turns     *narvipg.TurnStore
 	Sandboxes *narvipg.SandboxStore
 	Timers    *narvipg.TimerStore
+	// Events is this follow-up PR's own addition (scenario #7, "WS-drop ack
+	// redelivery"), following the exact same pattern as Sessions/Turns/
+	// Sandboxes/Timers above: a thin, real store wrapping this harness's
+	// own shared pool, exposed so a scenario can assert directly on the
+	// events table's own dedupe-on-(session_id, message_id) behavior
+	// (TestEventStore_Create_DedupesOnSessionIDAndMessageID's own already-
+	// proven primitive, internal/adapters/outbound/postgres) end to end
+	// through the real inbound WS pipeline, not just at the store level.
+	Events *narvipg.EventStore
 }
 
 // newHarness spins up one throwaway Postgres container, applies every
@@ -142,6 +153,7 @@ func newHarness(t *testing.T) *Harness {
 		Turns:     narvipg.NewTurnStore(pool),
 		Sandboxes: narvipg.NewSandboxStore(pool),
 		Timers:    narvipg.NewTimerStore(pool),
+		Events:    narvipg.NewEventStore(pool),
 	}
 }
 
@@ -180,6 +192,51 @@ func (h *Harness) NewRegistry(ctx context.Context, t *testing.T) *sessionactor.R
 		t.Fatalf("sessionactor.NewRegistry: %v", err)
 	}
 	return r
+}
+
+// NewRegistryWithCommander is this follow-up PR's own sibling constructor
+// (scenario #7, "WS-drop ack redelivery") -- exactly the extension this
+// file's own doc comment above anticipated ("#7 will need a sibling
+// constructor... rather than reusing NewRegistry as-is"): NewRegistry's own
+// existing signature and every one of its current callers (scenario #12,
+// and any future #3) are completely unaffected by this addition. Mirrors
+// NewRegistry's own call shape exactly, except commander is a real,
+// caller-supplied ports.SandboxCommander (a real wshub.SandboxRegistry in
+// production usage) instead of the hard-coded nil -- provider/sourceControl
+// stay nil, since #7 never exercises spawn/push, only the sandbox-WS
+// inbound event pipeline a live commander is needed for.
+func (h *Harness) NewRegistryWithCommander(ctx context.Context, t *testing.T, commander ports.SandboxCommander) *sessionactor.Registry {
+	t.Helper()
+
+	r, err := sessionactor.NewRegistry(ctx, h.Pool, h.Timeouts, h.Hub, commander, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("sessionactor.NewRegistry (with commander): %v", err)
+	}
+	return r
+}
+
+// waitUntil polls cond every 20ms until it reports true, or fails the test
+// once timeout elapses -- shared by every scenario in this package that
+// needs to observe the eventual effect of an actor's own asynchronous
+// mailbox processing without coupling the test to internal timing. Mirrors
+// internal/app/sessionactor/integration_helpers_test.go's own identical
+// helper (and internal/adapters/inbound/wshub's own copy of it) exactly --
+// this package builds its own copy rather than importing either of theirs,
+// matching that same established "each test package owns a small copy"
+// precedent this file's own doc comment already follows for newHarness.
+func waitUntil(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		if cond() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("condition not met within %v", timeout)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // CreateSession inserts a minimal session row and returns its id --
