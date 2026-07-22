@@ -188,6 +188,13 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 	// function's own transact below has committed, never inside it (see
 	// pushpr.go's own top comment for why).
 	var pushAfterCommit *pushSignal
+	// gitSyncReceived is set true by the "git_sync" case below (Step 29,
+	// "gitstate in-sandbox", §3.4 design section 6) -- acted on (a real
+	// SandboxCommander.SendCommand call replying with GitSyncComplete)
+	// only AFTER this function's own transact below has committed, never
+	// inside it, exactly like pushAfterCommit above: a real network call
+	// must never run while this transact's own row lock is held.
+	var gitSyncReceived bool
 
 	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		now := time.Now()
@@ -349,6 +356,19 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			if err := a.handleSnapshotReadyEvent(ctx, tx, row, cmd.Raw); err != nil {
 				return err
 			}
+		case "git_sync":
+			// Step 29 ("gitstate in-sandbox", §3.4 design section 6): a
+			// git_sync event needs no DB-side mutation of its own at all --
+			// the generic appendRawEvent persist+broadcast above already
+			// covers "CP durably stores it and the browser UI can show it
+			// as a live progress signal". This case's only job is flagging
+			// that a GitSyncComplete reply is owed, sent AFTER this
+			// transact commits (see gitSyncReceived's own doc comment above
+			// and this function's post-commit block below) -- mirroring
+			// cmd.Type == "push_complete"'s own identical "no in-transact
+			// case needed, just an outside-transact reply" shape a few
+			// lines below in this same function.
+			gitSyncReceived = true
 		}
 
 		outcome.Persisted = true
@@ -434,6 +454,14 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		}
 		if cmd.Type == "push_complete" {
 			a.createPRBestEffort(ctx, cmd.Raw)
+		}
+
+		// Step 29 ("gitstate in-sandbox"): reply to a just-committed
+		// git_sync event with GitSyncComplete -- same "outside the
+		// transact, log-only on failure" shape as the two side effects
+		// just above.
+		if gitSyncReceived {
+			a.sendGitSyncCompleteBestEffort(a.sessionID.String(), cmd.Gen)
 		}
 	}
 
@@ -763,5 +791,44 @@ func (a *Actor) revertSnapshotBestEffort(ctx context.Context) {
 	})
 	if err != nil {
 		a.logger.Warn("sessionactor: revert snapshot to ready failed", "error", err)
+	}
+}
+
+// sendGitSyncCompleteBestEffort implements handleSandboxEvent's own
+// git_sync reply (Step 29, "gitstate in-sandbox", §3.4 design section 6):
+// a real sandboxws.GitSyncComplete command, a pure acknowledgment carrying
+// no fields beyond the envelope (commands.schema.json's own
+// GitSyncComplete def) -- mirrors sendPushBestEffort/triggerSnapshotBestEffort's
+// own exact "mint a fresh MessageId, marshal, SendCommand, log a Warn on
+// failure, never escalate" shape. git_sync itself carries no ackId (a
+// best-effort event, not one of the 6 critical types), and the sandbox's
+// own reconciliation sequence (internal/sandboxagent/gitclone.SyncAll)
+// does not gate on or wait for this reply before proceeding to its next
+// phase -- see cmd/sandbox-agent/main.go's own HandleGitSyncComplete doc
+// comment for the sandbox-side half of this design. Never alters
+// handleSandboxEvent's own return value: the git_sync event that triggered
+// this already committed successfully regardless of whether this reply
+// can be delivered.
+func (a *Actor) sendGitSyncCompleteBestEffort(sessionID string, gen int) {
+	if a.commander == nil {
+		a.logger.Warn("sessionactor: git_sync received but no SandboxCommander is configured; cannot ack")
+		return
+	}
+
+	messageID := uuid.NewString()
+	msg := sandboxws.GitSyncComplete{
+		Type:      "git_sync_complete",
+		MessageId: messageID,
+		SessionId: sessionID,
+		Gen:       gen,
+	}
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		a.logger.Error("sessionactor: marshal git_sync_complete command failed", "error", err)
+		return
+	}
+
+	if err := a.commander.SendCommand(sessionID, payload); err != nil {
+		a.logger.Warn("sessionactor: send git_sync_complete command failed", "error", err)
 	}
 }

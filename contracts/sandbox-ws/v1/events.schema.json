@@ -140,12 +140,13 @@
       "type": "object",
       "additionalProperties": false,
       "description": "§3.4 stash -> checkout -> pop sequence, reported as it happens.",
-      "required": ["type", "messageId", "sessionId", "gen", "status", "branch"],
+      "required": ["type", "messageId", "sessionId", "gen", "repo", "status", "branch"],
       "properties": {
         "type": { "type": "string", "const": "git_sync" },
         "messageId": { "type": "string" },
         "sessionId": { "type": "string", "format": "uuid" },
         "gen": { "type": "integer" },
+        "repo": { "type": "string", "description": "§3.4: repos are always a list -- names which repo (SessionConfig.repos[].name) this phase is about, so a multi-repo session reconciling several repos concurrently/sequentially can be disambiguated." },
         "status": { "type": "string", "enum": ["stash", "checkout", "pop"] },
         "branch": { "type": "string" }
       }

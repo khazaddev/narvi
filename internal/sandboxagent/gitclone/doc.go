@@ -31,4 +31,21 @@
 // WriteAgentsManifest's exact markdown shape is this Step's own invented,
 // documented convention -- no contracts/ schema governs it, exactly like
 // Step 14 documented its own invented Readiness.Health shape.
+//
+// Step 29 ("gitstate in-sandbox", §3.4) adds SyncAll (sync.go) -- the
+// counterpart to CloneAll for a boot whose workspace ALREADY has a real
+// git repo on disk (a BootModeRepoImage/BootModeSnapshotRestore boot,
+// baked into the image or restored from a snapshot), never invoked
+// alongside CloneAll for the same repo list. SyncAll runs the real
+// "stash-if-dirty -> checkout session branch (create from base if absent)
+// -> stash pop" sequence §3.4 describes, driving each real git outcome
+// through internal/domain/gitstate's own pure Transition table (via that
+// package's TriggerFor* helpers) rather than deciding anything about
+// sequencing itself -- see gitstate's own doc.go for why that split exists.
+// It shares this package's own hardening conventions unchanged: every new
+// git invocation goes through the SAME validateRepoSpec/reposource
+// checks, the SAME supervisor.Supervisor (never a bare exec.Command), and
+// the SAME "-- ends option parsing" defense in depth, adapted to
+// checkout's own real semantics (see sync.go's own checkoutBranch doc
+// comment for why that placement differs from cloneOne's).
 package gitclone

@@ -1,0 +1,763 @@
+package gitclone_test
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/khazaddev/narvi/internal/domain/gitstate"
+	"github.com/khazaddev/narvi/internal/sandboxagent/gitclone"
+	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
+)
+
+// These tests exercise SyncAll against a REAL, already-existing git
+// workspace (never cloned by SyncAll itself -- see its own doc comment: it
+// reconciles a workspace that already exists on disk, exactly like a
+// BootModeRepoImage/BootModeSnapshotRestore boot would find one baked into
+// an image or restored from a snapshot). initRepo/runGit/currentBranch/
+// exitCode are clone_test.go's own helpers, reused here unchanged (same
+// package, same test binary).
+
+const testSyncStepTimeout = 10 * time.Second
+
+// gitSyncEvent records one onGitSync callback invocation for assertions.
+type gitSyncEvent struct {
+	repoName, status, branch string
+}
+
+func recordingOnGitSync(events *[]gitSyncEvent) gitclone.OnGitSync {
+	return func(repoName, status, branch string) {
+		*events = append(*events, gitSyncEvent{repoName, status, branch})
+	}
+}
+
+// TestSyncAll_CleanTree_CreatesSessionBranchFromHead covers §3.4's "checkout
+// session branch (create from base if absent)" for a repo with NO explicit
+// branch (repos[].branch == nil): the generated "narvi/<sessionID>" branch
+// does not exist yet, so SyncAll creates it from HEAD -- no stash/pop
+// phase at all for a clean tree.
+func TestSyncAll_CleanTree_CreatesSessionBranchFromHead(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // branch "main", one commit
+
+	sessionID := "11111111-1111-1111-1111-111111111111"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+
+	var events []gitSyncEvent
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, sessionID,
+		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+	if !got.Primary {
+		t.Error("results[0].Primary = false, want true (position 0)")
+	}
+
+	wantBranch := "narvi/" + sessionID
+	if got.Branch != wantBranch {
+		t.Errorf("results[0].Branch = %q, want %q", got.Branch, wantBranch)
+	}
+	if head := currentBranch(t, repoDir); head != wantBranch {
+		t.Errorf("checked-out branch = %q, want %q", head, wantBranch)
+	}
+
+	if len(events) != 1 || events[0].status != "checkout" || events[0].repoName != "repo1" || events[0].branch != wantBranch {
+		t.Errorf("events = %#v, want exactly one checkout event for repo1/%s", events, wantBranch)
+	}
+}
+
+// TestSyncAll_DirtyTree_StashCheckoutPop_PreservesEditsByteForByte is §9.3
+// scenario #11's own core assertion at the smallest possible scope: a
+// dirty working tree survives a full stash -> checkout -> pop cycle with
+// zero lost user edits, byte-for-byte, and fires all three onGitSync
+// phases in order.
+func TestSyncAll_DirtyTree_StashCheckoutPop_PreservesEditsByteForByte(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	dirtyContent := "uncommitted user edit, must survive\n"
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte(dirtyContent), 0o644); err != nil {
+		t.Fatalf("write dirty edit: %v", err)
+	}
+
+	sessionID := "22222222-2222-2222-2222-222222222222"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+
+	var events []gitSyncEvent
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, sessionID,
+		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+	if gitstate.RequiresStashRecovery(got.State) {
+		t.Error("RequiresStashRecovery(results[0].State) = true, want false on the happy path")
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md after sync: %v", err)
+	}
+	if string(data) != dirtyContent {
+		t.Errorf("README.md content = %q, want %q (dirty edit must survive byte-for-byte)", data, dirtyContent)
+	}
+
+	wantStatuses := []string{"stash", "checkout", "pop"}
+	if len(events) != len(wantStatuses) {
+		t.Fatalf("events = %#v, want exactly %v (in order)", events, wantStatuses)
+	}
+	for i, wantStatus := range wantStatuses {
+		if events[i].status != wantStatus {
+			t.Errorf("events[%d].status = %q, want %q", i, events[i].status, wantStatus)
+		}
+		if events[i].repoName != "repo1" {
+			t.Errorf("events[%d].repoName = %q, want repo1", i, events[i].repoName)
+		}
+	}
+}
+
+// TestResilienceScenario11_DirtyWorkingTree_RelaunchWithDifferentBranch_ZeroLostEdits
+// proves §9.3 resilience scenario #11 end to end, at the sandbox-agent
+// level, in the exact shape that scenario names: "Dirty working tree at
+// relaunch -> stash -> checkout session branch -> pop; zero lost user
+// edits." This is the scenario Step 29 exists to make real -- a repo with
+// REAL uncommitted changes reconciles against a session branch that
+// ALREADY EXISTS but is DIFFERENT from whatever is currently checked out
+// (simulating a BootModeRepoImage/BootModeSnapshotRestore relaunch whose
+// session names a different branch than the one baked into/restored in
+// this already-existing workspace). Confirms all three of this scenario's
+// own guarantees: the dirty edits survive stashed-then-popped, byte-
+// identical; the correct (different, existing) branch ends up checked
+// out; and a GitSync event fires for each of the three phases with the
+// correct repo/status/branch fields.
+func TestResilienceScenario11_DirtyWorkingTree_RelaunchWithDifferentBranch_ZeroLostEdits(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // checked out on "main"
+
+	// The session's own target branch already exists (as if created by an
+	// earlier boot of this same session) -- distinct from "main", the
+	// branch currently checked out in this already-existing workspace.
+	targetBranch := "session-target-branch"
+	runGit(t, repoDir, "branch", targetBranch)
+
+	dirtyContent := "user's real uncommitted edit -- must survive relaunch\n"
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte(dirtyContent), 0o644); err != nil {
+		t.Fatalf("write dirty edit: %v", err)
+	}
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &targetBranch},
+	}
+
+	var events []gitSyncEvent
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "resilience-session-11",
+		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+	if gitstate.RequiresStashRecovery(got.State) {
+		t.Error("RequiresStashRecovery(results[0].State) = true, want false -- zero lost edits means a clean recovery, not a P0")
+	}
+	if got.Branch != targetBranch {
+		t.Errorf("results[0].Branch = %q, want %q", got.Branch, targetBranch)
+	}
+
+	if head := currentBranch(t, repoDir); head != targetBranch {
+		t.Errorf("checked-out branch = %q, want %q (the DIFFERENT session target branch)", head, targetBranch)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md after relaunch: %v", err)
+	}
+	if string(data) != dirtyContent {
+		t.Errorf("README.md content = %q, want %q (zero lost user edits, §9.3 scenario #11)", data, dirtyContent)
+	}
+
+	wantEvents := []gitSyncEvent{
+		{repoName: "repo1", status: "stash", branch: targetBranch},
+		{repoName: "repo1", status: "checkout", branch: targetBranch},
+		{repoName: "repo1", status: "pop", branch: targetBranch},
+	}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("events = %#v, want %#v", events, wantEvents)
+	}
+	for i, want := range wantEvents {
+		if events[i] != want {
+			t.Errorf("events[%d] = %#v, want %#v", i, events[i], want)
+		}
+	}
+}
+
+// TestSyncAll_UntrackedFileOnly_StashCheckoutPop_PreservesEditsByteForByte
+// covers a dirty tree whose ONLY change is a brand-new UNTRACKED file --
+// one of the most realistic forms of session dirtiness (e.g. an agent's
+// own uncommitted new file from a prior turn) -- and is the regression
+// test for a genuine gap: gitStatusDirty (`git status --porcelain`)
+// reports an untracked file as dirty, but a plain `git stash push` (no
+// --include-untracked) has nothing to stash in that case and exits 0
+// without creating a stash entry, so the later unconditional `git stash
+// pop` then failed with "no stash entries found" -- a spurious fatal sync
+// failure and a P0 "stash outstanding" log even though `git stash list`
+// was genuinely empty and the file was never at risk. Proves: SyncAll
+// succeeds, State is Ready (never PopFailed), RequiresStashRecovery is
+// false, `git stash list` is empty afterward, and the untracked file's
+// content survives byte-for-byte.
+func TestSyncAll_UntrackedFileOnly_StashCheckoutPop_PreservesEditsByteForByte(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	untrackedContent := "brand-new untracked file, never git-add'ed, must survive\n"
+	if err := os.WriteFile(filepath.Join(repoDir, "untracked.txt"), []byte(untrackedContent), 0o644); err != nil {
+		t.Fatalf("write untracked file: %v", err)
+	}
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+
+	var events []gitSyncEvent
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-untracked-only",
+		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil (an untracked-only tree must not be a fatal failure)", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready (must not land in pop_failed for an untracked-only tree)", got.State)
+	}
+	if gitstate.RequiresStashRecovery(got.State) {
+		t.Error("RequiresStashRecovery(results[0].State) = true, want false -- nothing was ever at risk")
+	}
+
+	if stashList := gitOutput(t, repoDir, "stash", "list"); stashList != "" {
+		t.Errorf("git stash list = %q, want empty after a clean pop", stashList)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "untracked.txt"))
+	if err != nil {
+		t.Fatalf("read untracked.txt after sync: %v", err)
+	}
+	if string(data) != untrackedContent {
+		t.Errorf("untracked.txt content = %q, want %q (untracked edit must survive byte-for-byte)", data, untrackedContent)
+	}
+
+	wantStatuses := []string{"stash", "checkout", "pop"}
+	if len(events) != len(wantStatuses) {
+		t.Fatalf("events = %#v, want exactly %v (in order)", events, wantStatuses)
+	}
+}
+
+// TestSyncAll_StagedChange_StashCheckoutPop_PreservesStagedStatus covers a
+// dirty tree whose only change is `git add`-ed (staged) but not committed
+// -- proving the stash/checkout/pop cycle preserves the STAGED bit, not
+// just the content. Regression test for gitStashPop previously running
+// plain `git stash pop` (no --index): git's own documented default leaves
+// popped content unstaged even if it was staged at stash time, which is a
+// real divergence from "edits survive byte-for-byte" once staging state
+// counts as part of the edit.
+func TestSyncAll_StagedChange_StashCheckoutPop_PreservesStagedStatus(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // README.md = "hello\n", committed
+
+	stagedContent := "staged uncommitted edit, must survive AND remain staged\n"
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte(stagedContent), 0o644); err != nil {
+		t.Fatalf("write staged edit: %v", err)
+	}
+	runGit(t, repoDir, "add", "README.md")
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-staged",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md after sync: %v", err)
+	}
+	if string(data) != stagedContent {
+		t.Errorf("README.md content = %q, want %q (staged edit must survive byte-for-byte)", data, stagedContent)
+	}
+
+	// `git status --porcelain`'s first column is the INDEX (staged) status;
+	// "M " (staged modified, clean working tree) proves the edit is still
+	// staged, not just present -- "M " and " M" are meaningfully different
+	// here, so this checks the exact two-character code, not just non-empty.
+	statusOut := gitOutput(t, repoDir, "status", "--porcelain")
+	if !strings.HasPrefix(statusOut, "M ") {
+		t.Errorf("git status --porcelain = %q, want to start with \"M \" (staged), not unstaged", statusOut)
+	}
+}
+
+// TestSyncAll_BranchAlreadyExists_PlainCheckout covers the "branch already
+// exists" half of §3.4's "checkout session branch (create from base if
+// absent)": an explicit repos[].branch that already exists locally is
+// checked out directly, never re-created.
+func TestSyncAll_BranchAlreadyExists_PlainCheckout(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	explicitBranch := "existing-feature"
+	runGit(t, repoDir, "branch", explicitBranch) // exists, not checked out yet
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &explicitBranch},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-x",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+	if results[0].Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", results[0].Err)
+	}
+	if head := currentBranch(t, repoDir); head != explicitBranch {
+		t.Errorf("checked-out branch = %q, want %q", head, explicitBranch)
+	}
+}
+
+// TestSyncAll_PopFailureDetectedNotFatal reproduces a REAL stash-pop
+// conflict (verified directly against real git behavior, not simulated)
+// and proves: the failure is detected (State == StatePopFailed,
+// RequiresStashRecovery == true), it is reported via results[0].Err (not a
+// panic/crash), and -- for a PRIMARY repo -- SyncAll still returns a
+// non-nil, fatal error (matching CloneAll's own primary-fatal semantics)
+// while never crashing the process.
+func TestSyncAll_PopFailureDetectedNotFatal(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // main, README.md = "hello\n"
+
+	conflictBranch := "conflict-branch"
+	runGit(t, repoDir, "checkout", "-b", conflictBranch)
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello from conflict branch\n"), 0o644); err != nil {
+		t.Fatalf("write conflict branch content: %v", err)
+	}
+	runGit(t, repoDir, "add", ".")
+	runGit(t, repoDir, "commit", "-m", "conflicting change on the target branch")
+	runGit(t, repoDir, "checkout", "main")
+
+	// Dirty, uncommitted edit on main to the SAME line -- verified directly
+	// (see this Step's own exploratory testing) that stashing this, then
+	// checking out conflictBranch, then popping produces a real merge
+	// conflict, not a clean auto-merge.
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello from main's dirty edit\n"), 0o644); err != nil {
+		t.Fatalf("write dirty edit: %v", err)
+	}
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &conflictBranch},
+	}
+
+	var events []gitSyncEvent
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-y",
+		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's pop failed)")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+
+	got := results[0]
+	if got.Err == nil {
+		t.Fatal("results[0].Err = nil, want a pop error")
+	}
+	if got.State != gitstate.StatePopFailed {
+		t.Errorf("results[0].State = %s, want pop_failed", got.State)
+	}
+	if !gitstate.RequiresStashRecovery(got.State) {
+		t.Error("RequiresStashRecovery(results[0].State) = false, want true (P0: stash left outstanding)")
+	}
+
+	// The stash itself must NOT have been dropped -- git's own real
+	// behavior on a pop conflict (verified directly): the entry stays in
+	// the stash list for manual recovery, never silently lost.
+	stashList := gitOutput(t, repoDir, "stash", "list")
+	if stashList == "" {
+		t.Error("git stash list is empty after a failed pop -- the stash must survive for manual recovery")
+	}
+
+	wantStatuses := []string{"stash", "checkout", "pop"}
+	if len(events) != len(wantStatuses) {
+		t.Fatalf("events = %#v, want exactly %v", events, wantStatuses)
+	}
+}
+
+// TestSyncAll_PrimaryFailureStopsImmediately and
+// TestSyncAll_SecondaryFailureContinues mirror CloneAll's own identical
+// criticality tests (clone_test.go) exactly, proving SyncAll shares the
+// SAME primary-fatal/secondary-warn semantics (§3.4: "position 0 =
+// primary").
+func TestSyncAll_PrimaryFailureStopsImmediately(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	// "bad-primary" is never actually created as a real repo directory --
+	// `git -C <nonexistent dir> status --porcelain` fails immediately,
+	// exactly the real-world shape of a workspace that failed to bake/
+	// restore correctly.
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "bad-primary", Url: "https://example.invalid/never.git"},
+		{Name: "never-attempted", Url: "https://example.invalid/never.git"},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-z",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal error for the failed primary repo")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1 (only the primary should have been attempted)", len(results))
+	}
+	if results[0].Err == nil {
+		t.Error("results[0].Err = nil, want a sync error")
+	}
+}
+
+func TestSyncAll_SecondaryFailureContinues(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	initRepo(t, filepath.Join(workspaceDir, "primary"))
+	initRepo(t, filepath.Join(workspaceDir, "later"))
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "primary", Url: "https://example.invalid/primary.git"},
+		{Name: "bad-secondary", Url: "https://example.invalid/never.git"},
+		{Name: "later", Url: "https://example.invalid/later.git"},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-w",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil (a secondary failure is a warning, not fatal)", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("len(results) = %d, want 3 (every repo attempted)", len(results))
+	}
+	if results[0].Err != nil {
+		t.Errorf("results[0] (primary) Err = %v, want nil", results[0].Err)
+	}
+	if results[1].Err == nil {
+		t.Error("results[1] (bad secondary) Err = nil, want a sync error")
+	}
+	if results[2].Err != nil {
+		t.Errorf("results[2] (later) Err = %v, want nil -- loop must continue past the secondary failure", results[2].Err)
+	}
+}
+
+// TestSyncAll_MaliciousRepoNameRejectedBeforeAnySpawn mirrors
+// TestCloneAll_MaliciousRepoNameRejectedBeforeAnySpawn (clone_test.go)
+// exactly: a repo.Name attempting path traversal is rejected by
+// reposource.ValidateRepoName BEFORE SyncAll's own filepath.Join, let alone
+// any git subprocess, ever runs for it.
+func TestSyncAll_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T) {
+	t.Parallel()
+
+	parentDir := t.TempDir()
+	workspaceDir := filepath.Join(parentDir, "workspace")
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "../escaped-outside-workspace", Url: "https://example.invalid/never.git"},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-v",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal validation error for the malicious repo name")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].Err == nil {
+		t.Error("results[0].Err = nil, want a validation error")
+	}
+	if results[0].Dir != "" {
+		t.Errorf("results[0].Dir = %q, want empty -- an invalid Name must never even reach filepath.Join", results[0].Dir)
+	}
+
+	escapeTarget := filepath.Join(parentDir, "escaped-outside-workspace")
+	if _, statErr := os.Stat(escapeTarget); !os.IsNotExist(statErr) {
+		t.Errorf("escape target stat = %v, want IsNotExist (a path-traversal target must never be created)", statErr)
+	}
+}
+
+// TestSyncAll_MaliciousBranchRejectedBeforeAnySpawn proves a "-"-prefixed
+// branch value -- whether supplied explicitly or (defensively) via the
+// resolved narvi/<sessionID> fallback -- is rejected by
+// reposource.ValidateBranch before ever reaching a git subprocess's
+// argument list.
+func TestSyncAll_MaliciousBranchRejectedBeforeAnySpawn(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	maliciousBranch := "--upload-pack=touch /tmp/should-never-run"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &maliciousBranch},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, "session-u",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal validation error for the malicious branch")
+	}
+	if results[0].Err == nil {
+		t.Error("results[0].Err = nil, want a validation error")
+	}
+}
+
+// TestGitCheckoutDashDashPlacement_RealDefenseInDepth proves, against the
+// REAL git binary (verified directly, not assumed from documentation), the
+// exact reasoning checkoutBranch's own doc comment (sync.go) relies on: a
+// TRAILING "--" (after the branch, with nothing following it) switches
+// branches exactly like no "--" at all, while a LEADING "--" (immediately
+// before the branch) instead makes git treat the branch name as a
+// PATHSPEC to restore -- the opposite of what a checkout step needs. This
+// isolates the mechanical placement question from reposource.ValidateBranch's
+// own separate rejection of a "-"-prefixed value (which, in production,
+// never lets such a value reach a real checkout at all).
+func TestGitCheckoutDashDashPlacement_RealDefenseInDepth(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	initRepo(t, dir)
+	runGit(t, dir, "checkout", "-b", "feature-x")
+	runGit(t, dir, "checkout", "main")
+
+	t.Run("trailing dashdash switches branch as expected", func(t *testing.T) {
+		cmd := exec.Command("git", "-C", dir, "checkout", "feature-x", "--")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git checkout feature-x -- failed: %v\n%s", err, out)
+		}
+		if head := currentBranch(t, dir); head != "feature-x" {
+			t.Errorf("checked-out branch = %q, want feature-x", head)
+		}
+	})
+
+	t.Run("leading dashdash treats branch as a pathspec instead", func(t *testing.T) {
+		runGit(t, dir, "checkout", "main")
+		cmd := exec.Command("git", "-C", dir, "checkout", "--", "feature-x")
+		err := cmd.Run()
+		if err == nil {
+			t.Fatal("git checkout -- feature-x unexpectedly succeeded -- expected it to fail treating feature-x as a pathspec")
+		}
+		if head := currentBranch(t, dir); head != "main" {
+			t.Errorf("checked-out branch = %q, want main (a leading -- must not switch branches)", head)
+		}
+	})
+}
+
+// TestCleanForImageBuild_DiscardsUntrackedAndTrackedResidue proves Part E's
+// own §3.4 "Image builds must snapshot a clean tree" step end to end
+// against real git: setup.sh-style residue (an untracked file, an
+// untracked+gitignored directory, and an uncommitted modification to a
+// tracked file) is fully discarded, leaving the tree byte-for-byte
+// identical to its last commit.
+func TestCleanForImageBuild_DiscardsUntrackedAndTrackedResidue(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // README.md = "hello\n", committed
+
+	if err := os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("build/\n"), 0o644); err != nil {
+		t.Fatalf("write .gitignore: %v", err)
+	}
+	runGit(t, repoDir, "add", ".gitignore")
+	runGit(t, repoDir, "commit", "-m", "add gitignore")
+
+	// setup.sh-style residue: an untracked file, an untracked+ignored
+	// directory, and an uncommitted modification to a tracked file.
+	if err := os.WriteFile(filepath.Join(repoDir, "untracked.txt"), []byte("residue\n"), 0o644); err != nil {
+		t.Fatalf("write untracked.txt: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoDir, "build"), 0o755); err != nil {
+		t.Fatalf("mkdir build: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "build", "out.bin"), []byte("artifact\n"), 0o644); err != nil {
+		t.Fatalf("write build/out.bin: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("dirty modification\n"), 0o644); err != nil {
+		t.Fatalf("write dirty README.md: %v", err)
+	}
+
+	sup := supervisor.New()
+	if err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"repo1"},
+		testSyncStepTimeout, testStopGrace); err != nil {
+		t.Fatalf("CleanForImageBuild() error = %v, want nil", err)
+	}
+
+	if status := gitOutput(t, repoDir, "status", "--porcelain"); status != "" {
+		t.Errorf("git status --porcelain = %q, want empty (fully clean tree)", status)
+	}
+	data, err := os.ReadFile(filepath.Join(repoDir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	if string(data) != "hello\n" {
+		t.Errorf("README.md = %q, want the committed content restored", data)
+	}
+	if _, statErr := os.Stat(filepath.Join(repoDir, "untracked.txt")); !os.IsNotExist(statErr) {
+		t.Errorf("untracked.txt stat = %v, want IsNotExist", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(repoDir, "build")); !os.IsNotExist(statErr) {
+		t.Errorf("build/ stat = %v, want IsNotExist", statErr)
+	}
+}
+
+// TestCleanForImageBuild_FailureIsFatal proves a repo that fails to clean
+// (a nonexistent/broken workspace, mirroring a real setup-gone-wrong image
+// build) is a real, propagated error -- never silently swallowed.
+func TestCleanForImageBuild_FailureIsFatal(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+
+	sup := supervisor.New()
+	err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"nonexistent-repo"},
+		testSyncStepTimeout, testStopGrace)
+	if err == nil {
+		t.Fatal("CleanForImageBuild() error = nil, want a fatal error for a nonexistent repo directory")
+	}
+}
+
+// TestCleanForImageBuild_MaliciousRepoNameRejectedBeforeAnySpawn mirrors
+// TestSyncAll_MaliciousRepoNameRejectedBeforeAnySpawn exactly, for
+// CleanForImageBuild: this function is EXPORTED and takes bare repo names
+// with no upstream validation guarantee of its own (unlike SyncAll/
+// CloneAll's sessionconfig.SessionConfigReposElem, which validateRepoSpec
+// already runs before either of those ever reach this package's own
+// filepath.Join). A ".."-containing name must be rejected by
+// reposource.ValidateRepoName before `git clean -fdx` / `git checkout --
+// .` ever run against a directory outside workspaceDir -- proven here by
+// seeding a real, untracked file in a sibling directory OUTSIDE
+// workspaceDir and confirming CleanForImageBuild never touches it.
+func TestCleanForImageBuild_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T) {
+	t.Parallel()
+
+	parentDir := t.TempDir()
+	workspaceDir := filepath.Join(parentDir, "workspace")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir workspaceDir: %v", err)
+	}
+
+	outsideDir := filepath.Join(parentDir, "escaped-outside-workspace")
+	initRepo(t, outsideDir)
+	outsideUntracked := filepath.Join(outsideDir, "must-survive.txt")
+	if err := os.WriteFile(outsideUntracked, []byte("must not be deleted\n"), 0o644); err != nil {
+		t.Fatalf("write outside untracked file: %v", err)
+	}
+
+	sup := supervisor.New()
+	err := gitclone.CleanForImageBuild(context.Background(), sup, workspaceDir, []string{"../escaped-outside-workspace"},
+		testSyncStepTimeout, testStopGrace)
+	if err == nil {
+		t.Fatal("CleanForImageBuild() error = nil, want a fatal validation error for the malicious repo name")
+	}
+
+	if _, statErr := os.Stat(outsideUntracked); statErr != nil {
+		t.Errorf("outside untracked file stat = %v, want nil -- a path-traversal name must never reach `git clean`", statErr)
+	}
+}
+
+// gitOutput runs git with args in dir and returns its trimmed stdout,
+// failing the test on any error -- a read-only sibling of clone_test.go's
+// own runGit (which discards output and only checks for failure).
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v (dir=%s) failed: %v", args, dir, err)
+	}
+	return string(out)
+}

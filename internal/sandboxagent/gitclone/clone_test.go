@@ -136,7 +136,7 @@ func TestCloneAll_SinglePrimarySucceeds(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, nil, testCloneTimeout, testStopGrace)
 	if err != nil {
 		t.Fatalf("CloneAll() error = %v, want nil", err)
 	}
@@ -185,7 +185,7 @@ func TestCloneAll_ExplicitBranchChecksOutThatBranch(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, nil, testCloneTimeout, testStopGrace)
 	if err != nil {
 		t.Fatalf("CloneAll() error = %v, want nil", err)
 	}
@@ -212,7 +212,7 @@ func TestCloneAll_NilBranchClonesDefaultBranch(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, nil, testCloneTimeout, testStopGrace)
 	if err != nil {
 		t.Fatalf("CloneAll() error = %v, want nil", err)
 	}
@@ -239,7 +239,7 @@ func TestCloneAll_PrimaryFailureStopsImmediately(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, nil, testCloneTimeout, testStopGrace)
 	if err == nil {
 		t.Fatal("CloneAll() error = nil, want a fatal error for the failed primary repo")
 	}
@@ -278,7 +278,7 @@ func TestCloneAll_SecondaryFailureContinues(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, nil, testCloneTimeout, testStopGrace)
 	if err != nil {
 		t.Fatalf("CloneAll() error = %v, want nil (a secondary failure is a warning, not fatal)", err)
 	}
@@ -317,7 +317,7 @@ func TestCloneAll_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, nil, testCloneTimeout, testStopGrace)
 	if err == nil {
 		t.Fatal("CloneAll() error = nil, want a fatal validation error for the malicious repo name")
 	}
@@ -362,7 +362,7 @@ func TestCloneAll_MaliciousRepoURLRejectedBeforeAnySpawn(t *testing.T) {
 	}
 
 	sup := supervisor.New()
-	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, testCloneTimeout, testStopGrace)
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, nil, testCloneTimeout, testStopGrace)
 	if err == nil {
 		t.Fatal("CloneAll() error = nil, want a fatal validation error for the ext:: repo url")
 	}
@@ -491,5 +491,116 @@ func TestWriteAgentsManifest(t *testing.T) {
 	}
 	if strings.Contains(content, "failed-repo") {
 		t.Errorf("manifest includes failed-repo, want it skipped; content:\n%s", content)
+	}
+}
+
+// TestCloneAll_ScopedEnvironment_AppliesSparseCheckout proves §14.1's own
+// clone-step enforcement end to end, against a real git clone + real
+// sparse-checkout: a non-empty pathScope restricts the cloned working tree
+// to exactly the given patterns -- files outside them never materialize on
+// disk at all.
+func TestCloneAll_ScopedEnvironment_AppliesSparseCheckout(t *testing.T) {
+	t.Parallel()
+
+	reposParent := t.TempDir()
+	srcDir := filepath.Join(reposParent, "repo1-src")
+	initRepo(t, srcDir) // README.md at the root, branch "main"
+
+	for _, dir := range []string{"apps/web", "apps/api", "contracts/api"} {
+		if err := os.MkdirAll(filepath.Join(srcDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "apps/web/index.js"), []byte("web\n"), 0o644); err != nil {
+		t.Fatalf("write apps/web/index.js: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "apps/api/index.js"), []byte("api\n"), 0o644); err != nil {
+		t.Fatalf("write apps/api/index.js: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "contracts/api/openapi.yaml"), []byte("spec\n"), 0o644); err != nil {
+		t.Fatalf("write contracts/api/openapi.yaml: %v", err)
+	}
+	runGit(t, srcDir, "add", ".")
+	runGit(t, srcDir, "commit", "-m", "add apps/web, apps/api, contracts/api")
+
+	server := startGitHTTPSServer(t, reposParent)
+
+	workspaceDir := t.TempDir()
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: server.URL + "/repo1-src"},
+	}
+	pathScope := []string{"/apps/web/*", "/contracts/api/*"}
+
+	sup := supervisor.New()
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, pathScope, testCloneTimeout, testStopGrace)
+	if err != nil {
+		t.Fatalf("CloneAll() error = %v, want nil", err)
+	}
+	if results[0].Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", results[0].Err)
+	}
+
+	clonedDir := results[0].Dir
+	for _, want := range []string{"apps/web/index.js", "contracts/api/openapi.yaml"} {
+		if _, statErr := os.Stat(filepath.Join(clonedDir, want)); statErr != nil {
+			t.Errorf("expected %s to materialize (in scope): %v", want, statErr)
+		}
+	}
+	for _, wantAbsent := range []string{"apps/api/index.js", "README.md"} {
+		if _, statErr := os.Stat(filepath.Join(clonedDir, wantAbsent)); !os.IsNotExist(statErr) {
+			t.Errorf("expected %s to NOT materialize (out of scope), stat = %v", wantAbsent, statErr)
+		}
+	}
+}
+
+// TestCloneAll_UnscopedEnvironment_NoSparseCheckoutInvoked proves a nil
+// pathScope (the overwhelming common, unscoped case) produces ZERO
+// behavior change: every file materializes, exactly as before this Step.
+func TestCloneAll_UnscopedEnvironment_NoSparseCheckoutInvoked(t *testing.T) {
+	t.Parallel()
+
+	reposParent := t.TempDir()
+	initRepo(t, filepath.Join(reposParent, "repo1-src"))
+	server := startGitHTTPSServer(t, reposParent)
+
+	workspaceDir := t.TempDir()
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: server.URL + "/repo1-src"},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, nil, testCloneTimeout, testStopGrace)
+	if err != nil {
+		t.Fatalf("CloneAll() error = %v, want nil", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(results[0].Dir, "README.md")); statErr != nil {
+		t.Errorf("README.md missing, want present (unscoped clone must be full): %v", statErr)
+	}
+}
+
+// TestCloneAll_InvalidPathScopeRejectedBeforeAnyClone proves a malicious/
+// invalid pathScope pattern (a ".." path-traversal segment,
+// internal/domain/environment.ValidatePathScope's own rejection rule) is
+// rejected BEFORE any repo is even attempted -- zero clones, zero
+// directories created.
+func TestCloneAll_InvalidPathScopeRejectedBeforeAnyClone(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+	pathScope := []string{"../escape"}
+
+	sup := supervisor.New()
+	results, err := gitclone.CloneAll(context.Background(), sup, workspaceDir, repos, pathScope, testCloneTimeout, testStopGrace)
+	if err == nil {
+		t.Fatal("CloneAll() error = nil, want a fatal validation error for the invalid path scope")
+	}
+	if len(results) != 0 {
+		t.Fatalf("len(results) = %d, want 0 (no repo should have been attempted)", len(results))
+	}
+	if _, statErr := os.Stat(filepath.Join(workspaceDir, "repo1")); !os.IsNotExist(statErr) {
+		t.Errorf("repo1 dir stat = %v, want IsNotExist (no repo should have been cloned before validation)", statErr)
 	}
 }

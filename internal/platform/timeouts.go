@@ -699,6 +699,26 @@ type Timeouts struct {
 	// as 10s, matching RepoSHAResolutionTimeout/CredentialFetchTimeout's
 	// own "lightweight call, not a large data transfer" reasoning.
 	ContractsFingerprintResolutionTimeout time.Duration
+
+	// --- Step 29 standalone addition ("gitstate in-sandbox", §3.4): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior Step's standalone additions), so -- per those additions' own
+	// precedent -- a plain field with a sensible default, not wired into a
+	// fake invariant link.
+
+	// GitSyncStepTimeout bounds each individual git subprocess
+	// internal/sandboxagent/gitclone.SyncAll spawns while reconciling one
+	// already-existing repo at boot (`git status --porcelain`, `git stash
+	// push`, `git rev-parse --verify`, `git checkout`/`git checkout -b`,
+	// `git stash pop`) -- every one of these is local-only (no network),
+	// unlike RepoCloneTimeout's own network-bound clone/push operations, so
+	// a much smaller budget than RepoCloneTimeout's 5m is appropriate; still
+	// more generous than RepoSHADiscoveryTimeout's 5s since checkout/stash
+	// can touch a large working tree, not just read one small ref. Not
+	// specified in the plan; chosen as 30s, matching ServiceReadinessTimeout/
+	// OpenCodeReadinessTimeout's own "generous for typical local operations
+	// without stalling the whole boot sequence" reasoning.
+	GitSyncStepTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -785,6 +805,8 @@ func DefaultTimeouts() Timeouts {
 		ImageBuildBackoffMax:   30 * time.Minute, // not specified; chosen -- the eventual steady-state ceiling, never the first-failure delay (§3.5)
 
 		ContractsFingerprintResolutionTimeout: 10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+
+		GitSyncStepTimeout: 30 * time.Second, // not specified; chosen, generous for a local-only stash/checkout/pop step without stalling boot
 	}
 }
 

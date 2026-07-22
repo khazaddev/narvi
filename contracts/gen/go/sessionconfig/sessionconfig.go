@@ -21,6 +21,16 @@ type SessionConfig struct {
 	// Spawn generation (§3.2 fencing).
 	Gen int `json:"gen" yaml:"gen" mapstructure:"gen"`
 
+	// §14.1: the session's own Environment.path_scope, when one is attached -- the
+	// sparse-checkout glob patterns internal/sandboxagent/gitclone.CloneAll passes to
+	// `git sparse-checkout set` for each repo, immediately after that repo's own
+	// clone succeeds. Genuinely OPTIONAL (may be absent from the document entirely),
+	// NOT required-nullable like the fields above: absent or null both mean unscoped,
+	// today's exact unchanged full-access behavior -- the overwhelming common case,
+	// and every SessionConfig document produced before this field existed remains
+	// valid as-is.
+	PathScope *SessionConfigPathScope `json:"pathScope,omitempty,omitzero" yaml:"pathScope,omitempty" mapstructure:"pathScope,omitempty"`
+
 	// §3.4: position 0 = primary; repos are always a list, never a scalar single-repo
 	// mirror.
 	Repos []SessionConfigReposElem `json:"repos" yaml:"repos" mapstructure:"repos"`
@@ -76,6 +86,16 @@ func (j *SessionConfigBootMode) UnmarshalJSON(value []byte) error {
 // wrapper -> back. Null only when no upstream correlation id exists (e.g. session
 // created without an ingress webhook).
 type SessionConfigCorrelationId *string
+
+// §14.1: the session's own Environment.path_scope, when one is attached -- the
+// sparse-checkout glob patterns internal/sandboxagent/gitclone.CloneAll passes to
+// `git sparse-checkout set` for each repo, immediately after that repo's own clone
+// succeeds. Genuinely OPTIONAL (may be absent from the document entirely), NOT
+// required-nullable like the fields above: absent or null both mean unscoped,
+// today's exact unchanged full-access behavior -- the overwhelming common case,
+// and every SessionConfig document produced before this field existed remains
+// valid as-is.
+type SessionConfigPathScope []string
 
 type SessionConfigReposElem struct {
 	// Null means create the session branch from the repo's default base branch.

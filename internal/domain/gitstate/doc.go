@@ -19,6 +19,19 @@
 //   - NormalizeBranchName (branchname.go): the "branch names normalized
 //     (lowercase) before push" clause of §3.4 -- lowercasing only, nothing
 //     more.
+//   - ResolveSessionBranch (branchname.go, Step 29 "gitstate in-sandbox"):
+//     which branch a repo's checkout step should target -- the caller's own
+//     explicit repos[].branch when non-nil, otherwise an invented
+//     "narvi/<sessionID>" name (this package's own new convention, since
+//     nothing else in the codebase named one) -- always normalized via
+//     NormalizeBranchName.
+//   - TriggerForDirtyCheck/TriggerForStash/TriggerForCheckout/TriggerForPop
+//     (sequence.go, Step 29): the small, pure "which Trigger does a real,
+//     caller-observed git outcome correspond to" mappings a real driver
+//     (internal/sandboxagent/gitclone.SyncAll) feeds through Transition as
+//     each actual git command's result becomes known -- the missing
+//     "sequencing is explicit and testable in isolation from real git I/O"
+//     piece this package's own house style (§11) asks for.
 //
 // Every function here is pure per §11: no I/O, no time.Now(), no
 // randomness. There is no Clock/duration concept in this package at all --

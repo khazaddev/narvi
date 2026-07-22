@@ -58,4 +58,8 @@ export interface SessionConfig {
    * §5.3 propagation chain: webhook -> CP -> provider -> sandbox-agent -> OpenCode wrapper -> back. Null only when no upstream correlation id exists (e.g. session created without an ingress webhook).
    */
   correlationId: string | null;
+  /**
+   * §14.1: the session's own Environment.path_scope, when one is attached -- the sparse-checkout glob patterns internal/sandboxagent/gitclone.CloneAll passes to `git sparse-checkout set` for each repo, immediately after that repo's own clone succeeds. Genuinely OPTIONAL (may be absent from the document entirely), NOT required-nullable like the fields above: absent or null both mean unscoped, today's exact unchanged full-access behavior -- the overwhelming common case, and every SessionConfig document produced before this field existed remains valid as-is.
+   */
+  pathScope?: string[] | null;
 }
