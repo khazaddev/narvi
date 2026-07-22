@@ -727,9 +727,21 @@ func TestClientHandler_SlowConnectionDoesNotBlockOthers(t *testing.T) {
 		return nil
 	})
 
+	// Both deadlines below are deliberately generous -- they exist only to
+	// bound the test if the non-blocking property under test were ever
+	// violated (Broadcast genuinely stuck waiting on the slow connection),
+	// not to assert anything about real-world timing. A tight bound here
+	// previously produced a real, observed CI flake (0/50 received) on a
+	// resource-contended runner where the reader goroutine's own
+	// scheduling was delayed well past a tighter deadline, despite
+	// Broadcast/Register (client.go) being provably non-blocking per
+	// connection -- confirmed by 10 clean local reruns immediately after
+	// that failure. Widening these is the fix: it does not change what
+	// this test proves, only how much CI scheduling jitter it tolerates
+	// before that proof's own bookkeeping times out.
 	select {
 	case <-completed:
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("broadcasting with a slow/non-draining connection present took too long -- want it to never block on one slow subscriber")
 	}
 	if err := burstGroup.Wait(); err != nil {
@@ -737,7 +749,7 @@ func TestClientHandler_SlowConnectionDoesNotBlockOthers(t *testing.T) {
 	}
 
 	received := 0
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(20 * time.Second)
 collect:
 	for received < broadcastCount {
 		select {
