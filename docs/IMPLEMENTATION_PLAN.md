@@ -13,7 +13,9 @@ PR number without consuming a Step), so never write "PR-06" expecting it to mean
 
 **Assumptions** (challenge if needed): mono-module Go, trunk-based (small PRs to `main`, feature flags for
 incomplete paths). The mockups ([docs/design/mockups.html](design/mockups.html)) and the §6 contracts are the
-spec of record for behavior.
+spec of record for behavior. Note the mockups do not cover every individual screen phase 6 will need — a screen
+genuinely required but absent from the artifact must be derived from the same design system (docs/
+TECHNICAL_PLAN.md §12), never invented independently of it.
 
 ## Cross-cutting conventions (apply to every Step)
 

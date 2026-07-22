@@ -209,7 +209,7 @@ Problem this solves: some engine behaviors spawn multiple concurrent sub-agents 
 
 1. **Plan mode**: persistent plans, HITL approve/reject on web/Slack/Linear/GitHub, server-side implementation dispatch on approval, plan/build model split, cross-channel verdict + archive notifications.
 2. **Code review**: review sessions per PR with session reuse; atomic claim coalescing of concurrent @mentions; risk-map verdict with `review:*` labels; test-coverage & doc-drift sentinels; **server-side** verdict floor + formal-review gate + verdict-posting tool (raw issue comments blocked, scoped to review sessions); re-trigger via label/button; inline diff pre-fetched into context (agent must not need to run `gh pr diff` repeatedly); suggestion safety (apply via validated endpoint); label-driven auto-approval (`visual-qa: pass/skip`, `review: low risk`); dedicated review model selection; optional sentinel auto-fix for coverage/doc-drift findings, merge-gated on the origin PR (§17, disabled by default).
-3. **Unified intent classifier** (detailed design — see §18): review-vs-request and plan-vs-direct across all ingress surfaces; shadow mode (log-only) → active, permanently available, never a one-time launch gate; never-throw contract with an enumerated fallback-reason taxonomy; confidence rubric anchored on textual directness, not model self-reported certainty; DB-backed editable prompt templates with assembled-prompt preview; per-session routing decision records (§18.4).
+3. **Unified intent classifier** (detailed design — see §18): review-vs-request and plan-vs-build across all ingress surfaces; shadow mode (log-only) → active, permanently available, never a one-time launch gate; never-throw contract with an enumerated fallback-reason taxonomy; confidence rubric anchored on textual directness, not model self-reported certainty; DB-backed editable prompt templates with assembled-prompt preview; per-session routing decision records (§18.4).
 4. **Automations**: GitHub/Linear/webhook/cron triggers with condition builder; sandbox settings honored on automation sessions; creator/status filters; `last_run` + `artifact_summary` populated; per-automation env vars/secrets.
 5. **Enterprise sandbox glue**: cloud credentials via OIDC (provider-agnostic), kubeconfig injection for the target cluster, Docker-in-sandbox, egress proxy, repo/environment/global secrets, OpenCode config storage + injection, toolchain in images (Playwright+Chromium, ripgrep, typescript-language-server).
 6. **Files**: uploads to object storage (S3-compatible) + `download_file` tool in sandbox; failed-upload UX signal.
@@ -292,7 +292,7 @@ The SPA on the generated contracts, embedded in the control-plane binary.
 
 ## 12. Web UI (phase 6)
 
-Design mockups of the nine views exist (decision inbox/home, session workspace, code review, release review, plan mode, automations, settings, analytics, sign-in) and are the visual spec; ask the requester for the artifact if not provided.
+Design mockups of the nine views exist (decision inbox/home, session workspace, code review, release review, plan mode, automations, settings, analytics, sign-in) and are the visual spec; ask the requester for the artifact if not provided. The mockups do not necessarily cover every individual screen or state phase 6 will need (an empty state, an error state, a secondary modal not explicitly drawn) — any such screen must be derived from the same visual design system the mockups establish (tokens, typography, layout, component patterns), never designed independently of it; §11's own resolve-ambiguity-against-the-mockups rule extends to this.
 
 ### 12.1 Architecture
 - **SPA, no SSR, no BFF.** Vite + React + TanStack Query/Router. Static build embedded in the control-plane binary via `go:embed`; `narvi serve` serves API + WS + UI on one port. Self-host story: one binary + Postgres.
@@ -432,7 +432,7 @@ Both reuse existing primitives (review sentinels, labels, child sessions, plan m
 Problem this solves: reviewing a release PR (one that bundles many already-individually-reviewed PRs — a release-branch cut, a `develop→main` promotion) is a different job from reviewing a feature/fix PR. Line-by-line correctness was already checked per constituent PR; what's missing is (a) verifying the safety net actually held for every one of them, and (b) catching composition bugs that only emerge from PRs interacting — which no single PR's review can see. Two concrete failure classes make this non-hypothetical: a migration-numbering collision across sequential PRs (each diff clean; the conflict is only visible in the merged tree) and an endpoint rename silently regressed by an unrelated merge — neither visible in any one PR's diff.
 
 ### 15.1 Detecting a release PR
-A PR is treated as a release review when it matches a configurable pattern: originates from/targets a `release/*` branch, or carries a `release` label (manually applied, or auto-applied by an automation trigger on branch-name pattern, §8.4). Detection reuses the existing intent-classification seam (§8.3) — release-vs-feature is just one more category alongside review-vs-request and plan-vs-direct, not a separate classifier.
+A PR is treated as a release review when it matches a configurable pattern: originates from/targets a `release/*` branch, or carries a `release` label (manually applied, or auto-applied by an automation trigger on branch-name pattern, §8.4). Detection reuses the existing intent-classification seam (§8.3) — release-vs-feature is just one more category alongside review-vs-request and plan-vs-build, not a separate classifier.
 
 ### 15.2 Manifest check (always runs)
 Extends `domain/review` (§8.2) with a `ReleaseManifestCheck`, distinct from the per-PR risk-map verdict:
@@ -509,7 +509,7 @@ Extends the code-review domain and sentinel family (§8.2, Step 40/43) — Phase
 type IntentDecision struct {
     Source         string // "classifier" | "fallback"
     Target         string // decision-specific, e.g. review/request
-    Mode           string // e.g. plan/direct
+    Mode           string // e.g. plan/build
     Confidence     string // "high" | "medium" | "low" — classifier source only
     Reasoning      string // classifier source only; see §18.4 for storage/exposure rules
     FallbackReason string // fallback source only; enumerated, see below
