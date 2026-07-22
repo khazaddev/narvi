@@ -631,6 +631,82 @@ func TestClientHandler_LiveBroadcast(t *testing.T) {
 	}
 }
 
+// TestClientHandler_BroadcastDuringSubscribeWindowArrivesAfterSubscribed
+// proves the F8 audit fix's own core invariant end-to-end, over a real
+// websocket connection and a real Postgres-backed handshake: a broadcast
+// fired DURING buildSubscribedPayload's own DB-read window -- injected
+// deterministically via wshub.SetSubscribeDBReadHookForTest, not a
+// sleep-based race -- is (1) delivered to the client only AFTER the
+// subscribed reply, never before (the wire-order inversion F8 flagged),
+// and (2) never lost (the ORIGINAL bug e2119b1 fixed, and this handler's
+// own top comment still requires). Both properties are asserted from the
+// same two frames read off the same connection, in order: losing property
+// (2) while fixing property (1) would be a regression back to e2119b1's
+// own bug, so a single test exercising both together is deliberate, not
+// merely convenient.
+func TestClientHandler_BroadcastDuringSubscribeWindowArrivesAfterSubscribed(t *testing.T) {
+	rig, sessionRow := newClientTestRigWithBroadcast(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	const injectedBroadcast = `{"type":"tick","n":"during-subscribe-window"}`
+
+	// Fires exactly once, synchronously, from inside the handler's own
+	// goroutine at the precise point between Hub.Register (step 6) and
+	// buildSubscribedPayload's own DB reads (step 7) -- i.e. before the
+	// subscribed reply has been assembled, marshaled, or written at all.
+	wshub.SetSubscribeDBReadHookForTest(func() {
+		rig.hub.Broadcast(sessionRow.ID.String(), json.RawMessage(injectedBroadcast))
+	})
+	defer wshub.SetSubscribeDBReadHookForTest(nil)
+
+	conn, _, err := websocket.Dial(ctx, rig.wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+
+	req := clientws.SubscribeRequest{Token: token, ClientId: "test-client"}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal subscribe request: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+		t.Fatalf("Write subscribe: %v", err)
+	}
+
+	// Frame 1 must be the subscribed reply -- proving property (1): the
+	// broadcast injected during the DB-read window did NOT reach the wire
+	// first, even though it was enqueued well before the subscribed reply
+	// was even assembled.
+	rc1, cancel1 := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel1()
+	_, data1, err := conn.Read(rc1)
+	if err != nil {
+		t.Fatalf("Read frame 1: %v", err)
+	}
+	var subscribed clientws.SubscribedPayload
+	if err := json.Unmarshal(data1, &subscribed); err != nil {
+		t.Fatalf("frame 1 is not a valid SubscribedPayload -- want the subscribed reply FIRST, got %s instead (the injected broadcast reaching the wire before it would be exactly the F8 wire-order inversion): %v", data1, err)
+	}
+	if subscribed.SessionId != sessionRow.ID.String() {
+		t.Fatalf("frame 1 SubscribedPayload.SessionId = %q, want %q", subscribed.SessionId, sessionRow.ID.String())
+	}
+
+	// Frame 2 must be the injected broadcast, verbatim -- proving property
+	// (2): it was never lost, only correctly deferred until after the
+	// subscribed reply.
+	rc2, cancel2 := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel2()
+	_, data2, err := conn.Read(rc2)
+	if err != nil {
+		t.Fatalf("Read frame 2 (the injected broadcast, which must still arrive -- see e2119b1, the original lost-broadcast fix this must not regress): %v", err)
+	}
+	if string(data2) != injectedBroadcast {
+		t.Errorf("frame 2 = %s, want the injected broadcast verbatim %s", data2, injectedBroadcast)
+	}
+}
+
 // TestHandler_DispatchesByType proves the top-level dispatcher
 // (wshub.NewHandler) routes ?type=sandbox to the sandbox handler and
 // ?type=client to the client handler, and 400s on anything else --
