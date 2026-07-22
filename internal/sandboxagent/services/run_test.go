@@ -446,9 +446,22 @@ func TestRun_PrimaryTimeoutIsFatal(t *testing.T) {
 func TestRun_ServicesRunConcurrently(t *testing.T) {
 	t.Parallel()
 
+	// fastDelay/mediumDelay are deliberately larger than the minimum
+	// needed to prove ordering -- this widens the gap between sumOfDelays
+	// (the sequential-would-take bound below) and slowestDelay (the actual
+	// concurrent wall-clock bound, since real elapsed time is governed by
+	// the slowest service, not by fast/medium) without changing the test's
+	// own real-world runtime at all. A previously tighter margin (0.6s
+	// medium against a 2.0s sum) produced a real, observed CI flake
+	// ("Run() took 2.206698958s, want well under the sequential sum 2s")
+	// on a resource-contended runner, confirmed non-reproducing in 5 clean
+	// local reruns immediately after -- process-spawn/scheduling jitter
+	// under contention, not a genuine concurrency regression. Widening
+	// this margin (2.7s sum vs. the same 1.4s slowest/actual-runtime
+	// bound) is the fix.
 	const (
-		fastDelay   = 0.0
-		mediumDelay = 0.6
+		fastDelay   = 0.4
+		mediumDelay = 0.9
 		slowDelay   = 1.4
 	)
 
