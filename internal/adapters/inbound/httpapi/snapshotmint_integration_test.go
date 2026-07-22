@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sync"
 	"testing"
 
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 )
 
@@ -80,9 +82,25 @@ func (f *fakeSnapshotProvider) lastRef() ports.SandboxRef {
 }
 
 // postSnapshotMint POSTs to /sessions/{sessionID}/snapshot with the given
-// bearer token (omitted entirely if bearer == ""), returning the raw
-// status and a best-effort decoded body.
+// bearer token (omitted entirely if bearer == ""), and X-Sandbox-Gen "1"
+// (matching a freshly created sandbox row's own default gen, §3.2, exactly
+// the same default postScmCredentials' own sibling helper in
+// scmcredentials_integration_test.go uses) -- this audit remediation's own
+// new gen-fencing check must not silently change what every PRE-EXISTING
+// test in this file was already proving. Use postSnapshotMintFull directly
+// for a test that needs a non-default gen (or no X-Sandbox-Gen header at
+// all). Returns the raw status and a best-effort decoded body.
 func postSnapshotMint(t *testing.T, r testRig, sessionID string, bearer string) (int, map[string]string) {
+	t.Helper()
+	return postSnapshotMintFull(t, r, sessionID, bearer, "1")
+}
+
+// postSnapshotMintFull is postSnapshotMint's general-purpose form: gen is
+// sent as the X-Sandbox-Gen header verbatim, or omitted entirely when
+// gen == "" (matching a real caller that never sends the header at all,
+// not merely an empty one) -- mirrors postScmCredentialsFull's own
+// identical convention exactly.
+func postSnapshotMintFull(t *testing.T, r testRig, sessionID, bearer, gen string) (int, map[string]string) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, r.server.URL+"/sessions/"+sessionID+"/snapshot", nil)
 	if err != nil {
@@ -90,6 +108,9 @@ func postSnapshotMint(t *testing.T, r testRig, sessionID string, bearer string) 
 	}
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if gen != "" {
+		req.Header.Set("X-Sandbox-Gen", gen)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -254,5 +275,151 @@ func TestSnapshotMint_NilTokenHash_Rejected(t *testing.T) {
 	status, _ := postSnapshotMint(t, rig, session.ID.String(), "any-non-empty-token")
 	if status != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d (a nil token_hash must reject, never bypass, on this endpoint)", status, http.StatusUnauthorized)
+	}
+}
+
+// --- Dead-sandbox check (audit remediation) ---
+
+// TestSnapshotMint_DeadSandboxStatus proves a sandbox in a dead status is
+// rejected with 410, even with an otherwise-valid bearer token and gen --
+// mirrors TestScmCredentials_DeadSandboxStatus exactly (same statuses, same
+// status code, same reasoning: this endpoint's own IsDeadSandboxStatus
+// guard was entirely missing before this audit remediation, letting a
+// terminalized sandbox's last-known-live token keep minting real provider
+// snapshots indefinitely). TakeSnapshot must never be called.
+func TestSnapshotMint_DeadSandboxStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status sqlcgen.SandboxStatus
+	}{
+		{"stopped", sqlcgen.SandboxStatusStopped},
+		{"failed", sqlcgen.SandboxStatusFailed},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+
+			session := rig.createSession(ctx, t)
+			createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+			if _, err := rig.pool.Exec(ctx, `UPDATE sandboxes SET provider_id = $2 WHERE session_id = $1`,
+				session.ID, "modal-sandbox-object-1"); err != nil {
+				t.Fatalf("set provider_id: %v", err)
+			}
+			moveSandboxStatus(ctx, t, rig, session.ID, tc.status)
+
+			status, _ := postSnapshotMint(t, rig, session.ID.String(), "sandbox-bearer-token")
+			if status != http.StatusGone {
+				t.Errorf("status = %d, want %d (dead sandbox status %s)", status, http.StatusGone, tc.status)
+			}
+			if got := rig.provider.callCount(); got != 0 {
+				t.Errorf("TakeSnapshot called %d times, want 0 (dead sandbox must be rejected before ever reaching the provider)", got)
+			}
+		})
+	}
+}
+
+// TestSnapshotMint_SuspectSandbox_NotDead proves a Suspect sandbox --
+// deliberately NOT in the dead-status deny-list -- still succeeds, mirroring
+// TestScmCredentials_SuspectSandbox_NotDead exactly: a sandbox merely
+// suspected of having missed a heartbeat must still be able to mint a
+// snapshot.
+func TestSnapshotMint_SuspectSandbox_NotDead(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+	if _, err := rig.pool.Exec(ctx, `UPDATE sandboxes SET provider_id = $2 WHERE session_id = $1`,
+		session.ID, "modal-sandbox-object-1"); err != nil {
+		t.Fatalf("set provider_id: %v", err)
+	}
+	moveSandboxStatus(ctx, t, rig, session.ID, sqlcgen.SandboxStatusSuspect)
+
+	rig.provider.nextID = "snap-suspect-ok"
+
+	status, got := postSnapshotMint(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want %d (Suspect is not a dead status)", status, http.StatusOK)
+	}
+	if got["snapshotId"] != "snap-suspect-ok" {
+		t.Errorf("snapshotId = %q, want %q", got["snapshotId"], "snap-suspect-ok")
+	}
+}
+
+// --- Gen fencing (audit remediation) ---
+
+// TestSnapshotMint_GenMismatch_Rejected proves a stale/wrong X-Sandbox-Gen
+// -> 403, mirroring TestScmCredentials_GenMismatch_Rejected exactly.
+// TakeSnapshot must never be called.
+func TestSnapshotMint_GenMismatch_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token") // gen 1
+	if _, err := rig.pool.Exec(ctx, `UPDATE sandboxes SET provider_id = $2 WHERE session_id = $1`,
+		session.ID, "modal-sandbox-object-1"); err != nil {
+		t.Fatalf("set provider_id: %v", err)
+	}
+
+	status, _ := postSnapshotMintFull(t, rig, session.ID.String(), "sandbox-bearer-token", "999")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (gen mismatch)", status, http.StatusForbidden)
+	}
+	if got := rig.provider.callCount(); got != 0 {
+		t.Errorf("TakeSnapshot called %d times, want 0", got)
+	}
+}
+
+// TestSnapshotMint_MissingGen_Rejected proves an ABSENT X-Sandbox-Gen
+// header -- not merely a mismatched one -- is rejected the SAME way (403),
+// mirroring TestScmCredentials_MissingGen_Rejected exactly.
+func TestSnapshotMint_MissingGen_Rejected(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+	if _, err := rig.pool.Exec(ctx, `UPDATE sandboxes SET provider_id = $2 WHERE session_id = $1`,
+		session.ID, "modal-sandbox-object-1"); err != nil {
+		t.Fatalf("set provider_id: %v", err)
+	}
+
+	status, _ := postSnapshotMintFull(t, rig, session.ID.String(), "sandbox-bearer-token", "" /* no X-Sandbox-Gen header at all */)
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (missing X-Sandbox-Gen header)", status, http.StatusForbidden)
+	}
+}
+
+// TestSnapshotMint_CorrectCurrentGen_Succeeds proves the gen check compares
+// against the sandbox row's REAL current gen, not a hardcoded "1" --
+// mirrors TestScmCredentials_CorrectCurrentGen_Succeeds exactly: bumps the
+// sandbox to gen 2 via a real UpsertForSpawn respawn, then proves
+// presenting gen "2" succeeds.
+func TestSnapshotMint_CorrectCurrentGen_Succeeds(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token") // gen 1
+	bumped := bumpSandboxGen(ctx, t, rig, session.ID, "respawned-bearer-token")
+	if bumped.Gen != 2 {
+		t.Fatalf("bumped.Gen = %d, want 2 (test setup assumption: UpsertForSpawn bumps an existing gen-1 row to gen 2)", bumped.Gen)
+	}
+	if _, err := rig.pool.Exec(ctx, `UPDATE sandboxes SET provider_id = $2 WHERE session_id = $1`,
+		session.ID, "modal-sandbox-object-1"); err != nil {
+		t.Fatalf("set provider_id: %v", err)
+	}
+
+	rig.provider.nextID = "snap-regen-ok"
+
+	status, got := postSnapshotMintFull(t, rig, session.ID.String(), "respawned-bearer-token", fmt.Sprintf("%d", bumped.Gen))
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d (correct current gen)", status, http.StatusOK)
+	}
+	if got["snapshotId"] != "snap-regen-ok" {
+		t.Errorf("snapshotId = %q, want %q", got["snapshotId"], "snap-regen-ok")
 	}
 }

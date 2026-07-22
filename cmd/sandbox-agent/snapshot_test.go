@@ -49,6 +49,13 @@ type fakeSnapshotCP struct {
 	// HTTP status (and a failure body) instead of a real 200 + snapshotId.
 	mintStatus int
 	frames     chan json.RawMessage
+	// gotMintGenHeader records the real X-Sandbox-Gen header value the
+	// snapshot-mint request actually carried (audit remediation:
+	// snapshotclient.Client.Mint now always sends one) -- proves the wiring
+	// all the way from SessionConfig.Gen through HandleSnapshot's own
+	// client.Mint call to the real outbound HTTP request, not merely that
+	// Mint's own unit tests set the header correctly in isolation.
+	gotMintGenHeader string
 }
 
 func newFakeSnapshotCP(t *testing.T, sessionID string) *fakeSnapshotCP {
@@ -59,7 +66,8 @@ func newFakeSnapshotCP(t *testing.T, sessionID string) *fakeSnapshotCP {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/sessions/"+sessionID+"/snapshot", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/sessions/"+sessionID+"/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		fcp.gotMintGenHeader = r.Header.Get("X-Sandbox-Gen")
 		if fcp.mintStatus != 0 {
 			http.Error(w, "mint failed", fcp.mintStatus)
 			return
@@ -175,6 +183,15 @@ func TestHandleSnapshot_Success_SendsRealSnapshotReady(t *testing.T) {
 	})
 
 	raw := waitForFrameType(t, fcp, "snapshot_ready", snapshotTestWait)
+
+	// Audit remediation: proves the real outbound snapshot-mint request
+	// carried "X-Sandbox-Gen: 3", matching this handler's own configured
+	// SessionConfig.Gen -- the control plane's new gen-fencing check on
+	// this endpoint would otherwise reject every real request like this
+	// one.
+	if fcp.gotMintGenHeader != "3" {
+		t.Errorf("snapshot-mint request X-Sandbox-Gen header = %q, want %q", fcp.gotMintGenHeader, "3")
+	}
 
 	var got sandboxws.SnapshotReady
 	if err := json.Unmarshal(raw, &got); err != nil {
