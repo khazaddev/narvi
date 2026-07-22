@@ -123,6 +123,98 @@ func TestHandleSandboxEvent_SuspectRecovery_ReturnsToPreSuspectStatus(t *testing
 	}
 }
 
+// TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogsOnReturnToReady
+// proves the F2 fix's fourth landing site (sandboxevent.go's own top
+// comment and armReadyWatchdogs' own doc comment both name it): a Suspect
+// sandbox recovering DIRECTLY back to Ready (pre_suspect_status ==
+// SandboxStatusReady) gets both liveness_check and inactivity re-armed in
+// the SAME event, even though the generic Booting->Ready guard a few
+// lines below in handleSandboxEvent can never catch this path (row is
+// already reassigned to the recovered, already-Ready row before that
+// guard's own before/after comparison runs). Mirrors
+// TestPostTurnSnapshotCycle_RearmsLivenessAndInactivityWatchdogsOnReturnToReady's
+// own stale-seed / FiresAt.After(start) freshness pattern exactly, so a
+// no-op "timer merely survived untouched" pass can't be mistaken for a
+// real re-arm.
+func TestHandleSandboxEvent_SuspectRecovery_RearmsLivenessAndInactivityWatchdogsOnReturnToReady(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	sandboxStore := seedSuspectSandboxWithPreSuspectStatus(ctx, t, pool, sessionID, sqlcgen.SandboxStatusReady)
+
+	before, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+
+	timerStore := narvipg.NewTimerStore(pool)
+	if _, err := timerStore.Upsert(ctx, sqlcgen.UpsertSessionTimerParams{
+		SessionID: sessionID, Name: TimerTerminalGrace,
+		FiresAt: pgtype.Timestamptz{Time: time.Now().Add(time.Minute), Valid: true},
+	}); err != nil {
+		t.Fatalf("arm terminal_grace: %v", err)
+	}
+	// Seed both watchdogs already armed, as a real earlier Booting->Ready
+	// transition would have left them BEFORE the sandbox ever went
+	// Suspect -- with a STALE fires_at (liveness_check/inactivity are
+	// actually deleted, not left stale, by the watchdog that suspected the
+	// sandbox in the first place; seeding a stale value here instead of
+	// leaving them absent still proves the fresh-arm assertion below
+	// unambiguously, and additionally proves this recovery path doesn't
+	// merely no-op when a row happens to already exist).
+	staleFiresAt := time.Now().Add(-1 * time.Hour)
+	for _, name := range []string{TimerLivenessCheck, TimerInactivity} {
+		if _, err := timerStore.Upsert(ctx, sqlcgen.UpsertSessionTimerParams{
+			SessionID: sessionID, Name: name,
+			FiresAt: pgtype.Timestamptz{Time: staleFiresAt, Valid: true},
+		}); err != nil {
+			t.Fatalf("seed stale %s timer: %v", name, err)
+		}
+	}
+
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	recoveryStart := time.Now()
+
+	outcome := sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "heartbeat", Gen: int(before.Gen), MessageID: "hb-recover-rearm-1", Raw: heartbeatRaw("hb-recover-rearm-1"),
+	})
+	if !outcome.Persisted {
+		t.Error("outcome.Persisted = false, want true")
+	}
+
+	got, err := sandboxStore.Get(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("get sandbox: %v", err)
+	}
+	if got.Status != sqlcgen.SandboxStatusReady {
+		t.Fatalf("sandbox status = %s, want %s (recovered directly to ready)", got.Status, sqlcgen.SandboxStatusReady)
+	}
+
+	for _, name := range []string{TimerLivenessCheck, TimerInactivity} {
+		timerRow, err := timerStore.Get(ctx, sqlcgen.GetSessionTimerParams{SessionID: sessionID, Name: name})
+		if errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("%s timer was left absent/deleted after a Suspect->Ready recovery -- audit finding F2's fourth landing site", name)
+		}
+		if err != nil {
+			t.Fatalf("get %s timer: %v", name, err)
+		}
+		if !timerRow.FiresAt.Time.After(recoveryStart) {
+			t.Errorf("%s fires_at = %v, want strictly after this recovery's own start %v (stale seed value was never actually re-armed)",
+				name, timerRow.FiresAt.Time, recoveryStart)
+		}
+	}
+}
+
 // TestHandleSandboxEvent_LateExecutionComplete_RecoversSandboxTurnAndSession
 // is THE scenario Step 24 ("two-phase terminalization") exists for,
 // matching §9.3 scenario #4's own literal description ("execution_complete
