@@ -1019,6 +1019,111 @@ func TestSyncAll_SparseCheckoutFailure_SecondaryContinues(t *testing.T) {
 	}
 }
 
+// TestSyncAll_StashPopFailure_StillReAppliesSparseCheckout closes the
+// residual F1 gap a security review identified against this fix: before
+// this test (and the fix it verifies), syncOne returned as soon as the
+// stash/checkout/pop sequence itself failed (here, a real stash-pop merge
+// conflict -- StatePopFailed, the same reachable outcome
+// TestSyncAll_PopFailureDetectedNotFatal already demonstrates), WITHOUT
+// ever reaching the sparse-checkout re-narrowing step below it. Since a
+// repo_image/snapshot_restore boot's workspace may already contain a full,
+// unscoped checkout baked at image time (see SyncAll's own doc comment),
+// and a failure like this one on a SECONDARY repo is only ever logged as a
+// warning (SyncAll's own primary-fatal/secondary-warn split) rather than
+// stopping the boot, the out-of-scope directory would have been left on
+// disk, readable by an agent in the now-booted sandbox -- exactly the F1
+// bypass this whole fix exists to close, just reached via a different
+// (failing) path through syncOne. This test proves pathScope is now
+// re-applied regardless: apps/api (out of scope) must be gone from disk
+// even though the pop itself fails and the repo's own result correctly
+// still reports that failure (State/Err untouched in what they report
+// about the git-sync sequence itself).
+func TestSyncAll_StashPopFailure_StillReAppliesSparseCheckout(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // main, README.md = "hello\n"
+
+	for _, dir := range []string{"apps/web", "apps/api"} {
+		if err := os.MkdirAll(filepath.Join(repoDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "apps/web/index.js"), []byte("web\n"), 0o644); err != nil {
+		t.Fatalf("write apps/web/index.js: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "apps/api/index.js"), []byte("api\n"), 0o644); err != nil {
+		t.Fatalf("write apps/api/index.js: %v", err)
+	}
+	runGit(t, repoDir, "add", ".")
+	runGit(t, repoDir, "commit", "-m", "add apps/web and apps/api")
+
+	// Same real stash-pop-conflict setup as TestSyncAll_PopFailureDetectedNotFatal:
+	// a conflicting committed change to README.md on the target branch, plus
+	// a dirty, uncommitted edit to README.md on main -- verified there
+	// (and re-verified here) to produce a real merge conflict on `git stash
+	// pop`, not a clean auto-merge. apps/api is untouched by any of this --
+	// it is only ever removed by sparse-checkout re-narrowing, never by the
+	// stash/checkout/pop sequence itself.
+	conflictBranch := "conflict-branch"
+	runGit(t, repoDir, "checkout", "-b", conflictBranch)
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello from conflict branch\n"), 0o644); err != nil {
+		t.Fatalf("write conflict branch content: %v", err)
+	}
+	runGit(t, repoDir, "add", ".")
+	runGit(t, repoDir, "commit", "-m", "conflicting change on the target branch")
+	runGit(t, repoDir, "checkout", "main")
+
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hello from main's dirty edit\n"), 0o644); err != nil {
+		t.Fatalf("write dirty edit: %v", err)
+	}
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &conflictBranch},
+	}
+	pathScope := []string{"/apps/web/*"}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-pop-fail-scope",
+		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's pop failed)")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+
+	got := results[0]
+	if got.Err == nil {
+		t.Fatal("results[0].Err = nil, want a pop error")
+	}
+	if got.State != gitstate.StatePopFailed {
+		t.Errorf("results[0].State = %s, want pop_failed", got.State)
+	}
+	if !gitstate.RequiresStashRecovery(got.State) {
+		t.Error("RequiresStashRecovery(results[0].State) = false, want true (P0: stash left outstanding)")
+	}
+
+	// The stash itself must still survive the failed pop, exactly as
+	// TestSyncAll_PopFailureDetectedNotFatal already verifies -- this fix
+	// must not change that P0 guarantee.
+	stashList := gitOutput(t, repoDir, "stash", "list")
+	if stashList == "" {
+		t.Error("git stash list is empty after a failed pop -- the stash must survive for manual recovery")
+	}
+
+	// The actual regression check: pathScope re-narrowing must have run
+	// despite the pop failure above -- apps/api (out of scope) gone,
+	// apps/web (in scope) still present.
+	if _, statErr := os.Stat(filepath.Join(repoDir, "apps/api/index.js")); !os.IsNotExist(statErr) {
+		t.Errorf("expected apps/api/index.js to be ABSENT from disk after SyncAll re-applies sparse-checkout despite the pop failure -- stat = %v -- this is the residual F1 bypass a stash/checkout/pop failure previously left open", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(repoDir, "apps/web/index.js")); statErr != nil {
+		t.Errorf("expected apps/web/index.js to remain on disk (in scope): %v", statErr)
+	}
+}
+
 // gitOutput runs git with args in dir and returns its trimmed stdout,
 // failing the test on any error -- a read-only sibling of clone_test.go's
 // own runGit (which discards output and only checks for failure).

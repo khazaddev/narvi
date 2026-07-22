@@ -176,7 +176,7 @@ func syncOne(
 	sessionID string,
 	stepTimeout, stopGrace time.Duration,
 	onGitSync OnGitSync,
-) SyncResult {
+) (result SyncResult) {
 	// Validate BEFORE any filepath.Join or sup.Spawn happens for this repo
 	// -- same reasoning, same helper (validateRepoSpec, clone.go), as
 	// CloneAll's own identical guard: repo.Name/Url/Branch are all
@@ -201,7 +201,42 @@ func syncOne(
 			Err: fmt.Errorf("gitclone: invalid resolved branch %q: %w", branch, err)}
 	}
 
-	result := SyncResult{Repo: repo, Primary: primary, Dir: dir, Branch: branch}
+	result = SyncResult{Repo: repo, Primary: primary, Dir: dir, Branch: branch}
+
+	// pathScope (§14.1) re-narrowing is attempted on EVERY exit from this
+	// point forward, via this deferred call -- regardless of whether the
+	// stash/checkout/pop sequence below succeeds, or fails at ANY step
+	// (git status, stash push, checkout, or stash pop). This closes a
+	// residual instance of the exact bypass §14.1 exists to prevent: a
+	// repo_image/snapshot_restore boot's workspace may already contain a
+	// full, unscoped checkout baked at image time (see SyncAll's own doc
+	// comment on why re-applying scope here is not redundant), and a
+	// secondary repo's failure is only ever logged as a warning
+	// (SyncAll's own primary-fatal/secondary-warn split) -- the sandbox
+	// still boots and becomes reachable regardless. Leaving that repo's
+	// on-disk scope unenforced merely because ITS OWN git-sync sequence
+	// happened to error out before reaching StateReady would silently
+	// reopen the bypass for that repo's directory. This is deliberately
+	// best-effort and additive: it never clears an earlier, more specific
+	// failure already recorded in result.Err (it only appends a
+	// sparse-checkout failure on top of one, if any), and it never touches
+	// result.State, which keeps reporting whichever gitstate.State the
+	// stash/checkout/pop sequence itself reached -- exactly as before this
+	// change.
+	if len(pathScope) > 0 {
+		defer func() {
+			sparseErr := applySparseCheckout(ctx, sup, dir, pathScope, stepTimeout, stopGrace)
+			if sparseErr == nil {
+				return
+			}
+			wrapped := fmt.Errorf("gitclone: sparse-checkout %s: %w", repo.Name, sparseErr)
+			if result.Err != nil {
+				result.Err = fmt.Errorf("%w (repo also failed to sync earlier: %v)", wrapped, result.Err)
+			} else {
+				result.Err = wrapped
+			}
+		}()
+	}
 
 	state := gitstate.StateIdle
 
@@ -264,30 +299,9 @@ func syncOne(
 	// state is StateReady here: either the tree was clean and checkout
 	// succeeded directly, or it was dirty, checkout succeeded, and the pop
 	// above (whether or not this repo ever took that branch) succeeded too.
-	//
-	// pathScope (§14.1) is re-applied at this exact point, mirroring
-	// CloneAll's own "clone succeeded, now scope it" ordering (clone.go)
-	// precisely -- see SyncAll's own doc comment for why this is NOT
-	// redundant on a repo_image/snapshot_restore boot. Deliberately kept
-	// orthogonal to gitstate's own transition table, exactly like CloneAll
-	// keeps it orthogonal there: a sparse-checkout failure does not change
-	// `state` (still whatever terminal gitstate.State the stash/checkout/
-	// pop sequence above already reached -- StateReady here), it only sets
-	// result.Err, matching CloneResult's own shape (which has no State
-	// field for this step at all).
-	if len(pathScope) > 0 {
-		if sparseErr := applySparseCheckout(ctx, sup, dir, pathScope, stepTimeout, stopGrace); sparseErr != nil {
-			return SyncResult{
-				Repo:    repo,
-				Primary: primary,
-				Dir:     dir,
-				Branch:  branch,
-				State:   state,
-				Err:     fmt.Errorf("gitclone: sparse-checkout %s: %w", repo.Name, sparseErr),
-			}
-		}
-	}
-
+	// pathScope re-narrowing itself already happens unconditionally via the
+	// deferred call above, regardless of this success path or any earlier
+	// failure -- see its own comment for why.
 	result.State = state
 	return result
 }
