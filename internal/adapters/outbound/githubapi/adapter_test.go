@@ -188,7 +188,7 @@ func TestResolveBranchSHA_EscapesOwnerRepoAndBranch(t *testing.T) {
 
 	adapter := githubapi.New(server.Client(), server.URL)
 
-	sha, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
+	sha, _, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
 		Owner: "acme/evil",
 		Repo:  "widgets#v1",
 		Token: "gho_realtoken",
