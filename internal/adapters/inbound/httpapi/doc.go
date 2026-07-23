@@ -103,4 +103,45 @@
 //
 // Wiring participants/presence (§8.11) is still untouched -- a distinct,
 // not-yet-scoped concern.
+//
+// # Step 31 ("webhook toolkit") update
+//
+// No new route is added by this Step -- it adds no concrete provider
+// wiring at all. CreateSession's own doc comment above (create.go) is
+// split in two: everything after decoding the request body is now the
+// unexported createSessionCore, taking an already-decoded
+// restdtos.CreateSessionRequest plus a NULLABLE creator (pgtype.UUID,
+// Valid == false for "no human caller"). CreateSession itself is now a
+// thin wrapper: decode body -> authenticatedUserID (UNCHANGED, still
+// hard-required for this browser/REST route) -> createSessionCore ->
+// write the JSON response. This is a pure refactor for this route --
+// every existing test in this package's own _test.go files passes
+// unchanged. The point of the split is reuse: Steps 32/33/34's own
+// GitHub/Slack/Linear webhook ingress handlers call createSessionCore
+// directly, with their own already-verified, already-decoded request and
+// a NULL creator (no cookie, no human) -- never this package's own
+// CreateSession, which stays browser-only. createSessionCore stays
+// unexported deliberately: since it is package-private, those ingress
+// handlers must live in THIS package (as new files alongside create.go/
+// get.go/events.go/artifacts.go/wstoken.go -- the same one-package,
+// one-file-per-route-family shape this package already uses), not in
+// separate new packages -- an unexported identifier cannot be called
+// from outside its own package. Whether that turns out to be
+// internal/adapters/inbound/httpapi/github.go et al., or Steps 32-34
+// decide createSessionCore should be exported instead, is left to those
+// Steps; this Step only guarantees the extraction itself is
+// behavior-preserving.
+//
+// This Step also adds two other, independent pieces used by those same
+// future ingress endpoints, neither wired to a concrete provider yet:
+//
+//   - internal/platform/webhooksig.go: a generic, provider-agnostic
+//     raw-body HMAC-SHA256 signature-verification helper
+//     (VerifyWebhookSignature / VerifyWebhookTimestamp) -- see that
+//     file's own doc comment for the full GitHub-vs-Slack shape
+//     reasoning and the HMACWebhookSecret design-question writeup.
+//   - migrations/000027_webhook_deliveries.up.sql +
+//     postgres.WebhookDeliveryStore.Claim: the atomic
+//     INSERT ... ON CONFLICT dedupe/coalescing claim §5.1 calls for,
+//     keyed on (provider, delivery_id).
 package httpapi

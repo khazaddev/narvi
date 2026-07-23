@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,10 +124,24 @@ const defaultContractsPath = "contracts/api"
 // plus rejecting "?"/"#" -- see that function's own doc comment) BEFORE
 // pool.Begin, the SAME trust-boundary precedent every other request field
 // this handler validates already follows.
+//
+// Step 31 ("webhook toolkit") update: everything this func used to do
+// AFTER decoding the request body is now createSessionCore below -- a
+// pure extraction, not a behavior change (every case this func's own doc
+// comment above describes, and every existing test in this package's own
+// _test.go files, is unchanged). The only two things that stay HERE,
+// specific to the browser/REST path, are decoding the body off an actual
+// *http.Request and requiring a real authenticated human caller via
+// authenticatedUserID -- a future webhook ingress handler (Steps 32-34)
+// calls createSessionCore directly with its own already-decoded request
+// and a NULL createdBy (no cookie, no human), never this func.
+// createSessionCore is unexported on purpose, so that future caller must
+// live in this same package (see doc.go's own updated writeup) rather
+// than a separate package -- an unexported identifier isn't reachable
+// from outside internal/adapters/inbound/httpapi.
 func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		logger := platform.Logger(ctx)
 
 		createdBy, ok := authenticatedUserID(w, r)
 		if !ok {
@@ -146,203 +161,231 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		if len(req.Repos) < 1 {
-			writeError(w, http.StatusBadRequest, "repos must be non-empty")
+		created, cerr := createSessionCore(ctx, pool, sessions, turns, environments, registry, req, createdBy)
+		if cerr != nil {
+			writeError(w, cerr.status, cerr.message)
 			return
-		}
-
-		// Validate every repo's Name/Url/Branch BEFORE any Postgres write
-		// (pool.Begin below) -- see this func's own doc comment above.
-		// Stops at the first failure, in order, matching gitclone's own
-		// validateRepoSpec precedent exactly; does not attempt to
-		// collect/report every failure across every repo at once.
-		for i, repo := range req.Repos {
-			if err := reposource.ValidateRepoName(repo.Name); err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err))
-				return
-			}
-			if err := reposource.ValidateRepoURL(repo.Url); err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err))
-				return
-			}
-			if repo.Branch != nil {
-				if err := reposource.ValidateBranch(*repo.Branch); err != nil {
-					writeError(w, http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err))
-					return
-				}
-			}
-		}
-
-		reposJSON, err := json.Marshal(req.Repos)
-		if err != nil {
-			logger.Error("httpapi: marshal repos failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		// pathScope is OPTIONAL (contracts/rest/v1/dtos.schema.json's
-		// CreateSessionRequest.pathScope) -- req.PathScope may be nil
-		// (absent) or point at a nil/empty slice (present but null/[]);
-		// either way that means "unscoped", exactly today's existing
-		// behavior. Only a genuinely non-empty pathScope triggers
-		// validation + environment creation below.
-		var pathScope []string
-		if req.PathScope != nil {
-			pathScope = []string(*req.PathScope)
-		}
-		hasPathScope := len(pathScope) > 0
-
-		// Validate every pathScope pattern BEFORE any Postgres write (pool.
-		// Begin below) -- the SAME trust-boundary precedent the repo
-		// validation above already established: reject with 400 on the
-		// first invalid pattern, in order, never reaching pool.Begin on
-		// that path.
-		if hasPathScope {
-			if err := environment.ValidatePathScope(pathScope); err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("pathScope: %s", err))
-				return
-			}
-		}
-
-		// mockConfig is OPTIONAL and INDEPENDENT of pathScope (row 27,
-		// "mocking + contract drift", §14.3 -- see this func's own doc
-		// comment). hasMockConfig is true whenever the request body carried
-		// a "mockConfig" key at all (req.MockConfig != nil), even as {} --
-		// contractsPath resolves to the caller's own value when supplied,
-		// otherwise defaultContractsPath.
-		hasMockConfig := req.MockConfig != nil
-		contractsPath := defaultContractsPath
-		if hasMockConfig && req.MockConfig.ContractsPath != nil {
-			contractsPath = *req.MockConfig.ContractsPath
-
-			// Validate a caller-supplied contractsPath BEFORE any Postgres
-			// write (pool.Begin below) -- the SAME trust-boundary precedent
-			// pathScope's own ValidatePathScope call above already
-			// established (audit remediation: contractsPath previously had
-			// NO validation at all, unlike pathScope, even though it is
-			// later interpolated into a real outbound GitHub API request,
-			// internal/adapters/outbound/githubapi.
-			// ResolveContractsFingerprint). defaultContractsPath itself is
-			// never run through this check -- it is this handler's own
-			// fixed, known-safe constant, not caller input.
-			if err := environment.ValidateContractsPath(contractsPath); err != nil {
-				writeError(w, http.StatusBadRequest, fmt.Sprintf("mockConfig.contractsPath: %s", err))
-				return
-			}
-		}
-
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			logger.Error("httpapi: begin create-session tx failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		// Rollback is a safety net for every return path other than a
-		// successful Commit below -- same pattern as internal/adapters/
-		// inbound/auth's own createUserAndIdentity and app/sessionactor's
-		// own transact.
-		defer func() { _ = tx.Rollback(ctx) }()
-
-		// An environments row is inserted in this SAME transaction, BEFORE
-		// the session row itself, so the session insert below can set
-		// environment_id to it directly, whenever EITHER a non-empty
-		// pathScope OR a present mockConfig was supplied -- matching this
-		// func's own doc comment (row 27's "either" gate, not "both
-		// required"). environment_id/provenanceTag both stay their
-		// pgtype/Go zero values (NULL) when NEITHER is present, identical
-		// to every session created before this batch.
-		var environmentID pgtype.UUID
-		var provenanceTag *string
-		if hasPathScope || hasMockConfig {
-			var pathScopeJSON []byte
-			if hasPathScope {
-				var marshalErr error
-				pathScopeJSON, marshalErr = json.Marshal(pathScope)
-				if marshalErr != nil {
-					logger.Error("httpapi: marshal pathScope failed", "error", marshalErr)
-					writeError(w, http.StatusInternalServerError, "internal error")
-					return
-				}
-			}
-
-			var contractsPathCol *string
-			if hasMockConfig {
-				contractsPathCol = &contractsPath
-			}
-
-			env, envErr := environments.WithTx(tx).Create(ctx, sqlcgen.CreateEnvironmentParams{
-				PathScope:      pathScopeJSON,
-				MockConfigured: hasMockConfig,
-				ContractsPath:  contractsPathCol,
-			})
-			if envErr != nil {
-				logger.Error("httpapi: create environment failed", "error", envErr)
-				writeError(w, http.StatusInternalServerError, "internal error")
-				return
-			}
-			environmentID = env.ID
-
-			// The real domain function, not a re-derived local boolean --
-			// see this func's own doc comment. Depends only on PathScope,
-			// exactly like RequiresProvenanceTag's own doc comment says --
-			// a mockConfig-only Environment never causes this to fire.
-			if environment.RequiresProvenanceTag(environment.Environment{PathScope: pathScope}) {
-				tag := scopedEnvironmentProvenanceTag
-				provenanceTag = &tag
-			}
-		}
-
-		created, err := sessions.WithTx(tx).Create(ctx, sqlcgen.CreateSessionParams{
-			Title:         (*string)(req.Title),
-			SpawnSource:   sqlcgen.SessionSpawnSource(req.SpawnSource),
-			CreatedBy:     createdBy,
-			Repos:         reposJSON,
-			EnvironmentID: environmentID,
-			ProvenanceTag: provenanceTag,
-		})
-		if err != nil {
-			logger.Error("httpapi: create session failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		hasPrompt := req.Prompt != nil
-		if hasPrompt {
-			if _, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-				SessionID: created.ID,
-				Status:    sqlcgen.TurnStatusPending,
-				Prompt:    (*string)(req.Prompt),
-				ModelID:   (*string)(req.ModelId),
-				PlanMode:  req.PlanMode,
-			}); err != nil {
-				logger.Error("httpapi: create turn failed", "error", err)
-				writeError(w, http.StatusInternalServerError, "internal error")
-				return
-			}
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			logger.Error("httpapi: commit create-session tx failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		if hasPrompt {
-			// Fire-and-forget: GetOrSpawn hydrates local actor state (fast,
-			// no external network call) and Send only enqueues into the
-			// actor's own mailbox -- the actual spawn/dispatch decision
-			// (including any real CreateSandbox network call) runs
-			// entirely on the actor's own background goroutine, not on
-			// this request's own goroutine, so this does not block the
-			// 201 response on how long that decision takes.
-			actor, spawnErr := registry.GetOrSpawn(ctx, created.ID)
-			if spawnErr != nil {
-				logger.Warn("httpapi: GetOrSpawn after session create failed", "error", spawnErr)
-			} else if sendErr := actor.Send(ctx, sessionactor.EnsureDispatched{}); sendErr != nil {
-				logger.Warn("httpapi: send EnsureDispatched after session create failed", "error", sendErr)
-			}
 		}
 
 		writeJSON(w, http.StatusCreated, sessionToDTO(created))
 	}
+}
+
+// createSessionError carries the exact (status, message) pair the HTTP
+// handler should surface for a createSessionCore failure -- a distinct
+// type (rather than a plain error) so CreateSession's own writeError call
+// sites, and every message they produce, stay byte-for-byte identical to
+// what this codebase's existing tests already assert, before and after
+// this Step 31 extraction.
+type createSessionError struct {
+	status  int
+	message string
+}
+
+func (e *createSessionError) Error() string { return e.message }
+
+// createSessionCore does everything CreateSession's own doc comment above
+// describes AFTER decoding the request body: repo validation, pathScope/
+// mockConfig validation, the transactional environment/session/(optional)
+// turn writes, and the post-commit GetOrSpawn + EnsureDispatched dispatch.
+//
+// createdBy is a NULLABLE creator (pgtype.UUID with Valid == false stored
+// as a genuine SQL NULL in sessions.created_by) -- matching sqlcgen.
+// CreateSessionParams.CreatedBy's own pgtype.UUID nullability and this
+// schema's own documented intent (contracts/rest/v1/dtos.schema.json:
+// Session.createdBy, "Null for bot/automation-created sessions with no
+// direct human user"). CreateSession (the HTTP handler above) always
+// passes a Valid one today, since it still hard-requires
+// authenticatedUserID -- but this core function itself never assumes
+// that: a future webhook ingress caller (Steps 32-34) with no
+// cookie-authenticated human passes an explicitly invalid pgtype.UUID{}
+// here instead.
+func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (sqlcgen.Session, *createSessionError) {
+	logger := platform.Logger(ctx)
+
+	if len(req.Repos) < 1 {
+		return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, "repos must be non-empty"}
+	}
+
+	// Validate every repo's Name/Url/Branch BEFORE any Postgres write
+	// (pool.Begin below) -- see CreateSession's own doc comment above.
+	// Stops at the first failure, in order, matching gitclone's own
+	// validateRepoSpec precedent exactly; does not attempt to
+	// collect/report every failure across every repo at once.
+	for i, repo := range req.Repos {
+		if err := reposource.ValidateRepoName(repo.Name); err != nil {
+			return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err)}
+		}
+		if err := reposource.ValidateRepoURL(repo.Url); err != nil {
+			return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err)}
+		}
+		if repo.Branch != nil {
+			if err := reposource.ValidateBranch(*repo.Branch); err != nil {
+				return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err)}
+			}
+		}
+	}
+
+	reposJSON, err := json.Marshal(req.Repos)
+	if err != nil {
+		logger.Error("httpapi: marshal repos failed", "error", err)
+		return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+	}
+
+	// pathScope is OPTIONAL (contracts/rest/v1/dtos.schema.json's
+	// CreateSessionRequest.pathScope) -- req.PathScope may be nil
+	// (absent) or point at a nil/empty slice (present but null/[]);
+	// either way that means "unscoped", exactly today's existing
+	// behavior. Only a genuinely non-empty pathScope triggers
+	// validation + environment creation below.
+	var pathScope []string
+	if req.PathScope != nil {
+		pathScope = []string(*req.PathScope)
+	}
+	hasPathScope := len(pathScope) > 0
+
+	// Validate every pathScope pattern BEFORE any Postgres write (pool.
+	// Begin below) -- the SAME trust-boundary precedent the repo
+	// validation above already established: reject with 400 on the
+	// first invalid pattern, in order, never reaching pool.Begin on
+	// that path.
+	if hasPathScope {
+		if err := environment.ValidatePathScope(pathScope); err != nil {
+			return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("pathScope: %s", err)}
+		}
+	}
+
+	// mockConfig is OPTIONAL and INDEPENDENT of pathScope (row 27,
+	// "mocking + contract drift", §14.3 -- see CreateSession's own doc
+	// comment). hasMockConfig is true whenever the request body carried
+	// a "mockConfig" key at all (req.MockConfig != nil), even as {} --
+	// contractsPath resolves to the caller's own value when supplied,
+	// otherwise defaultContractsPath.
+	hasMockConfig := req.MockConfig != nil
+	contractsPath := defaultContractsPath
+	if hasMockConfig && req.MockConfig.ContractsPath != nil {
+		contractsPath = *req.MockConfig.ContractsPath
+
+		// Validate a caller-supplied contractsPath BEFORE any Postgres
+		// write (pool.Begin below) -- the SAME trust-boundary precedent
+		// pathScope's own ValidatePathScope call above already
+		// established (audit remediation: contractsPath previously had
+		// NO validation at all, unlike pathScope, even though it is
+		// later interpolated into a real outbound GitHub API request,
+		// internal/adapters/outbound/githubapi.
+		// ResolveContractsFingerprint). defaultContractsPath itself is
+		// never run through this check -- it is this handler's own
+		// fixed, known-safe constant, not caller input.
+		if err := environment.ValidateContractsPath(contractsPath); err != nil {
+			return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("mockConfig.contractsPath: %s", err)}
+		}
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		logger.Error("httpapi: begin create-session tx failed", "error", err)
+		return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+	}
+	// Rollback is a safety net for every return path other than a
+	// successful Commit below -- same pattern as internal/adapters/
+	// inbound/auth's own createUserAndIdentity and app/sessionactor's
+	// own transact.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// An environments row is inserted in this SAME transaction, BEFORE
+	// the session row itself, so the session insert below can set
+	// environment_id to it directly, whenever EITHER a non-empty
+	// pathScope OR a present mockConfig was supplied -- matching
+	// CreateSession's own doc comment (row 27's "either" gate, not "both
+	// required"). environment_id/provenanceTag both stay their
+	// pgtype/Go zero values (NULL) when NEITHER is present, identical
+	// to every session created before this batch.
+	var environmentID pgtype.UUID
+	var provenanceTag *string
+	if hasPathScope || hasMockConfig {
+		var pathScopeJSON []byte
+		if hasPathScope {
+			var marshalErr error
+			pathScopeJSON, marshalErr = json.Marshal(pathScope)
+			if marshalErr != nil {
+				logger.Error("httpapi: marshal pathScope failed", "error", marshalErr)
+				return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+			}
+		}
+
+		var contractsPathCol *string
+		if hasMockConfig {
+			contractsPathCol = &contractsPath
+		}
+
+		env, envErr := environments.WithTx(tx).Create(ctx, sqlcgen.CreateEnvironmentParams{
+			PathScope:      pathScopeJSON,
+			MockConfigured: hasMockConfig,
+			ContractsPath:  contractsPathCol,
+		})
+		if envErr != nil {
+			logger.Error("httpapi: create environment failed", "error", envErr)
+			return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+		}
+		environmentID = env.ID
+
+		// The real domain function, not a re-derived local boolean --
+		// see CreateSession's own doc comment. Depends only on PathScope,
+		// exactly like RequiresProvenanceTag's own doc comment says --
+		// a mockConfig-only Environment never causes this to fire.
+		if environment.RequiresProvenanceTag(environment.Environment{PathScope: pathScope}) {
+			tag := scopedEnvironmentProvenanceTag
+			provenanceTag = &tag
+		}
+	}
+
+	created, err := sessions.WithTx(tx).Create(ctx, sqlcgen.CreateSessionParams{
+		Title:         (*string)(req.Title),
+		SpawnSource:   sqlcgen.SessionSpawnSource(req.SpawnSource),
+		CreatedBy:     createdBy,
+		Repos:         reposJSON,
+		EnvironmentID: environmentID,
+		ProvenanceTag: provenanceTag,
+	})
+	if err != nil {
+		logger.Error("httpapi: create session failed", "error", err)
+		return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+	}
+
+	hasPrompt := req.Prompt != nil
+	if hasPrompt {
+		if _, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
+			SessionID: created.ID,
+			Status:    sqlcgen.TurnStatusPending,
+			Prompt:    (*string)(req.Prompt),
+			ModelID:   (*string)(req.ModelId),
+			PlanMode:  req.PlanMode,
+		}); err != nil {
+			logger.Error("httpapi: create turn failed", "error", err)
+			return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		logger.Error("httpapi: commit create-session tx failed", "error", err)
+		return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+	}
+
+	if hasPrompt {
+		// Fire-and-forget: GetOrSpawn hydrates local actor state (fast,
+		// no external network call) and Send only enqueues into the
+		// actor's own mailbox -- the actual spawn/dispatch decision
+		// (including any real CreateSandbox network call) runs
+		// entirely on the actor's own background goroutine, not on
+		// this request's own goroutine, so this does not block the
+		// 201 response on how long that decision takes.
+		actor, spawnErr := registry.GetOrSpawn(ctx, created.ID)
+		if spawnErr != nil {
+			logger.Warn("httpapi: GetOrSpawn after session create failed", "error", spawnErr)
+		} else if sendErr := actor.Send(ctx, sessionactor.EnsureDispatched{}); sendErr != nil {
+			logger.Warn("httpapi: send EnsureDispatched after session create failed", "error", sendErr)
+		}
+	}
+
+	return created, nil
 }
