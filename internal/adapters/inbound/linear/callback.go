@@ -26,7 +26,7 @@ import (
 // branch here at all: installing (or re-installing) a workspace is
 // authorized simply by already being a signed-in Narvi user (see doc.go's
 // own scope note on role-gating), and Upsert always just replaces the
-// prior token pair in place (see migrations/000029_linear_installations.
+// prior token pair in place (see migrations/000031_linear_installations.
 // up.sql's own doc comment: "there is exactly one live installation per
 // organization_id, never a history of past ones").
 func NewInstallCallbackHandler(

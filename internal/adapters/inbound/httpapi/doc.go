@@ -108,18 +108,36 @@
 //
 // No new route is added by this Step -- it adds no concrete provider
 // wiring at all. CreateSession's own doc comment above (create.go) is
-// split in two: everything after decoding the request body is now the
-// unexported createSessionCore, taking an already-decoded
-// restdtos.CreateSessionRequest plus a NULLABLE creator (pgtype.UUID,
-// Valid == false for "no human caller"). CreateSession itself is now a
-// thin wrapper: decode body -> authenticatedUserID (UNCHANGED, still
-// hard-required for this browser/REST route) -> createSessionCore ->
-// write the JSON response. This is a pure refactor for this route --
-// every existing test in this package's own _test.go files passes
-// unchanged. The point of the split is reuse: a webhook ingress handler
-// calls createSessionCore directly, with its own already-verified,
+// split in two: everything after decoding the request body is now
+// createSessionCore (unexported as of this Step -- Step 33 exports it,
+// see below), taking an already-decoded restdtos.CreateSessionRequest
+// plus a NULLABLE creator (pgtype.UUID, Valid == false for "no human
+// caller"). CreateSession itself is now a thin wrapper: decode body ->
+// authenticatedUserID (UNCHANGED, still hard-required for this browser/
+// REST route) -> createSessionCore -> write the JSON response. This is a
+// pure refactor for this route -- every existing test in this package's
+// own _test.go files passes unchanged. The point of the split is reuse:
+// Steps 32/33/34's own GitHub/Slack/Linear webhook ingress handlers call
+// createSessionCore directly, with their own already-verified,
 // already-decoded request and a NULL creator (no cookie, no human) --
 // never this package's own CreateSession, which stays browser-only.
+// Whether those ingress handlers end up living in THIS package (as new
+// files alongside create.go/get.go/events.go/artifacts.go/wstoken.go) or
+// export createSessionCore to reach it from their own separate packages
+// is left open by this Step -- see the Step 33 update immediately below
+// for how that question was actually resolved.
+//
+// # Step 33 ("Slack ingress") update
+//
+// internal/adapters/inbound/slack (a separate package, mirroring
+// github/linear's own reserved package-per-surface shape) is Step 33's
+// own new Slack webhook ingress adapter -- see that package's own doc.go.
+// It needs to reach createSessionCore from outside this package, so this
+// Step exports it (CreateSessionCore) and its error type (CreateSessionError,
+// with exported Status/Message fields) -- a pure rename, no behavior
+// change; every call site and test in THIS package keeps compiling
+// unchanged (create.go's own doc comment above CreateSessionCore has the
+// full reasoning).
 //
 // This Step also adds two other, independent pieces used by those same
 // future ingress endpoints, neither wired to a concrete provider yet:
@@ -139,11 +157,9 @@
 //
 // Independent webhook-ingress adapters each ended up needing "create a
 // session (+ optional turn), then post-commit trigger dispatch" from
-// OUTSIDE this package, which resolves the "should this stay
-// package-private" question this Step originally left open: createSessionCore
-// is exported (as CreateSessionCore, alongside an exported
-// CreateSessionError -- Status/Message fields, same Error() method) -- a
-// pure rename, no behavior change for any existing caller. At least one
+// OUTSIDE this package -- CreateSessionCore/CreateSessionError are already
+// exported as of Step 33 above (Status/Message fields, same Error()
+// method), so no further export/rename is needed here. At least one
 // such adapter also needs to create a session+turn while ALREADY holding
 // an unrelated lock on its own already-open transaction (e.g. an atomic
 // per-resource claim taken via SELECT ... FOR UPDATE) -- calling the
@@ -192,4 +208,37 @@
 //     that same connection, and calls TriggerDispatch itself once its own
 //     outer transaction commits -- never CreateSessionCore, which is only
 //     safe for a caller with no transaction of its own yet.
+//
+// # Step 32 ("GitHub ingress") update
+//
+// The real webhook handler lives in its own package,
+// internal/adapters/inbound/github (mounted at POST /webhooks/github,
+// cmd/control-plane/main.go) -- NOT inside this package, since it is a
+// genuinely separate protocol adapter (signature verification, GitHub's
+// own event/payload shapes, per-PR coalescing), not one more browser/REST
+// route family. bot.go adds two small EXPORTED wrappers for that package's
+// use: CreateSessionForBot (forwards to CreateSessionCore with a NULL
+// creator) and CreateTurnForBot (mirrors CreateTurn's own
+// lock-then-insert-then-dispatch sequencing, minus its REST-specific
+// hasOpenTurn 409 gate -- see bot.go's own doc comment for why that gate
+// doesn't apply to a bot-ingress caller enqueuing a coalesced backlog of
+// turns on one shared session).
+//
+// github's own per-PR coalescing (coalesce.go, that package) uses
+// CreateTurnForBot directly for its REUSE branch. Its WINNER branch, since
+// the reconciliation update above landed, calls CreateSessionOnTx directly
+// (inline on the SAME tx its own claim-row lock already holds) rather than
+// duplicating any of CreateSessionOnTx's own validation/insert logic by
+// hand, then calls TriggerDispatch itself once that outer transaction has
+// committed and hasPrompt is true -- exactly the "already holding an
+// open transaction of its own" caller shape CreateSessionOnTx's own doc
+// comment (create.go) describes. Neither branch calls CreateSessionForBot
+// for the winner path: that wrapper is pool-based (CreateSessionCore
+// underneath), and opening a SECOND, separate transaction from the same
+// pool while the claim-row lock's own transaction is still open would
+// risk exhausting the connection pool under enough concurrent same-PR
+// mentions. CreateSessionForBot itself is untouched and still fully
+// tested (bot_integration_test.go) as a general-purpose, no-coalescing
+// bot-session entry point for a caller that isn't simultaneously holding
+// a transaction open of its own.
 package httpapi

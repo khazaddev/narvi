@@ -33,6 +33,7 @@ test-integration:
 # against it. Every env var below is an obviously-fake, dev-only value
 # supplied inline by this recipe so platform.Load() (internal/platform/
 # config.go) succeeds: the 3 HMAC secrets, the GitHub OAuth credentials,
+# the GitHub webhook secret + bot handle (Step 32, "GitHub ingress"),
 # NARVI_PUBLIC_BASE_URL (matches config.go's own defaultHTTPAddr, ":8080"),
 # NARVI_TOKEN_ENCRYPTION_KEY (a real base64 encoding of exactly 32 random
 # bytes -- Load() rejects anything else for AES-256-GCM), one signup
@@ -43,7 +44,11 @@ test-integration:
 # this only restores "make dev boots", not "make dev's Modal calls work"),
 # and Step 34's own Linear webhook secret/OAuth credentials/default repo
 # (also placeholders -- nothing actually verifies a Linear webhook
-# signature or exchanges a Linear OAuth code locally either).
+# signature or exchanges a Linear OAuth code locally either), and
+# (Step 33, "Slack ingress") the Slack signing secret/bot token pair --
+# nothing actually listens for any of these locally, so a real Slack/
+# Linear webhook or chat.postMessage/OAuth exchange still needs further
+# setup, same caveat as Modal.
 # Config.Load() still requires every one of these unconditionally in Go —
 # nothing is made "optional in development" there.
 dev:
@@ -55,6 +60,8 @@ dev:
 	NARVI_HMAC_WEBHOOK_SECRET=dev-only-insecure-webhook-secret \
 	NARVI_GITHUB_CLIENT_ID=dev-github-client-id-placeholder \
 	NARVI_GITHUB_CLIENT_SECRET=dev-github-client-secret-placeholder \
+	NARVI_GITHUB_WEBHOOK_SECRET=dev-only-insecure-github-webhook-secret \
+	NARVI_GITHUB_BOT_HANDLE=narvi-bot \
 	NARVI_PUBLIC_BASE_URL=http://localhost:8080 \
 	NARVI_TOKEN_ENCRYPTION_KEY=X4x5GAK5D4bwFxg5fEzToXLfPfe2XwZp8U3CR/Pl1Z4= \
 	NARVI_ALLOWED_GITHUB_ORGS=dev-org-placeholder \
@@ -65,6 +72,8 @@ dev:
 	NARVI_LINEAR_CLIENT_SECRET=dev-linear-client-secret-placeholder \
 	NARVI_LINEAR_DEFAULT_REPO_NAME=narvi \
 	NARVI_LINEAR_DEFAULT_REPO_URL=https://github.com/khazaddev/narvi \
+	NARVI_SLACK_SIGNING_SECRET=dev-slack-signing-secret-placeholder \
+	NARVI_SLACK_BOT_TOKEN=dev-slack-bot-token-placeholder \
 	go run ./cmd/control-plane serve
 
 # contracts-generate regenerates every codegen target under contracts/gen from

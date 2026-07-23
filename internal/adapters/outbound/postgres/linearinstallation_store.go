@@ -11,7 +11,7 @@ import (
 
 // LinearInstallationStore is a thin, pass-through wrapper around the
 // sqlc-generated linear_installations queries (Step 34, "Linear ingress",
-// §8.10's own "OAuth" scope -- see migrations/000029_linear_installations.
+// §8.10's own "OAuth" scope -- see migrations/000031_linear_installations.
 // up.sql's own doc comment for why this table is keyed by organization_id
 // rather than user_id). No caching, no retries, no business rules --
 // internal/adapters/inbound/linear's own install-callback and webhook

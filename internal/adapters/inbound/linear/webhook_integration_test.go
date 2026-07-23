@@ -284,7 +284,7 @@ func TestWebhookHandler_DuplicateDelivery_NoSecondSession(t *testing.T) {
 // Linear-Delivery id (so the webhook_deliveries claim alone would NOT
 // catch it) for the SAME agentSession.id must still never create a
 // second Narvi session -- Linear's own AgentSession identity is the real
-// source of truth (migrations/000028_linear_agent_sessions.up.sql's own
+// source of truth (migrations/000030_linear_agent_sessions.up.sql's own
 // doc comment).
 func TestWebhookHandler_DuplicateAgentSession_DifferentDelivery_NoSecondSession(t *testing.T) {
 	pool := newTestPool(t)

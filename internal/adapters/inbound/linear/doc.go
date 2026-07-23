@@ -19,7 +19,7 @@
 //     "linear", delivery id = the Linear-Delivery header), and routed to
 //     a Narvi session/turn via LinearAgentSessionStore's own atomic claim
 //     on Linear's own AgentSession id (see migrations/
-//     000028_linear_agent_sessions.up.sql's own doc comment for why that
+//     000030_linear_agent_sessions.up.sql's own doc comment for why that
 //     id is already a 1:1-with-one-unit-of-work identity, unlike
 //     GitHub's/Slack's own coalescing problems).
 //

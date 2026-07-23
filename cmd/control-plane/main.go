@@ -28,8 +28,10 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
+	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
+	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
@@ -57,6 +59,12 @@ const githubAPIBaseURL = "https://api.github.com"
 // githubAPIBaseURL's own identical precedent immediately above (Step 34,
 // "Linear ingress", §8.10).
 const linearAPIBaseURL = "https://api.linear.app"
+
+// slackAPIBaseURL is Slack's own real Web API base, passed to
+// slack.Deps.SlackAPIBaseURL in production wiring (Step 33, "Slack
+// ingress") -- the ONLY place this literal appears in this binary's
+// wiring, mirroring githubAPIBaseURL's own identical precedent exactly.
+const slackAPIBaseURL = "https://slack.com/api"
 
 // This is intentionally a bare-bones dispatch, not a flag-parsing library:
 // there is exactly one subcommand today ("serve"). Anything else prints a
@@ -187,6 +195,18 @@ func serve() error {
 	environmentStore := postgres.NewEnvironmentStore(pool)
 	imageBuildStore := postgres.NewImageBuildStore(pool)
 
+	// webhookDeliveryStore is Step 31's own provider-agnostic dedupe claim,
+	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress (see
+	// the Linear ingress block below, which reuses this SAME store rather
+	// than constructing its own). slackThreadSessionStore (Step 33, "Slack
+	// ingress", §8.10) is the thread<->session mapping (see
+	// internal/adapters/inbound/slack's own doc.go); githubPRSessionStore
+	// (Step 32, "GitHub ingress", §8.2) is the per-PR review-session
+	// coalescing claim (see internal/adapters/inbound/github's own doc.go).
+	webhookDeliveryStore := postgres.NewWebhookDeliveryStore(pool)
+	slackThreadSessionStore := postgres.NewSlackThreadSessionStore(pool)
+	githubPRSessionStore := postgres.NewGitHubPRSessionStore(pool)
+
 	// recon is Step 25's ("reconciler + GC", §5.3) process-wide
 	// provider-reconciliation/orphan-GC loop, run below via the errgroup
 	// exactly once per process -- constructed from the SAME sandboxStore/
@@ -259,6 +279,52 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/snapshot",
 		httpapi.SnapshotMint(sandboxStore, sandboxProvider))
 
+	// Slack ingress (Step 33, §8.10): deliberately mounted OUTSIDE
+	// /api/sessions and outside auth.Middleware entirely -- Slack itself
+	// is the caller here, authenticated via its own request-signing
+	// scheme (X-Slack-Signature/X-Slack-Request-Timestamp), not a
+	// narvi_auth_session cookie. See internal/adapters/inbound/slack's
+	// own doc.go for the full request-handling writeup.
+	router.Post("/webhooks/slack", slack.NewHandler(slack.Deps{
+		Pool:            pool,
+		Sessions:        sessionStore,
+		Turns:           turnStore,
+		Environments:    environmentStore,
+		Registry:        registry,
+		Deliveries:      webhookDeliveryStore,
+		Threads:         slackThreadSessionStore,
+		SigningSecret:   cfg.SlackSigningSecret,
+		BotToken:        cfg.SlackBotToken,
+		DefaultRepoName: cfg.SlackDefaultRepoName,
+		DefaultRepoURL:  cfg.SlackDefaultRepoURL,
+		TimestampWindow: cfg.Timeouts.WebhookTimestampFreshnessWindow,
+		SlackAPIBaseURL: slackAPIBaseURL,
+		AckTimeout:      cfg.Timeouts.SlackAckTimeout,
+	}))
+
+	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
+	// OUTSIDE auth.Middleware entirely, mirroring scm-credentials/
+	// snapshot-mint immediately above exactly -- this route authenticates
+	// via GitHub's own HMAC webhook signature, not a browser cookie. See
+	// internal/adapters/inbound/github's own doc.go for the full
+	// verify -> dedupe-claim -> parse -> detect -> per-PR-coalesce
+	// sequencing.
+	router.Post("/webhooks/github", githubingress.NewHandler(
+		&githubingress.SessionCoalescer{
+			Pool:         pool,
+			PRSessions:   githubPRSessionStore,
+			Sessions:     sessionStore,
+			Turns:        turnStore,
+			Environments: environmentStore,
+			Registry:     registry,
+		},
+		webhookDeliveryStore,
+		githubingress.Config{
+			WebhookSecret: cfg.GitHubWebhookSecret,
+			BotHandle:     cfg.GitHubBotHandle,
+		},
+	))
+
 	// Auth routes (§13.1/§13.4, Step 20): how a session is obtained/
 	// discarded in the first place, so — obviously — mounted OUTSIDE any
 	// auth gate. See internal/adapters/inbound/auth's own doc.go for the
@@ -312,7 +378,6 @@ func serve() error {
 	// analogous blocks here independently, in separate worktrees).
 	linearOAuthConfig := linear.NewOAuthConfig(*cfg)
 	linearClient := linearapi.New(nil, linearAPIBaseURL)
-	webhookDeliveryStore := postgres.NewWebhookDeliveryStore(pool)
 	linearAgentSessionStore := postgres.NewLinearAgentSessionStore(pool)
 	linearInstallationStore := postgres.NewLinearInstallationStore(pool)
 

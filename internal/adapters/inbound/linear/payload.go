@@ -63,7 +63,7 @@ type agentSessionEventWebhookPayload struct {
 type agentSessionWebhookPayload struct {
 	// ID is Linear's own AgentSession identity -- the key
 	// linear_agent_sessions.agent_session_id is claimed/looked-up by (see
-	// migrations/000028_linear_agent_sessions.up.sql's own doc comment).
+	// migrations/000030_linear_agent_sessions.up.sql's own doc comment).
 	ID string `json:"id"`
 
 	// Issue is present when this session is attached to an issue (the

@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 )
 
 // Stage identifies which deployment stage the control plane is running in.
@@ -162,6 +164,29 @@ const (
 	publicBaseURLEnvVarName      = "NARVI_PUBLIC_BASE_URL"
 )
 
+// gitHubWebhookSecretEnvVarName and gitHubBotHandleEnvVarName configure
+// Step 32's ("GitHub ingress", §8.2) own webhook adapter --
+// internal/adapters/inbound/github. gitHubWebhookSecretEnvVarName is
+// DELIBERATELY DISTINCT from hmacWebhookSecretEnvVarName above: that
+// secret backs Narvi's OWN internal bearer HMAC scheme (a later, unrelated
+// concern -- see internal/platform/webhooksig.go's own doc comment for
+// the full reasoning), never a real third-party provider signature.
+// GitHubWebhookSecret is the REAL secret GitHub itself signs
+// "X-Hub-Signature-256" with, configured on GitHub's own webhook settings
+// screen. gitHubBotHandleEnvVarName is the bot/app username Step 32's own
+// mention-detection matches comment bodies against (a plain "@handle"
+// substring check, internal/adapters/inbound/github). Both required in
+// every stage -- never defaulted, matching every other secret/credential
+// this file already reads (the 3 HMAC secrets, the GitHub OAuth
+// credentials, TokenEncryptionKey, Modal's own BaseURL/AuthToken): there
+// is no safe placeholder webhook secret, and a misconfigured/empty bot
+// handle would silently make this entire ingress route never detect a
+// single mention.
+const (
+	gitHubWebhookSecretEnvVarName = "NARVI_GITHUB_WEBHOOK_SECRET"
+	gitHubBotHandleEnvVarName     = "NARVI_GITHUB_BOT_HANDLE"
+)
+
 // tokenEncryptionKeyEnvVarName is the env var Load reads for the AES-256-GCM
 // key protecting provider tokens at rest (§13.1: "Provider tokens encrypted
 // at rest (AES-GCM), per-user"). Required in every stage; the raw value
@@ -310,6 +335,39 @@ const (
 	linearDefaultRepoURLEnvVarName  = "NARVI_LINEAR_DEFAULT_REPO_URL"
 )
 
+// slackSigningSecretEnvVarName and slackBotTokenEnvVarName configure Step
+// 33's ("Slack ingress", §8.10) real Slack Events API adapter
+// (internal/adapters/inbound/slack). Deliberately NOT HMACWebhookSecret --
+// see internal/platform/webhooksig.go's own doc comment for why a real
+// provider's own signature scheme never matches that internal bearer
+// format. SlackSigningSecret verifies "X-Slack-Signature"/
+// "X-Slack-Request-Timestamp" on every inbound webhook request (fail
+// closed); SlackBotToken authenticates the one direct
+// chat.postMessage call this Step's own in-thread ack makes (see that
+// package's own doc.go for why this is a single direct API call, not the
+// general Notifier/outbox abstraction Step 35 builds). Both required in
+// every stage -- never defaulted, matching every other secret this file
+// already reads.
+const (
+	slackSigningSecretEnvVarName = "NARVI_SLACK_SIGNING_SECRET"
+	slackBotTokenEnvVarName      = "NARVI_SLACK_BOT_TOKEN"
+)
+
+// slackDefaultRepoNameEnvVarName and slackDefaultRepoURLEnvVarName name the
+// single repo a brand-new Slack-spawned session's CreateSessionRequest
+// carries (Step 33, "Slack ingress"). Deliberately OPTIONAL, unlike the two
+// vars above: the technical plan has no per-channel/per-workspace repo
+// routing design yet (that is a genuinely open gap, left to a future
+// automations/routing Step), so this Step's own honest, minimal stand-in is
+// exactly one operator-configured default repo. Leaving either one unset
+// disables NEW-thread session creation only (see internal/adapters/inbound/
+// slack's own doc.go) -- it does not affect replies on an already-mapped
+// thread, which never need a repo at all.
+const (
+	slackDefaultRepoNameEnvVarName = "NARVI_SLACK_DEFAULT_REPO_NAME"
+	slackDefaultRepoURLEnvVarName  = "NARVI_SLACK_DEFAULT_REPO_URL"
+)
+
 // initialAdminEmailsEnvVarName is the env var Load reads for the
 // first-run-seeding initial-admin list (§13.4: "initial admins set by
 // config"). Optional — an empty list simply means every first-time
@@ -388,6 +446,15 @@ type Config struct {
 	GitHubClientID     string
 	GitHubClientSecret string
 
+	// GitHubWebhookSecret and GitHubBotHandle configure Step 32's
+	// ("GitHub ingress", §8.2) webhook adapter, read from
+	// NARVI_GITHUB_WEBHOOK_SECRET / NARVI_GITHUB_BOT_HANDLE. Both required
+	// in every stage -- never defaulted. See gitHubWebhookSecretEnvVarName's
+	// own doc comment above for why GitHubWebhookSecret is a DISTINCT
+	// secret from HMACWebhookSecret.
+	GitHubWebhookSecret string
+	GitHubBotHandle     string
+
 	// PublicBaseURL is this control plane's own externally-reachable base
 	// URL (e.g. "http://localhost:8080" in development, a real https://
 	// URL in production), read from NARVI_PUBLIC_BASE_URL. Required — used
@@ -464,6 +531,22 @@ type Config struct {
 	// note this stopgap exists under. Both required, no default.
 	LinearDefaultRepoName string
 	LinearDefaultRepoURL  string
+
+	// SlackSigningSecret and SlackBotToken configure Step 33's ("Slack
+	// ingress") real Slack Events API adapter, read from
+	// NARVI_SLACK_SIGNING_SECRET / NARVI_SLACK_BOT_TOKEN. Both required in
+	// every stage -- never defaulted (see slackSigningSecretEnvVarName's
+	// own doc comment above for the full reasoning).
+	SlackSigningSecret string
+	SlackBotToken      string
+
+	// SlackDefaultRepoName and SlackDefaultRepoURL are the single repo a
+	// brand-new Slack-spawned session's CreateSessionRequest carries,
+	// read from NARVI_SLACK_DEFAULT_REPO_NAME / NARVI_SLACK_DEFAULT_REPO_URL.
+	// Both optional -- see slackDefaultRepoNameEnvVarName's own doc
+	// comment above for why, and for what leaving either one empty means.
+	SlackDefaultRepoName string
+	SlackDefaultRepoURL  string
 }
 
 // Load reads process configuration and validates it fail-fast, returning
@@ -542,6 +625,16 @@ func Load() (*Config, error) {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: publicBaseURLEnvVarName})
 	}
 
+	gitHubWebhookSecret := os.Getenv(gitHubWebhookSecretEnvVarName)
+	if gitHubWebhookSecret == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubWebhookSecretEnvVarName})
+	}
+
+	gitHubBotHandle := os.Getenv(gitHubBotHandleEnvVarName)
+	if gitHubBotHandle == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubBotHandleEnvVarName})
+	}
+
 	var tokenEncryptionKey []byte
 	rawTokenEncryptionKey := os.Getenv(tokenEncryptionKeyEnvVarName)
 	if rawTokenEncryptionKey == "" {
@@ -613,6 +706,35 @@ func Load() (*Config, error) {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: linearDefaultRepoURLEnvVarName})
 	}
 
+	slackSigningSecret := os.Getenv(slackSigningSecretEnvVarName)
+	if slackSigningSecret == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: slackSigningSecretEnvVarName})
+	}
+
+	slackBotToken := os.Getenv(slackBotTokenEnvVarName)
+	if slackBotToken == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: slackBotTokenEnvVarName})
+	}
+
+	// SlackDefaultRepoName/URL are optional (see their own env-var-name
+	// doc comment above) -- but a NON-empty value is validated with the
+	// SAME domain validators the REST create-session path already trusts
+	// (internal/adapters/inbound/httpapi.CreateSessionCore), so a typo'd
+	// operator-configured repo fails fast at boot rather than surfacing
+	// as a confusing 500 on the first Slack mention that tries to use it.
+	slackDefaultRepoName := os.Getenv(slackDefaultRepoNameEnvVarName)
+	if slackDefaultRepoName != "" {
+		if err := reposource.ValidateRepoName(slackDefaultRepoName); err != nil {
+			errs = append(errs, fmt.Errorf("invalid %s: %w", slackDefaultRepoNameEnvVarName, err))
+		}
+	}
+	slackDefaultRepoURL := os.Getenv(slackDefaultRepoURLEnvVarName)
+	if slackDefaultRepoURL != "" {
+		if err := reposource.ValidateRepoURL(slackDefaultRepoURL); err != nil {
+			errs = append(errs, fmt.Errorf("invalid %s: %w", slackDefaultRepoURLEnvVarName, err))
+		}
+	}
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -628,6 +750,8 @@ func Load() (*Config, error) {
 		HMACWebhookSecret:      hmacWebhookSecret,
 		GitHubClientID:         gitHubClientID,
 		GitHubClientSecret:     gitHubClientSecret,
+		GitHubWebhookSecret:    gitHubWebhookSecret,
+		GitHubBotHandle:        gitHubBotHandle,
 		PublicBaseURL:          publicBaseURL,
 		TokenEncryptionKey:     tokenEncryptionKey,
 		AllowedEmailDomains:    allowedEmailDomains,
@@ -644,5 +768,10 @@ func Load() (*Config, error) {
 		LinearOAuthClientSecret: linearOAuthClientSecret,
 		LinearDefaultRepoName:   linearDefaultRepoName,
 		LinearDefaultRepoURL:    linearDefaultRepoURL,
+
+		SlackSigningSecret:   slackSigningSecret,
+		SlackBotToken:        slackBotToken,
+		SlackDefaultRepoName: slackDefaultRepoName,
+		SlackDefaultRepoURL:  slackDefaultRepoURL,
 	}, nil
 }

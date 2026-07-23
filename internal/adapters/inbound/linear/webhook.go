@@ -171,7 +171,7 @@ func NewWebhookHandler(deps Deps) http.HandlerFunc {
 
 // handleCreated processes a `created` AgentSessionEvent: claims this
 // Linear agent session's own identity (first-writer-wins -- see
-// migrations/000028_linear_agent_sessions.up.sql's own doc comment),
+// migrations/000030_linear_agent_sessions.up.sql's own doc comment),
 // and -- only for the winner -- creates the backing Narvi session via
 // CreateSessionCore, attaches the resulting session id back onto the
 // claimed row, and posts the minimal acknowledgment Agent Activity.

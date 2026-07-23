@@ -1,15 +1,12 @@
 //go:build integration
 
-// Integration tests for CreateSessionCore, CreateSessionOnTx, and
-// TriggerDispatch (Step 31's "webhook toolkit" extraction, later exported
-// and split for tx support) -- deliberately in package httpapi (not
-// httpapi_test, unlike this package's other integration tests): even
-// though CreateSessionCore/CreateSessionOnTx are exported today, they
-// remain CreateSession's own internal implementation detail first and
-// foremost, with each provider's own webhook ingress package (Steps
-// 32-34's GitHub/Slack/Linear adapters, internal/adapters/inbound/linear
-// among them) as their only outside callers. This file builds its own
-// minimal testcontainers-Postgres rig
+// -- Step 33, "Slack ingress" -- and split for tx support) --
+// deliberately in package httpapi (not httpapi_test, unlike this
+// package's other integration tests): even though CreateSessionCore/
+// CreateSessionOnTx are exported today, they remain CreateSession's own
+// internal implementation detail first and foremost, with the webhook
+// ingress packages (Steps 32-34) as their only outside callers today.
+// This file builds its own minimal testcontainers-Postgres rig
 // rather than reusing httpapi_test's own newTestRig/newTestPool -- an
 // external test package's unexported helpers are not reachable from an
 // internal one, matching this codebase's own existing precedent that

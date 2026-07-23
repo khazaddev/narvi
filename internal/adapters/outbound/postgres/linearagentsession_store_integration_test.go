@@ -6,7 +6,7 @@
 // SAME "(xmax = 0) AS inserted" atomic-claim idiom against a real
 // Postgres instance, for a DIFFERENT identity (Linear's own AgentSession
 // id, not a webhook delivery id) -- see migrations/
-// 000028_linear_agent_sessions.up.sql's own doc comment for the full "why
+// 000030_linear_agent_sessions.up.sql's own doc comment for the full "why
 // this table, why this race matters" writeup.
 package postgres_test
 

@@ -544,6 +544,13 @@ type Event struct {
 	MessageID string             `json:"message_id"`
 }
 
+type GithubPrSession struct {
+	RepoFullName string             `json:"repo_full_name"`
+	PrNumber     int32              `json:"pr_number"`
+	SessionID    pgtype.UUID        `json:"session_id"`
+	ClaimedAt    pgtype.Timestamptz `json:"claimed_at"`
+}
+
 type Identity struct {
 	ID                   pgtype.UUID        `json:"id"`
 	UserID               pgtype.UUID        `json:"user_id"`
@@ -658,6 +665,13 @@ type SessionTimer struct {
 	SessionID pgtype.UUID        `json:"session_id"`
 	Name      string             `json:"name"`
 	FiresAt   pgtype.Timestamptz `json:"fires_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type SlackThreadSession struct {
+	ChannelID string             `json:"channel_id"`
+	ThreadTs  string             `json:"thread_ts"`
+	SessionID pgtype.UUID        `json:"session_id"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 

@@ -12,7 +12,7 @@ import (
 
 // LinearAgentSessionStore is a thin, pass-through wrapper around the
 // sqlc-generated linear_agent_sessions queries (Step 34, "Linear
-// ingress", §8.10 -- see migrations/000028_linear_agent_sessions.up.sql's
+// ingress", §8.10 -- see migrations/000030_linear_agent_sessions.up.sql's
 // own doc comment for why this table exists and how its atomic claim is
 // used). No caching, no retries, no business rules -- internal/adapters/
 // inbound/linear's own webhook handler is the only caller.
