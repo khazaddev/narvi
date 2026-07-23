@@ -674,6 +674,12 @@ type UserSession struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type WebhookDelivery struct {
+	Provider   string             `json:"provider"`
+	DeliveryID string             `json:"delivery_id"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
+}
+
 type WsToken struct {
 	ID        pgtype.UUID        `json:"id"`
 	SessionID pgtype.UUID        `json:"session_id"`
