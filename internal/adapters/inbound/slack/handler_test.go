@@ -67,8 +67,20 @@ func TestNewHandler_SignatureVerification(t *testing.T) {
 		{
 			name: "tampered signature rejected",
 			mutate: func(req *http.Request) {
+				// Flip the last hex digit to a value GUARANTEED to differ
+				// from the real one, rather than a fixed literal -- the
+				// base request above is signed against a real time.Now(),
+				// so a fixed "always append '0'" mutation is a silent
+				// no-op (and this "tampered" request is actually still
+				// valid) whenever the real signature already happens to
+				// end in '0', flaking this test roughly 1 run in 16.
 				sig := req.Header.Get("X-Slack-Signature")
-				req.Header.Set("X-Slack-Signature", sig[:len(sig)-1]+"0")
+				last := sig[len(sig)-1]
+				replacement := byte('0')
+				if last == '0' {
+					replacement = '1'
+				}
+				req.Header.Set("X-Slack-Signature", sig[:len(sig)-1]+string(replacement))
 			},
 			wantStatus: http.StatusUnauthorized,
 		},
