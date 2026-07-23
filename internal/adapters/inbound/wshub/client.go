@@ -39,27 +39,57 @@
 //     (both are treated as "not a valid credential for THIS session",
 //     never leaking which case it was). Found, for this session, but
 //     expired (expires_at before now) -> close 4002 ("token expired").
-//  6. Otherwise: register the connection with the shared *Hub for live
-//     broadcast delivery FIRST, THEN assemble and write the single
-//     `subscribed` reply (SubscribedPayload) -- deliberately in that
-//     order, not the reverse. Registering after the reply would leave a
-//     real window, between the client observing "subscribed" and this
-//     goroutine actually completing Hub.Register, during which any
-//     broadcast for this session is silently and permanently lost for
-//     this connection (Hub.Broadcast never replays -- a connection not
-//     yet registered simply isn't there to receive it). That window is
+//  6. Otherwise: insert the connection into the shared *Hub's session-keyed
+//     map FIRST (Hub.Register), THEN assemble and write the single
+//     `subscribed` reply (SubscribedPayload), and only AFTER that write
+//     returns start actually delivering queued/future broadcasts to the
+//     wire (Hub.StartDelivery) -- three separate steps, deliberately in
+//     that order, not any other.
+//
+//     The first ordering constraint (registration before the reply) fixes
+//     the original lost-broadcast bug: registering after the reply would
+//     leave a real window, between the client observing "subscribed" and
+//     this goroutine actually completing Hub.Register, during which any
+//     broadcast for this session is silently and permanently lost for this
+//     connection (Hub.Broadcast never replays -- a connection not yet
+//     registered simply isn't there to receive it). That window is
 //     normally too narrow to matter on an unloaded machine, but widens
 //     under real scheduling contention -- confirmed in CI
-//     (TestClientHandler_SlowConnectionDoesNotBlockOthers failed there
-//     with 0/50 broadcasts received, never locally reproduced). Registering
+//     (TestClientHandler_SlowConnectionDoesNotBlockOthers failed there with
+//     0/50 broadcasts received, never locally reproduced). Registering
 //     first makes "client observed the subscribed reply" unconditionally
 //     imply "already registered", closing the race outright rather than
-//     merely narrowing it. Then: start the idle-liveness ping loop (see
-//     pingClientLoop's own doc comment -- an unanswered ping closes 4003
-//     "idle timeout"), then run the post-subscribe read loop
-//     (fetch_history, rate-limited per-connection via
-//     platform.Timeouts.ClientFetchHistoryMinInterval) until the
-//     connection errs or closes.
+//     merely narrowing it.
+//
+//     The second ordering constraint (delaying StartDelivery until after
+//     the subscribed reply's own write returns) fixes a narrower, inverse
+//     problem that constraint one alone introduced (F8 audit finding):
+//     Hub.Register's map-insertion and the drain goroutine that actually
+//     writes queued broadcasts to conn used to start together, in one
+//     call. buildSubscribedPayload runs several sequential DB reads before
+//     this handler's own goroutine writes the subscribed reply; if the
+//     drain goroutine is already running during that window, a broadcast
+//     enqueued and drained during it can reach conn.Write before this
+//     handler's own subscribed-reply conn.Write does, so the client can
+//     observe a live event before its baseline -- inverting §6.2's "single
+//     subscribed payload -> broadcast stream". coder/websocket serializes
+//     concurrent Conn.Write calls internally (no data race, no wire
+//     corruption), so this was purely a wire-ORDER bug. Splitting
+//     registration (Hub.Register: map insertion only, so a broadcast fired
+//     anytime after it is still never lost -- just queued, buffered,
+//     unread, in order) from starting delivery (Hub.StartDelivery: the
+//     drain goroutine) lets this handler defer that second step until
+//     after its own subscribed-reply write has already returned, making
+//     "drain start happens-after subscribed write returns" a plain
+//     program-order guarantee within this one goroutine, not a race
+//     against the drain goroutine. See Hub.Register's and
+//     Hub.StartDelivery's own doc comments for the full mechanics.
+//
+//     Then: start the idle-liveness ping loop (see pingClientLoop's own
+//     doc comment -- an unanswered ping closes 4003 "idle timeout"), then
+//     run the post-subscribe read loop (fetch_history, rate-limited
+//     per-connection via platform.Timeouts.ClientFetchHistoryMinInterval)
+//     until the connection errs or closes.
 //
 // No registry.GetOrSpawn call belongs anywhere in this handshake: every
 // step above is a plain store read (session/ws-token/turns/sandbox/
@@ -78,6 +108,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -93,6 +124,39 @@ import (
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// subscribeDBReadHook, when non-nil, is invoked once by NewClientHandler's
+// handshake immediately after step (6) (Hub.Register: the connection's
+// channel is already in the map) and before step (7) (buildSubscribedPayload's
+// own sequential DB reads) begins. It exists ONLY so
+// TestClientHandler_BroadcastDuringSubscribeWindowArrivesAfterSubscribed
+// (client_test.go) can deterministically fire a broadcast into exactly that
+// window -- the window the F8 audit finding is about -- instead of relying
+// on a sleep or an unreliable scheduling race to land a broadcast there.
+// Always nil in production; this handler's own normal path never sets or
+// reads it for anything other than this single nil check. An
+// atomic.Pointer, not a plain var: the test goroutine sets it (via
+// SetSubscribeDBReadHookForTest below) before dialing, and the handler
+// goroutine (spawned independently by net/http/httptest, with no
+// happens-before edge to the test's own prior statements otherwise) reads
+// it -- a plain var here would be a genuine, `go test -race`-detectable
+// data race between those two goroutines.
+var subscribeDBReadHook atomic.Pointer[func()]
+
+// SetSubscribeDBReadHookForTest installs (or, given nil, clears) the
+// package-level subscribeDBReadHook seam documented above. Exported
+// SOLELY so client_test.go (package wshub_test, a separate, external test
+// package with no access to this package's unexported identifiers) can
+// deterministically synchronize a broadcast into the exact window between
+// Hub.Register and buildSubscribedPayload's own DB reads. Not part of this
+// package's real API -- never call this from production code.
+func SetSubscribeDBReadHookForTest(hook func()) {
+	if hook == nil {
+		subscribeDBReadHook.Store(nil)
+		return
+	}
+	subscribeDBReadHook.Store(&hook)
+}
 
 // initialReplayLimit bounds how many of a session's oldest events are
 // included directly in the SubscribedPayload's own "events" field at
@@ -196,22 +260,33 @@ func NewClientHandler(
 			return // verifyClientToken already closed the connection (4001/4002).
 		}
 
-		// (6) register for live broadcast delivery BEFORE the client can
+		// (6) insert conn into the shared Hub's map BEFORE the client can
 		// ever observe the "subscribed" reply below -- see this file's own
 		// top comment for why this ordering, not the reverse, is required.
-		// The writer goroutine this starts is scoped to
-		// writerCtx/writerGroup, both torn down (canceled + joined) before
-		// this handler returns (including on every early-return path
-		// below), so no goroutine outlives the connection it serves.
+		// This step alone (Hub.Register) already makes every broadcast from
+		// this instant on unloseable (queued, buffered, in order) -- it
+		// deliberately does NOT yet start writing those broadcasts to conn;
+		// that is step (7b) below, delayed on purpose (F8 audit fix; see
+		// Hub.StartDelivery's own doc comment). The writer goroutine (7b)
+		// eventually starts is scoped to writerCtx/writerGroup, both torn
+		// down (canceled + joined) before this handler returns (including
+		// on every early-return path below), so no goroutine outlives the
+		// connection it serves.
 		writerCtx, cancelWriter := context.WithCancel(ctx)
 		defer cancelWriter()
 		var writerGroup errgroup.Group
-		unregister := hub.Register(writerCtx, &writerGroup, sessionID.String(), conn)
+		ch, unregister := hub.Register(sessionID.String(), conn)
 		defer func() {
 			unregister()
 			cancelWriter()
 			_ = writerGroup.Wait()
 		}()
+
+		// Test-only synchronization seam: see subscribeDBReadHook's own doc
+		// comment. Always nil in production.
+		if hook := subscribeDBReadHook.Load(); hook != nil {
+			(*hook)()
+		}
 
 		// (7) assemble + write the single `subscribed` reply.
 		payload, err := buildSubscribedPayload(ctx, sessionID, sessionRow, turns, sandboxes, events, artifacts)
@@ -232,6 +307,16 @@ func NewClientHandler(
 		}
 
 		logger.Info("wshub: client ws subscribed", "client_id", req.ClientId)
+
+		// (7b) ONLY NOW -- after the subscribed reply's own conn.Write above
+		// has already returned -- start actually delivering queued/future
+		// broadcasts to the wire (F8 audit fix). Any broadcast fired between
+		// step (6) and this line is still sitting, unlost, in ch (buffered by
+		// Hub.Register); StartDelivery's drain goroutine will write it right
+		// after this call, i.e. strictly after the subscribed reply, never
+		// before. See Hub.StartDelivery's own doc comment for why this
+		// ordering is a plain program-order guarantee, not a race.
+		hub.StartDelivery(writerCtx, &writerGroup, conn, ch)
 
 		// Idle-liveness check (audit-remediation, inbound-hygiene lens): a
 		// periodic server-initiated ping, run on the SAME writerGroup/
@@ -714,21 +799,31 @@ func NewHub() *Hub {
 
 var _ ports.EventBroadcaster = (*Hub)(nil)
 
-// Register starts conn's own dedicated writer goroutine (via eg.Go --
-// §11, no naked goroutines) that drains newly broadcast payloads for
-// sessionID and writes each one to conn verbatim (§6.2: a live-pushed
-// event is the raw stored payload, sent exactly as stored -- no wrapper
-// envelope), until writerCtx is done or a write fails. This goroutine's
-// lifetime is scoped to writerCtx, which the caller (NewClientHandler)
-// derives from the connection's own request context and cancels the
-// moment that connection's read loop exits -- both exit together, as
-// design decision 7g requires.
+// Register inserts conn's own channel into this Hub's session-keyed map --
+// and ONLY that (F8 audit fix; see this method's own contrast with
+// StartDelivery below). From the instant this call returns, any
+// Hub.Broadcast for sessionID enqueues into the returned ch for conn:
+// buffered (hubConnBufferSize), in order, never lost even though nothing is
+// draining it yet -- a plain unbuffered-nothing-listening channel send
+// would block Broadcast, but this channel already has its full buffer
+// capacity from the moment it is created here, before anything is
+// registered, so an early broadcast simply queues.
+//
+// Register deliberately does NOT start the goroutine that drains ch and
+// writes those queued payloads to conn -- call StartDelivery once it is
+// safe for a broadcast frame to reach the wire (see that method's own doc
+// comment for the invariant this split protects). Splitting these two
+// concerns is what closes the F8 finding: the original single-call
+// Register started draining (and therefore writing to conn) immediately,
+// which could race a caller's own concurrent conn.Write for some other
+// frame (e.g. NewClientHandler's "subscribed" reply) and let a broadcast
+// reach the wire first.
 //
 // The caller must call the returned unregister exactly once (typically
-// deferred, alongside canceling writerCtx and joining eg) so this Hub
-// stops fanning out to a connection that is going away.
-func (h *Hub) Register(writerCtx context.Context, eg *errgroup.Group, sessionID string, conn *websocket.Conn) (unregister func()) {
-	ch := make(chan []byte, hubConnBufferSize)
+// deferred), regardless of whether StartDelivery is ever called, so this
+// Hub stops tracking a connection that is going away.
+func (h *Hub) Register(sessionID string, conn *websocket.Conn) (ch chan []byte, unregister func()) {
+	ch = make(chan []byte, hubConnBufferSize)
 
 	h.mu.Lock()
 	if h.conns[sessionID] == nil {
@@ -737,6 +832,45 @@ func (h *Hub) Register(writerCtx context.Context, eg *errgroup.Group, sessionID 
 	h.conns[sessionID][conn] = ch
 	h.mu.Unlock()
 
+	return ch, func() {
+		h.mu.Lock()
+		delete(h.conns[sessionID], conn)
+		if len(h.conns[sessionID]) == 0 {
+			delete(h.conns, sessionID)
+		}
+		h.mu.Unlock()
+	}
+}
+
+// StartDelivery starts conn's own dedicated writer goroutine (via eg.Go --
+// §11, no naked goroutines) that drains ch -- the same channel Register
+// already returned for this same conn -- and writes each queued payload to
+// conn verbatim (§6.2: a live-pushed event is the raw stored payload, sent
+// exactly as stored -- no wrapper envelope), until writerCtx is done or a
+// write fails. This goroutine's lifetime is scoped to writerCtx, which the
+// caller (NewClientHandler) derives from the connection's own request
+// context and cancels the moment that connection's read loop exits -- both
+// exit together, as design decision 7g requires.
+//
+// THE INVARIANT THIS SPLIT FROM Register EXISTS TO PROTECT (F8 audit
+// finding): the caller must not call StartDelivery until its own conn.Write
+// for whatever frame must reach the client first (NewClientHandler's own
+// "subscribed" reply) has already returned successfully. Register alone
+// only guarantees a broadcast is never LOST (queued, buffered, in order) --
+// it says nothing about when it is WRITTEN to the wire, because that write
+// happens on THIS goroutine, entirely independent of whatever the caller's
+// own goroutine is doing with conn concurrently; coder/websocket serializes
+// the two Conn.Write calls internally (no data race, no corruption), but
+// whichever call reaches that internal lock first is what the client
+// actually receives first. Calling StartDelivery too early re-opens
+// exactly the wire-order inversion the audit flagged: a live broadcast
+// reaching the wire before the connection's own baseline reply, inverting
+// §6.2's "single subscribed payload -> broadcast stream". Delaying this
+// call until after that reply's own conn.Write returns makes "drain start
+// happens-after subscribed write returns" a plain program-order guarantee
+// (sequential statements on one goroutine) rather than a race between this
+// goroutine and the caller's.
+func (h *Hub) StartDelivery(writerCtx context.Context, eg *errgroup.Group, conn *websocket.Conn, ch <-chan []byte) {
 	eg.Go(func() error {
 		for {
 			select {
@@ -749,15 +883,6 @@ func (h *Hub) Register(writerCtx context.Context, eg *errgroup.Group, sessionID 
 			}
 		}
 	})
-
-	return func() {
-		h.mu.Lock()
-		delete(h.conns[sessionID], conn)
-		if len(h.conns[sessionID]) == 0 {
-			delete(h.conns, sessionID)
-		}
-		h.mu.Unlock()
-	}
 }
 
 // Broadcast implements ports.EventBroadcaster: delivers payload to every

@@ -38,19 +38,41 @@
 // sandbox.go's InsecureSkipVerify -- this socket is browser-facing, same-
 // origin enforcement matters here, see client.go's own contrast comment)
 // -> bounded subscribe-frame read -> ws-token verify (close 4001 re-auth /
-// 4002 expired) -> a single `subscribed` reply (SubscribedPayload) ->
-// registration with the shared *Hub for live broadcast -> a read loop
+// 4002 expired) -> insertion into the shared *Hub's session-keyed map
+// (Hub.Register: so no live broadcast for this session is ever lost from
+// that instant on -- it queues, buffered, even though nothing drains it
+// yet) -> a single `subscribed` reply (SubscribedPayload) -> only once
+// THAT reply's own write has returned does broadcast delivery to this
+// connection actually begin (Hub.StartDelivery starts the drain goroutine
+// that writes queued/future broadcasts to the wire) -> a read loop
 // handling `fetch_history` cursor-paginated replay, rate-limited
-// per-connection via ClientFetchHistoryMinInterval). *Hub (also in
-// client.go) is the in-process, session-keyed connection registry that
-// implements internal/app/ports.EventBroadcaster -- the session actor's
-// own successful transact commits call Hub.Broadcast, which fans a raw
-// stored event payload out to every subscribed connection for that
-// session, sent exactly as stored (§6.2: no wrapper envelope for a live
-// broadcast frame). A concurrent, periodic server-initiated ping
-// (pingClientLoop, ClientWSPingInterval) is this same handler's own
-// idle-liveness check -- an unanswered ping closes the connection with
-// 4003 ("idle timeout"), the third custom close code alongside 4001/4002.
+// per-connection via ClientFetchHistoryMinInterval).
+//
+// Splitting "register in the map" from "start writing broadcasts to the
+// wire" into those two separate calls (both in client.go) is deliberate,
+// not incidental (F8 audit fix): registering the map entry first still
+// closes the original lost-broadcast window (a connection not yet in the
+// map simply isn't there to receive a Broadcast), while delaying the drain
+// goroutine's start until after the subscribed reply's own conn.Write
+// returns closes a narrower, inverse window that a single combined
+// register-and-start-draining call left open -- a broadcast's drain
+// goroutine and this handler's own subscribed-reply write both call
+// conn.Write, and coder/websocket only serializes those calls against each
+// other (no data race), it does not order them, so whichever one reached
+// the wire first was whichever won that race. Deferring the drain
+// goroutine's start until after the subscribed write already returned
+// makes that ordering a plain program-order guarantee instead.
+//
+// *Hub (also in client.go) is the in-process, session-keyed connection
+// registry that implements internal/app/ports.EventBroadcaster -- the
+// session actor's own successful transact commits call Hub.Broadcast,
+// which fans a raw stored event payload out to every subscribed
+// connection for that session, sent exactly as stored (§6.2: no wrapper
+// envelope for a live broadcast frame). A concurrent, periodic
+// server-initiated ping (pingClientLoop, ClientWSPingInterval) is this
+// same handler's own idle-liveness check -- an unanswered ping closes the
+// connection with 4003 ("idle timeout"), the third custom close code
+// alongside 4001/4002.
 //
 // # Honest gaps this package documents rather than papers over
 //
