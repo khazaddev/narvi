@@ -719,6 +719,29 @@ type Timeouts struct {
 	// OpenCodeReadinessTimeout's own "generous for typical local operations
 	// without stalling the whole boot sequence" reasoning.
 	GitSyncStepTimeout time.Duration
+
+	// --- Step 31 standalone addition ("webhook toolkit", §5.1/§5.2): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior Step's standalone additions), so -- per those additions' own
+	// precedent -- a plain field with a sensible default, not wired into a
+	// fake invariant link.
+
+	// WebhookTimestampFreshnessWindow bounds how far a provider-supplied
+	// webhook timestamp (e.g. Slack's X-Slack-Request-Timestamp) may drift
+	// from now before platform.VerifyWebhookTimestamp rejects it as a
+	// possible replay -- checked SEPARATELY from (in addition to) the
+	// signature itself, mirroring Slack's own signing-secrets guidance.
+	// Deliberately a DISTINCT field from HMACWindow above even though both
+	// happen to default to 5 minutes: HMACWindow guards Narvi's own
+	// internal "{timestamp}.{signature}" bearer scheme (hmacauth.go),
+	// this one guards third-party provider webhook signatures
+	// (webhooksig.go) -- two functionally distinct subsystems that must
+	// stay independently rotatable/tunable, matching
+	// ProcessStopGracePeriod/ShutdownGracePeriod's own "same value, two
+	// distinct fields for two distinct subsystems" precedent. Not given
+	// an explicit figure in the plan; chosen as 5 minutes, matching
+	// Slack's own commonly recommended replay window.
+	WebhookTimestampFreshnessWindow time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -807,6 +830,8 @@ func DefaultTimeouts() Timeouts {
 		ContractsFingerprintResolutionTimeout: 10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 
 		GitSyncStepTimeout: 30 * time.Second, // not specified; chosen, generous for a local-only stash/checkout/pop step without stalling boot
+
+		WebhookTimestampFreshnessWindow: 5 * time.Minute, // not specified; chosen, matches Slack's own commonly recommended replay window
 	}
 }
 

@@ -315,6 +315,16 @@ type Config struct {
 	// NARVI_HMAC_SANDBOX_SECRET, NARVI_HMAC_BOTS_SECRET, and
 	// NARVI_HMAC_WEBHOOK_SECRET respectively. All three are required in
 	// every stage, including development — never defaulted.
+	//
+	// HMACWebhookSecret note (Step 31, "webhook toolkit"): this secret
+	// pairs with platform.Sign/Verify's own internal "{timestamp}.
+	// {signature}" bearer format (hmacauth.go) -- it is NOT the secret
+	// GitHub/Slack/Linear ingress adapters (Steps 32-34) use to verify
+	// their OWN provider's webhook signature (a real provider signature
+	// never matches this bearer format at all; see
+	// internal/platform/webhooksig.go's own doc comment for the full
+	// reasoning and each provider's own scheme). Each of those adapters
+	// reads its own, separate, provider-specific secret instead.
 	HMACSandboxSecret string
 	HMACBotsSecret    string
 	HMACWebhookSecret string
