@@ -41,7 +41,10 @@ test-integration:
 # OR-of-three-allowlists requirement), and the Modal base URL/auth token
 # (a syntactically valid URL with a real host, but nothing actually
 # listens there -- spawning a real sandbox locally needs further setup;
-# this only restores "make dev boots", not "make dev's Modal calls work").
+# this only restores "make dev boots", not "make dev's Modal calls work"),
+# and (Step 33, "Slack ingress") the Slack signing secret/bot token pair --
+# nothing actually listens for either locally, so a real Slack webhook or
+# chat.postMessage call still needs further setup, same caveat as Modal.
 # Config.Load() still requires every one of these unconditionally in Go —
 # nothing is made "optional in development" there.
 dev:
@@ -60,6 +63,8 @@ dev:
 	NARVI_ALLOWED_GITHUB_ORGS=dev-org-placeholder \
 	NARVI_MODAL_BASE_URL=http://localhost:9999 \
 	NARVI_MODAL_AUTH_TOKEN=dev-modal-token-placeholder \
+	NARVI_SLACK_SIGNING_SECRET=dev-slack-signing-secret-placeholder \
+	NARVI_SLACK_BOT_TOKEN=dev-slack-bot-token-placeholder \
 	go run ./cmd/control-plane serve
 
 # contracts-generate regenerates every codegen target under contracts/gen from

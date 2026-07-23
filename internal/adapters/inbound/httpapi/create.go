@@ -137,6 +137,20 @@ const defaultContractsPath = "contracts/api"
 // CreateSessionCore directly with its own already-decoded request and a
 // NULL createdBy (no cookie, no human), never this func.
 //
+// Step 33 ("Slack ingress") update: CreateSessionCore (and
+// CreateSessionError, alongside it) is now EXPORTED -- doc.go's own Step
+// 31 writeup left the unexported-vs-exported question deliberately open
+// for Steps 32-34 to decide ("Whether that turns out to be ... or Steps
+// 32-34 decide createSessionCore should be exported instead, is left to
+// those Steps"). internal/adapters/inbound/slack lives in its own
+// package (mirroring httpapi/linear/github's own one-package-per-ingress-
+// surface shape, not folded into this one), so it needs the exported
+// form to reach this function at all -- an unexported identifier is not
+// reachable from outside internal/adapters/inbound/httpapi. This is
+// still a pure rename, not a behavior change: every existing call site
+// and test in this package keeps compiling (Go does not care whether a
+// same-package caller uses the exported or unexported spelling).
+//
 // Reconciliation update (tx-support split): CreateSessionCore itself is
 // now a THIN pool-based wrapper around two smaller, EXPORTED pieces --
 // CreateSessionOnTx (everything up to and including the optional turn
@@ -145,7 +159,11 @@ const defaultContractsPath = "contracts/api"
 // fire-and-forget pattern) -- see both functions' own doc comments below
 // for why. CreateSession itself (this func) is untouched by that split:
 // it still calls CreateSessionCore exactly as before, and every existing
-// test in this package's own _test.go files passes unchanged.
+// test in this package's own _test.go files passes unchanged. Likewise,
+// CreateSessionCore's own external signature/behavior -- the two things
+// Step 33's Slack ingress (above) actually depends on -- is unchanged by
+// this split: same params, same (sqlcgen.Session, *CreateSessionError)
+// return, same validate -> insert -> commit -> dispatch sequencing.
 func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -185,7 +203,8 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 // byte-for-byte identical to what this codebase's existing tests already
 // assert, before and after this Step 31 extraction. Exported (alongside
 // CreateSessionCore/CreateSessionOnTx) so a caller outside this package
-// can inspect Status/Message directly.
+// can inspect Status/Message directly -- including internal/adapters/
+// inbound/slack (Step 33), which reads cerr.Status/cerr.Message directly.
 type CreateSessionError struct {
 	Status  int
 	Message string

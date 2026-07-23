@@ -108,18 +108,36 @@
 //
 // No new route is added by this Step -- it adds no concrete provider
 // wiring at all. CreateSession's own doc comment above (create.go) is
-// split in two: everything after decoding the request body is now the
-// unexported createSessionCore, taking an already-decoded
-// restdtos.CreateSessionRequest plus a NULLABLE creator (pgtype.UUID,
-// Valid == false for "no human caller"). CreateSession itself is now a
-// thin wrapper: decode body -> authenticatedUserID (UNCHANGED, still
-// hard-required for this browser/REST route) -> createSessionCore ->
-// write the JSON response. This is a pure refactor for this route --
-// every existing test in this package's own _test.go files passes
-// unchanged. The point of the split is reuse: a webhook ingress handler
-// calls createSessionCore directly, with its own already-verified,
+// split in two: everything after decoding the request body is now
+// createSessionCore (unexported as of this Step -- Step 33 exports it,
+// see below), taking an already-decoded restdtos.CreateSessionRequest
+// plus a NULLABLE creator (pgtype.UUID, Valid == false for "no human
+// caller"). CreateSession itself is now a thin wrapper: decode body ->
+// authenticatedUserID (UNCHANGED, still hard-required for this browser/
+// REST route) -> createSessionCore -> write the JSON response. This is a
+// pure refactor for this route -- every existing test in this package's
+// own _test.go files passes unchanged. The point of the split is reuse:
+// Steps 32/33/34's own GitHub/Slack/Linear webhook ingress handlers call
+// createSessionCore directly, with their own already-verified,
 // already-decoded request and a NULL creator (no cookie, no human) --
 // never this package's own CreateSession, which stays browser-only.
+// Whether those ingress handlers end up living in THIS package (as new
+// files alongside create.go/get.go/events.go/artifacts.go/wstoken.go) or
+// export createSessionCore to reach it from their own separate packages
+// is left open by this Step -- see the Step 33 update immediately below
+// for how that question was actually resolved.
+//
+// # Step 33 ("Slack ingress") update
+//
+// internal/adapters/inbound/slack (a separate package, mirroring
+// github/linear's own reserved package-per-surface shape) is Step 33's
+// own new Slack webhook ingress adapter -- see that package's own doc.go.
+// It needs to reach createSessionCore from outside this package, so this
+// Step exports it (CreateSessionCore) and its error type (CreateSessionError,
+// with exported Status/Message fields) -- a pure rename, no behavior
+// change; every call site and test in THIS package keeps compiling
+// unchanged (create.go's own doc comment above CreateSessionCore has the
+// full reasoning).
 //
 // This Step also adds two other, independent pieces used by those same
 // future ingress endpoints, neither wired to a concrete provider yet:
@@ -139,11 +157,9 @@
 //
 // Independent webhook-ingress adapters each ended up needing "create a
 // session (+ optional turn), then post-commit trigger dispatch" from
-// OUTSIDE this package, which resolves the "should this stay
-// package-private" question this Step originally left open: createSessionCore
-// is exported (as CreateSessionCore, alongside an exported
-// CreateSessionError -- Status/Message fields, same Error() method) -- a
-// pure rename, no behavior change for any existing caller. At least one
+// OUTSIDE this package -- CreateSessionCore/CreateSessionError are already
+// exported as of Step 33 above (Status/Message fields, same Error()
+// method), so no further export/rename is needed here. At least one
 // such adapter also needs to create a session+turn while ALREADY holding
 // an unrelated lock on its own already-open transaction (e.g. an atomic
 // per-resource claim taken via SELECT ... FOR UPDATE) -- calling the

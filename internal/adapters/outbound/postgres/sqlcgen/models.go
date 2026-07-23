@@ -650,6 +650,13 @@ type SessionTimer struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type SlackThreadSession struct {
+	ChannelID string             `json:"channel_id"`
+	ThreadTs  string             `json:"thread_ts"`
+	SessionID pgtype.UUID        `json:"session_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type Turn struct {
 	ID                   pgtype.UUID        `json:"id"`
 	SessionID            pgtype.UUID        `json:"session_id"`
