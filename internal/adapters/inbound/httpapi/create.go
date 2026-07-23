@@ -126,19 +126,30 @@ const defaultContractsPath = "contracts/api"
 // this handler validates already follows.
 //
 // Step 31 ("webhook toolkit") update: everything this func used to do
-// AFTER decoding the request body is now createSessionCore below -- a
+// AFTER decoding the request body is now CreateSessionCore below -- a
 // pure extraction, not a behavior change (every case this func's own doc
 // comment above describes, and every existing test in this package's own
 // _test.go files, is unchanged). The only two things that stay HERE,
 // specific to the browser/REST path, are decoding the body off an actual
 // *http.Request and requiring a real authenticated human caller via
-// authenticatedUserID -- a future webhook ingress handler (Steps 32-34)
-// calls createSessionCore directly with its own already-decoded request
-// and a NULL createdBy (no cookie, no human), never this func.
-// createSessionCore is unexported on purpose, so that future caller must
-// live in this same package (see doc.go's own updated writeup) rather
-// than a separate package -- an unexported identifier isn't reachable
-// from outside internal/adapters/inbound/httpapi.
+// authenticatedUserID -- a webhook ingress handler (Steps 32-34) calls
+// CreateSessionCore directly with its own already-decoded request and a
+// NULL createdBy (no cookie, no human), never this func.
+//
+// Step 34 ("Linear ingress") update: CreateSessionCore (and its own
+// CreateSessionError return type) is now EXPORTED, resolving the
+// "unexported on purpose... future caller must live in this same
+// package" question this func's own doc comment used to leave open (see
+// doc.go's own updated writeup). Each provider's own ingress adapter
+// (internal/adapters/inbound/linear, and Steps 32/33's own GitHub/Slack
+// packages) is its own separate package -- matching this codebase's
+// existing one-package-per-provider-adapter shape (internal/adapters/
+// inbound/auth, outbound/githubapi, outbound/linearapi, ...) -- rather
+// than growing this package into a shared home for three unrelated
+// providers' own webhook-parsing/signature-verification code, which would
+// have been the alternative "createSessionCore stays package-private"
+// path. CreateSession itself (this func) and its own decode/
+// authenticatedUserID/writeJSON responsibilities are otherwise unchanged.
 func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -161,9 +172,9 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		created, cerr := createSessionCore(ctx, pool, sessions, turns, environments, registry, req, createdBy)
+		created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, registry, req, createdBy)
 		if cerr != nil {
-			writeError(w, cerr.status, cerr.message)
+			writeError(w, cerr.Status, cerr.Message)
 			return
 		}
 
@@ -171,20 +182,27 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 	}
 }
 
-// createSessionError carries the exact (status, message) pair the HTTP
-// handler should surface for a createSessionCore failure -- a distinct
+// CreateSessionError carries the exact (status, message) pair the HTTP
+// handler should surface for a CreateSessionCore failure -- a distinct
 // type (rather than a plain error) so CreateSession's own writeError call
 // sites, and every message they produce, stay byte-for-byte identical to
 // what this codebase's existing tests already assert, before and after
 // this Step 31 extraction.
-type createSessionError struct {
-	status  int
-	message string
+//
+// Exported (Step 34, "Linear ingress"): CreateSessionCore below is now
+// called from separate packages (internal/adapters/inbound/linear, and
+// Steps 32/33's own GitHub/Slack ingress packages), which need Status/
+// Message readable from outside this package -- see CreateSessionCore's
+// own doc comment for the full "why exported, not left package-private"
+// reasoning this Step settles.
+type CreateSessionError struct {
+	Status  int
+	Message string
 }
 
-func (e *createSessionError) Error() string { return e.message }
+func (e *CreateSessionError) Error() string { return e.Message }
 
-// createSessionCore does everything CreateSession's own doc comment above
+// CreateSessionCore does everything CreateSession's own doc comment above
 // describes AFTER decoding the request body: repo validation, pathScope/
 // mockConfig validation, the transactional environment/session/(optional)
 // turn writes, and the post-commit GetOrSpawn + EnsureDispatched dispatch.
@@ -200,11 +218,11 @@ func (e *createSessionError) Error() string { return e.message }
 // that: a future webhook ingress caller (Steps 32-34) with no
 // cookie-authenticated human passes an explicitly invalid pgtype.UUID{}
 // here instead.
-func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (sqlcgen.Session, *createSessionError) {
+func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (sqlcgen.Session, *CreateSessionError) {
 	logger := platform.Logger(ctx)
 
 	if len(req.Repos) < 1 {
-		return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, "repos must be non-empty"}
+		return sqlcgen.Session{}, &CreateSessionError{http.StatusBadRequest, "repos must be non-empty"}
 	}
 
 	// Validate every repo's Name/Url/Branch BEFORE any Postgres write
@@ -214,14 +232,14 @@ func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	// collect/report every failure across every repo at once.
 	for i, repo := range req.Repos {
 		if err := reposource.ValidateRepoName(repo.Name); err != nil {
-			return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err)}
+			return sqlcgen.Session{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err)}
 		}
 		if err := reposource.ValidateRepoURL(repo.Url); err != nil {
-			return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err)}
+			return sqlcgen.Session{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err)}
 		}
 		if repo.Branch != nil {
 			if err := reposource.ValidateBranch(*repo.Branch); err != nil {
-				return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err)}
+				return sqlcgen.Session{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err)}
 			}
 		}
 	}
@@ -229,7 +247,7 @@ func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	reposJSON, err := json.Marshal(req.Repos)
 	if err != nil {
 		logger.Error("httpapi: marshal repos failed", "error", err)
-		return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
 	}
 
 	// pathScope is OPTIONAL (contracts/rest/v1/dtos.schema.json's
@@ -251,7 +269,7 @@ func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	// that path.
 	if hasPathScope {
 		if err := environment.ValidatePathScope(pathScope); err != nil {
-			return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("pathScope: %s", err)}
+			return sqlcgen.Session{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("pathScope: %s", err)}
 		}
 	}
 
@@ -277,14 +295,14 @@ func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 		// never run through this check -- it is this handler's own
 		// fixed, known-safe constant, not caller input.
 		if err := environment.ValidateContractsPath(contractsPath); err != nil {
-			return sqlcgen.Session{}, &createSessionError{http.StatusBadRequest, fmt.Sprintf("mockConfig.contractsPath: %s", err)}
+			return sqlcgen.Session{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("mockConfig.contractsPath: %s", err)}
 		}
 	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		logger.Error("httpapi: begin create-session tx failed", "error", err)
-		return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
 	}
 	// Rollback is a safety net for every return path other than a
 	// successful Commit below -- same pattern as internal/adapters/
@@ -309,7 +327,7 @@ func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 			pathScopeJSON, marshalErr = json.Marshal(pathScope)
 			if marshalErr != nil {
 				logger.Error("httpapi: marshal pathScope failed", "error", marshalErr)
-				return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+				return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
 			}
 		}
 
@@ -325,7 +343,7 @@ func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 		})
 		if envErr != nil {
 			logger.Error("httpapi: create environment failed", "error", envErr)
-			return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+			return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
 		}
 		environmentID = env.ID
 
@@ -349,7 +367,7 @@ func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	})
 	if err != nil {
 		logger.Error("httpapi: create session failed", "error", err)
-		return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
 	}
 
 	hasPrompt := req.Prompt != nil
@@ -362,13 +380,13 @@ func createSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 			PlanMode:  req.PlanMode,
 		}); err != nil {
 			logger.Error("httpapi: create turn failed", "error", err)
-			return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+			return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		logger.Error("httpapi: commit create-session tx failed", "error", err)
-		return sqlcgen.Session{}, &createSessionError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Session{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
 	}
 
 	if hasPrompt {

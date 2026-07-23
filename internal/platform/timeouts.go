@@ -742,6 +742,43 @@ type Timeouts struct {
 	// an explicit figure in the plan; chosen as 5 minutes, matching
 	// Slack's own commonly recommended replay window.
 	WebhookTimestampFreshnessWindow time.Duration
+
+	// --- Step 34 standalone additions ("Linear ingress", §8.10): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior Step's standalone additions), so -- per those additions' own
+	// precedent -- plain fields with sensible defaults, not wired into a
+	// fake invariant link.
+
+	// LinearWebhookTimestampWindow bounds how far a Linear webhook's own
+	// body-level webhookTimestamp field may drift from now before this
+	// Step's webhook handler rejects it as a possible replay -- a
+	// DELIBERATELY DISTINCT field from WebhookTimestampFreshnessWindow
+	// above (Step 31's generic 5-minute default, "matching Slack's own
+	// commonly recommended replay window") even though both guard the same
+	// general class of check, because Linear's own real, current developer
+	// docs (confirmed during this Step's investigation) recommend a much
+	// tighter window: "verify it's within a minute of the time your system
+	// sees it." Using the shared 5-minute field here would silently accept
+	// a replay window 5x wider than Linear's own stated guidance -- exactly
+	// the kind of same-value-different-subsystem confusion
+	// ProcessStopGracePeriod/ShutdownGracePeriod's own precedent (cited by
+	// WebhookTimestampFreshnessWindow's own doc comment) argues against.
+	// Chosen as 60s, Linear's own explicit figure, not invented.
+	LinearWebhookTimestampWindow time.Duration
+
+	// LinearOutboundActivityTimeout bounds the one outbound Linear
+	// GraphQL API call this Step makes synchronously from inside the
+	// webhook handler itself (posting an initial acknowledgment Agent
+	// Activity -- see internal/adapters/outbound/linearapi's own doc
+	// comment for why this is a minimal direct call, not the general
+	// Notifier/outbox abstraction Step 35 owns). Linear's own real docs
+	// require a webhook receiver to "return a response ... within 5
+	// seconds" -- this must clear that budget with real margin, so a slow
+	// or hanging Linear API call never itself causes Linear to consider
+	// the webhook delivery failed. Chosen as 3s: generous for a single
+	// lightweight GraphQL mutation, comfortably below the 5s ceiling with
+	// margin for the rest of the handler's own (fast, no-network) work.
+	LinearOutboundActivityTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -832,6 +869,9 @@ func DefaultTimeouts() Timeouts {
 		GitSyncStepTimeout: 30 * time.Second, // not specified; chosen, generous for a local-only stash/checkout/pop step without stalling boot
 
 		WebhookTimestampFreshnessWindow: 5 * time.Minute, // not specified; chosen, matches Slack's own commonly recommended replay window
+
+		LinearWebhookTimestampWindow:  60 * time.Second, // Linear's own docs, explicit ("within a minute")
+		LinearOutboundActivityTimeout: 3 * time.Second,  // not specified; chosen, comfortably below Linear's own 5s webhook-response requirement
 	}
 }
 

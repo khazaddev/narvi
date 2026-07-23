@@ -108,29 +108,33 @@
 //
 // No new route is added by this Step -- it adds no concrete provider
 // wiring at all. CreateSession's own doc comment above (create.go) is
-// split in two: everything after decoding the request body is now the
-// unexported createSessionCore, taking an already-decoded
-// restdtos.CreateSessionRequest plus a NULLABLE creator (pgtype.UUID,
-// Valid == false for "no human caller"). CreateSession itself is now a
-// thin wrapper: decode body -> authenticatedUserID (UNCHANGED, still
-// hard-required for this browser/REST route) -> createSessionCore ->
+// split in two: everything after decoding the request body is now
+// CreateSessionCore, taking an already-decoded restdtos.
+// CreateSessionRequest plus a NULLABLE creator (pgtype.UUID, Valid ==
+// false for "no human caller"). CreateSession itself is now a thin
+// wrapper: decode body -> authenticatedUserID (UNCHANGED, still
+// hard-required for this browser/REST route) -> CreateSessionCore ->
 // write the JSON response. This is a pure refactor for this route --
 // every existing test in this package's own _test.go files passes
 // unchanged. The point of the split is reuse: Steps 32/33/34's own
-// GitHub/Slack/Linear webhook ingress handlers call createSessionCore
+// GitHub/Slack/Linear webhook ingress handlers call CreateSessionCore
 // directly, with their own already-verified, already-decoded request and
 // a NULL creator (no cookie, no human) -- never this package's own
-// CreateSession, which stays browser-only. createSessionCore stays
-// unexported deliberately: since it is package-private, those ingress
-// handlers must live in THIS package (as new files alongside create.go/
-// get.go/events.go/artifacts.go/wstoken.go -- the same one-package,
-// one-file-per-route-family shape this package already uses), not in
-// separate new packages -- an unexported identifier cannot be called
-// from outside its own package. Whether that turns out to be
-// internal/adapters/inbound/httpapi/github.go et al., or Steps 32-34
-// decide createSessionCore should be exported instead, is left to those
-// Steps; this Step only guarantees the extraction itself is
-// behavior-preserving.
+// CreateSession, which stays browser-only.
+//
+// # Step 34 ("Linear ingress") update: CreateSessionCore exported
+//
+// This Step settles the question this Step's own original writeup left
+// open ("whether that turns out to be ... et al., or Steps 32-34 decide
+// CreateSessionCore should be exported instead"): CreateSessionCore and
+// its own CreateSessionError return type are now EXPORTED. Each
+// provider's own ingress adapter (internal/adapters/inbound/linear here;
+// Steps 32/33's own GitHub/Slack packages) lives in its OWN separate
+// package, matching this codebase's existing one-package-per-provider-
+// adapter shape (internal/adapters/inbound/auth, outbound/githubapi,
+// outbound/linearapi, ...) -- growing this package into a shared home for
+// three unrelated providers' own webhook-parsing/signature-verification
+// code would have cut against that shape, not extended it.
 //
 // This Step also adds two other, independent pieces used by those same
 // future ingress endpoints, neither wired to a concrete provider yet:

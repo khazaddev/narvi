@@ -38,6 +38,11 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_MODAL_AUTH_TOKEN", "test-modal-auth-token")
 	t.Setenv("NARVI_MODAL_EGRESS_PROXY_URL", "")
 	t.Setenv("NARVI_OPENCODE_RUNTIME_VERSION", "")
+	t.Setenv("NARVI_LINEAR_WEBHOOK_SECRET", "test-linear-webhook-secret")
+	t.Setenv("NARVI_LINEAR_CLIENT_ID", "test-linear-client-id")
+	t.Setenv("NARVI_LINEAR_CLIENT_SECRET", "test-linear-client-secret")
+	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_NAME", "narvi")
+	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_URL", "https://github.com/khazaddev/narvi")
 }
 
 // TestLoad is table-driven over NARVI_STAGE values: each of the three
@@ -696,6 +701,11 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "dev-org-placeholder")
 	t.Setenv("NARVI_MODAL_BASE_URL", "http://localhost:9999")
 	t.Setenv("NARVI_MODAL_AUTH_TOKEN", "dev-modal-token-placeholder")
+	t.Setenv("NARVI_LINEAR_WEBHOOK_SECRET", "dev-linear-webhook-secret-placeholder")
+	t.Setenv("NARVI_LINEAR_CLIENT_ID", "dev-linear-client-id-placeholder")
+	t.Setenv("NARVI_LINEAR_CLIENT_SECRET", "dev-linear-client-secret-placeholder")
+	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_NAME", "narvi")
+	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_URL", "https://github.com/khazaddev/narvi")
 	// Every other allowlist/optional var is deliberately left unset here,
 	// matching the Makefile's dev target exactly (it never sets
 	// NARVI_ALLOWED_EMAIL_DOMAINS, NARVI_ALLOWED_EMAILS,

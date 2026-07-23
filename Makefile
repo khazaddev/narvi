@@ -37,10 +37,13 @@ test-integration:
 # NARVI_TOKEN_ENCRYPTION_KEY (a real base64 encoding of exactly 32 random
 # bytes -- Load() rejects anything else for AES-256-GCM), one signup
 # allowlist mechanism (NARVI_ALLOWED_GITHUB_ORGS, satisfying Load()'s
-# OR-of-three-allowlists requirement), and the Modal base URL/auth token
+# OR-of-three-allowlists requirement), the Modal base URL/auth token
 # (a syntactically valid URL with a real host, but nothing actually
 # listens there -- spawning a real sandbox locally needs further setup;
-# this only restores "make dev boots", not "make dev's Modal calls work").
+# this only restores "make dev boots", not "make dev's Modal calls work"),
+# and Step 34's own Linear webhook secret/OAuth credentials/default repo
+# (also placeholders -- nothing actually verifies a Linear webhook
+# signature or exchanges a Linear OAuth code locally either).
 # Config.Load() still requires every one of these unconditionally in Go —
 # nothing is made "optional in development" there.
 dev:
@@ -57,6 +60,11 @@ dev:
 	NARVI_ALLOWED_GITHUB_ORGS=dev-org-placeholder \
 	NARVI_MODAL_BASE_URL=http://localhost:9999 \
 	NARVI_MODAL_AUTH_TOKEN=dev-modal-token-placeholder \
+	NARVI_LINEAR_WEBHOOK_SECRET=dev-linear-webhook-secret-placeholder \
+	NARVI_LINEAR_CLIENT_ID=dev-linear-client-id-placeholder \
+	NARVI_LINEAR_CLIENT_SECRET=dev-linear-client-secret-placeholder \
+	NARVI_LINEAR_DEFAULT_REPO_NAME=narvi \
+	NARVI_LINEAR_DEFAULT_REPO_URL=https://github.com/khazaddev/narvi \
 	go run ./cmd/control-plane serve
 
 # contracts-generate regenerates every codegen target under contracts/gen from

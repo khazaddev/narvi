@@ -570,6 +570,24 @@ type ImageBuild struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type LinearAgentSession struct {
+	AgentSessionID string             `json:"agent_session_id"`
+	SessionID      pgtype.UUID        `json:"session_id"`
+	OrganizationID string             `json:"organization_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type LinearInstallation struct {
+	OrganizationID        string             `json:"organization_id"`
+	AppUserID             string             `json:"app_user_id"`
+	AccessTokenEncrypted  []byte             `json:"access_token_encrypted"`
+	RefreshTokenEncrypted []byte             `json:"refresh_token_encrypted"`
+	ExpiresAt             pgtype.Timestamptz `json:"expires_at"`
+	ConnectedByUserID     pgtype.UUID        `json:"connected_by_user_id"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Outbox struct {
 	ID            pgtype.UUID        `json:"id"`
 	SessionID     pgtype.UUID        `json:"session_id"`
