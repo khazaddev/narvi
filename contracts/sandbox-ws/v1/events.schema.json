@@ -139,7 +139,7 @@
     "GitSync": {
       "type": "object",
       "additionalProperties": false,
-      "description": "§3.4 stash -> checkout -> pop sequence, reported as it happens.",
+      "description": "§3.4 stash -> checkout -> pop sequence, reported as it happens. NOTE on \"repo\" in required: this tightens an already-merged def (repo did not exist at all in the earlier scaffolding-only shape) rather than staying purely additive. That is deliberate and safe here, not an oversight: git_sync had zero real producers or consumers before the same Step that added \"repo\" also wired the one producer that sets it (cmd/sandbox-agent) and the field is read nowhere else, so no already-running wire party could have been depending on its absence. Tightening a field that is actually in use elsewhere would need a BREAKING marker instead.",
       "required": ["type", "messageId", "sessionId", "gen", "repo", "status", "branch"],
       "properties": {
         "type": { "type": "string", "const": "git_sync" },
