@@ -463,22 +463,7 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 	default:
 	}
 
-	// Design decision 3: unconditionally re-evaluate spawn/dispatch state
-	// right after this event's own transact commits successfully -- e.g.
-	// a "ready"/heartbeat-driven transition to Booting/Ready is
-	// immediately followed by a fresh dispatch evaluation, in case a
-	// pending turn is now dispatchable. Calls the SAME handler function
-	// EnsureDispatched itself invokes, directly (not via a.Send), since
-	// this already runs on the actor's own single command-processing
-	// goroutine -- see command.go's own EnsureDispatched doc comment.
-	// Deliberately does NOT alter this function's own return value: a
-	// failure here is logged, never treated as a failure of the sandbox
-	// event itself (which already committed successfully).
 	if err == nil {
-		if dispatchErr := a.handleEnsureDispatched(ctx); dispatchErr != nil {
-			a.logger.Warn("sessionactor: ensure-dispatched after sandbox event failed", "error", dispatchErr)
-		}
-
 		// Step 22 ("snapshots & restore"), design decision 1 -- CORRECTED
 		// per independent review: §3.3's own governing rule is "On
 		// terminal event: complete turn, trigger snapshot, re-derive
@@ -506,8 +491,50 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// the first delivery already moved the sandbox off Ready, so
 		// triggerSnapshotBestEffort's own internal check no-ops on the
 		// redelivery.
+		//
+		// Fix (audit finding F4): this call runs BEFORE handleEnsureDispatched
+		// below, matching §3.3's own literal order -- "complete turn ->
+		// trigger snapshot -> re-derive status -> dispatch next" -- exactly.
+		// The two must not run in the other order: dispatching the next
+		// pending turn (handleEnsureDispatched) does not itself change the
+		// SANDBOX's own status column (it stays Ready; only the TURN's own
+		// row moves Pending->Processing and a real prompt is sent) --
+		// which means triggerSnapshotBestEffort's own eligibility check
+		// ("status == Ready") would still pass just as well AFTER a
+		// dispatch-then-snapshot ordering as before it. So a dispatch-then-
+		// snapshot order lets the snapshot fire while the NEXT turn is
+		// already actively executing inside the sandbox -- capturing
+		// mid-turn, in-flight state instead of the clean, idle state
+		// between the two turns -- and that next turn's own later,
+		// legitimate execution_complete snapshot attempt then finds the
+		// sandbox still Snapshotting from this premature one and silently
+		// no-ops, skipping a snapshot cycle entirely. Running this call
+		// first instead means the sandbox is already Snapshotting (neither
+		// Ready nor Suspect) by the time handleEnsureDispatched looks at
+		// it, so planDispatch's own dispatch branch does not fire yet --
+		// the next turn stays Pending until this snapshot cycle completes
+		// and returns the sandbox to Ready, at which point a later
+		// EnsureDispatched call picks it up.
 		if cmd.Type == "execution_complete" {
 			a.triggerSnapshotBestEffort(ctx)
+		}
+
+		// Design decision 3: unconditionally re-evaluate spawn/dispatch state
+		// right after this event's own transact commits successfully (and,
+		// per the fix above, after any execution_complete snapshot trigger
+		// has already had its chance to run against the clean post-turn
+		// Ready state) -- e.g. a "ready"/heartbeat-driven transition to
+		// Booting/Ready is immediately followed by a fresh dispatch
+		// evaluation, in case a pending turn is now dispatchable. Calls the
+		// SAME handler function EnsureDispatched itself invokes, directly
+		// (not via a.Send), since this already runs on the actor's own
+		// single command-processing goroutine -- see command.go's own
+		// EnsureDispatched doc comment. Deliberately does NOT alter this
+		// function's own return value: a failure here is logged, never
+		// treated as a failure of the sandbox event itself (which already
+		// committed successfully).
+		if dispatchErr := a.handleEnsureDispatched(ctx); dispatchErr != nil {
+			a.logger.Warn("sessionactor: ensure-dispatched after sandbox event failed", "error", dispatchErr)
 		}
 
 		// Step 21 ("e2e happy path"): the two remaining best-effort side

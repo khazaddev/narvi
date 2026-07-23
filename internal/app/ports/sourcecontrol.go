@@ -121,7 +121,19 @@ type SourceControl interface {
 	// the base image for this spawn (§10 Phase 2: "always fall back to
 	// base image on any miss -- never block a session"), never a fatal
 	// condition.
-	ResolveBranchSHA(ctx context.Context, spec ResolveBranchSHASpec) (string, error)
+	//
+	// The second return, resolvedBranch, is spec.Branch verbatim when
+	// non-empty, or the repo's own real default branch name (the SAME
+	// name this call already resolved internally to pick which ref to
+	// read the SHA at) when spec.Branch was empty -- audit finding F5's
+	// follow-up: a caller that keys any per-branch state (e.g.
+	// sessionactor/contractdrift.go's contract-drift snapshot key) off
+	// spec.Branch directly would otherwise treat a session left with no
+	// explicit branch and one that explicitly names the repo's actual
+	// default branch as two different branches, even though they resolve
+	// to the exact same ref -- splitting what should be one branch's
+	// tracked state into two.
+	ResolveBranchSHA(ctx context.Context, spec ResolveBranchSHASpec) (sha string, resolvedBranch string, err error)
 
 	// ResolveContractsFingerprint fingerprints spec.Path's directory
 	// listing at spec.Ref (Step 27, "mocking + contract drift", §14.3).

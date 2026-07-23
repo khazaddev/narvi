@@ -912,7 +912,15 @@ func (a *Actor) planRestore(
 // call reads status==Spawning instead of Stopped/Stale and no-ops via its
 // own existing SpawningTimeout-guarded Skip branch (spawndecision.go,
 // untouched by this fix) -- the exact same protection a concurrent second
-// spawn/restore attempt already gets.
+// spawn/restore attempt already gets. That guard measures from the last
+// sign of life (max(created_at, last_seen_at)), so it only genuinely
+// fires here because UpsertSandboxForSpawn's own ON CONFLICT branch
+// resets last_seen_at to now() on every claim, including this one
+// (postgres/queries/sandboxes.sql's own audit finding F3 fix) -- without
+// that, a box resumed after sitting Stopped/Stale well past
+// SpawningTimeout (the normal case for a resume) would still measure
+// sinceLastSignOfLife from however long it already sat idle, and this
+// guard would NOT skip.
 //
 // Reuses the EXACT SAME UpsertSandboxForSpawn upsert planFreshSpawn/
 // planRestore already share -- that query's own doc comment ("every
@@ -1168,7 +1176,12 @@ func (a *Actor) recordSpawnFailure(ctx context.Context, tx pgx.Tx, sandboxRow sq
 // for the same session now reads status==Spawning, not Stopped/Stale, and
 // EvaluateSpawnDecision's own existing guard (spawndecision.go,
 // untouched by this fix) no-ops instead of returning SpawnActionResume a
-// second time.
+// second time -- genuinely, because planResume's own UpsertSandboxForSpawn
+// claim just reset last_seen_at to now() on the ON CONFLICT branch (audit
+// finding F3's fix, postgres/queries/sandboxes.sql), so the guard's own
+// sinceLastSignOfLife reads as "just now," not however long this box sat
+// Stopped/Stale beforehand -- see planResume's own doc comment above for
+// the full reasoning.
 //
 // ref.ProviderID is the EXISTING provider object recorded on plan (never
 // a new one, unlike executeSpawn/executeRestore's own ref, which comes

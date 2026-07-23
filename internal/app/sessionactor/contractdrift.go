@@ -142,7 +142,7 @@ func (a *Actor) checkContractDriftForRepo(ctx context.Context, r sessionconfig.S
 	}
 
 	shaCtx, cancel := context.WithTimeout(ctx, a.timeouts.ContractsFingerprintResolutionTimeout)
-	sha, err := a.sourceControl.ResolveBranchSHA(shaCtx, ports.ResolveBranchSHASpec{
+	sha, resolvedBranch, err := a.sourceControl.ResolveBranchSHA(shaCtx, ports.ResolveBranchSHASpec{
 		Owner: owner, Repo: repoName, Branch: branch, Token: token,
 	})
 	cancel()
@@ -169,7 +169,34 @@ func (a *Actor) checkContractDriftForRepo(ctx context.Context, r sessionconfig.S
 		fingerprint = ""
 	}
 
-	repoKey := owner + "/" + repoName
+	// Fix (audit finding F5): repoKey includes the branch, not just
+	// owner/repoName. A bare "owner/repo" key is GLOBAL across every
+	// session/branch naming that repo, but the (RepoSHA, ContractsFingerprint)
+	// pair this key snapshots is inherently branch-specific -- RepoSHA is
+	// literally "the SHA branch currently resolves to". Two mock-configured
+	// sessions on different branches of the same repo would otherwise
+	// overwrite and read back each other's snapshot: session A on branch-1
+	// spawns (recording branch-1's SHA), then session B on branch-2 spawns
+	// and sees branch-1's SHA as "previous", with a matching fingerprint by
+	// coincidence -- contractdrift.HasDrifted's own truth table then flags
+	// drift even though neither branch's own contracts ever changed.
+	// Uses resolvedBranch (ResolveBranchSHA's own second return), NOT the
+	// local branch/r.Branch value, for this key's own branch component --
+	// audit finding F5 follow-up: r.Branch is nil for a session left on
+	// the repo's default branch, but that resolves (via the SAME
+	// ResolveBranchSHA call above) to the exact same ref/SHA as another
+	// session that explicitly names that default branch by its real name
+	// (e.g. "main"). Keying on the raw, possibly-empty branch string would
+	// give those two sessions two different keys ("owner/repo@" vs.
+	// "owner/repo@main") for what is actually the same branch's drift
+	// state -- a real drift recorded under one key would be invisible to
+	// a session reading via the other, read back as a false "first
+	// sighting" instead of genuine drift. resolvedBranch is never empty
+	// (ResolveBranchSHA always returns the real branch name it resolved
+	// SHA against, substituting the repo's actual default when spec.
+	// Branch was empty), so this key is stable across nil-vs-explicit-
+	// default-name sessions on the same branch.
+	repoKey := owner + "/" + repoName + "@" + resolvedBranch
 
 	var previous contractdrift.Snapshot
 	row, err := a.stores.contractDrift.Get(ctx, repoKey)

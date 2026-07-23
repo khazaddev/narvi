@@ -4,6 +4,7 @@ package sessionactor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -139,6 +140,42 @@ func createTestSessionWithRepoAndEnvironment(ctx context.Context, t *testing.T, 
 // literal without a separate local variable each time.
 func contractsPathPtr(s string) *string { return &s }
 
+// createTestSessionWithRepoAndEnvironmentNilBranch mirrors
+// createTestSessionWithRepoAndEnvironment exactly, except the repo's own
+// "branch" key is explicit JSON null (rather than reposJSONForTest's
+// always-present string) -- unmarshaling into sessionconfig.
+// SessionConfigReposElem.Branch (a *string) then leaves it genuinely nil,
+// exactly like a real session created via httpapi.CreateSession with no
+// branch named for this repo (create.go only validates Branch "ONLY when
+// Branch is non-nil"). The key itself must still be PRESENT (json: null,
+// not omitted): SessionConfigReposElem.UnmarshalJSON (contracts/gen/go/
+// sessionconfig) treats "branch" as required-nullable -- present-but-null
+// is valid and means "unscoped", but an absent key is itself a schema
+// validation error, surfacing downstream as assembleSessionConfig's own
+// "field branch in SessionConfigReposElem: required" the moment a spawn
+// actually tries to build this session's SessionConfig.
+func createTestSessionWithRepoAndEnvironmentNilBranch(ctx context.Context, t *testing.T, pool *pgxpool.Pool, createdBy, environmentID pgtype.UUID, name, url string) pgtype.UUID {
+	t.Helper()
+
+	raw, err := json.Marshal([]map[string]any{
+		{"name": name, "url": url, "branch": nil},
+	})
+	if err != nil {
+		t.Fatalf("marshal nil-branch test repos: %v", err)
+	}
+
+	created, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource:   sqlcgen.SessionSpawnSourceWeb,
+		CreatedBy:     createdBy,
+		Repos:         raw,
+		EnvironmentID: environmentID,
+	})
+	if err != nil {
+		t.Fatalf("create test session with nil-branch repo and environment: %v", err)
+	}
+	return created.ID
+}
+
 // TestCheckContractDrift_NoMockConfig_NeverTouchesSnapshots proves the
 // critical scope-boundary guarantee: spawning an ORDINARY session (no
 // environment_id at all) never creates or touches any
@@ -179,7 +216,7 @@ func TestCheckContractDrift_NoMockConfig_NeverTouchesSnapshots(t *testing.T) {
 	}
 
 	contractDriftStore := narvipg.NewContractDriftStore(pool)
-	if _, err := contractDriftStore.Get(ctx, "acme/repo-no-mock"); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := contractDriftStore.Get(ctx, "acme/repo-no-mock@main"); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("contract_drift_snapshots row for acme/repo-no-mock: err = %v, want pgx.ErrNoRows (no row must ever be created)", err)
 	}
 
@@ -226,7 +263,7 @@ func TestCheckContractDrift_MockConfigured_FirstSpawn_RecordsBaselineNoDrift(t *
 	contractDriftStore := narvipg.NewContractDriftStore(pool)
 	var row sqlcgen.ContractDriftSnapshot
 	waitUntil(t, 5*time.Second, func() bool {
-		row, err = contractDriftStore.Get(ctx, "acme/repo-baseline")
+		row, err = contractDriftStore.Get(ctx, "acme/repo-baseline@main")
 		return err == nil
 	})
 
@@ -262,7 +299,7 @@ func TestCheckContractDrift_SecondSpawn_SameFingerprint_FlagsDrift(t *testing.T)
 	contractDriftStore := narvipg.NewContractDriftStore(pool)
 
 	const repoURL = "https://github.com/acme/repo-drift.git"
-	const repoKey = "acme/repo-drift"
+	const repoKey = "acme/repo-drift@main"
 
 	// First spawn: records the baseline (sha-1, fp-1).
 	session1 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
@@ -336,7 +373,7 @@ func TestCheckContractDrift_SecondSpawn_DifferentFingerprint_NoDrift(t *testing.
 	contractDriftStore := narvipg.NewContractDriftStore(pool)
 
 	const repoURL = "https://github.com/acme/repo-no-drift.git"
-	const repoKey = "acme/repo-no-drift"
+	const repoKey = "acme/repo-no-drift@main"
 
 	session1 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
 		"repo-no-drift", repoURL, "main")
@@ -410,7 +447,7 @@ func TestCheckContractDrift_NoContractsDirectory_FingerprintStoredEmptyNeverDrif
 	contractDriftStore := narvipg.NewContractDriftStore(pool)
 
 	const repoURL = "https://github.com/acme/repo-no-contracts-dir.git"
-	const repoKey = "acme/repo-no-contracts-dir"
+	const repoKey = "acme/repo-no-contracts-dir@main"
 
 	session1 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
 		"repo-no-contracts-dir", repoURL, "main")
@@ -506,7 +543,7 @@ func TestCheckContractDrift_NilSourceControl_StillSpawnsSuccessfully(t *testing.
 		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
 	})
 
-	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-nil-sc"); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-nil-sc@main"); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("contract_drift_snapshots row: err = %v, want pgx.ErrNoRows (nil SourceControl means nothing was ever checked)", err)
 	}
 }
@@ -550,7 +587,219 @@ func TestCheckContractDrift_NoUsableGitHubToken_StillSpawnsSuccessfully(t *testi
 	if got := sourceControl.fingerprintCallCount(); got != 0 {
 		t.Errorf("ResolveContractsFingerprint call count = %d, want 0 (no usable token -> never attempted)", got)
 	}
-	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-no-token"); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-no-token@main"); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("contract_drift_snapshots row: err = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+// TestCheckContractDrift_DifferentBranches_SameRepo_NoFalsePositiveDrift
+// proves audit finding F5's own fix: two mock-configured sessions naming
+// the SAME repo but DIFFERENT branches no longer see each other's SHA as
+// "previous" and wrongly report drift. Before the fix, repoKey was a bare
+// "owner/repo" (no branch), so branch-b's spawn here would have read
+// branch-a's just-recorded snapshot as its own "previous", seen a
+// different SHA (branches always resolve to different SHAs) with a
+// coincidentally-matching fingerprint, and flagged false-positive drift --
+// even though nothing on branch-b itself ever changed (this was in fact
+// branch-b's OWN first sighting).
+func TestCheckContractDrift_DifferentBranches_SameRepo_NoFalsePositiveDrift(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-multibranch")
+	turnStore := narvipg.NewTurnStore(pool)
+	contractDriftStore := narvipg.NewContractDriftStore(pool)
+
+	const repoURL = "https://github.com/acme/repo-multibranch.git"
+	const keyBranchA = "acme/repo-multibranch@feature-a"
+	const keyBranchB = "acme/repo-multibranch@feature-b"
+
+	// branch-a's spawn: records its own baseline (sha-a1, fp-shared).
+	sessionA := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-multibranch", repoURL, "feature-a")
+	createPendingTurn(ctx, t, turnStore, sessionA, "prompt a")
+
+	sourceControlA := &fakeSourceControl{nextSHA: "sha-a1", nextFingerprint: "fp-shared", nextFingerprintExists: true}
+	providerA := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-multibranch-a"}}
+	rA := newImageBuildTestRegistry(t, ctx, pool, providerA, sourceControlA)
+	t.Cleanup(func() { _ = rA.Shutdown() })
+
+	aA, err := rA.GetOrSpawn(ctx, sessionA)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(sessionA): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, aA)
+	waitUntil(t, 5*time.Second, func() bool { return providerA.callCount() == 1 })
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := contractDriftStore.Get(ctx, keyBranchA)
+		return getErr == nil && row.LastRepoSha == "sha-a1"
+	})
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	// branch-b's spawn: a DIFFERENT session, SAME repo, DIFFERENT branch --
+	// a different SHA (branches always resolve differently) but the SAME
+	// fingerprint as branch-a's baseline purely by coincidence. This is
+	// branch-b's own FIRST sighting and must not be flagged as drift
+	// against branch-a's snapshot.
+	sessionB := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-multibranch", repoURL, "feature-b")
+	createPendingTurn(ctx, t, turnStore, sessionB, "prompt b")
+
+	sourceControlB := &fakeSourceControl{nextSHA: "sha-b1", nextFingerprint: "fp-shared", nextFingerprintExists: true}
+	providerB := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-multibranch-b"}}
+	rB := newImageBuildTestRegistry(t, ctx, pool, providerB, sourceControlB)
+	t.Cleanup(func() { _ = rB.Shutdown() })
+
+	aB, err := rB.GetOrSpawn(ctx, sessionB)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(sessionB): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, aB)
+	waitUntil(t, 5*time.Second, func() bool { return providerB.callCount() == 1 })
+
+	var rowB sqlcgen.ContractDriftSnapshot
+	waitUntil(t, 5*time.Second, func() bool {
+		rowB, err = contractDriftStore.Get(ctx, keyBranchB)
+		return err == nil && rowB.LastRepoSha == "sha-b1"
+	})
+	if rowB.LastContractsFingerprint != "fp-shared" {
+		t.Errorf("branch-b last_contracts_fingerprint = %q, want %q", rowB.LastContractsFingerprint, "fp-shared")
+	}
+
+	after := readContractDriftDetected(ctx, t, otelReader)
+	if after != before {
+		t.Errorf("contract_drift_detected counter delta = %d, want 0 (branch-b's own first sighting must never be flagged as drift against branch-a's snapshot)", after-before)
+	}
+
+	// branch-a's own snapshot must be untouched by branch-b's spawn --
+	// each branch owns an independent row.
+	rowA, err := contractDriftStore.Get(ctx, keyBranchA)
+	if err != nil {
+		t.Fatalf("get branch-a snapshot: %v", err)
+	}
+	if rowA.LastRepoSha != "sha-a1" {
+		t.Errorf("branch-a last_repo_sha = %q, want %q (must not be overwritten by branch-b's spawn)", rowA.LastRepoSha, "sha-a1")
+	}
+
+	// A genuine SECOND spawn on branch-a itself (same branch, repo SHA
+	// changed, contracts fingerprint did not) must still correctly detect
+	// drift -- the fix scopes the key to (repo, branch), it does not
+	// disable same-branch drift detection.
+	beforeSameBranch := readContractDriftDetected(ctx, t, otelReader)
+
+	sessionA2 := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-multibranch", repoURL, "feature-a")
+	createPendingTurn(ctx, t, turnStore, sessionA2, "prompt a2")
+
+	sourceControlA2 := &fakeSourceControl{nextSHA: "sha-a2", nextFingerprint: "fp-shared", nextFingerprintExists: true}
+	providerA2 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-multibranch-a2"}}
+	rA2 := newImageBuildTestRegistry(t, ctx, pool, providerA2, sourceControlA2)
+	t.Cleanup(func() { _ = rA2.Shutdown() })
+
+	aA2, err := rA2.GetOrSpawn(ctx, sessionA2)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(sessionA2): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, aA2)
+	waitUntil(t, 5*time.Second, func() bool { return providerA2.callCount() == 1 })
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := contractDriftStore.Get(ctx, keyBranchA)
+		return getErr == nil && row.LastRepoSha == "sha-a2"
+	})
+
+	afterSameBranch := readContractDriftDetected(ctx, t, otelReader)
+	if afterSameBranch-beforeSameBranch != 1 {
+		t.Errorf("contract_drift_detected counter delta = %d, want 1 (genuine same-branch drift must still be detected)", afterSameBranch-beforeSameBranch)
+	}
+}
+
+// TestCheckContractDrift_NilBranchAndExplicitDefaultBranchName_ShareOneKey
+// is the F5 follow-up regression test: a session left with no explicit
+// branch (r.Branch == nil) and a later session that explicitly names the
+// repo's own real default branch by name must be tracked as the SAME
+// branch's drift state -- both resolve to the identical underlying ref,
+// via ports.SourceControl.ResolveBranchSHA's own "empty Branch resolves to
+// the repo's real default" contract. Before this fix, checkContractDriftForRepo
+// built its repoKey from the raw/possibly-nil branch string, so the
+// nil-branch session keyed on "owner/repo@" while the explicit-"main"
+// session keyed on "owner/repo@main" -- two independent rows for what is
+// actually one branch, so a genuine SHA change on that branch (this test's
+// second spawn) would have been silently missed as drift (read back as a
+// fresh "first sighting" on the second, different key instead).
+func TestCheckContractDrift_NilBranchAndExplicitDefaultBranchName_ShareOneKey(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-nilbranch")
+	turnStore := narvipg.NewTurnStore(pool)
+	contractDriftStore := narvipg.NewContractDriftStore(pool)
+
+	const repoURL = "https://github.com/acme/repo-nilbranch.git"
+	const key = "acme/repo-nilbranch@main"
+
+	// Session A: no explicit branch at all (nil) -- resolves to the
+	// repo's own real default branch, "main", via the fake's own
+	// defaultBranchName (mirroring the real adapter's empty-Branch
+	// resolution).
+	sessionA := createTestSessionWithRepoAndEnvironmentNilBranch(ctx, t, pool, creator, environmentID,
+		"repo-nilbranch", repoURL)
+	createPendingTurn(ctx, t, turnStore, sessionA, "prompt a")
+
+	sourceControlA := &fakeSourceControl{
+		nextSHA: "sha-nil-1", defaultBranchName: "main",
+		nextFingerprint: "fp-1", nextFingerprintExists: true,
+	}
+	providerA := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-nilbranch-a"}}
+	rA := newImageBuildTestRegistry(t, ctx, pool, providerA, sourceControlA)
+	t.Cleanup(func() { _ = rA.Shutdown() })
+
+	aA, err := rA.GetOrSpawn(ctx, sessionA)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(sessionA): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, aA)
+	waitUntil(t, 5*time.Second, func() bool { return providerA.callCount() == 1 })
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := contractDriftStore.Get(ctx, key)
+		return getErr == nil && row.LastRepoSha == "sha-nil-1"
+	})
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	// Session B: a DIFFERENT session, explicitly naming that SAME real
+	// default branch ("main") by name. A genuinely new SHA, but the SAME
+	// fingerprint -- must be flagged as real drift against session A's
+	// snapshot, because it IS the same branch, not a fresh first sighting
+	// on a separate key.
+	sessionB := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-nilbranch", repoURL, "main")
+	createPendingTurn(ctx, t, turnStore, sessionB, "prompt b")
+
+	sourceControlB := &fakeSourceControl{nextSHA: "sha-nil-2", nextFingerprint: "fp-1", nextFingerprintExists: true}
+	providerB := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-nilbranch-b"}}
+	rB := newImageBuildTestRegistry(t, ctx, pool, providerB, sourceControlB)
+	t.Cleanup(func() { _ = rB.Shutdown() })
+
+	aB, err := rB.GetOrSpawn(ctx, sessionB)
+	if err != nil {
+		t.Fatalf("GetOrSpawn(sessionB): %v", err)
+	}
+	sendEnsureDispatched(ctx, t, aB)
+	waitUntil(t, 5*time.Second, func() bool { return providerB.callCount() == 1 })
+
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := contractDriftStore.Get(ctx, key)
+		return getErr == nil && row.LastRepoSha == "sha-nil-2"
+	})
+
+	after := readContractDriftDetected(ctx, t, otelReader)
+	if after-before != 1 {
+		t.Errorf("contract_drift_detected counter delta = %d, want 1 (nil-branch session and explicit-\"main\" session must share one key, so this SHA change is genuine drift, not a second first-sighting)", after-before)
 	}
 }

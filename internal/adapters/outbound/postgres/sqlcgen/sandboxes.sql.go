@@ -448,6 +448,7 @@ ON CONFLICT (session_id) DO UPDATE
 SET gen = sandboxes.gen + 1,
     status = 'spawning',
     token_hash = $2,
+    last_seen_at = now(),
     updated_at = now()
 RETURNING id, session_id, gen, status, last_seen_at, created_at, updated_at, token_hash, provider_id, spawn_failure_count, last_spawn_failure_at, snapshot_id, pending_snapshot_message_id, pre_suspect_status
 `
@@ -466,6 +467,37 @@ type UpsertSandboxForSpawnParams struct {
 // ever sets it, and a stale previous-gen provider_id lingering between
 // those two writes is harmless (SpawnState.ProviderObjectID is only read
 // BEFORE this upsert runs, from the row as it stood prior to this call).
+//
+// Fix (audit finding F3): the ON CONFLICT (resume/restore/re-claim) branch
+// now also sets last_seen_at = now() -- this claim is itself a fresh sign
+// of life for the row, exactly like RecoverSandboxFromSuspect's own "this
+// write is itself the liveness signal" precedent below. A resume/restore
+// claim in particular can land on a row that sat in a terminal status
+// (Stopped/Failed/Stale) for arbitrarily long before being claimed again,
+// so without this, sinceLastSignOfLife in domain/sandbox.
+// EvaluateSpawnDecision's own Skip guard (measured from max(created_at,
+// last_seen_at)) would still reflect however long the box sat idle
+// beforehand, not this claim -- defeating that guard's "no-op a concurrent
+// second actor for free" purpose for exactly the case (resume/restore of a
+// long-terminal box) it most needs to cover. Because session_id is
+// UNIQUE, any second concurrent caller for the same session is guaranteed
+// to land on THIS branch (not the INSERT below) regardless of which one
+// physically ran first, so this is the only branch that needs to move
+// last_seen_at for that guard's sake.
+//
+// The INSERT (fresh-row) branch below deliberately does NOT set
+// last_seen_at: leaving it NULL until the sandbox's own first liveness
+// signal (the column's doc comment, migrations/000006_sandboxes.up.sql)
+// is what tells domain/sandbox.EvaluateConnectingTimeout this box hasn't
+// connected yet, so it grants the longer FirstConnectBudget (240s) rather
+// than the steady-state SteadyHeartbeatBudget (90s) while it cold-starts.
+// Setting it here too was tried and reverted: it made every fresh spawn's
+// very first connecting-deadline check see a non-zero last_seen_at (==
+// created_at) and wrongly pick the 90s budget, false-positiving a
+// perfectly normal slow boot into "stuck spawn" territory. It also isn't
+// needed for the Skip guard above -- a fresh INSERT has no prior row for a
+// concurrent caller to race against; maxTime(created_at, zero) ==
+// created_at already reads as "just spawned".
 func (q *Queries) UpsertSandboxForSpawn(ctx context.Context, arg UpsertSandboxForSpawnParams) (Sandbox, error) {
 	row := q.db.QueryRow(ctx, upsertSandboxForSpawn, arg.SessionID, arg.TokenHash)
 	var i Sandbox

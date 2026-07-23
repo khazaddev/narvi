@@ -339,7 +339,7 @@ func TestResolveBranchSHA_ExplicitBranch(t *testing.T) {
 
 	adapter := githubapi.New(server.Client(), server.URL)
 
-	sha, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
+	sha, resolvedBranch, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
 		Owner:  "acme",
 		Repo:   "widgets",
 		Branch: "feature-x",
@@ -349,7 +349,10 @@ func TestResolveBranchSHA_ExplicitBranch(t *testing.T) {
 		t.Fatalf("ResolveBranchSHA() error = %v, want nil", err)
 	}
 	if sha != "abc123def456" {
-		t.Errorf("ResolveBranchSHA() = %q, want %q", sha, "abc123def456")
+		t.Errorf("ResolveBranchSHA() sha = %q, want %q", sha, "abc123def456")
+	}
+	if resolvedBranch != "feature-x" {
+		t.Errorf("ResolveBranchSHA() resolvedBranch = %q, want %q (explicit branch echoed back verbatim)", resolvedBranch, "feature-x")
 	}
 	if gotPath != "/repos/acme/widgets/commits/feature-x" {
 		t.Errorf("request path = %q, want %q", gotPath, "/repos/acme/widgets/commits/feature-x")
@@ -383,7 +386,7 @@ func TestResolveBranchSHA_EmptyBranchResolvesDefault(t *testing.T) {
 
 	adapter := githubapi.New(server.Client(), server.URL)
 
-	sha, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
+	sha, resolvedBranch, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
 		Owner: "acme",
 		Repo:  "widgets",
 		Token: "gho_realtoken",
@@ -392,7 +395,10 @@ func TestResolveBranchSHA_EmptyBranchResolvesDefault(t *testing.T) {
 		t.Fatalf("ResolveBranchSHA() error = %v, want nil", err)
 	}
 	if sha != "def789" {
-		t.Errorf("ResolveBranchSHA() = %q, want %q", sha, "def789")
+		t.Errorf("ResolveBranchSHA() sha = %q, want %q", sha, "def789")
+	}
+	if resolvedBranch != "trunk" {
+		t.Errorf("ResolveBranchSHA() resolvedBranch = %q, want %q (the repo's own real default branch, not left empty)", resolvedBranch, "trunk")
 	}
 	wantPaths := []string{"/repos/acme/widgets", "/repos/acme/widgets/commits/trunk"}
 	if len(gotPaths) != len(wantPaths) || gotPaths[0] != wantPaths[0] || gotPaths[1] != wantPaths[1] {
@@ -416,7 +422,7 @@ func TestResolveBranchSHA_4xxMapsToRealError(t *testing.T) {
 
 	adapter := githubapi.New(server.Client(), server.URL)
 
-	_, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
+	_, _, err := adapter.ResolveBranchSHA(context.Background(), ports.ResolveBranchSHASpec{
 		Owner:  "acme",
 		Repo:   "widgets",
 		Branch: "main",

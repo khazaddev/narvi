@@ -125,7 +125,7 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 		}
 
 		shaCtx, cancel := context.WithTimeout(ctx, a.timeouts.RepoSHAResolutionTimeout)
-		sha, err := a.sourceControl.ResolveBranchSHA(shaCtx, ports.ResolveBranchSHASpec{
+		sha, _, err := a.sourceControl.ResolveBranchSHA(shaCtx, ports.ResolveBranchSHASpec{
 			Owner: owner, Repo: repoName, Branch: branch, Token: token,
 		})
 		cancel()

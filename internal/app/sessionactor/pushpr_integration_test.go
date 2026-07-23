@@ -63,6 +63,12 @@ type fakeSourceControl struct {
 	shaFor     map[string]string // keyed by repo name; falls back to nextSHA if absent
 	nextSHA    string
 	nextSHAErr error
+	// defaultBranchName is the resolvedBranch ResolveBranchSHA returns
+	// when the caller's spec.Branch is empty (simulating the real
+	// adapter's own "resolve the repo's actual default branch name"
+	// behavior, githubapi.Adapter.ResolveBranchSHA) -- defaults to "main"
+	// (a realistic default-branch name) when a test never sets it.
+	defaultBranchName string
 
 	fingerprintCalls      []ports.ResolveContractsFingerprintSpec
 	fingerprintFor        map[string]string // keyed by repo name; overrides nextFingerprint if present
@@ -93,17 +99,26 @@ func (f *fakeSourceControl) lastSpec() ports.CreatePRSpec {
 	return f.calls[len(f.calls)-1]
 }
 
-func (f *fakeSourceControl) ResolveBranchSHA(_ context.Context, spec ports.ResolveBranchSHASpec) (string, error) {
+func (f *fakeSourceControl) ResolveBranchSHA(_ context.Context, spec ports.ResolveBranchSHASpec) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shaCalls = append(f.shaCalls, spec)
 	if f.nextSHAErr != nil {
-		return "", f.nextSHAErr
+		return "", "", f.nextSHAErr
+	}
+	resolvedBranch := spec.Branch
+	if resolvedBranch == "" {
+		// Mirrors the real adapter: an empty spec.Branch resolves to the
+		// repo's own actual default branch name, never staying empty.
+		resolvedBranch = f.defaultBranchName
+		if resolvedBranch == "" {
+			resolvedBranch = "main"
+		}
 	}
 	if sha, ok := f.shaFor[spec.Repo]; ok {
-		return sha, nil
+		return sha, resolvedBranch, nil
 	}
-	return f.nextSHA, nil
+	return f.nextSHA, resolvedBranch, nil
 }
 
 func (f *fakeSourceControl) shaCallCount() int {
