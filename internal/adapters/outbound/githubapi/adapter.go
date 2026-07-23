@@ -335,6 +335,79 @@ type contentsEntry struct {
 	Type string `json:"type"`
 }
 
+// issueCommentRequest is the body POSTed to
+// /repos/{owner}/{repo}/issues/{issue_number}/comments (real GitHub REST
+// API shape -- https://docs.github.com/rest/issues/comments#create-an-issue-comment).
+// A pull request is itself always addressable through GitHub's Issues API
+// (every PR IS an issue, sharing the same numbering) -- there is no
+// separate "PR comment" endpoint distinct from this one.
+type issueCommentRequest struct {
+	Body string `json:"body"`
+}
+
+// doPost performs one authenticated POST against a.apiBaseURL+path with
+// reqBody as the JSON request body, returning the raw response body on any
+// 2xx status -- the doGet-analog this package's own doc.go promises: same
+// bounded-read/error-envelope-parsing shape, just a POST with a body
+// instead of a bodyless GET.
+func (a *Adapter) doPost(ctx context.Context, path, token string, reqBody []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: build post request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: post request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: read post response: %w", err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		message := "no error body"
+		var parsed githubErrorBody
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Message != "" {
+			message = parsed.Message
+		} else if len(body) > 0 {
+			message = "error body did not match GitHub's expected error envelope"
+		}
+		return nil, &APIError{Status: resp.StatusCode, Message: message}
+	}
+
+	return body, nil
+}
+
+// PostIssueComment posts body as a new comment on repo owner/repo's
+// issue/PR prNumber, authenticated with token as a Bearer token (Step 35,
+// "outbox delivery", §5.1). Unlike CreatePR/ResolveBranchSHA above, token
+// here is typically a single, statically-configured bot credential
+// (platform.Config.GitHubBotToken via BotNotifier, notifier.go) rather
+// than a per-session decrypted OAuth token -- this method itself is
+// agnostic to which kind of token it's handed, exactly like doGet/doPost
+// are agnostic to whose token they carry.
+func (a *Adapter) PostIssueComment(ctx context.Context, owner, repo string, prNumber int, token, body string) error {
+	reqBody, err := json.Marshal(issueCommentRequest{Body: body})
+	if err != nil {
+		return fmt.Errorf("githubapi: encode post-issue-comment request: %w", err)
+	}
+
+	// Owner/Repo escaped via url.PathEscape (single opaque segments,
+	// mirroring CreatePR/ResolveBranchSHA's own identical discipline); PR
+	// numbers need no escaping (a plain decimal integer).
+	path := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), prNumber)
+	if _, err := a.doPost(ctx, path, token, reqBody); err != nil {
+		return fmt.Errorf("githubapi: post issue comment: %w", err)
+	}
+	return nil
+}
+
 // ResolveContractsFingerprint implements ports.SourceControl (Step 27,
 // "mocking + contract drift", §14.3): fingerprints spec.Path's directory
 // listing at spec.Ref via a real GET

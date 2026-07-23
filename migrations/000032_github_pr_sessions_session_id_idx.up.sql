@@ -1,0 +1,12 @@
+-- Step 35 ("outbox delivery", §5.1): a completed turn's own outbox-enqueue
+-- decision needs the REVERSE lookup github_pr_sessions never had before
+-- this Step -- "given a session_id, which (repo_full_name, pr_number) PR
+-- does it back?" -- so a GitHub-origin session's turn-completion
+-- notification can be routed to the right PR to comment on.
+-- slack_thread_sessions (migrations/000029) and linear_agent_sessions
+-- (migrations/000030) each already carry this same reverse index for their
+-- own session_id column; github_pr_sessions was the one left without one,
+-- since Step 32's own ingress path never needed it (only the FORWARD
+-- (repo_full_name, pr_number) -> session_id direction, its own primary
+-- key).
+CREATE INDEX github_pr_sessions_session_id_idx ON github_pr_sessions (session_id);

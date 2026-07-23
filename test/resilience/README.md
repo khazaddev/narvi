@@ -274,20 +274,23 @@ product decision, not an oversight this PR is hiding.
 > Outbox: Slack API 500s for 10 min → notification eventually delivered,
 > no loss.
 
-**Status: deferred to a later phase.** This scenario depends on
-functionality that does not exist yet:
+**Status: covered.** Step 35 ("outbox delivery") built both dependencies
+this scenario needed (the outbox delivery worker, `internal/app/
+outboxworker`, and the Slack Notifier adapter, `internal/adapters/
+outbound/slackapi`) and this scenario alongside them.
+`scenario9_outbox_retry_test.go` drives a REAL `outboxworker.Builder`
+against a REAL `slackapi.Client`, pointed at a fake Slack-shaped
+`httptest.Server` scripted to return 500 for several requests before
+recovering — the "10 min" outage is compressed via short, test-scale
+`platform.Timeouts` overrides (mirroring scenario #3's own identical
+convention), never by weakening `domain/outbox.MaxAttempts` itself.
+Asserts, via direct Postgres inspection after each tick: the row is never
+dead-lettered while genuinely still within its retry budget, is
+eventually delivered once the fake server recovers, and is never
+delivered twice.
 
-- **Step 35, "outbox delivery" (Phase 3)** — the outbox delivery worker
-  itself. `internal/adapters/outbound/postgres/outbox_store.go`'s own doc
-  comment: "No caching, no retries, no business rules — the delivery
-  worker lands in PR-35."
-- **Step 33, "Slack ingress" (Phase 3)** — the Slack Notifier adapter.
-  `internal/adapters/outbound/slackapi/doc.go`: "Package slackapi will
-  hold the Slack Notifier adapter, consumed via the outbox only —
-  implemented in PR-35."
-
-Nothing here is built or faked to simulate coverage; there is genuinely
-nothing yet to test.
+- `TestResilienceScenario9_Outbox_SlackAPI500sThenRecovers_EventuallyDeliveredNoLoss`
+  — `test/resilience/scenario9_outbox_retry_test.go`
 
 ### #10 — concurrent @mentions on one PR
 
@@ -358,7 +361,7 @@ resumable, not merely "not yet marked failed".
 | 6 | Stale-gen reconnect | Covered |
 | 7 | WS-drop ack redelivery | Covered (all 6 critical types) |
 | 8 | Provider down during spawn | Covered (backoff-retry mechanism an accepted, user-confirmed gap) |
-| 9 | Outbox: Slack API 500s | Deferred — needs Step 33 + Step 35 (Phase 3) |
+| 9 | Outbox: Slack API 500s | Covered — this Step (35) |
 | 10 | Concurrent @mentions | Deferred — needs Step 32 (Phase 3) + Step 40/41 (Phase 4) |
 | 11 | Dirty working tree at relaunch | Covered |
 | 12 | Deploy rollout (rolling restart) | Covered — this PR |

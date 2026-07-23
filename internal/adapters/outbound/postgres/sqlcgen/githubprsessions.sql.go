@@ -40,6 +40,31 @@ func (q *Queries) EnsureGitHubPRSessionRow(ctx context.Context, arg EnsureGitHub
 	return err
 }
 
+const getGitHubPRSessionBySessionID = `-- name: GetGitHubPRSessionBySessionID :one
+SELECT repo_full_name, pr_number, session_id, claimed_at FROM github_pr_sessions
+WHERE session_id = $1
+`
+
+// The REVERSE lookup Step 35 ("outbox delivery") needs: given a
+// session_id, which (repo_full_name, pr_number) PR does it back? Backed
+// by migrations/000032_github_pr_sessions_session_id_idx.up.sql's own new
+// index (this table had no session_id index before that Step, since Step
+// 32's own ingress path only ever needed the FORWARD direction, its own
+// primary key). A pgx.ErrNoRows result means this session was never
+// created via a GitHub PR mention -- the caller skips enqueuing a GitHub
+// notification entirely rather than fabricating one.
+func (q *Queries) GetGitHubPRSessionBySessionID(ctx context.Context, sessionID pgtype.UUID) (GithubPrSession, error) {
+	row := q.db.QueryRow(ctx, getGitHubPRSessionBySessionID, sessionID)
+	var i GithubPrSession
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.PrNumber,
+		&i.SessionID,
+		&i.ClaimedAt,
+	)
+	return i, err
+}
+
 const lockGitHubPRSessionForUpdate = `-- name: LockGitHubPRSessionForUpdate :one
 SELECT session_id FROM github_pr_sessions
 WHERE repo_full_name = $1 AND pr_number = $2

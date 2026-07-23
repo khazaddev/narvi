@@ -187,6 +187,27 @@ const (
 	gitHubBotHandleEnvVarName     = "NARVI_GITHUB_BOT_HANDLE"
 )
 
+// gitHubBotTokenEnvVarName configures Step 35's ("outbox delivery", §5.1)
+// own GitHub Notifier adapter (internal/adapters/outbound/githubapi's new
+// issue-comment-posting method) -- read from NARVI_GITHUB_BOT_TOKEN.
+// Required in every stage -- never defaulted, matching every other secret
+// this file already reads. Deliberately a SEPARATE credential from every
+// existing GitHub-flavored value in this struct: GitHubClientID/
+// GitHubClientSecret authenticate the OAuth APP a human signs into Narvi
+// through (§13.1); ports.SourceControl.CreatePR (githubapi.Adapter,
+// already-existing) authenticates PER-CALL with the SESSION CREATOR's own
+// decrypted OAuth access token (internal/adapters/outbound/postgres.
+// IdentityStore) -- but a webhook-originated (GitHub/Slack/Linear) session
+// has sessions.created_by left NULL (migrations/000004_sessions.up.sql),
+// so there is no logged-in Narvi user's own token to reuse for posting an
+// async turn-outcome comment back to a PR. GitHubBotToken is instead a
+// single, statically-configured bot/app credential (a real GitHub personal
+// access token or a GitHub App installation token, whichever the deploying
+// operator provisions), baked into the GitHub Notifier adapter once at
+// construction time (cmd/control-plane/main.go), never looked up per
+// session the way CreatePR's own spec.Token is.
+const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
+
 // tokenEncryptionKeyEnvVarName is the env var Load reads for the AES-256-GCM
 // key protecting provider tokens at rest (§13.1: "Provider tokens encrypted
 // at rest (AES-GCM), per-user"). Required in every stage; the raw value
@@ -455,6 +476,13 @@ type Config struct {
 	GitHubWebhookSecret string
 	GitHubBotHandle     string
 
+	// GitHubBotToken configures Step 35's ("outbox delivery", §5.1) own
+	// GitHub Notifier adapter, read from NARVI_GITHUB_BOT_TOKEN. Required
+	// in every stage -- never defaulted. See gitHubBotTokenEnvVarName's own
+	// doc comment above for why this is a distinct credential from every
+	// other GitHub-flavored value in this struct. Never logged.
+	GitHubBotToken string
+
 	// PublicBaseURL is this control plane's own externally-reachable base
 	// URL (e.g. "http://localhost:8080" in development, a real https://
 	// URL in production), read from NARVI_PUBLIC_BASE_URL. Required — used
@@ -635,6 +663,11 @@ func Load() (*Config, error) {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubBotHandleEnvVarName})
 	}
 
+	gitHubBotToken := os.Getenv(gitHubBotTokenEnvVarName)
+	if gitHubBotToken == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubBotTokenEnvVarName})
+	}
+
 	var tokenEncryptionKey []byte
 	rawTokenEncryptionKey := os.Getenv(tokenEncryptionKeyEnvVarName)
 	if rawTokenEncryptionKey == "" {
@@ -752,6 +785,7 @@ func Load() (*Config, error) {
 		GitHubClientSecret:     gitHubClientSecret,
 		GitHubWebhookSecret:    gitHubWebhookSecret,
 		GitHubBotHandle:        gitHubBotHandle,
+		GitHubBotToken:         gitHubBotToken,
 		PublicBaseURL:          publicBaseURL,
 		TokenEncryptionKey:     tokenEncryptionKey,
 		AllowedEmailDomains:    allowedEmailDomains,

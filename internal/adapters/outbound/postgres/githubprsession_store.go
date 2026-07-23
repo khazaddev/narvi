@@ -69,3 +69,11 @@ func (s *GitHubPRSessionStore) SetSessionID(ctx context.Context, repoFullName st
 		SessionID:    sessionID,
 	})
 }
+
+// GetBySessionID is the REVERSE lookup Step 35 ("outbox delivery") needs:
+// given a session_id, which (repoFullName, prNumber) PR does it back?
+// Returns pgx.ErrNoRows (unwrapped) when sessionID was never created via a
+// GitHub PR mention.
+func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.GithubPrSession, error) {
+	return s.q.GetGitHubPRSessionBySessionID(ctx, sessionID)
+}

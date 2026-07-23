@@ -800,6 +800,83 @@ type Timeouts struct {
 	// Slack's own ~3s "retry the webhook" outer expectation being made
 	// noticeably worse.
 	SlackAckTimeout time.Duration
+
+	// --- Step 35 standalone additions ("outbox delivery", §5.1): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior Step's standalone additions), so -- per those additions' own
+	// precedent -- plain fields with sensible defaults, not wired into a
+	// fake invariant link.
+
+	// OutboxPumpInterval is how often the process-wide background outbox
+	// delivery loop (internal/app/outboxworker, mirroring app/imagebuild's
+	// own ImageBuildPumpInterval-driven ticker shape) polls the outbox
+	// table for rows eligible to (re)attempt delivery now. Not specified in
+	// the plan; chosen as 5s -- deliberately much shorter than
+	// ImageBuildPumpInterval/ReconcilerInterval's own 60s: unlike a slow,
+	// expensive image build or a coarse reconciliation sweep, an outbox
+	// entry is a small, cheap notification a real user (in a Slack thread,
+	// a Linear session, a GitHub PR) is actively waiting to see, so this
+	// loop polls near-real-time, matching TimerPumpInterval's own identical
+	// "near-real-time delivery without hammering Postgres" reasoning.
+	OutboxPumpInterval time.Duration
+
+	// OutboxBackoffBase is domain/outbox.BackoffConfig.BaseDelay: the retry
+	// delay scheduled after an outbox entry's FIRST failed delivery
+	// attempt. Not specified in the plan; chosen as 30s -- see
+	// domain/outbox.EvaluateBackoff's own doc comment for the full
+	// schedule this produces alongside OutboxBackoffMax below, and
+	// domain/outbox.MaxAttempts's own doc comment for why this combination
+	// comfortably survives resilience scenario 9's own 10-minute outage
+	// (§9.3: "Slack API 500s for 10 min -> notification eventually
+	// delivered, no loss") without ever dead-lettering partway through it.
+	OutboxBackoffBase time.Duration
+
+	// OutboxBackoffMax is domain/outbox.BackoffConfig.MaxDelay: the ceiling
+	// the exponential schedule above plateaus at. Not specified in the
+	// plan; chosen as 5min -- deliberately shorter than ImageBuildBackoffMax's
+	// own 30min: a stuck image build can reasonably wait half an hour
+	// between retries with no one watching in real time, but an outbox
+	// entry backs a live notification a human is waiting on, so this
+	// plateaus much sooner.
+	OutboxBackoffMax time.Duration
+
+	// OutboxDeliveryTimeout bounds ONE outbound notifier call
+	// (ports.Notifier.Deliver, routed to whichever of the Slack/Linear/
+	// GitHub adapters owns the claimed row's own kind) during a single
+	// delivery attempt -- mirrors RepoSHAResolutionTimeout's own "a
+	// lightweight outbound call, bounded individually so one slow/hanging
+	// call can't stall the rest of the batch" reasoning exactly. Not
+	// specified in the plan; chosen as 15s -- more generous than
+	// RepoSHAResolutionTimeout/CredentialFetchTimeout's own 10s (a
+	// notification POST can occasionally be slower than a lightweight GET,
+	// e.g. Slack/Linear API tail latency), but still far short of
+	// OutboxBackoffBase so a single hung call never meaningfully delays the
+	// next pump tick's own batch.
+	OutboxDeliveryTimeout time.Duration
+
+	// OutboxClaimDuration protects a just-claimed outbox row from being
+	// re-selected by a concurrent/later pump tick (this pod's or another
+	// pod's own outboxworker.Builder) before THIS tick's own real delivery
+	// attempt has recorded an outcome -- mirrors TimerClaimDuration's own
+	// identical "push the due-again time forward by a protection window at
+	// claim time" mechanism exactly, needed here because the outbox table
+	// (unlike image_builds' own 'building' status) has no third, in-flight
+	// status distinct from pending/delivered/dead_letter to mark a row
+	// claimed with. ClaimOutboxEntry bumps next_attempt_at forward by this
+	// duration (and increments attempts) BEFORE the real notifier call ever
+	// runs; RecordOutboxEntryFailure/MarkOutboxEntryDeadLetter then
+	// overwrite that provisional value with the real domain/outbox.
+	// EvaluateBackoff decision once the attempt's real outcome is known.
+	// Self-healing exactly like TimerClaimDuration's own precedent: a pod
+	// that crashes mid-delivery simply leaves the row due again once this
+	// window elapses, picked up by a later tick with no separate sweep
+	// needed. Not specified in the plan; chosen as 30s, matching
+	// TimerClaimDuration's own value and reasoning ("comfortably longer than
+	// a single [attempt]'s expected processing time, short enough that a
+	// genuinely crashed pod's claimed row is retried reasonably quickly") --
+	// OutboxDeliveryTimeout (15s) above is this claim window's own
+	// worst-case real attempt duration, so 30s leaves meaningful margin.
+	OutboxClaimDuration time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -895,6 +972,12 @@ func DefaultTimeouts() Timeouts {
 		LinearOutboundActivityTimeout: 3 * time.Second,  // not specified; chosen, comfortably below Linear's own 5s webhook-response requirement
 
 		SlackAckTimeout: 10 * time.Second, // not specified; chosen, generous for a single Slack chat.postMessage POST, mirrors PRCreateTimeout's own reasoning
+
+		OutboxPumpInterval:    5 * time.Second,  // not specified; chosen, near-real-time delivery, matches TimerPumpInterval's own reasoning
+		OutboxBackoffBase:     30 * time.Second, // not specified; chosen -- see domain/outbox.EvaluateBackoff's own doc comment for the schedule this produces
+		OutboxBackoffMax:      5 * time.Minute,  // not specified; chosen, shorter than ImageBuildBackoffMax since a live notification is being waited on
+		OutboxDeliveryTimeout: 15 * time.Second, // not specified; chosen, generous for a single outbound notifier POST
+		OutboxClaimDuration:   30 * time.Second, // not specified; chosen, matches TimerClaimDuration's own value/reasoning
 	}
 }
 

@@ -1,0 +1,150 @@
+package slackapi
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/khazaddev/narvi/internal/app/ports"
+)
+
+// defaultAPIBaseURL is Slack's own real Web API base -- the ONLY place
+// this literal appears in this package; production wiring
+// (cmd/control-plane/main.go) passes it explicitly, mirroring
+// internal/adapters/outbound/githubapi's own defaultAPIBaseURL/apiBaseURL
+// constructor-parameter precedent exactly.
+const defaultAPIBaseURL = "https://slack.com/api"
+
+// maxResponseBodySize bounds how much of Slack's own chat.postMessage
+// response body this client ever reads -- mirrors githubapi's own
+// maxResponseBodySize/internal/adapters/inbound/slack's own
+// maxAckResponseBodySize precedent exactly.
+const maxResponseBodySize = 1 << 20 // 1 MiB
+
+// Payload is the JSON shape this package expects to find in an outbox
+// entry's own payload column for a ports.NotificationKindSlack row --
+// enqueued by internal/app/sessionactor at turn-completion time (channel
+// ID + thread timestamp from the session's own reverse-looked-up
+// slack_thread_sessions row) with a short, human-readable outcome
+// message.
+type Payload struct {
+	ChannelID string `json:"channel_id"`
+	ThreadTS  string `json:"thread_ts"`
+	Text      string `json:"text"`
+}
+
+// Client implements ports.Notifier against Slack's real chat.postMessage
+// Web API endpoint.
+type Client struct {
+	httpClient *http.Client
+	apiBaseURL string
+	botToken   string
+}
+
+// var _ ports.Notifier = (*Client)(nil) makes a Notifier signature drift a
+// build error, not a runtime surprise.
+var _ ports.Notifier = (*Client)(nil)
+
+// New builds a Client. httpClient defaults to http.DefaultClient when nil
+// (each Deliver call is bounded by its own caller-supplied context
+// deadline, platform.Timeouts.OutboxDeliveryTimeout, not a package-level
+// http.Client.Timeout); apiBaseURL defaults to defaultAPIBaseURL when
+// empty -- production wiring should still pass it explicitly, mirroring
+// githubapi.New/linearapi.New's own identical precedent.
+func New(httpClient *http.Client, apiBaseURL, botToken string) *Client {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	if apiBaseURL == "" {
+		apiBaseURL = defaultAPIBaseURL
+	}
+	return &Client{
+		httpClient: httpClient,
+		apiBaseURL: strings.TrimSuffix(apiBaseURL, "/"),
+		botToken:   botToken,
+	}
+}
+
+// postMessageRequest is the subset of Slack's real chat.postMessage
+// request body this client needs -- mirrors internal/adapters/inbound/
+// slack/ack.go's own postMessageRequest shape exactly (a deliberate, small
+// duplication -- see this package's own doc.go).
+type postMessageRequest struct {
+	Channel  string `json:"channel"`
+	ThreadTS string `json:"thread_ts"`
+	Text     string `json:"text"`
+}
+
+// postMessageResponse is Slack Web API's own universal response envelope
+// -- every method responds HTTP 200 even on an API-level failure, with
+// "ok": false and an "error" code naming what went wrong.
+type postMessageResponse struct {
+	Ok    bool   `json:"ok"`
+	Error string `json:"error"`
+}
+
+// DeliveryError is returned by Deliver for a non-ok Slack API response --
+// a plain, structured error mirroring githubapi.CreatePRError/APIError's
+// own precedent (no transient/permanent classification: outboxworker's
+// own domain/outbox.EvaluateBackoff decision is driven by attempt count
+// alone, not by inspecting this error's own shape).
+type DeliveryError struct {
+	SlackError string
+}
+
+func (e *DeliveryError) Error() string {
+	return fmt.Sprintf("slackapi: chat.postMessage failed: %s", e.SlackError)
+}
+
+// Deliver implements ports.Notifier: decodes n.Payload as Payload and
+// posts it via a real chat.postMessage call, authenticated with this
+// Client's own bot token (Authorization: Bearer). n.Kind is not checked --
+// this Client is only ever asked to Deliver ports.NotificationKindSlack
+// rows in practice (the delivery worker's own kind->Notifier routing is
+// what guarantees that; see ports.Notifier's own doc comment).
+func (c *Client) Deliver(ctx context.Context, n ports.Notification) error {
+	var payload Payload
+	if err := json.Unmarshal(n.Payload, &payload); err != nil {
+		return fmt.Errorf("slackapi: decode payload: %w", err)
+	}
+
+	reqBody, err := json.Marshal(postMessageRequest{
+		Channel:  payload.ChannelID,
+		ThreadTS: payload.ThreadTS,
+		Text:     payload.Text,
+	})
+	if err != nil {
+		return fmt.Errorf("slackapi: encode chat.postMessage request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiBaseURL+"/chat.postMessage", bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("slackapi: build chat.postMessage request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("slackapi: chat.postMessage request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
+	if err != nil {
+		return fmt.Errorf("slackapi: read chat.postMessage response: %w", err)
+	}
+
+	var parsed postMessageResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return fmt.Errorf("slackapi: decode chat.postMessage response: %w", err)
+	}
+	if !parsed.Ok {
+		return &DeliveryError{SlackError: parsed.Error}
+	}
+	return nil
+}

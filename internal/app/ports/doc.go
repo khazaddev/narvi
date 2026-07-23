@@ -41,7 +41,18 @@
 // internal/adapters/outbound/gitlabapi remains an untouched stub for a
 // future Step).
 //
-// The remaining §4.3 ports — Notifier, IntentClassifier, LLM, BlobStore,
+// Notifier (notifier.go) is the FIFTH port, added at Step 35 ("outbox
+// delivery", §5.1/§5.4): a single Deliver(ctx, Notification) method,
+// implemented by THREE real adapters (internal/adapters/outbound/
+// slackapi, linearapi, githubapi) -- see notifier.go's own doc comment for
+// why one interface with three implementations is the right shape here,
+// even though (unlike SandboxProvider/SourceControl, where two adapters
+// genuinely implement the same operation against different providers)
+// each of these three is only ever asked to Deliver its own matching
+// NotificationKind in practice, by internal/app/outboxworker's own
+// kind->Notifier routing.
+//
+// The remaining §4.3 ports — IntentClassifier, LLM, BlobStore,
 // SessionStore/TurnStore/SandboxStore, Outbox, TimerScheduler, Clock — are
 // out of scope for this Step and land in their own later Steps, each
 // adding its own interface file here without touching any existing one.
