@@ -144,4 +144,31 @@
 //     postgres.WebhookDeliveryStore.Claim: the atomic
 //     INSERT ... ON CONFLICT dedupe/coalescing claim §5.1 calls for,
 //     keyed on (provider, delivery_id).
+//
+// # Step 32 ("GitHub ingress") update
+//
+// The real webhook handler lives in its own package,
+// internal/adapters/inbound/github (mounted at POST /webhooks/github,
+// cmd/control-plane/main.go) -- NOT inside this package, since it is a
+// genuinely separate protocol adapter (signature verification, GitHub's
+// own event/payload shapes, per-PR coalescing), not one more browser/REST
+// route family. Since createSessionCore stays unexported (Step 31's own
+// doc comment above), that package cannot call it directly -- bot.go adds
+// two small EXPORTED wrappers instead: CreateSessionForBot (forwards to
+// createSessionCore with a NULL creator) and CreateTurnForBot (mirrors
+// CreateTurn's own lock-then-insert-then-dispatch sequencing, minus its
+// REST-specific hasOpenTurn 409 gate -- see bot.go's own doc comment for
+// why that gate doesn't apply to a bot-ingress caller enqueuing a
+// coalesced backlog of turns on one shared session).
+//
+// github's own per-PR coalescing (coalesce.go, that package) uses
+// CreateTurnForBot directly for its REUSE branch, but deliberately does
+// NOT call CreateSessionForBot for its WINNER branch -- that branch holds
+// a claim-row lock open on its own transaction for the whole decision,
+// and calling CreateSessionForBot there (which opens a SECOND, separate
+// transaction from the same pool) would risk exhausting the connection
+// pool under enough concurrent same-PR mentions. CreateSessionForBot
+// itself is untouched and still fully tested (bot_integration_test.go) as
+// a general-purpose, no-coalescing bot-session entry point for a caller
+// that isn't simultaneously holding a transaction open of its own.
 package httpapi
