@@ -134,11 +134,12 @@ func newTestRig(t *testing.T) testRig {
 	}
 
 	coalescer := &githubingress.SessionCoalescer{
-		Pool:       pool,
-		PRSessions: narvipg.NewGitHubPRSessionStore(pool),
-		Sessions:   narvipg.NewSessionStore(pool),
-		Turns:      rig.turns,
-		Registry:   registry,
+		Pool:         pool,
+		PRSessions:   narvipg.NewGitHubPRSessionStore(pool),
+		Sessions:     narvipg.NewSessionStore(pool),
+		Turns:        rig.turns,
+		Environments: narvipg.NewEnvironmentStore(pool),
+		Registry:     registry,
 	}
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 

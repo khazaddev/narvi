@@ -84,24 +84,24 @@
 // Whichever caller observes session_id still NULL under that lock is the
 // genuine first mention on this PR (the WINNER): it creates the session
 // AND its initial turn INLINE, on the exact SAME transaction/connection
-// that already holds the claim row lock (coalesce.go's own
-// sessionAndTurnOnTx -- a small, deliberately trimmed subset of
-// createSessionCore's own logic, NOT a call to httpapi.
-// CreateSessionForBot -- see CreateOrJoin's own "connection-pool safety"
-// doc comment in coalesce.go for exactly why a second, simultaneous pool
-// connection there would be a genuine deadlock risk under enough
-// concurrent same-PR mentions), then fills the claim row's session_id in
-// and commits, releasing the lock. Every other (concurrent or later)
-// caller observes a non-NULL session_id under that SAME lock, commits
-// immediately (releasing its own connection), and only THEN -- with no
-// transaction of its own left open -- enqueues a new turn on the EXISTING
-// session via httpapi.CreateTurnForBot. Reuse, never a duplicate session,
-// and never more than one live connection per request in either branch.
+// that already holds the claim row lock, via the shared
+// httpapi.CreateSessionOnTx (internal/adapters/inbound/httpapi/create.go)
+// -- NOT a call to httpapi.CreateSessionForBot -- see CreateOrJoin's own
+// "connection-pool safety" doc comment in coalesce.go for exactly why a
+// second, simultaneous pool connection there would be a genuine deadlock
+// risk under enough concurrent same-PR mentions), then fills the claim
+// row's session_id in and commits, releasing the lock. Every other
+// (concurrent or later) caller observes a non-NULL session_id under that
+// SAME lock, commits immediately (releasing its own connection), and only
+// THEN -- with no transaction of its own left open -- enqueues a new turn
+// on the EXISTING session via httpapi.CreateTurnForBot. Reuse, never a
+// duplicate session, and never more than one live connection per request
+// in either branch.
 //
 // A LOSING caller therefore never creates a session row at all (zero
 // wasted Postgres writes, zero wasted actor-spawn/dispatch side effects).
 // A crash on the WINNING path is likewise not a source of duplicate
-// sessions: sessionAndTurnOnTx's own session+turn inserts, SetSessionID,
+// sessions: CreateSessionOnTx's own session+turn inserts, SetSessionID,
 // and the final commit are all part of the exact SAME transaction, so
 // either all of it lands atomically or none of it does -- a crash before
 // commit rolls everything back cleanly, including the claim row itself,

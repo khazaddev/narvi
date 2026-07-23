@@ -2,10 +2,9 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
@@ -13,7 +12,6 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -21,16 +19,21 @@ import (
 // small struct rather than a long positional-parameter list, constructed
 // once at wiring time (cmd/control-plane/main.go), mirroring this
 // codebase's own construct-once-thread-through convention for every other
-// store/registry pair. No *postgres.EnvironmentStore here on purpose: a
-// GitHub-sourced restdtos.CreateSessionRequest never sets PathScope or
-// MockConfig (handler.go never populates either), so sessionAndTurnOnTx's
-// own trimmed session-creation logic below never needs one.
+// store/registry pair. Environments is only here because
+// httpapi.CreateSessionOnTx's own signature requires a
+// *postgres.EnvironmentStore argument -- a GitHub-sourced
+// restdtos.CreateSessionRequest never sets PathScope or MockConfig
+// (handler.go never populates either), so the CreateSessionOnTx call below
+// never actually exercises the environment-insert branch for any request
+// this package ever hands it; Environments is simply threaded through
+// unused on this path.
 type SessionCoalescer struct {
-	Pool       *pgxpool.Pool
-	PRSessions *postgres.GitHubPRSessionStore
-	Sessions   *postgres.SessionStore
-	Turns      *postgres.TurnStore
-	Registry   *sessionactor.Registry
+	Pool         *pgxpool.Pool
+	PRSessions   *postgres.GitHubPRSessionStore
+	Sessions     *postgres.SessionStore
+	Turns        *postgres.TurnStore
+	Environments *postgres.EnvironmentStore
+	Registry     *sessionactor.Registry
 }
 
 // CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
@@ -64,19 +67,20 @@ type SessionCoalescer struct {
 // concurrency), so it is the wrong assumption to lean on "the pool
 // probably has enough spare capacity".
 //
-// The fix: the winner path below creates the session AND its turn using
-// sessionAndTurnOnTx, INLINE on the SAME tx/connection the claim lock
-// already holds -- never a second connection. sessionAndTurnOnTx
-// deliberately duplicates only the small subset of createSessionCore's
-// own logic (internal/adapters/inbound/httpapi/create.go) that a
-// GitHub-sourced request ever actually exercises (repo validation +
-// session insert + turn insert) -- a GitHub mention never sets
-// pathScope/mockConfig, so environment creation is simply never part of
-// this path's own behavior to replicate. httpapi.CreateSessionForBot
-// itself is untouched and still exported/tested (bot.go) as a
-// general-purpose, no-coalescing entry point for a caller that is NOT
-// simultaneously holding a claim-row lock (e.g. a future Slack/Linear
-// ingress path with no per-thread coalescing of its own).
+// The fix: the winner path below calls httpapi.CreateSessionOnTx directly,
+// INLINE on the SAME tx/connection the claim lock already holds -- never a
+// second connection. CreateSessionOnTx is the shared, exported piece of
+// CreateSessionCore's own logic (internal/adapters/inbound/httpapi/
+// create.go) that takes an ALREADY-OPEN transaction the caller owns
+// entirely, built for exactly this "already holding an unrelated lock on
+// my own open transaction" shape -- so this package no longer needs to
+// hand-duplicate any repo-validation/session-insert/turn-insert logic of
+// its own to get the same never-a-second-connection guarantee.
+// httpapi.CreateSessionForBot itself is untouched and still
+// exported/tested (bot.go) as a general-purpose, no-coalescing entry
+// point for a caller that is NOT simultaneously holding a claim-row lock
+// (e.g. a future Slack/Linear ingress path with no per-thread coalescing
+// of its own).
 //
 // The REUSE (loser) path below has no such risk: it commits tx BEFORE
 // calling httpapi.CreateTurnForBot, so only ever one connection is open
@@ -147,12 +151,44 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 
 	// Winner case: still holding the claim row lock (this transaction is
 	// uncommitted) -- create the session AND its turn INLINE, on this
-	// SAME tx/connection (see this function's own "connection-pool
-	// safety" doc comment above for why NOT httpapi.CreateSessionForBot
-	// here).
-	created, createdTurn, err := sessionAndTurnOnTx(ctx, tx, c.Sessions, c.Turns, req)
-	if err != nil {
-		return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create session: %w", err)
+	// SAME tx/connection, via the shared httpapi.CreateSessionOnTx (see
+	// this function's own "connection-pool safety" doc comment above for
+	// why NOT httpapi.CreateSessionForBot here). createdBy is left at its
+	// pgtype.UUID zero value (Valid == false, a genuine SQL NULL) --
+	// every bot/automation-created session has no direct human creator,
+	// exactly CreateSessionOnTx's own documented convention for a nil
+	// creator.
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, req, pgtype.UUID{})
+	if cerr != nil {
+		return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create session: %w", cerr)
+	}
+
+	// A GitHub mention always carries a real comment body -- handler.go
+	// always populates req.Prompt -- so hasPrompt is always true on this
+	// path in practice; CreateSessionOnTx doesn't hand the inserted turn
+	// row back directly, so it's fetched here, still INSIDE this same
+	// uncommitted tx (WithTx(tx), not a fresh pool connection) and still
+	// holding the claim-row lock -- the only turn that can possibly exist
+	// for this brand-new session.ID at this point is the one
+	// CreateSessionOnTx just inserted; no concurrent caller can have
+	// enqueued a turn of its own onto this session yet, since SetSessionID
+	// below (which is what makes this session visible to a concurrent
+	// REUSE-path caller at all) hasn't even run yet, let alone committed.
+	// Fetching this AFTER commit instead would be a genuine race: a
+	// concurrent loser could observe the just-committed session_id and
+	// enqueue its own turn before this function's own ListForSession call
+	// ran, breaking the "exactly one turn" assumption below under real
+	// concurrent load.
+	var createdTurn sqlcgen.Turn
+	if hasPrompt {
+		turnRows, err := c.Turns.WithTx(tx).ListForSession(ctx, created.ID)
+		if err != nil {
+			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: list turns for new session: %w", err)
+		}
+		if len(turnRows) != 1 {
+			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: expected exactly one turn for new session, got %d", len(turnRows))
+		}
+		createdTurn = turnRows[0]
 	}
 
 	if err := txPRSessions.SetSessionID(ctx, repoFullName, prNumber, created.ID); err != nil {
@@ -163,92 +199,16 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	}
 	committed = true
 
-	// Fire-and-forget, OUTSIDE the transaction above -- mirrors
-	// createSessionCore/CreateTurnForBot's own identical post-commit
-	// sequencing (see either's own doc comment for why this never blocks
-	// on how long the resulting spawn/dispatch decision takes).
-	actor, spawnErr := c.Registry.GetOrSpawn(ctx, created.ID)
-	if spawnErr != nil {
-		logger.Warn("github: GetOrSpawn after session create failed", "error", spawnErr)
-	} else if sendErr := actor.Send(ctx, sessionactor.EnsureDispatched{}); sendErr != nil {
-		logger.Warn("github: send EnsureDispatched after session create failed", "error", sendErr)
+	// Fire-and-forget, OUTSIDE the transaction above, and ONLY if a
+	// prompt/turn was actually created -- mirrors every other
+	// CreateSessionOnTx caller's own post-commit TriggerDispatch
+	// sequencing (create.go's own CreateSessionCore does the same,
+	// gated on the same hasPrompt CreateSessionOnTx returned).
+	if hasPrompt {
+		httpapi.TriggerDispatch(ctx, c.Registry, created.ID)
 	}
 
 	logger.Info("github: created new review session for mention",
 		"session_id", created.ID, "turn_id", createdTurn.ID, "repo", repoFullName, "pr_number", prNumber)
 	return created, createdTurn, true, nil
-}
-
-// sessionAndTurnOnTx creates a session and its (always-present, for a
-// real mention) initial turn on tx -- a deliberately trimmed-down subset
-// of createSessionCore's own logic (internal/adapters/inbound/httpapi/
-// create.go), duplicated here (rather than called through
-// httpapi.CreateSessionForBot) so CreateOrJoin's own winner path never
-// needs a second, simultaneous pool connection -- see CreateOrJoin's own
-// doc comment for the full reasoning. Safe to trim: a GitHub-sourced
-// restdtos.CreateSessionRequest never sets PathScope or MockConfig (this
-// package's own handler.go never populates either), so the environment-
-// creation branch createSessionCore's own fuller logic has is simply
-// never reachable behavior for any request this function is ever called
-// with -- there is no hidden divergence for the cases this path actually
-// serves.
-func sessionAndTurnOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, req restdtos.CreateSessionRequest) (sqlcgen.Session, sqlcgen.Turn, error) {
-	if len(req.Repos) < 1 {
-		return sqlcgen.Session{}, sqlcgen.Turn{}, fmt.Errorf("repos must be non-empty")
-	}
-
-	// Validate every repo's Name/Url/Branch BEFORE the insert -- the SAME
-	// trust-boundary precedent createSessionCore's own doc comment
-	// establishes (create.go), stopping at the first failure.
-	for i, repo := range req.Repos {
-		if err := reposource.ValidateRepoName(repo.Name); err != nil {
-			return sqlcgen.Session{}, sqlcgen.Turn{}, fmt.Errorf("repos[%d].name: %w", i, err)
-		}
-		if err := reposource.ValidateRepoURL(repo.Url); err != nil {
-			return sqlcgen.Session{}, sqlcgen.Turn{}, fmt.Errorf("repos[%d].url: %w", i, err)
-		}
-		if repo.Branch != nil {
-			if err := reposource.ValidateBranch(*repo.Branch); err != nil {
-				return sqlcgen.Session{}, sqlcgen.Turn{}, fmt.Errorf("repos[%d].branch: %w", i, err)
-			}
-		}
-	}
-
-	reposJSON, err := json.Marshal(req.Repos)
-	if err != nil {
-		return sqlcgen.Session{}, sqlcgen.Turn{}, fmt.Errorf("marshal repos: %w", err)
-	}
-
-	created, err := sessions.WithTx(tx).Create(ctx, sqlcgen.CreateSessionParams{
-		Title:       (*string)(req.Title),
-		SpawnSource: sqlcgen.SessionSpawnSourceGithub,
-		// CreatedBy left at its pgtype.UUID zero value -- Valid == false,
-		// a genuine SQL NULL -- every bot/automation-created session has
-		// no direct human creator, exactly createSessionCore's own
-		// identical convention for a nil creator.
-		Repos: reposJSON,
-	})
-	if err != nil {
-		return sqlcgen.Session{}, sqlcgen.Turn{}, fmt.Errorf("create session: %w", err)
-	}
-
-	// A GitHub mention always carries a real comment body -- handler.go
-	// always populates req.Prompt -- so a turn is unconditionally created,
-	// unlike createSessionCore's own conditional hasPrompt branch.
-	var prompt string
-	if req.Prompt != nil {
-		prompt = *req.Prompt
-	}
-	createdTurn, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-		SessionID: created.ID,
-		Status:    sqlcgen.TurnStatusPending,
-		Prompt:    &prompt,
-		ModelID:   (*string)(req.ModelId),
-		PlanMode:  req.PlanMode,
-	})
-	if err != nil {
-		return sqlcgen.Session{}, sqlcgen.Turn{}, fmt.Errorf("create turn: %w", err)
-	}
-
-	return created, createdTurn, nil
 }

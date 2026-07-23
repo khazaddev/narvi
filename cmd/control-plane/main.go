@@ -266,11 +266,12 @@ func serve() error {
 	// sequencing.
 	router.Post("/webhooks/github", githubingress.NewHandler(
 		&githubingress.SessionCoalescer{
-			Pool:       pool,
-			PRSessions: githubPRSessionStore,
-			Sessions:   sessionStore,
-			Turns:      turnStore,
-			Registry:   registry,
+			Pool:         pool,
+			PRSessions:   githubPRSessionStore,
+			Sessions:     sessionStore,
+			Turns:        turnStore,
+			Environments: environmentStore,
+			Registry:     registry,
 		},
 		webhookDeliveryStore,
 		githubingress.Config{
