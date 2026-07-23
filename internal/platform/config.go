@@ -284,6 +284,57 @@ const openCodeRuntimeVersionEnvVarName = "NARVI_OPENCODE_RUNTIME_VERSION"
 // this equality is not mechanically guaranteed to survive.
 const defaultOpenCodeRuntimeVersion = "1.17.15"
 
+// linearWebhookSecretEnvVarName, linearOAuthClientIDEnvVarName, and
+// linearOAuthClientSecretEnvVarName are the env vars Load reads for Step
+// 34's ("Linear ingress", §8.10) Linear wiring. All three are required in
+// every stage — never defaulted, matching every other "never a baked-in
+// default" secret this file already reads.
+//
+// linearWebhookSecretEnvVarName is deliberately a SEPARATE secret from
+// hmacWebhookSecretEnvVarName above: that one backs platform.Sign/Verify's
+// own internal "{timestamp}.{signature}" bearer format (see
+// internal/platform/webhooksig.go's own doc comment), never a real
+// provider's webhook signature. This one is Linear's own real webhook
+// signing secret ("You can find the signing secret on the webhook's
+// detail page" — confirmed against Linear's real, current developer docs
+// during this Step's investigation), verified via
+// platform.VerifyWebhookSignature against Linear's own real scheme: a
+// hex-encoded HMAC-SHA256 of the raw request body, presented in the
+// Linear-Signature header — no "sha256="-style prefix, unlike GitHub's.
+//
+// linearOAuthClientIDEnvVarName/linearOAuthClientSecretEnvVarName are a
+// SEPARATE OAuth application from GitHubClientID/GitHubClientSecret above:
+// that one is a human signing into Narvi's own web UI (§13.1); this one
+// authorizes a Linear WORKSPACE installation (Linear's own OAuth2 flow,
+// with the `actor=app` authorization-url parameter that "switches to an
+// app installation" at workspace scope) so the control plane can call
+// Linear's own API on that workspace's behalf — never a second way for a
+// human to log into Narvi itself.
+const (
+	linearWebhookSecretEnvVarName     = "NARVI_LINEAR_WEBHOOK_SECRET"
+	linearOAuthClientIDEnvVarName     = "NARVI_LINEAR_CLIENT_ID"
+	linearOAuthClientSecretEnvVarName = "NARVI_LINEAR_CLIENT_SECRET"
+)
+
+// linearDefaultRepoNameEnvVarName and linearDefaultRepoURLEnvVarName name
+// the single repo a Linear-originated session's Repos field is populated
+// with (both required, no default). Scope note (Step 34): Linear's own
+// AgentSessionEvent webhook payload carries no repository information at
+// all (confirmed against Linear's real schema during this Step's
+// investigation — an agent is expected to either already know its own
+// candidate repos, via the SEPARATE issueRepositorySuggestions API, or be
+// told out of band), and every CreateSessionRequest requires a non-empty
+// Repos list (contracts/rest/v1/dtos.schema.json) regardless of ingress
+// surface. §14/§8.4's own per-workspace/per-team repo mapping (Automations
+// config) does not exist yet — building it is out of this Step's scope.
+// Until that lands, every Linear-originated session targets this ONE
+// operator-configured repo; a future Step naturally replaces this with a
+// real per-team/per-workspace mapping once Automations config exists.
+const (
+	linearDefaultRepoNameEnvVarName = "NARVI_LINEAR_DEFAULT_REPO_NAME"
+	linearDefaultRepoURLEnvVarName  = "NARVI_LINEAR_DEFAULT_REPO_URL"
+)
+
 // slackSigningSecretEnvVarName and slackBotTokenEnvVarName configure Step
 // 33's ("Slack ingress", §8.10) real Slack Events API adapter
 // (internal/adapters/inbound/slack). Deliberately NOT HMACWebhookSecret --
@@ -463,6 +514,24 @@ type Config struct {
 	// separate pin).
 	OpenCodeRuntimeVersion string
 
+	// LinearWebhookSecret, LinearOAuthClientID, and LinearOAuthClientSecret
+	// are Step 34's ("Linear ingress", §8.10) own Linear wiring, read from
+	// NARVI_LINEAR_WEBHOOK_SECRET / NARVI_LINEAR_CLIENT_ID /
+	// NARVI_LINEAR_CLIENT_SECRET respectively — see those env var names'
+	// own doc comments above for why each is a separate secret from its
+	// same-shaped-sounding GitHub/HMAC counterpart. All three required in
+	// every stage — never defaulted.
+	LinearWebhookSecret     string
+	LinearOAuthClientID     string
+	LinearOAuthClientSecret string
+
+	// LinearDefaultRepoName and LinearDefaultRepoURL are the single repo
+	// every Linear-originated session's Repos field is populated with —
+	// see linearDefaultRepoNameEnvVarName's own doc comment for the scope
+	// note this stopgap exists under. Both required, no default.
+	LinearDefaultRepoName string
+	LinearDefaultRepoURL  string
+
 	// SlackSigningSecret and SlackBotToken configure Step 33's ("Slack
 	// ingress") real Slack Events API adapter, read from
 	// NARVI_SLACK_SIGNING_SECRET / NARVI_SLACK_BOT_TOKEN. Both required in
@@ -612,6 +681,31 @@ func Load() (*Config, error) {
 		openCodeRuntimeVersion = defaultOpenCodeRuntimeVersion
 	}
 
+	linearWebhookSecret := os.Getenv(linearWebhookSecretEnvVarName)
+	if linearWebhookSecret == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: linearWebhookSecretEnvVarName})
+	}
+
+	linearOAuthClientID := os.Getenv(linearOAuthClientIDEnvVarName)
+	if linearOAuthClientID == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: linearOAuthClientIDEnvVarName})
+	}
+
+	linearOAuthClientSecret := os.Getenv(linearOAuthClientSecretEnvVarName)
+	if linearOAuthClientSecret == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: linearOAuthClientSecretEnvVarName})
+	}
+
+	linearDefaultRepoName := os.Getenv(linearDefaultRepoNameEnvVarName)
+	if linearDefaultRepoName == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: linearDefaultRepoNameEnvVarName})
+	}
+
+	linearDefaultRepoURL := os.Getenv(linearDefaultRepoURLEnvVarName)
+	if linearDefaultRepoURL == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: linearDefaultRepoURLEnvVarName})
+	}
+
 	slackSigningSecret := os.Getenv(slackSigningSecretEnvVarName)
 	if slackSigningSecret == "" {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: slackSigningSecretEnvVarName})
@@ -668,9 +762,16 @@ func Load() (*Config, error) {
 		ModalAuthToken:         modalAuthToken,
 		ModalEgressProxyURL:    modalEgressProxyURL,
 		OpenCodeRuntimeVersion: openCodeRuntimeVersion,
-		SlackSigningSecret:     slackSigningSecret,
-		SlackBotToken:          slackBotToken,
-		SlackDefaultRepoName:   slackDefaultRepoName,
-		SlackDefaultRepoURL:    slackDefaultRepoURL,
+
+		LinearWebhookSecret:     linearWebhookSecret,
+		LinearOAuthClientID:     linearOAuthClientID,
+		LinearOAuthClientSecret: linearOAuthClientSecret,
+		LinearDefaultRepoName:   linearDefaultRepoName,
+		LinearDefaultRepoURL:    linearDefaultRepoURL,
+
+		SlackSigningSecret:   slackSigningSecret,
+		SlackBotToken:        slackBotToken,
+		SlackDefaultRepoName: slackDefaultRepoName,
+		SlackDefaultRepoURL:  slackDefaultRepoURL,
 	}, nil
 }

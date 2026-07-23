@@ -30,9 +30,11 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
 	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
+	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
@@ -49,6 +51,14 @@ import (
 // GitHub's API — this constant is the ONLY place the real
 // "https://api.github.com" literal appears in this binary's wiring.
 const githubAPIBaseURL = "https://api.github.com"
+
+// linearAPIBaseURL is Linear's own real API base (its GraphQL endpoint and
+// OAuth2 token endpoint both live under this host), passed to
+// linearapi.New's own apiBaseURL parameter in production wiring -- the
+// ONLY place this literal appears in this binary's wiring, mirroring
+// githubAPIBaseURL's own identical precedent immediately above (Step 34,
+// "Linear ingress", §8.10).
+const linearAPIBaseURL = "https://api.linear.app"
 
 // slackAPIBaseURL is Slack's own real Web API base, passed to
 // slack.Deps.SlackAPIBaseURL in production wiring (Step 33, "Slack
@@ -186,12 +196,13 @@ func serve() error {
 	imageBuildStore := postgres.NewImageBuildStore(pool)
 
 	// webhookDeliveryStore is Step 31's own provider-agnostic dedupe claim,
-	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress.
-	// slackThreadSessionStore (Step 33, "Slack ingress", §8.10) is the
-	// thread<->session mapping (see internal/adapters/inbound/slack's own
-	// doc.go); githubPRSessionStore (Step 32, "GitHub ingress", §8.2) is the
-	// per-PR review-session coalescing claim (see
-	// internal/adapters/inbound/github's own doc.go).
+	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress (see
+	// the Linear ingress block below, which reuses this SAME store rather
+	// than constructing its own). slackThreadSessionStore (Step 33, "Slack
+	// ingress", §8.10) is the thread<->session mapping (see
+	// internal/adapters/inbound/slack's own doc.go); githubPRSessionStore
+	// (Step 32, "GitHub ingress", §8.2) is the per-PR review-session
+	// coalescing claim (see internal/adapters/inbound/github's own doc.go).
 	webhookDeliveryStore := postgres.NewWebhookDeliveryStore(pool)
 	slackThreadSessionStore := postgres.NewSlackThreadSessionStore(pool)
 	githubPRSessionStore := postgres.NewGitHubPRSessionStore(pool)
@@ -358,6 +369,51 @@ func serve() error {
 		// one is already in flight. See httpapi/turn.go's own doc comment.
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, registry))
 	})
+
+	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see
+	// internal/adapters/inbound/linear's own doc.go for the full design.
+	// Kept as one self-contained block, separate from the auth/REST
+	// sections above, to keep this Step's own diff to this shared file
+	// minimal (Steps 32/33's own GitHub/Slack ingress land their own
+	// analogous blocks here independently, in separate worktrees).
+	linearOAuthConfig := linear.NewOAuthConfig(*cfg)
+	linearClient := linearapi.New(nil, linearAPIBaseURL)
+	linearAgentSessionStore := postgres.NewLinearAgentSessionStore(pool)
+	linearInstallationStore := postgres.NewLinearInstallationStore(pool)
+
+	// /auth/linear/install + /auth/linear/callback: the workspace OAuth
+	// connection flow (§8.10's own "OAuth" scope) -- mounted behind
+	// auth.Middleware (a signed-in Narvi user must initiate/complete a
+	// workspace connection; see internal/adapters/inbound/linear's own
+	// doc.go for why role-gating this to admins specifically is left to
+	// Step 39).
+	router.Route("/auth/linear", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/install", linear.NewInstallHandler(linearOAuthConfig, cfg.Timeouts, secureCookies))
+		r.Get("/callback", linear.NewInstallCallbackHandler(linearOAuthConfig, linearClient, linearInstallationStore, cfg.TokenEncryptionKey, secureCookies))
+	})
+
+	// /webhooks/linear: Linear's own real AgentSessionEvent webhook --
+	// deliberately mounted OUTSIDE auth.Middleware entirely, mirroring
+	// scm-credentials/snapshot-mint's own precedent above exactly: this
+	// is authenticated by Linear's own webhook signature (verified inside
+	// the handler itself), never a browser cookie.
+	router.Post("/webhooks/linear", linear.NewWebhookHandler(linear.Deps{
+		Pool:               pool,
+		Sessions:           sessionStore,
+		Turns:              turnStore,
+		Environments:       environmentStore,
+		Registry:           registry,
+		Deliveries:         webhookDeliveryStore,
+		AgentSessions:      linearAgentSessionStore,
+		Installations:      linearInstallationStore,
+		LinearClient:       linearClient,
+		WebhookSecret:      []byte(cfg.LinearWebhookSecret),
+		TokenEncryptionKey: cfg.TokenEncryptionKey,
+		DefaultRepoName:    cfg.LinearDefaultRepoName,
+		DefaultRepoURL:     cfg.LinearDefaultRepoURL,
+		Timeouts:           cfg.Timeouts,
+	}))
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,

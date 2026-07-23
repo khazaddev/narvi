@@ -1,7 +1,5 @@
 //go:build integration
 
-// Integration tests for CreateSessionCore, CreateSessionOnTx, and
-// TriggerDispatch (Step 31's "webhook toolkit" extraction, later exported
 // -- Step 33, "Slack ingress" -- and split for tx support) --
 // deliberately in package httpapi (not httpapi_test, unlike this
 // package's other integration tests): even though CreateSessionCore/
