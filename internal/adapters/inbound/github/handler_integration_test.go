@@ -300,6 +300,60 @@ func TestGitHubIntegration_DedupeSameDeliveryNotDoubleProcessed(t *testing.T) {
 	}
 }
 
+// TestGitHubIntegration_FailedFirstAttemptReleasesClaimForRedelivery
+// proves the delivery-dedupe claim does NOT permanently poison a
+// (provider, delivery_id) when the first attempt fails AFTER the claim
+// succeeds but BEFORE the mention is actually processed (payload parse
+// error here; a transient DB error downstream of the claim is the same
+// code path) -- GitHub always redelivers on a non-2xx response, so the
+// SAME delivery id must be reprocessable, not silently swallowed as an
+// "already claimed" duplicate forever.
+func TestGitHubIntegration_FailedFirstAttemptReleasesClaimForRedelivery(t *testing.T) {
+	ctx := context.Background()
+	rig := newTestRig(t)
+
+	const deliveryID = "delivery-retry-after-failure-1"
+
+	// First attempt: correctly signed, but the body is not valid JSON --
+	// parseMention fails after the claim already succeeded.
+	malformedBody := []byte("not valid json")
+	first := postWebhook(t, rig, malformedBody, deliveryID)
+	if first != http.StatusBadRequest {
+		t.Fatalf("first (malformed) delivery status = %d, want %d", first, http.StatusBadRequest)
+	}
+
+	// The claim row must have been released by the failure path, not left
+	// behind poisoning this delivery id.
+	var deliveryRowCountAfterFailure int
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'github' AND delivery_id = $1`, deliveryID,
+	).Scan(&deliveryRowCountAfterFailure); err != nil {
+		t.Fatalf("count webhook_deliveries rows after failure: %v", err)
+	}
+	if deliveryRowCountAfterFailure != 0 {
+		t.Fatalf("webhook_deliveries row count after failed attempt = %d, want 0 (claim must be released on failure)", deliveryRowCountAfterFailure)
+	}
+
+	// Redelivery: GitHub's real retry behavior on a non-2xx response --
+	// SAME delivery id, this time a genuine, well-formed mention payload.
+	// It must be processed, not skipped as an already-claimed duplicate.
+	validBody := issueCommentBody("acme/retry-repo", "retry-repo", "https://github.com/acme/retry-repo.git", 404, "retry-after-failure")
+	second := postWebhook(t, rig, validBody, deliveryID)
+	if second != http.StatusOK {
+		t.Fatalf("redelivered (valid) status = %d, want %d", second, http.StatusOK)
+	}
+
+	var sessionCount int
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT count(*) FROM sessions WHERE spawn_source = 'github'`,
+	).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Errorf("session count = %d, want exactly 1 (the redelivered valid payload must actually be processed)", sessionCount)
+	}
+}
+
 // TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns
 // is this Step's own headline concurrency proof: N concurrent, distinctly
 // -delivered @mentions on the SAME PR must result in exactly ONE session

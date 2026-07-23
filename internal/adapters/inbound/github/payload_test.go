@@ -19,6 +19,9 @@ func TestCompileMentionPattern(t *testing.T) {
 		{name: "longer handle superstring rejected by word boundary", botHandle: "narvi", body: "@narvi-bot-2 review this", want: false},
 		{name: "email-shaped string rejected", botHandle: "narvi-bot", body: "contact user@narvi-bot.example for help", want: false},
 		{name: "handle at start of body matches", botHandle: "narvi-bot", body: "@narvi-bot hello", want: true},
+		{name: "team mention sharing handle as prefix rejected", botHandle: "narvi", body: "please cc @narvi/maintainers for review", want: false},
+		{name: "team mention with dash slug sharing handle as prefix rejected", botHandle: "narvi", body: "@narvi/team-x take a look", want: false},
+		{name: "dotted suffix sharing handle as prefix rejected", botHandle: "narvi", body: "cc @narvi.bot for triage", want: false},
 	}
 
 	for _, tc := range tests {

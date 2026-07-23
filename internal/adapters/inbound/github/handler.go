@@ -100,6 +100,14 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		m, ok, err := parseMention(eventType, body, mentionRE)
 		if err != nil {
 			logger.Error("github: parse webhook payload failed", "error", err, "event_type", eventType, "delivery_id", deliveryID)
+			// This delivery was claimed above but never actually processed --
+			// release the claim so a genuine GitHub redelivery of this same
+			// X-GitHub-Delivery id (GitHub retries on any non-2xx response,
+			// exactly what this path returns) can retry rather than being
+			// silently skipped forever as an already-claimed duplicate.
+			if releaseErr := deliveries.Release(ctx, githubDeliveryProvider, deliveryID); releaseErr != nil {
+				logger.Error("github: release webhook delivery claim failed", "error", releaseErr, "delivery_id", deliveryID)
+			}
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -126,6 +134,12 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req)
 		if err != nil {
 			logger.Error("github: create-or-join session failed", "error", err, "repo", m.RepoFullName, "pr_number", m.PRNumber)
+			// Same reasoning as the parseMention error path above -- this
+			// delivery was claimed but never actually acted on, so release
+			// the claim to let a genuine redelivery retry.
+			if releaseErr := deliveries.Release(ctx, githubDeliveryProvider, deliveryID); releaseErr != nil {
+				logger.Error("github: release webhook delivery claim failed", "error", releaseErr, "delivery_id", deliveryID)
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}

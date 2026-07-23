@@ -177,14 +177,18 @@ func parsePullRequestReviewComment(body []byte, mentionRE *regexp.Regexp) (menti
 // above) for a configured bot handle. Deliberately a simple heuristic, not
 // an attempt at fully robust NLP mention-parsing:
 //
-//   - A trailing negative class, `($|[^a-zA-Z0-9_-])`, requires whatever
+//   - A trailing negative class, `($|[^a-zA-Z0-9_./-])`, requires whatever
 //     immediately follows the handle to NOT itself be a character a real
-//     GitHub username can be extended with (alnum, "_", or "-") --
-//     rejecting a comment that mentions some OTHER, longer handle merely
-//     starting with this one (e.g. handle "narvi" must not match
-//     "@narvi-bot-2"; Go RE2's plain `\b` word-boundary alone is NOT
-//     sufficient here, since "-" itself already counts as a word
-//     boundary, letting "narvi-bot-2" slip through a bare `\b` check).
+//     GitHub username can be extended with (alnum, "_", or "-"), NOR a
+//     "/" or "." -- rejecting both a comment that mentions some OTHER,
+//     longer handle merely starting with this one (e.g. handle "narvi"
+//     must not match "@narvi-bot-2"; Go RE2's plain `\b` word-boundary
+//     alone is NOT sufficient here, since "-" itself already counts as a
+//     word boundary, letting "narvi-bot-2" slip through a bare `\b`
+//     check) AND a GitHub team mention sharing the handle as a prefix
+//     (e.g. handle "narvi" must not match "@narvi/maintainers" -- "/"
+//     always starts a team's slug half in "@org/team", and "." can
+//     appear in one directly after an org name too).
 //   - A negative-lookbehind-equivalent leading class,
 //     `(^|[^a-zA-Z0-9_./-])`, requires whatever immediately precedes the
 //     "@" to NOT itself be an identifier character -- rejecting an email
@@ -196,5 +200,5 @@ func parsePullRequestReviewComment(body []byte, mentionRE *regexp.Regexp) (menti
 // happens to contain (unlikely for a real GitHub handle, but not
 // validated elsewhere) is matched literally, never reinterpreted.
 func compileMentionPattern(botHandle string) *regexp.Regexp {
-	return regexp.MustCompile(`(?i)(^|[^a-zA-Z0-9_./-])@` + regexp.QuoteMeta(botHandle) + `($|[^a-zA-Z0-9_-])`)
+	return regexp.MustCompile(`(?i)(^|[^a-zA-Z0-9_./-])@` + regexp.QuoteMeta(botHandle) + `($|[^a-zA-Z0-9_./-])`)
 }
