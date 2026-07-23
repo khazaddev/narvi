@@ -28,6 +28,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
+	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
@@ -177,6 +178,13 @@ func serve() error {
 	environmentStore := postgres.NewEnvironmentStore(pool)
 	imageBuildStore := postgres.NewImageBuildStore(pool)
 
+	// Step 32 ("GitHub ingress", §8.2): the shared webhook-delivery dedupe
+	// claim (Step 31) and the new per-PR review-session coalescing claim
+	// this Step itself adds -- see internal/adapters/inbound/github's own
+	// doc.go for the full design.
+	webhookDeliveryStore := postgres.NewWebhookDeliveryStore(pool)
+	githubPRSessionStore := postgres.NewGitHubPRSessionStore(pool)
+
 	// recon is Step 25's ("reconciler + GC", §5.3) process-wide
 	// provider-reconciliation/orphan-GC loop, run below via the errgroup
 	// exactly once per process -- constructed from the SAME sandboxStore/
@@ -248,6 +256,28 @@ func serve() error {
 	// authenticated route, not a browser-facing one.
 	router.Post("/sessions/{sessionID}/snapshot",
 		httpapi.SnapshotMint(sandboxStore, sandboxProvider))
+
+	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
+	// OUTSIDE auth.Middleware entirely, mirroring scm-credentials/
+	// snapshot-mint immediately above exactly -- this route authenticates
+	// via GitHub's own HMAC webhook signature, not a browser cookie. See
+	// internal/adapters/inbound/github's own doc.go for the full
+	// verify -> dedupe-claim -> parse -> detect -> per-PR-coalesce
+	// sequencing.
+	router.Post("/webhooks/github", githubingress.NewHandler(
+		&githubingress.SessionCoalescer{
+			Pool:       pool,
+			PRSessions: githubPRSessionStore,
+			Sessions:   sessionStore,
+			Turns:      turnStore,
+			Registry:   registry,
+		},
+		webhookDeliveryStore,
+		githubingress.Config{
+			WebhookSecret: cfg.GitHubWebhookSecret,
+			BotHandle:     cfg.GitHubBotHandle,
+		},
+	))
 
 	// Auth routes (§13.1/§13.4, Step 20): how a session is obtained/
 	// discarded in the first place, so — obviously — mounted OUTSIDE any
