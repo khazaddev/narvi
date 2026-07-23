@@ -619,7 +619,7 @@ func (h *commandHandler) HandleSnapshot(_ context.Context, cmd sandboxws.Snapsho
 		return
 	}
 
-	snapshotID, err := client.Mint(h.runCtx, h.cfg.SessionConfig.SessionId, h.cfg.SessionConfig.SandboxToken)
+	snapshotID, err := client.Mint(h.runCtx, h.cfg.SessionConfig.SessionId, h.cfg.SessionConfig.SandboxToken, h.cfg.SessionConfig.Gen)
 	if err != nil {
 		slog.Warn("sandbox-agent: snapshot: mint request to control plane failed", "messageId", cmd.MessageId, "error", err)
 		return

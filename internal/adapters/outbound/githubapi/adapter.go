@@ -8,11 +8,38 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/contractdrift"
 )
+
+// escapePathSegments url.PathEscape's EACH "/"-delimited segment of p,
+// then rejoins them with "/" -- for a value like spec.Path (Environment.
+// ContractsPath, §14.3) that is itself a real, multi-segment repo-relative
+// directory path (e.g. "services/mock-api/contracts"), rather than a
+// single opaque path component the way Owner/Repo/a branch name are.
+// Escaping the WHOLE string as one blob via a single url.PathEscape call
+// would percent-encode its own "/" separators too, turning a real,
+// multi-segment directory path into a single bogus path segment GitHub's
+// Contents API would never resolve -- so each segment is escaped on its
+// own instead, exactly like GitHub's own Contents API documentation
+// expects a multi-segment path to be built. Audit remediation
+// (security-crosscutting lens): every outbound adapter in this codebase
+// that builds a request path from caller-controlled string fields already
+// escapes them this way (internal/adapters/inbound/auth/callback.go's own
+// checkOrgMembership, internal/adapters/outbound/modal/provider.go,
+// internal/adapters/outbound/opencode/session.go, internal/sandboxagent/
+// snapshotclient/client.go, internal/sandboxagent/credentials/cpclient.go)
+// -- this package was the one exception before this fix.
+func escapePathSegments(p string) string {
+	segments := strings.Split(p, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	return strings.Join(segments, "/")
+}
 
 // defaultAPIBaseURL is GitHub's own real REST API base -- the ONLY place
 // this literal appears in this package; production wiring
@@ -112,7 +139,12 @@ func (a *Adapter) CreatePR(ctx context.Context, spec ports.CreatePRSpec) (ports.
 		return ports.PRRef{}, fmt.Errorf("githubapi: encode create-pr request: %w", err)
 	}
 
-	path := fmt.Sprintf("%s/repos/%s/%s/pulls", a.apiBaseURL, spec.Owner, spec.Repo)
+	// Owner/Repo are each a single opaque path segment (never containing a
+	// real "/" separator the way spec.Path can) -- audit remediation: both
+	// escaped via url.PathEscape before being interpolated, mirroring every
+	// other outbound adapter's own discipline (see escapePathSegments' own
+	// doc comment above).
+	path := fmt.Sprintf("%s/repos/%s/%s/pulls", a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(reqBody))
 	if err != nil {
 		return ports.PRRef{}, fmt.Errorf("githubapi: build create-pr request: %w", err)
@@ -245,7 +277,9 @@ func (a *Adapter) doGet(ctx context.Context, path, token string) ([]byte, error)
 func (a *Adapter) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranchSHASpec) (string, error) {
 	branch := spec.Branch
 	if branch == "" {
-		repoPath := fmt.Sprintf("%s/repos/%s/%s", a.apiBaseURL, spec.Owner, spec.Repo)
+		// Owner/Repo escaped via url.PathEscape -- audit remediation, see
+		// escapePathSegments' own doc comment above.
+		repoPath := fmt.Sprintf("%s/repos/%s/%s", a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo))
 		body, err := a.doGet(ctx, repoPath, spec.Token)
 		if err != nil {
 			return "", fmt.Errorf("githubapi: resolve default branch: %w", err)
@@ -261,7 +295,14 @@ func (a *Adapter) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranch
 		branch = repoInfo.DefaultBranch
 	}
 
-	commitPath := fmt.Sprintf("%s/repos/%s/%s/commits/%s", a.apiBaseURL, spec.Owner, spec.Repo, branch)
+	// branch comes from spec.Branch (session-controlled repos[].branch,
+	// §14.1) when non-empty, otherwise GitHub's own reported default_branch
+	// above -- either way, escaped via url.PathEscape (audit remediation):
+	// a branch name is a single opaque path segment here (GitHub's own
+	// "commits/{ref}" route never expects a "/"-delimited multi-segment
+	// value the way spec.Path does below), so a plain PathEscape, not
+	// escapePathSegments, is the correct granularity.
+	commitPath := fmt.Sprintf("%s/repos/%s/%s/commits/%s", a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo), url.PathEscape(branch))
 	body, err := a.doGet(ctx, commitPath, spec.Token)
 	if err != nil {
 		return "", fmt.Errorf("githubapi: resolve commit sha for branch %q: %w", branch, err)
@@ -318,7 +359,24 @@ type contentsEntry struct {
 // subdirectory entry itself); the path->sha map built from it is handed to
 // contractdrift.Fingerprint, and (digest, true, nil) is returned.
 func (a *Adapter) ResolveContractsFingerprint(ctx context.Context, spec ports.ResolveContractsFingerprintSpec) (string, bool, error) {
-	contentsPath := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", a.apiBaseURL, spec.Owner, spec.Repo, spec.Path, spec.Ref)
+	// Audit remediation (security-crosscutting lens): Owner/Repo escaped
+	// via url.PathEscape (single opaque segments); spec.Path escaped
+	// segment-by-segment via escapePathSegments (its own doc comment above)
+	// since Path is a real, multi-segment repo-relative directory path
+	// (Environment.ContractsPath, §14.3, assigned verbatim from the request
+	// body at CreateSession time -- see internal/adapters/inbound/httpapi/
+	// create.go's own environment.ValidateContractsPath call, this same
+	// remediation's other half); spec.Ref escaped via url.QueryEscape since
+	// it is a QUERY value, not a path segment. Before this fix, an
+	// attacker-influenced Path like "x?ref=other&" could rewrite this
+	// request's own query string, and a "#" could truncate it via an
+	// unintended URL fragment -- both closed by encoding every one of
+	// these caller-controlled fields at its own correct escaping
+	// granularity, matching the rest of this codebase's existing
+	// discipline (see escapePathSegments' own doc comment for the other
+	// adapters that already do this).
+	contentsPath := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
+		a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo), escapePathSegments(spec.Path), url.QueryEscape(spec.Ref))
 	body, err := a.doGet(ctx, contentsPath, spec.Token)
 	if err != nil {
 		var apiErr *APIError

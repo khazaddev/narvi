@@ -11,12 +11,21 @@
 // cmd/sandbox-agent/main.go's real HandleSnapshot (design decision 4) is
 // this package's only caller: it calls New(cfg.SessionConfig.
 // ControlPlaneWsUrl, timeouts.SnapshotMintTimeout), then Mint(ctx,
-// cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken) to obtain a
-// real snapshotId before reporting it back over the WS bridge as a
-// CRITICAL "snapshot_ready" event. On any failure obtaining the id,
-// HandleSnapshot logs and returns without sending anything -- design
-// decision 2's own honest, documented limitation: no NACK-shaped event
-// exists on the wire to report a failure here back to the control plane.
+// cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken,
+// cfg.SessionConfig.Gen) to obtain a real snapshotId before reporting it
+// back over the WS bridge as a CRITICAL "snapshot_ready" event. On any
+// failure obtaining the id, HandleSnapshot logs and returns without
+// sending anything -- design decision 2's own honest, documented
+// limitation: no NACK-shaped event exists on the wire to report a failure
+// here back to the control plane.
+//
+// Audit remediation (security-crosscutting lens): Mint's own gen parameter
+// was added alongside the control-plane's own snapshot-mint endpoint
+// (internal/adapters/inbound/httpapi.SnapshotMint) gaining a mandatory
+// X-Sandbox-Gen check -- mirroring internal/sandboxagent/credentials.
+// CPClient.Fetch's own identical gen parameter/header exactly. Without this
+// client-side change, every real production snapshot-mint request would
+// start failing that new server-side check with 403.
 package snapshotclient
 
 import (
@@ -28,6 +37,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
@@ -130,7 +140,11 @@ type mintResponse struct {
 }
 
 // Mint POSTs to <baseURL>/sessions/<sessionID>/snapshot with
-// "Authorization: Bearer <sandboxToken>" and no body, and expects back
+// "Authorization: Bearer <sandboxToken>" and an "X-Sandbox-Gen: <gen>"
+// header (mirroring internal/sandboxagent/wsbridge/run.go's own exact
+// header name/convention for the sandbox WS handshake's gen-fencing
+// header, and credentials.CPClient.Fetch's own identical addition for the
+// scm-credentials endpoint) and no body, and expects back
 // {"snapshotId": "..."} on a 2xx response. Any non-2xx or malformed
 // response is a plain error -- no retry (design decision 2's own honest,
 // documented limitation: no NACK-shaped event exists on the wire to
@@ -141,13 +155,14 @@ type mintResponse struct {
 // error -- mirrors credentials.CPClient.Fetch's own identical discipline
 // (a validation-failure response could echo request/secret data back
 // verbatim, and this error can end up logged).
-func (c Client) Mint(ctx context.Context, sessionID, sandboxToken string) (string, error) {
+func (c Client) Mint(ctx context.Context, sessionID, sandboxToken string, gen int) (string, error) {
 	path := fmt.Sprintf("%s/sessions/%s/snapshot", c.baseURL, url.PathEscape(sessionID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, nil)
 	if err != nil {
 		return "", fmt.Errorf("snapshotclient: build snapshot-mint request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+sandboxToken)
+	req.Header.Set("X-Sandbox-Gen", strconv.Itoa(gen))
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

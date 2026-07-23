@@ -120,6 +120,96 @@ func ValidatePathScope(patterns []string) error {
 	return nil
 }
 
+// Sentinel errors ValidateContractsPath can return, each naming a distinct
+// reason a candidate contracts_path is rejected, wrapped by
+// InvalidContractsPathError -- mirrors ValidatePathScope's own sentinel-
+// error house style exactly (see that group's own doc comment above).
+var (
+	// ErrContractsPathEmpty means contracts_path was the empty string --
+	// meaningless (httpapi.CreateSession's own defaultContractsPath is used
+	// instead whenever the caller omits contractsPath entirely; an
+	// explicit empty string is never that same "use the default" signal).
+	ErrContractsPathEmpty = errors.New("environment: contracts_path is empty")
+
+	// ErrContractsPathTraversal means contracts_path contains a ".." path
+	// segment -- the SAME trust-boundary reasoning ErrPathTraversal
+	// documents for path_scope above applies here: contracts_path is
+	// assigned verbatim from the request body (httpapi.CreateSession) and
+	// later reaches a real outbound GitHub API request (internal/adapters/
+	// outbound/githubapi.ResolveContractsFingerprint), so a ".." segment
+	// must never be allowed to reach outside the repo's own contracts
+	// directory.
+	ErrContractsPathTraversal = errors.New(`environment: contracts_path contains a ".." segment`)
+
+	// ErrContractsPathInvalidChars means contracts_path contains a "?" or
+	// "#" -- audit remediation (security-crosscutting lens): unlike
+	// path_scope (a set of sparse-checkout glob patterns, never
+	// interpolated into a URL), contracts_path is later interpolated into
+	// a real GitHub Contents API request URL. Even though that adapter
+	// now ALSO escapes every path segment it builds (a second, independent
+	// layer of defense-in-depth), a "?" or "#" is rejected here too, at the
+	// trust boundary, exactly like every other caller-controlled field this
+	// package validates before it is ever persisted.
+	ErrContractsPathInvalidChars = errors.New(`environment: contracts_path contains a "?" or "#"`)
+)
+
+// InvalidContractsPathError reports a candidate contracts_path
+// ValidateContractsPath rejected, and why -- mirrors InvalidGlobError's own
+// shape exactly.
+type InvalidContractsPathError struct {
+	// Path is the offending contracts_path value, verbatim.
+	Path string
+	// Reason is one of ErrContractsPathEmpty, ErrContractsPathTraversal, or
+	// ErrContractsPathInvalidChars -- the base sentinel this error unwraps
+	// to.
+	Reason error
+}
+
+func (e *InvalidContractsPathError) Error() string {
+	return fmt.Sprintf("environment: invalid contracts_path %q: %s", e.Path, e.Reason)
+}
+
+func (e *InvalidContractsPathError) Unwrap() error { return e.Reason }
+
+// contractsPathInvalidChars are the characters ValidateContractsPath
+// rejects outright -- see ErrContractsPathInvalidChars' own doc comment
+// for why these two specifically.
+const contractsPathInvalidChars = "?#"
+
+// ValidateContractsPath validates a candidate contracts_path (Environment.
+// ContractsPath, §14.3) before it is accepted at CreateSession time --
+// the SAME trust-boundary precedent ValidatePathScope already established
+// for path_scope, applied here since contracts_path had none at all
+// before this audit remediation (unlike path_scope, which already went
+// through ValidatePathScope's own ".." rejection and glob-syntax check).
+// Checked, in order:
+//
+//  1. being the empty string (ErrContractsPathEmpty);
+//  2. containing a ".." path segment (ErrContractsPathTraversal), reusing
+//     hasDotDotSegment -- the SAME check ValidatePathScope uses;
+//  3. containing a "?" or "#" (ErrContractsPathInvalidChars) -- either
+//     character could otherwise rewrite or truncate the outbound GitHub
+//     Contents API request internal/adapters/outbound/githubapi.
+//     ResolveContractsFingerprint builds from this value (see that
+//     adapter's own escapePathSegments doc comment for this package's
+//     other, independent half of this same remediation).
+//
+// Unlike ValidatePathScope, ValidateContractsPath takes a single string,
+// not a slice -- contracts_path is always exactly one repo-relative
+// directory path, never a list of glob patterns.
+func ValidateContractsPath(contractsPath string) error {
+	if contractsPath == "" {
+		return &InvalidContractsPathError{Path: contractsPath, Reason: ErrContractsPathEmpty}
+	}
+	if hasDotDotSegment(contractsPath) {
+		return &InvalidContractsPathError{Path: contractsPath, Reason: ErrContractsPathTraversal}
+	}
+	if strings.ContainsAny(contractsPath, contractsPathInvalidChars) {
+		return &InvalidContractsPathError{Path: contractsPath, Reason: ErrContractsPathInvalidChars}
+	}
+	return nil
+}
+
 // IsScoped reports whether env restricts what is checked out -- true iff
 // len(env.PathScope) > 0. This is the single decision point for "does
 // this Environment restrict what's checked out" (§14.1: "absent = full

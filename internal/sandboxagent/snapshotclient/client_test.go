@@ -126,11 +126,12 @@ func TestInvalidControlPlaneWsURLError_ErrorAndUnwrap(t *testing.T) {
 func TestClient_Mint_RequestShape(t *testing.T) {
 	t.Parallel()
 
-	var gotPath, gotAuth, gotMethod string
+	var gotPath, gotAuth, gotMethod, gotGen string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotAuth = r.Header.Get("Authorization")
 		gotMethod = r.Method
+		gotGen = r.Header.Get("X-Sandbox-Gen")
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"snapshotId": "snap-abc-123"})
@@ -142,7 +143,7 @@ func TestClient_Mint_RequestShape(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	id, err := client.Mint(context.Background(), "sess-1", "sandbox-tok")
+	id, err := client.Mint(context.Background(), "sess-1", "sandbox-tok", 42)
 	if err != nil {
 		t.Fatalf("Mint() error = %v, want nil", err)
 	}
@@ -155,6 +156,12 @@ func TestClient_Mint_RequestShape(t *testing.T) {
 	}
 	if gotPath != "/sessions/sess-1/snapshot" {
 		t.Errorf("request path = %q, want %q", gotPath, "/sessions/sess-1/snapshot")
+	}
+	// The real X-Sandbox-Gen header (audit remediation): mirrors
+	// credentials.CPClient_test.go's own identical assertion for the
+	// scm-credentials endpoint's own analogous header.
+	if gotGen != "42" {
+		t.Errorf("X-Sandbox-Gen header = %q, want %q", gotGen, "42")
 	}
 	if id != "snap-abc-123" {
 		t.Errorf("Mint() = %q, want %q", id, "snap-abc-123")
@@ -175,7 +182,7 @@ func TestClient_Mint_NonTwoXXIsAnError(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	_, err = client.Mint(context.Background(), "sess-1", "tok")
+	_, err = client.Mint(context.Background(), "sess-1", "tok", 1)
 	if err == nil {
 		t.Fatal("Mint() error = nil, want an error for a 502 response")
 	}
@@ -200,7 +207,7 @@ func TestClient_Mint_ErrorResponseBodyNeverLeaks(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	_, err = client.Mint(context.Background(), "sess-1", "tok")
+	_, err = client.Mint(context.Background(), "sess-1", "tok", 1)
 	if err == nil {
 		t.Fatal("Mint() error = nil, want an error for a 401 response")
 	}
@@ -223,7 +230,7 @@ func TestClient_Mint_MalformedResponseBody(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	_, err = client.Mint(context.Background(), "sess-1", "tok")
+	_, err = client.Mint(context.Background(), "sess-1", "tok", 1)
 	if err == nil {
 		t.Fatal("Mint() error = nil, want an error for a malformed 2xx response body")
 	}
@@ -243,7 +250,7 @@ func TestClient_Mint_MissingSnapshotIDIsAnError(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	_, err = client.Mint(context.Background(), "sess-1", "tok")
+	_, err = client.Mint(context.Background(), "sess-1", "tok", 1)
 	if err == nil {
 		t.Fatal("Mint() error = nil, want an error for a response with an empty/missing snapshotId")
 	}
