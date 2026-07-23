@@ -116,21 +116,10 @@
 // hard-required for this browser/REST route) -> createSessionCore ->
 // write the JSON response. This is a pure refactor for this route --
 // every existing test in this package's own _test.go files passes
-// unchanged. The point of the split is reuse: Steps 32/33/34's own
-// GitHub/Slack/Linear webhook ingress handlers call createSessionCore
-// directly, with their own already-verified, already-decoded request and
-// a NULL creator (no cookie, no human) -- never this package's own
-// CreateSession, which stays browser-only. createSessionCore stays
-// unexported deliberately: since it is package-private, those ingress
-// handlers must live in THIS package (as new files alongside create.go/
-// get.go/events.go/artifacts.go/wstoken.go -- the same one-package,
-// one-file-per-route-family shape this package already uses), not in
-// separate new packages -- an unexported identifier cannot be called
-// from outside its own package. Whether that turns out to be
-// internal/adapters/inbound/httpapi/github.go et al., or Steps 32-34
-// decide createSessionCore should be exported instead, is left to those
-// Steps; this Step only guarantees the extraction itself is
-// behavior-preserving.
+// unchanged. The point of the split is reuse: a webhook ingress handler
+// calls createSessionCore directly, with its own already-verified,
+// already-decoded request and a NULL creator (no cookie, no human) --
+// never this package's own CreateSession, which stays browser-only.
 //
 // This Step also adds two other, independent pieces used by those same
 // future ingress endpoints, neither wired to a concrete provider yet:
@@ -145,6 +134,65 @@
 //     INSERT ... ON CONFLICT dedupe/coalescing claim §5.1 calls for,
 //     keyed on (provider, delivery_id).
 //
+// # Reconciliation update: createSessionCore exported and split for tx
+// support
+//
+// Independent webhook-ingress adapters each ended up needing "create a
+// session (+ optional turn), then post-commit trigger dispatch" from
+// OUTSIDE this package, which resolves the "should this stay
+// package-private" question this Step originally left open: createSessionCore
+// is exported (as CreateSessionCore, alongside an exported
+// CreateSessionError -- Status/Message fields, same Error() method) -- a
+// pure rename, no behavior change for any existing caller. At least one
+// such adapter also needs to create a session+turn while ALREADY holding
+// an unrelated lock on its own already-open transaction (e.g. an atomic
+// per-resource claim taken via SELECT ... FOR UPDATE) -- calling the
+// pool-based CreateSessionCore from inside that critical section would
+// open a SECOND, simultaneous connection out of the same pool while the
+// first transaction's own connection is still held, a genuine
+// connection-pool exhaustion/deadlock risk under real concurrent load.
+// Rather than leave every such caller to duplicate CreateSessionCore's own
+// repo/pathScope/mockConfig validation and session/turn-insert logic by
+// hand, CreateSessionCore is now split into three pieces (create.go):
+//
+//   - validateCreateSessionRequest: every in-memory-only check
+//     (repos non-empty, each repo's Name/Url/Branch, pathScope,
+//     mockConfig.contractsPath) that used to run inline, extracted so it
+//     can be called from two places without duplicating its logic by
+//     hand.
+//   - CreateSessionOnTx: everything CreateSessionCore used to do AFTER
+//     validation, up to and including the optional turn insert, taking
+//     an ALREADY-OPEN pgx.Tx the CALLER owns entirely -- no Begin/Commit/
+//     Rollback inside it at all. It calls validateCreateSessionRequest
+//     itself, at its own top, before touching tx -- necessary because it
+//     is also called directly by callers that already hold their own
+//     open transaction and have not necessarily validated the request
+//     first. Returns hasPrompt explicitly so the caller knows, ONCE ITS
+//     OWN outer transaction has committed, whether a dispatch trigger is
+//     needed.
+//   - TriggerDispatch: the exact "GetOrSpawn + Send(EnsureDispatched{})"
+//     fire-and-forget pattern (warn-log-on-error, never returned to the
+//     caller), extracted so every caller triggers dispatch identically
+//     post-commit.
+//   - CreateSessionCore itself: now validateCreateSessionRequest ->
+//     pool.Begin -> CreateSessionOnTx -> tx.Commit -> (if hasPrompt)
+//     TriggerDispatch. The explicit pre-Begin validation call is a
+//     correction, not just a refactor: an earlier version of this split
+//     called pool.Begin FIRST and left validation to run only inside
+//     CreateSessionOnTx, i.e. AFTER the transaction/connection was
+//     already open -- silently breaking the pre-existing trust-boundary
+//     invariant (create.go's own doc comments above, "a rejected repo
+//     spec never reaches Postgres at all") for every malformed request on
+//     this pool-based path. With the pre-Begin call restored, the
+//     validate -> insert -> commit sequencing is byte-for-byte the same
+//     as CreateSessionCore performed before the tx-support split, so
+//     CreateSession (the HTTP handler) and every existing
+//     CreateSessionCore test are unaffected. A caller already holding its
+//     own open transaction calls CreateSessionOnTx directly, inline on
+//     that same connection, and calls TriggerDispatch itself once its own
+//     outer transaction commits -- never CreateSessionCore, which is only
+//     safe for a caller with no transaction of its own yet.
+//
 // # Step 32 ("GitHub ingress") update
 //
 // The real webhook handler lives in its own package,
@@ -152,23 +200,29 @@
 // cmd/control-plane/main.go) -- NOT inside this package, since it is a
 // genuinely separate protocol adapter (signature verification, GitHub's
 // own event/payload shapes, per-PR coalescing), not one more browser/REST
-// route family. Since createSessionCore stays unexported (Step 31's own
-// doc comment above), that package cannot call it directly -- bot.go adds
-// two small EXPORTED wrappers instead: CreateSessionForBot (forwards to
-// createSessionCore with a NULL creator) and CreateTurnForBot (mirrors
-// CreateTurn's own lock-then-insert-then-dispatch sequencing, minus its
-// REST-specific hasOpenTurn 409 gate -- see bot.go's own doc comment for
-// why that gate doesn't apply to a bot-ingress caller enqueuing a
-// coalesced backlog of turns on one shared session).
+// route family. bot.go adds two small EXPORTED wrappers for that package's
+// use: CreateSessionForBot (forwards to CreateSessionCore with a NULL
+// creator) and CreateTurnForBot (mirrors CreateTurn's own
+// lock-then-insert-then-dispatch sequencing, minus its REST-specific
+// hasOpenTurn 409 gate -- see bot.go's own doc comment for why that gate
+// doesn't apply to a bot-ingress caller enqueuing a coalesced backlog of
+// turns on one shared session).
 //
 // github's own per-PR coalescing (coalesce.go, that package) uses
-// CreateTurnForBot directly for its REUSE branch, but deliberately does
-// NOT call CreateSessionForBot for its WINNER branch -- that branch holds
-// a claim-row lock open on its own transaction for the whole decision,
-// and calling CreateSessionForBot there (which opens a SECOND, separate
-// transaction from the same pool) would risk exhausting the connection
-// pool under enough concurrent same-PR mentions. CreateSessionForBot
-// itself is untouched and still fully tested (bot_integration_test.go) as
-// a general-purpose, no-coalescing bot-session entry point for a caller
-// that isn't simultaneously holding a transaction open of its own.
+// CreateTurnForBot directly for its REUSE branch. Its WINNER branch, since
+// the reconciliation update above landed, calls CreateSessionOnTx directly
+// (inline on the SAME tx its own claim-row lock already holds) rather than
+// duplicating any of CreateSessionOnTx's own validation/insert logic by
+// hand, then calls TriggerDispatch itself once that outer transaction has
+// committed and hasPrompt is true -- exactly the "already holding an
+// open transaction of its own" caller shape CreateSessionOnTx's own doc
+// comment (create.go) describes. Neither branch calls CreateSessionForBot
+// for the winner path: that wrapper is pool-based (CreateSessionCore
+// underneath), and opening a SECOND, separate transaction from the same
+// pool while the claim-row lock's own transaction is still open would
+// risk exhausting the connection pool under enough concurrent same-PR
+// mentions. CreateSessionForBot itself is untouched and still fully
+// tested (bot_integration_test.go) as a general-purpose, no-coalescing
+// bot-session entry point for a caller that isn't simultaneously holding
+// a transaction open of its own.
 package httpapi

@@ -30,13 +30,13 @@ import (
 // status codes, etc.), so instead these two thin wrappers translate to
 // and from plain Go values/errors a non-HTTP caller actually wants.
 //
-// CreateSessionForBot forwards to createSessionCore with an explicit NULL
+// CreateSessionForBot forwards to CreateSessionCore with an explicit NULL
 // creator (pgtype.UUID{}) -- every bot/automation-created session has no
-// direct human creator, exactly createSessionCore's own doc comment and
+// direct human creator, exactly CreateSessionCore's own doc comment and
 // createcore_integration_test.go's own TestCreateSessionCore_NilCreator_*
 // tests already establish and cover.
 func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest) (sqlcgen.Session, error) {
-	created, cerr := createSessionCore(ctx, pool, sessions, turns, environments, registry, req, pgtype.UUID{})
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, registry, req, pgtype.UUID{})
 	if cerr != nil {
 		return sqlcgen.Session{}, cerr
 	}
