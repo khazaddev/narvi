@@ -45,3 +45,16 @@ func (s *WebhookDeliveryStore) Claim(ctx context.Context, provider, deliveryID s
 		DeliveryID: deliveryID,
 	})
 }
+
+// Release un-claims a (provider, deliveryID) this same caller previously
+// claimed via Claim but then failed to actually process -- see
+// ReleaseWebhookDelivery's own doc comment (postgres/queries/
+// webhookdeliveries.sql) for why this exists: without it, a claim that
+// wins but is never followed by successful processing would silently and
+// permanently swallow every future redelivery of that same id.
+func (s *WebhookDeliveryStore) Release(ctx context.Context, provider, deliveryID string) error {
+	return s.q.ReleaseWebhookDelivery(ctx, sqlcgen.ReleaseWebhookDeliveryParams{
+		Provider:   provider,
+		DeliveryID: deliveryID,
+	})
+}

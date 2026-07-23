@@ -192,4 +192,37 @@
 //     that same connection, and calls TriggerDispatch itself once its own
 //     outer transaction commits -- never CreateSessionCore, which is only
 //     safe for a caller with no transaction of its own yet.
+//
+// # Step 32 ("GitHub ingress") update
+//
+// The real webhook handler lives in its own package,
+// internal/adapters/inbound/github (mounted at POST /webhooks/github,
+// cmd/control-plane/main.go) -- NOT inside this package, since it is a
+// genuinely separate protocol adapter (signature verification, GitHub's
+// own event/payload shapes, per-PR coalescing), not one more browser/REST
+// route family. bot.go adds two small EXPORTED wrappers for that package's
+// use: CreateSessionForBot (forwards to CreateSessionCore with a NULL
+// creator) and CreateTurnForBot (mirrors CreateTurn's own
+// lock-then-insert-then-dispatch sequencing, minus its REST-specific
+// hasOpenTurn 409 gate -- see bot.go's own doc comment for why that gate
+// doesn't apply to a bot-ingress caller enqueuing a coalesced backlog of
+// turns on one shared session).
+//
+// github's own per-PR coalescing (coalesce.go, that package) uses
+// CreateTurnForBot directly for its REUSE branch. Its WINNER branch, since
+// the reconciliation update above landed, calls CreateSessionOnTx directly
+// (inline on the SAME tx its own claim-row lock already holds) rather than
+// duplicating any of CreateSessionOnTx's own validation/insert logic by
+// hand, then calls TriggerDispatch itself once that outer transaction has
+// committed and hasPrompt is true -- exactly the "already holding an
+// open transaction of its own" caller shape CreateSessionOnTx's own doc
+// comment (create.go) describes. Neither branch calls CreateSessionForBot
+// for the winner path: that wrapper is pool-based (CreateSessionCore
+// underneath), and opening a SECOND, separate transaction from the same
+// pool while the claim-row lock's own transaction is still open would
+// risk exhausting the connection pool under enough concurrent same-PR
+// mentions. CreateSessionForBot itself is untouched and still fully
+// tested (bot_integration_test.go) as a general-purpose, no-coalescing
+// bot-session entry point for a caller that isn't simultaneously holding
+// a transaction open of its own.
 package httpapi
