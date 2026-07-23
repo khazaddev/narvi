@@ -151,4 +151,61 @@
 //     postgres.WebhookDeliveryStore.Claim: the atomic
 //     INSERT ... ON CONFLICT dedupe/coalescing claim §5.1 calls for,
 //     keyed on (provider, delivery_id).
+//
+// # Reconciliation update: createSessionCore exported and split for tx
+// support
+//
+// Independent webhook-ingress adapters each ended up needing "create a
+// session (+ optional turn), then post-commit trigger dispatch" from
+// OUTSIDE this package -- CreateSessionCore/CreateSessionError are already
+// exported as of Step 33 above (Status/Message fields, same Error()
+// method), so no further export/rename is needed here. At least one
+// such adapter also needs to create a session+turn while ALREADY holding
+// an unrelated lock on its own already-open transaction (e.g. an atomic
+// per-resource claim taken via SELECT ... FOR UPDATE) -- calling the
+// pool-based CreateSessionCore from inside that critical section would
+// open a SECOND, simultaneous connection out of the same pool while the
+// first transaction's own connection is still held, a genuine
+// connection-pool exhaustion/deadlock risk under real concurrent load.
+// Rather than leave every such caller to duplicate CreateSessionCore's own
+// repo/pathScope/mockConfig validation and session/turn-insert logic by
+// hand, CreateSessionCore is now split into three pieces (create.go):
+//
+//   - validateCreateSessionRequest: every in-memory-only check
+//     (repos non-empty, each repo's Name/Url/Branch, pathScope,
+//     mockConfig.contractsPath) that used to run inline, extracted so it
+//     can be called from two places without duplicating its logic by
+//     hand.
+//   - CreateSessionOnTx: everything CreateSessionCore used to do AFTER
+//     validation, up to and including the optional turn insert, taking
+//     an ALREADY-OPEN pgx.Tx the CALLER owns entirely -- no Begin/Commit/
+//     Rollback inside it at all. It calls validateCreateSessionRequest
+//     itself, at its own top, before touching tx -- necessary because it
+//     is also called directly by callers that already hold their own
+//     open transaction and have not necessarily validated the request
+//     first. Returns hasPrompt explicitly so the caller knows, ONCE ITS
+//     OWN outer transaction has committed, whether a dispatch trigger is
+//     needed.
+//   - TriggerDispatch: the exact "GetOrSpawn + Send(EnsureDispatched{})"
+//     fire-and-forget pattern (warn-log-on-error, never returned to the
+//     caller), extracted so every caller triggers dispatch identically
+//     post-commit.
+//   - CreateSessionCore itself: now validateCreateSessionRequest ->
+//     pool.Begin -> CreateSessionOnTx -> tx.Commit -> (if hasPrompt)
+//     TriggerDispatch. The explicit pre-Begin validation call is a
+//     correction, not just a refactor: an earlier version of this split
+//     called pool.Begin FIRST and left validation to run only inside
+//     CreateSessionOnTx, i.e. AFTER the transaction/connection was
+//     already open -- silently breaking the pre-existing trust-boundary
+//     invariant (create.go's own doc comments above, "a rejected repo
+//     spec never reaches Postgres at all") for every malformed request on
+//     this pool-based path. With the pre-Begin call restored, the
+//     validate -> insert -> commit sequencing is byte-for-byte the same
+//     as CreateSessionCore performed before the tx-support split, so
+//     CreateSession (the HTTP handler) and every existing
+//     CreateSessionCore test are unaffected. A caller already holding its
+//     own open transaction calls CreateSessionOnTx directly, inline on
+//     that same connection, and calls TriggerDispatch itself once its own
+//     outer transaction commits -- never CreateSessionCore, which is only
+//     safe for a caller with no transaction of its own yet.
 package httpapi
