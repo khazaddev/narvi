@@ -193,6 +193,121 @@ type CreateSessionError struct {
 
 func (e *CreateSessionError) Error() string { return e.Message }
 
+// validatedCreateSessionInput carries every value validateCreateSessionRequest
+// has already normalized/derived from a request -- reposJSON (the
+// marshaled req.Repos, ready for the session insert), the resolved
+// pathScope slice and its hasPathScope flag, and hasMockConfig/
+// contractsPath -- so a caller that already validated does not need to
+// re-derive any of it.
+type validatedCreateSessionInput struct {
+	reposJSON     []byte
+	pathScope     []string
+	hasPathScope  bool
+	hasMockConfig bool
+	contractsPath string
+}
+
+// validateCreateSessionRequest performs every check CreateSession's own
+// doc comment above describes as running "BEFORE any Postgres write" --
+// repos non-empty, each repo's Name/Url/Branch (reposource), pathScope
+// (environment.ValidatePathScope), and mockConfig.contractsPath
+// (environment.ValidateContractsPath) -- and nothing else: no tx, no
+// pool, no I/O of any kind, so it is always safe (and cheap) to call
+// before a transaction/connection exists.
+//
+// It has exactly two callers, deliberately: CreateSessionCore calls it
+// FIRST, before pool.Begin, so a request that fails this validation never
+// acquires a pooled Postgres connection at all -- restoring the same
+// trust-boundary invariant this handler documented before the tx-support
+// split (a rejected repo/pathScope/contractsPath spec never reaches
+// Postgres). CreateSessionOnTx ALSO calls it, at its own top, before
+// touching tx -- necessary because CreateSessionOnTx is called directly
+// by callers that already hold their own open transaction (e.g. a webhook
+// ingress handler mid-critical-section) and have not necessarily
+// revalidated the request themselves. Calling it twice on the
+// CreateSessionCore path (once to gate pool.Begin, once again inside
+// CreateSessionOnTx) is deliberate, harmless, in-memory-only duplication,
+// not a bug -- see CreateSessionCore's own doc comment below.
+func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedCreateSessionInput, *CreateSessionError) {
+	if len(req.Repos) < 1 {
+		return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, "repos must be non-empty"}
+	}
+
+	// Validate every repo's Name/Url/Branch. Stops at the first failure,
+	// in order, matching gitclone's own validateRepoSpec precedent
+	// exactly; does not attempt to collect/report every failure across
+	// every repo at once.
+	for i, repo := range req.Repos {
+		if err := reposource.ValidateRepoName(repo.Name); err != nil {
+			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err)}
+		}
+		if err := reposource.ValidateRepoURL(repo.Url); err != nil {
+			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err)}
+		}
+		if repo.Branch != nil {
+			if err := reposource.ValidateBranch(*repo.Branch); err != nil {
+				return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err)}
+			}
+		}
+	}
+
+	reposJSON, err := json.Marshal(req.Repos)
+	if err != nil {
+		return validatedCreateSessionInput{}, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+	}
+
+	// pathScope is OPTIONAL (contracts/rest/v1/dtos.schema.json's
+	// CreateSessionRequest.pathScope) -- req.PathScope may be nil
+	// (absent) or point at a nil/empty slice (present but null/[]);
+	// either way that means "unscoped", exactly today's existing
+	// behavior. Only a genuinely non-empty pathScope triggers validation
+	// + environment creation.
+	var pathScope []string
+	if req.PathScope != nil {
+		pathScope = []string(*req.PathScope)
+	}
+	hasPathScope := len(pathScope) > 0
+
+	if hasPathScope {
+		if err := environment.ValidatePathScope(pathScope); err != nil {
+			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("pathScope: %s", err)}
+		}
+	}
+
+	// mockConfig is OPTIONAL and INDEPENDENT of pathScope (row 27,
+	// "mocking + contract drift", §14.3 -- see CreateSession's own doc
+	// comment). hasMockConfig is true whenever the request body carried a
+	// "mockConfig" key at all (req.MockConfig != nil), even as {} --
+	// contractsPath resolves to the caller's own value when supplied,
+	// otherwise defaultContractsPath.
+	hasMockConfig := req.MockConfig != nil
+	contractsPath := defaultContractsPath
+	if hasMockConfig && req.MockConfig.ContractsPath != nil {
+		contractsPath = *req.MockConfig.ContractsPath
+
+		// Audit remediation (security-crosscutting lens): a
+		// caller-supplied mockConfig.contractsPath previously reached
+		// Postgres (and, downstream, a real outbound GitHub API request
+		// built by internal/adapters/outbound/githubapi.
+		// ResolveContractsFingerprint) with ZERO validation -- unlike
+		// pathScope, which ValidatePathScope already gated.
+		// defaultContractsPath itself is never run through this check --
+		// it is this handler's own fixed, known-safe constant, not
+		// caller input.
+		if err := environment.ValidateContractsPath(contractsPath); err != nil {
+			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("mockConfig.contractsPath: %s", err)}
+		}
+	}
+
+	return validatedCreateSessionInput{
+		reposJSON:     reposJSON,
+		pathScope:     pathScope,
+		hasPathScope:  hasPathScope,
+		hasMockConfig: hasMockConfig,
+		contractsPath: contractsPath,
+	}, nil
+}
+
 // CreateSessionOnTx does everything CreateSession's own doc comment above
 // describes AFTER decoding the request body, up to and including the
 // optional turn insert: repo validation, pathScope/mockConfig validation,
@@ -232,83 +347,21 @@ func (e *CreateSessionError) Error() string { return e.Message }
 func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
 	logger := platform.Logger(ctx)
 
-	if len(req.Repos) < 1 {
-		return sqlcgen.Session{}, false, &CreateSessionError{http.StatusBadRequest, "repos must be non-empty"}
+	// All request validation (repos non-empty, each repo's Name/Url/
+	// Branch, pathScope, mockConfig.contractsPath) lives in
+	// validateCreateSessionRequest -- see its own doc comment for why
+	// this function calls it too, even though CreateSessionCore (the
+	// only caller with no already-open tx) already calls it before ever
+	// reaching this function's tx parameter.
+	validated, verr := validateCreateSessionRequest(req)
+	if verr != nil {
+		return sqlcgen.Session{}, false, verr
 	}
-
-	// Validate every repo's Name/Url/Branch BEFORE any Postgres write
-	// (pool.Begin below) -- see CreateSession's own doc comment above.
-	// Stops at the first failure, in order, matching gitclone's own
-	// validateRepoSpec precedent exactly; does not attempt to
-	// collect/report every failure across every repo at once.
-	for i, repo := range req.Repos {
-		if err := reposource.ValidateRepoName(repo.Name); err != nil {
-			return sqlcgen.Session{}, false, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].name: %s", i, err)}
-		}
-		if err := reposource.ValidateRepoURL(repo.Url); err != nil {
-			return sqlcgen.Session{}, false, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].url: %s", i, err)}
-		}
-		if repo.Branch != nil {
-			if err := reposource.ValidateBranch(*repo.Branch); err != nil {
-				return sqlcgen.Session{}, false, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("repos[%d].branch: %s", i, err)}
-			}
-		}
-	}
-
-	reposJSON, err := json.Marshal(req.Repos)
-	if err != nil {
-		logger.Error("httpapi: marshal repos failed", "error", err)
-		return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
-	}
-
-	// pathScope is OPTIONAL (contracts/rest/v1/dtos.schema.json's
-	// CreateSessionRequest.pathScope) -- req.PathScope may be nil
-	// (absent) or point at a nil/empty slice (present but null/[]);
-	// either way that means "unscoped", exactly today's existing
-	// behavior. Only a genuinely non-empty pathScope triggers
-	// validation + environment creation below.
-	var pathScope []string
-	if req.PathScope != nil {
-		pathScope = []string(*req.PathScope)
-	}
-	hasPathScope := len(pathScope) > 0
-
-	// Validate every pathScope pattern BEFORE any Postgres write (pool.
-	// Begin below) -- the SAME trust-boundary precedent the repo
-	// validation above already established: reject with 400 on the
-	// first invalid pattern, in order, never reaching pool.Begin on
-	// that path.
-	if hasPathScope {
-		if err := environment.ValidatePathScope(pathScope); err != nil {
-			return sqlcgen.Session{}, false, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("pathScope: %s", err)}
-		}
-	}
-
-	// mockConfig is OPTIONAL and INDEPENDENT of pathScope (row 27,
-	// "mocking + contract drift", §14.3 -- see CreateSession's own doc
-	// comment). hasMockConfig is true whenever the request body carried
-	// a "mockConfig" key at all (req.MockConfig != nil), even as {} --
-	// contractsPath resolves to the caller's own value when supplied,
-	// otherwise defaultContractsPath.
-	hasMockConfig := req.MockConfig != nil
-	contractsPath := defaultContractsPath
-	if hasMockConfig && req.MockConfig.ContractsPath != nil {
-		contractsPath = *req.MockConfig.ContractsPath
-
-		// Validate a caller-supplied contractsPath BEFORE any Postgres
-		// write (pool.Begin below) -- the SAME trust-boundary precedent
-		// pathScope's own ValidatePathScope call above already
-		// established (audit remediation: contractsPath previously had
-		// NO validation at all, unlike pathScope, even though it is
-		// later interpolated into a real outbound GitHub API request,
-		// internal/adapters/outbound/githubapi.
-		// ResolveContractsFingerprint). defaultContractsPath itself is
-		// never run through this check -- it is this handler's own
-		// fixed, known-safe constant, not caller input.
-		if err := environment.ValidateContractsPath(contractsPath); err != nil {
-			return sqlcgen.Session{}, false, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("mockConfig.contractsPath: %s", err)}
-		}
-	}
+	reposJSON := validated.reposJSON
+	pathScope := validated.pathScope
+	hasPathScope := validated.hasPathScope
+	hasMockConfig := validated.hasMockConfig
+	contractsPath := validated.contractsPath
 
 	// An environments row is inserted in this SAME transaction, BEFORE
 	// the session row itself, so the session insert below can set
@@ -415,11 +468,18 @@ func TriggerDispatch(ctx context.Context, registry *sessionactor.Registry, sessi
 
 // CreateSessionCore is the pool-based wrapper CreateSession (the HTTP
 // handler above) and any other caller with no already-open transaction
-// of its own use: it owns a SINGLE transaction start-to-finish (pool.
-// Begin -> CreateSessionOnTx -> tx.Commit -> TriggerDispatch), exactly
-// byte-for-byte the same sequencing this function performed before the
-// tx-support split (CreateSessionOnTx/TriggerDispatch below) -- this is a
-// pure refactor for every existing caller, not a behavior change: every
+// of its own use: it validates the request FIRST (validateCreateSession
+// Request, below) -- a rejected repo/pathScope/mockConfig.contractsPath
+// spec never reaches pool.Begin, let alone Postgres, restoring the same
+// trust-boundary invariant this handler documented before the tx-support
+// split (CreateSession's own doc comment above) -- then owns a SINGLE
+// transaction start-to-finish (pool.Begin -> CreateSessionOnTx ->
+// tx.Commit -> TriggerDispatch). Validating again inside CreateSessionOnTx
+// is redundant on this path (harmless, in-memory only) but necessary for
+// CreateSessionOnTx's OTHER callers -- see its own doc comment. With that
+// pre-check in place, this is byte-for-byte the same validate -> insert ->
+// commit sequencing this function performed before the tx-support split:
+// a pure refactor for every existing caller, not a behavior change -- every
 // existing CreateSession/CreateSessionCore test keeps passing unchanged.
 //
 // A caller that is ALREADY holding an open transaction of its own (e.g.
@@ -433,6 +493,15 @@ func TriggerDispatch(ctx context.Context, registry *sessionactor.Registry, sessi
 // transaction has committed and hasPrompt is true.
 func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (sqlcgen.Session, *CreateSessionError) {
 	logger := platform.Logger(ctx)
+
+	// Validate BEFORE ever acquiring a pooled connection -- see
+	// validateCreateSessionRequest's own doc comment. A request that
+	// fails this check returns its 400/500 having opened zero Postgres
+	// connections/transactions, matching this function's pre-tx-support-
+	// split behavior exactly.
+	if _, verr := validateCreateSessionRequest(req); verr != nil {
+		return sqlcgen.Session{}, verr
+	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {

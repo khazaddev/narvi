@@ -22,6 +22,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -47,6 +48,18 @@ import (
 // lives in the internal httpapi package while that one lives in the
 // external httpapi_test package.
 func newCoreTestPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	pool, _ := newCoreTestPoolAndConnStr(t)
+	return pool
+}
+
+// newCoreTestPoolAndConnStr is newCoreTestPool plus the raw connection
+// string, for the rare test (TestCreateSessionCore_ValidationFailure_
+// NeverAcquiresConnection below) that needs to open its OWN
+// differently-configured pool (a MaxConns:1 one) against the same
+// container/database rather than reuse the shared-default pool every
+// other test in this file gets.
+func newCoreTestPoolAndConnStr(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -98,7 +111,7 @@ func newCoreTestPool(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 
-	return pool
+	return pool, connStr
 }
 
 // TestCreateSessionCore_NilCreator_StoresNullCreatedBy proves the
@@ -381,6 +394,81 @@ func TestCreateSessionOnTx_ValidationFailure_NeverTouchesTx(t *testing.T) {
 	// written, and no error/abort state was left on the connection).
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("tx.Commit after validation failure: %v", err)
+	}
+}
+
+// TestCreateSessionCore_ValidationFailure_NeverAcquiresConnection proves
+// the trust-boundary invariant create.go's own doc comments describe ("a
+// rejected repo spec never reaches Postgres at all") actually holds on
+// CreateSessionCore's real pool-based path -- not just, as
+// TestCreateSessionOnTx_ValidationFailure_NeverTouchesTx above already
+// proves, that CreateSessionOnTx doesn't write to a tx the TEST itself
+// opened.
+//
+// It opens its own MaxConns:1 pool against the same database, then
+// deliberately holds that single connection open for the whole test (via
+// a separate, still-open tx on a throwaway table) before ever calling
+// CreateSessionCore with a request that fails pure in-memory validation
+// (empty repos). If CreateSessionCore validated AFTER pool.Begin (the
+// regression this test guards against), it would block forever waiting
+// for a connection no one is going to release, and the bounded context
+// below would fail the test with context.DeadlineExceeded instead of the
+// expected 400. Validating BEFORE pool.Begin means the call returns
+// immediately, with the one pooled connection still held elsewhere the
+// entire time.
+func TestCreateSessionCore_ValidationFailure_NeverAcquiresConnection(t *testing.T) {
+	ctx := context.Background()
+	_, connStr := newCoreTestPoolAndConnStr(t)
+
+	cfg, err := pgxpool.ParseConfig(connStr)
+	if err != nil {
+		t.Fatalf("pgxpool.ParseConfig: %v", err)
+	}
+	cfg.MaxConns = 1
+
+	limitedPool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("pgxpool.NewWithConfig: %v", err)
+	}
+	t.Cleanup(limitedPool.Close)
+
+	// Hold the pool's only connection open on an unrelated tx for the
+	// whole test, so any attempt by CreateSessionCore to acquire a
+	// SECOND connection (i.e. pool.Begin having already run) would block
+	// with none available.
+	holderTx, err := limitedPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("holderTx Begin: %v", err)
+	}
+	t.Cleanup(func() { _ = holderTx.Rollback(ctx) })
+
+	sessions := narvipg.NewSessionStore(limitedPool)
+	turns := narvipg.NewTurnStore(limitedPool)
+	environments := narvipg.NewEnvironmentStore(limitedPool)
+	registry, err := sessionactor.NewRegistry(ctx, limitedPool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = registry.Shutdown() })
+
+	req := restdtos.CreateSessionRequest{
+		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
+		Repos:       []restdtos.CreateSessionRequestReposElem{}, // empty: must fail validation
+	}
+	var nilCreator pgtype.UUID
+
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, cerr := CreateSessionCore(callCtx, limitedPool, sessions, turns, environments, registry, req, nilCreator)
+	if cerr == nil {
+		t.Fatal("CreateSessionCore: got nil error, want a CreateSessionError for empty repos")
+	}
+	if cerr.Status != http.StatusBadRequest {
+		t.Errorf("cerr.Status = %d, want %d (got it without blocking on the held connection: %s)", cerr.Status, http.StatusBadRequest, cerr.Message)
+	}
+	if errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+		t.Error("callCtx deadline exceeded -- CreateSessionCore blocked waiting for a connection instead of validating first")
 	}
 }
 

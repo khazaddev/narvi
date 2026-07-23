@@ -155,20 +155,38 @@
 // repo/pathScope/mockConfig validation and session/turn-insert logic by
 // hand, CreateSessionCore is now split into three pieces (create.go):
 //
-//   - CreateSessionOnTx: everything CreateSessionCore used to do up to
-//     and including the optional turn insert, taking an ALREADY-OPEN
-//     pgx.Tx the CALLER owns entirely -- no Begin/Commit/Rollback inside
-//     it at all. Returns hasPrompt explicitly so the caller knows, ONCE
-//     ITS OWN outer transaction has committed, whether a dispatch trigger
-//     is needed.
+//   - validateCreateSessionRequest: every in-memory-only check
+//     (repos non-empty, each repo's Name/Url/Branch, pathScope,
+//     mockConfig.contractsPath) that used to run inline, extracted so it
+//     can be called from two places without duplicating its logic by
+//     hand.
+//   - CreateSessionOnTx: everything CreateSessionCore used to do AFTER
+//     validation, up to and including the optional turn insert, taking
+//     an ALREADY-OPEN pgx.Tx the CALLER owns entirely -- no Begin/Commit/
+//     Rollback inside it at all. It calls validateCreateSessionRequest
+//     itself, at its own top, before touching tx -- necessary because it
+//     is also called directly by callers that already hold their own
+//     open transaction and have not necessarily validated the request
+//     first. Returns hasPrompt explicitly so the caller knows, ONCE ITS
+//     OWN outer transaction has committed, whether a dispatch trigger is
+//     needed.
 //   - TriggerDispatch: the exact "GetOrSpawn + Send(EnsureDispatched{})"
 //     fire-and-forget pattern (warn-log-on-error, never returned to the
 //     caller), extracted so every caller triggers dispatch identically
 //     post-commit.
-//   - CreateSessionCore itself: now a thin pool-based wrapper --
+//   - CreateSessionCore itself: now validateCreateSessionRequest ->
 //     pool.Begin -> CreateSessionOnTx -> tx.Commit -> (if hasPrompt)
-//     TriggerDispatch -- byte-for-byte the same sequencing it always
-//     performed, so CreateSession (the HTTP handler) and every existing
+//     TriggerDispatch. The explicit pre-Begin validation call is a
+//     correction, not just a refactor: an earlier version of this split
+//     called pool.Begin FIRST and left validation to run only inside
+//     CreateSessionOnTx, i.e. AFTER the transaction/connection was
+//     already open -- silently breaking the pre-existing trust-boundary
+//     invariant (create.go's own doc comments above, "a rejected repo
+//     spec never reaches Postgres at all") for every malformed request on
+//     this pool-based path. With the pre-Begin call restored, the
+//     validate -> insert -> commit sequencing is byte-for-byte the same
+//     as CreateSessionCore performed before the tx-support split, so
+//     CreateSession (the HTTP handler) and every existing
 //     CreateSessionCore test are unaffected. A caller already holding its
 //     own open transaction calls CreateSessionOnTx directly, inline on
 //     that same connection, and calls TriggerDispatch itself once its own
