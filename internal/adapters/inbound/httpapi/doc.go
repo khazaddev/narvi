@@ -116,21 +116,10 @@
 // hard-required for this browser/REST route) -> createSessionCore ->
 // write the JSON response. This is a pure refactor for this route --
 // every existing test in this package's own _test.go files passes
-// unchanged. The point of the split is reuse: Steps 32/33/34's own
-// GitHub/Slack/Linear webhook ingress handlers call createSessionCore
-// directly, with their own already-verified, already-decoded request and
-// a NULL creator (no cookie, no human) -- never this package's own
-// CreateSession, which stays browser-only. createSessionCore stays
-// unexported deliberately: since it is package-private, those ingress
-// handlers must live in THIS package (as new files alongside create.go/
-// get.go/events.go/artifacts.go/wstoken.go -- the same one-package,
-// one-file-per-route-family shape this package already uses), not in
-// separate new packages -- an unexported identifier cannot be called
-// from outside its own package. Whether that turns out to be
-// internal/adapters/inbound/httpapi/github.go et al., or Steps 32-34
-// decide createSessionCore should be exported instead, is left to those
-// Steps; this Step only guarantees the extraction itself is
-// behavior-preserving.
+// unchanged. The point of the split is reuse: a webhook ingress handler
+// calls createSessionCore directly, with its own already-verified,
+// already-decoded request and a NULL creator (no cookie, no human) --
+// never this package's own CreateSession, which stays browser-only.
 //
 // This Step also adds two other, independent pieces used by those same
 // future ingress endpoints, neither wired to a concrete provider yet:
@@ -144,4 +133,45 @@
 //     postgres.WebhookDeliveryStore.Claim: the atomic
 //     INSERT ... ON CONFLICT dedupe/coalescing claim §5.1 calls for,
 //     keyed on (provider, delivery_id).
+//
+// # Reconciliation update: createSessionCore exported and split for tx
+// support
+//
+// Independent webhook-ingress adapters each ended up needing "create a
+// session (+ optional turn), then post-commit trigger dispatch" from
+// OUTSIDE this package, which resolves the "should this stay
+// package-private" question this Step originally left open: createSessionCore
+// is exported (as CreateSessionCore, alongside an exported
+// CreateSessionError -- Status/Message fields, same Error() method) -- a
+// pure rename, no behavior change for any existing caller. At least one
+// such adapter also needs to create a session+turn while ALREADY holding
+// an unrelated lock on its own already-open transaction (e.g. an atomic
+// per-resource claim taken via SELECT ... FOR UPDATE) -- calling the
+// pool-based CreateSessionCore from inside that critical section would
+// open a SECOND, simultaneous connection out of the same pool while the
+// first transaction's own connection is still held, a genuine
+// connection-pool exhaustion/deadlock risk under real concurrent load.
+// Rather than leave every such caller to duplicate CreateSessionCore's own
+// repo/pathScope/mockConfig validation and session/turn-insert logic by
+// hand, CreateSessionCore is now split into three pieces (create.go):
+//
+//   - CreateSessionOnTx: everything CreateSessionCore used to do up to
+//     and including the optional turn insert, taking an ALREADY-OPEN
+//     pgx.Tx the CALLER owns entirely -- no Begin/Commit/Rollback inside
+//     it at all. Returns hasPrompt explicitly so the caller knows, ONCE
+//     ITS OWN outer transaction has committed, whether a dispatch trigger
+//     is needed.
+//   - TriggerDispatch: the exact "GetOrSpawn + Send(EnsureDispatched{})"
+//     fire-and-forget pattern (warn-log-on-error, never returned to the
+//     caller), extracted so every caller triggers dispatch identically
+//     post-commit.
+//   - CreateSessionCore itself: now a thin pool-based wrapper --
+//     pool.Begin -> CreateSessionOnTx -> tx.Commit -> (if hasPrompt)
+//     TriggerDispatch -- byte-for-byte the same sequencing it always
+//     performed, so CreateSession (the HTTP handler) and every existing
+//     CreateSessionCore test are unaffected. A caller already holding its
+//     own open transaction calls CreateSessionOnTx directly, inline on
+//     that same connection, and calls TriggerDispatch itself once its own
+//     outer transaction commits -- never CreateSessionCore, which is only
+//     safe for a caller with no transaction of its own yet.
 package httpapi
