@@ -27,7 +27,7 @@ type ClaimSlackThreadSessionParams struct {
 
 // Queries backing SlackThreadSessionStore (§8.10's thread↔session
 // mapping, Step 33 "Slack ingress"). See
-// migrations/000028_slack_thread_sessions.up.sql's own doc comment for
+// migrations/000029_slack_thread_sessions.up.sql's own doc comment for
 // the full atomic-claim design.
 // Atomic first-writer-wins claim on (channel_id, thread_ts) for a
 // BRAND-NEW thread's session_id -- ON CONFLICT DO NOTHING (deliberately

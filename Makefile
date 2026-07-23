@@ -33,6 +33,7 @@ test-integration:
 # against it. Every env var below is an obviously-fake, dev-only value
 # supplied inline by this recipe so platform.Load() (internal/platform/
 # config.go) succeeds: the 3 HMAC secrets, the GitHub OAuth credentials,
+# the GitHub webhook secret + bot handle (Step 32, "GitHub ingress"),
 # NARVI_PUBLIC_BASE_URL (matches config.go's own defaultHTTPAddr, ":8080"),
 # NARVI_TOKEN_ENCRYPTION_KEY (a real base64 encoding of exactly 32 random
 # bytes -- Load() rejects anything else for AES-256-GCM), one signup
@@ -55,6 +56,8 @@ dev:
 	NARVI_HMAC_WEBHOOK_SECRET=dev-only-insecure-webhook-secret \
 	NARVI_GITHUB_CLIENT_ID=dev-github-client-id-placeholder \
 	NARVI_GITHUB_CLIENT_SECRET=dev-github-client-secret-placeholder \
+	NARVI_GITHUB_WEBHOOK_SECRET=dev-only-insecure-github-webhook-secret \
+	NARVI_GITHUB_BOT_HANDLE=narvi-bot \
 	NARVI_PUBLIC_BASE_URL=http://localhost:8080 \
 	NARVI_TOKEN_ENCRYPTION_KEY=X4x5GAK5D4bwFxg5fEzToXLfPfe2XwZp8U3CR/Pl1Z4= \
 	NARVI_ALLOWED_GITHUB_ORGS=dev-org-placeholder \

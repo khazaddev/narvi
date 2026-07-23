@@ -56,3 +56,28 @@ func (q *Queries) ClaimWebhookDelivery(ctx context.Context, arg ClaimWebhookDeli
 	)
 	return i, err
 }
+
+const releaseWebhookDelivery = `-- name: ReleaseWebhookDelivery :exec
+DELETE FROM webhook_deliveries WHERE provider = $1 AND delivery_id = $2
+`
+
+type ReleaseWebhookDeliveryParams struct {
+	Provider   string `json:"provider"`
+	DeliveryID string `json:"delivery_id"`
+}
+
+// Un-claims a (provider, delivery_id) this same request just claimed via
+// ClaimWebhookDelivery, but failed to actually process (payload parse
+// error, transient DB error downstream of the claim, etc.) -- called ONLY
+// on those genuine-failure paths, never on a legitimate "nothing to do"
+// outcome. Without this, a claim that wins the INSERT but then fails
+// before the work it gates ever completes would permanently poison that
+// (provider, delivery_id): every subsequent redelivery (which every one
+// of these providers sends on a timeout/5xx -- the exact scenario a
+// mid-pipeline failure often causes) would see Inserted=false and skip
+// reprocessing forever, silently dropping the event. Deleting the row
+// lets the next redelivery re-claim and retry from scratch.
+func (q *Queries) ReleaseWebhookDelivery(ctx context.Context, arg ReleaseWebhookDeliveryParams) error {
+	_, err := q.db.Exec(ctx, releaseWebhookDelivery, arg.Provider, arg.DeliveryID)
+	return err
+}

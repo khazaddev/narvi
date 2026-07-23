@@ -164,6 +164,29 @@ const (
 	publicBaseURLEnvVarName      = "NARVI_PUBLIC_BASE_URL"
 )
 
+// gitHubWebhookSecretEnvVarName and gitHubBotHandleEnvVarName configure
+// Step 32's ("GitHub ingress", §8.2) own webhook adapter --
+// internal/adapters/inbound/github. gitHubWebhookSecretEnvVarName is
+// DELIBERATELY DISTINCT from hmacWebhookSecretEnvVarName above: that
+// secret backs Narvi's OWN internal bearer HMAC scheme (a later, unrelated
+// concern -- see internal/platform/webhooksig.go's own doc comment for
+// the full reasoning), never a real third-party provider signature.
+// GitHubWebhookSecret is the REAL secret GitHub itself signs
+// "X-Hub-Signature-256" with, configured on GitHub's own webhook settings
+// screen. gitHubBotHandleEnvVarName is the bot/app username Step 32's own
+// mention-detection matches comment bodies against (a plain "@handle"
+// substring check, internal/adapters/inbound/github). Both required in
+// every stage -- never defaulted, matching every other secret/credential
+// this file already reads (the 3 HMAC secrets, the GitHub OAuth
+// credentials, TokenEncryptionKey, Modal's own BaseURL/AuthToken): there
+// is no safe placeholder webhook secret, and a misconfigured/empty bot
+// handle would silently make this entire ingress route never detect a
+// single mention.
+const (
+	gitHubWebhookSecretEnvVarName = "NARVI_GITHUB_WEBHOOK_SECRET"
+	gitHubBotHandleEnvVarName     = "NARVI_GITHUB_BOT_HANDLE"
+)
+
 // tokenEncryptionKeyEnvVarName is the env var Load reads for the AES-256-GCM
 // key protecting provider tokens at rest (§13.1: "Provider tokens encrypted
 // at rest (AES-GCM), per-user"). Required in every stage; the raw value
@@ -372,6 +395,15 @@ type Config struct {
 	GitHubClientID     string
 	GitHubClientSecret string
 
+	// GitHubWebhookSecret and GitHubBotHandle configure Step 32's
+	// ("GitHub ingress", §8.2) webhook adapter, read from
+	// NARVI_GITHUB_WEBHOOK_SECRET / NARVI_GITHUB_BOT_HANDLE. Both required
+	// in every stage -- never defaulted. See gitHubWebhookSecretEnvVarName's
+	// own doc comment above for why GitHubWebhookSecret is a DISTINCT
+	// secret from HMACWebhookSecret.
+	GitHubWebhookSecret string
+	GitHubBotHandle     string
+
 	// PublicBaseURL is this control plane's own externally-reachable base
 	// URL (e.g. "http://localhost:8080" in development, a real https://
 	// URL in production), read from NARVI_PUBLIC_BASE_URL. Required — used
@@ -524,6 +556,16 @@ func Load() (*Config, error) {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: publicBaseURLEnvVarName})
 	}
 
+	gitHubWebhookSecret := os.Getenv(gitHubWebhookSecretEnvVarName)
+	if gitHubWebhookSecret == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubWebhookSecretEnvVarName})
+	}
+
+	gitHubBotHandle := os.Getenv(gitHubBotHandleEnvVarName)
+	if gitHubBotHandle == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubBotHandleEnvVarName})
+	}
+
 	var tokenEncryptionKey []byte
 	rawTokenEncryptionKey := os.Getenv(tokenEncryptionKeyEnvVarName)
 	if rawTokenEncryptionKey == "" {
@@ -614,6 +656,8 @@ func Load() (*Config, error) {
 		HMACWebhookSecret:      hmacWebhookSecret,
 		GitHubClientID:         gitHubClientID,
 		GitHubClientSecret:     gitHubClientSecret,
+		GitHubWebhookSecret:    gitHubWebhookSecret,
+		GitHubBotHandle:        gitHubBotHandle,
 		PublicBaseURL:          publicBaseURL,
 		TokenEncryptionKey:     tokenEncryptionKey,
 		AllowedEmailDomains:    allowedEmailDomains,

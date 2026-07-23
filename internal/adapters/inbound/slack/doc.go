@@ -71,7 +71,7 @@
 // all -- and, more importantly, establishes OUR OWN thread the moment we
 // post the very first ack in reply to a plain, non-threaded mention).
 //
-// A concurrency-safe claim (migrations/000028_slack_thread_sessions.up.sql,
+// A concurrency-safe claim (migrations/000029_slack_thread_sessions.up.sql,
 // postgres.SlackThreadSessionStore) is needed for the case two
 // near-simultaneous first messages race to create the SAME brand-new
 // thread's mapping. The design deliberately sequences around the fact

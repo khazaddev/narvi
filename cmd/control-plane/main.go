@@ -28,6 +28,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
+	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
@@ -184,14 +185,16 @@ func serve() error {
 	environmentStore := postgres.NewEnvironmentStore(pool)
 	imageBuildStore := postgres.NewImageBuildStore(pool)
 
-	// The 2 stores backing Step 33's ("Slack ingress", §8.10) own
-	// webhook adapter -- webhookDeliveryStore is Step 31's own
-	// provider-agnostic dedupe claim (shared with Steps 32/34's own
-	// GitHub/Linear ingress); slackThreadSessionStore is Step 33's own
-	// thread<->session mapping (see internal/adapters/inbound/slack's
-	// own doc.go).
+	// webhookDeliveryStore is Step 31's own provider-agnostic dedupe claim,
+	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress.
+	// slackThreadSessionStore (Step 33, "Slack ingress", §8.10) is the
+	// thread<->session mapping (see internal/adapters/inbound/slack's own
+	// doc.go); githubPRSessionStore (Step 32, "GitHub ingress", §8.2) is the
+	// per-PR review-session coalescing claim (see
+	// internal/adapters/inbound/github's own doc.go).
 	webhookDeliveryStore := postgres.NewWebhookDeliveryStore(pool)
 	slackThreadSessionStore := postgres.NewSlackThreadSessionStore(pool)
+	githubPRSessionStore := postgres.NewGitHubPRSessionStore(pool)
 
 	// recon is Step 25's ("reconciler + GC", §5.3) process-wide
 	// provider-reconciliation/orphan-GC loop, run below via the errgroup
@@ -287,6 +290,29 @@ func serve() error {
 		SlackAPIBaseURL: slackAPIBaseURL,
 		AckTimeout:      cfg.Timeouts.SlackAckTimeout,
 	}))
+
+	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
+	// OUTSIDE auth.Middleware entirely, mirroring scm-credentials/
+	// snapshot-mint immediately above exactly -- this route authenticates
+	// via GitHub's own HMAC webhook signature, not a browser cookie. See
+	// internal/adapters/inbound/github's own doc.go for the full
+	// verify -> dedupe-claim -> parse -> detect -> per-PR-coalesce
+	// sequencing.
+	router.Post("/webhooks/github", githubingress.NewHandler(
+		&githubingress.SessionCoalescer{
+			Pool:         pool,
+			PRSessions:   githubPRSessionStore,
+			Sessions:     sessionStore,
+			Turns:        turnStore,
+			Environments: environmentStore,
+			Registry:     registry,
+		},
+		webhookDeliveryStore,
+		githubingress.Config{
+			WebhookSecret: cfg.GitHubWebhookSecret,
+			BotHandle:     cfg.GitHubBotHandle,
+		},
+	))
 
 	// Auth routes (§13.1/§13.4, Step 20): how a session is obtained/
 	// discarded in the first place, so — obviously — mounted OUTSIDE any
