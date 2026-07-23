@@ -81,6 +81,30 @@ func (q *Queries) GetLinearAgentSessionByAgentSessionID(ctx context.Context, age
 	return i, err
 }
 
+const getLinearAgentSessionBySessionID = `-- name: GetLinearAgentSessionBySessionID :one
+SELECT agent_session_id, session_id, organization_id, created_at FROM linear_agent_sessions
+WHERE session_id = $1
+`
+
+// The REVERSE lookup Step 35 ("outbox delivery") needs: given a
+// session_id, which agent_session_id/organization_id does it back? Backed
+// by migrations/000030_linear_agent_sessions.up.sql's own already-existing
+// linear_agent_sessions_session_id_idx (Step 34 added this index up
+// front). A pgx.ErrNoRows result means this session was never created via
+// a Linear agent session -- the caller skips enqueuing a Linear
+// notification entirely rather than fabricating one.
+func (q *Queries) GetLinearAgentSessionBySessionID(ctx context.Context, sessionID pgtype.UUID) (LinearAgentSession, error) {
+	row := q.db.QueryRow(ctx, getLinearAgentSessionBySessionID, sessionID)
+	var i LinearAgentSession
+	err := row.Scan(
+		&i.AgentSessionID,
+		&i.SessionID,
+		&i.OrganizationID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const setLinearAgentSessionSessionID = `-- name: SetLinearAgentSessionSessionID :exec
 UPDATE linear_agent_sessions
 SET session_id = $2

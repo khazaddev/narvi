@@ -1,0 +1,60 @@
+// Package outboxworker is the process-wide background outbox-delivery
+// loop (Step 35, "outbox delivery", §5.1/§9.3 scenario 9) -- a sibling of
+// app/reconciler and app/imagebuild, not folded into either
+// (TECHNICAL_PLAN.md §1's own repo-layout convention: one package per
+// major loop/subsystem under internal/app/).
+//
+// Builder.Run (mirroring app/imagebuild.Builder.Run/app/reconciler.
+// Reconciler.Run's own identical shape) ticks every platform.Timeouts.
+// OutboxPumpInterval, calling PumpOnce -- exported separately, exactly
+// like ReconcileOnce/imagebuild's own PumpOnce, so tests can drive exactly
+// one tick deterministically. PumpOnce:
+//
+//  1. Claims a batch of outbox rows eligible to (re)attempt delivery now
+//     (status='pending', next_attempt_at elapsed) -- ONE transaction:
+//     SELECT ... FOR UPDATE SKIP LOCKED, then per-row UPDATE bumping
+//     next_attempt_at forward by platform.Timeouts.OutboxClaimDuration (a
+//     provisional protection window -- the outbox table, unlike
+//     image_builds' own 'building' status, has no third, in-flight status
+//     to mark a row claimed with) and incrementing attempts, committed
+//     BEFORE any real notifier call -- mirrors app/imagebuild.Builder.
+//     claimBatch/app/sessionactor/timerpump.go's own claimDueTimers
+//     precedent exactly.
+//  2. For each claimed row, OUTSIDE any transaction, bounded by platform.
+//     Timeouts.OutboxDeliveryTimeout: routes to whichever of the three
+//     ports.Notifier implementations (internal/adapters/outbound/
+//     {slackapi,linearapi via linearNotifier,githubapi}) owns the row's
+//     own kind, via a caller-supplied kind->Notifier map (constructed once
+//     in cmd/control-plane/main.go). On success: MarkOutboxEntryDelivered.
+//     On failure: domain/outbox.EvaluateBackoff (fed the row's own
+//     post-claim attempts count) decides RecordOutboxEntryFailure
+//     (schedule next_attempt_at) vs MarkOutboxEntryDeadLetter (attempts
+//     have exhausted domain/outbox.MaxAttempts).
+//
+// One row's delivery failure (or any error recording its outcome) is
+// logged and does NOT abort the rest of the batch -- exactly like
+// app/imagebuild.Builder.attempt's own per-row isolation.
+//
+// Two OTel instruments are constructed once, at NewBuilder time (mirroring
+// app/imagebuild's own image_build_failure_streak precedent): the
+// outbox_lag gauge (IMPLEMENTATION_PLAN.md row 35's own explicit
+// requirement, §5.3's "outbox lag" observability item) observes, once per
+// tick, the age (in seconds) of the oldest still-due pending row at the
+// START of that tick's own claim step -- zero when nothing is overdue --
+// and the outbox_dead_letter counter increments once per row this Builder
+// dead-letters.
+//
+// linearnotifier.go's own linearNotifier is this package's own small
+// Linear-specific ports.Notifier wrapper (holding a *linearapi.Client, a
+// *postgres.LinearInstallationStore, and platform.Config.
+// TokenEncryptionKey): it looks up the target workspace's real Linear API
+// credential FRESH, by organization_id, at delivery time (decrypt via
+// platform.DecryptToken), and never inside internal/adapters/outbound/
+// linearapi itself -- keeping that package free of a postgres-store
+// dependency it would otherwise be the only outbound adapter to carry (a
+// hard security requirement: a decrypted token must never sit in the
+// outbox payload at rest, and this package -- not linearapi -- is where
+// the postgres.LinearInstallationStore dependency this lookup needs
+// already naturally lives, alongside every other store this Builder's own
+// wiring already threads through).
+package outboxworker

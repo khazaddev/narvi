@@ -37,7 +37,10 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
+	"github.com/khazaddev/narvi/internal/app/outboxworker"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reconciler"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -415,6 +418,37 @@ func serve() error {
 		Timeouts:           cfg.Timeouts,
 	}))
 
+	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3
+	// scenario 9): three real ports.Notifier implementations, one per
+	// NotificationKind, assembled into a single kind->Notifier routing map
+	// -- see internal/app/outboxworker's own doc.go for the full pump
+	// design this Builder runs. slackNotifier is a NEW, separate client
+	// from internal/adapters/inbound/slack's own ackClient (that one is
+	// Step 33's own synchronous in-thread ack, never reused here -- see
+	// that package's own doc.go). githubNotifier wraps the SAME
+	// sourceControl Adapter already constructed above (design decision:
+	// BotNotifier is a sibling type over the same Adapter/doPost
+	// machinery, not a second, independently-constructed client),
+	// authenticated with the NEW, separate cfg.GitHubBotToken rather than
+	// any per-session OAuth token (see internal/platform/config.go's own
+	// gitHubBotTokenEnvVarName doc comment for why). linearNotifier looks
+	// up each workspace's own real Linear API credential fresh, by
+	// organization_id, at delivery time (linearInstallationStore +
+	// cfg.TokenEncryptionKey) -- never a token cached in this map itself.
+	slackNotifier := slackapi.New(nil, slackAPIBaseURL, cfg.SlackBotToken)
+	githubNotifier := githubapi.NewBotNotifier(sourceControl, cfg.GitHubBotToken)
+	linearNotifier := outboxworker.NewLinearNotifier(linearClient, linearInstallationStore, cfg.TokenEncryptionKey)
+
+	outboxStore := postgres.NewOutboxStore(pool)
+	outboxBuilder, err := outboxworker.NewBuilder(outboxStore, pool, map[ports.NotificationKind]ports.Notifier{
+		ports.NotificationKindSlack:  slackNotifier,
+		ports.NotificationKindGitHub: githubNotifier,
+		ports.NotificationKindLinear: linearNotifier,
+	}, cfg.Timeouts)
+	if err != nil {
+		return fmt.Errorf("construct outbox delivery worker: %w", err)
+	}
+
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
 		Handler: router,
@@ -474,6 +508,18 @@ func serve() error {
 	group.Go(func() error {
 		if err := builder.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("image builder: %w", err)
+		}
+		return nil
+	})
+
+	// Step 35 ("outbox delivery", §5.1): started/shut down through this
+	// SAME errgroup as every other background loop above -- no naked
+	// goroutine (§11) -- with the identical context.Canceled carve-out
+	// RunTimerPump/RunExpiredTokenCleanup/recon.Run/builder.Run each
+	// already establish for normal shutdown.
+	group.Go(func() error {
+		if err := outboxBuilder.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("outbox delivery worker: %w", err)
 		}
 		return nil
 	})

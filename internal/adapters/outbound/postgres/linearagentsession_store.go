@@ -66,3 +66,11 @@ func (s *LinearAgentSessionStore) GetByAgentSessionID(ctx context.Context, agent
 	}
 	return row, nil
 }
+
+// GetBySessionID is the REVERSE lookup Step 35 ("outbox delivery") needs:
+// given a session_id, which agent_session_id/organization_id does it
+// back? Returns pgx.ErrNoRows (unwrapped) when sessionID was never
+// created via a Linear agent session.
+func (s *LinearAgentSessionStore) GetBySessionID(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.LinearAgentSession, error) {
+	return s.q.GetLinearAgentSessionBySessionID(ctx, sessionID)
+}

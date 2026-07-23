@@ -32,4 +32,21 @@
 // convention used for the PUSH itself (see cmd/sandbox-agent's own
 // HandlePush): these are two distinct, correct conventions built on the
 // SAME underlying OAuth token, never conflated here.
+//
+// Step 35 ("outbox delivery", §5.1) adds PostIssueComment (a real POST
+// https://api.github.com/repos/{owner}/{repo}/issues/{pr_number}/comments
+// call -- GitHub's Issues API, which a pull request is itself always
+// addressable through) plus BotNotifier, a small sibling type (notifier.go)
+// implementing ports.Notifier by calling PostIssueComment with a single,
+// statically-configured bot credential (platform.Config.GitHubBotToken)
+// baked in at construction time -- deliberately NOT Adapter itself: every
+// existing Adapter method (CreatePR/ResolveBranchSHA/
+// ResolveContractsFingerprint) is authenticated PER-CALL with a
+// caller-supplied token (the session creator's own decrypted OAuth
+// identity), which webhook-originated sessions simply don't have
+// (sessions.created_by is NULL for them, migrations/000004_sessions.
+// up.sql) -- BotNotifier wraps the SAME Adapter/doPost machinery with a
+// bot token baked in once, rather than duplicating the HTTP plumbing a
+// second time or threading a bot-token special case through Adapter's
+// existing per-call-token methods.
 package githubapi

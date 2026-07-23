@@ -12,9 +12,10 @@ import (
 // setRequiredEnv sets NARVI_STAGE, NARVI_DATABASE_URL, the three
 // per-direction HMAC secret env vars (PR-06), Step 20's ("auth v1") own
 // required vars (GitHub OAuth credentials, PublicBaseURL, a valid 32-byte
-// base64 token encryption key, and one allowlist mechanism), and Step
+// base64 token encryption key, and one allowlist mechanism), Step
 // 32's ("GitHub ingress") own required vars (the real GitHub webhook
-// secret and the bot mention handle) to valid dummy values for the
+// secret and the bot mention handle), and Step 35's ("outbox delivery")
+// own GitHub bot token to valid dummy values for the
 // duration of the calling (sub)test, via
 // t.Setenv. Tests that exercise one specific, unrelated env var
 // (NARVI_LOG_LEVEL, NARVI_DATABASE_URL, ...) call this first so Load
@@ -32,6 +33,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_GITHUB_CLIENT_SECRET", "test-github-client-secret")
 	t.Setenv("NARVI_GITHUB_WEBHOOK_SECRET", "test-github-webhook-secret")
 	t.Setenv("NARVI_GITHUB_BOT_HANDLE", "test-bot")
+	t.Setenv("NARVI_GITHUB_BOT_TOKEN", "test-github-bot-token")
 	t.Setenv("NARVI_PUBLIC_BASE_URL", "http://localhost:8080")
 	t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=") // base64 of exactly 32 bytes
 	t.Setenv("NARVI_ALLOWED_EMAIL_DOMAINS", "example.com")
@@ -760,6 +762,7 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	t.Setenv("NARVI_GITHUB_CLIENT_SECRET", "dev-github-client-secret-placeholder")
 	t.Setenv("NARVI_GITHUB_WEBHOOK_SECRET", "dev-only-insecure-github-webhook-secret")
 	t.Setenv("NARVI_GITHUB_BOT_HANDLE", "narvi-bot")
+	t.Setenv("NARVI_GITHUB_BOT_TOKEN", "dev-github-bot-token-placeholder")
 	t.Setenv("NARVI_PUBLIC_BASE_URL", "http://localhost:8080")
 	t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "X4x5GAK5D4bwFxg5fEzToXLfPfe2XwZp8U3CR/Pl1Z4=")
 	t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "dev-org-placeholder")

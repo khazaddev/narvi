@@ -62,20 +62,38 @@ type storeBundle struct {
 	// same function compares against.
 	environment   *postgres.EnvironmentStore
 	contractDrift *postgres.ContractDriftStore
+
+	// outbox, slackThreadSession, githubPRSession, and linearAgentSession
+	// are Step 35's ("outbox delivery", §5.1) own additions: outbox is
+	// where pushpr.go's own completeProcessingTurn writes exactly one
+	// notification row per non-'web'-origin session's turn completion,
+	// inside that SAME transaction (§5.1: "written in the same tx as the
+	// state change"); the other three are the REVERSE (session_id ->
+	// origin-channel-address) lookups that write needs to know WHERE to
+	// route that notification -- each mirrors imageBuild/environment's own
+	// identical "added by the Step that first needs it" precedent.
+	outbox             *postgres.OutboxStore
+	slackThreadSession *postgres.SlackThreadSessionStore
+	githubPRSession    *postgres.GitHubPRSessionStore
+	linearAgentSession *postgres.LinearAgentSessionStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 	return storeBundle{
-		session:       postgres.NewSessionStore(pool),
-		turn:          postgres.NewTurnStore(pool),
-		sandbox:       postgres.NewSandboxStore(pool),
-		timer:         postgres.NewTimerStore(pool),
-		event:         postgres.NewEventStore(pool),
-		identity:      postgres.NewIdentityStore(pool),
-		artifact:      postgres.NewArtifactStore(pool),
-		imageBuild:    postgres.NewImageBuildStore(pool),
-		environment:   postgres.NewEnvironmentStore(pool),
-		contractDrift: postgres.NewContractDriftStore(pool),
+		session:            postgres.NewSessionStore(pool),
+		turn:               postgres.NewTurnStore(pool),
+		sandbox:            postgres.NewSandboxStore(pool),
+		timer:              postgres.NewTimerStore(pool),
+		event:              postgres.NewEventStore(pool),
+		identity:           postgres.NewIdentityStore(pool),
+		artifact:           postgres.NewArtifactStore(pool),
+		imageBuild:         postgres.NewImageBuildStore(pool),
+		environment:        postgres.NewEnvironmentStore(pool),
+		contractDrift:      postgres.NewContractDriftStore(pool),
+		outbox:             postgres.NewOutboxStore(pool),
+		slackThreadSession: postgres.NewSlackThreadSessionStore(pool),
+		githubPRSession:    postgres.NewGitHubPRSessionStore(pool),
+		linearAgentSession: postgres.NewLinearAgentSessionStore(pool),
 	}
 }
 

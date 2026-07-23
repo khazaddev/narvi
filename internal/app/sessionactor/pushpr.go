@@ -201,6 +201,23 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, err
 	}
 
+	sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: get session: %w", err)
+	}
+
+	// Step 35 ("outbox delivery", §5.1): enqueue exactly one outbox
+	// notification for THIS turn's completion, in the SAME transaction as
+	// the state change above -- runs for every outcome (complete/fail/
+	// cancel alike), unlike the push/PR path below which is success-only.
+	// A no-op (never an error propagated to the caller) for a 'web'-origin
+	// session, or a non-'web'-origin session whose own reverse-lookup row
+	// is missing -- see enqueueOutboxNotification's own doc comment
+	// (outboxenqueue.go).
+	if err := a.enqueueOutboxNotification(ctx, tx, sessionRow, trig, failureReason); err != nil {
+		return nil, err
+	}
+
 	if trig != turn.TriggerComplete {
 		// A failed/cancelled turn has nothing to push -- §9.3's resilience
 		// scenarios for THOSE outcomes are later Steps' own job (see this
@@ -208,10 +225,6 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, nil
 	}
 
-	sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("sessionactor: get session: %w", err)
-	}
 	repos, err := reposFromJSON(sessionRow.Repos)
 	if err != nil {
 		return nil, err
