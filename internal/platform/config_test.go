@@ -10,10 +10,12 @@ import (
 )
 
 // setRequiredEnv sets NARVI_STAGE, NARVI_DATABASE_URL, the three
-// per-direction HMAC secret env vars (PR-06), and Step 20's ("auth v1")
-// own required vars (GitHub OAuth credentials, PublicBaseURL, a valid
-// 32-byte base64 token encryption key, and one allowlist mechanism) to
-// valid dummy values for the duration of the calling (sub)test, via
+// per-direction HMAC secret env vars (PR-06), Step 20's ("auth v1") own
+// required vars (GitHub OAuth credentials, PublicBaseURL, a valid 32-byte
+// base64 token encryption key, and one allowlist mechanism), and Step
+// 32's ("GitHub ingress") own required vars (the real GitHub webhook
+// secret and the bot mention handle) to valid dummy values for the
+// duration of the calling (sub)test, via
 // t.Setenv. Tests that exercise one specific, unrelated env var
 // (NARVI_LOG_LEVEL, NARVI_DATABASE_URL, ...) call this first so Load
 // doesn't also fail on these other required vars; tests that exercise one
@@ -28,6 +30,8 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_HMAC_WEBHOOK_SECRET", "test-webhook-secret")
 	t.Setenv("NARVI_GITHUB_CLIENT_ID", "test-github-client-id")
 	t.Setenv("NARVI_GITHUB_CLIENT_SECRET", "test-github-client-secret")
+	t.Setenv("NARVI_GITHUB_WEBHOOK_SECRET", "test-github-webhook-secret")
+	t.Setenv("NARVI_GITHUB_BOT_HANDLE", "test-bot")
 	t.Setenv("NARVI_PUBLIC_BASE_URL", "http://localhost:8080")
 	t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=") // base64 of exactly 32 bytes
 	t.Setenv("NARVI_ALLOWED_EMAIL_DOMAINS", "example.com")
@@ -491,6 +495,58 @@ func TestLoadModalConfig(t *testing.T) {
 	})
 }
 
+// TestLoadGitHubWebhookConfig mirrors TestLoadModalConfig's own table
+// shape: NARVI_GITHUB_WEBHOOK_SECRET/NARVI_GITHUB_BOT_HANDLE (Step 32,
+// "GitHub ingress", §8.2) are each individually required -- never
+// defaulted, matching every other secret/credential this file already
+// reads.
+func TestLoadGitHubWebhookConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVar string
+	}{
+		{name: "webhook secret missing", envVar: "NARVI_GITHUB_WEBHOOK_SECRET"},
+		{name: "bot handle missing", envVar: "NARVI_GITHUB_BOT_HANDLE"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv(tc.envVar, "")
+
+			cfg, err := platform.Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil, want error for %s=%q", tc.envVar, "")
+			}
+			var missErr *platform.MissingRequiredEnvError
+			if !errors.As(err, &missErr) {
+				t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+			}
+			if missErr.EnvVar != tc.envVar {
+				t.Fatalf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, tc.envVar)
+			}
+			if cfg != nil {
+				t.Fatalf("Load() cfg = %+v, want nil on error", cfg)
+			}
+		})
+	}
+
+	t.Run("both set, succeeds", func(t *testing.T) {
+		setRequiredEnv(t)
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.GitHubWebhookSecret != "test-github-webhook-secret" {
+			t.Errorf("Load().GitHubWebhookSecret = %q, want %q", cfg.GitHubWebhookSecret, "test-github-webhook-secret")
+		}
+		if cfg.GitHubBotHandle != "test-bot" {
+			t.Errorf("Load().GitHubBotHandle = %q, want %q", cfg.GitHubBotHandle, "test-bot")
+		}
+	})
+}
+
 // TestLoadOpenCodeRuntimeVersion covers Step 26's ("image builds") own
 // optional NARVI_OPENCODE_RUNTIME_VERSION: unset defaults to
 // defaultOpenCodeRuntimeVersion (pinned equal to .github/workflows/ci.yml's
@@ -691,6 +747,8 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	t.Setenv("NARVI_STAGE", "development")
 	t.Setenv("NARVI_GITHUB_CLIENT_ID", "dev-github-client-id-placeholder")
 	t.Setenv("NARVI_GITHUB_CLIENT_SECRET", "dev-github-client-secret-placeholder")
+	t.Setenv("NARVI_GITHUB_WEBHOOK_SECRET", "dev-only-insecure-github-webhook-secret")
+	t.Setenv("NARVI_GITHUB_BOT_HANDLE", "narvi-bot")
 	t.Setenv("NARVI_PUBLIC_BASE_URL", "http://localhost:8080")
 	t.Setenv("NARVI_TOKEN_ENCRYPTION_KEY", "X4x5GAK5D4bwFxg5fEzToXLfPfe2XwZp8U3CR/Pl1Z4=")
 	t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "dev-org-placeholder")
