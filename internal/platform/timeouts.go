@@ -742,6 +742,27 @@ type Timeouts struct {
 	// an explicit figure in the plan; chosen as 5 minutes, matching
 	// Slack's own commonly recommended replay window.
 	WebhookTimestampFreshnessWindow time.Duration
+
+	// --- Step 33 standalone addition ("Slack ingress", §8.10): no
+	// ordering relationship with either invariant chain above (or with
+	// any prior Step's standalone additions), so -- per those additions'
+	// own precedent -- a plain field with a sensible default, not wired
+	// into a fake invariant link.
+
+	// SlackAckTimeout bounds a single internal/adapters/inbound/slack
+	// ackClient.postAck call (a real outbound POST to Slack's own
+	// chat.postMessage, made synchronously in the inbound webhook request
+	// path before that handler answers Slack's own delivery with 200) --
+	// mirrors PRCreateTimeout's own "a genuine outbound network call that
+	// must never run against an unbounded context" precedent exactly:
+	// without this, a Slack API outage would hang every webhook request
+	// touching a new-or-busy thread indefinitely, since neither
+	// http.DefaultClient nor the request's own context carries any
+	// deadline otherwise. Not specified in the plan; chosen as 10s,
+	// generous for a single Slack Web API POST while still well short of
+	// Slack's own ~3s "retry the webhook" outer expectation being made
+	// noticeably worse.
+	SlackAckTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -832,6 +853,8 @@ func DefaultTimeouts() Timeouts {
 		GitSyncStepTimeout: 30 * time.Second, // not specified; chosen, generous for a local-only stash/checkout/pop step without stalling boot
 
 		WebhookTimestampFreshnessWindow: 5 * time.Minute, // not specified; chosen, matches Slack's own commonly recommended replay window
+
+		SlackAckTimeout: 10 * time.Second, // not specified; chosen, generous for a single Slack chat.postMessage POST, mirrors PRCreateTimeout's own reasoning
 	}
 }
 

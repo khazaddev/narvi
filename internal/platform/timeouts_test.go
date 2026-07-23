@@ -499,6 +499,27 @@ func TestDefaultTimeouts_Step31StandaloneField(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step33StandaloneField proves Step 33's ("Slack
+// ingress") own addition -- SlackAckTimeout -- is populated with a
+// sensible default and does not disturb either invariant chain, matching
+// every other standalone addition's own test precedent above.
+func TestDefaultTimeouts_Step33StandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.SlackAckTimeout <= 0 {
+		t.Errorf("SlackAckTimeout = %v, want > 0", to.SlackAckTimeout)
+	}
+	if to.SlackAckTimeout != 10*time.Second {
+		t.Errorf("SlackAckTimeout = %v, want %v", to.SlackAckTimeout, 10*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

@@ -1,13 +1,14 @@
 //go:build integration
 
-// Integration tests for the UNEXPORTED createSessionCore function
-// itself (Step 31, "webhook toolkit" extraction) -- deliberately in
-// package httpapi (not httpapi_test, unlike this package's other
-// integration tests) since createSessionCore is intentionally
-// unexported: it is CreateSession's own internal implementation detail,
-// not yet a second public entry point (Steps 32-34 gain their own
-// webhook-specific callers later; nothing outside this package calls it
-// today). This file builds its own minimal testcontainers-Postgres rig
+// Integration tests for CreateSessionCore itself (Step 31, "webhook
+// toolkit" extraction) -- deliberately in package httpapi (not
+// httpapi_test, unlike this package's other integration tests), matching
+// this file's own original Step 31 precedent even after Step 33 exported
+// CreateSessionCore (see create.go's own updated doc comment): it is
+// still CreateSession's own internal implementation detail first and
+// foremost, with Steps 32-34's own webhook-specific ingress packages as
+// its only outside callers today. This file builds its own minimal
+// testcontainers-Postgres rig
 // rather than reusing httpapi_test's own newTestRig/newTestPool -- an
 // external test package's unexported helpers are not reachable from an
 // internal one, matching this codebase's own existing precedent that
@@ -129,9 +130,9 @@ func TestCreateSessionCore_NilCreator_StoresNullCreatedBy(t *testing.T) {
 
 	var nilCreator pgtype.UUID // Valid == false: the explicit "no human caller" case.
 
-	created, cerr := createSessionCore(ctx, pool, sessions, turns, environments, registry, req, nilCreator)
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, registry, req, nilCreator)
 	if cerr != nil {
-		t.Fatalf("createSessionCore: status=%d message=%q", cerr.status, cerr.message)
+		t.Fatalf("CreateSessionCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
 
 	if created.CreatedBy.Valid {
@@ -156,13 +157,13 @@ func TestCreateSessionCore_NilCreator_StoresNullCreatedBy(t *testing.T) {
 }
 
 // TestCreateSessionCore_NilCreator_WithPromptDispatches proves a nil
-// creator does not disturb the rest of createSessionCore's own existing
+// creator does not disturb the rest of CreateSessionCore's own existing
 // behavior: a non-nil prompt still creates a pending turn AND still
 // triggers the post-commit GetOrSpawn+EnsureDispatched path exactly like
 // today's authenticated-human path already does (indirectly proven here
 // by a successful, error-free call -- dispatch_integration_test.go in
 // app/sessionactor is what exhaustively covers the decision tree itself;
-// this test only proves createSessionCore's own wiring into it is
+// this test only proves CreateSessionCore's own wiring into it is
 // unaffected by createdBy being NULL).
 func TestCreateSessionCore_NilCreator_WithPromptDispatches(t *testing.T) {
 	ctx := context.Background()
@@ -188,9 +189,9 @@ func TestCreateSessionCore_NilCreator_WithPromptDispatches(t *testing.T) {
 
 	var nilCreator pgtype.UUID
 
-	created, cerr := createSessionCore(ctx, pool, sessions, turns, environments, registry, req, nilCreator)
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, registry, req, nilCreator)
 	if cerr != nil {
-		t.Fatalf("createSessionCore: status=%d message=%q", cerr.status, cerr.message)
+		t.Fatalf("CreateSessionCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
 
 	turnRows, err := turns.ListForSession(ctx, created.ID)

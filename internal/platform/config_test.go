@@ -38,6 +38,12 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("NARVI_MODAL_AUTH_TOKEN", "test-modal-auth-token")
 	t.Setenv("NARVI_MODAL_EGRESS_PROXY_URL", "")
 	t.Setenv("NARVI_OPENCODE_RUNTIME_VERSION", "")
+	// Step 33 ("Slack ingress") own required vars -- SlackDefaultRepoName/
+	// URL are deliberately left unset here since they're optional (see
+	// internal/platform/config.go's own slackDefaultRepoNameEnvVarName doc
+	// comment).
+	t.Setenv("NARVI_SLACK_SIGNING_SECRET", "test-slack-signing-secret")
+	t.Setenv("NARVI_SLACK_BOT_TOKEN", "test-slack-bot-token")
 }
 
 // TestLoad is table-driven over NARVI_STAGE values: each of the three
@@ -696,6 +702,8 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	t.Setenv("NARVI_ALLOWED_GITHUB_ORGS", "dev-org-placeholder")
 	t.Setenv("NARVI_MODAL_BASE_URL", "http://localhost:9999")
 	t.Setenv("NARVI_MODAL_AUTH_TOKEN", "dev-modal-token-placeholder")
+	t.Setenv("NARVI_SLACK_SIGNING_SECRET", "dev-slack-signing-secret-placeholder")
+	t.Setenv("NARVI_SLACK_BOT_TOKEN", "dev-slack-bot-token-placeholder")
 	// Every other allowlist/optional var is deliberately left unset here,
 	// matching the Makefile's dev target exactly (it never sets
 	// NARVI_ALLOWED_EMAIL_DOMAINS, NARVI_ALLOWED_EMAILS,
