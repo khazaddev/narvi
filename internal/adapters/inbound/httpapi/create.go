@@ -135,6 +135,10 @@ const defaultContractsPath = "contracts/api"
 // authenticatedUserID -- a future webhook ingress handler (Steps 32-34)
 // calls createSessionCore directly with its own already-decoded request
 // and a NULL createdBy (no cookie, no human), never this func.
+// createSessionCore is unexported on purpose, so that future caller must
+// live in this same package (see doc.go's own updated writeup) rather
+// than a separate package -- an unexported identifier isn't reachable
+// from outside internal/adapters/inbound/httpapi.
 func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()

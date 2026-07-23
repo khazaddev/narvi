@@ -11,8 +11,9 @@ package postgres_test
 
 import (
 	"context"
-	"sync"
 	"testing"
+
+	"golang.org/x/sync/errgroup"
 
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 )
@@ -124,27 +125,24 @@ func TestWebhookDeliveryStore_Claim_ConcurrentSameIdentity_ExactlyOneWinner(t *t
 	store := narvipg.NewWebhookDeliveryStore(pool)
 
 	const n = 20
-	var wg sync.WaitGroup
+	var g errgroup.Group
 	results := make([]bool, n)
-	errs := make([]error, n)
 
 	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
+		idx := i
+		g.Go(func() error {
 			row, err := store.Claim(ctx, "github", "concurrent-delivery-xyz")
 			results[idx] = row.Inserted
-			errs[idx] = err
-		}(i)
+			return err
+		})
 	}
-	wg.Wait()
+	if err := g.Wait(); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
 
 	insertedCount := 0
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("Claim[%d]: %v", i, err)
-		}
-		if results[i] {
+	for _, inserted := range results {
+		if inserted {
 			insertedCount++
 		}
 	}

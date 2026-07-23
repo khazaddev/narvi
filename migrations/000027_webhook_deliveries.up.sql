@@ -15,13 +15,13 @@
 -- every one of these providers does on a timeout/5xx) hits this
 -- constraint, not a race-prone read-then-write check.
 --
--- Just enough to prove the claim end to end (mirrors migrations/
--- 000010_outbox.up.sql's own doc comment: "just enough to prove the
--- pipeline") -- received_at is the only payload column, since this
--- Step's own job is the atomic claim primitive itself, not storing or
--- replaying delivery bodies. No caller exists yet: the concrete GitHub/
--- Slack/Linear webhook endpoints that actually call this claim land in
--- Steps 32/33/34.
+-- Just enough to prove the claim end to end, the same minimal-columns
+-- shape migrations/000010_outbox.up.sql's own doc comment uses for the
+-- outbox table -- received_at is the only payload column here, since
+-- this Step's own job is the atomic claim primitive itself, not storing
+-- or replaying delivery bodies. No caller exists yet: the concrete
+-- GitHub/Slack/Linear webhook endpoints that actually call this claim
+-- land in Steps 32/33/34.
 CREATE TABLE webhook_deliveries (
     provider     TEXT NOT NULL,
     delivery_id  TEXT NOT NULL,
