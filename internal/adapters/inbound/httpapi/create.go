@@ -14,6 +14,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/environment"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
@@ -164,7 +165,10 @@ const defaultContractsPath = "contracts/api"
 // Step 33's Slack ingress (above) actually depends on -- is unchanged by
 // this split: same params, same (sqlcgen.Session, *CreateSessionError)
 // return, same validate -> insert -> commit -> dispatch sequencing.
-func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry) http.HandlerFunc {
+// intentSvc is nil-safe (see recordExplicitIntentDecision's own doc
+// comment) so every existing call site that doesn't care about Step 36
+// can keep passing nil unchanged.
+func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
@@ -191,6 +195,31 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			writeError(w, cerr.Status, cerr.Message)
 			return
 		}
+
+		// Step 36 ("intent classifier", §8.3/§18): this is the ONE
+		// surface that ever supplies its own decision rather than calling
+		// Classify -- a human's own explicit plan/build toggle on the web
+		// UI, known the moment the session is created (§18.4's own
+		// "architecturally capable of having classified it themselves"
+		// carve-out). See recordExplicitIntentDecision's own doc comment.
+		// The surface argument is hardcoded to "web", NOT req.SpawnSource:
+		// req.SpawnSource is a client-supplied JSON field on this same
+		// request body, and this handler (CreateSession, the generic
+		// authenticated /api/sessions REST endpoint) is structurally only
+		// ever reachable as the real web surface -- Slack/Linear/GitHub
+		// ingress each construct sessions through their own separate code
+		// paths (CreateSessionCore/CreateSessionOnTx/CreateTurnForBot
+		// called directly from internal/adapters/inbound/{slack,linear,
+		// github}), never through this REST handler. §18.4 requires this
+		// check to be "server-side and never trust a client-supplied
+		// claim" -- honoring req.SpawnSource here would let a client
+		// hitting /api/sessions directly claim spawnSource: "slack" (or
+		// linear/github) in its JSON body and get an "explicit" decision
+		// recorded against a surface this handler never actually is.
+		// req.SpawnSource itself is still used, unchanged, for the
+		// session's own sessions.spawn_source column below -- that is a
+		// separate, pre-existing concern this fix does not touch.
+		recordExplicitIntentDecision(ctx, intentSvc, created.ID, "web", req.PlanMode)
 
 		writeJSON(w, http.StatusCreated, sessionToDTO(created))
 	}

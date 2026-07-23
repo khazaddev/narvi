@@ -877,6 +877,30 @@ type Timeouts struct {
 	// OutboxDeliveryTimeout (15s) above is this claim window's own
 	// worst-case real attempt duration, so 30s leaves meaningful margin.
 	OutboxClaimDuration time.Duration
+
+	// --- Step 36 standalone addition ("intent classifier", §8.3/§18): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior Step's standalone additions), so -- per those additions' own
+	// precedent -- a plain field with a sensible default, not wired into a
+	// fake invariant link.
+
+	// IntentClassifierLLMTimeout bounds ONE outbound ports.LLM.Complete
+	// call (internal/adapters/outbound/llm's Anthropic adapter, called
+	// once per session by internal/app/intentclassifier.Classify).
+	// Configured directly on the Anthropic SDK client at construction time
+	// (option.WithRequestTimeout) -- §18.1's own explicit rule is that
+	// this is the ONLY timeout layer for this call: never a second,
+	// redundant context.WithTimeout raced against it, since the SDK's own
+	// internal abort always resolves first. Not specified in the plan;
+	// chosen as 10s, matching RepoSHAResolutionTimeout/
+	// CredentialFetchTimeout's own "lightweight call, not a large data
+	// transfer" reasoning -- a structured-output classification call over
+	// a short prompt is exactly that kind of call, and this is a
+	// high-volume, latency-sensitive path called on every session across
+	// every surface (never a "remotely complicated" reasoning task, hence
+	// this Step's own choice of a fast/cheap model with no extended
+	// thinking enabled).
+	IntentClassifierLLMTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -978,6 +1002,8 @@ func DefaultTimeouts() Timeouts {
 		OutboxBackoffMax:      5 * time.Minute,  // not specified; chosen, shorter than ImageBuildBackoffMax since a live notification is being waited on
 		OutboxDeliveryTimeout: 15 * time.Second, // not specified; chosen, generous for a single outbound notifier POST
 		OutboxClaimDuration:   30 * time.Second, // not specified; chosen, matches TimerClaimDuration's own value/reasoning
+
+		IntentClassifierLLMTimeout: 10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 	}
 }
 

@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,9 +12,17 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/intentclassifier"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// intentClassifierSurface is the sessions.spawn_source value (§18.1's
+// IntentClassifierInput.Surface / §18.4's IntentDecisionRecord.Surface)
+// this package's own mentions are classified/recorded under.
+const intentClassifierSurface = "github"
 
 // SessionCoalescer bundles the stores/registry CreateOrJoin needs -- a
 // small struct rather than a long positional-parameter list, constructed
@@ -27,13 +36,21 @@ import (
 // never actually exercises the environment-insert branch for any request
 // this package ever hands it; Environments is simply threaded through
 // unused on this path.
+//
+// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify+
+// record runs ONCE, on the WINNER (brand-new session) path only -- see
+// CreateOrJoin's own doc comment below for why the REUSE path never
+// re-classifies. Optional (nil-safe): a nil IntentClassifier simply skips
+// classification entirely, so existing tests/wiring that don't care about
+// this Step keep working unchanged.
 type SessionCoalescer struct {
-	Pool         *pgxpool.Pool
-	PRSessions   *postgres.GitHubPRSessionStore
-	Sessions     *postgres.SessionStore
-	Turns        *postgres.TurnStore
-	Environments *postgres.EnvironmentStore
-	Registry     *sessionactor.Registry
+	Pool             *pgxpool.Pool
+	PRSessions       *postgres.GitHubPRSessionStore
+	Sessions         *postgres.SessionStore
+	Turns            *postgres.TurnStore
+	Environments     *postgres.EnvironmentStore
+	Registry         *sessionactor.Registry
+	IntentClassifier *intentclassifier.Service
 }
 
 // CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
@@ -206,6 +223,70 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// gated on the same hasPrompt CreateSessionOnTx returned).
 	if hasPrompt {
 		httpapi.TriggerDispatch(ctx, c.Registry, created.ID)
+	}
+
+	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE, on
+	// this winner (brand-new session) path only -- IntentDecisionRecord
+	// is a per-SESSION record (§18.4), and every GitHub-originated session
+	// is created exactly here, so there is no gap left by never
+	// re-classifying on the REUSE path above (a later @mention on an
+	// already-tracked PR reuses a session that already went through this
+	// exact path once). Runs entirely OUTSIDE the transaction above (a
+	// real outbound LLM call must never hold a Postgres transaction open,
+	// mirroring ports.Notifier.Deliver's/ports.SourceControl.CreatePR's own
+	// identical "network call always outside any tx" discipline), and
+	// never blocks the ack response on its own outcome beyond this
+	// synchronous call -- shadow mode (§18.5, the default for every
+	// surface until explicitly configured active) means nothing downstream
+	// yet consumes the recorded Target/Mode for real behavior regardless.
+	if hasPrompt && c.IntentClassifier != nil && req.Prompt != nil {
+		decision := c.IntentClassifier.Classify(ctx, ports.IntentClassifierInput{
+			Text:    *req.Prompt,
+			Surface: intentClassifierSurface,
+			// DeterministicTarget IS a real, already-known signal here,
+			// not an absent one: CreateOrJoin (this function) is only ever
+			// reached via parseMention (handler.go/payload.go) resolving to
+			// a genuine PR-scoped mention -- parseIssueComment explicitly
+			// rejects a plain-issue comment (p.Issue.PullRequest == nil:
+			// "A comment on a plain issue, not a PR -- §8.2 is PR review
+			// only"), and parsePullRequestReviewComment's own event type
+			// ("pull_request_review_comment") never fires for anything
+			// other than a PR. So simply being on this code path at all --
+			// regardless of which of the two event types produced it --
+			// already deterministically means this mention landed on a
+			// pull request, i.e. Target should be "review". This is
+			// distinct from (and available strictly earlier than) the
+			// existing-tracked-PR signal the REUSE path above has, which
+			// never re-classifies anyway.
+			DeterministicTarget: intentdomain.TargetReview,
+		})
+
+		var confidence, reasoning *string
+		if decision.Source == ports.IntentSourceClassifier {
+			confVal := decision.Confidence
+			confidence = &confVal
+			reasonVal := intentdomain.TruncateReasoning(decision.Reasoning)
+			reasoning = &reasonVal
+		}
+
+		if _, recErr := c.IntentClassifier.RecordDecision(ctx, created.ID, intentdomain.IntentDecisionRecord{
+			Surface:        intentClassifierSurface,
+			Source:         decision.Source,
+			Target:         decision.Target,
+			Mode:           decision.Mode,
+			Confidence:     confidence,
+			Reasoning:      reasoning,
+			DecidedAt:      time.Now(),
+			DecidedAtStage: intentdomain.DecidedAtStageCreate,
+		}); recErr != nil {
+			// Never fatal -- the session itself is already fully created
+			// and dispatched above; a failure to persist the (shadow-
+			// mode, log-only) decision record is logged and otherwise
+			// ignored, exactly mirroring how GetOrSpawn/Send failures are
+			// handled elsewhere in this same codebase (never let an
+			// observability-only side effect fail the real request).
+			logger.Warn("github: record intent decision failed", "error", recErr, "session_id", created.ID)
+		}
 	}
 
 	logger.Info("github: created new review session for mention",

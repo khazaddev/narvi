@@ -389,6 +389,45 @@ const (
 	slackDefaultRepoURLEnvVarName  = "NARVI_SLACK_DEFAULT_REPO_URL"
 )
 
+// anthropicAPIKeyEnvVarName and intentClassifierModelEnvVarName configure
+// Step 36's ("intent classifier", §8.3/§18) real Anthropic adapter
+// (internal/adapters/outbound/llm), read from NARVI_ANTHROPIC_API_KEY /
+// NARVI_INTENT_CLASSIFIER_MODEL. Both required in every stage -- never
+// defaulted, matching every other secret/required-choice this file
+// already reads. intentClassifierProviderEnvVarName names the SEPARATE,
+// explicitly-validated provider dimension (§8's own "multi-provider by
+// nature" requirement: Provider is never inferred from the model string's
+// own naming convention) -- also required, no default, so a deploy that
+// forgets to set it fails fast at boot rather than silently resolving to
+// whichever provider happens to be registered first.
+const (
+	anthropicAPIKeyEnvVarName          = "NARVI_ANTHROPIC_API_KEY"
+	intentClassifierProviderEnvVarName = "NARVI_INTENT_CLASSIFIER_PROVIDER"
+	intentClassifierModelEnvVarName    = "NARVI_INTENT_CLASSIFIER_MODEL"
+)
+
+// intentClassifierActiveSurfacesEnvVarName is the env var Load reads for
+// §18.5's permanent shadow-vs-active gate (see
+// Config.IntentClassifierActiveSurfaces's own doc comment). Optional --
+// an empty/unset value means every surface defaults to shadow mode.
+const intentClassifierActiveSurfacesEnvVarName = "NARVI_INTENT_CLASSIFIER_ACTIVE_SURFACES"
+
+// Model choice (the Makefile dev target's own example value:
+// "claude-haiku-4-5", Claude Haiku 4.5 -- NOT applied as a silent Load()
+// default; Provider/Model are both required, no default, per the const
+// block above): a classification call run on EVERY session across EVERY
+// ingress surface is a high-volume, cost- and latency-sensitive internal
+// call, quite unlike a user-facing generative task (§18.1: "a fast, low-
+// complexity, high-volume, latency-sensitive call, not a 'remotely
+// complicated' reasoning task"). Haiku 4.5 is Anthropic's fastest/
+// cheapest current-generation model with structured-output support --
+// the right tier for a call this codebase's own SessionStore will end up
+// making once per session, forever, rather than the biggest available
+// model. An unrecognized/misconfigured NARVI_INTENT_CLASSIFIER_MODEL
+// value maps to FallbackReasonUnsupportedProvider at classification time
+// (never a silent substitution) -- see internal/adapters/outbound/llm's
+// own model-recognition table.
+
 // initialAdminEmailsEnvVarName is the env var Load reads for the
 // first-run-seeding initial-admin list (§13.4: "initial admins set by
 // config"). Optional — an empty list simply means every first-time
@@ -575,6 +614,29 @@ type Config struct {
 	// comment above for why, and for what leaving either one empty means.
 	SlackDefaultRepoName string
 	SlackDefaultRepoURL  string
+
+	// AnthropicAPIKey, IntentClassifierProvider, and IntentClassifierModel
+	// configure Step 36's ("intent classifier", §8.3/§18) real Anthropic
+	// adapter, read from NARVI_ANTHROPIC_API_KEY /
+	// NARVI_INTENT_CLASSIFIER_PROVIDER / NARVI_INTENT_CLASSIFIER_MODEL. All
+	// three required in every stage -- never defaulted. See
+	// anthropicAPIKeyEnvVarName's own doc comment above for the model
+	// choice's full reasoning. AnthropicAPIKey is never logged anywhere.
+	AnthropicAPIKey          string
+	IntentClassifierProvider string
+	IntentClassifierModel    string
+
+	// IntentClassifierActiveSurfaces is the permanent shadow-vs-active
+	// gating config §18.5/§9.4 requires: "shadow mode ... permanently
+	// available, never a one-time launch gate". Parsed the same comma-
+	// separated way as AllowedEmailDomains/AllowedGitHubOrgs/AllowedEmails
+	// above, from NARVI_INTENT_CLASSIFIER_ACTIVE_SURFACES -- each entry
+	// one of sessions.spawn_source's own values ("web", "slack", "linear",
+	// "github"). A surface NOT listed here defaults to shadow mode (§18.5:
+	// "never silently flip a surface to active without an explicit config
+	// value saying so") -- optional, an empty/unset value means every
+	// surface runs in shadow.
+	IntentClassifierActiveSurfaces []string
 }
 
 // Load reads process configuration and validates it fail-fast, returning
@@ -768,6 +830,23 @@ func Load() (*Config, error) {
 		}
 	}
 
+	anthropicAPIKey := os.Getenv(anthropicAPIKeyEnvVarName)
+	if anthropicAPIKey == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: anthropicAPIKeyEnvVarName})
+	}
+
+	intentClassifierProvider := os.Getenv(intentClassifierProviderEnvVarName)
+	if intentClassifierProvider == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: intentClassifierProviderEnvVarName})
+	}
+
+	intentClassifierModel := os.Getenv(intentClassifierModelEnvVarName)
+	if intentClassifierModel == "" {
+		errs = append(errs, &MissingRequiredEnvError{EnvVar: intentClassifierModelEnvVarName})
+	}
+
+	intentClassifierActiveSurfaces := parseCommaSeparatedList(os.Getenv(intentClassifierActiveSurfacesEnvVarName))
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -807,5 +886,11 @@ func Load() (*Config, error) {
 		SlackBotToken:        slackBotToken,
 		SlackDefaultRepoName: slackDefaultRepoName,
 		SlackDefaultRepoURL:  slackDefaultRepoURL,
+
+		AnthropicAPIKey:          anthropicAPIKey,
+		IntentClassifierProvider: intentClassifierProvider,
+		IntentClassifierModel:    intentClassifierModel,
+
+		IntentClassifierActiveSurfaces: intentClassifierActiveSurfaces,
 	}, nil
 }
