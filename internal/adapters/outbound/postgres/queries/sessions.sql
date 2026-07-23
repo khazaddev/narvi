@@ -64,3 +64,18 @@ UPDATE sessions
 SET opencode_conversation_id = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: UpdateSessionIntentDecisionIfNull :execrows
+-- Step 36's ("intent classifier", §18.4) write-once guarded update:
+-- "UPDATE sessions SET intent_decision = ... WHERE intent_decision IS
+-- NULL" -- NOT read-then-write, first decision wins, no application-level
+-- lock needed. RowsAffected (via :execrows) is the caller's own win/lose
+-- signal: 1 means THIS call actually set intent_decision (first writer
+-- wins); 0 means some other writer already set it first -- internal/app/
+-- intentclassifier's persistence path treats either outcome as success,
+-- never an error, since "someone already recorded a decision for this
+-- session" is exactly the expected, race-safe steady state, not a
+-- failure.
+UPDATE sessions
+SET intent_decision = $2
+WHERE id = $1 AND intent_decision IS NULL;

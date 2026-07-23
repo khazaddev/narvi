@@ -33,7 +33,7 @@ const createSession = `-- name: CreateSession :one
 
 INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag)
 VALUES ($1, $2, $3, COALESCE($4, '[]'::jsonb), $5, $6)
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision
 `
 
 type CreateSessionParams struct {
@@ -85,12 +85,13 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.OpencodeConversationID,
 		&i.EnvironmentID,
 		&i.ProvenanceTag,
+		&i.IntentDecision,
 	)
 	return i, err
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag FROM sessions
+SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision FROM sessions
 WHERE id = $1
 `
 
@@ -112,6 +113,7 @@ func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (Session, erro
 		&i.OpencodeConversationID,
 		&i.EnvironmentID,
 		&i.ProvenanceTag,
+		&i.IntentDecision,
 	)
 	return i, err
 }
@@ -138,7 +140,7 @@ const updateSessionConversationID = `-- name: UpdateSessionConversationID :one
 UPDATE sessions
 SET opencode_conversation_id = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision
 `
 
 type UpdateSessionConversationIDParams struct {
@@ -170,15 +172,45 @@ func (q *Queries) UpdateSessionConversationID(ctx context.Context, arg UpdateSes
 		&i.OpencodeConversationID,
 		&i.EnvironmentID,
 		&i.ProvenanceTag,
+		&i.IntentDecision,
 	)
 	return i, err
+}
+
+const updateSessionIntentDecisionIfNull = `-- name: UpdateSessionIntentDecisionIfNull :execrows
+UPDATE sessions
+SET intent_decision = $2
+WHERE id = $1 AND intent_decision IS NULL
+`
+
+type UpdateSessionIntentDecisionIfNullParams struct {
+	ID             pgtype.UUID `json:"id"`
+	IntentDecision []byte      `json:"intent_decision"`
+}
+
+// Step 36's ("intent classifier", §18.4) write-once guarded update:
+// "UPDATE sessions SET intent_decision = ... WHERE intent_decision IS
+// NULL" -- NOT read-then-write, first decision wins, no application-level
+// lock needed. RowsAffected (via :execrows) is the caller's own win/lose
+// signal: 1 means THIS call actually set intent_decision (first writer
+// wins); 0 means some other writer already set it first -- internal/app/
+// intentclassifier's persistence path treats either outcome as success,
+// never an error, since "someone already recorded a decision for this
+// session" is exactly the expected, race-safe steady state, not a
+// failure.
+func (q *Queries) UpdateSessionIntentDecisionIfNull(ctx context.Context, arg UpdateSessionIntentDecisionIfNullParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateSessionIntentDecisionIfNull, arg.ID, arg.IntentDecision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateSessionStatus = `-- name: UpdateSessionStatus :one
 UPDATE sessions
 SET status = $2, failure_reason = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision
 `
 
 type UpdateSessionStatusParams struct {
@@ -209,6 +241,7 @@ func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStat
 		&i.OpencodeConversationID,
 		&i.EnvironmentID,
 		&i.ProvenanceTag,
+		&i.IntentDecision,
 	)
 	return i, err
 }

@@ -76,6 +76,9 @@ dev:
 	NARVI_LINEAR_DEFAULT_REPO_URL=https://github.com/khazaddev/narvi \
 	NARVI_SLACK_SIGNING_SECRET=dev-slack-signing-secret-placeholder \
 	NARVI_SLACK_BOT_TOKEN=dev-slack-bot-token-placeholder \
+	NARVI_ANTHROPIC_API_KEY=dev-anthropic-api-key-placeholder \
+	NARVI_INTENT_CLASSIFIER_PROVIDER=anthropic \
+	NARVI_INTENT_CLASSIFIER_MODEL=claude-haiku-4-5 \
 	go run ./cmd/control-plane serve
 
 # contracts-generate regenerates every codegen target under contracts/gen from

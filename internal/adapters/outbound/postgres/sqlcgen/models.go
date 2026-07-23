@@ -616,6 +616,12 @@ type Participant struct {
 	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 }
 
+type PromptTemplate struct {
+	Name      string             `json:"name"`
+	Template  string             `json:"template"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Sandbox struct {
 	ID                       pgtype.UUID        `json:"id"`
 	SessionID                pgtype.UUID        `json:"session_id"`
@@ -658,6 +664,7 @@ type Session struct {
 	OpencodeConversationID *string               `json:"opencode_conversation_id"`
 	EnvironmentID          pgtype.UUID           `json:"environment_id"`
 	ProvenanceTag          *string               `json:"provenance_tag"`
+	IntentDecision         []byte                `json:"intent_decision"`
 }
 
 type SessionTimer struct {

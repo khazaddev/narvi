@@ -55,6 +55,13 @@ func setRequiredEnv(t *testing.T) {
 	// comment).
 	t.Setenv("NARVI_SLACK_SIGNING_SECRET", "test-slack-signing-secret")
 	t.Setenv("NARVI_SLACK_BOT_TOKEN", "test-slack-bot-token")
+	// Step 36 ("intent classifier") own required vars --
+	// NARVI_INTENT_CLASSIFIER_ACTIVE_SURFACES is deliberately left unset
+	// here since it's optional (§18.5: every surface defaults to shadow
+	// mode when unset).
+	t.Setenv("NARVI_ANTHROPIC_API_KEY", "test-anthropic-api-key")
+	t.Setenv("NARVI_INTENT_CLASSIFIER_PROVIDER", "anthropic")
+	t.Setenv("NARVI_INTENT_CLASSIFIER_MODEL", "claude-haiku-4-5")
 }
 
 // TestLoad is table-driven over NARVI_STAGE values: each of the three
@@ -775,6 +782,9 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	t.Setenv("NARVI_LINEAR_DEFAULT_REPO_URL", "https://github.com/khazaddev/narvi")
 	t.Setenv("NARVI_SLACK_SIGNING_SECRET", "dev-slack-signing-secret-placeholder")
 	t.Setenv("NARVI_SLACK_BOT_TOKEN", "dev-slack-bot-token-placeholder")
+	t.Setenv("NARVI_ANTHROPIC_API_KEY", "dev-anthropic-api-key-placeholder")
+	t.Setenv("NARVI_INTENT_CLASSIFIER_PROVIDER", "anthropic")
+	t.Setenv("NARVI_INTENT_CLASSIFIER_MODEL", "claude-haiku-4-5")
 	// Every other allowlist/optional var is deliberately left unset here,
 	// matching the Makefile's dev target exactly (it never sets
 	// NARVI_ALLOWED_EMAIL_DOMAINS, NARVI_ALLOWED_EMAILS,
@@ -797,4 +807,78 @@ func TestLoadMakefileDevTargetValues(t *testing.T) {
 	if cfg.ModalBaseURL != "http://localhost:9999" {
 		t.Errorf("Load().ModalBaseURL = %q, want %q", cfg.ModalBaseURL, "http://localhost:9999")
 	}
+}
+
+// TestLoadIntentClassifierConfig covers Step 36's ("intent classifier",
+// §8.3/§18) own required vars (AnthropicAPIKey/IntentClassifierProvider/
+// IntentClassifierModel -- each individually required, never defaulted,
+// matching every other secret/credential this file already reads) and the
+// optional, comma-separated IntentClassifierActiveSurfaces (§18.5: unset
+// means every surface defaults to shadow mode).
+func TestLoadIntentClassifierConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVar string
+	}{
+		{name: "anthropic api key missing", envVar: "NARVI_ANTHROPIC_API_KEY"},
+		{name: "provider missing", envVar: "NARVI_INTENT_CLASSIFIER_PROVIDER"},
+		{name: "model missing", envVar: "NARVI_INTENT_CLASSIFIER_MODEL"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv(tc.envVar, "")
+
+			cfg, err := platform.Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil, want error for %s=%q", tc.envVar, "")
+			}
+			var missErr *platform.MissingRequiredEnvError
+			if !errors.As(err, &missErr) {
+				t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+			}
+			if missErr.EnvVar != tc.envVar {
+				t.Fatalf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, tc.envVar)
+			}
+			if cfg != nil {
+				t.Fatalf("Load() cfg = %+v, want nil on error", cfg)
+			}
+		})
+	}
+
+	t.Run("all set, succeeds, active surfaces unset defaults to empty (every surface shadow)", func(t *testing.T) {
+		setRequiredEnv(t)
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.AnthropicAPIKey != "test-anthropic-api-key" {
+			t.Errorf("Load().AnthropicAPIKey = %q, want %q", cfg.AnthropicAPIKey, "test-anthropic-api-key")
+		}
+		if cfg.IntentClassifierProvider != "anthropic" {
+			t.Errorf("Load().IntentClassifierProvider = %q, want %q", cfg.IntentClassifierProvider, "anthropic")
+		}
+		if cfg.IntentClassifierModel != "claude-haiku-4-5" {
+			t.Errorf("Load().IntentClassifierModel = %q, want %q", cfg.IntentClassifierModel, "claude-haiku-4-5")
+		}
+		if len(cfg.IntentClassifierActiveSurfaces) != 0 {
+			t.Errorf("Load().IntentClassifierActiveSurfaces = %v, want empty", cfg.IntentClassifierActiveSurfaces)
+		}
+	})
+
+	t.Run("explicit active surfaces parse as a comma-separated list", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_INTENT_CLASSIFIER_ACTIVE_SURFACES", "github, slack")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		want := []string{"github", "slack"}
+		if !slices.Equal(cfg.IntentClassifierActiveSurfaces, want) {
+			t.Errorf("Load().IntentClassifierActiveSurfaces = %v, want %v", cfg.IntentClassifierActiveSurfaces, want)
+		}
+	})
 }

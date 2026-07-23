@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -18,10 +19,18 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/intentclassifier"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// intentClassifierSurface is the sessions.spawn_source value (§18.1's
+// IntentClassifierInput.Surface / §18.4's IntentDecisionRecord.Surface)
+// this package's own agent sessions are classified/recorded under.
+const intentClassifierSurface = "linear"
 
 // maxRequestBodyBytes bounds the webhook body this handler reads --
 // mirrors internal/adapters/inbound/httpapi's own identical constant
@@ -51,6 +60,15 @@ type Deps struct {
 	AgentSessions *postgres.LinearAgentSessionStore
 	Installations *postgres.LinearInstallationStore
 	LinearClient  *linearapi.Client
+
+	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
+	// + record runs ONCE, right after a `created` AgentSessionEvent's own
+	// winning claim creates the backing session (decided_at_stage="create"
+	// -- the full prompt text is already available at that point, via
+	// payload.PromptContext). A `prompted` event on an already-backed
+	// session never re-classifies. Optional (nil-safe): a nil
+	// IntentClassifier simply skips classification entirely.
+	IntentClassifier *intentclassifier.Service
 
 	WebhookSecret      []byte
 	TokenEncryptionKey []byte
@@ -231,6 +249,19 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 		return
 	}
 
+	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE,
+	// right here -- IntentDecisionRecord is a per-SESSION record (§18.4),
+	// and every Linear-originated session is created exactly here, with
+	// its full prompt text already in hand. Runs entirely OUTSIDE any
+	// Postgres transaction (a real outbound LLM call must never hold one
+	// open) and never blocks the caller's own acknowledgment beyond this
+	// synchronous call -- shadow mode (§18.5, the default until a surface
+	// is explicitly configured active) means nothing downstream yet
+	// consumes the recorded Target/Mode for real behavior regardless.
+	if deps.IntentClassifier != nil {
+		deps.recordIntentDecision(ctx, logger, created.ID, prompt)
+	}
+
 	logger.Info("linear: created session from agent session", "agent_session_id", payload.AgentSession.ID, "session_id", created.ID.String())
 
 	deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID)
@@ -366,5 +397,36 @@ func (deps Deps) postAcknowledgment(ctx context.Context, organizationID, agentSe
 
 	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, string(accessToken), agentSessionID, acknowledgmentBody); err != nil {
 		logger.Error("linear: post acknowledgment activity failed", "error", err, "agent_session_id", agentSessionID)
+	}
+}
+
+// recordIntentDecision runs Step 36's own classify+record step (§8.3/§18)
+// against prompt -- see handleCreated's own doc comment for why this is
+// only ever called once per session, right after its own creation.
+func (deps Deps) recordIntentDecision(ctx context.Context, logger *slog.Logger, sessionID pgtype.UUID, prompt string) {
+	decision := deps.IntentClassifier.Classify(ctx, ports.IntentClassifierInput{
+		Text:    prompt,
+		Surface: intentClassifierSurface,
+	})
+
+	var confidence, reasoning *string
+	if decision.Source == ports.IntentSourceClassifier {
+		confVal := decision.Confidence
+		confidence = &confVal
+		reasonVal := intentdomain.TruncateReasoning(decision.Reasoning)
+		reasoning = &reasonVal
+	}
+
+	if _, err := deps.IntentClassifier.RecordDecision(ctx, sessionID, intentdomain.IntentDecisionRecord{
+		Surface:        intentClassifierSurface,
+		Source:         decision.Source,
+		Target:         decision.Target,
+		Mode:           decision.Mode,
+		Confidence:     confidence,
+		Reasoning:      reasoning,
+		DecidedAt:      time.Now(),
+		DecidedAtStage: intentdomain.DecidedAtStageCreate,
+	}); err != nil {
+		logger.Warn("linear: record intent decision failed", "error", err, "session_id", sessionID)
 	}
 }

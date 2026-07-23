@@ -35,10 +35,12 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/llm"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
+	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/outboxworker"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reconciler"
@@ -210,6 +212,33 @@ func serve() error {
 	slackThreadSessionStore := postgres.NewSlackThreadSessionStore(pool)
 	githubPRSessionStore := postgres.NewGitHubPRSessionStore(pool)
 
+	// intentClassifierSvc is Step 36's own real classifier (§8.3, §18):
+	// llm.New resolves cfg.IntentClassifierProvider against this
+	// codebase's own small provider registry (internal/adapters/outbound/
+	// llm's own doc.go) -- Anthropic is the one real adapter this Step
+	// ships; an unrecognized provider name never fails process boot (see
+	// that package's own registry.go), it simply makes every future
+	// Classify call fall back with FallbackReasonUnsupportedProvider,
+	// exactly like a misconfigured model string would. promptTemplateStore
+	// backs the DB-editable prompt templates (§18.6); intentClassifierSvc
+	// composes both plus sessionStore's own write-once persistence
+	// (UpdateIntentDecisionIfNull) and cfg.IntentClassifierActiveSurfaces'
+	// own permanent shadow-vs-active gate (§18.5).
+	promptTemplateStore := postgres.NewPromptTemplateStore(pool)
+	intentLLM := llm.New(llm.Config{
+		Provider: cfg.IntentClassifierProvider,
+		APIKey:   cfg.AnthropicAPIKey,
+		Timeout:  cfg.Timeouts.IntentClassifierLLMTimeout,
+	})
+	intentClassifierSvc := intentclassifier.New(
+		intentLLM,
+		cfg.IntentClassifierProvider,
+		cfg.IntentClassifierModel,
+		promptTemplateStore,
+		sessionStore,
+		cfg.IntentClassifierActiveSurfaces,
+	)
+
 	// recon is Step 25's ("reconciler + GC", §5.3) process-wide
 	// provider-reconciliation/orphan-GC loop, run below via the errgroup
 	// exactly once per process -- constructed from the SAME sandboxStore/
@@ -289,20 +318,21 @@ func serve() error {
 	// narvi_auth_session cookie. See internal/adapters/inbound/slack's
 	// own doc.go for the full request-handling writeup.
 	router.Post("/webhooks/slack", slack.NewHandler(slack.Deps{
-		Pool:            pool,
-		Sessions:        sessionStore,
-		Turns:           turnStore,
-		Environments:    environmentStore,
-		Registry:        registry,
-		Deliveries:      webhookDeliveryStore,
-		Threads:         slackThreadSessionStore,
-		SigningSecret:   cfg.SlackSigningSecret,
-		BotToken:        cfg.SlackBotToken,
-		DefaultRepoName: cfg.SlackDefaultRepoName,
-		DefaultRepoURL:  cfg.SlackDefaultRepoURL,
-		TimestampWindow: cfg.Timeouts.WebhookTimestampFreshnessWindow,
-		SlackAPIBaseURL: slackAPIBaseURL,
-		AckTimeout:      cfg.Timeouts.SlackAckTimeout,
+		Pool:             pool,
+		Sessions:         sessionStore,
+		Turns:            turnStore,
+		Environments:     environmentStore,
+		Registry:         registry,
+		Deliveries:       webhookDeliveryStore,
+		Threads:          slackThreadSessionStore,
+		IntentClassifier: intentClassifierSvc,
+		SigningSecret:    cfg.SlackSigningSecret,
+		BotToken:         cfg.SlackBotToken,
+		DefaultRepoName:  cfg.SlackDefaultRepoName,
+		DefaultRepoURL:   cfg.SlackDefaultRepoURL,
+		TimestampWindow:  cfg.Timeouts.WebhookTimestampFreshnessWindow,
+		SlackAPIBaseURL:  slackAPIBaseURL,
+		AckTimeout:       cfg.Timeouts.SlackAckTimeout,
 	}))
 
 	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
@@ -314,12 +344,13 @@ func serve() error {
 	// sequencing.
 	router.Post("/webhooks/github", githubingress.NewHandler(
 		&githubingress.SessionCoalescer{
-			Pool:         pool,
-			PRSessions:   githubPRSessionStore,
-			Sessions:     sessionStore,
-			Turns:        turnStore,
-			Environments: environmentStore,
-			Registry:     registry,
+			Pool:             pool,
+			PRSessions:       githubPRSessionStore,
+			Sessions:         sessionStore,
+			Turns:            turnStore,
+			Environments:     environmentStore,
+			Registry:         registry,
+			IntentClassifier: intentClassifierSvc,
 		},
 		webhookDeliveryStore,
 		githubingress.Config{
@@ -362,7 +393,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, registry))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, registry, intentClassifierSvc))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
@@ -411,6 +442,7 @@ func serve() error {
 		AgentSessions:      linearAgentSessionStore,
 		Installations:      linearInstallationStore,
 		LinearClient:       linearClient,
+		IntentClassifier:   intentClassifierSvc,
 		WebhookSecret:      []byte(cfg.LinearWebhookSecret),
 		TokenEncryptionKey: cfg.TokenEncryptionKey,
 		DefaultRepoName:    cfg.LinearDefaultRepoName,

@@ -52,8 +52,18 @@
 // NotificationKind in practice, by internal/app/outboxworker's own
 // kind->Notifier routing.
 //
-// The remaining §4.3 ports — IntentClassifier, LLM, BlobStore,
-// SessionStore/TurnStore/SandboxStore, Outbox, TimerScheduler, Clock — are
-// out of scope for this Step and land in their own later Steps, each
-// adding its own interface file here without touching any existing one.
+// LLM (llm.go) and IntentClassifier (intentclassifier.go) are the SIXTH
+// and SEVENTH ports, both added this Step (36, §8.3/§18): LLM is a
+// genuinely reusable, provider-agnostic structured-output text-completion
+// port (internal/adapters/outbound/llm's Anthropic adapter is the first
+// real implementation this Step; a future internal/adapters/outbound/
+// openai remains an untouched stub, PR-50) — nothing Anthropic- or
+// OpenAI-specific may leak into either port's signature. IntentClassifier
+// is the never-throw classification port internal/app/intentclassifier
+// implements against LLM.
+//
+// The remaining §4.3 ports — BlobStore, SessionStore/TurnStore/
+// SandboxStore, Outbox, TimerScheduler, Clock — are out of scope for this
+// Step and land in their own later Steps, each adding its own interface
+// file here without touching any existing one.
 package ports

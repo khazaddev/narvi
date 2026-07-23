@@ -67,3 +67,21 @@ func (s *SessionStore) UpdateStatus(ctx context.Context, arg sqlcgen.UpdateSessi
 func (s *SessionStore) UpdateConversationID(ctx context.Context, arg sqlcgen.UpdateSessionConversationIDParams) (sqlcgen.Session, error) {
 	return s.q.UpdateSessionConversationID(ctx, arg)
 }
+
+// UpdateIntentDecisionIfNull persists decisionJSON (a marshaled
+// intent.IntentDecisionRecord) via the §18.4 write-once guarded update --
+// "UPDATE sessions SET intent_decision = ... WHERE intent_decision IS
+// NULL", never read-then-write. won reports whether THIS call actually
+// set the column (true) or a concurrent/earlier caller already had (false,
+// "first decision wins") -- both are success outcomes; only a genuine
+// database error is returned as err.
+func (s *SessionStore) UpdateIntentDecisionIfNull(ctx context.Context, id pgtype.UUID, decisionJSON []byte) (won bool, err error) {
+	rows, err := s.q.UpdateSessionIntentDecisionIfNull(ctx, sqlcgen.UpdateSessionIntentDecisionIfNullParams{
+		ID:             id,
+		IntentDecision: decisionJSON,
+	})
+	if err != nil {
+		return false, err
+	}
+	return rows == 1, nil
+}
