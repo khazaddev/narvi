@@ -434,9 +434,11 @@ func UnlinkMemberIdentity(pool *pgxpool.Pool, identities *postgres.IdentityStore
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+		var target sqlcgen.Identity
 		found := false
 		for _, i := range existing {
 			if i.ID == identityID {
+				target = i
 				found = true
 				break
 			}
@@ -455,7 +457,9 @@ func UnlinkMemberIdentity(pool *pgxpool.Pool, identities *postgres.IdentityStore
 		defer func() { _ = tx.Rollback(ctx) }()
 
 		if err := auditlog.Record(ctx, auditLog.WithTx(tx), actorUserID, "identity.unlinked", "identity", identityID.String(), map[string]any{
-			"user_id": targetUserID.String(),
+			"user_id":     targetUserID.String(),
+			"provider":    string(target.Provider),
+			"external_id": target.ExternalID,
 		}); err != nil {
 			logger.Error("httpapi: unlink member identity: record audit log failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")

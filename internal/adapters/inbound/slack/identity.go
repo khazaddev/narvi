@@ -43,9 +43,18 @@ import (
 // now known to belong to a real user (already linked, or auto-linked THIS
 // call); notice is §13.2's own "notify in-channel" text (identitylink.
 // Resolution.NotificationText), or "" when there's nothing to say -- the
-// CALLER decides where to put it (handler.go appends it to the existing
-// in-thread ack; interactive.go appends it to the plan-decision outcome
-// text it already posts via chat.update).
+// CALLER decides how to deliver it, and every caller delivers it
+// EPHEMERALLY (visible only to the acting user), never appended to
+// whole-channel-visible text: handler.go delivers it via
+// ack.postEphemeralBounded; interactive.go delivers its own sibling
+// resolveSlackActorSingleAttempt's notice (below) via
+// SlackClient.PostEphemeral. This replaced this Step's own PREVIOUS
+// behavior -- appending the notice to the existing in-thread ack
+// (handler.go) or to the plan-decision outcome text posted via
+// chat.update (interactive.go) -- which a confirmed security review
+// found let anyone in the channel read another user's link-prompt
+// notice; do not reintroduce that whole-channel-visible hijack path by
+// trusting a future edit of this comment over the actual delivery code.
 func resolveSlackActor(ctx context.Context, logger *slog.Logger, slackClient *slackapi.Client, identityLinkDeps identitylink.Deps, timeouts platform.Timeouts, slackUserID string) (actorUserID pgtype.UUID, notice string) {
 	if slackUserID == "" {
 		return pgtype.UUID{}, ""
