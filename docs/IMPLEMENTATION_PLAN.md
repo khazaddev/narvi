@@ -3,9 +3,10 @@
 ## Context
 
 Narvi's technical specification (autonomous coding agents in sandboxes) is in
-[docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§16), and the nine-view UI design spec is in
+[docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§19), and the nine-view UI design spec is in
 [docs/design/mockups.html](design/mockups.html). This plan breaks the 7 phases (0–6) into **~65 ordered Steps**,
-each individually shippable and CI-green, executable by a developer assisted by coding agents (Sonnet 5).
+plus Phase 3.5's 5 additive, non-gating lettered sub-steps (39a-39e), each individually shippable and CI-green,
+executable by a developer assisted by coding agents (Sonnet 5).
 Every Step references the technical-plan section that specifies it. Each Step becomes exactly one PR when
 implemented — but a Step's number (e.g. Step 06) is the plan's own row number, not the GitHub PR number it
 becomes; the two are unrelated counters that will drift apart (e.g. a docs-only or hotfix PR consumes a GitHub
@@ -93,6 +94,20 @@ TECHNICAL_PLAN.md §12), never invented independently of it.
 
 **Phase 3 milestone**: GitHub/Slack/Linear ingress live; classifier shadow report on real traffic.
 
+## Phase 3.5 — Warm boot & agent-turn resilience (5 Steps, additive)
+
+Lettered sub-steps, not a renumber: Step 40 ("domain/review") and every Step after it keep their exact current numbers. These do not gate Phase 3's own milestone above and do not block Phase 4 from starting — Step 39d in particular is scheduled only once Step 39c's own telemetry shows it is needed, not built speculatively alongside it.
+
+| Step | Title | Content | Ref. |
+|---|---|---|---|
+| 39a | warm boot: fetch-aware git sync | `sandbox-agent/gitclone.SyncAll` gains a bounded `git fetch` step before checkout (remote-tracking preferred over the local-HEAD fallback) + credential-helper wiring; explicit-branch-fetch-failure hard rule (never silently fork at a stale base); new `gitstate` fetch states/triggers + table-driven tests | §19.3, §3.4 |
+| 39b | warm boot: shared image fingerprint | Redefine `imagebuild.Fingerprint` to key on repo clone URLs, not SHAs (one shared image per repo set); `ports.ImageSpec` → `{Base, Repos{URL,SHA}, RuntimeVersion}`; baked `/narvi/image-manifest.json`; `image_builds` migration (`built_repo_shas`, `built_at`); spawn path drops the per-repo `ResolveBranchSHA` loop | §19.1, §4.1 |
+| 39c | warm boot: refresh pump + hook policy | `imagebuild.Builder` freshness pump (poll default-branch tips, in-place `image_ref` swap, never degrades availability) + platform GitHub credential; `EvaluateHook`'s `workspaceMoved` policy for `repo_image` (**§6.4 breaking-change amendment**, non-fatal rerun); bounded ANSI-stripped hook-output-tail capture; per-hook rerun-duration telemetry; `sparse-checkout disable` hardening for the unscoped `snapshot_restore` case; new §9.3-class scenarios (fetch-fail/stale-image/refresh-in-flight/non-idempotent-setup boots) | §19.2, §19.4, §19.5, §6.4 |
+| 39d | warm boot: graduated setup-rerun ladder (telemetry-gated) | Optional repo-authored delta script runs instead of full `setup.sh` when only dependencies drifted (`git diff --quiet <built_sha> HEAD -- setup.sh` against the baked manifest); soft-fails to full `setup.sh`, then warn-and-continue (never fatal); every ladder decision logs a structured reason; scheduled once Step 39c's own telemetry shows full reruns eroding warm-boot latency, not shipped alongside it | §19.6 |
+| 39e ∥ | opencode: context-overflow compaction retry | Adapter-local classification on the already-decoded `ContextOverflowError` tagged union; one forced-compaction retry per turn via `POST /session/{id}/summarize` (new `OpenCodeSummarizeTimeout`), entirely inside one `StartTurn` call; no new `FailureReason`; CI contract test pins `/summarize`'s availability on the pinned OpenCode binary | §7.2 |
+
+**Phase 3.5 milestone**: warm-boot staleness window observed within §19.2's predicted 10–40 min range; the new §9.3-class scenarios green; compaction-retry contract test green. Independent of Phase 3's own milestone; Phase 4 Steps may proceed regardless of this phase's status.
+
 ## Phase 4 — Code review & automations (12 Steps)
 
 | Step | Title | Content | Ref. |
@@ -140,11 +155,12 @@ TECHNICAL_PLAN.md §12), never invented independently of it.
 
 - **Parallel streams in phase 1**: control-plane (07-08, 09-12, 18-20) ∥ sandbox-agent (13-17) — converge at 21.
 - **Phase 3**: 32/33/34 parallel after 31; 36-38 after 35.
+- **Phase 3.5**: 39a → 39b → 39c are sequential (each builds on the prior Step's own schema/behavior change); 39d starts only once 39c's rerun-duration telemetry shows the need. 39e has no dependency on 39a-39d or on any Phase 3 Step beyond Step 17 (OpenCode adapter) — it may run in parallel with any of them, or with Phase 4.
 - **Phase 6** can start 56-57 during phase 5 (backend and contracts are frozen by then).
 - Go/no-go after Step 21 (~1 month).
 
 ## Verification
 
 - Each Step: CI (lint, `go test -race`, contract tests) + its own criterion listed on its row.
-- Phase milestones = blocking gates: e2e via API/UI (P1), 12 resilience scenarios (P2), classifier shadow report (P3), review-verdict diff reviewed for precision (P4), flag-reversible rollout (P5), 9 views built to mockups + screenshot review (P6).
+- Phase milestones = blocking gates: e2e via API/UI (P1), 12 resilience scenarios (P2), classifier shadow report (P3), review-verdict diff reviewed for precision (P4), flag-reversible rollout (P5), 9 views built to mockups + screenshot review (P6). Phase 3.5 (Steps 39a-39e) is additive scope, not a blocking gate — its own milestone verifies warm-boot behavior and compaction-retry recovery but never holds up Phase 4.
 - Project end: `make dist` produces the standalone `narvi` binary; all phase gates green.
