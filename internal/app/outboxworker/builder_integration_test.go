@@ -302,9 +302,28 @@ func TestPumpOnce_DeadLettersAfterMaxAttempts(t *testing.T) {
 
 	notifier := &fakeNotifier{nextErr: errors.New("notifier: permanently broken")}
 	timeouts := platform.DefaultTimeouts()
-	timeouts.OutboxBackoffBase = 1 * time.Millisecond
-	timeouts.OutboxBackoffMax = 2 * time.Millisecond
-	timeouts.OutboxClaimDuration = 1 * time.Millisecond
+	// Backoff/claim windows are intentionally short (this test wants MANY
+	// attempts to run fast, not a real-scale schedule) but NOT
+	// single-digit-millisecond: a real, reproduced flake (second
+	// re-verification pass, Step 39) traced back to exactly this test
+	// pairing a 1ms/2ms backoff window with a per-iteration sleep of only
+	// 5ms and zero margin beyond it. NextRetryAt is computed from THIS
+	// process's own time.Now() (recordFailure, builder.go) but
+	// ListDuePendingOutboxEntries' own "next_attempt_at <= now()" check
+	// runs against the testcontainers Postgres server's OWN clock -- under
+	// full-suite -race load (this whole module's test binaries running in
+	// parallel), ordinary scheduling jitter plus any nonzero skew between
+	// the two clocks can exceed a 1-5ms margin, silently skipping a tick's
+	// own claim (the row simply isn't "due" yet from Postgres's own point
+	// of view). A skipped tick does NOT error and does NOT change the
+	// row's status, so it passes unnoticed here -- it only ever surfaces as
+	// this test needing more than the available iterations to reach
+	// MaxAttempts, i.e. exactly the observed "Status = pending, want
+	// dead_letter" failure. 10ms/20ms leaves a real order-of-magnitude
+	// margin over realistic same-host clock skew while staying fast.
+	timeouts.OutboxBackoffBase = 10 * time.Millisecond
+	timeouts.OutboxBackoffMax = 20 * time.Millisecond
+	timeouts.OutboxClaimDuration = 10 * time.Millisecond
 
 	builder, err := outboxworker.NewBuilder(store, pool, map[ports.NotificationKind]ports.Notifier{
 		ports.NotificationKindSlack: notifier,
@@ -315,14 +334,18 @@ func TestPumpOnce_DeadLettersAfterMaxAttempts(t *testing.T) {
 
 	before := readDeadLetterCount(ctx, t, otelReader)
 
-	// domain/outbox.MaxAttempts is 10 -- pump enough times (with a short
-	// sleep to clear the short backoff window each time) that the row is
-	// guaranteed to have been attempted at least that many times.
-	for i := 0; i < 12; i++ {
+	// domain/outbox.MaxAttempts is 10 -- pump enough times, with a sleep
+	// between ticks that comfortably clears the backoff window's own worst
+	// case (OutboxBackoffMax, 20ms) PLUS a generous buffer against the
+	// scheduling-jitter/clock-skew margin explained above, that the row is
+	// guaranteed to have been attempted at least that many times. 15
+	// iterations (a 5-iteration buffer over the 10 actually needed) at 60ms
+	// apart keeps this well under a second even with the wider windows.
+	for i := 0; i < 15; i++ {
 		if err := builder.PumpOnce(ctx); err != nil {
 			t.Fatalf("PumpOnce (%d): %v", i, err)
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(60 * time.Millisecond)
 	}
 
 	got, err := store.Get(ctx, row.ID)

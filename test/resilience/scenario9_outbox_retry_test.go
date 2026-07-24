@@ -106,6 +106,27 @@ func TestResilienceScenario9_Outbox_SlackAPI500sThenRecovers_EventuallyDelivered
 	server := httptest.NewServer(http.HandlerFunc(flaky.handler))
 	t.Cleanup(server.Close)
 
+	// tickSettleBuffer is extra slack slept on top of h.Timeouts.
+	// OutboxBackoffMax before each subsequent tick below. A real,
+	// reproduced flake (second re-verification pass, Step 39) traced back
+	// to this test's own bare time.Sleep(h.Timeouts.OutboxBackoffMax)
+	// leaving ZERO margin: outboxworker.recordFailure computes NextRetryAt
+	// from THIS process's own time.Now(), but ListDuePendingOutboxEntries'
+	// own "next_attempt_at <= now()" check runs against h.Pool's real
+	// Postgres server's OWN clock -- under full-suite -race load (this
+	// whole package's tests, each spinning up a testcontainers Postgres,
+	// running in parallel), ordinary scheduling jitter plus any nonzero
+	// skew between the two clocks can make a tick's own claim land just
+	// BEFORE the row is actually due, silently skipping that tick's
+	// delivery attempt entirely (attempts/status unchanged, so the
+	// still-pending/not-dead-lettered assertions inside the loop below
+	// still pass trivially) -- which only ever surfaces as flaky.requests
+	// under-counting relative to ticksWhileFailing, exactly the observed
+	// "fake Slack server saw 4 requests, want at least 5" failure. 30ms is
+	// a comfortable order of magnitude above realistic same-host clock
+	// skew/jitter while keeping this scenario fast.
+	const tickSettleBuffer = 30 * time.Millisecond
+
 	slackNotifier := slackapi.New(server.Client(), server.URL, "test-bot-token")
 
 	outboxStore := narvipg.NewOutboxStore(h.Pool)
@@ -137,7 +158,7 @@ func TestResilienceScenario9_Outbox_SlackAPI500sThenRecovers_EventuallyDelivered
 		if err := builder.PumpOnce(ctx); err != nil {
 			t.Fatalf("PumpOnce (failing tick %d): %v", i, err)
 		}
-		time.Sleep(h.Timeouts.OutboxBackoffMax)
+		time.Sleep(h.Timeouts.OutboxBackoffMax + tickSettleBuffer)
 
 		got, err := outboxStore.Get(ctx, row.ID)
 		if err != nil {
@@ -159,7 +180,7 @@ func TestResilienceScenario9_Outbox_SlackAPI500sThenRecovers_EventuallyDelivered
 	// succeeds) -- wait past the currently-scheduled backoff, then pump
 	// again: the notification must be delivered exactly once, with no
 	// loss.
-	time.Sleep(h.Timeouts.OutboxBackoffMax)
+	time.Sleep(h.Timeouts.OutboxBackoffMax + tickSettleBuffer)
 	if err := builder.PumpOnce(ctx); err != nil {
 		t.Fatalf("PumpOnce (recovery tick): %v", err)
 	}
