@@ -520,6 +520,39 @@ func TestDefaultTimeouts_Step33StandaloneField(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step38StandaloneField proves Step 38's ("plan mode,
+// cross-channel") own addition -- SlackInteractivityAckTimeout -- is
+// populated with a sensible default, does not disturb either invariant
+// chain, and is genuinely much tighter than SlackAckTimeout -- the specific
+// property this field exists to fix (a confirmed adversarial-review
+// finding): SlackAckTimeout (Step 33) was sized for the Events API's own
+// in-thread ack, a completely different and much less time-pressured
+// budget than Slack's real interactivity payload ack window (a hard ~3s),
+// so reusing it for the interactivity path silently permitted the handler
+// to blow well past that real budget under DB contention or a slow Slack
+// response.
+func TestDefaultTimeouts_Step38StandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.SlackInteractivityAckTimeout <= 0 {
+		t.Errorf("SlackInteractivityAckTimeout = %v, want > 0", to.SlackInteractivityAckTimeout)
+	}
+	if to.SlackInteractivityAckTimeout != 2500*time.Millisecond {
+		t.Errorf("SlackInteractivityAckTimeout = %v, want %v", to.SlackInteractivityAckTimeout, 2500*time.Millisecond)
+	}
+	if to.SlackInteractivityAckTimeout >= to.SlackAckTimeout {
+		t.Errorf("SlackInteractivityAckTimeout = %v, want strictly less than SlackAckTimeout = %v "+
+			"(the interactivity path's real ~3s Slack budget is much tighter than the Events API in-thread ack's own budget)",
+			to.SlackInteractivityAckTimeout, to.SlackAckTimeout)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

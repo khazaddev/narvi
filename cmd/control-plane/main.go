@@ -206,6 +206,27 @@ func serve() error {
 	planStore := postgres.NewPlanStore(pool)
 	participantStore := postgres.NewParticipantStore(pool)
 
+	// outboxStore/linearAgentSessionStore are constructed here (rather than
+	// down where the outbox delivery worker/Linear ingress blocks live
+	// below) because Step 38's ("plan mode, cross-channel", §8.1/§13.3) own
+	// httpapi.DecidePlanOnTx -- shared by the /api/sessions plan approve/
+	// reject routes immediately below AND by internal/adapters/inbound/
+	// {slack,linear}'s own new plan-decision entry points -- needs both, to
+	// enqueue this Step's own cross-channel-notify outbox rows.
+	outboxStore := postgres.NewOutboxStore(pool)
+	linearAgentSessionStore := postgres.NewLinearAgentSessionStore(pool)
+
+	// slackNotifier/planSlackNotifier are constructed here (rather than
+	// down where the outbox delivery worker block lives below) because the
+	// new Slack interactivity route (right below) ALSO needs a real
+	// *slackapi.Client, for its own synchronous chat.update/views.open
+	// calls -- one client, reused for both the outbox notifier registration
+	// and this route, mirroring how registry/commander are each
+	// constructed once and threaded through multiple call sites elsewhere
+	// in this same function.
+	slackNotifier := slackapi.New(nil, slackAPIBaseURL, cfg.SlackBotToken)
+	planSlackNotifier := outboxworker.NewPlanSlackNotifier(slackNotifier, planStore)
+
 	// webhookDeliveryStore is Step 31's own provider-agnostic dedupe claim,
 	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress (see
 	// the Linear ingress block below, which reuses this SAME store rather
@@ -341,6 +362,28 @@ func serve() error {
 		AckTimeout:       cfg.Timeouts.SlackAckTimeout,
 	}))
 
+	// Slack INTERACTIVITY ingress (Step 38, "plan mode, cross-channel",
+	// §8.1/§13.3) -- a SEPARATE route from the Events API ingress
+	// immediately above (structurally different payload shape; see
+	// internal/adapters/inbound/slack/interactive.go's own top doc comment
+	// for the real, external "Interactivity & Shortcuts" App-config step
+	// this route requires before Slack ever sends it anything). Mounted
+	// OUTSIDE auth.Middleware entirely, mirroring the Events API route
+	// exactly -- authenticated via Slack's own request signature, not a
+	// cookie.
+	router.Post("/webhooks/slack/interactive", slack.NewInteractivityHandler(slack.InteractiveDeps{
+		Pool:                pool,
+		Sessions:            sessionStore,
+		Turns:               turnStore,
+		Plans:               planStore,
+		Outbox:              outboxStore,
+		LinearAgentSessions: linearAgentSessionStore,
+		Registry:            registry,
+		SlackClient:         slackNotifier,
+		SigningSecret:       cfg.SlackSigningSecret,
+		Timeouts:            cfg.Timeouts,
+	}))
+
 	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
 	// OUTSIDE auth.Middleware entirely, mirroring scm-credentials/
 	// snapshot-mint immediately above exactly -- this route authenticates
@@ -410,9 +453,11 @@ func serve() error {
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, registry))
 		// plans (Step 37, "plan mode, web", §8.1/§12.2 item 3): the
 		// approve/reject HITL actions -- see httpapi/planapprove.go's own
-		// doc comment for the full sequencing.
-		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, registry))
-		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, planStore, participantStore))
+		// doc comment for the full sequencing. outboxStore/
+		// linearAgentSessionStore (Step 38, "plan mode, cross-channel") feed
+		// DecidePlanOnTx's own cross-channel-notify step (decideplan.go).
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, registry))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore))
 	})
 
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see
@@ -423,7 +468,8 @@ func serve() error {
 	// analogous blocks here independently, in separate worktrees).
 	linearOAuthConfig := linear.NewOAuthConfig(*cfg)
 	linearClient := linearapi.New(nil, linearAPIBaseURL)
-	linearAgentSessionStore := postgres.NewLinearAgentSessionStore(pool)
+	// linearAgentSessionStore is constructed earlier, alongside outboxStore
+	// -- see that construction site's own doc comment for why.
 	linearInstallationStore := postgres.NewLinearInstallationStore(pool)
 
 	// /auth/linear/install + /auth/linear/callback: the workspace OAuth
@@ -459,6 +505,10 @@ func serve() error {
 		DefaultRepoName:    cfg.LinearDefaultRepoName,
 		DefaultRepoURL:     cfg.LinearDefaultRepoURL,
 		Timeouts:           cfg.Timeouts,
+		// Plans/Outbox (Step 38, "plan mode, cross-channel", §8.1/§13.3):
+		// handlePrompted's own new plan-verdict keyword check.
+		Plans:  planStore,
+		Outbox: outboxStore,
 	}))
 
 	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3
@@ -478,15 +528,19 @@ func serve() error {
 	// up each workspace's own real Linear API credential fresh, by
 	// organization_id, at delivery time (linearInstallationStore +
 	// cfg.TokenEncryptionKey) -- never a token cached in this map itself.
-	slackNotifier := slackapi.New(nil, slackAPIBaseURL, cfg.SlackBotToken)
+	// slackNotifier/planSlackNotifier are constructed earlier, alongside
+	// outboxStore -- see that construction site's own doc comment for why.
 	githubNotifier := githubapi.NewBotNotifier(sourceControl, cfg.GitHubBotToken)
 	linearNotifier := outboxworker.NewLinearNotifier(linearClient, linearInstallationStore, cfg.TokenEncryptionKey)
 
-	outboxStore := postgres.NewOutboxStore(pool)
+	// outboxStore is constructed earlier, alongside linearAgentSessionStore
+	// -- see that construction site's own doc comment for why.
 	outboxBuilder, err := outboxworker.NewBuilder(outboxStore, pool, map[ports.NotificationKind]ports.Notifier{
-		ports.NotificationKindSlack:  slackNotifier,
-		ports.NotificationKindGitHub: githubNotifier,
-		ports.NotificationKindLinear: linearNotifier,
+		ports.NotificationKindSlack:             slackNotifier,
+		ports.NotificationKindGitHub:            githubNotifier,
+		ports.NotificationKindLinear:            linearNotifier,
+		ports.NotificationKindSlackPlanApproval: planSlackNotifier,
+		ports.NotificationKindSlackPlanDecided:  planSlackNotifier,
 	}, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)

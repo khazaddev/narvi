@@ -801,6 +801,48 @@ type Timeouts struct {
 	// noticeably worse.
 	SlackAckTimeout time.Duration
 
+	// --- Step 38 standalone addition ("plan mode, cross-channel", §8.1/
+	// §13.3): no ordering relationship with either invariant chain above (or
+	// with any prior Step's standalone additions), so -- per those
+	// additions' own precedent -- a plain field with a sensible default, not
+	// wired into a fake invariant link.
+
+	// SlackInteractivityAckTimeout bounds the ENTIRE synchronous decide+
+	// update sequence internal/adapters/inbound/slack/interactive.go's
+	// block_actions handling runs for approve_plan/reject_plan: the shared
+	// httpapi.DecidePlan call (opens a tx, locks the session row, the
+	// guarded UPDATE, possibly inserting+dispatching a new turn, enqueuing
+	// cross-channel notifications, committing) followed by the real,
+	// synchronous chat.update call reflecting the outcome -- ONE shared
+	// bounded context covers both, not two separately-budgeted calls that
+	// could each individually fit within their own budget yet still
+	// together exceed Slack's real window.
+	//
+	// Deliberately a SEPARATE, much tighter constant from SlackAckTimeout
+	// above, even though both nominally guard "a Slack ack": SlackAckTimeout
+	// was sized for the Events API's own in-thread ack (handler.go's
+	// ackClient.postAck -- a single outbound chat.postMessage POST, with no
+	// DB transaction ahead of it, and generous headroom relative to Slack's
+	// own separate "~3s, then retry the whole webhook delivery" outer
+	// expectation for THAT route). This field guards a COMPLETELY DIFFERENT
+	// and far more time-pressured budget: Slack's own real interactivity
+	// payload ack window, which Slack's docs describe as a hard ~3 seconds --
+	// miss it and Slack shows the user a "dispatch_failed" error, even when
+	// Narvi's own backend goes on to complete the action correctly a moment
+	// later. And unlike SlackAckTimeout's single POST, this budget must
+	// cover the WHOLE guarded-UPDATE transaction described above plus the
+	// follow-up chat.update, so it cannot reuse SlackAckTimeout's own more
+	// generous 10s value without risking exactly the kind of DB-contention-
+	// blows-past-Slack's-real-budget failure this field exists to prevent.
+	// Not given an explicit figure in the plan; chosen as 2.5s -- leaves
+	// real margin (roughly 500ms) below Slack's own ~3s hard ceiling for
+	// network/serialization overhead getting the response back to Slack,
+	// while still being tight enough to fail fast (and let the handler
+	// answer Slack's own required 200 promptly regardless) under DB
+	// contention or a slow Slack response, rather than hang until either
+	// finishes.
+	SlackInteractivityAckTimeout time.Duration
+
 	// --- Step 35 standalone additions ("outbox delivery", §5.1): no
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
@@ -996,6 +1038,8 @@ func DefaultTimeouts() Timeouts {
 		LinearOutboundActivityTimeout: 3 * time.Second,  // not specified; chosen, comfortably below Linear's own 5s webhook-response requirement
 
 		SlackAckTimeout: 10 * time.Second, // not specified; chosen, generous for a single Slack chat.postMessage POST, mirrors PRCreateTimeout's own reasoning
+
+		SlackInteractivityAckTimeout: 2500 * time.Millisecond, // not specified; chosen, a SEPARATE and much tighter budget than SlackAckTimeout -- see field doc comment for why (Slack's real interactivity ack window is a hard ~3s, covering the whole decide+update sequence, not just SlackAckTimeout's single POST)
 
 		OutboxPumpInterval:    5 * time.Second,  // not specified; chosen, near-real-time delivery, matches TimerPumpInterval's own reasoning
 		OutboxBackoffBase:     30 * time.Second, // not specified; chosen -- see domain/outbox.EvaluateBackoff's own doc comment for the schedule this produces

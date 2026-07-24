@@ -28,6 +28,30 @@ const (
 	// NotificationKindGitHub routes to internal/adapters/outbound/githubapi
 	// (an issue comment posted to the session's own originating PR).
 	NotificationKindGitHub NotificationKind = "github"
+
+	// NotificationKindSlackPlanApproval is Step 38's ("plan mode,
+	// cross-channel", §8.1/§13.3) own addition -- routes to internal/app/
+	// outboxworker's own Slack plan-approval notifier (wrapping
+	// internal/adapters/outbound/slackapi), which posts the REAL
+	// interactive Block Kit approval-request message (chat.postMessage,
+	// numbered steps + Approve/Request changes/Reject buttons) and, on
+	// success, persists the message's own channel+ts back onto the plans
+	// row (PlanStore.SetSlackMessageRef) -- distinct from
+	// NotificationKindSlack (a plain-text chat.postMessage reply) because
+	// this one carries plan-specific content/buttons and has a real,
+	// durable side effect (the persisted message ref) beyond delivery
+	// itself.
+	NotificationKindSlackPlanApproval NotificationKind = "slack_plan_approval"
+
+	// NotificationKindSlackPlanDecided is Step 38's own addition -- routes
+	// to the SAME Slack plan-approval notifier, but calls chat.update
+	// (never chat.postMessage) against an EXISTING message (channel+ts
+	// already known, carried in the payload itself -- see slackapi.
+	// PlanDecidedPayload) to reflect a plan's final approved/rejected
+	// outcome, whichever entry point (Slack itself, Linear, or the web
+	// REST endpoints) actually rendered the decision -- §16.1/§13.3's own
+	// "first verdict wins + notify the other channels".
+	NotificationKindSlackPlanDecided NotificationKind = "slack_plan_decided"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

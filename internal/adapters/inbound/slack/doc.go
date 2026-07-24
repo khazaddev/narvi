@@ -3,6 +3,16 @@
 // covers Linear, in a separate package/worktree in parallel). One route,
 // wired in cmd/control-plane/main.go: POST /webhooks/slack.
 //
+// Step 38 ("plan mode, cross-channel", §8.1/§13.3) adds a SECOND route to
+// this package, POST /webhooks/slack/interactive -- Slack's own
+// structurally different Interactivity payload shape (real Block Kit
+// button clicks / modal submissions on the plan-approval-request message),
+// requiring its own separate Slack App "Interactivity & Shortcuts" Request
+// URL configuration. See interactive.go's own top doc comment for the full
+// design and the real, external, one-time operator setup step it requires
+// -- this file's own writeup below covers ONLY the original Events API
+// route.
+//
 // # Request handling, in order (fail closed at every step)
 //
 //  1. Read the raw request body (bounded by http.MaxBytesReader) BEFORE

@@ -661,15 +661,17 @@ type Participant struct {
 }
 
 type Plan struct {
-	ID          pgtype.UUID        `json:"id"`
-	SessionID   pgtype.UUID        `json:"session_id"`
-	TurnID      pgtype.UUID        `json:"turn_id"`
-	Version     int32              `json:"version"`
-	Status      PlanStatus         `json:"status"`
-	PlanModelID *string            `json:"plan_model_id"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	DecidedAt   pgtype.Timestamptz `json:"decided_at"`
-	DecidedBy   pgtype.UUID        `json:"decided_by"`
+	ID             pgtype.UUID        `json:"id"`
+	SessionID      pgtype.UUID        `json:"session_id"`
+	TurnID         pgtype.UUID        `json:"turn_id"`
+	Version        int32              `json:"version"`
+	Status         PlanStatus         `json:"status"`
+	PlanModelID    *string            `json:"plan_model_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	DecidedAt      pgtype.Timestamptz `json:"decided_at"`
+	DecidedBy      pgtype.UUID        `json:"decided_by"`
+	SlackChannelID *string            `json:"slack_channel_id"`
+	SlackMessageTs *string            `json:"slack_message_ts"`
 }
 
 type PromptTemplate struct {

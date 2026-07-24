@@ -35,7 +35,7 @@ const createPlan = `-- name: CreatePlan :one
 
 INSERT INTO plans (session_id, turn_id, version, status, plan_model_id)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, session_id, turn_id, version, status, plan_model_id, created_at, decided_at, decided_by
+RETURNING id, session_id, turn_id, version, status, plan_model_id, created_at, decided_at, decided_by, slack_channel_id, slack_message_ts
 `
 
 type CreatePlanParams struct {
@@ -82,6 +82,47 @@ func (q *Queries) CreatePlan(ctx context.Context, arg CreatePlanParams) (Plan, e
 		&i.CreatedAt,
 		&i.DecidedAt,
 		&i.DecidedBy,
+		&i.SlackChannelID,
+		&i.SlackMessageTs,
+	)
+	return i, err
+}
+
+const getPlan = `-- name: GetPlan :one
+
+SELECT id, session_id, turn_id, version, status, plan_model_id, created_at, decided_at, decided_by, slack_channel_id, slack_message_ts FROM plans WHERE id = $1
+`
+
+// Step 38 ("plan mode, cross-channel", §8.1/§13.3) additions.
+//
+// GetPlan backs httpapi.DecidePlanOnTx's own post-guarded-UPDATE re-fetch
+// (decideplan.go): whether THIS call's own guarded UPDATE won or lost, it
+// needs the plan's own CURRENT row -- on a win, to read back
+// slack_channel_id/slack_message_ts for the cross-channel notify step; on a
+// loss, to report the plan's own actual current status honestly (already
+// approved/rejected/superseded by whichever OTHER entry point won) rather
+// than a bare "conflict".
+//
+// SetPlanSlackMessageRef backs internal/app/outboxworker's own Slack
+// plan-approval notifier: once (and only once) a real chat.postMessage call
+// for this plan version succeeds, the message's own real channel+ts (Slack's
+// own response, never invented/derived) is persisted so a LATER decision
+// (from any entry point) can chat.update that exact message.
+func (q *Queries) GetPlan(ctx context.Context, id pgtype.UUID) (Plan, error) {
+	row := q.db.QueryRow(ctx, getPlan, id)
+	var i Plan
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.TurnID,
+		&i.Version,
+		&i.Status,
+		&i.PlanModelID,
+		&i.CreatedAt,
+		&i.DecidedAt,
+		&i.DecidedBy,
+		&i.SlackChannelID,
+		&i.SlackMessageTs,
 	)
 	return i, err
 }
@@ -140,6 +181,21 @@ func (q *Queries) RejectPlanIfAwaitingApproval(ctx context.Context, arg RejectPl
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setPlanSlackMessageRef = `-- name: SetPlanSlackMessageRef :exec
+UPDATE plans SET slack_channel_id = $2, slack_message_ts = $3 WHERE id = $1
+`
+
+type SetPlanSlackMessageRefParams struct {
+	ID             pgtype.UUID `json:"id"`
+	SlackChannelID *string     `json:"slack_channel_id"`
+	SlackMessageTs *string     `json:"slack_message_ts"`
+}
+
+func (q *Queries) SetPlanSlackMessageRef(ctx context.Context, arg SetPlanSlackMessageRefParams) error {
+	_, err := q.db.Exec(ctx, setPlanSlackMessageRef, arg.ID, arg.SlackChannelID, arg.SlackMessageTs)
+	return err
 }
 
 const supersedePlan = `-- name: SupersedePlan :exec
