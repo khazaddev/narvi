@@ -206,6 +206,21 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, fmt.Errorf("sessionactor: get session: %w", err)
 	}
 
+	// Step 37 ("plan mode, web", §8.1/§12.2 item 3): a plan_mode=true turn
+	// that just genuinely completed records exactly one new plans row, in
+	// this SAME transaction -- see planrecord.go's own doc comment.
+	// recordPlanIfNeeded itself is a no-op (nil, nil) for every other case
+	// (plan_mode false, or trig != TriggerComplete). Deliberately called
+	// BEFORE enqueueOutboxNotification below (Step 38, "plan mode,
+	// cross-channel", reordering this Step's own predecessor): that call
+	// needs to know whether a plan was just recorded (and its own id/
+	// version) to route this turn's completion to the plan-approval-
+	// request notification instead of the generic one.
+	plan, err := a.recordPlanIfNeeded(ctx, tx, processing, trig)
+	if err != nil {
+		return nil, err
+	}
+
 	// Step 35 ("outbox delivery", §5.1): enqueue exactly one outbox
 	// notification for THIS turn's completion, in the SAME transaction as
 	// the state change above -- runs for every outcome (complete/fail/
@@ -214,18 +229,7 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 	// session, or a non-'web'-origin session whose own reverse-lookup row
 	// is missing -- see enqueueOutboxNotification's own doc comment
 	// (outboxenqueue.go).
-	if err := a.enqueueOutboxNotification(ctx, tx, sessionRow, trig, failureReason); err != nil {
-		return nil, err
-	}
-
-	// Step 37 ("plan mode, web", §8.1/§12.2 item 3): a plan_mode=true turn
-	// that just genuinely completed records exactly one new plans row, in
-	// this SAME transaction -- see planrecord.go's own doc comment.
-	// recordPlanIfNeeded itself is a no-op for every other case (plan_mode
-	// false, or trig != TriggerComplete), so this call is unconditional
-	// here, mirroring enqueueOutboxNotification's own identical shape just
-	// above.
-	if err := a.recordPlanIfNeeded(ctx, tx, processing, trig); err != nil {
+	if err := a.enqueueOutboxNotification(ctx, tx, sessionRow, trig, failureReason, processing, plan); err != nil {
 		return nil, err
 	}
 

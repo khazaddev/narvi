@@ -182,6 +182,76 @@ func TestEventStore_ListForSession(t *testing.T) {
 	}
 }
 
+// TestEventStore_ListRecentForSession proves ListRecentForSession's own
+// mirror-image pagination direction from ListForSession above: newest id
+// first, limit honored exactly, and scoped to sessionID alone -- the
+// mechanism sessionactor.planContentText (Step 38, "plan mode,
+// cross-channel") relies on to find a plan-mode turn's own final token
+// event within a bounded window regardless of how much EARLIER history a
+// long-lived session has already accumulated.
+func TestEventStore_ListRecentForSession(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessionID := createTestSession(ctx, t, pool)
+
+	events := narvipg.NewEventStore(pool)
+
+	var created []sqlcgen.CreateEventRow
+	for i := 0; i < 5; i++ {
+		row, err := events.Create(ctx, sqlcgen.CreateEventParams{
+			SessionID: sessionID,
+			Type:      "token",
+			MessageID: fmt.Sprintf("recent-msg-%d", i),
+			Payload:   []byte(fmt.Sprintf(`{"n":%d}`, i)),
+		})
+		if err != nil {
+			t.Fatalf("create event %d: %v", i, err)
+		}
+		created = append(created, row)
+	}
+
+	// Unbounded page: all 5, NEWEST first (the mirror image of
+	// ListForSession's own oldest-first order).
+	all, err := events.ListRecentForSession(ctx, sessionID, 10)
+	if err != nil {
+		t.Fatalf("ListRecentForSession(10): %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("len(all) = %d, want 5", len(all))
+	}
+	for i, e := range all {
+		want := created[len(created)-1-i]
+		if e.ID != want.ID {
+			t.Errorf("all[%d].ID = %d, want %d (order must be newest-first)", i, e.ID, want.ID)
+		}
+	}
+
+	// A small limit returns exactly the NEWEST that many, e.g. the last 2
+	// created (still newest-first) -- exactly what lets a caller bounded
+	// to a fixed limit still reach a long session's own most RECENT
+	// activity, unlike ListForSession's own oldest-first limit.
+	page, err := events.ListRecentForSession(ctx, sessionID, 2)
+	if err != nil {
+		t.Fatalf("ListRecentForSession(2): %v", err)
+	}
+	if len(page) != 2 {
+		t.Fatalf("len(page) = %d, want 2", len(page))
+	}
+	if page[0].ID != created[4].ID || page[1].ID != created[3].ID {
+		t.Errorf("page = %+v, want the last two created events, newest first", page)
+	}
+
+	// A DIFFERENT session sees none of this session's events.
+	otherSessionID := createTestSession(ctx, t, pool)
+	none, err := events.ListRecentForSession(ctx, otherSessionID, 10)
+	if err != nil {
+		t.Fatalf("ListRecentForSession for other session: %v", err)
+	}
+	if len(none) != 0 {
+		t.Errorf("other session's events = %d, want 0", len(none))
+	}
+}
+
 // TestEventStore_Create_DedupesOnSessionIDAndMessageID proves Finding 2's
 // own upsert contract end to end against a real Postgres instance: two
 // CreateEvent calls carrying the SAME (session_id, message_id) return the

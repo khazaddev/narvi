@@ -1,0 +1,34 @@
+-- Step 38 ("plan mode, cross-channel", §8.1/§13.3) addition: two new
+-- nullable columns on plans (migrations/000034_plan_mode.up.sql), populated
+-- ONLY when the outbox delivery worker's own Slack plan-approval notifier
+-- (internal/app/outboxworker) successfully posts the real interactive
+-- Block Kit approval-request message (chat.postMessage) for THIS plan
+-- version.
+--
+-- Both are needed together, later, to UPDATE that same message (chat.update)
+-- regardless of which channel (Slack itself, Linear, or the web REST
+-- endpoints) ultimately renders the "first verdict wins" decision --
+-- Slack's own chat.update requires both channel and ts (the message's own
+-- timestamp-shaped id) to target an existing message; neither alone is
+-- enough. NULL (the default) means "no Slack message has been posted for
+-- this plan version yet" -- either this session never had a Slack
+-- notification at all (a web/GitHub/Linear-origin session), or the initial
+-- post itself hasn't succeeded (yet, or ever, after exhausting retries).
+--
+-- Deliberately living on plans, not on a separate table: a plan VERSION's
+-- own Slack message is a 1:1 relationship (Step 37's "v1->v2 history" means
+-- a new version is a brand-new plans row, hence a brand-new message of its
+-- own, never an update-in-place of a PRIOR version's message) -- exactly
+-- the same granularity slack_channel_id/slack_message_ts are already
+-- scoped to.
+--
+-- Linear needs no equivalent column: internal/adapters/outbound/postgres's
+-- own linear_agent_sessions table (migrations/000030_linear_agent_sessions.
+-- up.sql) already gives a session_id -> (agent_session_id, organization_id)
+-- reverse lookup, which is everything a follow-up AgentActivity needs to
+-- post -- unlike Slack's chat.update, Linear's AgentActivity creation
+-- mutation has no "target an existing activity to edit" concept at all;
+-- every follow-up is simply a NEW activity posted to the same agent
+-- session, so no per-plan-version message reference is ever needed.
+ALTER TABLE plans ADD COLUMN slack_channel_id TEXT;
+ALTER TABLE plans ADD COLUMN slack_message_ts TEXT;

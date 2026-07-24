@@ -31,8 +31,25 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 )
+
+// planApprovalLinearText builds the Linear plan-approval-request
+// AgentActivity body -- the plan's own rendered content (planContentText)
+// followed by the EXACT approve/reject keyword instructions handlePrompted
+// itself parses against (plandomain.ApproveKeywords/RejectKeywords), so the
+// instructions shown here can never drift out of sync with what is
+// actually accepted (this file's own doc comment on plandomain.
+// ApproveKeywords explains why both live off that one shared list).
+func planApprovalLinearText(version int32, content string) string {
+	return fmt.Sprintf(
+		"Plan v%d is ready for review:\n\n%s\n\nReply %s to approve and build it, or %s to reject it.",
+		version, content,
+		strings.Join(plandomain.ApproveKeywords, "/"),
+		strings.Join(plandomain.RejectKeywords, "/"),
+	)
+}
 
 // outcomeText builds the short, human-readable outcome message every
 // outbox notification payload carries as its own "what happened" line --
@@ -89,7 +106,20 @@ func splitRepoFullName(repoFullName string) (owner, repo string, ok bool) {
 // created BY that same ingress path writing its own claim row first, but
 // defensive against any future gap) also enqueues nothing, logged as a
 // warning, never a hard failure of the whole turn completion.
-func (a *Actor) enqueueOutboxNotification(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session, trig turn.Trigger, failureReason turn.FailureReason) error {
+//
+// Step 38 ("plan mode, cross-channel", §8.1/§13.3) update: plan is the
+// SAME (possibly nil) plan row recordPlanIfNeeded (planrecord.go) just
+// returned, moments earlier in completeProcessingTurn's own sequencing --
+// non-nil iff processing was a plan_mode=true turn that just genuinely
+// completed. When non-nil AND the session is Slack- or Linear-origin, this
+// function enqueues the RICHER plan-approval-request notification (plan
+// steps/scope, real Slack buttons / Linear text-verdict instructions)
+// INSTEAD of the generic outcomeText message above -- web needs neither
+// (this Step's own explicit scope note: the web UI, whenever it exists,
+// just re-reads the plan's own status) and GitHub keeps today's existing
+// generic behavior unchanged (GitHub plan-mode verdicts are explicitly out
+// of this Step's own scope).
+func (a *Actor) enqueueOutboxNotification(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session, trig turn.Trigger, failureReason turn.FailureReason, processing sqlcgen.Turn, plan *sqlcgen.Plan) error {
 	if sessionRow.SpawnSource == sqlcgen.SessionSpawnSourceWeb {
 		return nil
 	}
@@ -110,8 +140,20 @@ func (a *Actor) enqueueOutboxNotification(ctx context.Context, tx pgx.Tx, sessio
 			}
 			return fmt.Errorf("sessionactor: enqueue outbox notification: get slack thread session: %w", err)
 		}
-		kind = ports.NotificationKindSlack
-		payload = slackapi.Payload{ChannelID: row.ChannelID, ThreadTS: row.ThreadTs, Text: text}
+		if plan != nil {
+			kind = ports.NotificationKindSlackPlanApproval
+			payload = slackapi.PlanApprovalPayload{
+				PlanID:    plan.ID.String(),
+				SessionID: a.sessionID.String(),
+				ChannelID: row.ChannelID,
+				ThreadTS:  row.ThreadTs,
+				Version:   int(plan.Version),
+				Text:      a.planContentText(ctx, processing),
+			}
+		} else {
+			kind = ports.NotificationKindSlack
+			payload = slackapi.Payload{ChannelID: row.ChannelID, ThreadTS: row.ThreadTs, Text: text}
+		}
 
 	case sqlcgen.SessionSpawnSourceGithub:
 		row, err := a.stores.githubPRSession.WithTx(tx).GetBySessionID(ctx, a.sessionID)
@@ -141,7 +183,16 @@ func (a *Actor) enqueueOutboxNotification(ctx context.Context, tx pgx.Tx, sessio
 			return fmt.Errorf("sessionactor: enqueue outbox notification: get linear agent session: %w", err)
 		}
 		kind = ports.NotificationKindLinear
-		payload = linearapi.Payload{AgentSessionID: row.AgentSessionID, OrganizationID: row.OrganizationID, Text: text, Success: success}
+		if plan != nil {
+			payload = linearapi.Payload{
+				AgentSessionID: row.AgentSessionID,
+				OrganizationID: row.OrganizationID,
+				Text:           planApprovalLinearText(plan.Version, a.planContentText(ctx, processing)),
+				Success:        true,
+			}
+		} else {
+			payload = linearapi.Payload{AgentSessionID: row.AgentSessionID, OrganizationID: row.OrganizationID, Text: text, Success: success}
+		}
 
 	default:
 		// Defensive: sessions.spawn_source is a fixed 4-value enum

@@ -77,3 +77,26 @@ func (s *PlanStore) RejectIfAwaitingApproval(ctx context.Context, planID, sessio
 		DecidedBy: decidedBy,
 	})
 }
+
+// Get fetches a plan row by id -- Step 38's ("plan mode, cross-channel",
+// §8.1/§13.3) own addition, used by httpapi.DecidePlanOnTx to re-fetch a
+// plan's own current state (status, slack_channel_id/slack_message_ts)
+// after its own guarded UPDATE, whether that UPDATE won or lost. Returns
+// pgx.ErrNoRows (unwrapped) for a nonexistent id.
+func (s *PlanStore) Get(ctx context.Context, id pgtype.UUID) (sqlcgen.Plan, error) {
+	return s.q.GetPlan(ctx, id)
+}
+
+// SetSlackMessageRef persists the real Slack channel+message-timestamp a
+// successful chat.postMessage call for planID's own approval-request
+// message returned -- Step 38's own addition, called exactly once, by
+// internal/app/outboxworker's Slack plan-approval notifier, right after
+// that call succeeds. A later decision (from ANY entry point) reads this
+// back (via Get above) to know which Slack message to chat.update.
+func (s *PlanStore) SetSlackMessageRef(ctx context.Context, id pgtype.UUID, channelID, messageTS string) error {
+	return s.q.SetPlanSlackMessageRef(ctx, sqlcgen.SetPlanSlackMessageRefParams{
+		ID:             id,
+		SlackChannelID: &channelID,
+		SlackMessageTs: &messageTS,
+	})
+}

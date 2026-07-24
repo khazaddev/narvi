@@ -49,3 +49,25 @@ WHERE id = $1 AND session_id = $2 AND status = 'awaiting_approval';
 UPDATE plans
 SET status = 'rejected', decided_at = now(), decided_by = $3
 WHERE id = $1 AND session_id = $2 AND status = 'awaiting_approval';
+
+-- Step 38 ("plan mode, cross-channel", §8.1/§13.3) additions.
+--
+-- GetPlan backs httpapi.DecidePlanOnTx's own post-guarded-UPDATE re-fetch
+-- (decideplan.go): whether THIS call's own guarded UPDATE won or lost, it
+-- needs the plan's own CURRENT row -- on a win, to read back
+-- slack_channel_id/slack_message_ts for the cross-channel notify step; on a
+-- loss, to report the plan's own actual current status honestly (already
+-- approved/rejected/superseded by whichever OTHER entry point won) rather
+-- than a bare "conflict".
+--
+-- SetPlanSlackMessageRef backs internal/app/outboxworker's own Slack
+-- plan-approval notifier: once (and only once) a real chat.postMessage call
+-- for this plan version succeeds, the message's own real channel+ts (Slack's
+-- own response, never invented/derived) is persisted so a LATER decision
+-- (from any entry point) can chat.update that exact message.
+
+-- name: GetPlan :one
+SELECT * FROM plans WHERE id = $1;
+
+-- name: SetPlanSlackMessageRef :exec
+UPDATE plans SET slack_channel_id = $2, slack_message_ts = $3 WHERE id = $1;

@@ -23,6 +23,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
+	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -60,6 +61,15 @@ type Deps struct {
 	AgentSessions *postgres.LinearAgentSessionStore
 	Installations *postgres.LinearInstallationStore
 	LinearClient  *linearapi.Client
+
+	// Plans/Outbox are Step 38's ("plan mode, cross-channel", §8.1/§13.3)
+	// own additions -- handlePrompted's new plan-verdict keyword check
+	// (below) needs Plans to find this session's own awaiting_approval
+	// plan (if any) and, alongside AgentSessions/Registry above, to call
+	// the shared httpapi.DecidePlan; Outbox is DecidePlan's own
+	// cross-channel-notify dependency (decideplan.go).
+	Plans  *postgres.PlanStore
+	Outbox *postgres.OutboxStore
 
 	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, right after a `created` AgentSessionEvent's own
@@ -271,6 +281,21 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 // existing Narvi session this agent session already backs (never
 // creating a second one), unless the event carries Linear's own "stop"
 // signal.
+//
+// Step 38 ("plan mode, cross-channel", §8.1/§13.3) update: BEFORE the
+// existing unconditional turn-creation below, this now checks whether
+// sessionID currently has an awaiting_approval plan and, if so, matches
+// the reply's own trimmed/lower-cased text against plandomain.MatchVerdict
+// -- on a match, calls the SAME shared httpapi.DecidePlan every other entry
+// point uses (never a duplicated decision path), then posts a follow-up
+// AgentActivity confirming the REAL outcome (honest either way: this
+// call's own verdict if it won, or "already decided elsewhere" if a
+// different channel won first -- outcome.Won/outcome.FinalStatus report
+// the truth). On NO match (including when there is no awaiting_approval
+// plan at all), this falls through to the EXISTING create-turn behavior
+// completely unchanged -- this IS "request changes" (Step 37 already
+// established that reusing ordinary turn-creation for feedback is
+// correct).
 func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWebhookPayload) {
 	logger := platform.Logger(ctx)
 
@@ -304,6 +329,15 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		return
 	}
 	sessionID := row.SessionID
+
+	if deps.Plans != nil {
+		if planID, hasAwaiting := deps.findAwaitingApprovalPlanID(ctx, logger, sessionID); hasAwaiting {
+			if verdict, ok := plandomain.MatchVerdict(payload.AgentActivity.Content.Body); ok {
+				deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, payload.OrganizationID, payload.AgentSession.ID)
+				return
+			}
+		}
+	}
 
 	existingTurns, err := deps.Turns.ListForSession(ctx, sessionID)
 	if err != nil {
@@ -339,6 +373,108 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	}
 	if err := actor.Send(ctx, sessionactor.EnsureDispatched{}); err != nil {
 		logger.Warn("linear: send EnsureDispatched after turn create failed", "error", err)
+	}
+}
+
+// findAwaitingApprovalPlanID reports sessionID's own current
+// awaiting_approval plan id, if any -- a plain scan over
+// ListPlanSummariesForSession (the SAME query planrecord.go's own
+// recordPlanIfNeeded already uses), since the partial unique index
+// (plans_one_awaiting_approval_per_session) guarantees at most one match
+// in practice; this scans defensively rather than assuming that. A lookup
+// failure is logged and treated as "no awaiting plan" (false) -- a
+// keyword-parsing convenience must never turn into a hard failure of the
+// underlying `prompted` webhook handling.
+func (deps Deps) findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Logger, sessionID pgtype.UUID) (pgtype.UUID, bool) {
+	summaries, err := deps.Plans.ListSummariesForSession(ctx, sessionID)
+	if err != nil {
+		logger.Warn("linear: list plan summaries for verdict check failed", "error", err, "session_id", sessionID.String())
+		return pgtype.UUID{}, false
+	}
+	for _, s := range summaries {
+		if s.Status == sqlcgen.PlanStatusAwaitingApproval {
+			return s.ID, true
+		}
+	}
+	return pgtype.UUID{}, false
+}
+
+// handlePlanVerdict calls the shared httpapi.DecidePlan with bot
+// attribution (an explicitly invalid decidedBy, matching this Step's own
+// precedent for Slack/Linear-originated decisions -- see decideplan.go's
+// own top doc comment), then posts a follow-up `response` AgentActivity
+// describing the REAL final outcome, whether this call itself won or a
+// different channel already decided first.
+func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, organizationID, agentSessionID string) {
+	var noDecider pgtype.UUID // Valid == false: bot/channel attribution, matching sessions.created_by's own existing convention for these two channels.
+	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), noDecider)
+	if err != nil {
+		if errors.Is(err, httpapi.ErrPlanOpenTurnInFlight) {
+			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, "A revision is already in progress for this plan -- try again once it completes.")
+			return
+		}
+		logger.Error("linear: decide plan failed", "error", err, "plan_id", planID.String(), "session_id", sessionID.String())
+		return
+	}
+
+	deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, renderLinearPlanOutcomeText(outcome))
+}
+
+// renderLinearPlanOutcomeText mirrors internal/adapters/inbound/slack's
+// own renderPlanOutcomeText (interactive.go) -- reports outcome.FinalStatus
+// honestly, whether THIS call won (the verdict it itself just rendered) or
+// the plan was already decided by a DIFFERENT channel first (an honest
+// "already decided elsewhere" reply, never a confusing duplicate --
+// point 5 of this Step's own brief).
+func renderLinearPlanOutcomeText(outcome httpapi.DecidePlanOutcome) string {
+	switch outcome.FinalStatus {
+	case "approved":
+		if outcome.Won {
+			return "Approved -- implementation started."
+		}
+		return "This plan was already approved via a different channel."
+	case "rejected":
+		if outcome.Won {
+			return "Rejected."
+		}
+		return "This plan was already rejected via a different channel."
+	case "superseded":
+		return "This plan was superseded by a newer revision before your reply arrived."
+	default:
+		return "This plan is no longer awaiting approval."
+	}
+}
+
+// postPlanOutcomeActivity posts a single `response` Agent Activity
+// describing a plan decision's own outcome -- mirrors postAcknowledgment's
+// own install-lookup/decrypt/bounded-call shape exactly, but always
+// CreateResponseActivity (a rendered decision, approve or reject, is a
+// normal outcome, never an "error" activity -- matches decideplan.go's own
+// identical Success:true convention for the cross-channel notify path).
+// Best-effort only: any failure is logged and swallowed, mirroring
+// postAcknowledgment's own identical tolerance.
+func (deps Deps) postPlanOutcomeActivity(ctx context.Context, logger *slog.Logger, organizationID, agentSessionID, text string) {
+	install, err := deps.Installations.GetByOrganizationID(ctx, organizationID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			logger.Warn("linear: no installation for organization, skipping plan-outcome activity", "organization_id", organizationID)
+			return
+		}
+		logger.Error("linear: look up installation failed", "error", err, "organization_id", organizationID)
+		return
+	}
+
+	accessToken, err := platform.DecryptToken(deps.TokenEncryptionKey, install.AccessTokenEncrypted)
+	if err != nil {
+		logger.Error("linear: decrypt installation access token failed", "error", err, "organization_id", organizationID)
+		return
+	}
+
+	activityCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.LinearOutboundActivityTimeout)
+	defer cancel()
+
+	if err := deps.LinearClient.CreateResponseActivity(activityCtx, string(accessToken), agentSessionID, text); err != nil {
+		logger.Error("linear: post plan-outcome activity failed", "error", err, "agent_session_id", agentSessionID)
 	}
 }
 

@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
@@ -91,16 +93,6 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 		ctx := platform.WithSessionID(r.Context(), sessionID.String())
 		logger := platform.Logger(ctx)
 
-		if _, err := sessions.Get(ctx, sessionID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				writeError(w, http.StatusNotFound, "session not found")
-				return
-			}
-			logger.Error("httpapi: get session failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req restdtos.CreateTurnRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -113,74 +105,11 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			return
 		}
 
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			logger.Error("httpapi: begin create-turn tx failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
+		created, cerr := CreateTurnCore(ctx, pool, sessions, turns, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode)
+		if cerr != nil {
+			logger.Error("httpapi: create turn failed", "status", cerr.Status, "message", cerr.Message)
+			writeError(w, cerr.Status, cerr.Message)
 			return
-		}
-		// Rollback is a safety net for every return path other than a
-		// successful Commit below -- mirrors CreateSession's own identical
-		// pattern (create.go).
-		defer func() { _ = tx.Rollback(ctx) }()
-
-		// Lock the session row before ever reading the turns list below --
-		// see this function's own doc comment for why this closes the
-		// check-then-act race a plain pre-transaction read would leave
-		// open. A concurrent DELETE of the session between the earlier
-		// sessions.Get above and this lock is the only way this can miss
-		// (vanishingly rare, and 404 is still the right answer either way).
-		if _, err := sessions.WithTx(tx).GetActorEpochForUpdate(ctx, sessionID); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				writeError(w, http.StatusNotFound, "session not found")
-				return
-			}
-			logger.Error("httpapi: lock session row failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		existingTurns, err := turns.WithTx(tx).ListForSession(ctx, sessionID)
-		if err != nil {
-			logger.Error("httpapi: list turns failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		if hasOpenTurn(existingTurns) {
-			writeError(w, http.StatusConflict, "a turn is already pending, dispatched, or processing for this session")
-			return
-		}
-
-		prompt := req.Prompt
-		created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-			SessionID: sessionID,
-			Status:    sqlcgen.TurnStatusPending,
-			Prompt:    &prompt,
-			ModelID:   (*string)(req.ModelId),
-			PlanMode:  req.PlanMode,
-		})
-		if err != nil {
-			logger.Error("httpapi: create turn failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			logger.Error("httpapi: commit create-turn tx failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		// Fire-and-forget, OUTSIDE the transact above, exactly mirroring
-		// CreateSession's own identical post-commit sequencing (create.go)
-		// -- see that handler's own doc comment for why this never blocks
-		// the response on how long the resulting spawn/dispatch decision
-		// takes.
-		actor, spawnErr := registry.GetOrSpawn(ctx, sessionID)
-		if spawnErr != nil {
-			logger.Warn("httpapi: GetOrSpawn after turn create failed", "error", spawnErr)
-		} else if sendErr := actor.Send(ctx, sessionactor.EnsureDispatched{}); sendErr != nil {
-			logger.Warn("httpapi: send EnsureDispatched after turn create failed", "error", sendErr)
 		}
 
 		writeJSON(w, http.StatusCreated, restdtos.CreateTurnResponse{
@@ -188,4 +117,110 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			Status: restdtos.CreateTurnResponseStatus(created.Status),
 		})
 	}
+}
+
+// CreateTurnError carries the exact (status, message) pair a caller of
+// CreateTurnCore should surface -- mirrors CreateSessionError's own
+// identical purpose (create.go): a distinct type, not a plain error, so
+// CreateTurn's own existing tests/messages stay byte-for-byte unchanged
+// after this extraction, and so a non-HTTP caller (Slack's view_submission
+// handling, internal/adapters/inbound/slack/interactive.go) can inspect
+// Status/Message directly the same way internal/adapters/inbound/{slack,
+// linear} already do for CreateSessionError.
+type CreateTurnError struct {
+	Status  int
+	Message string
+}
+
+func (e *CreateTurnError) Error() string { return e.Message }
+
+// CreateTurnCore is everything CreateTurn's own doc comment above
+// describes AFTER decoding the request body -- pure extraction, not a
+// behavior change (every existing CreateTurn test in this package's own
+// _test.go files passes unchanged): fetch (404), lock (the SAME
+// GetActorEpochForUpdate call, closing the identical check-then-act race
+// this function's own top doc comment already documents), the hasOpenTurn
+// 409 gate, insert, commit, then the SAME fire-and-forget GetOrSpawn+
+// EnsureDispatched post-commit sequencing.
+//
+// Exported (Step 38, "plan mode, cross-channel", §8.1/§13.3) so Slack's
+// own "Request changes" modal submission (internal/adapters/inbound/slack/
+// interactive.go) can create a real plan_mode=true turn through the EXACT
+// SAME path POST .../turns itself uses, rather than a third, duplicated
+// turn-creation call site -- mirrors CreateSessionCore's own identical
+// cross-package reuse precedent (internal/adapters/inbound/{slack,linear}
+// already call that one directly).
+func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool) (sqlcgen.Turn, *CreateTurnError) {
+	logger := platform.Logger(ctx)
+
+	if _, err := sessions.Get(ctx, sessionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlcgen.Turn{}, &CreateTurnError{http.StatusNotFound, "session not found"}
+		}
+		logger.Error("httpapi: get session failed", "error", err)
+		return sqlcgen.Turn{}, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		logger.Error("httpapi: begin create-turn tx failed", "error", err)
+		return sqlcgen.Turn{}, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+	}
+	// Rollback is a safety net for every return path other than a
+	// successful Commit below -- mirrors CreateSession's own identical
+	// pattern (create.go).
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Lock the session row before ever reading the turns list below --
+	// see this function's own doc comment for why this closes the
+	// check-then-act race a plain pre-transaction read would leave
+	// open. A concurrent DELETE of the session between the earlier
+	// sessions.Get above and this lock is the only way this can miss
+	// (vanishingly rare, and 404 is still the right answer either way).
+	if _, err := sessions.WithTx(tx).GetActorEpochForUpdate(ctx, sessionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlcgen.Turn{}, &CreateTurnError{http.StatusNotFound, "session not found"}
+		}
+		logger.Error("httpapi: lock session row failed", "error", err)
+		return sqlcgen.Turn{}, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+	}
+
+	existingTurns, err := turns.WithTx(tx).ListForSession(ctx, sessionID)
+	if err != nil {
+		logger.Error("httpapi: list turns failed", "error", err)
+		return sqlcgen.Turn{}, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+	}
+	if hasOpenTurn(existingTurns) {
+		return sqlcgen.Turn{}, &CreateTurnError{http.StatusConflict, "a turn is already pending, dispatched, or processing for this session"}
+	}
+
+	created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID: sessionID,
+		Status:    sqlcgen.TurnStatusPending,
+		Prompt:    &prompt,
+		ModelID:   modelID,
+		PlanMode:  planMode,
+	})
+	if err != nil {
+		logger.Error("httpapi: create turn failed", "error", err)
+		return sqlcgen.Turn{}, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		logger.Error("httpapi: commit create-turn tx failed", "error", err)
+		return sqlcgen.Turn{}, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+	}
+
+	// Fire-and-forget, OUTSIDE the transact above, exactly mirroring
+	// CreateSession's own identical post-commit sequencing (create.go) --
+	// see that handler's own doc comment for why this never blocks the
+	// response on how long the resulting spawn/dispatch decision takes.
+	actor, spawnErr := registry.GetOrSpawn(ctx, sessionID)
+	if spawnErr != nil {
+		logger.Warn("httpapi: GetOrSpawn after turn create failed", "error", spawnErr)
+	} else if sendErr := actor.Send(ctx, sessionactor.EnsureDispatched{}); sendErr != nil {
+		logger.Warn("httpapi: send EnsureDispatched after turn create failed", "error", sendErr)
+	}
+
+	return created, nil
 }

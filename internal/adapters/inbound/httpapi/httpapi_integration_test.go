@@ -135,6 +135,14 @@ type testRig struct {
 	plans        *narvipg.PlanStore
 	participants *narvipg.ParticipantStore
 
+	// outbox/linearAgentSessions are Step 38's ("plan mode, cross-channel",
+	// §8.1/§13.3) own additions -- DecidePlanOnTx's own cross-channel-notify
+	// dependencies (decideplan.go), now threaded through the approve/reject
+	// routes below exactly like production wiring (cmd/control-plane/
+	// main.go).
+	outbox              *narvipg.OutboxStore
+	linearAgentSessions *narvipg.LinearAgentSessionStore
+
 	// tokenEncryptionKey is a fixed, valid 32-byte AES-256-GCM key used by
 	// this rig's own scm-credentials tests (real EncryptToken/DecryptToken
 	// round trip, matching the SAME real flow Step 20's own OAuth callback
@@ -164,22 +172,24 @@ func newTestRig(t *testing.T) testRig {
 	}
 
 	rig := testRig{
-		pool:               pool,
-		sessions:           narvipg.NewSessionStore(pool),
-		turns:              narvipg.NewTurnStore(pool),
-		sandboxes:          narvipg.NewSandboxStore(pool),
-		events:             narvipg.NewEventStore(pool),
-		artifacts:          narvipg.NewArtifactStore(pool),
-		wsTokens:           narvipg.NewWSTokenStore(pool),
-		environments:       narvipg.NewEnvironmentStore(pool),
-		users:              narvipg.NewUserStore(pool),
-		identities:         narvipg.NewIdentityStore(pool),
-		userSessions:       narvipg.NewUserSessionStore(pool),
-		registry:           registry,
-		tokenEncryptionKey: []byte("01234567890123456789012345678901"), // exactly 32 bytes
-		provider:           &fakeSnapshotProvider{},
-		plans:              narvipg.NewPlanStore(pool),
-		participants:       narvipg.NewParticipantStore(pool),
+		pool:                pool,
+		sessions:            narvipg.NewSessionStore(pool),
+		turns:               narvipg.NewTurnStore(pool),
+		sandboxes:           narvipg.NewSandboxStore(pool),
+		events:              narvipg.NewEventStore(pool),
+		artifacts:           narvipg.NewArtifactStore(pool),
+		wsTokens:            narvipg.NewWSTokenStore(pool),
+		environments:        narvipg.NewEnvironmentStore(pool),
+		users:               narvipg.NewUserStore(pool),
+		identities:          narvipg.NewIdentityStore(pool),
+		userSessions:        narvipg.NewUserSessionStore(pool),
+		registry:            registry,
+		tokenEncryptionKey:  []byte("01234567890123456789012345678901"), // exactly 32 bytes
+		provider:            &fakeSnapshotProvider{},
+		plans:               narvipg.NewPlanStore(pool),
+		participants:        narvipg.NewParticipantStore(pool),
+		outbox:              narvipg.NewOutboxStore(pool),
+		linearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -192,8 +202,8 @@ func newTestRig(t *testing.T) testRig {
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.registry))
-		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.registry))
-		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.plans, rig.participants))
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.registry))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions))
 	})
 	// scm-credentials is deliberately mounted OUTSIDE /api/sessions and
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc
