@@ -31,9 +31,9 @@ func (q *Queries) BumpActorEpoch(ctx context.Context, id pgtype.UUID) (int64, er
 
 const createSession = `-- name: CreateSession :one
 
-INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag)
-VALUES ($1, $2, $3, COALESCE($4, '[]'::jsonb), $5, $6)
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision
+INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag, build_model_id)
+VALUES ($1, $2, $3, COALESCE($4, '[]'::jsonb), $5, $6, $7)
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id
 `
 
 type CreateSessionParams struct {
@@ -43,6 +43,7 @@ type CreateSessionParams struct {
 	Repos         interface{}        `json:"repos"`
 	EnvironmentID pgtype.UUID        `json:"environment_id"`
 	ProvenanceTag *string            `json:"provenance_tag"`
+	BuildModelID  *string            `json:"build_model_id"`
 }
 
 // Queries backing SessionStore (§4.3). Just enough to prove the pipeline
@@ -60,6 +61,11 @@ type CreateSessionParams struct {
 // EXISTING call site that never sets them (every session created before
 // this batch) keeps compiling and behaving identically: both stay NULL,
 // byte-for-byte today's unscoped behavior.
+//
+// build_model_id (Step 37, "plan mode, web", §12.2 item 3) is likewise
+// sqlc.narg -- every EXISTING call site that never sets it keeps
+// compiling and behaving identically (NULL, "use the default model
+// catalog entry", migrations/000034_plan_mode.up.sql's own convention).
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
 	row := q.db.QueryRow(ctx, createSession,
 		arg.Title,
@@ -68,6 +74,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		arg.Repos,
 		arg.EnvironmentID,
 		arg.ProvenanceTag,
+		arg.BuildModelID,
 	)
 	var i Session
 	err := row.Scan(
@@ -86,12 +93,13 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.EnvironmentID,
 		&i.ProvenanceTag,
 		&i.IntentDecision,
+		&i.BuildModelID,
 	)
 	return i, err
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision FROM sessions
+SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id FROM sessions
 WHERE id = $1
 `
 
@@ -114,6 +122,7 @@ func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (Session, erro
 		&i.EnvironmentID,
 		&i.ProvenanceTag,
 		&i.IntentDecision,
+		&i.BuildModelID,
 	)
 	return i, err
 }
@@ -140,7 +149,7 @@ const updateSessionConversationID = `-- name: UpdateSessionConversationID :one
 UPDATE sessions
 SET opencode_conversation_id = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id
 `
 
 type UpdateSessionConversationIDParams struct {
@@ -173,6 +182,7 @@ func (q *Queries) UpdateSessionConversationID(ctx context.Context, arg UpdateSes
 		&i.EnvironmentID,
 		&i.ProvenanceTag,
 		&i.IntentDecision,
+		&i.BuildModelID,
 	)
 	return i, err
 }
@@ -210,7 +220,7 @@ const updateSessionStatus = `-- name: UpdateSessionStatus :one
 UPDATE sessions
 SET status = $2, failure_reason = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id
 `
 
 type UpdateSessionStatusParams struct {
@@ -242,6 +252,7 @@ func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStat
 		&i.EnvironmentID,
 		&i.ProvenanceTag,
 		&i.IntentDecision,
+		&i.BuildModelID,
 	)
 	return i, err
 }

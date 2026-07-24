@@ -129,6 +129,12 @@ type testRig struct {
 	registry     *sessionactor.Registry
 	server       *httptest.Server
 
+	// plans/participants are Step 37's ("plan mode, web", §8.1) own
+	// additions, backing this rig's own approve/reject plan routes below
+	// (planapprove_integration_test.go).
+	plans        *narvipg.PlanStore
+	participants *narvipg.ParticipantStore
+
 	// tokenEncryptionKey is a fixed, valid 32-byte AES-256-GCM key used by
 	// this rig's own scm-credentials tests (real EncryptToken/DecryptToken
 	// round trip, matching the SAME real flow Step 20's own OAuth callback
@@ -172,6 +178,8 @@ func newTestRig(t *testing.T) testRig {
 		registry:           registry,
 		tokenEncryptionKey: []byte("01234567890123456789012345678901"), // exactly 32 bytes
 		provider:           &fakeSnapshotProvider{},
+		plans:              narvipg.NewPlanStore(pool),
+		participants:       narvipg.NewParticipantStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -184,6 +192,8 @@ func newTestRig(t *testing.T) testRig {
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.registry))
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.registry))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.plans, rig.participants))
 	})
 	// scm-credentials is deliberately mounted OUTSIDE /api/sessions and
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc

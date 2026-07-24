@@ -76,6 +76,13 @@ type storeBundle struct {
 	slackThreadSession *postgres.SlackThreadSessionStore
 	githubPRSession    *postgres.GitHubPRSessionStore
 	linearAgentSession *postgres.LinearAgentSessionStore
+
+	// plan is Step 37's ("plan mode, web", §8.1/§12.2 item 3) own
+	// addition: pushpr.go's own completeProcessingTurn calls
+	// recordPlanIfNeeded (planrecord.go) right after persisting a turn's
+	// terminal state, inside that SAME transaction, exactly mirroring
+	// outbox's own precedent above.
+	plan *postgres.PlanStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
@@ -94,6 +101,7 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		slackThreadSession: postgres.NewSlackThreadSessionStore(pool),
 		githubPRSession:    postgres.NewGitHubPRSessionStore(pool),
 		linearAgentSession: postgres.NewLinearAgentSessionStore(pool),
+		plan:               postgres.NewPlanStore(pool),
 	}
 }
 
