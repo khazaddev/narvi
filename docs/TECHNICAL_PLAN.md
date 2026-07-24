@@ -186,7 +186,7 @@ The BFF-facing routes: sessions CRUD/create, events, artifacts, secrets, environ
 ### 6.4 Sandbox boot contract
 Boot modes: `build | fresh | repo_image | snapshot_restore` (env `NARVI_BOOT_MODE`). Hook policy: `setup.sh` runs only in fresh/build (fatal only in build); `start.sh` runs in all non-build modes (primary repo fatal, secondaries warn). Multi-repo ordered clones under `/workspace/{name}` + generated `AGENTS.md` manifest. Tunnel URLs delivered via provider; sandbox env persisted to `/workspace/.env.sandbox`.
 
-**Amendment (§19.4, warm-boot shared images, Step 39c):** under `repo_image`, `setup.sh`'s `ShouldRun` is no longer a flat "never" — it reruns, non-fatally, whenever the boot-time workspace has moved from the image's own built SHA. This is a breaking change to the contract as stated above (Conventional-Commits `!` marker required on the landing PR) — see §19.4 for the full redefinition and rationale.
+**Amendment (§19.4, warm-boot shared images, Step 42):** under `repo_image`, `setup.sh`'s `ShouldRun` is no longer a flat "never" — it reruns, non-fatally, whenever the boot-time workspace has moved from the image's own built SHA. This is a breaking change to the contract as stated above (Conventional-Commits `!` marker required on the landing PR) — see §19.4 for the full redefinition and rationale.
 
 ## 7. OpenCode integration (`adapters/outbound/opencode`)
 
@@ -205,9 +205,9 @@ Problem this solves: some engine behaviors spawn multiple concurrent sub-agents 
 - The adapter assigns each spawned sub-task a stable `subTaskId` (derived from whatever correlator the engine itself exposes — OpenCode's own nested-task id today; not Narvi's own session concepts, per the note below) and tags every event that sub-task produces with it (§6.1), emitting `sub_task_start`/`sub_task_finish` to bracket its lifetime.
 - **Not a new domain entity.** A sub-task is a presentation/wire-level grouping of events belonging to one turn — not a new Postgres row, and not Narvi's own "child session" (§14.4: a full session with its own sandbox/turns, spawned by automation/sentinel features — a materially heavier mechanism; the naming here is deliberately distinct so the two are never confused). The turn state machine (§3.3) is unaffected: one turn still has exactly one `processing` state no matter how many sub-tasks ran underneath it.
 - **Cost rolls up.** Every `step_finish.cost` (§6.1) is summed into the same turn/session total regardless of which lane — main or any sub-task — produced it; a sub-task's spend is never invisible in the cost breakdown (§12.2 item 1). (Per-model cost attribution when a sub-task runs on a different model than its turn — §12.2 item 6's cost-by-model view — is not designed here; that needs its own `step_finish` model field before it can be claimed, left to whichever future work actually adds it.)
-- Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 59 (session timeline, lane nesting) and Step 60 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
+- Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 64 (session timeline, lane nesting) and Step 65 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
 
-### 7.2 Context-overflow compaction retry (Step 39e)
+### 7.2 Context-overflow compaction retry (Step 44)
 
 Problem this solves: a long-running turn (many tool calls/steps) can outrun the model's context window mid-turn, or a sandbox restart can reload a session's full history and overflow on the very first call after resume. Today this is invisible as a distinct failure: the adapter's tagged-union decoder already recognizes it by name (`openCodeTaggedError.Name == "ContextOverflowError"`, one of the schema-derived-only union members alongside `ProviderAuthError`/`UnknownError`/`APIError`/etc., `types.go:128-138`) but `deriveOutcome` folds every non-abort error name into the same generic path: `reason := fmt.Sprintf("opencode: %s", err.Name)` → `ExecutionCompleteOutcomeFailed` (`outcome.go:38-45`). A context-overflow turn today just fails, with no attempt at recovery — the only recourse is a human-initiated retry (§8 item 7, Recovery UX).
 
@@ -225,7 +225,7 @@ The adapter already has a *partial* answer for the auto-compaction case: an `Ove
 
 **Interaction with turn recovery (§8 item 7, §3.3):** this shrinks, rather than duplicates, the manual-retry class Recovery UX otherwise absorbs — one whole failure mode (mid-turn context overflow) resolves without ever reaching the user as a failed turn. It is unrelated to the sandbox-loss re-enqueue path (`sessionactor/dispatch.go`'s `planReenqueueOrRespawn`/`tryPlanReenqueue`, §9.3 scenario #2): that path recovers from the *sandbox* dying; this recovers from the *agent* reporting a recoverable error on a live sandbox, entirely within one `StartTurn` call, before the turn ever terminalizes.
 
-**Phasing:** Step 39e — one PR: the classifier + `forceCompaction` + retry loop + `OpenCodeSummarizeTimeout` + table-driven unit tests on the retry decision + a fake-server test (mirroring `fake_server_test.go`'s existing precedent) + the one real-binary contract case above. Independent of every warm-boot Step (§19) — it touches only the OpenCode adapter, and can land whenever Step 17 (OpenCode adapter) is already merged, in parallel with anything else.
+**Phasing:** Step 44 — one PR: the classifier + `forceCompaction` + retry loop + `OpenCodeSummarizeTimeout` + table-driven unit tests on the retry decision + a fake-server test (mirroring `fake_server_test.go`'s existing precedent) + the one real-binary contract case above. Independent of every warm-boot Step (§19) — it touches only the OpenCode adapter, and can land whenever Step 17 (OpenCode adapter) is already merged, in parallel with anything else.
 
 ## 8. Feature set (exit criteria, not options)
 
@@ -291,9 +291,9 @@ Snapshots/restore/resume; image prebuilds (fingerprint = repo SHAs + runtime ver
 GitHub/Slack/Linear/webhook ingress with shared toolkit (signature verify, atomic dedupe, one `CreateSessionRequest`); intent classifier (shadow first); plan mode end-to-end; outbox delivery to all notifiers; auth hardening (host-scoped cookies, backend-issued session validation).
 *Exit: bot ingress demo; classifier shadow report on real traffic.*
 
-**Phase 3.5 — Warm boot & agent-turn resilience (Steps 39a-39e; additive, does not gate Phase 3's exit above or block Phase 4's start)**
+**Phase 3.5 — Warm boot & agent-turn resilience (Steps 40-44; additive, does not gate Phase 3's exit above or block Phase 4's start)**
 Shared, tip-tracking image prebuilds (§19): re-keyed fingerprint, fetch-aware `gitclone.SyncAll`, freshness pump, the `repo_image` setup-rerun contract amendment, hook-output capture, and the telemetry-gated graduated rerun ladder; plus the OpenCode adapter's context-overflow compaction retry (§7.2), fully independent of the warm-boot work.
-*Exit: per-Environment warm-boot staleness window observed within the 10–40 min range §19.2 predicts; §9.3-class fetch-fail/stale-image/non-idempotent-setup scenarios green; compaction-retry contract test green against the pinned OpenCode binary. Step 39d specifically does not start until Step 39c's rerun-duration telemetry shows a real need.*
+*Exit: per-Environment warm-boot staleness window observed within the 10–40 min range §19.2 predicts; §9.3-class fetch-fail/stale-image/non-idempotent-setup scenarios green; compaction-retry contract test green against the pinned OpenCode binary. Step 43 specifically does not start until Step 42's rerun-duration telemetry shows a real need.*
 
 **Phase 4 — Code review & automations (2 wks)**
 Full §8.2 code review; automations engine + sweeps; RWX provider + previews; uploads; secrets scopes; model catalog + Codex OAuth.
@@ -449,7 +449,7 @@ Both reuse existing primitives (review sentinels, labels, child sessions, plan m
 - `path_scope` + sparse-checkout enforcement: extends `domain/gitstate` and the Environment/session-creation data model — Phase 1-2 (alongside Step 09/26).
 - `services.yml` supervision: extends `sandbox-agent` process supervision and `boot_progress` reporting — Phase 1-2 (alongside Step 12).
 - Mock contract drift-check: extends the image-build fingerprint work — Phase 2 (alongside Step 24).
-- Handoff sentinel v1: extends the review sentinels — Phase 4 (alongside Step 40).
+- Handoff sentinel v1: extends the review sentinels — Phase 4 (alongside Step 45).
 - Handoff v2 (child-session escalation): optional; add later in Phase 4 or beyond if the volume of v1 handoffs justifies the extra complexity.
 - UI (Phase 6): Settings → Environments gains a path-scope + services editor; sessions can be filtered/labeled by prototyping provenance; the handoff sentinel surfaces inside the code-review view (§12.2 item 2).
 
@@ -475,7 +475,7 @@ A pure decision function (same style as the domain decision functions, §3.2/§9
 When triggered, run one review pass over the full diff `baseRef..headRef` — not per constituent PR — with a prompt **distinct from the standard risk-map verdict**: explicitly framed around composition ("do these already-individually-correct changes conflict, duplicate, or invalidate each other's assumptions"), never re-litigating logic already approved per PR. Reuses the same LLM/review pipeline (§4.3, §8.2) with a separate, versioned prompt template (same mechanism as §8.3/§12.2 item 5).
 
 ### 15.4 Phasing
-Extends the code-review domain and review-session reuse (§8.2, Step 41) plus the intent classifier (§8.3, Step 36) — Phase 4, alongside the rest of the sentinel family (Step 40/41/43/44). No new domain package, no new state machine. UI: a dedicated release-review screen (§12.2 item 9, mocked in the design artifact) — manifest table + trigger banner + composition findings.
+Extends the code-review domain and review-session reuse (§8.2, Step 46) plus the intent classifier (§8.3, Step 36) — Phase 4, alongside the rest of the sentinel family (Step 45/46/48/49). No new domain package, no new state machine. UI: a dedicated release-review screen (§12.2 item 9, mocked in the design artifact) — manifest table + trigger banner + composition findings.
 
 ## 16. Decision inbox (home view — new capability)
 
@@ -522,7 +522,7 @@ This is a **system-initiated action, not a delegated human one** — it does not
 The merge is recorded in `audit_log` (§13.3) with `actor_user_id` NULL — using the same allowance already made in the audit_log schema for actions with no human actor — and `action`/`detail_json` capturing the origin PR, the review session, the fix PR, and which of the four checks passed. If the origin PR itself is never merged (closed, abandoned), the fix PR is simply left open as an ordinary review item — never silently discarded.
 
 ### 17.6 Phasing
-Extends the code-review domain and sentinel family (§8.2, Step 40/43) — Phase 4, after the sentinels themselves exist; reuses child sessions (§14.4), the verdict-posting tool, and the label-auto-approval policy, so no new subsystem. UI: the toggle (Settings → Environments) and the fix-PR link on finding cards (§12.2 items 2 and 5) are mocked/built in Phase 6 alongside the rest of those views.
+Extends the code-review domain and sentinel family (§8.2, Step 45/48) — Phase 4, after the sentinels themselves exist; reuses child sessions (§14.4), the verdict-posting tool, and the label-auto-approval policy, so no new subsystem. UI: the toggle (Settings → Environments) and the fix-PR link on finding cards (§12.2 items 2 and 5) are mocked/built in Phase 6 alongside the rest of those views.
 
 ## 18. Unified intent classifier (detailed design)
 
@@ -646,7 +646,7 @@ Two small, concrete gaps this design surfaces and closes, both landing no later 
 
 **(b) Rerun-duration telemetry.** Per-hook wall-clock, emitted from the existing hook-run bracketing in `runRepoHooks`/`runHook`, joins the OTel metrics §5.3 already lists (boot phase durations). This is the concrete measurement §19.4's "expected to be fast" claim needs, and it is §19.6's own adoption trigger — shipping §19.4 without this leaves that trigger unmeasurable.
 
-### 19.6 Graduated setup-rerun ladder (Step 39d, telemetry-gated)
+### 19.6 Graduated setup-rerun ladder (Step 43, telemetry-gated)
 
 Designed now, scheduled later: once §19.5(b)'s telemetry shows full `setup.sh` reruns materially eroding the warm-boot latency win (rather than assumed up front), this adds a middle tier between "skip" and "full rerun."
 
@@ -672,9 +672,9 @@ Narvi has no per-scope, user-configurable environment variable surface today —
 
 ### 19.9 Phasing
 
-- **Step 39a** — sandbox-agent fetch-aware sync (§19.3): `gitclone/sync.go` fetch step + credential wiring, `checkoutBranch` remote-tracking preference, degrade policy; `domain/gitstate` fetch states/triggers; new `GitFetchStepTimeout`. Independently shippable and independently valuable — it also hardens today's exact-SHA `repo_image` boots against the local-branch-missing edge, with no other behavior change.
-- **Step 39b** — shared fingerprint + spawn-path simplification (§19.1): `imagebuild.Fingerprint` redefinition; `imageresolve.go`'s `resolveAndSetImage` drops the per-repo `ResolveBranchSHA` loop; `image_builds` migration adds `built_repo_shas`/`built_at` (existing rows dropped, not migrated in place — pure cache); `ports.ImageSpec` → `{Base, Repos{URL,SHA}, RuntimeVersion}`; build service bakes `/narvi/image-manifest.json` and full clones.
-- **Step 39c** — refresh pump + hook-policy change + hook diagnostics (§19.2, §19.4, §19.5): `app/imagebuild.Builder` freshness pump, claim-time SHA resolution, in-place `image_ref` swap, the new platform GitHub credential; `EvaluateHook`'s `workspaceMoved` policy and the §6.4 amendment (breaking-change marker); bounded hook-output-tail capture through the supervisor's existing `Stdout`/`Stderr` seam; per-hook rerun-duration telemetry; the `sparse-checkout disable` hardening (§19.7). New §9.3-class resilience scenarios: fetch-fail boot, stale-image boot, refresh-in-flight spawn, non-idempotent-setup boot.
-- **Step 39d** — graduated setup-rerun ladder (§19.6): scheduled once Step 39c's rerun-duration telemetry shows full reruns materially eroding warm-boot latency, not shipped speculatively alongside it.
+- **Step 40** — sandbox-agent fetch-aware sync (§19.3): `gitclone/sync.go` fetch step + credential wiring, `checkoutBranch` remote-tracking preference, degrade policy; `domain/gitstate` fetch states/triggers; new `GitFetchStepTimeout`. Independently shippable and independently valuable — it also hardens today's exact-SHA `repo_image` boots against the local-branch-missing edge, with no other behavior change.
+- **Step 41** — shared fingerprint + spawn-path simplification (§19.1): `imagebuild.Fingerprint` redefinition; `imageresolve.go`'s `resolveAndSetImage` drops the per-repo `ResolveBranchSHA` loop; `image_builds` migration adds `built_repo_shas`/`built_at` (existing rows dropped, not migrated in place — pure cache); `ports.ImageSpec` → `{Base, Repos{URL,SHA}, RuntimeVersion}`; build service bakes `/narvi/image-manifest.json` and full clones.
+- **Step 42** — refresh pump + hook-policy change + hook diagnostics (§19.2, §19.4, §19.5): `app/imagebuild.Builder` freshness pump, claim-time SHA resolution, in-place `image_ref` swap, the new platform GitHub credential; `EvaluateHook`'s `workspaceMoved` policy and the §6.4 amendment (breaking-change marker); bounded hook-output-tail capture through the supervisor's existing `Stdout`/`Stderr` seam; per-hook rerun-duration telemetry; the `sparse-checkout disable` hardening (§19.7). New §9.3-class resilience scenarios: fetch-fail boot, stale-image boot, refresh-in-flight spawn, non-idempotent-setup boot.
+- **Step 43** — graduated setup-rerun ladder (§19.6): scheduled once Step 42's rerun-duration telemetry shows full reruns materially eroding warm-boot latency, not shipped speculatively alongside it.
 
 Stays as-is, unaffected by this design: stash/pop machinery, `CloneAll`'s fresh-clone path, the boot-dispatch shape (`runBootSequence`), the builder's claim/backoff/streak machinery, the separate `contract_drift` mechanism (§14.3; unification remains its own future work).
