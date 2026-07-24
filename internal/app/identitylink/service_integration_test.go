@@ -317,6 +317,19 @@ func TestResolve_ReusesStillLiveLinkPrompt(t *testing.T) {
 // its own URL for this test's own convenience), then Consume, given the
 // authenticated user, links the identity, records a human-actor audit-log
 // entry, and deletes the prompt so it cannot be replayed.
+//
+// Deliberately UNCHANGED by Step 39's own security-remediation fix
+// ("identities + full RBAC", §13.2): "the-clicker" here is simply this
+// package's own test double for "whoever is authenticated and presents
+// the nonce" -- Consume itself performs no correlation between that
+// visitor and the identity that originally triggered the prompt (see
+// Consume's own updated doc comment, service.go, for why that check
+// cannot live here at all). This test's own assertions still correctly
+// describe Consume's real, documented contract; what actually closes the
+// confirmed hijack this shape once demonstrated is delivery-scoping
+// upstream (chat.postEphemeral, internal/adapters/inbound/slack/ack.go),
+// proved separately by internal/adapters/inbound/slack's own
+// TestHandler_AppMention_IdentityNoticeDeliveredEphemerally.
 func TestConsume_LinksIdentityAndDeletesPrompt(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)

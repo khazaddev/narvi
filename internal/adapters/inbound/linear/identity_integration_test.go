@@ -247,3 +247,233 @@ func TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptButStillCreatesTurn
 		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
 	}
 }
+
+// newIdentityLinkDepsForTest mirrors internal/adapters/inbound/slack's own
+// identical helper (identity_integration_test.go, that package) -- built
+// once here since this file's own earlier tests each construct an
+// equivalent identitylink.Deps value inline instead.
+func newIdentityLinkDepsForTest(pool *pgxpool.Pool, auditLog *narvipg.AuditLogStore) identitylink.Deps {
+	return identitylink.Deps{
+		Pool:          pool,
+		Users:         narvipg.NewUserStore(pool),
+		Identities:    narvipg.NewIdentityStore(pool),
+		LinkPrompts:   narvipg.NewIdentityLinkPromptStore(pool),
+		AuditLog:      auditLog,
+		PublicBaseURL: "https://narvi.example.com",
+		PromptTTL:     time.Hour,
+	}
+}
+
+// TestWebhookHandler_Created_DeniedForViewer is this Step's own regression
+// test for a confirmed security review finding: BEFORE this fix, a
+// `created` AgentSessionEvent whose creatorId auto-links to a REAL Narvi
+// user (any role) unconditionally created the backing session --
+// domain/authz.Authorize was never consulted. This proves a `viewer`'s
+// auto-linked account is now REJECTED: no session is ever created for
+// this agent session at all -- exactly like the REST /api/sessions
+// endpoint already rejects a viewer's own CreateSession call
+// (domain/authz's own matrix: ActionCreateSession has no viewer entry).
+// The identity itself still auto-links (only the state-changing effect is
+// refused).
+func TestWebhookHandler_Created_DeniedForViewer(t *testing.T) {
+	pool := newTestPool(t)
+	deps := newHandlerDeps(t, pool)
+
+	organizationID := "org-viewer-create-1"
+	tokenEncryptionKey := deps.TokenEncryptionKey
+	installLinearFixture(context.Background(), t, pool, organizationID, tokenEncryptionKey)
+
+	graphqlStub := newLinearGraphQLStub(t, "viewer-creator@example.com")
+	deps.LinearClient = linearapi.New(graphqlStub.Client(), graphqlStub.URL)
+
+	users := narvipg.NewUserStore(pool)
+	matchedUser, err := users.Create(context.Background(), sqlcgen.CreateUserParams{
+		PrimaryEmail: "viewer-creator@example.com", DisplayName: "Viewer Creator", Role: sqlcgen.UserRoleViewer,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user: %v", err)
+	}
+
+	auditLog := narvipg.NewAuditLogStore(pool)
+	deps.AuditLog = auditLog
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, auditLog)
+
+	handler := linear.NewWebhookHandler(deps)
+
+	agentSessionID := "agent-session-viewer-create-1"
+	body := agentSessionCreatedPayloadWithCreator(agentSessionID, organizationID, "linear-viewer-creator-1")
+
+	rec := postWebhook(t, handler, body, "delivery-viewer-create-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	ctx := context.Background()
+	var sessionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE spawn_source = 'linear'`).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Errorf("session count = %d, want 0 (a viewer must never create a session, even auto-linked)", sessionCount)
+	}
+
+	// The identity itself still auto-links -- only the effect is denied.
+	identity, err := narvipg.NewIdentityStore(pool).GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderLinear, "linear-viewer-creator-1")
+	if err != nil {
+		t.Fatalf("GetByProviderAndExternalID: %v", err)
+	}
+	if identity.UserID != matchedUser.ID {
+		t.Errorf("identity.UserID = %v, want %v", identity.UserID, matchedUser.ID)
+	}
+}
+
+// TestWebhookHandler_PlanVerdict_DeniedForUnownedMember proves
+// handlePlanVerdict (an `approve`/`reject` keyword reply) is denied for an
+// auto-linked `member` who neither created nor joined the target session
+// -- the plan stays awaiting_approval, decided_by stays NULL, exactly
+// like the REST approve/reject endpoints already behave for the identical
+// (role, ownership) combination (canActOnPlan, httpapi/planauthz.go).
+func TestWebhookHandler_PlanVerdict_DeniedForUnownedMember(t *testing.T) {
+	pool := newTestPool(t)
+	deps := newHandlerDeps(t, pool)
+	deps.Plans = narvipg.NewPlanStore(pool)
+	deps.Outbox = narvipg.NewOutboxStore(pool)
+	deps.Participants = narvipg.NewParticipantStore(pool)
+
+	organizationID := "org-plan-unowned-1"
+	installLinearFixture(context.Background(), t, pool, organizationID, deps.TokenEncryptionKey)
+
+	graphqlStub := newLinearGraphQLStub(t, "unowned-decider@example.com")
+	deps.LinearClient = linearapi.New(graphqlStub.Client(), graphqlStub.URL)
+
+	users := narvipg.NewUserStore(pool)
+	if _, err := users.Create(context.Background(), sqlcgen.CreateUserParams{
+		PrimaryEmail: "unowned-decider@example.com", DisplayName: "Unowned Decider", Role: sqlcgen.UserRoleMember,
+	}); err != nil {
+		t.Fatalf("create fixture user: %v", err)
+	}
+
+	auditLog := narvipg.NewAuditLogStore(pool)
+	deps.AuditLog = auditLog
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, auditLog)
+
+	handler := linear.NewWebhookHandler(deps)
+
+	ctx := context.Background()
+	agentSessionID := "agent-session-plan-unowned-1"
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	plans := narvipg.NewPlanStore(pool)
+	agentSessions := narvipg.NewLinearAgentSessionStore(pool)
+
+	// Deliberately NO CreatedBy, no participants row.
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceLinear})
+	if err != nil {
+		t.Fatalf("create linear-origin session: %v", err)
+	}
+	if _, err := agentSessions.Claim(ctx, agentSessionID, organizationID); err != nil {
+		t.Fatalf("claim agent session: %v", err)
+	}
+	if err := agentSessions.SetSessionID(ctx, agentSessionID, session.ID); err != nil {
+		t.Fatalf("attach session id: %v", err)
+	}
+	producingTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	plan, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: session.ID, TurnID: producingTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval})
+	if err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+
+	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, "linear-unowned-decider-1", "approve")
+	rec := postWebhook(t, handler, body, "delivery-plan-unowned-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var dbStatus sqlcgen.PlanStatus
+	var decidedBy pgtype.UUID
+	if err := pool.QueryRow(ctx, `SELECT status, decided_by FROM plans WHERE id = $1`, plan.ID).Scan(&dbStatus, &decidedBy); err != nil {
+		t.Fatalf("query plan row: %v", err)
+	}
+	if dbStatus != sqlcgen.PlanStatusAwaitingApproval {
+		t.Errorf("db status = %q, want %q (denied by authz, must not decide)", dbStatus, sqlcgen.PlanStatusAwaitingApproval)
+	}
+	if decidedBy.Valid {
+		t.Errorf("decided_by = %v, want invalid (denied -- never decided)", decidedBy)
+	}
+}
+
+// TestWebhookHandler_Prompted_DeniedForUnownedMember proves the ordinary
+// reply ("request changes" for Linear, handlePrompted's own top doc
+// comment) fallthrough is likewise denied for an auto-linked `member` with
+// no ownership/participation in the target session: no new turn is
+// created.
+func TestWebhookHandler_Prompted_DeniedForUnownedMember(t *testing.T) {
+	pool := newTestPool(t)
+	deps := newHandlerDeps(t, pool)
+	deps.Plans = narvipg.NewPlanStore(pool)
+	deps.Outbox = narvipg.NewOutboxStore(pool)
+	deps.Participants = narvipg.NewParticipantStore(pool)
+
+	organizationID := "org-prompt-unowned-1"
+	installLinearFixture(context.Background(), t, pool, organizationID, deps.TokenEncryptionKey)
+
+	graphqlStub := newLinearGraphQLStub(t, "unowned-prompter@example.com")
+	deps.LinearClient = linearapi.New(graphqlStub.Client(), graphqlStub.URL)
+
+	users := narvipg.NewUserStore(pool)
+	if _, err := users.Create(context.Background(), sqlcgen.CreateUserParams{
+		PrimaryEmail: "unowned-prompter@example.com", DisplayName: "Unowned Prompter", Role: sqlcgen.UserRoleMember,
+	}); err != nil {
+		t.Fatalf("create fixture user: %v", err)
+	}
+
+	auditLog := narvipg.NewAuditLogStore(pool)
+	deps.AuditLog = auditLog
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, auditLog)
+
+	handler := linear.NewWebhookHandler(deps)
+
+	ctx := context.Background()
+	agentSessionID := "agent-session-prompt-unowned-1"
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	agentSessions := narvipg.NewLinearAgentSessionStore(pool)
+
+	// Deliberately NO CreatedBy, no participants row.
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceLinear})
+	if err != nil {
+		t.Fatalf("create linear-origin session: %v", err)
+	}
+	if _, err := agentSessions.Claim(ctx, agentSessionID, organizationID); err != nil {
+		t.Fatalf("claim agent session: %v", err)
+	}
+	if err := agentSessions.SetSessionID(ctx, agentSessionID, session.ID); err != nil {
+		t.Fatalf("attach session id: %v", err)
+	}
+	producingTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+
+	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, "linear-unowned-prompter-1", "please also fix the tests")
+	rec := postWebhook(t, handler, body, "delivery-prompt-unowned-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	allTurns, err := turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(allTurns) != 1 {
+		t.Errorf("len(turns) = %d, want 1 (only the seeded producing turn -- denied reply must never create a turn)", len(allTurns))
+	}
+	if allTurns[0].ID != producingTurn.ID {
+		t.Errorf("remaining turn = %v, want the seeded producing turn %v", allTurns[0].ID, producingTurn.ID)
+	}
+}

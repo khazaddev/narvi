@@ -423,8 +423,13 @@ func serve() error {
 		SlackClient:         slackNotifier,
 		AuditLog:            auditLogStore,
 		IdentityLink:        appIdentityLinkDeps,
-		SigningSecret:       cfg.SlackSigningSecret,
-		Timeouts:            cfg.Timeouts,
+		// Participants (Step 39, "identities + full RBAC", §13.2/§13.3):
+		// the SAME participantStore instance Step 37's own REST plan
+		// approve/reject endpoints already use (constructed once, above),
+		// never a second, independently-constructed copy.
+		Participants:  participantStore,
+		SigningSecret: cfg.SlackSigningSecret,
+		Timeouts:      cfg.Timeouts,
 	}))
 
 	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
@@ -589,10 +594,14 @@ func serve() error {
 		// handlePrompted's own new plan-verdict keyword check.
 		Plans:  planStore,
 		Outbox: outboxStore,
-		// AuditLog/IdentityLink (Step 39, "identities + full RBAC", §13.2/
-		// §13.3).
+		// AuditLog/IdentityLink/Participants (Step 39, "identities + full
+		// RBAC", §13.2/§13.3): Participants is the SAME participantStore
+		// instance Step 37's own REST plan approve/reject endpoints already
+		// use (constructed once, above), never a second, independently-
+		// constructed copy.
 		AuditLog:     auditLogStore,
 		IdentityLink: appIdentityLinkDeps,
+		Participants: participantStore,
 	}))
 
 	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3

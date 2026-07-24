@@ -332,6 +332,44 @@ var (
 // confirmed link, unlike autoLink's own NULL-actor system-driven case
 // above) in ONE transaction, then deletes EVERY pending prompt for that
 // same (provider, externalID) so a stale link can never be replayed.
+//
+// # Deliberate design note (Step 39, "identities + full RBAC", §13.2 --
+// security review remediation)
+//
+// This function performs NO correlation at all between authenticatedUserID
+// (whoever is visiting) and the identity WHO ORIGINALLY TRIGGERED this
+// prompt (the Slack/Linear event that caused createOrReuseLinkPrompt to
+// mint it, service.go) -- it links whichever authenticated Narvi user
+// presents a valid, unexpired, not-yet-consumed nonce, structurally the
+// SAME shape a confirmed review finding demonstrated as an account-hijack
+// in a shared channel (any other member with their own already-
+// authenticated web session could open the link first and get the
+// identity linked to THEIR account instead of its rightful owner's).
+//
+// This is deliberately NOT fixed here, because it cannot be: nonce
+// possession is the ONLY signal this function -- or any code reachable
+// from a bare (nonce, authenticatedUserID) pair -- has to work with.
+// There is no independent, external proof of "authenticatedUserID is the
+// same human as the Slack/Linear identity behind this nonce" available to
+// check against; establishing exactly that correspondence is the whole
+// point of the magic-link mechanism in the first place, so requiring it
+// as a PRECONDITION here would be circular.
+//
+// The real fix is upstream, at DELIVERY: the caller that mints and posts
+// this nonce's own URL (internal/adapters/inbound/slack, via ack.go's own
+// postEphemeral) now scopes it to chat.postEphemeral, visible ONLY to the
+// triggering Slack user -- never the whole channel/thread
+// (chat.postMessage) a confirmed review finding demonstrated hijacking
+// through. Once delivery is scoped that way, nonce possession itself
+// becomes a sufficient proxy for "is the rightful recipient": only that
+// one user's own Slack client ever renders the link at all. Consume
+// remains structurally capable of linking a cross-user nonce if one ever
+// leaked through some OTHER channel (e.g. a compromised Slack export, a
+// browser history sync) -- accepted as a documented, practically
+// unreachable residual, not a gap this function itself closes. (Linear's
+// own delivery is NOT scoped this way -- see internal/adapters/inbound/
+// linear/identity.go's own appendNotice doc comment for that accepted,
+// separately-documented residual.)
 func Consume(ctx context.Context, deps Deps, nonce string, authenticatedUserID pgtype.UUID) (sqlcgen.Identity, error) {
 	prompt, err := deps.LinkPrompts.GetByNonceHash(ctx, platform.HashToken(nonce))
 	if err != nil {

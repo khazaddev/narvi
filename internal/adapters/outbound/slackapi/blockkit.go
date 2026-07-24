@@ -361,6 +361,46 @@ func (c *Client) OpenView(ctx context.Context, triggerID, planID, sessionID stri
 	return nil
 }
 
+// postEphemeralRequest is chat.postEphemeral's own real request body shape
+// (docs.slack.dev/reference/methods/chat.postEphemeral) -- channel + user
+// (the ONE person who can ever see this message) + text, optionally
+// threaded via thread_ts exactly like chatUpdateRequest above.
+type postEphemeralRequest struct {
+	Channel  string `json:"channel"`
+	User     string `json:"user"`
+	ThreadTS string `json:"thread_ts,omitempty"`
+	Text     string `json:"text"`
+}
+
+// PostEphemeral posts text into channel via chat.postEphemeral, visible
+// ONLY to userID -- Step 39's own security-remediation addition
+// ("identities + full RBAC", §13.2): a confirmed review finding proved
+// that appending the magic-link identity-link notice to this package's
+// own whole-channel-visible UpdateMessage/PostPlanApprovalMessage text let
+// ANY other member of a shared channel who already had an authenticated
+// Narvi web session open the link first and get the pending identity
+// permanently linked to their OWN account instead of its rightful
+// owner's. chat.postEphemeral is Slack's own documented mechanism for a
+// message only the named user (never anyone else viewing the same
+// channel/thread) can ever see -- used by internal/adapters/inbound/
+// slack/interactive.go's own decideAndUpdateMessage to deliver that
+// notice privately to the clicking user instead.
+func (c *Client) PostEphemeral(ctx context.Context, channel, userID, threadTS, text string) error {
+	reqBody, err := json.Marshal(postEphemeralRequest{Channel: channel, User: userID, ThreadTS: threadTS, Text: text})
+	if err != nil {
+		return fmt.Errorf("slackapi: encode chat.postEphemeral request: %w", err)
+	}
+
+	var parsed postMessageResponse
+	if err := c.doPost(ctx, "/chat.postEphemeral", reqBody, &parsed); err != nil {
+		return err
+	}
+	if !parsed.Ok {
+		return &DeliveryError{SlackError: parsed.Error}
+	}
+	return nil
+}
+
 // doPost is the small shared HTTP mechanics every method in this file
 // (PostPlanApprovalMessage/UpdateMessage/OpenView) uses: POST reqBody (a
 // pre-marshaled JSON body) to c.apiBaseURL+path, authenticated with this

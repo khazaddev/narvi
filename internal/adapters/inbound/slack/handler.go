@@ -23,6 +23,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -53,6 +54,14 @@ const (
 	ackReplyText         = "Got it — continuing work on this thread."
 	ackBusyText          = "Still working on the previous message in this thread — I'll pick this up next."
 	ackNotConfiguredText = "Slack ingress isn't configured with a default repo yet, so I can't start new work from a mention. A reply on an existing thread still works."
+
+	// ackNotAuthorizedText is Step 39's own addition ("identities + full
+	// RBAC", §13.2/§13.3): posted instead of ackNewSessionText when the
+	// auto-linked/already-linked actor's own role fails domain/authz.
+	// Authorize(ActionCreateSession) -- mirrors the REST API's own 403
+	// semantics ("not authorized to perform this action", helpers.go)
+	// rather than silently creating the session anyway.
+	ackNotAuthorizedText = "Your linked Narvi account isn't authorized to start new sessions from Slack."
 )
 
 // Deps bundles every dependency NewHandler needs -- a small config
@@ -234,6 +243,25 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	actorUserID, notice := resolveSlackActor(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts, ev.User)
 
 	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key, actorUserID)
+
+	// Security-remediation addition (Step 39, "identities + full RBAC",
+	// §13.2): notice (the "connected your account" confirmation, or --
+	// far more sensitive -- the magic-link URL itself) is posted via
+	// chat.postEphemeral, visible ONLY to ev.User, NEVER appended to the
+	// ordinary, whole-channel-visible ack below anymore -- see
+	// ack.go's own postEphemeral doc comment for the confirmed hijack
+	// this closes. Posted regardless of ok/res.Skip (a denied/skip
+	// outcome already gets its own ack elsewhere above; the identity
+	// notice, when there is one, is still this user's own business to
+	// see either way) except when ev.User is empty (postEphemeral would
+	// have nothing to scope to -- never expected in practice, see
+	// resolveSlackActor's own identical defensive short-circuit).
+	if notice != "" && ev.User != "" {
+		if err := ack.postEphemeralBounded(ctx, deps.AckTimeout, channel, ev.User, key, notice); err != nil {
+			logger.Warn("slack: post identity-link ephemeral notice failed", "error", err)
+		}
+	}
+
 	if !ok || res.Skip {
 		return
 	}
@@ -264,12 +292,10 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	case !created:
 		ackText = ackBusyText
 	}
-	// notice (§13.2's own "notify in-channel", "" when there's nothing to
-	// say) is appended to the SAME ack this handler already posts, rather
-	// than sent as a second chat.postMessage call -- mirrors internal/
-	// adapters/inbound/linear's own identical "append, don't double-post"
-	// precedent (identity.go's own appendNotice).
-	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, appendNotice(ackText, notice)); err != nil {
+	// notice is no longer appended here -- see this function's own top
+	// doc comment for why it is now posted separately, ephemerally,
+	// scoped to ev.User (Step 39's own security-remediation addition).
+	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
 	}
 }
@@ -304,6 +330,24 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	if deps.DefaultRepoName == "" || deps.DefaultRepoURL == "" {
 		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotConfiguredText); ackErr != nil {
 			logger.Warn("slack: post not-configured ack failed", "error", ackErr)
+		}
+		return sessionResolution{Skip: true}, true
+	}
+
+	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: creator is
+	// no longer trusted unconditionally just because it resolved to a
+	// REAL, linked user_id -- that user's own role must still pass
+	// domain/authz.Authorize(ActionCreateSession), exactly like the REST
+	// /api/sessions handler already requires (create.go's own authorize
+	// call). Resource{} is always correct here (no ownership carve-out on
+	// create, mirroring create.go's own identical reasoning). A still-
+	// unlinked (bot-attributed) creator is untouched -- authorizeResolvedActor
+	// returns true immediately for that case, preserving §13.2's own
+	// explicit "the action proceeds" precedent.
+	if !authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
+		logger.Warn("slack: create-session denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
+		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedText); ackErr != nil {
+			logger.Warn("slack: post not-authorized ack failed", "error", ackErr)
 		}
 		return sessionResolution{Skip: true}, true
 	}

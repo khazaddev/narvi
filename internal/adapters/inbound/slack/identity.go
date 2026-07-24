@@ -23,9 +23,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -107,16 +109,63 @@ func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, sl
 	return res.UserID, res.NotificationText()
 }
 
-// appendNotice appends notice to base on its own line, or returns base
-// unchanged when notice is empty -- mirrors internal/adapters/inbound/
-// linear's own identical helper (identity.go) exactly; kept as its own,
-// separately-declared small function in each package (rather than a
-// single exported one either would import from the other) since neither
-// Slack nor Linear ingress otherwise depends on the other's own package at
-// all, and this is a two-line function.
-func appendNotice(base, notice string) string {
-	if notice == "" {
-		return base
+// authorizeResolvedActor closes the gap a confirmed security review found
+// in this Step's own auto-linking wiring: resolveSlackActor/
+// resolveSlackActorSingleAttempt above resolve a REAL, auto-linked
+// user_id/role, but until this function existed, NOTHING ever ran that
+// resolved actor's role back through domain/authz.Authorize before the
+// caller's own state-changing effect -- so a `viewer` (or a `member` with
+// no ownership/participation in the target session) could create
+// sessions, approve/reject plans, or request changes via Slack even
+// though the identical action through the REST API (which DOES call
+// authorize()/canActOnPlan) would be rejected. This directly contradicts
+// docs/TECHNICAL_PLAN.md §13.3's own "a Slack approval passes exactly the
+// same check as a web one".
+//
+// actorUserID.Valid == false (still bot-attributed -- the identity has
+// not been linked yet) always returns allowed=true immediately, with NO
+// lookup/Authorize call at all: §13.2's own explicit "unlinked actors get
+// bot attribution + a link prompt ... the action proceeds" precedent for
+// the not-yet-linked case is UNCHANGED by this fix -- the bug this closes
+// is specifically that a RESOLVED, linked identity's role was never
+// actually checked.
+//
+// A role lookup failure (should be unreachable in practice: actorUserID
+// was JUST resolved from identities.user_id, itself FK'd to users.id) or
+// any unexpected Authorize error (ErrUnknownAction -- a caller bug, never
+// a legitimate "no" verdict) fails CLOSED -- logged loudly, allowed=false
+// -- never silently treated as "proceed".
+func authorizeResolvedActor(ctx context.Context, logger *slog.Logger, users *postgres.UserStore, actorUserID pgtype.UUID, action authz.Action, resource authz.Resource) bool {
+	if !actorUserID.Valid {
+		return true
 	}
-	return base + "\n\n" + notice
+
+	user, err := users.GetByID(ctx, actorUserID)
+	if err != nil {
+		logger.Error("slack: authz: look up resolved actor's role failed", "error", err, "user_id", actorUserID.String(), "action", string(action))
+		return false
+	}
+
+	actor := authz.Actor{UserID: actorUserID.String(), Role: authz.Role(user.Role)}
+	if err := authz.Authorize(actor, action, resource); err != nil {
+		if !errors.Is(err, authz.ErrForbidden) {
+			logger.Error("slack: authz.Authorize failed", "error", err, "action", string(action))
+		}
+		return false
+	}
+	return true
+}
+
+// ownedOrJoined mirrors internal/adapters/inbound/httpapi's own
+// canActOnPlan/CreateTurn "own/joined" resolution exactly (§13.3 row 2):
+// true iff sessionRow was created by actorUserID, or actorUserID has an
+// existing participants row for it. Duplicated here (rather than
+// exporting httpapi's own unexported equivalent) mirroring this package's
+// own established "small, documented duplication over a forced shared
+// abstraction" precedent (hasOpenTurn, turn.go).
+func ownedOrJoined(ctx context.Context, participants *postgres.ParticipantStore, sessionRow sqlcgen.Session, actorUserID pgtype.UUID) (bool, error) {
+	if sessionRow.CreatedBy.Valid && sessionRow.CreatedBy == actorUserID {
+		return true, nil
+	}
+	return participants.Exists(ctx, sessionRow.ID, actorUserID)
 }

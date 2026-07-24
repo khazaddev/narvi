@@ -23,6 +23,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 	"github.com/khazaddev/narvi/internal/domain/turn"
@@ -71,6 +72,15 @@ type Deps struct {
 	// cross-channel-notify dependency (decideplan.go).
 	Plans  *postgres.PlanStore
 	Outbox *postgres.OutboxStore
+
+	// Participants is Step 39's own addition ("identities + full RBAC",
+	// §13.2/§13.3) -- identity.go's own authorizeSessionAction/ownedOrJoined
+	// need this to resolve a `member` actor's own "own/joined" carve-out
+	// exactly like httpapi's canActOnPlan/CreateTurn already do, so a
+	// Linear-decided plan verdict or ordinary reply ("request changes")
+	// renders the IDENTICAL §13.3 verdict a REST caller would for the same
+	// (actor, session).
+	Participants *postgres.ParticipantStore
 
 	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
 	// httpapi.CreateSessionCore/DecidePlan below exactly like Plans/Outbox
@@ -280,6 +290,21 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 	}
 	creator, notice := deps.resolveActor(ctx, logger, payload.OrganizationID, creatorID)
 
+	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a creator
+	// that resolved to a REAL, linked user_id must still pass domain/authz.
+	// Authorize(ActionCreateSession) -- exactly what the REST /api/sessions
+	// handler already requires (create.go's own authorize call). Resource{}
+	// is always correct here (no ownership carve-out on create). A still-
+	// unlinked (bot-attributed, including every automation-initiated,
+	// nil-CreatorID session) creator is untouched -- authorizeResolvedActor
+	// returns true immediately for that case, preserving §13.2's own
+	// existing precedent.
+	if !authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
+		logger.Warn("linear: create session denied by authz", "agent_session_id", payload.AgentSession.ID, "user_id", creator.String())
+		deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("Your linked Narvi account isn't authorized to start new sessions from Linear.", notice))
+		return
+	}
+
 	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, creator)
 	if cerr != nil {
 		logger.Error("linear: create session failed", "status", cerr.Status, "message", cerr.Message, "agent_session_id", payload.AgentSession.ID)
@@ -382,6 +407,22 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		}
 	}
 
+	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: this
+	// fallthrough IS "request changes" for Linear (this function's own top
+	// doc comment) -- the same state-changing command POST .../turns
+	// itself gates behind ActionPromptSession (turn.go's own authorize
+	// call). An actorUserID that resolved to a REAL, linked user_id must
+	// pass that same check before this reply is allowed to create a turn.
+	// A still-unlinked (bot-attributed) actorUserID is untouched --
+	// authorizeSessionAction returns true immediately for that case,
+	// preserving §13.2's own "the action proceeds" precedent for the
+	// not-yet-linked case.
+	if !deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession) {
+		logger.Warn("linear: prompted reply denied by authz", "session_id", sessionID.String(), "user_id", actorUserID.String())
+		deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("Your linked Narvi account isn't authorized to prompt this session.", notice))
+		return
+	}
+
 	existingTurns, err := deps.Turns.ListForSession(ctx, sessionID)
 	if err != nil {
 		logger.Error("linear: list turns failed", "error", err, "session_id", sessionID.String())
@@ -462,6 +503,20 @@ func (deps Deps) findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Lo
 // different channel already decided first, with identityNotice (§13.2's
 // own "notify in-channel", empty when there's nothing to say) appended.
 func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, decidedBy pgtype.UUID, identityNotice, organizationID, agentSessionID string) {
+	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
+	// that resolved to a REAL, linked user_id must still pass domain/authz.
+	// Authorize(ActionApprovePlan) -- exactly what the REST approve/reject
+	// endpoints already require via canActOnPlan (planauthz.go). A still-
+	// unlinked (bot-attributed) decidedBy is untouched -- authorizeSessionAction
+	// returns true immediately for that case, preserving this package's own
+	// existing "Linear verdicts stay unauthenticated-per-user until linked"
+	// precedent (decideplan.go's own top doc comment).
+	if !deps.authorizeSessionAction(ctx, logger, sessionID, decidedBy, authz.ActionApprovePlan) {
+		logger.Warn("linear: plan decision denied by authz", "plan_id", planID.String(), "session_id", sessionID.String(), "user_id", decidedBy.String())
+		deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("You don't have permission to approve or reject this plan.", identityNotice))
+		return
+	}
+
 	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), decidedBy)
 	if err != nil {
 		if errors.Is(err, httpapi.ErrPlanOpenTurnInFlight) {
