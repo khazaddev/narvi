@@ -141,14 +141,20 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
 	handler := slack.NewHandler(slack.Deps{
-		Pool:            pool,
-		Sessions:        sessions,
-		Turns:           turns,
-		Environments:    environments,
-		Registry:        registry,
-		Deliveries:      deliveries,
-		Threads:         threads,
-		AuditLog:        auditLog,
+		Pool:         pool,
+		Sessions:     sessions,
+		Turns:        turns,
+		Environments: environments,
+		Registry:     registry,
+		Deliveries:   deliveries,
+		Threads:      threads,
+		AuditLog:     auditLog,
+		// Participants (Step 39's own SECOND fix-pass addition, "identities
+		// + full RBAC", §13.2/§13.3): authorizeSessionAction (identity.go)
+		// needs this even though this rig's own fixture users never
+		// auto-link (see this func's own doc comment) -- mirrors every
+		// other Deps field here, always a real, non-nil store.
+		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
 		BotToken:        "test-bot-token",
 		DefaultRepoName: "narvi",

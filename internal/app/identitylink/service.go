@@ -370,6 +370,32 @@ var (
 // own delivery is NOT scoped this way -- see internal/adapters/inbound/
 // linear/identity.go's own appendNotice doc comment for that accepted,
 // separately-documented residual.)
+//
+// # Investigated and NOT done: narrowing Consume to the ambiguous
+// candidate set (Step 39's own SECOND fix-pass re-review)
+//
+// One sub-case of createOrReuseLinkPrompt's own "zero or multiple
+// matches -> never guess" branch (identitylink.Decide) is narrower than
+// the other: "multiple matches" (createOrReuseLinkPrompt reached via more
+// than one already-matched candidate user id) at least has a small,
+// KNOWN set of legitimate recipients, unlike "zero matches" (any
+// authenticated user is equally "unmatched"). Restricting Consume to
+// accept authenticatedUserID only when it is one of THAT ambiguous call's
+// own candidate ids would shrink (not close) the hijack window for that
+// one sub-case.
+//
+// This was investigated and deliberately NOT implemented here: Decide
+// (internal/domain/identitylink) does not distinguish "zero" from
+// "multiple" in its own return value, createOrReuseLinkPrompt takes no
+// candidate list parameter today, and identity_link_prompts itself
+// (migrations/000036) has no column to persist one -- landing this would
+// require a new migration, a sqlc-generated column/query change, a new
+// Consume-side sentinel error, and a new outcome page in internal/
+// adapters/inbound/identitylink's own consume handler, not a change that
+// fits this function's existing signature/flow. Left as the SAME
+// documented, accepted residual this doc comment already described,
+// exactly as the prior fix pass left it -- a genuinely smaller redesign
+// than it first appears, but still a redesign, not a targeted fix.
 func Consume(ctx context.Context, deps Deps, nonce string, authenticatedUserID pgtype.UUID) (sqlcgen.Identity, error) {
 	prompt, err := deps.LinkPrompts.GetByNonceHash(ctx, platform.HashToken(nonce))
 	if err != nil {

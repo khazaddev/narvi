@@ -156,6 +156,17 @@ func (deps Deps) postIdentityNotice(ctx context.Context, organizationID, agentSe
 // accepted as a documented residual gap for Linear specifically, per this
 // Step's own explicit brief, rather than guessed at with an unverified
 // API call.
+//
+// Re-reviewed in this Step's own SECOND fix pass: also checked whether
+// Consume (internal/app/identitylink.Consume) could at least be narrowed
+// to the small, known candidate-user-id set for the "multiple matches"
+// (ambiguous) sub-case specifically, shrinking -- not closing -- this
+// same hijack window without needing any new Linear API capability.
+// Investigated and NOT done: see identitylink/service.go's own Consume
+// doc comment for the full reasoning (it would need a new migration/
+// column, a Consume signature change, and a new outcome case in the
+// magic-link consume handler -- a small redesign, but still a redesign,
+// not a targeted fix). This gap remains exactly as documented above.
 func appendNotice(base, notice string) string {
 	if notice == "" {
 		return base
@@ -173,6 +184,15 @@ func appendNotice(base, notice string) string {
 // slack package, mirroring this codebase's own established "small,
 // documented duplication over a forced cross-package dependency"
 // precedent (hasOpenTurn, webhook.go).
+//
+// user.Disabled is checked BEFORE ever calling domain/authz.Authorize --
+// this Step's own SECOND fix-pass addition (a confirmed re-review
+// finding), mirroring slack's own identical addition exactly: a disabled
+// account's role would otherwise still pass Authorize, letting a disabled
+// user create sessions, approve/reject plans, or prompt sessions via
+// Linear even though auth.Middleware's own Authenticate already rejects
+// that SAME disabled user's web session outright (internal/adapters/
+// inbound/auth/middleware.go).
 func authorizeResolvedActor(ctx context.Context, logger *slog.Logger, users *postgres.UserStore, actorUserID pgtype.UUID, action authz.Action, resource authz.Resource) bool {
 	if !actorUserID.Valid {
 		return true
@@ -181,6 +201,11 @@ func authorizeResolvedActor(ctx context.Context, logger *slog.Logger, users *pos
 	user, err := users.GetByID(ctx, actorUserID)
 	if err != nil {
 		logger.Error("linear: authz: look up resolved actor's role failed", "error", err, "user_id", actorUserID.String(), "action", string(action))
+		return false
+	}
+
+	if user.Disabled {
+		logger.Warn("linear: authz: resolved actor's linked account is disabled, denying", "user_id", actorUserID.String(), "action", string(action))
 		return false
 	}
 

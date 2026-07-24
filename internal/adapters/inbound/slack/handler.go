@@ -62,6 +62,18 @@ const (
 	// semantics ("not authorized to perform this action", helpers.go)
 	// rather than silently creating the session anyway.
 	ackNotAuthorizedText = "Your linked Narvi account isn't authorized to start new sessions from Slack."
+
+	// ackNotAuthorizedReplyText is this Step's own SECOND fix-pass
+	// addition ("identities + full RBAC", §13.2/§13.3 -- a confirmed
+	// re-review finding): posted instead of enqueuing a turn when a
+	// resolved, linked actor's reply on an ALREADY-MAPPED thread (or a
+	// brand-new mention that lost the first-writer-wins race and falls
+	// back onto a DIFFERENT, already-existing session) fails
+	// domain/authz.Authorize(ActionPromptSession) -- mirrors
+	// ackNotAuthorizedText's own wording above, and Linear's identical
+	// denial text for the equivalent ordinary-reply fallthrough
+	// (webhook.go's own handlePrompted).
+	ackNotAuthorizedReplyText = "Your linked Narvi account isn't authorized to prompt this session."
 )
 
 // Deps bundles every dependency NewHandler needs -- a small config
@@ -86,6 +98,18 @@ type Deps struct {
 	// a real user -- see identity.go's own resolveSlackActor for the
 	// replacement of the old unconditional bot-attribution precedent.
 	AuditLog *postgres.AuditLogStore
+
+	// Participants is this Step's own SECOND fix-pass addition
+	// ("identities + full RBAC", §13.2/§13.3): authorizeSessionAction
+	// (identity.go's own ownedOrJoined) needs this to resolve a `member`
+	// actor's own "own/joined" carve-out exactly like InteractiveDeps.
+	// Participants already does for the interactivity route -- so an
+	// ordinary Events-API reply on an already-mapped thread renders the
+	// IDENTICAL §13.3 verdict a REST/interactivity caller would for the
+	// same (actor, session). Production wiring passes the SAME
+	// participantStore instance every other caller already uses, never a
+	// second, independently-constructed copy.
+	Participants *postgres.ParticipantStore
 
 	// IdentityLink/SlackClient are Step 39's own auto-linking wiring
 	// (§13.2): resolveSlackActor (identity.go) uses SlackClient.
@@ -310,10 +334,23 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 // or was just auto-linked this call; invalid (bot attribution) otherwise,
 // exactly matching this function's own PREVIOUS unconditional-bot-
 // attribution precedent for the still-unresolved case.
+//
+// Both paths that resolve to an ALREADY-EXISTING session this event's own
+// actor did not just create right here (the existing-mapping branch
+// immediately below, and the "lost the race, fall back to the winner"
+// branch at the bottom) route through authorizeExistingSessionReply,
+// gating this event's eventual addTurn (handleEvent) behind exactly the
+// same domain/authz.Authorize(ActionPromptSession) verdict the REST API's
+// own POST .../turns endpoint already renders -- this Step's own SECOND
+// fix pass, closing a confirmed re-review finding: the existing-mapping
+// branch previously returned the resolved session id UNCONDITIONALLY,
+// with no authz check at all, unlike the brand-new-thread/
+// ActionCreateSession branch below (already gated by this Step's FIRST
+// fix pass).
 func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent, channel, key string, creator pgtype.UUID) (sessionResolution, bool) {
 	existing, err := deps.Threads.Get(ctx, channel, key)
 	if err == nil {
-		return sessionResolution{SessionID: existing.SessionID}, true
+		return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, existing.SessionID, creator)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		logger.Error("slack: lookup thread mapping failed", "error", err)
@@ -375,13 +412,36 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	// Lost the race -- a concurrent first message claimed this thread
 	// first. bare.ID is left as a harmless, never-dispatched orphan (see
 	// doc.go's own tradeoff note); resolve the WINNER's real session
-	// instead and continue exactly like an existing-mapping reply would.
+	// instead and continue exactly like an existing-mapping reply would --
+	// including this Step's own authorizeExistingSessionReply gate: this
+	// actor was only just authorized to CREATE a session (above), never to
+	// prompt the DIFFERENT session a concurrent racer actually won, so the
+	// same ActionPromptSession check applies here too.
 	winner, err := deps.Threads.Get(ctx, channel, key)
 	if err != nil {
 		logger.Error("slack: lookup winning thread mapping after lost claim failed", "error", err)
 		return sessionResolution{}, false
 	}
-	return sessionResolution{SessionID: winner.SessionID}, true
+	return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, winner.SessionID, creator)
+}
+
+// authorizeExistingSessionReply gates a session id that this event's own
+// actor did NOT just create in resolveOrClaimSession above (either branch
+// -- see that function's own doc comment) behind
+// domain/authz.Authorize(ActionPromptSession), replying in-thread with
+// ackNotAuthorizedReplyText on denial instead of letting handleEvent's own
+// addTurn enqueue a turn. A still-unlinked (bot-attributed) creator is
+// untouched: authorizeSessionAction (identity.go) returns true immediately
+// for that case, preserving §13.2's own "the action proceeds" precedent.
+func (deps Deps) authorizeExistingSessionReply(ctx context.Context, ack *ackClient, logger *slog.Logger, channel, key string, sessionID, creator pgtype.UUID) (sessionResolution, bool) {
+	if !deps.authorizeSessionAction(ctx, logger, sessionID, creator, authz.ActionPromptSession) {
+		logger.Warn("slack: reply denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
+		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedReplyText); ackErr != nil {
+			logger.Warn("slack: post not-authorized-reply ack failed", "error", ackErr)
+		}
+		return sessionResolution{Skip: true}, true
+	}
+	return sessionResolution{SessionID: sessionID}, true
 }
 
 // readBoundedBody reads r.Body (capped via http.MaxBytesReader, mirroring

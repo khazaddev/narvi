@@ -529,6 +529,26 @@ func appMentionEnvelopeWithUser(eventID, channel, ts, threadTS, text, userID str
 	return fmt.Sprintf(`{"type":"event_callback","event_id":%q,"team_id":"T0TEST","event":%s}`, eventID, eventJSON)
 }
 
+// messageEnvelopeWithUser mirrors handler_integration_test.go's own
+// messageEnvelope exactly, except the event's "user" field is a parameter
+// rather than the fixed "U0OTHERUSER" -- this file's own tests need to
+// control which Slack user id a reply on an already-mapped thread is
+// attributed to, so resolveSlackActor (identity.go) can be exercised
+// against a REAL, controllable identity on the "existing thread mapping"
+// path (this Step's own SECOND fix-pass regression tests below).
+func messageEnvelopeWithUser(eventID, channel, ts, threadTS, text, userID string) string {
+	event := map[string]string{
+		"type":      "message",
+		"channel":   channel,
+		"user":      userID,
+		"text":      text,
+		"ts":        ts,
+		"thread_ts": threadTS,
+	}
+	eventJSON, _ := json.Marshal(event)
+	return fmt.Sprintf(`{"type":"event_callback","event_id":%q,"team_id":"T0TEST","event":%s}`, eventID, eventJSON)
+}
+
 // newSlackHandlerRigForIdentityTests wires a real slack.NewHandler (Events
 // API ingress) against pool, using recordingSlackServer as its SlackClient
 // AND its in-thread ack client -- unlike newSlackTestRig
@@ -551,14 +571,21 @@ func newSlackHandlerRigForIdentityTests(t *testing.T, pool *pgxpool.Pool, record
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
 	handler := slack.NewHandler(slack.Deps{
-		Pool:            pool,
-		Sessions:        sessions,
-		Turns:           turns,
-		Environments:    environments,
-		Registry:        registry,
-		Deliveries:      deliveries,
-		Threads:         threads,
-		AuditLog:        auditLog,
+		Pool:         pool,
+		Sessions:     sessions,
+		Turns:        turns,
+		Environments: environments,
+		Registry:     registry,
+		Deliveries:   deliveries,
+		Threads:      threads,
+		AuditLog:     auditLog,
+		// Participants (Step 39's own SECOND fix-pass addition, "identities
+		// + full RBAC", §13.2/§13.3): authorizeSessionAction (identity.go)
+		// needs this to resolve a `member` actor's own "own/joined"
+		// carve-out on a reply to an already-mapped thread -- the SAME
+		// participantStore instance every other test rig in this package
+		// already wires.
+		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
 		BotToken:        "test-bot-token",
 		DefaultRepoName: "narvi",
@@ -702,5 +729,187 @@ drain:
 	}
 	if sawPublicWithLink {
 		t.Error("chat.postMessage (whole-channel-visible) carried the magic-link notice -- this is the confirmed hijack path, must never happen")
+	}
+}
+
+// TestHandler_ReplyOnMappedThread_DeniedForUnownedMember is this Step's
+// own SECOND fix-pass regression test for a confirmed re-review finding:
+// BEFORE this fix, handleEvent's "existing thread mapping" branch
+// (resolveOrClaimSession) returned the resolved session id
+// UNCONDITIONALLY -- no domain/authz.Authorize call at all -- so ANY
+// resolved actor (including a linked `member` with no ownership/
+// participation in the target session) could enqueue a real turn via an
+// ordinary reply, unlike the brand-new-thread/ActionCreateSession branch
+// this Step's own FIRST fix pass already gated. This proves such a reply
+// is now REJECTED: no new turn is added, and the identity itself still
+// auto-links (only the state-changing effect is denied) -- mirroring
+// TestHandler_AppMention_CreateSessionDeniedForViewer's own "still links,
+// still denies the effect" shape for the create-session path.
+func TestHandler_ReplyOnMappedThread_DeniedForUnownedMember(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	users := narvipg.NewUserStore(pool)
+	matchedUser, err := users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: "unowned-replier@example.com", DisplayName: "Unowned Replier", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user: %v", err)
+	}
+
+	fakeSlack := newFakeSlackWithUsersInfo(t, "U-UNOWNED-REPLY", "unowned-replier@example.com")
+	auditLog := narvipg.NewAuditLogStore(pool)
+	rig := newSlackHandlerRigForIdentityTests(t, pool, fakeSlack, auditLog)
+
+	// Seed an existing mapped thread directly (bypassing the app_mention
+	// creation path, to control ownership precisely): a session neither
+	// created by NOR joined by matchedUser -- deliberately "unowned" from
+	// this actor's own perspective.
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceSlack})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, _, err := rig.threads.Claim(ctx, "C0UNOWNEDREPLY", "1700000060.000100", session.ID); err != nil {
+		t.Fatalf("claim thread mapping: %v", err)
+	}
+
+	envelope := messageEnvelopeWithUser("Ev0UNOWNEDREPLY001", "C0UNOWNEDREPLY", "1700000060.000200", "1700000060.000100", "please continue", "U-UNOWNED-REPLY")
+	req := signedSlackRequest(t, envelope)
+	rec := httptest.NewRecorder()
+	rig.handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListForSession: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Errorf("len(turns) = %d, want 0 (denied by authz, must not add a turn)", len(turns))
+	}
+
+	// The identity itself still auto-links -- only the effect is denied.
+	identity, err := narvipg.NewIdentityStore(pool).GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderSlack, "U-UNOWNED-REPLY")
+	if err != nil {
+		t.Fatalf("GetByProviderAndExternalID: %v", err)
+	}
+	if identity.UserID != matchedUser.ID {
+		t.Errorf("identity.UserID = %v, want %v", identity.UserID, matchedUser.ID)
+	}
+}
+
+// TestHandler_ReplyOnMappedThread_AllowedForOwningMember proves the OTHER
+// side of the SAME gate this Step's own SECOND fix pass added: a `member`
+// who legitimately owns the target session (CreatedBy == the auto-linked
+// user) is NOT denied -- the existing-mapping branch's own domain/authz.
+// Authorize(ActionPromptSession) verdict passes via the row 2 own/joined
+// carve-out, and a real turn is added, exactly like a reply on an
+// unlinked/bot-attributed thread already does
+// (TestHandler_ReplyOnMappedThread_AddsTurnToSameSession,
+// handler_integration_test.go, which this new gate must never regress).
+func TestHandler_ReplyOnMappedThread_AllowedForOwningMember(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	users := narvipg.NewUserStore(pool)
+	matchedUser, err := users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: "owning-replier@example.com", DisplayName: "Owning Replier", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user: %v", err)
+	}
+
+	fakeSlack := newFakeSlackWithUsersInfo(t, "U-OWNING-REPLY", "owning-replier@example.com")
+	auditLog := narvipg.NewAuditLogStore(pool)
+	rig := newSlackHandlerRigForIdentityTests(t, pool, fakeSlack, auditLog)
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceSlack, CreatedBy: matchedUser.ID})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, _, err := rig.threads.Claim(ctx, "C0OWNINGREPLY", "1700000070.000100", session.ID); err != nil {
+		t.Fatalf("claim thread mapping: %v", err)
+	}
+
+	envelope := messageEnvelopeWithUser("Ev0OWNINGREPLY001", "C0OWNINGREPLY", "1700000070.000200", "1700000070.000100", "please continue", "U-OWNING-REPLY")
+	req := signedSlackRequest(t, envelope)
+	rec := httptest.NewRecorder()
+	rig.handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListForSession: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("len(turns) = %d, want 1 (owning member's reply must add a turn)", len(turns))
+	}
+}
+
+// TestHandler_AppMention_CreateSessionDeniedForDisabledUser is this Step's
+// own SECOND fix-pass regression test for a confirmed re-review finding:
+// authorizeResolvedActor resolved a disabled user's ROLE and called
+// domain/authz.Authorize with it, but never checked user.Disabled itself
+// -- so a disabled `member` (whose role would otherwise permit
+// ActionCreateSession) could still create a session via Slack, even
+// though auth.Middleware's own Authenticate already rejects that SAME
+// disabled user's web session outright (internal/adapters/inbound/auth/
+// middleware.go). This proves a disabled member's app_mention is now
+// REJECTED exactly like a role-based denial already is
+// (TestHandler_AppMention_CreateSessionDeniedForViewer).
+func TestHandler_AppMention_CreateSessionDeniedForDisabledUser(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	users := narvipg.NewUserStore(pool)
+	matchedUser, err := users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: "disabled-mentioner@example.com", DisplayName: "Disabled Mentioner", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user: %v", err)
+	}
+	// No UserStore mutation exists for Disabled today (only ListMembers'
+	// own read exposure, httpapi/members.go) -- set it directly, mirroring
+	// this file's own established precedent of a raw SQL statement where
+	// no store method exists yet (e.g. TestWebhookHandler_Prompted_...'s
+	// own UPDATE turns, linear/identity_integration_test.go).
+	if _, err := pool.Exec(ctx, `UPDATE users SET disabled = true WHERE id = $1`, matchedUser.ID); err != nil {
+		t.Fatalf("disable fixture user: %v", err)
+	}
+
+	fakeSlack := newFakeSlackWithUsersInfo(t, "U-DISABLED-MENTION", "disabled-mentioner@example.com")
+	auditLog := narvipg.NewAuditLogStore(pool)
+	rig := newSlackHandlerRigForIdentityTests(t, pool, fakeSlack, auditLog)
+
+	envelope := appMentionEnvelopeWithUser("Ev0DISABLEDDENY001", "C0DISABLEDDENY", "1700000080.000100", "", "please help", "U-DISABLED-MENTION")
+	req := signedSlackRequest(t, envelope)
+	rec := httptest.NewRecorder()
+	rig.handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	if _, err := rig.threads.Get(ctx, "C0DISABLEDDENY", "1700000080.000100"); err == nil {
+		t.Error("expected NO thread mapping row (denied by authz), got one")
+	}
+
+	var sessionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Errorf("session count = %d, want 0 (a disabled user must never create a session, even auto-linked with an otherwise-permitting role)", sessionCount)
+	}
+
+	// The identity itself still auto-links -- only the effect is denied.
+	identity, err := narvipg.NewIdentityStore(pool).GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderSlack, "U-DISABLED-MENTION")
+	if err != nil {
+		t.Fatalf("GetByProviderAndExternalID: %v", err)
+	}
+	if identity.UserID != matchedUser.ID {
+		t.Errorf("identity.UserID = %v, want %v", identity.UserID, matchedUser.ID)
 	}
 }

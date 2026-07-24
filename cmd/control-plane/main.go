@@ -377,14 +377,20 @@ func serve() error {
 	// narvi_auth_session cookie. See internal/adapters/inbound/slack's
 	// own doc.go for the full request-handling writeup.
 	router.Post("/webhooks/slack", slack.NewHandler(slack.Deps{
-		Pool:             pool,
-		Sessions:         sessionStore,
-		Turns:            turnStore,
-		Environments:     environmentStore,
-		Registry:         registry,
-		Deliveries:       webhookDeliveryStore,
-		Threads:          slackThreadSessionStore,
-		AuditLog:         auditLogStore,
+		Pool:         pool,
+		Sessions:     sessionStore,
+		Turns:        turnStore,
+		Environments: environmentStore,
+		Registry:     registry,
+		Deliveries:   webhookDeliveryStore,
+		Threads:      slackThreadSessionStore,
+		AuditLog:     auditLogStore,
+		// Participants (this Step's own SECOND fix-pass addition,
+		// "identities + full RBAC", §13.2/§13.3): the SAME participantStore
+		// instance every other caller (the interactivity route immediately
+		// below, Linear's own Deps) already uses, never a second,
+		// independently-constructed copy.
+		Participants:     participantStore,
 		IntentClassifier: intentClassifierSvc,
 		SigningSecret:    cfg.SlackSigningSecret,
 		BotToken:         cfg.SlackBotToken,

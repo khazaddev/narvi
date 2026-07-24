@@ -135,6 +135,17 @@ func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, sl
 // any unexpected Authorize error (ErrUnknownAction -- a caller bug, never
 // a legitimate "no" verdict) fails CLOSED -- logged loudly, allowed=false
 // -- never silently treated as "proceed".
+//
+// user.Disabled is checked BEFORE ever calling domain/authz.Authorize --
+// this Step's own SECOND fix-pass addition (a confirmed re-review
+// finding): a disabled account's role would otherwise still pass
+// Authorize (Disabled and Role are independent columns, migrations/
+// 000002_users.up.sql), letting a disabled user create sessions,
+// approve/reject plans, or prompt sessions via Slack even though
+// auth.Middleware's own Authenticate already rejects that SAME disabled
+// user's web session outright (internal/adapters/inbound/auth/
+// middleware.go). Mirrors that check exactly -- denies immediately, never
+// falls through to a role-based verdict for a disabled user.
 func authorizeResolvedActor(ctx context.Context, logger *slog.Logger, users *postgres.UserStore, actorUserID pgtype.UUID, action authz.Action, resource authz.Resource) bool {
 	if !actorUserID.Valid {
 		return true
@@ -143,6 +154,11 @@ func authorizeResolvedActor(ctx context.Context, logger *slog.Logger, users *pos
 	user, err := users.GetByID(ctx, actorUserID)
 	if err != nil {
 		logger.Error("slack: authz: look up resolved actor's role failed", "error", err, "user_id", actorUserID.String(), "action", string(action))
+		return false
+	}
+
+	if user.Disabled {
+		logger.Warn("slack: authz: resolved actor's linked account is disabled, denying", "user_id", actorUserID.String(), "action", string(action))
 		return false
 	}
 
@@ -168,4 +184,40 @@ func ownedOrJoined(ctx context.Context, participants *postgres.ParticipantStore,
 		return true, nil
 	}
 	return participants.Exists(ctx, sessionRow.ID, actorUserID)
+}
+
+// authorizeSessionAction renders the exact §13.3 verdict domain/authz.
+// Authorize would for actorUserID attempting action against sessionID --
+// this file's own Deps (handler.go, the Events API ingress) twin of
+// InteractiveDeps.authorizeSessionAction (interactive.go), added by this
+// Step's own SECOND fix pass so handler.go's own addTurn call (an
+// ordinary reply on an already-mapped thread, or a brand-new mention that
+// lost the first-writer-wins race and falls back onto a DIFFERENT
+// winning session -- see handler.go's own authorizeExistingSessionReply)
+// renders the IDENTICAL verdict the REST API/interactivity route already
+// render for the same (actor, session, action).
+//
+// actorUserID.Valid == false (still bot-attributed) short-circuits to
+// allowed=true immediately, with NO session/participants lookup at all --
+// preserving §13.2's own "unlinked actors get bot attribution ... the
+// action proceeds" precedent, and avoiding any DB read at all on the
+// common bot-attributed path.
+func (deps Deps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) bool {
+	if !actorUserID.Valid {
+		return true
+	}
+
+	sessionRow, err := deps.Sessions.Get(ctx, sessionID)
+	if err != nil {
+		logger.Error("slack: get session for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
+		return false
+	}
+
+	joined, err := ownedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
+	if err != nil {
+		logger.Error("slack: check participant for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
+		return false
+	}
+
+	return authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
 }

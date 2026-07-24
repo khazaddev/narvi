@@ -477,3 +477,75 @@ func TestWebhookHandler_Prompted_DeniedForUnownedMember(t *testing.T) {
 		t.Errorf("remaining turn = %v, want the seeded producing turn %v", allTurns[0].ID, producingTurn.ID)
 	}
 }
+
+// TestWebhookHandler_Created_DeniedForDisabledUser is this Step's own
+// SECOND fix-pass regression test for a confirmed re-review finding:
+// authorizeResolvedActor resolved a disabled user's ROLE and called
+// domain/authz.Authorize with it, but never checked user.Disabled itself
+// -- so a disabled `member` (whose role would otherwise permit
+// ActionCreateSession) could still create a session via Linear, even
+// though auth.Middleware's own Authenticate already rejects that SAME
+// disabled user's web session outright (internal/adapters/inbound/auth/
+// middleware.go). This proves a disabled creator's `created` event is now
+// REJECTED exactly like a role-based denial already is
+// (TestWebhookHandler_Created_DeniedForViewer).
+func TestWebhookHandler_Created_DeniedForDisabledUser(t *testing.T) {
+	pool := newTestPool(t)
+	deps := newHandlerDeps(t, pool)
+
+	organizationID := "org-disabled-create-1"
+	tokenEncryptionKey := deps.TokenEncryptionKey
+	installLinearFixture(context.Background(), t, pool, organizationID, tokenEncryptionKey)
+
+	graphqlStub := newLinearGraphQLStub(t, "disabled-creator@example.com")
+	deps.LinearClient = linearapi.New(graphqlStub.Client(), graphqlStub.URL)
+
+	users := narvipg.NewUserStore(pool)
+	matchedUser, err := users.Create(context.Background(), sqlcgen.CreateUserParams{
+		PrimaryEmail: "disabled-creator@example.com", DisplayName: "Disabled Creator", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user: %v", err)
+	}
+	// No UserStore mutation exists for Disabled today (only ListMembers'
+	// own read exposure, httpapi/members.go) -- set it directly, mirroring
+	// this file's own established precedent of a raw SQL statement where
+	// no store method exists yet (e.g. this file's own UPDATE turns,
+	// TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptButStillCreatesTurn
+	// above).
+	if _, err := pool.Exec(context.Background(), `UPDATE users SET disabled = true WHERE id = $1`, matchedUser.ID); err != nil {
+		t.Fatalf("disable fixture user: %v", err)
+	}
+
+	auditLog := narvipg.NewAuditLogStore(pool)
+	deps.AuditLog = auditLog
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, auditLog)
+
+	handler := linear.NewWebhookHandler(deps)
+
+	agentSessionID := "agent-session-disabled-create-1"
+	body := agentSessionCreatedPayloadWithCreator(agentSessionID, organizationID, "linear-disabled-creator-1")
+
+	rec := postWebhook(t, handler, body, "delivery-disabled-create-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	ctx := context.Background()
+	var sessionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE spawn_source = 'linear'`).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Errorf("session count = %d, want 0 (a disabled user must never create a session, even auto-linked with an otherwise-permitting role)", sessionCount)
+	}
+
+	// The identity itself still auto-links -- only the effect is denied.
+	identity, err := narvipg.NewIdentityStore(pool).GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderLinear, "linear-disabled-creator-1")
+	if err != nil {
+		t.Fatalf("GetByProviderAndExternalID: %v", err)
+	}
+	if identity.UserID != matchedUser.ID {
+		t.Errorf("identity.UserID = %v, want %v", identity.UserID, matchedUser.ID)
+	}
+}
