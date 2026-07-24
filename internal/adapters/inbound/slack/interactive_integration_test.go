@@ -83,6 +83,7 @@ func newInteractiveTestRigWithTimeouts(t *testing.T, pool *pgxpool.Pool, timeout
 	plans := narvipg.NewPlanStore(pool)
 	outbox := narvipg.NewOutboxStore(pool)
 	linearAgentSessions := narvipg.NewLinearAgentSessionStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
 
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
@@ -101,6 +102,7 @@ func newInteractiveTestRigWithTimeouts(t *testing.T, pool *pgxpool.Pool, timeout
 		LinearAgentSessions: linearAgentSessions,
 		Registry:            registry,
 		SlackClient:         slackClient,
+		AuditLog:            auditLog,
 		SigningSecret:       testSigningSecret,
 		Timeouts:            timeouts,
 	})

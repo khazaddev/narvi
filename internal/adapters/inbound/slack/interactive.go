@@ -95,6 +95,15 @@ type InteractiveDeps struct {
 	Registry            *sessionactor.Registry
 	SlackClient         *slackapi.Client
 
+	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// httpapi.DecidePlan/CreateTurnCore below exactly like Plans/Outbox
+	// already are, so a Slack-decided plan verdict or a Slack "Request
+	// changes" turn gets the SAME audit_log row every other caller of
+	// those two shared functions now gets (actor_user_id NULL -- no human
+	// caller on this channel yet, mirrors decidedBy's own existing
+	// NULL-for-bot convention).
+	AuditLog *postgres.AuditLogStore
+
 	SigningSecret string
 	Timeouts      platform.Timeouts
 }
@@ -277,7 +286,7 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	defer cancel()
 
 	var noDecider pgtype.UUID // Valid == false: bot/channel attribution, matching sessions.created_by's own existing convention for these two channels.
-	outcome, err := httpapi.DecidePlan(decideCtx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.Registry, sessionID, planID, verdict, noDecider)
+	outcome, err := httpapi.DecidePlan(decideCtx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, verdict, noDecider)
 
 	var text string
 	switch {
@@ -405,7 +414,12 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, logger *sl
 		return
 	}
 
-	if _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Registry, sessionID, feedback, nil, true); cerr != nil {
+	// noActor: Valid == false, bot/channel attribution -- mirrors
+	// handlePlanVerdict's own noDecider precedent immediately above
+	// exactly (§13.3, Step 39's own hand-off: a real per-user actor here
+	// needs identity auto-linking, out of THIS Step's own scope).
+	var noActor pgtype.UUID
+	if _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, sessionID, feedback, nil, true, noActor); cerr != nil {
 		logger.Error("slack: interactivity: create request-changes turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionIDStr)
 	}
 }

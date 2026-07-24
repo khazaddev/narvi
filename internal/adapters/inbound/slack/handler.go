@@ -67,6 +67,14 @@ type Deps struct {
 	Deliveries   *postgres.WebhookDeliveryStore
 	Threads      *postgres.SlackThreadSessionStore
 
+	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// httpapi.CreateSessionCore below exactly like Environments already
+	// is, so a Slack-originated session creation gets the SAME audit_log
+	// row every other CreateSessionCore caller now gets (actor_user_id
+	// NULL -- no human caller on this channel yet, mirrors created_by's
+	// own existing NULL-for-bot convention).
+	AuditLog *postgres.AuditLogStore
+
 	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, on the brand-new-thread's own first real turn
 	// (decided_at_stage="first_prompt" -- a bare session is created with
@@ -256,7 +264,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	}
 
 	var noCreator pgtype.UUID // Valid == false: no human caller (§ CreateSessionCore's own doc comment).
-	bare, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.Registry, restdtos.CreateSessionRequest{
+	bare, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceSlack,
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: deps.DefaultRepoName, Url: deps.DefaultRepoURL},

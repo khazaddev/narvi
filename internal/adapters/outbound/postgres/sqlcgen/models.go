@@ -607,6 +607,15 @@ type Identity struct {
 	AccessTokenEncrypted []byte             `json:"access_token_encrypted"`
 }
 
+type IdentityLinkPrompt struct {
+	ID         pgtype.UUID        `json:"id"`
+	Provider   IdentityProvider   `json:"provider"`
+	ExternalID string             `json:"external_id"`
+	NonceHash  string             `json:"nonce_hash"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type ImageBuild struct {
 	Fingerprint    string             `json:"fingerprint"`
 	Base           string             `json:"base"`

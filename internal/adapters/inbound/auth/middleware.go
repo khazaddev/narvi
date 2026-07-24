@@ -12,11 +12,18 @@ import (
 )
 
 // Middleware gates a chi route group behind a valid, backend-issued
-// user-session cookie (§13.4: "route middleware"). This is a "must be
-// logged in" gate ONLY -- no route in this Step's own scope needs an
-// admin-only check (see doc.go's own scope-boundary section), so this does
-// NOT add any role-based gating; platform.AuthenticatedUser.Role is
-// carried in context purely for future (Step 39) use.
+// user-session cookie (§13.4: "route middleware"). This remains a "must be
+// logged in" gate ONLY -- it still does not itself add any role-based
+// gating at the ROUTE level (that stays a coarse "authenticated or not"
+// check, exactly per §13.3's own "HTTP middleware handles the coarse
+// route-level gate"). platform.AuthenticatedUser.Role IS now real,
+// load-bearing data, though: Step 39 ("identities + full RBAC") reads it
+// straight out of context (platform.UserFromContext) in every
+// state-changing REST handler downstream (internal/adapters/inbound/
+// httpapi) to build a domain/authz.Actor and render the real §13.3
+// verdict per request -- this middleware's own job is unchanged, only
+// what a caller further down the chain does with the Role it already
+// carried is new.
 //
 // Every rejection path -- missing cookie, hash-lookup miss, expired row, a
 // disabled user's otherwise-valid session -- responds 401 with the SAME

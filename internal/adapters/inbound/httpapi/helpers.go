@@ -2,11 +2,13 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -81,4 +83,44 @@ func authenticatedUserID(w http.ResponseWriter, r *http.Request) (pgtype.UUID, b
 		return pgtype.UUID{}, false
 	}
 	return id, true
+}
+
+// authorize runs domain/authz.Authorize (§13.3) for the currently
+// authenticated request actor against action/resource, writing 500
+// (missing context user -- unreachable behind auth.Middleware, defended
+// against anyway rather than silently proceeding, mirroring
+// authenticatedUserID's own identical precedent) or 403 (Authorize
+// rejected) and returning ok=false on either -- shared by every REST
+// handler in this package that gates a state-changing command behind the
+// §13.3 matrix (CreateSession, CreateTurn; ApprovePlan/RejectPlan go
+// through authorizePlanAction/canActOnPlan instead, planauthz.go, since
+// they ALSO need the (bool, error) shape DecidePlanOnTx's callers already
+// established -- but that predicate itself now calls authz.Authorize too,
+// so every REST entry point ultimately renders its verdict from this SAME
+// one matrix).
+func authorize(w http.ResponseWriter, r *http.Request, action authz.Action, resource authz.Resource) bool {
+	ctx := r.Context()
+	logger := platform.Logger(ctx)
+
+	authUser, ok := platform.UserFromContext(ctx)
+	if !ok {
+		logger.Error("httpapi: no authenticated user in context (route not mounted behind auth.Middleware?)")
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return false
+	}
+
+	actor := authz.Actor{UserID: authUser.ID, Role: authz.Role(authUser.Role)}
+	if err := authz.Authorize(actor, action, resource); err != nil {
+		if errors.Is(err, authz.ErrForbidden) {
+			writeError(w, http.StatusForbidden, "not authorized to perform this action")
+			return false
+		}
+		// ErrUnknownAction (a caller bug, never a legitimate "no" verdict --
+		// see authz.ErrUnknownAction's own doc comment) or any other
+		// unexpected error: 500, not 403, and logged loudly.
+		logger.Error("httpapi: authz.Authorize failed", "error", err, "action", string(action))
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return false
+	}
+	return true
 }

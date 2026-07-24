@@ -71,6 +71,15 @@ type Deps struct {
 	Plans  *postgres.PlanStore
 	Outbox *postgres.OutboxStore
 
+	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// httpapi.CreateSessionCore/DecidePlan below exactly like Plans/Outbox
+	// already are, so a Linear-originated session creation or plan
+	// decision gets the SAME audit_log row every other caller of those two
+	// shared functions now gets (actor_user_id NULL -- no human caller on
+	// this channel yet, matching created_by/decidedBy's own existing
+	// NULL-for-bot convention).
+	AuditLog *postgres.AuditLogStore
+
 	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, right after a `created` AgentSessionEvent's own
 	// winning claim creates the backing session (decided_at_stage="create"
@@ -248,7 +257,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 
 	var nilCreator pgtype.UUID // Valid == false: no cookie, no human caller (see CreateSessionCore's own doc comment).
 
-	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.Registry, req, nilCreator)
+	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, nilCreator)
 	if cerr != nil {
 		logger.Error("linear: create session failed", "status", cerr.Status, "message", cerr.Message, "agent_session_id", payload.AgentSession.ID)
 		return
@@ -407,7 +416,7 @@ func (deps Deps) findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Lo
 // different channel already decided first.
 func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, organizationID, agentSessionID string) {
 	var noDecider pgtype.UUID // Valid == false: bot/channel attribution, matching sessions.created_by's own existing convention for these two channels.
-	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), noDecider)
+	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), noDecider)
 	if err != nil {
 		if errors.Is(err, httpapi.ErrPlanOpenTurnInFlight) {
 			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, "A revision is already in progress for this plan -- try again once it completes.")

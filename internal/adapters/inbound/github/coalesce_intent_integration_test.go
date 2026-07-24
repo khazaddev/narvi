@@ -97,6 +97,7 @@ func newTestRigWithIntentClassifier(t *testing.T, classifierTarget string) testR
 		Environments:     narvipg.NewEnvironmentStore(pool),
 		Registry:         registry,
 		IntentClassifier: intentSvc,
+		AuditLog:         narvipg.NewAuditLogStore(pool),
 	}
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 

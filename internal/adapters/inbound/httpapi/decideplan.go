@@ -50,6 +50,23 @@
 // no-per-user-gate behavior this file actually implements, matching Steps
 // 32-34's own identical precedent for every other webhook-originated
 // action.
+//
+// # Step 39 ("identities + full RBAC") update: domain/authz now exists,
+// but Slack/Linear verdicts STILL skip it -- see the paragraph above,
+// unchanged: routing Slack/Linear through a real Authorize call needs a
+// real resolved user_id/role for those actors, which needs identity
+// auto-linking (§13.2), explicitly out of THIS Step's own scope (see
+// docs/IMPLEMENTATION_PLAN.md row 39's hand-off). What DOES land now:
+// planapprove.go's REST handlers call authz.Authorize (via canActOnPlan,
+// planauthz.go) exactly as before this Step, just now backed by the real
+// matrix instead of a bespoke predicate; and DecidePlanOnTx itself now
+// writes an audit_log row (§13.3) on every winning decision, on the SAME
+// tx, for EVERY caller alike -- REST (a real decidedBy) and Slack/Linear
+// (an invalid, bot-attributed decidedBy) both get one, actor_user_id NULL
+// for the latter, mirroring decidedBy's own existing NULL-for-bot
+// convention. The audit write is unconditional on winning the decision,
+// regardless of who decided or how they were (or weren't) authorized --
+// it is a record of WHAT changed, not a second authorization gate.
 
 package httpapi
 
@@ -164,6 +181,7 @@ func DecidePlanOnTx(
 	plans *postgres.PlanStore,
 	outbox *postgres.OutboxStore,
 	linearAgentSessions *postgres.LinearAgentSessionStore,
+	auditLog *postgres.AuditLogStore,
 	sessionRow sqlcgen.Session,
 	planID pgtype.UUID,
 	verdict PlanVerdict,
@@ -251,6 +269,13 @@ func DecidePlanOnTx(
 		}
 		turnIDStr := createdTurn.ID.String()
 		outcome.TurnID = &turnIDStr
+	}
+
+	if err := recordAuditLog(ctx, auditLog.WithTx(tx), decidedBy, "plan."+string(verdict), "plan", planID.String(), map[string]any{
+		"session_id": sessionRow.ID.String(),
+		"verdict":    string(verdict),
+	}); err != nil {
+		return DecidePlanOutcome{}, fmt.Errorf("httpapi: record plan decision audit log: %w", err)
 	}
 
 	if err := enqueuePlanDecisionNotifications(ctx, tx, outbox, linearAgentSessions, sessionRow, planRow, planDecisionOutcomeText(verdict)); err != nil {
@@ -377,6 +402,7 @@ func DecidePlan(
 	plans *postgres.PlanStore,
 	outbox *postgres.OutboxStore,
 	linearAgentSessions *postgres.LinearAgentSessionStore,
+	auditLog *postgres.AuditLogStore,
 	registry *sessionactor.Registry,
 	sessionID, planID pgtype.UUID,
 	verdict PlanVerdict,
@@ -395,7 +421,7 @@ func DecidePlan(
 		return DecidePlanOutcome{}, fmt.Errorf("httpapi: get session for plan decision: %w", err)
 	}
 
-	outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, sessionRow, planID, verdict, decidedBy)
+	outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, verdict, decidedBy)
 	if err != nil {
 		return DecidePlanOutcome{}, err
 	}

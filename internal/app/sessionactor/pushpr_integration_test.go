@@ -572,3 +572,100 @@ func TestHandleSandboxEvent_PushComplete_NoCreatedBy_SkipsHonestly(t *testing.T)
 		t.Errorf("artifact count = %d, want 0", len(rows))
 	}
 }
+
+// TestHandleSandboxEvent_PushComplete_ViewerCreator_SkipsPRCreation proves
+// Step 39's own viewer guard (§13.3: "viewers never gain PR-reviewer
+// attribution or git identity on session artifacts"): a session whose
+// creator has a REAL, usable, encrypted GitHub identity/token -- otherwise
+// an identical setup to TestHandleSandboxEvent_PushComplete_CreatesPRArtifact
+// above, which proves the happy path succeeds with these exact same
+// ingredients -- never calls CreatePR and never records a PR artifact when
+// that creator's CURRENT role is viewer. This is the defense-in-depth half
+// of the guard: domain/authz.Authorize already refuses a viewer at
+// session-CREATION time (httpapi.CreateSession), so this test's own session
+// is seeded directly via the store (bypassing that create-time gate
+// entirely) to prove THIS second, independent check -- at PR-creation time
+// -- catches it too, exactly as it must for a user demoted to viewer after
+// already creating a session.
+func TestHandleSandboxEvent_PushComplete_ViewerCreator_SkipsPRCreation(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	userStore := narvipg.NewUserStore(pool)
+	identityStore := narvipg.NewIdentityStore(pool)
+
+	user, err := userStore.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: fmt.Sprintf("pr-viewer-test-%d@example.com", time.Now().UnixNano()),
+		DisplayName:  "PR Viewer Test User",
+		Role:         sqlcgen.UserRoleViewer,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	const plaintextToken = "gh-fake-oauth-token-viewer"
+	encrypted, err := platform.EncryptToken(testTokenEncryptionKey, []byte(plaintextToken))
+	if err != nil {
+		t.Fatalf("EncryptToken: %v", err)
+	}
+	email := user.PrimaryEmail
+	if _, err := identityStore.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:               user.ID,
+		Provider:             sqlcgen.IdentityProviderGithub,
+		ExternalID:           fmt.Sprintf("pr-viewer-test-external-%d", time.Now().UnixNano()),
+		Email:                &email,
+		EmailVerified:        true,
+		LinkedVia:            sqlcgen.IdentityLinkedViaAdmin,
+		AccessTokenEncrypted: encrypted,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	sessionID := createTestSessionWithRepos(ctx, t, pool, user.ID,
+		"repo1", "https://github.com/acme/repo1.git", "feature-x")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	sourceControl := &fakeSourceControl{nextRef: ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"}}
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "push_complete",
+		Gen:  1,
+		Raw:  pushCompleteRaw(t, sessionID.String(), 1, "repo1", "feature-x", "abc123"),
+	})
+
+	// A fixed sleep (not waitUntil-for-a-positive-condition), mirroring
+	// TestHandleSandboxEvent_PushComplete_NoCreatedBy_SkipsHonestly's own
+	// identical "prove a negative" precedent exactly: there is no
+	// eventually-true condition to poll for here, only "this never
+	// happens" -- so this test gives createPRBestEffort's own
+	// post-commit-triggered goroutine every reasonable chance to have
+	// already run (and wrongly called CreatePR) before asserting it did
+	// not.
+	time.Sleep(300 * time.Millisecond)
+	if got := sourceControl.callCount(); got != 0 {
+		t.Errorf("CreatePR called %d times, want 0 (session creator is a viewer)", got)
+	}
+
+	artifactStore := narvipg.NewArtifactStore(pool)
+	rows, err := artifactStore.ListForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("artifact count = %d, want 0 (no PR ever created for a viewer-owned session)", len(rows))
+	}
+}

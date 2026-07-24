@@ -241,4 +241,51 @@
 // tested (bot_integration_test.go) as a general-purpose, no-coalescing
 // bot-session entry point for a caller that isn't simultaneously holding
 // a transaction open of its own.
+//
+// # Step 39 ("identities + full RBAC", §13.3) update
+//
+// Every state-changing REST handler in this package now calls the real
+// internal/domain/authz.Authorize BEFORE its own effect:
+//
+//   - CreateSession (create.go): ActionCreateSession, unconditional for
+//     admin/maintainer/member -- viewer gets 403 before the request body
+//     is even decoded.
+//   - CreateTurn (turn.go): ActionPromptSession, own/joined-gated for
+//     member (resolved via a plain sessions.Get + participants.Exists,
+//     mirroring planauthz.go's own identical precedent), unconditional for
+//     admin/maintainer, never for viewer.
+//   - ApprovePlan/RejectPlan (planapprove.go): unchanged CALL SHAPE
+//     (canActOnPlan, still (bool, error)) but that predicate itself
+//     (planauthz.go) now renders its verdict via authz.Authorize instead
+//     of its own bespoke rule set -- see that file's own doc comment.
+//
+// helpers.go's new authorize(w, r, action, resource) bool is the shared
+// "resolve the context actor, call Authorize, write 403/500" plumbing
+// CreateSession/CreateTurn both use.
+//
+// Every one of these four handlers' own underlying state change --
+// CreateSessionOnTx (create.go), CreateTurnCore (turn.go),
+// DecidePlanOnTx (decideplan.go) -- also now writes one audit_log row
+// (postgres.AuditLogStore, audit.go's recordAuditLog) inside the SAME
+// transaction as the change (§13.3), for EVERY caller, not just these
+// REST handlers: CreateSessionOnTx's own webhook-ingress callers
+// (internal/adapters/inbound/{github,slack,linear}) and DecidePlanOnTx's
+// own Slack/Linear plan-verdict callers get the identical treatment,
+// actor_user_id NULL for their bot-attributed changes -- mirroring
+// sessions.created_by/plans.decided_by's own pre-existing NULL-for-bot
+// convention exactly, never a fabricated "system user" row.
+//
+// A defense-in-depth viewer guard ("viewers never gain PR-reviewer
+// attribution or git identity on session artifacts", §13.3) lives OUTSIDE
+// this package, in internal/app/sessionactor (githubtoken.go's
+// creatorMayGetPRAttribution, called from pushpr.go's createPRBestEffort)
+// -- distinct from, and in addition to, ActionCreateSession above already
+// refusing a viewer at session-creation time.
+//
+// Identity auto-linking, magic-link prompts, and a members API (§13.2,
+// the rest of Step 39's own brief) are NOT this package's job and are not
+// implemented here -- see internal/domain/authz's own doc.go and
+// migrations/000036_identity_link_prompts.up.sql for what this Step's own
+// first half actually built, and docs/IMPLEMENTATION_PLAN.md row 39 for
+// the full scope the second half still owns.
 package httpapi

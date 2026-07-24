@@ -44,6 +44,17 @@ type storeBundle struct {
 	identity *postgres.IdentityStore
 	artifact *postgres.ArtifactStore
 
+	// user is Step 39's ("identities + full RBAC", §13.3) own addition --
+	// pushpr.go's own createPRBestEffort uses it for the viewer guard
+	// ("viewers never gain PR-reviewer attribution or git identity on
+	// session artifacts"): a defense-in-depth check of the session
+	// creator's CURRENT role, distinct from (and in addition to)
+	// domain/authz.Authorize already refusing a viewer at session-creation
+	// time (httpapi.CreateSession) -- this second check catches a role
+	// downgraded to viewer AFTER a session was already created by a
+	// non-viewer, which Authorize's own create-time check cannot.
+	user *postgres.UserStore
+
 	// imageBuild is Step 26's ("image builds") own addition -- used by
 	// dispatch.go/imageresolve.go's resolveAndSetImage to look up an
 	// already-built image by fingerprint, and to best-effort upsert a
@@ -94,6 +105,7 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		event:              postgres.NewEventStore(pool),
 		identity:           postgres.NewIdentityStore(pool),
 		artifact:           postgres.NewArtifactStore(pool),
+		user:               postgres.NewUserStore(pool),
 		imageBuild:         postgres.NewImageBuildStore(pool),
 		environment:        postgres.NewEnvironmentStore(pool),
 		contractDrift:      postgres.NewContractDriftStore(pool),

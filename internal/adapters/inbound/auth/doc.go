@@ -95,12 +95,23 @@
 // # Explicitly out of scope (see cmd/control-plane/main.go and the plan's
 // own §13.4 phasing for the owning Step)
 //
-//   - Identity auto-linking across multiple providers, link prompts, the
-//     full four-role permission matrix, a real domain/authz package, the
-//     viewer guard, and audit-log WRITES (the audit_log table already
-//     exists, migration 000013 -- this package never writes to it) --
-//     all Step 39 ("identities + full RBAC", docs/IMPLEMENTATION_PLAN.md
-//     row 39), §13.2/§13.3.
+//   - Identity auto-linking across multiple providers, link prompts, and a
+//     members API -- Step 39's ("identities + full RBAC") own
+//     auto-linking half (§13.2), still not this package's job: this
+//     package still only ever links a user to a provider identity at
+//     first-sign-in time (createUserAndIdentity, callback.go), never in
+//     reaction to a webhook-originated event from an unknown identity.
+//   - The full four-role permission matrix, a real domain/authz package,
+//     the viewer guard, and audit-log WRITES ARE now real -- Step 39's own
+//     RBAC half (§13.3) landed as internal/domain/authz (a table-driven
+//     Authorize(actor, action, resource) error), wired into every
+//     state-changing REST handler in internal/adapters/inbound/httpapi
+//     (CreateSession/CreateTurn/ApprovePlan/RejectPlan), a defense-in-depth
+//     viewer guard in internal/app/sessionactor's own PR-creation path, and
+//     real audit_log writes (postgres.AuditLogStore) inside the SAME
+//     transaction as each change -- this package itself (auth) still
+//     issues no role-gated route of its own; Middleware here remains the
+//     identical "must be logged in" gate it always was.
 //   - Actually USING the stored, encrypted GitHub access token for
 //     anything (creating a PR, pushing a branch, minting a git
 //     credential) -- Step 21's own SourceControl adapter job ("createPR,

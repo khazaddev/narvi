@@ -130,6 +130,7 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	environments := narvipg.NewEnvironmentStore(pool)
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 	threads := narvipg.NewSlackThreadSessionStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
 
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
@@ -145,6 +146,7 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 		Registry:        registry,
 		Deliveries:      deliveries,
 		Threads:         threads,
+		AuditLog:        auditLog,
 		SigningSecret:   testSigningSecret,
 		BotToken:        "test-bot-token",
 		DefaultRepoName: "narvi",

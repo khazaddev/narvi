@@ -140,6 +140,7 @@ func newTestRig(t *testing.T) testRig {
 		Turns:        rig.turns,
 		Environments: narvipg.NewEnvironmentStore(pool),
 		Registry:     registry,
+		AuditLog:     narvipg.NewAuditLogStore(pool),
 	}
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 

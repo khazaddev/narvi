@@ -35,8 +35,8 @@ import (
 // direct human creator, exactly CreateSessionCore's own doc comment and
 // createcore_integration_test.go's own TestCreateSessionCore_NilCreator_*
 // tests already establish and cover.
-func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest) (sqlcgen.Session, error) {
-	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, registry, req, pgtype.UUID{})
+func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest) (sqlcgen.Session, error) {
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, pgtype.UUID{})
 	if cerr != nil {
 		return sqlcgen.Session{}, cerr
 	}

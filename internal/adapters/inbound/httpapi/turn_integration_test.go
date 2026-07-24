@@ -81,8 +81,8 @@ func (f *fakeTurnCommander) lastPayload() json.RawMessage {
 func TestCreateTurn_HappyPath(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
-	_, token := rig.createAuthenticatedUser(ctx, t)
-	session := rig.createSession(ctx, t)
+	user, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, user.ID, nil)
 
 	body := []byte(`{"prompt": "do the thing", "modelId": null, "planMode": false}`)
 	var got restdtos.CreateTurnResponse
@@ -119,8 +119,8 @@ func TestCreateTurn_HappyPath(t *testing.T) {
 func TestCreateTurn_InFlightTurnExists_Returns409(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
-	_, token := rig.createAuthenticatedUser(ctx, t)
-	session := rig.createSession(ctx, t)
+	user, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, user.ID, nil)
 
 	if _, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{
 		SessionID: session.ID,
@@ -150,8 +150,8 @@ func TestCreateTurn_InFlightTurnExists_Returns409(t *testing.T) {
 func TestCreateTurn_DispatchedTurnExists_Returns409(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
-	_, token := rig.createAuthenticatedUser(ctx, t)
-	session := rig.createSession(ctx, t)
+	user, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, user.ID, nil)
 
 	if _, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{
 		SessionID: session.ID,
@@ -177,8 +177,8 @@ func TestCreateTurn_DispatchedTurnExists_Returns409(t *testing.T) {
 func TestCreateTurn_ConcurrentRequests_OnlyOneSucceeds(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
-	_, token := rig.createAuthenticatedUser(ctx, t)
-	session := rig.createSession(ctx, t)
+	user, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, user.ID, nil)
 
 	// Deliberately NOT using rig.doJSON here: it calls t.Fatalf internally
 	// on transport errors, which the testing package requires be called
@@ -291,6 +291,8 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	users := narvipg.NewUserStore(pool)
 	identities := narvipg.NewIdentityStore(pool)
 	userSessions := narvipg.NewUserSessionStore(pool)
+	participants := narvipg.NewParticipantStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
 
 	commander := &fakeTurnCommander{}
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "http://localhost:8080", nil, nil, "")
@@ -302,7 +304,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessions, users))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, registry))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, participants, auditLog, registry))
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
@@ -335,7 +337,11 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 		t.Fatalf("create test user session: %v", err)
 	}
 
-	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb})
+	// CreatedBy is set to this test's own authenticated user -- §13.3's
+	// "own/joined" gate (domain/authz.ActionPromptSession) requires it;
+	// an unowned session would now get 403, not 201, from the CreateTurn
+	// call below.
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID})
 	if err != nil {
 		t.Fatalf("create test session: %v", err)
 	}

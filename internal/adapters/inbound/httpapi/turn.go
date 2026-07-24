@@ -14,6 +14,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -84,14 +85,56 @@ func hasOpenTurn(turns []sqlcgen.Turn) bool {
 // Locking the session row first forces a second concurrent request to
 // block until the first's transaction commits (or rolls back), so it
 // re-reads the turns list only after that outcome is visible.
-func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, registry *sessionactor.Registry) http.HandlerFunc {
+func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
 			return
 		}
 		ctx := platform.WithSessionID(r.Context(), sessionID.String())
+		r = r.WithContext(ctx)
 		logger := platform.Logger(ctx)
+
+		actorUserID, ok := authenticatedUserID(w, r)
+		if !ok {
+			return
+		}
+
+		// §13.3 row 2: "... prompt ... on own/joined sessions: admin,
+		// maintainer, member" (viewer never; admin/maintainer bypass
+		// ownership entirely). A plain, pool-scoped read (not WithTx) is
+		// enough to resolve ownership here -- mirrors
+		// lockSessionForPlanAction/authorizePlanAction's own identical
+		// "fetch once for authz" precedent (planapprove.go): sessions.
+		// created_by is immutable once set, so there is no meaningful
+		// TOCTOU between this read and CreateTurnCore's own separate,
+		// LOCKED re-fetch below. 404 here (not found) takes priority over
+		// any 403 -- a caller must never learn "you can't prompt this"
+		// about a session that doesn't exist at all.
+		sessionRow, err := sessions.Get(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "session not found")
+				return
+			}
+			logger.Error("httpapi: get session for authorization failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		ownedOrJoined := sessionRow.CreatedBy.Valid && sessionRow.CreatedBy == actorUserID
+		if !ownedOrJoined {
+			exists, err := participants.Exists(ctx, sessionRow.ID, actorUserID)
+			if err != nil {
+				logger.Error("httpapi: check participant for authorization failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			ownedOrJoined = exists
+		}
+		if !authorize(w, r, authz.ActionPromptSession, authz.Resource{OwnedOrJoined: ownedOrJoined}) {
+			return
+		}
 
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		var req restdtos.CreateTurnRequest
@@ -105,7 +148,7 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			return
 		}
 
-		created, cerr := CreateTurnCore(ctx, pool, sessions, turns, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode)
+		created, cerr := CreateTurnCore(ctx, pool, sessions, turns, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID)
 		if cerr != nil {
 			logger.Error("httpapi: create turn failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)
@@ -150,7 +193,21 @@ func (e *CreateTurnError) Error() string { return e.Message }
 // turn-creation call site -- mirrors CreateSessionCore's own identical
 // cross-package reuse precedent (internal/adapters/inbound/{slack,linear}
 // already call that one directly).
-func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool) (sqlcgen.Turn, *CreateTurnError) {
+//
+// actorUserID is Step 39's own addition, for the audit_log row this
+// function now writes on the SAME tx as the turn insert (§13.3): a real
+// authenticated caller's id from CreateTurn (the REST handler above,
+// which ALSO already ran authz.Authorize against this same actor before
+// ever reaching this function), or an explicit invalid pgtype.UUID{} for
+// Slack's own bot-attributed call -- mirrors CreateSessionOnTx's own
+// identical createdBy convention exactly. This parameter carries NO
+// authorization meaning here: CreateTurnCore itself still runs no
+// Authorize check (that stays the REST handler's own job, precisely so
+// Slack's call below can keep its existing, documented bot-attribution
+// behavior unchanged -- identity auto-linking, which would let a Slack
+// actor resolve to a real user_id and a real role, is explicitly Part
+// 2's scope, not this Step's).
+func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID) (sqlcgen.Turn, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	if _, err := sessions.Get(ctx, sessionID); err != nil {
@@ -203,6 +260,14 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 	})
 	if err != nil {
 		logger.Error("httpapi: create turn failed", "error", err)
+		return sqlcgen.Turn{}, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+	}
+
+	if err := recordAuditLog(ctx, auditLog.WithTx(tx), actorUserID, "turn.create", "turn", created.ID.String(), map[string]any{
+		"session_id": sessionID.String(),
+		"plan_mode":  planMode,
+	}); err != nil {
+		logger.Error("httpapi: record turn.create audit log failed", "error", err)
 		return sqlcgen.Turn{}, &CreateTurnError{http.StatusInternalServerError, "internal error"}
 	}
 

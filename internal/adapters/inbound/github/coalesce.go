@@ -51,6 +51,14 @@ type SessionCoalescer struct {
 	Environments     *postgres.EnvironmentStore
 	Registry         *sessionactor.Registry
 	IntentClassifier *intentclassifier.Service
+
+	// AuditLog is Step 39's own addition (§13.3): threaded through to the
+	// WINNER path's own httpapi.CreateSessionOnTx call below, exactly like
+	// Environments already is, so a GitHub-originated session creation
+	// gets the SAME audit_log row every other CreateSessionOnTx caller
+	// now gets (actor_user_id NULL -- no human caller here, mirrors
+	// created_by's own identical NULL-for-bot convention).
+	AuditLog *postgres.AuditLogStore
 }
 
 // CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
@@ -175,7 +183,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// every bot/automation-created session has no direct human creator,
 	// exactly CreateSessionOnTx's own documented convention for a nil
 	// creator.
-	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, req, pgtype.UUID{})
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, pgtype.UUID{})
 	if cerr != nil {
 		return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create session: %w", cerr)
 	}

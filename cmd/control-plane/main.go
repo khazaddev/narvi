@@ -206,6 +206,15 @@ func serve() error {
 	planStore := postgres.NewPlanStore(pool)
 	participantStore := postgres.NewParticipantStore(pool)
 
+	// auditLogStore is Step 39's ("identities + full RBAC", §13.3) own
+	// addition -- every Authorize-gated state change (CreateSession,
+	// CreateTurn, ApprovePlan/RejectPlan below) writes one audit_log row
+	// on the SAME transaction as the change itself; threaded into every
+	// GitHub/Slack/Linear ingress Deps struct too (below), so bot-
+	// attributed session/turn/plan-decision writes get the identical
+	// treatment (actor_user_id NULL), not a second, REST-only code path.
+	auditLogStore := postgres.NewAuditLogStore(pool)
+
 	// outboxStore/linearAgentSessionStore are constructed here (rather than
 	// down where the outbox delivery worker/Linear ingress blocks live
 	// below) because Step 38's ("plan mode, cross-channel", §8.1/§13.3) own
@@ -352,6 +361,7 @@ func serve() error {
 		Registry:         registry,
 		Deliveries:       webhookDeliveryStore,
 		Threads:          slackThreadSessionStore,
+		AuditLog:         auditLogStore,
 		IntentClassifier: intentClassifierSvc,
 		SigningSecret:    cfg.SlackSigningSecret,
 		BotToken:         cfg.SlackBotToken,
@@ -380,6 +390,7 @@ func serve() error {
 		LinearAgentSessions: linearAgentSessionStore,
 		Registry:            registry,
 		SlackClient:         slackNotifier,
+		AuditLog:            auditLogStore,
 		SigningSecret:       cfg.SlackSigningSecret,
 		Timeouts:            cfg.Timeouts,
 	}))
@@ -400,6 +411,7 @@ func serve() error {
 			Environments:     environmentStore,
 			Registry:         registry,
 			IntentClassifier: intentClassifierSvc,
+			AuditLog:         auditLogStore,
 		},
 		webhookDeliveryStore,
 		githubingress.Config{
@@ -442,7 +454,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, registry, intentClassifierSvc))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
@@ -450,14 +462,14 @@ func serve() error {
 		// turns (Step 28, "turn recovery", §8.7): the relaunch-and-resume
 		// REST API -- enqueues a new turn on an existing session, 409 if
 		// one is already in flight. See httpapi/turn.go's own doc comment.
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, registry))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, participantStore, auditLogStore, registry))
 		// plans (Step 37, "plan mode, web", §8.1/§12.2 item 3): the
 		// approve/reject HITL actions -- see httpapi/planapprove.go's own
 		// doc comment for the full sequencing. outboxStore/
 		// linearAgentSessionStore (Step 38, "plan mode, cross-channel") feed
 		// DecidePlanOnTx's own cross-channel-notify step (decideplan.go).
-		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, registry))
-		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore))
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, registry))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore))
 	})
 
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see
@@ -509,6 +521,8 @@ func serve() error {
 		// handlePrompted's own new plan-verdict keyword check.
 		Plans:  planStore,
 		Outbox: outboxStore,
+		// AuditLog (Step 39, "identities + full RBAC", §13.3).
+		AuditLog: auditLogStore,
 	}))
 
 	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3
