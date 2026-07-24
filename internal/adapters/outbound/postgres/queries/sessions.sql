@@ -15,8 +15,13 @@
 -- EXISTING call site that never sets them (every session created before
 -- this batch) keeps compiling and behaving identically: both stay NULL,
 -- byte-for-byte today's unscoped behavior.
-INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag)
-VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb), sqlc.narg('environment_id'), sqlc.narg('provenance_tag'))
+--
+-- build_model_id (Step 37, "plan mode, web", §12.2 item 3) is likewise
+-- sqlc.narg -- every EXISTING call site that never sets it keeps
+-- compiling and behaving identically (NULL, "use the default model
+-- catalog entry", migrations/000034_plan_mode.up.sql's own convention).
+INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag, build_model_id)
+VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb), sqlc.narg('environment_id'), sqlc.narg('provenance_tag'), sqlc.narg('build_model_id'))
 RETURNING *;
 
 -- name: GetSession :one

@@ -29,12 +29,40 @@ type sessionResponse struct {
 // promptAsyncRequest is POST /session/{id}/prompt_async's request body.
 // VERIFIED live via /doc (OpenAPI): {"messageID"?, "model"?:
 // {"providerID","modelID"}, "agent"?, "parts": [...]}. Only the fields this
-// adapter sends are modeled; "agent"/"noReply"/"tools"/"format"/"system"/
-// "variant" are real but unused by this Step's own scope.
+// adapter sends are modeled; "noReply"/"tools"/"format"/"system"/"variant"
+// remain real but unused by this Step's own scope.
+//
+// Agent (Step 37, "plan mode, web", §8.1) is this adapter's own wiring of
+// cmd.PlanMode (sandboxws.Prompt) onto OpenCode's REAL, NATIVE plan/build
+// agent split -- empirically confirmed live against the pinned OpenCode
+// 1.17.15 binary (GET /agent returns 7 agents; "plan" is
+// mode:"primary", description "Plan mode. Disallows all edit tools.",
+// with a permission list structurally denying the edit tool via OpenCode's
+// OWN permission engine: {"permission":"edit","pattern":"*","action":
+// "deny"}, vs "build"'s unrestricted "*"->allow). Set to "plan" when
+// cmd.PlanMode is true, omitted (OpenCode's own default "build" agent)
+// otherwise -- see postPromptAsync (session.go) for where this is set,
+// and that same investigation's own honest caveat: "plan"'s permission
+// list has NO override for "bash" (only edit/task(general) are denied),
+// so this is a real structural guard on file EDITS specifically, not a
+// complete sandbox -- bash could in principle still write files. This is
+// strictly stronger than a prompt-only instruction (which this Step does
+// NOT ALSO add: a real, enforced mode already exists, so layering a
+// redundant textual instruction on top would only invite the two to
+// drift), but it is not a hard filesystem guarantee either -- hardening
+// bash specifically (e.g. a sandbox-agent-level tool restriction) is
+// explicitly out of this Step's scope, left for a future hardening pass.
 type promptAsyncRequest struct {
 	Model *promptModelRef   `json:"model,omitempty"`
+	Agent *string           `json:"agent,omitempty"`
 	Parts []promptPartInput `json:"parts"`
 }
+
+// planAgentName is the literal OpenCode agent name this adapter requests
+// for a plan-mode turn -- VERIFIED live via GET /agent (see
+// promptAsyncRequest's own doc comment above): one of OpenCode's own 7
+// native agents, not a Narvi-invented string.
+const planAgentName = "plan"
 
 // promptModelRef is prompt_async's own "model" object shape: {"providerID",
 // "modelID"} — VERIFIED live via /doc, both fields required together.

@@ -37,6 +37,18 @@ func (j *ArtifactsResponse) UnmarshalJSON(value []byte) error {
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
+	// Optional (Step 37, 'plan mode, web', §12.2 item 3). Like pathScope/mockConfig
+	// below, this key is genuinely OPTIONAL (may be absent from the request body
+	// entirely) -- only meaningful when planMode is true: the model the eventual
+	// approval-dispatched IMPLEMENTATION turn should use, distinct from modelId
+	// (which names the PLAN turn's own model). Absent/null means 'use the default
+	// model catalog entry', the same convention modelId itself already establishes.
+	// Stored as sessions.build_model_id (migrations/000034_plan_mode.up.sql) -- a
+	// session-level, set-once value, unlike modelId/planMode which are per-turn
+	// (CreateTurnRequest does NOT carry this field: a 'request changes' turn never
+	// resubmits it).
+	BuildModelId CreateSessionRequestBuildModelId `json:"buildModelId,omitempty,omitzero" yaml:"buildModelId,omitempty" mapstructure:"buildModelId,omitempty"`
+
 	// Optional (row 27, 'mocking + contract drift', §14.3). Like pathScope above,
 	// this key is genuinely OPTIONAL (may be absent from the request body entirely)
 	// and independent of it -- an Environment can be path-scoped, mock-configured,
@@ -84,6 +96,18 @@ type CreateSessionRequest struct {
 	// Title corresponds to the JSON schema field "title".
 	Title CreateSessionRequestTitle `json:"title" yaml:"title" mapstructure:"title"`
 }
+
+// Optional (Step 37, 'plan mode, web', §12.2 item 3). Like pathScope/mockConfig
+// below, this key is genuinely OPTIONAL (may be absent from the request body
+// entirely) -- only meaningful when planMode is true: the model the eventual
+// approval-dispatched IMPLEMENTATION turn should use, distinct from modelId (which
+// names the PLAN turn's own model). Absent/null means 'use the default model
+// catalog entry', the same convention modelId itself already establishes. Stored
+// as sessions.build_model_id (migrations/000034_plan_mode.up.sql) -- a
+// session-level, set-once value, unlike modelId/planMode which are per-turn
+// (CreateTurnRequest does NOT carry this field: a 'request changes' turn never
+// resubmits it).
+type CreateSessionRequestBuildModelId *string
 
 // Optional (row 27, 'mocking + contract drift', §14.3). Like pathScope above, this
 // key is genuinely OPTIONAL (may be absent from the request body entirely) and

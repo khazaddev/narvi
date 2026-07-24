@@ -81,6 +81,12 @@ func fallbackModelRef() *promptModelRef {
 // prompt_async endpoint (§7: "POSTs prompt_async"). model is already
 // resolved (resolveModel) before this is called.
 //
+// cmd.PlanMode (Step 37, "plan mode, web", §8.1) selects OpenCode's own
+// native "plan" agent via the request's "agent" field when true, omitted
+// (OpenCode's own default "build" agent) otherwise -- see
+// promptAsyncRequest's own doc comment (types.go) for the full,
+// empirically-verified rationale and its honest scope limits.
+//
 // HONEST GAP: cmd.ScmName/cmd.ScmEmail (§6.1: Prompt "with author
 // scmName/scmEmail for git attribution") are deliberately NOT threaded
 // into this request or anywhere else in this package -- this Step's live
@@ -95,6 +101,10 @@ func (a *Adapter) postPromptAsync(ctx context.Context, sessionID string, cmd san
 	body := promptAsyncRequest{
 		Model: model,
 		Parts: []promptPartInput{{Type: "text", Text: cmd.Text}},
+	}
+	if cmd.PlanMode {
+		agent := planAgentName
+		body.Agent = &agent
 	}
 	path := "/session/" + url.PathEscape(sessionID) + "/prompt_async"
 	return a.doJSON(ctx, http.MethodPost, path, body, nil)

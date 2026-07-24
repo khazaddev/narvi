@@ -218,6 +218,17 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, err
 	}
 
+	// Step 37 ("plan mode, web", §8.1/§12.2 item 3): a plan_mode=true turn
+	// that just genuinely completed records exactly one new plans row, in
+	// this SAME transaction -- see planrecord.go's own doc comment.
+	// recordPlanIfNeeded itself is a no-op for every other case (plan_mode
+	// false, or trig != TriggerComplete), so this call is unconditional
+	// here, mirroring enqueueOutboxNotification's own identical shape just
+	// above.
+	if err := a.recordPlanIfNeeded(ctx, tx, processing, trig); err != nil {
+		return nil, err
+	}
+
 	if trig != turn.TriggerComplete {
 		// A failed/cancelled turn has nothing to push -- §9.3's resilience
 		// scenarios for THOSE outcomes are later Steps' own job (see this

@@ -228,6 +228,50 @@ func (ns NullOutboxStatus) Value() (driver.Value, error) {
 	return string(ns.OutboxStatus), nil
 }
 
+type PlanStatus string
+
+const (
+	PlanStatusAwaitingApproval PlanStatus = "awaiting_approval"
+	PlanStatusApproved         PlanStatus = "approved"
+	PlanStatusRejected         PlanStatus = "rejected"
+	PlanStatusSuperseded       PlanStatus = "superseded"
+)
+
+func (e *PlanStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = PlanStatus(s)
+	case string:
+		*e = PlanStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for PlanStatus: %T", src)
+	}
+	return nil
+}
+
+type NullPlanStatus struct {
+	PlanStatus PlanStatus `json:"plan_status"`
+	Valid      bool       `json:"valid"` // Valid is true if PlanStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullPlanStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.PlanStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.PlanStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullPlanStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.PlanStatus), nil
+}
+
 type SandboxStatus string
 
 const (
@@ -616,6 +660,18 @@ type Participant struct {
 	LastSeenAt pgtype.Timestamptz `json:"last_seen_at"`
 }
 
+type Plan struct {
+	ID          pgtype.UUID        `json:"id"`
+	SessionID   pgtype.UUID        `json:"session_id"`
+	TurnID      pgtype.UUID        `json:"turn_id"`
+	Version     int32              `json:"version"`
+	Status      PlanStatus         `json:"status"`
+	PlanModelID *string            `json:"plan_model_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	DecidedAt   pgtype.Timestamptz `json:"decided_at"`
+	DecidedBy   pgtype.UUID        `json:"decided_by"`
+}
+
 type PromptTemplate struct {
 	Name      string             `json:"name"`
 	Template  string             `json:"template"`
@@ -665,6 +721,7 @@ type Session struct {
 	EnvironmentID          pgtype.UUID           `json:"environment_id"`
 	ProvenanceTag          *string               `json:"provenance_tag"`
 	IntentDecision         []byte                `json:"intent_decision"`
+	BuildModelID           *string               `json:"build_model_id"`
 }
 
 type SessionTimer struct {

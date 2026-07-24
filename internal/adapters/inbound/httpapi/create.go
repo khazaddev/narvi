@@ -465,6 +465,12 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		Repos:         reposJSON,
 		EnvironmentID: environmentID,
 		ProvenanceTag: provenanceTag,
+		// Step 37 ("plan mode, web", §12.2 item 3): only meaningful when
+		// req.PlanMode is true, but stored unconditionally either way --
+		// mirrors modelId's own "always stored, only meaningful in
+		// context" convention (a non-plan-mode session simply never reads
+		// it back).
+		BuildModelID: (*string)(req.BuildModelId),
 	})
 	if err != nil {
 		logger.Error("httpapi: create session failed", "error", err)

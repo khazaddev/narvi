@@ -200,6 +200,12 @@ func serve() error {
 	environmentStore := postgres.NewEnvironmentStore(pool)
 	imageBuildStore := postgres.NewImageBuildStore(pool)
 
+	// planStore/participantStore are Step 37's ("plan mode, web", §8.1)
+	// own additions, backing the two new approve/reject REST endpoints
+	// below (internal/adapters/inbound/httpapi/planapprove.go).
+	planStore := postgres.NewPlanStore(pool)
+	participantStore := postgres.NewParticipantStore(pool)
+
 	// webhookDeliveryStore is Step 31's own provider-agnostic dedupe claim,
 	// shared across Steps 32/33/34's own GitHub/Slack/Linear ingress (see
 	// the Linear ingress block below, which reuses this SAME store rather
@@ -402,6 +408,11 @@ func serve() error {
 		// REST API -- enqueues a new turn on an existing session, 409 if
 		// one is already in flight. See httpapi/turn.go's own doc comment.
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, registry))
+		// plans (Step 37, "plan mode, web", §8.1/§12.2 item 3): the
+		// approve/reject HITL actions -- see httpapi/planapprove.go's own
+		// doc comment for the full sequencing.
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, registry))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, planStore, participantStore))
 	})
 
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see

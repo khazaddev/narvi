@@ -1,0 +1,607 @@
+//go:build integration
+
+package httpapi_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/platform"
+)
+
+// This file proves Step 37's ("plan mode, web", §8.1/§12.2 item 3) two new
+// REST endpoints -- POST .../plans/:planId/approve and .../reject -- and
+// their shared authorization stopgap (planauthz.go's canActOnPlan).
+
+// createUserWithRole is createAuthenticatedUser's own role-parameterized
+// twin -- this file's own authorization tests need a real admin/maintainer/
+// viewer, not just createAuthenticatedUser's hardcoded member.
+func createUserWithRole(ctx context.Context, t *testing.T, r testRig, role sqlcgen.UserRole) (sqlcgen.User, string) {
+	t.Helper()
+
+	externalID := fmt.Sprintf("test-github-id-%s-%d", role, time.Now().UnixNano())
+	email := externalID + "@example.com"
+
+	user, err := r.users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: email,
+		DisplayName:  "Test User",
+		Role:         role,
+	})
+	if err != nil {
+		t.Fatalf("create test user (role=%s): %v", role, err)
+	}
+	if _, err := r.identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:        user.ID,
+		Provider:      sqlcgen.IdentityProviderGithub,
+		ExternalID:    externalID,
+		Email:         &email,
+		EmailVerified: true,
+		LinkedVia:     sqlcgen.IdentityLinkedViaAdmin,
+	}); err != nil {
+		t.Fatalf("create test identity: %v", err)
+	}
+	token, err := platform.GenerateToken()
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	if _, err := r.userSessions.Create(ctx, sqlcgen.CreateUserSessionParams{
+		UserID:    user.ID,
+		TokenHash: platform.HashToken(token),
+		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(platform.DefaultTimeouts().UserSessionTTL), Valid: true},
+	}); err != nil {
+		t.Fatalf("create test user session: %v", err)
+	}
+	return user, token
+}
+
+// createSessionForUser creates a session owned (created_by) by ownerID,
+// optionally with buildModelID set -- this file's own tests need a real
+// owner to exercise canActOnPlan's "own session" branch, and a real
+// build_model_id to prove ApprovePlan's new turn actually carries it.
+func createSessionForUser(ctx context.Context, t *testing.T, r testRig, ownerID pgtype.UUID, buildModelID *string) sqlcgen.Session {
+	t.Helper()
+	row, err := r.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource:  sqlcgen.SessionSpawnSourceWeb,
+		CreatedBy:    ownerID,
+		BuildModelID: buildModelID,
+	})
+	if err != nil {
+		t.Fatalf("create test session for user: %v", err)
+	}
+	return row
+}
+
+// seedAwaitingApprovalPlan seeds a producing turn (Completed, plan_mode
+// true) and an awaiting_approval plans row atop it, at the given version
+// -- a direct DB seed (bypassing the actor pipeline entirely), matching
+// internal/app/sessionactor's own established "surgical direct DB seed"
+// precedent (createProcessingTurn) exactly: these tests exist to prove
+// ApprovePlan/RejectPlan's OWN behavior reacting to an existing plan row,
+// not planrecord.go's own creation logic (already covered by
+// planrecord_integration_test.go).
+func seedAwaitingApprovalPlan(ctx context.Context, t *testing.T, r testRig, sessionID pgtype.UUID, version int32) sqlcgen.Plan {
+	t.Helper()
+	turn, err := r.turns.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID: sessionID,
+		Status:    sqlcgen.TurnStatusCompleted,
+		PlanMode:  true,
+	})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	plan, err := r.plans.Create(ctx, sqlcgen.CreatePlanParams{
+		SessionID: sessionID,
+		TurnID:    turn.ID,
+		Version:   version,
+		Status:    sqlcgen.PlanStatusAwaitingApproval,
+	})
+	if err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+	return plan
+}
+
+// --- ApprovePlan: happy path ---
+
+// TestApprovePlan_Owner_HappyPath proves the session's own creator can
+// approve its awaiting plan: 200, the plan flips to approved with
+// decided_by/decided_at set, and a new Pending, plan_mode=false turn is
+// enqueued carrying the session's own build_model_id.
+func TestApprovePlan_Owner_HappyPath(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+
+	buildModel := "anthropic/claude-sonnet-5"
+	session := createSessionForUser(ctx, t, rig, owner.ID, &buildModel)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	var got planActionResponseForTest
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/approve", []byte{}, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.Status != "approved" {
+		t.Errorf("Status = %q, want %q", got.Status, "approved")
+	}
+	if got.TurnID == nil || *got.TurnID == "" {
+		t.Fatal("TurnID is nil/empty, want the new implementation turn's id")
+	}
+
+	var dbStatus sqlcgen.PlanStatus
+	var decidedBy pgtype.UUID
+	var decidedAt pgtype.Timestamptz
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT status, decided_by, decided_at FROM plans WHERE id = $1`, plan.ID,
+	).Scan(&dbStatus, &decidedBy, &decidedAt); err != nil {
+		t.Fatalf("query plan row: %v", err)
+	}
+	if dbStatus != sqlcgen.PlanStatusApproved {
+		t.Errorf("db status = %q, want %q", dbStatus, sqlcgen.PlanStatusApproved)
+	}
+	if !decidedBy.Valid || decidedBy != owner.ID {
+		t.Errorf("decided_by = %v, want %v", decidedBy, owner.ID)
+	}
+	if !decidedAt.Valid {
+		t.Error("decided_at is NULL, want set")
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	// The seeded producing turn (Completed) + the new implementation turn.
+	if len(turns) != 2 {
+		t.Fatalf("len(turns) = %d, want 2", len(turns))
+	}
+	var implTurn *sqlcgen.Turn
+	for i := range turns {
+		if turns[i].ID.String() == *got.TurnID {
+			implTurn = &turns[i]
+		}
+	}
+	if implTurn == nil {
+		t.Fatal("the new implementation turn id from the response was not found among the session's own turns")
+	}
+	if implTurn.Status != sqlcgen.TurnStatusPending {
+		t.Errorf("new turn status = %q, want %q", implTurn.Status, sqlcgen.TurnStatusPending)
+	}
+	if implTurn.PlanMode {
+		t.Error("new turn PlanMode = true, want false (this is the IMPLEMENTATION turn)")
+	}
+	if implTurn.ModelID == nil || *implTurn.ModelID != buildModel {
+		t.Errorf("new turn ModelID = %v, want %q (the session's own build_model_id)", implTurn.ModelID, buildModel)
+	}
+	if implTurn.Prompt == nil || *implTurn.Prompt == "" {
+		t.Error("new turn Prompt is nil/empty, want the fixed implementation prompt")
+	}
+}
+
+// TestApprovePlan_ConcurrentDoubleApprove_ExactlyOneWins proves "first
+// verdict wins" is a real, race-safe DB guarantee, not an application
+// convention: firing two concurrent approve requests at the SAME
+// awaiting_approval plan must produce exactly one 200 and one 409 --
+// mirroring Step 35/36's own errgroup-based concurrency-test pattern
+// (internal/app/sessionactor/registry_integration_test.go).
+func TestApprovePlan_ConcurrentDoubleApprove_ExactlyOneWins(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	path := "/api/sessions/" + session.ID.String() + "/plans/" + plan.ID.String() + "/approve"
+
+	var eg errgroup.Group
+	statuses := make(chan int, 2)
+	for i := 0; i < 2; i++ {
+		eg.Go(func() error {
+			statuses <- rig.doJSON(t, http.MethodPost, path, []byte{}, nil, token)
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("errgroup.Wait: %v", err)
+	}
+	close(statuses)
+
+	var ok, conflict int
+	for s := range statuses {
+		switch s {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Errorf("unexpected status %d among concurrent approve responses", s)
+		}
+	}
+	if ok != 1 {
+		t.Errorf("ok = %d, want exactly 1", ok)
+	}
+	if conflict != 1 {
+		t.Errorf("conflict = %d, want exactly 1", conflict)
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	// The seeded producing turn + exactly ONE implementation turn -- the
+	// loser must never have inserted a second one.
+	if len(turns) != 2 {
+		t.Fatalf("len(turns) = %d, want exactly 2 (the losing approve must not have created a second implementation turn)", len(turns))
+	}
+}
+
+// TestApprovePlan_AlreadyDecided_Returns409 proves an approve against a
+// plan that is already approved/rejected/superseded gets 409, not a
+// silent success or a 500.
+func TestApprovePlan_AlreadyDecided_Returns409(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	if _, err := rig.pool.Exec(ctx, `UPDATE plans SET status = 'rejected' WHERE id = $1`, plan.ID); err != nil {
+		t.Fatalf("seed already-decided plan: %v", err)
+	}
+
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/approve", []byte{}, nil, token)
+	if status != http.StatusConflict {
+		t.Errorf("status = %d, want %d", status, http.StatusConflict)
+	}
+}
+
+// TestApprovePlan_OpenTurnInFlight_Returns409 proves ApprovePlan's own
+// hasOpenTurn gate (planapprove.go's top doc comment): a plan can be
+// genuinely 'awaiting_approval' in the DB while a "request changes" turn
+// for it is already Pending/Dispatched/Processing (that turn hasn't
+// completed yet, so it hasn't superseded this plan row yet either) --
+// approving it in that window must be refused with 409, not silently
+// succeed and enqueue a second (implementation) turn behind the in-flight
+// revision's back.
+func TestApprovePlan_OpenTurnInFlight_Returns409(t *testing.T) {
+	tests := []struct {
+		name   string
+		status sqlcgen.TurnStatus
+	}{
+		{name: "revision turn pending", status: sqlcgen.TurnStatusPending},
+		{name: "revision turn dispatched", status: sqlcgen.TurnStatusDispatched},
+		{name: "revision turn processing", status: sqlcgen.TurnStatusProcessing},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+			owner, token := rig.createAuthenticatedUser(ctx, t)
+			session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+			plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+			// Simulate a "request changes" turn already in flight for this
+			// SAME session -- v1 is still 'awaiting_approval' at this point
+			// (recordPlanIfNeeded only supersedes it once THIS turn actually
+			// completes), exactly the window this gate must close.
+			if _, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{
+				SessionID: session.ID,
+				Status:    tc.status,
+				PlanMode:  true,
+			}); err != nil {
+				t.Fatalf("seed in-flight revision turn: %v", err)
+			}
+
+			status := rig.doJSON(t, http.MethodPost,
+				"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/approve", []byte{}, nil, token)
+			if status != http.StatusConflict {
+				t.Errorf("status = %d, want %d", status, http.StatusConflict)
+			}
+
+			var dbStatus sqlcgen.PlanStatus
+			if err := rig.pool.QueryRow(ctx, `SELECT status FROM plans WHERE id = $1`, plan.ID).Scan(&dbStatus); err != nil {
+				t.Fatalf("query plan row: %v", err)
+			}
+			if dbStatus != sqlcgen.PlanStatusAwaitingApproval {
+				t.Errorf("db status = %q, want %q (a 409 must never change plan state)", dbStatus, sqlcgen.PlanStatusAwaitingApproval)
+			}
+
+			turns, err := rig.turns.ListForSession(ctx, session.ID)
+			if err != nil {
+				t.Fatalf("list turns: %v", err)
+			}
+			// The seeded producing turn + the seeded in-flight revision turn
+			// -- NO implementation turn must have been created.
+			if len(turns) != 2 {
+				t.Errorf("len(turns) = %d, want exactly 2 (no implementation turn must be created while another turn is in flight)", len(turns))
+			}
+		})
+	}
+}
+
+// --- RejectPlan: happy path ---
+
+// TestRejectPlan_Owner_HappyPath proves reject flips the plan to rejected
+// and creates NO new turn.
+func TestRejectPlan_Owner_HappyPath(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	var got planActionResponseForTest
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/reject", []byte{}, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.Status != "rejected" {
+		t.Errorf("Status = %q, want %q", got.Status, "rejected")
+	}
+	if got.TurnID != nil {
+		t.Errorf("TurnID = %v, want nil (reject never dispatches a new turn)", *got.TurnID)
+	}
+
+	var dbStatus sqlcgen.PlanStatus
+	if err := rig.pool.QueryRow(ctx, `SELECT status FROM plans WHERE id = $1`, plan.ID).Scan(&dbStatus); err != nil {
+		t.Fatalf("query plan row: %v", err)
+	}
+	if dbStatus != sqlcgen.PlanStatusRejected {
+		t.Errorf("db status = %q, want %q", dbStatus, sqlcgen.PlanStatusRejected)
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Errorf("len(turns) = %d, want 1 (only the seeded producing turn, no new one)", len(turns))
+	}
+}
+
+// --- Authorization ---
+
+// TestApprovePlan_NonOwnerNonParticipantMember_Returns403 proves canActOnPlan's
+// own negative case: a plain member who neither created nor joined the
+// session cannot approve its plan.
+func TestApprovePlan_NonOwnerNonParticipantMember_Returns403(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	_, outsiderToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMember)
+
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/approve", []byte{}, nil, outsiderToken)
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", status, http.StatusForbidden)
+	}
+
+	var dbStatus sqlcgen.PlanStatus
+	if err := rig.pool.QueryRow(ctx, `SELECT status FROM plans WHERE id = $1`, plan.ID).Scan(&dbStatus); err != nil {
+		t.Fatalf("query plan row: %v", err)
+	}
+	if dbStatus != sqlcgen.PlanStatusAwaitingApproval {
+		t.Errorf("db status = %q, want %q (a 403 must never change plan state)", dbStatus, sqlcgen.PlanStatusAwaitingApproval)
+	}
+}
+
+// TestRejectPlan_NonOwnerNonParticipantMember_Returns403 is the reject
+// twin of the approve case above.
+func TestRejectPlan_NonOwnerNonParticipantMember_Returns403(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	_, outsiderToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMember)
+
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/reject", []byte{}, nil, outsiderToken)
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", status, http.StatusForbidden)
+	}
+}
+
+// TestApprovePlan_Maintainer_NotOwnerOrParticipant_Allowed proves §13.3's
+// own "approve any plan" row: a maintainer who neither created nor joined
+// the session can still approve it.
+func TestApprovePlan_Maintainer_NotOwnerOrParticipant_Allowed(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	_, maintainerToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/approve", []byte{}, nil, maintainerToken)
+	if status != http.StatusOK {
+		t.Errorf("status = %d, want %d (maintainer may approve any plan)", status, http.StatusOK)
+	}
+}
+
+// TestApprovePlan_Viewer_NotOwnerOrParticipant_Returns403 proves the
+// viewer role never gets an implicit pass -- §13.3: "viewer: —".
+func TestApprovePlan_Viewer_NotOwnerOrParticipant_Returns403(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	_, viewerToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleViewer)
+
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/approve", []byte{}, nil, viewerToken)
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", status, http.StatusForbidden)
+	}
+}
+
+// --- Request changes: reuse of the existing /turns endpoint ---
+
+// TestRequestChanges_ViaExistingTurnsEndpoint_SupersedesAndCreatesV2
+// proves the design decision this Step's own brief calls for explicitly:
+// "Request changes" reuses the EXISTING POST .../turns endpoint AS-IS
+// (planMode=true, feedback text as prompt) rather than a dedicated new
+// endpoint. A session already has an awaiting_approval plan v1; a new
+// turn is submitted through that same existing endpoint with
+// planMode=true; once THAT turn completes (driven through the real
+// sessionactor Actor, mirroring internal/app/sessionactor's own
+// established direct-completion-drive precedent), v1 is superseded and a
+// v2 plan is created.
+func TestRequestChanges_ViaExistingTurnsEndpoint_SupersedesAndCreatesV2(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+
+	v1 := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	if _, err := narvipg.NewSandboxStore(rig.pool).Create(ctx, session.ID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	// Submit the "request changes" turn via the EXISTING /turns endpoint
+	// (turn.go's own CreateTurn, reused as-is -- not a new endpoint).
+	body := []byte(`{"prompt": "keep the env fallback", "modelId": null, "planMode": true}`)
+	var createdTurn restdtos.CreateTurnResponse
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, &createdTurn, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+	if createdTurn.Status != restdtos.CreateTurnResponseStatusPending {
+		t.Fatalf("created turn status = %q, want %q", createdTurn.Status, restdtos.CreateTurnResponseStatusPending)
+	}
+
+	var turnID pgtype.UUID
+	if err := turnID.Scan(createdTurn.Id); err != nil {
+		t.Fatalf("scan turn id: %v", err)
+	}
+
+	// Drive the new turn to Processing then completion the SAME way
+	// internal/app/sessionactor's own tests do (a direct DB seed of the
+	// pre-completion state, then a real execution_complete through the
+	// real Actor) -- this rig's own registry has a nil provider/commander
+	// (newTestRig's own doc comment), so the real spawn/dispatch network
+	// path is deliberately not exercised here; only completeProcessingTurn's
+	// own reaction to a genuine execution_complete is under test.
+	if _, err := rig.pool.Exec(ctx, `UPDATE turns SET status = 'processing' WHERE id = $1`, turnID); err != nil {
+		t.Fatalf("seed turn as processing: %v", err)
+	}
+
+	actor, err := rig.registry.GetOrSpawn(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	reply := make(chan sessionactor.SandboxEventOutcome, 1)
+	evt := sessionactor.SandboxEvent{
+		Type:  "execution_complete",
+		Gen:   1,
+		Raw:   executionCompleteRawForTest(t, session.ID.String(), 1, sandboxws.ExecutionCompleteOutcomeCompleted),
+		Reply: reply,
+	}
+	if err := actor.Send(ctx, evt); err != nil {
+		t.Fatalf("Send execution_complete: %v", err)
+	}
+	select {
+	case <-reply:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for SandboxEventOutcome")
+	}
+
+	var v1Status sqlcgen.PlanStatus
+	if err := rig.pool.QueryRow(ctx, `SELECT status FROM plans WHERE id = $1`, v1.ID).Scan(&v1Status); err != nil {
+		t.Fatalf("query v1 plan row: %v", err)
+	}
+	if v1Status != sqlcgen.PlanStatusSuperseded {
+		t.Errorf("v1 status = %q, want %q", v1Status, sqlcgen.PlanStatusSuperseded)
+	}
+
+	rows, err := rig.pool.Query(ctx, `SELECT version, status, turn_id FROM plans WHERE session_id = $1 ORDER BY version`, session.ID)
+	if err != nil {
+		t.Fatalf("query plans: %v", err)
+	}
+	defer rows.Close()
+	var versions []int32
+	var v2TurnID pgtype.UUID
+	var v2Status sqlcgen.PlanStatus
+	for rows.Next() {
+		var version int32
+		var status sqlcgen.PlanStatus
+		var tid pgtype.UUID
+		if err := rows.Scan(&version, &status, &tid); err != nil {
+			t.Fatalf("scan plan row: %v", err)
+		}
+		versions = append(versions, version)
+		if version == 2 {
+			v2Status = status
+			v2TurnID = tid
+		}
+	}
+	if len(versions) != 2 {
+		t.Fatalf("plan row count = %d, want 2 (v1 superseded + v2 awaiting_approval)", len(versions))
+	}
+	if v2Status != sqlcgen.PlanStatusAwaitingApproval {
+		t.Errorf("v2 status = %q, want %q", v2Status, sqlcgen.PlanStatusAwaitingApproval)
+	}
+	if v2TurnID != turnID {
+		t.Errorf("v2 turn_id = %v, want %v (the turn submitted via /turns)", v2TurnID, turnID)
+	}
+}
+
+// executionCompleteRawForTest mirrors internal/app/sessionactor's own
+// unexported executionCompleteRaw helper -- duplicated here (this file's
+// own package, httpapi_test, cannot reach that unexported test helper
+// across the package boundary), matching this codebase's own established
+// per-package test-helper-duplication precedent (see turn_integration_
+// test.go's own fakeTurnCommander doc comment for the identical
+// rationale).
+func executionCompleteRawForTest(t *testing.T, sessionID string, gen int, outcome sandboxws.ExecutionCompleteOutcome) []byte {
+	t.Helper()
+	evt := sandboxws.ExecutionComplete{
+		Type:      "execution_complete",
+		MessageId: "msg-" + sessionID,
+		SessionId: sessionID,
+		Gen:       gen,
+		AckId:     "execution_complete:msg-" + sessionID,
+		Outcome:   outcome,
+	}
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		t.Fatalf("marshal execution_complete: %v", err)
+	}
+	return raw
+}
+
+// planActionResponseForTest mirrors planapprove.go's own unexported
+// planActionResponse wire shape -- duplicated here since this file lives
+// in package httpapi_test (a different package than the handler itself),
+// exactly matching restdtos-generated response types' own already-
+// established "decode into a local shape matching the real JSON tags"
+// test convention used throughout this package's other integration tests.
+type planActionResponseForTest struct {
+	PlanID string  `json:"planId"`
+	Status string  `json:"status"`
+	TurnID *string `json:"turnId,omitempty"`
+}
