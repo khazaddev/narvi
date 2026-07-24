@@ -30,6 +30,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
 	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
+	identitylinkhttp "github.com/khazaddev/narvi/internal/adapters/inbound/identitylink"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
@@ -39,6 +40,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/outboxworker"
@@ -305,6 +307,27 @@ func serve() error {
 	identityStore := postgres.NewIdentityStore(pool)
 	userSessionStore := postgres.NewUserSessionStore(pool)
 
+	// identityLinkPromptStore/appIdentityLinkDeps are Step 39's own
+	// ("identities + full RBAC", §13.2) auto-linking wiring -- threaded
+	// into every Slack/Linear ingress Deps struct below (so a first event
+	// from an unknown provider identity auto-links or creates a magic-link
+	// prompt instead of always falling back to bot attribution) AND into
+	// the magic-link consume route's own Deps further down. One shared
+	// identitylink.Deps value, built once here from the SAME userStore/
+	// identityStore/auditLogStore every other Step 20/39 caller already
+	// uses -- never a second, independently-constructed copy of any of
+	// them.
+	identityLinkPromptStore := postgres.NewIdentityLinkPromptStore(pool)
+	appIdentityLinkDeps := identitylink.Deps{
+		Pool:          pool,
+		Users:         userStore,
+		Identities:    identityStore,
+		LinkPrompts:   identityLinkPromptStore,
+		AuditLog:      auditLogStore,
+		PublicBaseURL: cfg.PublicBaseURL,
+		PromptTTL:     cfg.Timeouts.IdentityLinkPromptTTL,
+	}
+
 	oauthConfig := auth.NewGitHubOAuthConfig(*cfg)
 	allowlist := auth.AllowlistConfig{
 		EmailDomains: cfg.AllowedEmailDomains,
@@ -370,6 +393,14 @@ func serve() error {
 		TimestampWindow:  cfg.Timeouts.WebhookTimestampFreshnessWindow,
 		SlackAPIBaseURL:  slackAPIBaseURL,
 		AckTimeout:       cfg.Timeouts.SlackAckTimeout,
+		// IdentityLink/SlackClient/Timeouts (Step 39, "identities + full
+		// RBAC", §13.2): SlackClient reuses the SAME slackNotifier
+		// instance already constructed above (for the outbox delivery
+		// worker and the interactivity route immediately below), never a
+		// third, independently-constructed client.
+		IdentityLink: appIdentityLinkDeps,
+		SlackClient:  slackNotifier,
+		Timeouts:     cfg.Timeouts,
 	}))
 
 	// Slack INTERACTIVITY ingress (Step 38, "plan mode, cross-channel",
@@ -391,6 +422,7 @@ func serve() error {
 		Registry:            registry,
 		SlackClient:         slackNotifier,
 		AuditLog:            auditLogStore,
+		IdentityLink:        appIdentityLinkDeps,
 		SigningSecret:       cfg.SlackSigningSecret,
 		Timeouts:            cfg.Timeouts,
 	}))
@@ -439,6 +471,42 @@ func serve() error {
 		githubAPIBaseURL,
 	))
 	router.Post("/auth/logout", auth.NewLogoutHandler(userSessionStore, secureCookies))
+
+	// /auth/identity-link/{nonce}: the magic-link consume flow (Step 39,
+	// "identities + full RBAC", §13.2 step 4's own "connect your account"
+	// link) -- deliberately mounted OUTSIDE auth.Middleware entirely, like
+	// the auth routes immediately above: this handler authenticates the
+	// visitor ITSELF (auth.Authenticate), redirecting through the SAME
+	// GitHub OAuth login flow above (with its own ?next= carrying them
+	// back here) when they aren't signed in yet, rather than the bare 401
+	// Middleware would give a not-yet-authenticated request. See internal/
+	// adapters/inbound/identitylink's own doc.go for the complete design.
+	router.Get("/auth/identity-link/{nonce}", identitylinkhttp.NewConsumeHandler(identitylinkhttp.Deps{
+		UserSessions:    userSessionStore,
+		Users:           userStore,
+		AppIdentityLink: appIdentityLinkDeps,
+	}))
+
+	// /api/members, /api/audit-log (Step 39, "identities + full RBAC",
+	// §13.2/§13.3): the backend-only members API -- list members (with
+	// role, linked identities, pending-link state), an admin-only
+	// role-change endpoint, admin manual link/unlink of an identity, and a
+	// read endpoint over audit_log. Gated behind auth.Middleware (a "must
+	// be logged in" gate) exactly like /api/sessions above; each handler
+	// itself renders the REAL admin-only §13.3 verdict via
+	// domain/authz.Authorize. The actual Settings -> Members UI is Phase 7
+	// and out of scope here -- see httpapi/members.go's own doc comment.
+	router.Route("/api/members", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListMembers(userStore, identityStore, identityLinkPromptStore))
+		r.Patch("/{userID}/role", httpapi.UpdateMemberRole(pool, userStore, auditLogStore))
+		r.Post("/{userID}/identities", httpapi.LinkMemberIdentity(pool, userStore, identityStore, auditLogStore))
+		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(pool, identityStore, auditLogStore))
+	})
+	router.Route("/api/audit-log", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListAuditLog(auditLogStore))
+	})
 
 	// REST routes the UI needs (§6.3, Step 19's own plan row: "create/get/
 	// events/artifacts", + ws-token named separately by §6.2), all gated
@@ -521,8 +589,10 @@ func serve() error {
 		// handlePrompted's own new plan-verdict keyword check.
 		Plans:  planStore,
 		Outbox: outboxStore,
-		// AuditLog (Step 39, "identities + full RBAC", §13.3).
-		AuditLog: auditLogStore,
+		// AuditLog/IdentityLink (Step 39, "identities + full RBAC", §13.2/
+		// §13.3).
+		AuditLog:     auditLogStore,
+		IdentityLink: appIdentityLinkDeps,
 	}))
 
 	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3

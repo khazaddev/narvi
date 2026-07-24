@@ -91,12 +91,14 @@ const (
 	// "stricter than label-driven auto-approve since it ends in an
 	// unattended merge, not a human Merge click" — exactly why it sits in
 	// this admin-only row and ActionConfigureAutoApprove above sits one
-	// row up, at maintainer. No caller exists yet for any of these five
+	// row up, at maintainer. No caller exists yet for four of these five
 	// (integrations/global-secrets/template-activation/sentinel are later
-	// Steps; ActionManageMembers is this SAME Step's own "members API"
-	// deliverable, explicitly out of THIS agent's scope — see this
-	// package's own doc.go and the hand-off note in the PR this Step
-	// lands as).
+	// Steps) — ActionManageMembers is the exception: this SAME Step's own
+	// "members API" deliverable (internal/adapters/inbound/httpapi/
+	// members.go) gates every one of its endpoints (list members,
+	// role-change, manual link/unlink, and the audit-log read endpoint)
+	// behind this exact Action, per §13.3's own single, bundled "members &
+	// roles" row (no separate read-vs-write Action was invented for it).
 
 	// ActionManageIntegrations covers connecting/disconnecting a
 	// third-party integration (Slack/Linear workspace, etc).

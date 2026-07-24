@@ -46,3 +46,27 @@ func (s *UserStore) Create(ctx context.Context, arg sqlcgen.CreateUserParams) (s
 func (s *UserStore) GetByID(ctx context.Context, id pgtype.UUID) (sqlcgen.User, error) {
 	return s.q.GetUserByID(ctx, id)
 }
+
+// GetByPrimaryEmail fetches a user by primary_email (case-insensitive --
+// see queries/users.sql's own doc comment on GetUserByPrimaryEmail).
+// pgx.ErrNoRows means no user has this email as their primary_email --
+// the auto-link algorithm's own caller (internal/app/identitylink.Resolve)
+// treats that as "zero matches from this half", not an error.
+func (s *UserStore) GetByPrimaryEmail(ctx context.Context, email string) (sqlcgen.User, error) {
+	return s.q.GetUserByPrimaryEmail(ctx, email)
+}
+
+// List returns every user, oldest-first -- backs the members API's own
+// GET /api/members (Step 39, "identities + full RBAC", §13.3).
+func (s *UserStore) List(ctx context.Context) ([]sqlcgen.User, error) {
+	return s.q.ListUsersOrderedByCreatedAt(ctx)
+}
+
+// UpdateRole changes a user's role -- the ONLY column of an existing
+// user's own row this codebase mutates past creation time. Backs the
+// admin-only role-change endpoint (§13.3's own "members & roles: admin
+// only" row) -- callers gate this behind domain/authz.Authorize
+// themselves; this store performs no authorization of its own.
+func (s *UserStore) UpdateRole(ctx context.Context, id pgtype.UUID, role sqlcgen.UserRole) (sqlcgen.User, error) {
+	return s.q.UpdateUserRole(ctx, sqlcgen.UpdateUserRoleParams{ID: id, Role: role})
+}

@@ -92,15 +92,35 @@
 //     convenience -- every test in this package exercises the REAL
 //     cookie-issuing code path.
 //
+// # Step 39 ("identities + full RBAC", §13.2) second-half additions
+//
+//   - Authenticate (middleware.go): Middleware's own 4-step check
+//     (cookie present -> hash found -> not expired -> user not disabled),
+//     extracted so internal/adapters/inbound/identitylink's magic-link
+//     consume handler can reuse the IDENTICAL authentication check
+//     without going through chi middleware at all -- that handler needs
+//     to REDIRECT an unauthenticated visitor into login, never respond
+//     with Middleware's own bare 401 JSON body.
+//   - NewLoginHandler's own optional ?next= query parameter
+//     (login.go): a same-origin-only redirect target (isSafeRedirectNext),
+//     stored in a second short-lived cookie and honored by
+//     NewCallbackHandler as the final post-login redirect (instead of
+//     this flow's own fixed "/" default) -- lets the magic-link consume
+//     handler send a signed-out visitor through this SAME GitHub OAuth
+//     flow and land back on the magic-link URL afterward.
+//
+// The actual identity auto-linking ALGORITHM (matching a fetched provider
+// profile email against users.primary_email/verified identities.email,
+// auto-linking or creating a magic-link prompt) and the members API both
+// still live OUTSIDE this package -- internal/app/identitylink and
+// internal/adapters/inbound/{identitylink,httpapi} respectively; this
+// package still only ever links a user to a provider identity at
+// first-sign-in time (createUserAndIdentity, callback.go) for its own
+// GitHub OAuth login flow.
+//
 // # Explicitly out of scope (see cmd/control-plane/main.go and the plan's
 // own §13.4 phasing for the owning Step)
 //
-//   - Identity auto-linking across multiple providers, link prompts, and a
-//     members API -- Step 39's ("identities + full RBAC") own
-//     auto-linking half (§13.2), still not this package's job: this
-//     package still only ever links a user to a provider identity at
-//     first-sign-in time (createUserAndIdentity, callback.go), never in
-//     reaction to a webhook-originated event from an unknown identity.
 //   - The full four-role permission matrix, a real domain/authz package,
 //     the viewer guard, and audit-log WRITES ARE now real -- Step 39's own
 //     RBAC half (§13.3) landed as internal/domain/authz (a table-driven

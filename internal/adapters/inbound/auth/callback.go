@@ -109,6 +109,22 @@ func NewCallbackHandler(
 		// so it can never be replayed.
 		http.SetCookie(w, expiredCookie(oauthStateCookieName, secureCookies))
 
+		// Step 39 ("identities + full RBAC", §13.2) update: read and clear
+		// the optional next-redirect cookie (login.go's own doc comment)
+		// the SAME way, right alongside the state cookie -- read ONCE,
+		// here, before any of this handler's own early-rejection paths
+		// below; redirectTarget defaults to "/" (this handler's own
+		// PRE-EXISTING behavior, completely unchanged when no next cookie
+		// was ever set) and is only overridden on a SUCCESSFUL sign-in
+		// further down. isSafeRedirectNext is checked again here (not just
+		// trusted from login.go's own already-applied check) -- defense in
+		// depth against a tampered/forged cookie value.
+		redirectTarget := "/"
+		if nextCookie, nextErr := r.Cookie(oauthNextCookieName); nextErr == nil && isSafeRedirectNext(nextCookie.Value) {
+			redirectTarget = nextCookie.Value
+		}
+		http.SetCookie(w, expiredCookie(oauthNextCookieName, secureCookies))
+
 		// b. Exchange the code for a token.
 		code := r.URL.Query().Get("code")
 		token, err := oauthConfig.Exchange(ctx, code)
@@ -245,10 +261,14 @@ func NewCallbackHandler(
 		}
 
 		http.SetCookie(w, platform.WithAuthSessionCookie(sessionToken, expiresAt, secureCookies))
-		// There is no SPA to land on yet -- Phase 6 is what makes "/" a
-		// meaningful landing page. This redirect target is an intentional,
-		// forward-compatible interim behavior, not a bug.
-		http.Redirect(w, r, "/", http.StatusFound)
+		// redirectTarget is "/" (there is no SPA to land on yet -- Phase 6
+		// is what makes "/" a meaningful landing page; an intentional,
+		// forward-compatible interim behavior, not a bug) UNLESS a caller
+		// arrived via a real ?next= redirect (Step 39's own addition,
+		// this func's own top -- e.g. internal/adapters/inbound/
+		// identitylink's magic-link consume handler sending a signed-out
+		// visitor through this same flow).
+		http.Redirect(w, r, redirectTarget, http.StatusFound)
 	}
 }
 

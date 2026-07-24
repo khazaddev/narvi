@@ -64,6 +64,24 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 	return i, err
 }
 
+const deleteIdentity = `-- name: DeleteIdentity :execrows
+DELETE FROM identities
+WHERE id = $1
+`
+
+// Backs the admin manual-unlink endpoint. Scoped to id, but the caller
+// (httpapi/members.go) always re-checks the row's own UserID against the
+// path's userID first -- this query alone would just as happily delete
+// ANY user's identity by id, so it is never safe to call directly from
+// an id a caller hasn't already verified belongs to the expected user.
+func (q *Queries) DeleteIdentity(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteIdentity, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getIdentityByProviderAndExternalID = `-- name: GetIdentityByProviderAndExternalID :one
 SELECT id, user_id, provider, external_id, email, email_verified, linked_via, created_at, access_token_encrypted FROM identities
 WHERE provider = $1 AND external_id = $2
@@ -120,6 +138,81 @@ func (q *Queries) GetIdentityByUserAndProvider(ctx context.Context, arg GetIdent
 		&i.AccessTokenEncrypted,
 	)
 	return i, err
+}
+
+const listIdentitiesForUser = `-- name: ListIdentitiesForUser :many
+SELECT id, user_id, provider, external_id, email, email_verified, linked_via, created_at, access_token_encrypted FROM identities
+WHERE user_id = $1
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListIdentitiesForUser(ctx context.Context, userID pgtype.UUID) ([]Identity, error) {
+	rows, err := q.db.Query(ctx, listIdentitiesForUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Identity
+	for rows.Next() {
+		var i Identity
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Provider,
+			&i.ExternalID,
+			&i.Email,
+			&i.EmailVerified,
+			&i.LinkedVia,
+			&i.CreatedAt,
+			&i.AccessTokenEncrypted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVerifiedIdentityUserIDsByEmail = `-- name: ListVerifiedIdentityUserIDsByEmail :many
+
+SELECT DISTINCT user_id FROM identities
+WHERE email_verified = true AND lower(email) = lower($1)
+`
+
+// Step 39 ("identities + full RBAC", §13.2/§13.3) additions --
+// ListVerifiedIdentityUserIDsByEmail is the auto-link algorithm's own
+// "match against ... verified identity emails" half (the OTHER half,
+// users.primary_email, is GetUserByPrimaryEmail in users.sql);
+// ListIdentitiesForUser/DeleteIdentity back the members API's own
+// "linked identities incl. pending-link state" listing and admin
+// manual-unlink endpoint (§13.2 point 5, "admin can force-link").
+// DISTINCT: the SAME user could plausibly have two verified identities
+// (e.g. Slack AND Linear) sharing one email -- this must still count as
+// ONE match for §13.2's own "exactly one verified match" test, never two,
+// so a caller combining this with GetUserByPrimaryEmail's own single
+// result must dedupe by user_id regardless; DISTINCT here just avoids
+// handing back an already-known duplicate in the common case.
+func (q *Queries) ListVerifiedIdentityUserIDsByEmail(ctx context.Context, lower string) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listVerifiedIdentityUserIDsByEmail, lower)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var user_id pgtype.UUID
+		if err := rows.Scan(&user_id); err != nil {
+			return nil, err
+		}
+		items = append(items, user_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateIdentityAccessToken = `-- name: UpdateIdentityAccessToken :one

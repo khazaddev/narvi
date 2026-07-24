@@ -18,6 +18,8 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
@@ -70,10 +72,31 @@ type Deps struct {
 	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
 	// httpapi.CreateSessionCore below exactly like Environments already
 	// is, so a Slack-originated session creation gets the SAME audit_log
-	// row every other CreateSessionCore caller now gets (actor_user_id
-	// NULL -- no human caller on this channel yet, mirrors created_by's
-	// own existing NULL-for-bot convention).
+	// row every other CreateSessionCore caller now gets. actor_user_id is
+	// NULL only until identity auto-linking (IdentityLink below) resolves
+	// a real user -- see identity.go's own resolveSlackActor for the
+	// replacement of the old unconditional bot-attribution precedent.
 	AuditLog *postgres.AuditLogStore
+
+	// IdentityLink/SlackClient are Step 39's own auto-linking wiring
+	// (§13.2): resolveSlackActor (identity.go) uses SlackClient.
+	// GetUserEmail to fetch ev.User's own profile email (with retry, via
+	// Timeouts.IdentityEmailFetch*), then IdentityLink.Resolve to
+	// auto-link or create a magic-link prompt the first time this package
+	// sees a given Slack user id it doesn't already know about.
+	// SlackClient is a SEPARATE client instance from this file's own
+	// internal ackClient (newAckClient below) -- mirrors interactive.go's
+	// own identical InteractiveDeps.SlackClient precedent; production
+	// wiring (cmd/control-plane/main.go) passes the SAME *slackapi.Client
+	// instance already constructed for the outbox delivery worker, rather
+	// than building a third one.
+	IdentityLink identitylink.Deps
+	SlackClient  *slackapi.Client
+	// Timeouts is Step 39's own addition, read for its
+	// IdentityEmailFetch* fields only (identity.go) -- every OTHER
+	// timeout this package needs is still an existing discrete field
+	// below (TimestampWindow, AckTimeout), left untouched.
+	Timeouts platform.Timeouts
 
 	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, on the brand-new-thread's own first real turn
@@ -198,7 +221,19 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	key := ev.threadKey()
 	prompt := normalizeMrkdwn(ev.Text)
 
-	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key)
+	// Step 39 ("identities + full RBAC", §13.2) update: resolve the REAL
+	// actor behind ev.User ONCE, regardless of whether this event ends up
+	// starting a brand-new thread or replying to an existing one -- the
+	// auto-link algorithm runs "on first event from an unknown provider
+	// identity" (§13.2), on every event, not only session-creating ones.
+	// actorUserID is only actually CONSUMED by resolveOrClaimSession below
+	// (a bare session's own created_by) -- a reply on an existing thread
+	// has nowhere to attribute it (turns carries no actor column, mirrors
+	// this file's own addTurn, which has never taken one), but identity
+	// resolution/notification still needs to run for it regardless.
+	actorUserID, notice := resolveSlackActor(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts, ev.User)
+
+	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key, actorUserID)
 	if !ok || res.Skip {
 		return
 	}
@@ -229,7 +264,12 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	case !created:
 		ackText = ackBusyText
 	}
-	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
+	// notice (§13.2's own "notify in-channel", "" when there's nothing to
+	// say) is appended to the SAME ack this handler already posts, rather
+	// than sent as a second chat.postMessage call -- mirrors internal/
+	// adapters/inbound/linear's own identical "append, don't double-post"
+	// precedent (identity.go's own appendNotice).
+	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, appendNotice(ackText, notice)); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
 	}
 }
@@ -238,8 +278,13 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 // existing mapping resolves directly; a brand-new thread creates a bare
 // session, races to claim the mapping, and falls back to the winner's
 // session id on a lost claim. ok reports whether the caller should
-// continue at all (false on a genuine error, already logged).
-func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent, channel, key string) (sessionResolution, bool) {
+// continue at all (false on a genuine error, already logged). creator is
+// handleEvent's own already-resolved actor (Step 39, "identities + full
+// RBAC", §13.2) -- Valid iff the mentioning Slack user is already linked,
+// or was just auto-linked this call; invalid (bot attribution) otherwise,
+// exactly matching this function's own PREVIOUS unconditional-bot-
+// attribution precedent for the still-unresolved case.
+func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent, channel, key string, creator pgtype.UUID) (sessionResolution, bool) {
 	existing, err := deps.Threads.Get(ctx, channel, key)
 	if err == nil {
 		return sessionResolution{SessionID: existing.SessionID}, true
@@ -263,13 +308,12 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		return sessionResolution{Skip: true}, true
 	}
 
-	var noCreator pgtype.UUID // Valid == false: no human caller (§ CreateSessionCore's own doc comment).
 	bare, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceSlack,
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: deps.DefaultRepoName, Url: deps.DefaultRepoURL},
 		},
-	}, noCreator)
+	}, creator)
 	if cerr != nil {
 		logger.Error("slack: create bare session failed", "status", cerr.Status, "message", cerr.Message)
 		return sessionResolution{}, false

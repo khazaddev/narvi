@@ -282,10 +282,21 @@
 // -- distinct from, and in addition to, ActionCreateSession above already
 // refusing a viewer at session-creation time.
 //
-// Identity auto-linking, magic-link prompts, and a members API (§13.2,
-// the rest of Step 39's own brief) are NOT this package's job and are not
-// implemented here -- see internal/domain/authz's own doc.go and
-// migrations/000036_identity_link_prompts.up.sql for what this Step's own
-// first half actually built, and docs/IMPLEMENTATION_PLAN.md row 39 for
-// the full scope the second half still owns.
+// # Step 39 ("identities + full RBAC", §13.2) second-half update
+//
+// Identity auto-linking (the actual DECISION/persistence logic) and the
+// magic-link consume flow both live OUTSIDE this package -- internal/app/
+// identitylink (Resolve/Consume, the I/O-performing orchestrator) and
+// internal/adapters/inbound/identitylink (the magic-link consume HTTP
+// handler), wired into internal/adapters/inbound/{slack,linear} at the
+// point an inbound event first names an unknown provider identity. See
+// those packages' own doc comments for the complete design.
+//
+// This package's OWN new addition is members.go: the backend-only members
+// API §13.2/§13.3 call for -- GET /api/members (role + linked identities +
+// system-wide pending-link state), PATCH /api/members/{userID}/role,
+// POST/DELETE .../identities (admin manual link/unlink, §13.2 point 5),
+// and GET /api/audit-log -- every one of them admin-only
+// (domain/authz.ActionManageMembers). The actual Settings -> Members UI
+// is Phase 7 (§13.4) and still out of scope.
 package httpapi

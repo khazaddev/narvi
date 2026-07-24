@@ -50,13 +50,17 @@
 //     canActOnPlan (ActionApprovePlan) — see planauthz.go's own doc
 //     comment for why that predicate is now a thin Authorize wrapper,
 //     not a second, parallel rule set.
+//   - internal/adapters/inbound/httpapi's members.go (ActionManageMembers):
+//     ListMembers, UpdateMemberRole, LinkMemberIdentity,
+//     UnlinkMemberIdentity, ListAuditLog — every one of the members API's
+//     own endpoints (§13.2/§13.3's own "members API" deliverable).
 //   - Every other Action below (automations, environments, secrets,
-//     review verdicts, integrations, members, sentinel auto-fix) has NO
-//     caller yet — those features don't exist as of this Step (Phase 3
-//     ingress work only; automations/reviews/sentinel land in later
-//     Phase 3.5/6 Steps per docs/IMPLEMENTATION_PLAN.md) — they are
-//     defined here now so this package's own shape never has to change
-//     out from under them: a future Step calls Authorize with the right
+//     review verdicts, integrations, sentinel auto-fix) has NO caller
+//     yet — those features don't exist as of this Step (Phase 3 ingress
+//     work only; automations/reviews/sentinel land in later Phase 3.5/6
+//     Steps per docs/IMPLEMENTATION_PLAN.md) — they are defined here now
+//     so this package's own shape never has to change out from under
+//     them: a future Step calls Authorize with the right
 //     Action constant and gets the exact matrix row §13.3 already
 //     specifies, with zero changes to this package.
 package authz

@@ -19,6 +19,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
@@ -75,10 +76,20 @@ type Deps struct {
 	// httpapi.CreateSessionCore/DecidePlan below exactly like Plans/Outbox
 	// already are, so a Linear-originated session creation or plan
 	// decision gets the SAME audit_log row every other caller of those two
-	// shared functions now gets (actor_user_id NULL -- no human caller on
-	// this channel yet, matching created_by/decidedBy's own existing
-	// NULL-for-bot convention).
+	// shared functions now gets. actor_user_id is NULL only until identity
+	// auto-linking (IdentityLink below) resolves a real user -- see this
+	// file's own resolveActor for the replacement of the old unconditional
+	// bot-attribution precedent.
 	AuditLog *postgres.AuditLogStore
+
+	// IdentityLink is Step 39's own auto-linking wiring (§13.2): resolves
+	// a Linear user id (AgentSession.CreatorID for a `created` event,
+	// AgentActivity.UserID for a `prompted` one) to a real Narvi user_id,
+	// auto-linking or creating a magic-link prompt the first time this
+	// package sees a given Linear user id it doesn't already know about.
+	// See resolveActor's own doc comment for the full replacement of this
+	// package's previous unconditional bot-attribution behavior.
+	IdentityLink identitylink.Deps
 
 	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, right after a `created` AgentSessionEvent's own
@@ -255,9 +266,21 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 		},
 	}
 
-	var nilCreator pgtype.UUID // Valid == false: no cookie, no human caller (see CreateSessionCore's own doc comment).
+	// Step 39 ("identities + full RBAC", §13.2) update: creator is no
+	// longer unconditionally invalid -- resolveActor auto-links (or
+	// creates a magic-link prompt for) payload.AgentSession.CreatorID the
+	// first time this package sees it, and reports back whichever
+	// notification text (if any) the caller should surface. Nil CreatorID
+	// (an automation-initiated session, "unset if automation-initiated"
+	// per Linear's own schema) resolves to bot attribution unconditionally
+	// -- there is no external id to look up at all in that case.
+	creatorID := ""
+	if payload.AgentSession.CreatorID != nil {
+		creatorID = *payload.AgentSession.CreatorID
+	}
+	creator, notice := deps.resolveActor(ctx, logger, payload.OrganizationID, creatorID)
 
-	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, nilCreator)
+	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, creator)
 	if cerr != nil {
 		logger.Error("linear: create session failed", "status", cerr.Status, "message", cerr.Message, "agent_session_id", payload.AgentSession.ID)
 		return
@@ -283,7 +306,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 
 	logger.Info("linear: created session from agent session", "agent_session_id", payload.AgentSession.ID, "session_id", created.ID.String())
 
-	deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID)
+	deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(acknowledgmentBody, notice))
 }
 
 // handlePrompted processes a `prompted` AgentSessionEvent: routes to the
@@ -339,10 +362,21 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	}
 	sessionID := row.SessionID
 
+	// Step 39 ("identities + full RBAC", §13.2) update: resolve the REAL
+	// actor behind this activity ONCE, regardless of which branch below
+	// ends up handling it -- the auto-link algorithm runs "on first event
+	// from an unknown provider identity" (§13.2), not only on plan-verdict
+	// replies, so an ordinary reply must trigger it exactly the same way.
+	// UserID is Linear's own REQUIRED "who authored this activity" field
+	// (payload.go's own doc comment) -- never nil/empty the way
+	// AgentSession.CreatorID can be, so resolveActor is always given a
+	// real external id to look up here.
+	actorUserID, notice := deps.resolveActor(ctx, logger, payload.OrganizationID, payload.AgentActivity.UserID)
+
 	if deps.Plans != nil {
 		if planID, hasAwaiting := deps.findAwaitingApprovalPlanID(ctx, logger, sessionID); hasAwaiting {
 			if verdict, ok := plandomain.MatchVerdict(payload.AgentActivity.Content.Body); ok {
-				deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, payload.OrganizationID, payload.AgentSession.ID)
+				deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, actorUserID, notice, payload.OrganizationID, payload.AgentSession.ID)
 				return
 			}
 		}
@@ -374,6 +408,16 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		logger.Error("linear: create turn failed", "error", err, "session_id", sessionID.String())
 		return
 	}
+	// turns carries no per-row actor column at all (migrations/
+	// 000005_turns.up.sql) -- unlike sessions.created_by/plans.decided_by,
+	// there is nothing further to attribute actorUserID onto for this
+	// ordinary-reply path (mirrors internal/adapters/inbound/slack's own
+	// addTurn, which has never taken an actor parameter either). notice
+	// (if any) still needs to reach the user, though -- posted as its own
+	// best-effort activity, since (unlike the plan-verdict branch above)
+	// there is no other outbound activity this path already sends to
+	// append it to.
+	deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, notice)
 
 	actor, err := deps.Registry.GetOrSpawn(ctx, sessionID)
 	if err != nil {
@@ -408,25 +452,27 @@ func (deps Deps) findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Lo
 	return pgtype.UUID{}, false
 }
 
-// handlePlanVerdict calls the shared httpapi.DecidePlan with bot
-// attribution (an explicitly invalid decidedBy, matching this Step's own
-// precedent for Slack/Linear-originated decisions -- see decideplan.go's
-// own top doc comment), then posts a follow-up `response` AgentActivity
+// handlePlanVerdict calls the shared httpapi.DecidePlan with decidedBy --
+// Step 39's ("identities + full RBAC", §13.2) own resolveActor result
+// (Valid iff the replying Linear user is already linked, or was just
+// auto-linked this call; invalid/bot-attribution otherwise, matching this
+// package's own PREVIOUS unconditional-bot-attribution precedent for the
+// still-unresolved case) -- then posts a follow-up `response` AgentActivity
 // describing the REAL final outcome, whether this call itself won or a
-// different channel already decided first.
-func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, organizationID, agentSessionID string) {
-	var noDecider pgtype.UUID // Valid == false: bot/channel attribution, matching sessions.created_by's own existing convention for these two channels.
-	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), noDecider)
+// different channel already decided first, with identityNotice (§13.2's
+// own "notify in-channel", empty when there's nothing to say) appended.
+func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, decidedBy pgtype.UUID, identityNotice, organizationID, agentSessionID string) {
+	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), decidedBy)
 	if err != nil {
 		if errors.Is(err, httpapi.ErrPlanOpenTurnInFlight) {
-			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, "A revision is already in progress for this plan -- try again once it completes.")
+			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("A revision is already in progress for this plan -- try again once it completes.", identityNotice))
 			return
 		}
 		logger.Error("linear: decide plan failed", "error", err, "plan_id", planID.String(), "session_id", sessionID.String())
 		return
 	}
 
-	deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, renderLinearPlanOutcomeText(outcome))
+	deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice(renderLinearPlanOutcomeText(outcome), identityNotice))
 }
 
 // renderLinearPlanOutcomeText mirrors internal/adapters/inbound/slack's
@@ -518,7 +564,13 @@ func hasOpenTurn(turns []sqlcgen.Turn) bool {
 // outbound need" this Step's own scope note calls for. Until a future
 // Step adds it, this call simply starts failing (logged, non-fatal) once
 // a workspace's stored token expires, until an admin reconnects it.
-func (deps Deps) postAcknowledgment(ctx context.Context, organizationID, agentSessionID string) {
+//
+// body is now a parameter (Step 39, "identities + full RBAC", §13.2
+// update) rather than always the fixed acknowledgmentBody constant --
+// handleCreated's own caller passes acknowledgmentBody with an identity-
+// link notice appended (appendNotice), when there is one; every other
+// property of this function is unchanged.
+func (deps Deps) postAcknowledgment(ctx context.Context, organizationID, agentSessionID, body string) {
 	logger := platform.Logger(ctx)
 
 	install, err := deps.Installations.GetByOrganizationID(ctx, organizationID)
@@ -540,7 +592,7 @@ func (deps Deps) postAcknowledgment(ctx context.Context, organizationID, agentSe
 	activityCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.LinearOutboundActivityTimeout)
 	defer cancel()
 
-	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, string(accessToken), agentSessionID, acknowledgmentBody); err != nil {
+	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, string(accessToken), agentSessionID, body); err != nil {
 		logger.Error("linear: post acknowledgment activity failed", "error", err, "agent_session_id", agentSessionID)
 	}
 }

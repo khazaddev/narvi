@@ -22,3 +22,17 @@
 INSERT INTO audit_log (actor_user_id, action, resource_type, resource_id, detail_json, correlation_id)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
+
+-- name: ListAuditLogEntries :many
+-- Backs the members API's own read endpoint over audit_log (§13.3:
+-- "surfaced in Settings -> Members ('Audit log')") -- Step 39's own
+-- second half, the first Get/List query this table ever gets. Newest
+-- first (an audit trail is read backwards from "what just happened"),
+-- offset/limit paginated -- a plain, small page size, not a cursor: this
+-- table has no natural high-frequency-write hot path the way events/outbox
+-- do (an audit row is written once per state-changing command, not per
+-- streamed token), so simple offset pagination is a reasonable, honest
+-- fit rather than premature cursor machinery.
+SELECT * FROM audit_log
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2;

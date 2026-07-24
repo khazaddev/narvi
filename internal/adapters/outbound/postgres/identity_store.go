@@ -67,3 +67,32 @@ func (s *IdentityStore) GetByUserAndProvider(ctx context.Context, userID pgtype.
 func (s *IdentityStore) UpdateAccessToken(ctx context.Context, arg sqlcgen.UpdateIdentityAccessTokenParams) (sqlcgen.Identity, error) {
 	return s.q.UpdateIdentityAccessToken(ctx, arg)
 }
+
+// ListVerifiedUserIDsByEmail is the auto-link algorithm's own "match
+// against ... verified identity emails" half (§13.2 step 2) -- the OTHER
+// half, users.primary_email, is UserStore.GetByPrimaryEmail. Always
+// deduplicated by user_id (see queries/identities.sql's own doc comment)
+// but a caller combining this with GetByPrimaryEmail's own separate
+// result must still dedupe the UNION of both, since the same user could
+// match both ways at once.
+func (s *IdentityStore) ListVerifiedUserIDsByEmail(ctx context.Context, email string) ([]pgtype.UUID, error) {
+	return s.q.ListVerifiedIdentityUserIDsByEmail(ctx, email)
+}
+
+// ListForUser returns every identity linked to userID, oldest-first --
+// backs the members API's own "linked identities" listing per member
+// (Step 39, "identities + full RBAC", §13.2/§13.3).
+func (s *IdentityStore) ListForUser(ctx context.Context, userID pgtype.UUID) ([]sqlcgen.Identity, error) {
+	return s.q.ListIdentitiesForUser(ctx, userID)
+}
+
+// Delete removes one identities row by id -- backs the admin manual-unlink
+// endpoint (§13.2 point 5). Returns the number of rows actually deleted
+// (0 if id didn't exist) so the caller can distinguish "already gone" from
+// a genuine failure; callers must independently verify the row's own
+// UserID matches whatever the caller expected BEFORE calling Delete (see
+// queries/identities.sql's own doc comment -- this alone does not scope
+// by user).
+func (s *IdentityStore) Delete(ctx context.Context, id pgtype.UUID) (int64, error) {
+	return s.q.DeleteIdentity(ctx, id)
+}

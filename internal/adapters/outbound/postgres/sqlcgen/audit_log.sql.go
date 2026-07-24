@@ -68,3 +68,52 @@ func (q *Queries) CreateAuditLogEntry(ctx context.Context, arg CreateAuditLogEnt
 	)
 	return i, err
 }
+
+const listAuditLogEntries = `-- name: ListAuditLogEntries :many
+SELECT id, actor_user_id, action, resource_type, resource_id, detail_json, correlation_id, created_at FROM audit_log
+ORDER BY created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type ListAuditLogEntriesParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+// Backs the members API's own read endpoint over audit_log (§13.3:
+// "surfaced in Settings -> Members ('Audit log')") -- Step 39's own
+// second half, the first Get/List query this table ever gets. Newest
+// first (an audit trail is read backwards from "what just happened"),
+// offset/limit paginated -- a plain, small page size, not a cursor: this
+// table has no natural high-frequency-write hot path the way events/outbox
+// do (an audit row is written once per state-changing command, not per
+// streamed token), so simple offset pagination is a reasonable, honest
+// fit rather than premature cursor machinery.
+func (q *Queries) ListAuditLogEntries(ctx context.Context, arg ListAuditLogEntriesParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditLogEntries, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.ActorUserID,
+			&i.Action,
+			&i.ResourceType,
+			&i.ResourceID,
+			&i.DetailJson,
+			&i.CorrelationID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

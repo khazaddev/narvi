@@ -43,3 +43,13 @@ func (s *AuditLogStore) WithTx(tx pgx.Tx) *AuditLogStore {
 func (s *AuditLogStore) Record(ctx context.Context, arg sqlcgen.CreateAuditLogEntryParams) (sqlcgen.AuditLog, error) {
 	return s.q.CreateAuditLogEntry(ctx, arg)
 }
+
+// List returns up to limit audit_log rows, newest first, skipping offset
+// rows -- backs the members API's own read endpoint over the audit log
+// (§13.3: "surfaced in Settings -> Members ('Audit log')", Step 39's own
+// second half). Always the pool-scoped form (never WithTx) -- a read has
+// no transactional-consistency requirement with any in-flight write the
+// way Record's own callers do.
+func (s *AuditLogStore) List(ctx context.Context, limit, offset int32) ([]sqlcgen.AuditLog, error) {
+	return s.q.ListAuditLogEntries(ctx, sqlcgen.ListAuditLogEntriesParams{Limit: limit, Offset: offset})
+}

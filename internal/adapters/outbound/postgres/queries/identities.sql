@@ -32,3 +32,35 @@ UPDATE identities
 SET access_token_encrypted = $2
 WHERE id = $1
 RETURNING *;
+
+-- Step 39 ("identities + full RBAC", §13.2/§13.3) additions --
+-- ListVerifiedIdentityUserIDsByEmail is the auto-link algorithm's own
+-- "match against ... verified identity emails" half (the OTHER half,
+-- users.primary_email, is GetUserByPrimaryEmail in users.sql);
+-- ListIdentitiesForUser/DeleteIdentity back the members API's own
+-- "linked identities incl. pending-link state" listing and admin
+-- manual-unlink endpoint (§13.2 point 5, "admin can force-link").
+
+-- name: ListVerifiedIdentityUserIDsByEmail :many
+-- DISTINCT: the SAME user could plausibly have two verified identities
+-- (e.g. Slack AND Linear) sharing one email -- this must still count as
+-- ONE match for §13.2's own "exactly one verified match" test, never two,
+-- so a caller combining this with GetUserByPrimaryEmail's own single
+-- result must dedupe by user_id regardless; DISTINCT here just avoids
+-- handing back an already-known duplicate in the common case.
+SELECT DISTINCT user_id FROM identities
+WHERE email_verified = true AND lower(email) = lower($1);
+
+-- name: ListIdentitiesForUser :many
+SELECT * FROM identities
+WHERE user_id = $1
+ORDER BY created_at ASC;
+
+-- name: DeleteIdentity :execrows
+-- Backs the admin manual-unlink endpoint. Scoped to id, but the caller
+-- (httpapi/members.go) always re-checks the row's own UserID against the
+-- path's userID first -- this query alone would just as happily delete
+-- ANY user's identity by id, so it is never safe to call directly from
+-- an id a caller hasn't already verified belongs to the expected user.
+DELETE FROM identities
+WHERE id = $1;
