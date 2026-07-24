@@ -254,7 +254,7 @@ func NewInteractivityHandler(deps InteractiveDeps) http.HandlerFunc {
 			// message into at all (see that function's own doc comment),
 			// so Slack's own inline-modal-error mechanism is this path's
 			// equivalent of the REST API's 403.
-			deps.handleViewSubmission(w, ctx, logger, []byte(rawPayload))
+			deps.handleViewSubmission(ctx, w, logger, []byte(rawPayload))
 		default:
 			// A future Slack interaction type this handler doesn't yet
 			// understand -- logged, never a crash or 500 (this file's own
@@ -542,7 +542,7 @@ type viewSubmissionErrorResponse struct {
 // branch) so the ONLY path that writes something other than a plain 200
 // is the new authz-denial one, which responds with
 // viewSubmissionErrorResponse instead.
-func (deps InteractiveDeps) handleViewSubmission(w http.ResponseWriter, ctx context.Context, logger *slog.Logger, raw []byte) {
+func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, raw []byte) {
 	var payload viewSubmissionPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		logger.Warn("slack: interactivity: decode view_submission payload failed", "error", err)
