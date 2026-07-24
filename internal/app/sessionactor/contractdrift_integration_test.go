@@ -232,7 +232,7 @@ func TestCheckContractDrift_NoMockConfig_NeverTouchesSnapshots(t *testing.T) {
 // TestCheckContractDrift_MockConfigured_FirstSpawn_RecordsBaselineNoDrift
 // proves a mock-configured Environment's FIRST spawn records a baseline
 // contract_drift_snapshots row and does NOT flag drift (first sighting --
-// contractdrift.HasDrifted's own "previous.RepoSHA == ''" case).
+// contractdrift.HasDrifted's own "previous.RepoSHA == ”" case).
 func TestCheckContractDrift_MockConfigured_FirstSpawn_RecordsBaselineNoDrift(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
