@@ -28,28 +28,54 @@
 // one that never had a reason to lock at all -- call this function
 // identically.
 //
-// # Authorization is NOT this function's job
+// # Authorization is NOT this function's job -- its CALLERS' is
 //
-// This Step's own brief is explicit: Slack/Linear verdicts stay
-// UNAUTHENTICATED-per-user, following the SAME existing precedent
-// sessions.created_by/participants already establish for these two
-// channels (a webhook-originated session already has no per-user gate
-// today). Real domain/authz.Authorize (§13.3) is Step 39's own scope. So
-// DecidePlanOnTx/DecidePlan never call canActOnPlan (planauthz.go) --
-// planapprove.go's own REST handlers still call it themselves, BEFORE ever
-// reaching this function, exactly as they did before this refactor; Slack/
-// Linear callers skip it entirely, matching this codebase's own existing
-// treatment of every other webhook-originated action.
+// DecidePlanOnTx/DecidePlan themselves never call canActOnPlan/authz.
+// Authorize -- every caller is expected to have already rendered that
+// verdict BEFORE ever reaching this function, exactly like
+// planapprove.go's own REST handlers (authorizePlanAction -> canActOnPlan,
+// planauthz.go) always have.
 //
-// IMPLEMENTATION_PLAN.md row 38's own summary ("Slack/Linear verdicts via
-// the same `Authorize`") describes this PROSPECTIVELY, not as today's
-// behavior: it names the real domain/authz.Authorize call this package will
-// route Slack/Linear verdicts through once it exists, which is exactly the
-// Step 39 scope the paragraph above defers to -- today, with no Authorize
-// to call yet, the intentional interim state is the bot-attributed,
-// no-per-user-gate behavior this file actually implements, matching Steps
-// 32-34's own identical precedent for every other webhook-originated
-// action.
+// # Step 39 ("identities + full RBAC") correction: Slack/Linear verdicts
+// NOW go through the same matrix too
+//
+// An EARLIER version of this doc comment claimed Slack/Linear verdicts
+// would stay unauthenticated-per-user "until identity auto-linking exists,
+// which is out of this Step's own scope" -- that was wrong: THIS Step
+// (39) is exactly the one that supplies identity auto-linking (§13.2), so
+// it is also the one that closes this gap, not a future one. A confirmed
+// security review caught the contradiction: Slack's interactive.go
+// (decideAndUpdateMessage) and Linear's webhook.go (handlePlanVerdict)
+// were both already resolving a REAL, auto-linked decidedBy by this point
+// in Step 39's own work, yet neither called Authorize on it before
+// reaching this function -- letting a linked `viewer` (or an unowned
+// `member`) decide a plan via Slack/Linear when the identical REST call
+// would have been rejected, directly contradicting §13.3's own
+// "channel-agnostic" requirement this file's own doc comment already
+// promised above.
+//
+// Both callers now run a domain/authz.Authorize(ActionApprovePlan, ...)
+// check of their own (mirroring canActOnPlan's own "resolve own/joined,
+// then Authorize" shape) BEFORE ever calling DecidePlan/DecidePlanOnTx --
+// see internal/adapters/inbound/slack's own InteractiveDeps.
+// authorizeSessionAction (interactive.go) and internal/adapters/inbound/
+// linear's own identical Deps.authorizeSessionAction (identity.go). A
+// still-unlinked (bot-attributed, Valid == false) decidedBy is UNCHANGED:
+// it still proceeds with no per-user gate at all, exactly matching §13.2's
+// own explicit "unlinked actors get bot attribution ... the action
+// proceeds" precedent for that case -- this fix closes the gap for a
+// RESOLVED, linked actor's role specifically, not the not-yet-linked case.
+//
+// DecidePlanOnTx itself also writes an audit_log row (§13.3) on every
+// winning decision, on the SAME tx, for EVERY caller alike -- REST (a real
+// decidedBy) and Slack/Linear (a real decidedBy once linked, otherwise an
+// invalid, bot-attributed one) all get one, actor_user_id NULL only for
+// the still-unlinked case, mirroring decidedBy's own existing
+// NULL-for-bot convention. The audit write is unconditional on winning the
+// decision, regardless of who decided or how they were authorized -- it
+// is a record of WHAT changed, not a second authorization gate, and it
+// never runs at all for a call this function never reaches (i.e. one its
+// own caller already denied upstream).
 
 package httpapi
 
@@ -164,6 +190,7 @@ func DecidePlanOnTx(
 	plans *postgres.PlanStore,
 	outbox *postgres.OutboxStore,
 	linearAgentSessions *postgres.LinearAgentSessionStore,
+	auditLog *postgres.AuditLogStore,
 	sessionRow sqlcgen.Session,
 	planID pgtype.UUID,
 	verdict PlanVerdict,
@@ -251,6 +278,13 @@ func DecidePlanOnTx(
 		}
 		turnIDStr := createdTurn.ID.String()
 		outcome.TurnID = &turnIDStr
+	}
+
+	if err := recordAuditLog(ctx, auditLog.WithTx(tx), decidedBy, "plan."+string(verdict), "plan", planID.String(), map[string]any{
+		"session_id": sessionRow.ID.String(),
+		"verdict":    string(verdict),
+	}); err != nil {
+		return DecidePlanOutcome{}, fmt.Errorf("httpapi: record plan decision audit log: %w", err)
 	}
 
 	if err := enqueuePlanDecisionNotifications(ctx, tx, outbox, linearAgentSessions, sessionRow, planRow, planDecisionOutcomeText(verdict)); err != nil {
@@ -377,6 +411,7 @@ func DecidePlan(
 	plans *postgres.PlanStore,
 	outbox *postgres.OutboxStore,
 	linearAgentSessions *postgres.LinearAgentSessionStore,
+	auditLog *postgres.AuditLogStore,
 	registry *sessionactor.Registry,
 	sessionID, planID pgtype.UUID,
 	verdict PlanVerdict,
@@ -395,7 +430,7 @@ func DecidePlan(
 		return DecidePlanOutcome{}, fmt.Errorf("httpapi: get session for plan decision: %w", err)
 	}
 
-	outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, sessionRow, planID, verdict, decidedBy)
+	outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, verdict, decidedBy)
 	if err != nil {
 		return DecidePlanOutcome{}, err
 	}

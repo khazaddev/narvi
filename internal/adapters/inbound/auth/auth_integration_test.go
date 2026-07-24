@@ -395,6 +395,35 @@ func doLogin(t *testing.T, client *http.Client, serverURL string) string {
 	return state
 }
 
+// doLoginWithNext mirrors doLogin but also passes ?next=next -- Step 39's
+// ("identities + full RBAC", §13.2) own addition, letting a test drive the
+// post-login-redirect-target flow the SAME way internal/adapters/inbound/
+// identitylink's magic-link consume handler will (see login.go's own doc
+// comment on NewLoginHandler).
+func doLoginWithNext(t *testing.T, client *http.Client, serverURL, next string) string {
+	t.Helper()
+
+	resp, err := client.Get(serverURL + "/auth/github/login?next=" + url.QueryEscape(next))
+	if err != nil {
+		t.Fatalf("GET /auth/github/login?next=...: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("GET /auth/github/login?next=... status = %d, want %d", resp.StatusCode, http.StatusFound)
+	}
+
+	loc, err := resp.Location()
+	if err != nil {
+		t.Fatalf("resp.Location(): %v", err)
+	}
+	state := loc.Query().Get("state")
+	if state == "" {
+		t.Fatal("login redirect Location has no state query param")
+	}
+	return state
+}
+
 // doCallback issues GET /auth/github/callback?state=...&code=... via
 // client (whose jar carries whatever oauth-state cookie a prior doLogin
 // call captured, if any).
@@ -501,6 +530,56 @@ func TestCallback_FirstTimeSignIn_HappyPath(t *testing.T) {
 	wantExpiry := time.Now().Add(platform.DefaultTimeouts().UserSessionTTL)
 	if sessionRow.ExpiresAt.Time.Sub(wantExpiry).Abs() > time.Minute {
 		t.Errorf("sessionRow.ExpiresAt = %v, want close to %v", sessionRow.ExpiresAt.Time, wantExpiry)
+	}
+}
+
+// TestCallback_HonorsSafeNextRedirect proves Step 39's ("identities + full
+// RBAC", §13.2) own ?next= addition: a login started with a safe,
+// same-origin absolute-path next redirects there on success, instead of
+// this flow's own fixed "/" default.
+func TestCallback_HonorsSafeNextRedirect(t *testing.T) {
+	rig := newTestRig(t, defaultRiggedOptions())
+	client := newClient(t)
+
+	state := doLoginWithNext(t, client, rig.server.URL, "/auth/identity-link/some-nonce")
+	resp := doCallback(t, client, rig.server.URL, state, "a-fresh-code")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("callback status = %d, want %d", resp.StatusCode, http.StatusFound)
+	}
+	if loc, _ := resp.Location(); loc == nil || loc.Path != "/auth/identity-link/some-nonce" {
+		t.Errorf("callback redirected to %v, want \"/auth/identity-link/some-nonce\"", loc)
+	}
+}
+
+// TestCallback_IgnoresUnsafeNextRedirect proves an unsafe next value (here:
+// a scheme-relative "//evil.example.com" URL, the classic open-redirect
+// vector isSafeRedirectNext exists to reject) is silently ignored --
+// falling back to this flow's own fixed "/" default, never redirecting
+// off-site.
+func TestCallback_IgnoresUnsafeNextRedirect(t *testing.T) {
+	rig := newTestRig(t, defaultRiggedOptions())
+	client := newClient(t)
+
+	state := doLoginWithNext(t, client, rig.server.URL, "//evil.example.com")
+	resp := doCallback(t, client, rig.server.URL, state, "a-fresh-code")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("callback status = %d, want %d", resp.StatusCode, http.StatusFound)
+	}
+	// resp.Location() always resolves against the request's own URL (so
+	// loc.Host is the test server's OWN host even for a plain "/" target,
+	// never empty) -- what matters here is that loc.Path is the fixed "/"
+	// default and loc.Host is the SAME server, never an attacker-chosen
+	// one.
+	serverURL, err := url.Parse(rig.server.URL)
+	if err != nil {
+		t.Fatalf("url.Parse(rig.server.URL): %v", err)
+	}
+	if loc, _ := resp.Location(); loc == nil || loc.Path != "/" || loc.Host != serverURL.Host {
+		t.Errorf("callback redirected to %v, want a same-origin \"/\" (unsafe next must be ignored)", loc)
 	}
 }
 

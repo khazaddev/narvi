@@ -37,6 +37,8 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
@@ -130,6 +132,7 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	environments := narvipg.NewEnvironmentStore(pool)
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 	threads := narvipg.NewSlackThreadSessionStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
 
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
@@ -138,13 +141,20 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
 	handler := slack.NewHandler(slack.Deps{
-		Pool:            pool,
-		Sessions:        sessions,
-		Turns:           turns,
-		Environments:    environments,
-		Registry:        registry,
-		Deliveries:      deliveries,
-		Threads:         threads,
+		Pool:         pool,
+		Sessions:     sessions,
+		Turns:        turns,
+		Environments: environments,
+		Registry:     registry,
+		Deliveries:   deliveries,
+		Threads:      threads,
+		AuditLog:     auditLog,
+		// Participants (Step 39's own SECOND fix-pass addition, "identities
+		// + full RBAC", §13.2/§13.3): authorizeSessionAction (identity.go)
+		// needs this even though this rig's own fixture users never
+		// auto-link (see this func's own doc comment) -- mirrors every
+		// other Deps field here, always a real, non-nil store.
+		Participants:    narvipg.NewParticipantStore(pool),
 		SigningSecret:   testSigningSecret,
 		BotToken:        "test-bot-token",
 		DefaultRepoName: "narvi",
@@ -152,6 +162,26 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 		TimestampWindow: 5 * time.Minute,
 		SlackAPIBaseURL: ackServer.URL,
 		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
+		// IdentityLink/SlackClient/Timeouts (Step 39, "identities + full
+		// RBAC", §13.2): ackServer above answers EVERY path (including
+		// /users.info) with a bare {"ok":true}, so GetUserEmail resolves
+		// to (email="", ok=false) for every fixture event's own "user" id
+		// -- resolveSlackActor's own identity.Resolve call still needs
+		// REAL (non-nil) stores to run against, even though this rig's
+		// own fixture users never match anything (see
+		// identity_integration_test.go for a rig that actually exercises
+		// a real match).
+		SlackClient: slackapi.New(ackServer.Client(), ackServer.URL, "test-bot-token"),
+		Timeouts:    platform.DefaultTimeouts(),
+		IdentityLink: identitylink.Deps{
+			Pool:          pool,
+			Users:         narvipg.NewUserStore(pool),
+			Identities:    narvipg.NewIdentityStore(pool),
+			LinkPrompts:   narvipg.NewIdentityLinkPromptStore(pool),
+			AuditLog:      auditLog,
+			PublicBaseURL: "https://narvi.example.com",
+			PromptTTL:     time.Hour,
+		},
 	})
 
 	return &slackTestRig{handler: handler, pool: pool, sessions: sessions, turns: turns, threads: threads}

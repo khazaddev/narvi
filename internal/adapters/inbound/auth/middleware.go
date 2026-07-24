@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -12,11 +13,18 @@ import (
 )
 
 // Middleware gates a chi route group behind a valid, backend-issued
-// user-session cookie (§13.4: "route middleware"). This is a "must be
-// logged in" gate ONLY -- no route in this Step's own scope needs an
-// admin-only check (see doc.go's own scope-boundary section), so this does
-// NOT add any role-based gating; platform.AuthenticatedUser.Role is
-// carried in context purely for future (Step 39) use.
+// user-session cookie (§13.4: "route middleware"). This remains a "must be
+// logged in" gate ONLY -- it still does not itself add any role-based
+// gating at the ROUTE level (that stays a coarse "authenticated or not"
+// check, exactly per §13.3's own "HTTP middleware handles the coarse
+// route-level gate"). platform.AuthenticatedUser.Role IS now real,
+// load-bearing data, though: Step 39 ("identities + full RBAC") reads it
+// straight out of context (platform.UserFromContext) in every
+// state-changing REST handler downstream (internal/adapters/inbound/
+// httpapi) to build a domain/authz.Actor and render the real §13.3
+// verdict per request -- this middleware's own job is unchanged, only
+// what a caller further down the chain does with the Role it already
+// carried is new.
 //
 // Every rejection path -- missing cookie, hash-lookup miss, expired row, a
 // disabled user's otherwise-valid session -- responds 401 with the SAME
@@ -28,52 +36,73 @@ func Middleware(userSessions *postgres.UserSessionStore, users *postgres.UserSto
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
-			logger := platform.Logger(ctx)
 
-			cookie, err := r.Cookie(platform.AuthSessionCookieName)
-			if err != nil || cookie.Value == "" {
-				logger.Warn("auth: middleware rejected: no session cookie")
+			authUser, ok := Authenticate(ctx, userSessions, users, r)
+			if !ok {
 				writeUnauthorized(w)
 				return
 			}
 
-			row, err := userSessions.GetByHash(ctx, platform.HashToken(cookie.Value))
-			if err != nil {
-				if errors.Is(err, pgx.ErrNoRows) {
-					logger.Warn("auth: middleware rejected: session hash not found")
-				} else {
-					logger.Error("auth: middleware: lookup session failed", "error", err)
-				}
-				writeUnauthorized(w)
-				return
-			}
-
-			if row.ExpiresAt.Time.Before(time.Now()) {
-				logger.Warn("auth: middleware rejected: session expired")
-				writeUnauthorized(w)
-				return
-			}
-
-			userRow, err := users.GetByID(ctx, row.UserID)
-			if err != nil {
-				logger.Error("auth: middleware: lookup user failed", "error", err)
-				writeUnauthorized(w)
-				return
-			}
-			if userRow.Disabled {
-				logger.Warn("auth: middleware rejected: user disabled")
-				writeUnauthorized(w)
-				return
-			}
-
-			authUser := platform.AuthenticatedUser{
-				ID:    userRow.ID.String(),
-				Role:  string(userRow.Role),
-				Email: userRow.PrimaryEmail,
-			}
 			next.ServeHTTP(w, r.WithContext(platform.WithUser(ctx, authUser)))
 		})
 	}
+}
+
+// Authenticate resolves r's own narvi_auth_session cookie into a real,
+// non-disabled platform.AuthenticatedUser -- the exact same 4-step check
+// Middleware above already performed inline (cookie present -> hash found
+// -> not expired -> user not disabled), extracted here (Step 39,
+// "identities + full RBAC", §13.2) so a SECOND caller can reuse the
+// identical check without going through chi middleware at all: internal/
+// adapters/inbound/identitylink's magic-link consume handler needs to
+// know "is this visitor signed in" and, if not, REDIRECT them into the
+// login flow (never a bare 401 JSON body the way Middleware's own
+// rejection responds) -- a fundamentally different response shape than
+// Middleware's own gate, but the exact same underlying authentication
+// check either way. ok=false means any of the 4 checks failed (see this
+// package's own security note above on why none of them are
+// distinguished in a caller-visible way); every rejection reason is still
+// logged server-side, identically to Middleware's own previous inline
+// logging.
+func Authenticate(ctx context.Context, userSessions *postgres.UserSessionStore, users *postgres.UserStore, r *http.Request) (platform.AuthenticatedUser, bool) {
+	logger := platform.Logger(ctx)
+
+	cookie, err := r.Cookie(platform.AuthSessionCookieName)
+	if err != nil || cookie.Value == "" {
+		logger.Warn("auth: authenticate rejected: no session cookie")
+		return platform.AuthenticatedUser{}, false
+	}
+
+	row, err := userSessions.GetByHash(ctx, platform.HashToken(cookie.Value))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			logger.Warn("auth: authenticate rejected: session hash not found")
+		} else {
+			logger.Error("auth: authenticate: lookup session failed", "error", err)
+		}
+		return platform.AuthenticatedUser{}, false
+	}
+
+	if row.ExpiresAt.Time.Before(time.Now()) {
+		logger.Warn("auth: authenticate rejected: session expired")
+		return platform.AuthenticatedUser{}, false
+	}
+
+	userRow, err := users.GetByID(ctx, row.UserID)
+	if err != nil {
+		logger.Error("auth: authenticate: lookup user failed", "error", err)
+		return platform.AuthenticatedUser{}, false
+	}
+	if userRow.Disabled {
+		logger.Warn("auth: authenticate rejected: user disabled")
+		return platform.AuthenticatedUser{}, false
+	}
+
+	return platform.AuthenticatedUser{
+		ID:    userRow.ID.String(),
+		Role:  string(userRow.Role),
+		Email: userRow.PrimaryEmail,
+	}, true
 }
 
 // writeUnauthorized writes the single, generic 401 body every rejection

@@ -120,6 +120,79 @@ func (c *ackClient) postAck(ctx context.Context, channel, threadTS, text string)
 	return nil
 }
 
+// postEphemeralRequest is the subset of Slack's real chat.postEphemeral
+// request body (docs.slack.dev/reference/methods/chat.postEphemeral)
+// this client needs: channel + user (the ONE person who can ever see
+// this message) + text, threaded via thread_ts exactly like
+// postMessageRequest above.
+type postEphemeralRequest struct {
+	Channel  string `json:"channel"`
+	User     string `json:"user"`
+	ThreadTS string `json:"thread_ts"`
+	Text     string `json:"text"`
+}
+
+// postEphemeral posts text into channel via chat.postEphemeral, visible
+// ONLY to userID -- Step 39's own security-remediation addition
+// ("identities + full RBAC", §13.2): a confirmed review finding proved
+// that posting the magic-link identity-link notice via the ordinary,
+// whole-channel-visible postAck above let ANY other member of a shared
+// channel who already had an authenticated Narvi web session open the
+// link first and get the pending identity permanently linked to their
+// OWN account instead of its rightful owner's -- every future event from
+// that external identity would then be misattributed to the attacker,
+// including PR authorship (sessionactor/pushpr.go uses the session
+// creator's own stored GitHub OAuth token). chat.postEphemeral is Slack's
+// own documented mechanism for a message only the named user (and never
+// anyone else viewing the same channel/thread) can ever see -- once
+// delivery is scoped this way, the existing single-use nonce + expiry
+// already implemented (internal/app/identitylink) become a sufficient
+// correlation proof, since only the rightful recipient can ever see the
+// link at all.
+func (c *ackClient) postEphemeral(ctx context.Context, channel, userID, threadTS, text string) error {
+	reqBody, err := json.Marshal(postEphemeralRequest{Channel: channel, User: userID, ThreadTS: threadTS, Text: text})
+	if err != nil {
+		return fmt.Errorf("slack: encode chat.postEphemeral request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiBaseURL+"/chat.postEphemeral", bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("slack: build chat.postEphemeral request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("Authorization", "Bearer "+c.botToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("slack: chat.postEphemeral request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAckResponseBodySize))
+	if err != nil {
+		return fmt.Errorf("slack: read chat.postEphemeral response: %w", err)
+	}
+
+	var parsed postMessageResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return fmt.Errorf("slack: decode chat.postEphemeral response: %w", err)
+	}
+	if !parsed.Ok {
+		return &PostAckError{SlackError: parsed.Error}
+	}
+	return nil
+}
+
+// postEphemeralBounded calls postEphemeral under a derived context bounded
+// by timeout -- mirrors postAckBounded's own identical reasoning exactly
+// (postEphemeral is a genuine synchronous outbound network call in the
+// inbound webhook handler's own request path).
+func (c *ackClient) postEphemeralBounded(ctx context.Context, timeout time.Duration, channel, userID, threadTS, text string) error {
+	ephemeralCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return c.postEphemeral(ephemeralCtx, channel, userID, threadTS, text)
+}
+
 // postAckBounded calls postAck under a derived context bounded by timeout --
 // postAck is a genuine outbound network call made synchronously in the
 // inbound webhook handler's own request path (handler.go), which otherwise

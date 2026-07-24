@@ -354,6 +354,10 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		return
 	}
 
+	if !a.creatorMayGetPRAttribution(ctx, sessionRow.CreatedBy) {
+		return // already logged by creatorMayGetPRAttribution
+	}
+
 	token, ok := a.decryptCreatorGitHubToken(ctx, sessionRow.CreatedBy)
 	if !ok {
 		return // already logged by decryptCreatorGitHubToken

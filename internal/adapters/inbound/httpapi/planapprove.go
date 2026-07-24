@@ -152,7 +152,7 @@ func authorizePlanAction(w http.ResponseWriter, r *http.Request, participants *p
 // item 3's own "Approve & build" action). See this file's own top doc
 // comment for the full sequencing; the actual decision now runs through
 // DecidePlanOnTx (decideplan.go), shared with every other entry point.
-func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, outbox *postgres.OutboxStore, linearAgentSessions *postgres.LinearAgentSessionStore, registry *sessionactor.Registry) http.HandlerFunc {
+func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, outbox *postgres.OutboxStore, linearAgentSessions *postgres.LinearAgentSessionStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -184,7 +184,7 @@ func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *pos
 			return
 		}
 
-		outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, sessionRow, planID, PlanVerdictApprove, actorUserID)
+		outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, PlanVerdictApprove, actorUserID)
 		if err != nil {
 			if errors.Is(err, ErrPlanOpenTurnInFlight) {
 				// Mirrors CreateTurn's own hasOpenTurn 409 gate (turn.go)
@@ -226,7 +226,7 @@ func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *pos
 // RejectPlan backs POST /api/sessions/:id/plans/:planId/reject (§12.2
 // item 3's own "Reject" action). Same guarded-UPDATE shape as ApprovePlan,
 // with no new turn and no dispatch, via DecidePlanOnTx (decideplan.go).
-func RejectPlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, outbox *postgres.OutboxStore, linearAgentSessions *postgres.LinearAgentSessionStore) http.HandlerFunc {
+func RejectPlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, outbox *postgres.OutboxStore, linearAgentSessions *postgres.LinearAgentSessionStore, auditLog *postgres.AuditLogStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -258,7 +258,7 @@ func RejectPlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			return
 		}
 
-		outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, sessionRow, planID, PlanVerdictReject, actorUserID)
+		outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, PlanVerdictReject, actorUserID)
 		if err != nil {
 			logger.Error("httpapi: decide plan (reject) failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")

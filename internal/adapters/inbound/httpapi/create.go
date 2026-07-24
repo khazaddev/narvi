@@ -16,6 +16,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/environment"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -168,12 +169,21 @@ const defaultContractsPath = "contracts/api"
 // intentSvc is nil-safe (see recordExplicitIntentDecision's own doc
 // comment) so every existing call site that doesn't care about Step 36
 // can keep passing nil unchanged.
-func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service) http.HandlerFunc {
+func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
 		createdBy, ok := authenticatedUserID(w, r)
 		if !ok {
+			return
+		}
+
+		// §13.3 row 2: "Create sessions ... on own/joined sessions: admin,
+		// maintainer, member" -- viewer never. No ownership resolution
+		// needed here (there is no pre-existing resource to own yet, see
+		// domain/authz's own doc comment on ActionCreateSession) -- the
+		// zero-value Resource{} is always correct for this action.
+		if !authorize(w, r, authz.ActionCreateSession, authz.Resource{}) {
 			return
 		}
 
@@ -190,7 +200,7 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, registry, req, createdBy)
+		created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, createdBy)
 		if cerr != nil {
 			writeError(w, cerr.Status, cerr.Message)
 			return
@@ -392,7 +402,16 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 // assumes that: a webhook ingress caller (Steps 32-34) with no
 // cookie-authenticated human passes an explicitly invalid pgtype.UUID{}
 // here instead.
-func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
+//
+// auditLog is Step 39's own addition (§13.3: "written in the same
+// transaction as the change"): an audit_log row is inserted on this SAME
+// tx, right after the session row itself, for EVERY caller of this
+// function -- the browser REST path (CreateSession, a real authenticated
+// createdBy) and every webhook-ingress path (Steps 32-34's own GitHub/
+// Slack/Linear session creation, createdBy left invalid) alike, mirroring
+// sessions.created_by's own existing NULL-for-bot convention: actor_user_id
+// is NULL on a bot-attributed row, never a fabricated "system user".
+func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
 	logger := platform.Logger(ctx)
 
 	// All request validation (repos non-empty, each repo's Name/Url/
@@ -477,6 +496,13 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
 	}
 
+	if err := recordAuditLog(ctx, auditLog.WithTx(tx), createdBy, "session.create", "session", created.ID.String(), map[string]any{
+		"spawn_source": string(created.SpawnSource),
+	}); err != nil {
+		logger.Error("httpapi: record session.create audit log failed", "error", err)
+		return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+	}
+
 	hasPrompt = req.Prompt != nil
 	if hasPrompt {
 		if _, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
@@ -545,7 +571,7 @@ func TriggerDispatch(ctx context.Context, registry *sessionactor.Registry, sessi
 // That caller should call CreateSessionOnTx directly, inline on its own
 // already-open tx, and call TriggerDispatch itself once its own outer
 // transaction has committed and hasPrompt is true.
-func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (sqlcgen.Session, *CreateSessionError) {
+func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (sqlcgen.Session, *CreateSessionError) {
 	logger := platform.Logger(ctx)
 
 	// Validate BEFORE ever acquiring a pooled connection -- see
@@ -568,7 +594,7 @@ func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	// own transact.
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, req, createdBy)
+	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, createdBy)
 	if cerr != nil {
 		return sqlcgen.Session{}, cerr
 	}

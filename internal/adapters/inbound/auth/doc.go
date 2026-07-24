@@ -92,15 +92,46 @@
 //     convenience -- every test in this package exercises the REAL
 //     cookie-issuing code path.
 //
+// # Step 39 ("identities + full RBAC", §13.2) second-half additions
+//
+//   - Authenticate (middleware.go): Middleware's own 4-step check
+//     (cookie present -> hash found -> not expired -> user not disabled),
+//     extracted so internal/adapters/inbound/identitylink's magic-link
+//     consume handler can reuse the IDENTICAL authentication check
+//     without going through chi middleware at all -- that handler needs
+//     to REDIRECT an unauthenticated visitor into login, never respond
+//     with Middleware's own bare 401 JSON body.
+//   - NewLoginHandler's own optional ?next= query parameter
+//     (login.go): a same-origin-only redirect target (isSafeRedirectNext),
+//     stored in a second short-lived cookie and honored by
+//     NewCallbackHandler as the final post-login redirect (instead of
+//     this flow's own fixed "/" default) -- lets the magic-link consume
+//     handler send a signed-out visitor through this SAME GitHub OAuth
+//     flow and land back on the magic-link URL afterward.
+//
+// The actual identity auto-linking ALGORITHM (matching a fetched provider
+// profile email against users.primary_email/verified identities.email,
+// auto-linking or creating a magic-link prompt) and the members API both
+// still live OUTSIDE this package -- internal/app/identitylink and
+// internal/adapters/inbound/{identitylink,httpapi} respectively; this
+// package still only ever links a user to a provider identity at
+// first-sign-in time (createUserAndIdentity, callback.go) for its own
+// GitHub OAuth login flow.
+//
 // # Explicitly out of scope (see cmd/control-plane/main.go and the plan's
 // own §13.4 phasing for the owning Step)
 //
-//   - Identity auto-linking across multiple providers, link prompts, the
-//     full four-role permission matrix, a real domain/authz package, the
-//     viewer guard, and audit-log WRITES (the audit_log table already
-//     exists, migration 000013 -- this package never writes to it) --
-//     all Step 39 ("identities + full RBAC", docs/IMPLEMENTATION_PLAN.md
-//     row 39), §13.2/§13.3.
+//   - The full four-role permission matrix, a real domain/authz package,
+//     the viewer guard, and audit-log WRITES ARE now real -- Step 39's own
+//     RBAC half (§13.3) landed as internal/domain/authz (a table-driven
+//     Authorize(actor, action, resource) error), wired into every
+//     state-changing REST handler in internal/adapters/inbound/httpapi
+//     (CreateSession/CreateTurn/ApprovePlan/RejectPlan), a defense-in-depth
+//     viewer guard in internal/app/sessionactor's own PR-creation path, and
+//     real audit_log writes (postgres.AuditLogStore) inside the SAME
+//     transaction as each change -- this package itself (auth) still
+//     issues no role-gated route of its own; Middleware here remains the
+//     identical "must be logged in" gate it always was.
 //   - Actually USING the stored, encrypted GitHub access token for
 //     anything (creating a PR, pushing a branch, minting a git
 //     credential) -- Step 21's own SourceControl adapter job ("createPR,

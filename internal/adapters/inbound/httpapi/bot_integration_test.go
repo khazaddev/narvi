@@ -103,6 +103,7 @@ func TestCreateSessionForBot_CreatesNullCreatorSession(t *testing.T) {
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -118,7 +119,7 @@ func TestCreateSessionForBot_CreatesNullCreatorSession(t *testing.T) {
 		},
 	}
 
-	created, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, registry, req)
+	created, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, req)
 	if err != nil {
 		t.Fatalf("CreateSessionForBot: %v", err)
 	}
@@ -152,6 +153,7 @@ func TestCreateSessionForBot_ValidationFailureSurfacesAsError(t *testing.T) {
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -163,7 +165,7 @@ func TestCreateSessionForBot_ValidationFailureSurfacesAsError(t *testing.T) {
 		Repos:       []restdtos.CreateSessionRequestReposElem{}, // empty -- rejected before any Postgres write.
 	}
 
-	if _, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, registry, req); err == nil {
+	if _, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, req); err == nil {
 		t.Fatal("CreateSessionForBot() error = nil, want non-nil for an empty repos list")
 	}
 }
@@ -181,13 +183,14 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
-	created, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, registry, restdtos.CreateSessionRequest{
+	created, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: "widgets", Url: "https://github.com/acme/widgets.git"},

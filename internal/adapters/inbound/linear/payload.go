@@ -78,6 +78,18 @@ type agentSessionWebhookPayload struct {
 	// URL is the Linear-hosted URL of this agent session/issue thread --
 	// used only for this Step's own log lines, never persisted.
 	URL string `json:"url"`
+
+	// CreatorID is Linear's own "ID of human user; unset if
+	// automation-initiated" (AgentSessionWebhookPayload.creatorId,
+	// verified against Linear's real, current GraphQL schema during this
+	// Step's investigation) -- Step 39's ("identities + full RBAC", §13.2)
+	// own auto-linking wiring: the external_id a `created` event's own
+	// session-creation actor resolves against. Nil/empty means no
+	// responsible human at all (a purely automation-initiated session) --
+	// webhook.go's own resolveLinearActor treats that as bot attribution
+	// unconditionally, with no identity lookup attempted (there is no
+	// external id to look up).
+	CreatorID *string `json:"creatorId"`
 }
 
 // issueChildWebhookPayload mirrors Linear's own
@@ -103,6 +115,21 @@ type agentActivityWebhookPayload struct {
 	// detecting Linear's own "stop" signal (Linear's docs: a `prompted`
 	// event whose Signal == "stop" means the user cancelled the task).
 	Signal *string `json:"signal"`
+
+	// UserID is Linear's own "ID of the user who created this agent
+	// activity" (AgentActivityWebhookPayload.userId, verified against
+	// Linear's real, current GraphQL schema during this Step's
+	// investigation, REQUIRED/non-null there -- unlike AgentSession's own
+	// nullable creatorId, every individual activity has a real
+	// originating user; §8.10's own payload.go doc comment already notes
+	// "An agent cannot generate a prompt type activity", i.e. a
+	// `prompted` event's own activity is always human-authored). Step 39's
+	// ("identities + full RBAC", §13.2) own auto-linking wiring: the
+	// external_id a `prompted` event's own actor (a plan verdict, or an
+	// ordinary reply) resolves against -- distinct from, and potentially a
+	// DIFFERENT person than, AgentSession's own CreatorID above (multiple
+	// people can reply in the same Linear comment thread).
+	UserID string `json:"userId"`
 }
 
 // agentActivityContent mirrors the "prompt"-type activity content shape

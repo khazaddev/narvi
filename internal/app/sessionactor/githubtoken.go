@@ -63,3 +63,54 @@ func (a *Actor) decryptCreatorGitHubToken(ctx context.Context, createdBy pgtype.
 	}
 	return string(plaintext), true
 }
+
+// creatorMayGetPRAttribution is Step 39's own viewer guard (§13.3:
+// "viewers never gain PR-reviewer attribution or git identity on session
+// artifacts"), called by pushpr.go's createPRBestEffort BEFORE it ever
+// decrypts/uses createdBy's own GitHub token to open a pull request --
+// this is a SECOND, defense-in-depth check, distinct from (and in
+// addition to) domain/authz.Authorize already refusing a viewer at
+// session-CREATION time (httpapi.CreateSession, §13.3 row 2: "... on
+// own/joined sessions: admin, maintainer, member" -- never viewer). That
+// create-time check alone is not sufficient here: a session's creator's
+// role AND disabled state are read FRESH, right here, at PR-creation
+// time -- which can be long after creation -- so a user demoted to
+// viewer, or disabled outright, AFTER creating a session (an admin's own
+// role edit or disable, once Step 39's own "members API" half lands)
+// must still never get PR attribution for a session they created back
+// when they were neither. A missing user row (should be unreachable --
+// created_by is a real FK) is treated the SAME as "no created_by at
+// all": no attribution, nothing to fail loudly over, since
+// decryptCreatorGitHubToken's own subsequent lookup would fail identically
+// anyway.
+//
+// The disabled check mirrors this Step's own SECOND fix-pass finding
+// applied everywhere else a resolved actor's authority is re-verified
+// (internal/adapters/inbound/slack/identity.go's authorizeResolvedActor,
+// linear/identity.go's twin, auth/middleware.go's Authenticate): Disabled
+// and Role are independent columns (migrations/000002_users.up.sql), so
+// checking Role alone lets a disabled (but non-viewer) creator's session
+// still use their stored GitHub token for PR creation/attribution even
+// though every other ingress path already refuses that same disabled
+// user outright. This closes that gap for the sandbox's own
+// push_complete-triggered PR creation too.
+func (a *Actor) creatorMayGetPRAttribution(ctx context.Context, createdBy pgtype.UUID) bool {
+	if !createdBy.Valid {
+		return false
+	}
+
+	creator, err := a.stores.user.GetByID(ctx, createdBy)
+	if err != nil {
+		a.logger.Warn("sessionactor: get session creator for viewer guard failed; skipping PR creation", "error", err)
+		return false
+	}
+	if creator.Disabled {
+		a.logger.Warn("sessionactor: session creator is now disabled; refusing PR attribution (§13.3 viewer guard)", "user_id", createdBy.String())
+		return false
+	}
+	if creator.Role == sqlcgen.UserRoleViewer {
+		a.logger.Warn("sessionactor: session creator is now a viewer; refusing PR attribution (§13.3 viewer guard)", "user_id", createdBy.String())
+		return false
+	}
+	return true
+}

@@ -169,6 +169,7 @@ func newHandlerDeps(t *testing.T, pool *pgxpool.Pool) linear.Deps {
 		Deliveries:         narvipg.NewWebhookDeliveryStore(pool),
 		AgentSessions:      narvipg.NewLinearAgentSessionStore(pool),
 		Installations:      narvipg.NewLinearInstallationStore(pool),
+		AuditLog:           narvipg.NewAuditLogStore(pool),
 		LinearClient:       linearapi.New(nil, "http://127.0.0.1:0"), // never actually called: no installation row exists for this test's organization, so postAcknowledgment skips before any HTTP call.
 		WebhookSecret:      []byte(testWebhookSecret),
 		TokenEncryptionKey: bytes.Repeat([]byte("k"), 32),

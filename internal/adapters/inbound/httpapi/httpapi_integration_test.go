@@ -143,6 +143,12 @@ type testRig struct {
 	outbox              *narvipg.OutboxStore
 	linearAgentSessions *narvipg.LinearAgentSessionStore
 
+	// auditLog is Step 39's ("identities + full RBAC", §13.3) own
+	// addition -- threaded through to CreateSession/CreateTurn/
+	// ApprovePlan/RejectPlan below exactly like production wiring
+	// (cmd/control-plane/main.go).
+	auditLog *narvipg.AuditLogStore
+
 	// tokenEncryptionKey is a fixed, valid 32-byte AES-256-GCM key used by
 	// this rig's own scm-credentials tests (real EncryptToken/DecryptToken
 	// round trip, matching the SAME real flow Step 20's own OAuth callback
@@ -190,20 +196,21 @@ func newTestRig(t *testing.T) testRig {
 		participants:        narvipg.NewParticipantStore(pool),
 		outbox:              narvipg.NewOutboxStore(pool),
 		linearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
+		auditLog:            narvipg.NewAuditLogStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.environments, rig.registry, nil))
+		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.environments, rig.auditLog, rig.registry, nil))
 		r.Get("/{sessionID}", httpapi.GetSession(rig.sessions))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.registry))
-		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.registry))
-		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.participants, rig.auditLog, rig.registry))
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog))
 	})
 	// scm-credentials is deliberately mounted OUTSIDE /api/sessions and
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc

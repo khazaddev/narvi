@@ -28,10 +28,15 @@ type CreateUserParams struct {
 // migrations/000002_users.up.sql). CreateUser inserts a user row once, at
 // first-sign-in creation time (internal/adapters/inbound/auth's own OAuth
 // callback handler) -- role is set once, at creation, per that handler's
-// own initial-admin logic; no Update/List exists yet because nothing
-// changes a user's own row after creation in this Step (role/disabled
-// editing is Step 39's "members API" job). GetUserByID backs both the
-// callback handler and the auth middleware's own per-request lookup.
+// own initial-admin logic. GetUserByID backs both the callback handler and
+// the auth middleware's own per-request lookup.
+//
+// Step 39 ("identities + full RBAC", §13.2/§13.3) additions --
+// ListUsersOrderedByCreatedAt/UpdateUserRole/GetUserByPrimaryEmail back the
+// members API (internal/adapters/inbound/httpapi/members.go) and the
+// auto-link algorithm's own email-match step
+// (internal/app/identitylink.Resolve): the ONLY writes to an existing
+// user's own row this codebase makes past creation time.
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, createUser, arg.PrimaryEmail, arg.DisplayName, arg.Role)
 	var i User
@@ -53,6 +58,100 @@ WHERE id = $1
 
 func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.PrimaryEmail,
+		&i.DisplayName,
+		&i.Role,
+		&i.Disabled,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getUserByPrimaryEmail = `-- name: GetUserByPrimaryEmail :one
+SELECT id, primary_email, display_name, role, disabled, created_at FROM users
+WHERE lower(primary_email) = lower($1)
+`
+
+// Case-insensitive: email addresses are conventionally
+// case-insensitive (at least in the local-part-plus-domain sense every
+// real mail provider actually applies), and this is ONLY ever compared
+// against an email another provider (GitHub/Slack/Linear) already
+// independently attests to, never user-supplied free text -- matching
+// lower(email) on both sides is the same convention
+// ListVerifiedIdentityUserIDsByEmail (identities.sql) uses for its own
+// verified-identity-email match, so the two halves of §13.2's own "match
+// against primary_email AND verified identity emails" never disagree on
+// case sensitivity.
+func (q *Queries) GetUserByPrimaryEmail(ctx context.Context, lower string) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByPrimaryEmail, lower)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.PrimaryEmail,
+		&i.DisplayName,
+		&i.Role,
+		&i.Disabled,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const listUsersOrderedByCreatedAt = `-- name: ListUsersOrderedByCreatedAt :many
+SELECT id, primary_email, display_name, role, disabled, created_at FROM users
+ORDER BY created_at ASC
+`
+
+// Backs GET /api/members -- every user, oldest-first (matches
+// ListSummariesForSession's own "stable, predictable order" precedent
+// elsewhere in this codebase; oldest-first reads naturally as "founding
+// members first").
+func (q *Queries) ListUsersOrderedByCreatedAt(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsersOrderedByCreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []User
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.PrimaryEmail,
+			&i.DisplayName,
+			&i.Role,
+			&i.Disabled,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateUserRole = `-- name: UpdateUserRole :one
+UPDATE users
+SET role = $2
+WHERE id = $1
+RETURNING id, primary_email, display_name, role, disabled, created_at
+`
+
+type UpdateUserRoleParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Role UserRole    `json:"role"`
+}
+
+// Backs the admin-only role-change endpoint (§13.3's own "members & roles:
+// admin only" row) -- the ONLY column of an existing user's row this
+// codebase ever mutates past creation time.
+func (q *Queries) UpdateUserRole(ctx context.Context, arg UpdateUserRoleParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserRole, arg.ID, arg.Role)
 	var i User
 	err := row.Scan(
 		&i.ID,

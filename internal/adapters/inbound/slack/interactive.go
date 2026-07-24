@@ -50,12 +50,21 @@
 //     interaction type this handler doesn't yet understand must degrade
 //     gracefully, never crash or 500.
 //
-// Slack/Linear verdicts stay UNAUTHENTICATED-per-user throughout (this
-// Step's own explicit precedent, decideplan.go's own top doc comment) --
-// this handler never attempts to resolve a Slack user id to a Narvi
-// user_id; every decision/turn this handler causes is bot-attributed
-// (Valid == false), exactly like every other webhook-originated action in
-// this codebase today.
+// Every decision/turn this handler causes now resolves the REAL Slack
+// user behind it to a Narvi user_id/role, via identity auto-linking
+// (§13.2, identity.go's own resolveSlackActorSingleAttempt) -- and, once
+// resolved, that role is checked against domain/authz.Authorize before
+// the state-changing effect (decideAndUpdateMessage's own
+// authorizeSessionAction(ActionApprovePlan) call;
+// handleViewSubmission's own identical authorizeSessionAction
+// (ActionPromptSession) call) -- a confirmed security review found this
+// gate MISSING for a resolved, linked actor (any role, any ownership)
+// even after auto-linking already existed, contradicting §13.3's own
+// "channel-agnostic" requirement; see decideplan.go's own top doc comment
+// for the full "why" writeup. A still-UNLINKED (bot-attributed, Valid ==
+// false) actor is untouched: it still proceeds with no per-user gate at
+// all, exactly matching §13.2's own explicit "unlinked actors get bot
+// attribution ... the action proceeds" precedent for that case.
 
 package slack
 
@@ -74,7 +83,9 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -94,6 +105,32 @@ type InteractiveDeps struct {
 	LinearAgentSessions *postgres.LinearAgentSessionStore
 	Registry            *sessionactor.Registry
 	SlackClient         *slackapi.Client
+
+	// Participants is Step 39's own addition ("identities + full RBAC",
+	// §13.2/§13.3) -- authorizeSessionAction below (identity.go's own
+	// ownedOrJoined) needs this to resolve a `member` actor's own
+	// "own/joined" carve-out exactly like httpapi's canActOnPlan/CreateTurn
+	// already do, so a Slack-decided plan verdict or Slack "Request
+	// changes" turn renders the IDENTICAL §13.3 verdict a REST caller
+	// would for the same (actor, session).
+	Participants *postgres.ParticipantStore
+
+	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// httpapi.DecidePlan/CreateTurnCore below exactly like Plans/Outbox
+	// already are, so a Slack-decided plan verdict or a Slack "Request
+	// changes" turn gets the SAME audit_log row every other caller of
+	// those two shared functions now gets. actor_user_id is NULL only
+	// until identity auto-linking (IdentityLink below) resolves a real
+	// user -- see identity.go's own resolveSlackActor for the replacement
+	// of the old unconditional bot-attribution precedent.
+	AuditLog *postgres.AuditLogStore
+
+	// IdentityLink is Step 39's own auto-linking wiring (§13.2) --
+	// resolveSlackActor (identity.go) uses this handler's own SlackClient
+	// above (already present, for chat.update/views.open) to fetch the
+	// clicking/submitting Slack user's own profile email, then this to
+	// auto-link or create a magic-link prompt.
+	IdentityLink identitylink.Deps
 
 	SigningSecret string
 	Timeouts      platform.Timeouts
@@ -116,6 +153,14 @@ type blockActionsPayload struct {
 		ActionID string `json:"action_id"`
 		Value    string `json:"value"`
 	} `json:"actions"`
+	// User is Slack's own real top-level "the user who clicked" field,
+	// present on every block_actions payload (verified against Slack's
+	// current reference docs) -- Step 39's ("identities + full RBAC",
+	// §13.2) own auto-linking wiring: the Slack user id
+	// decideAndUpdateMessage resolves against.
+	User struct {
+		ID string `json:"id"`
+	} `json:"user"`
 }
 
 // viewSubmissionPayload is the subset of Slack's own real view_submission
@@ -133,6 +178,14 @@ type viewSubmissionPayload struct {
 			} `json:"values"`
 		} `json:"state"`
 	} `json:"view"`
+	// User is Slack's own real top-level "the user who submitted this
+	// modal" field, present on every view_submission payload (verified
+	// against Slack's current reference docs) -- Step 39's own auto-
+	// linking wiring: the Slack user id handleViewSubmission resolves
+	// against.
+	User struct {
+		ID string `json:"id"`
+	} `json:"user"`
 }
 
 // interactionEnvelope is the minimal shape read first, JUST to learn the
@@ -189,16 +242,26 @@ func NewInteractivityHandler(deps InteractiveDeps) http.HandlerFunc {
 		switch envelope.Type {
 		case "block_actions":
 			deps.handleBlockActions(ctx, logger, []byte(rawPayload))
+			w.WriteHeader(http.StatusOK)
 		case "view_submission":
-			deps.handleViewSubmission(ctx, logger, []byte(rawPayload))
+			// handleViewSubmission (Step 39, "identities + full RBAC",
+			// §13.2/§13.3 update) now writes its OWN response: an ordinary
+			// empty-body 200 on success/no-op (Slack's own documented
+			// contract, closes the modal), or a real Slack
+			// "response_action": "errors" body when the resolved actor's
+			// own role fails domain/authz.Authorize -- this view_submission
+			// payload has no channel/thread to post an ordinary denial
+			// message into at all (see that function's own doc comment),
+			// so Slack's own inline-modal-error mechanism is this path's
+			// equivalent of the REST API's 403.
+			deps.handleViewSubmission(ctx, w, logger, []byte(rawPayload))
 		default:
 			// A future Slack interaction type this handler doesn't yet
 			// understand -- logged, never a crash or 500 (this file's own
 			// top doc comment).
 			logger.Info("slack: interactivity: ignoring unrecognized payload type", "type", envelope.Type)
+			w.WriteHeader(http.StatusOK)
 		}
-
-		w.WriteHeader(http.StatusOK)
 	}
 }
 
@@ -228,12 +291,57 @@ func (deps InteractiveDeps) handleBlockActions(ctx context.Context, logger *slog
 
 	switch action.ActionID {
 	case slackapi.ActionApprovePlan, slackapi.ActionRejectPlan:
-		deps.decideAndUpdateMessage(ctx, logger, planIDStr, sessionIDStr, action.ActionID, payload.Channel.ID, payload.Message.Ts)
+		deps.decideAndUpdateMessage(ctx, logger, planIDStr, sessionIDStr, action.ActionID, payload.Channel.ID, payload.Message.Ts, payload.User.ID)
 	case slackapi.ActionRequestChangesPlan:
 		deps.openRequestChangesModal(ctx, logger, payload.TriggerID, planIDStr, sessionIDStr)
 	default:
 		logger.Info("slack: interactivity: unrecognized action_id", "action_id", action.ActionID)
 	}
+}
+
+// slackPlanForbiddenText/slackPromptForbiddenErrorText are Step 39's own
+// additions ("identities + full RBAC", §13.2/§13.3): posted/shown instead
+// of proceeding when a resolved, linked actor's own role fails
+// domain/authz.Authorize -- mirroring the REST API's own 403 semantics
+// ("not authorized to ...", helpers.go/planapprove.go) rather than
+// silently dropping the click/submission.
+const (
+	slackPlanForbiddenText        = "You don't have permission to approve or reject this plan."
+	slackPromptForbiddenErrorText = "You don't have permission to request changes on this plan."
+)
+
+// authorizeSessionAction renders the exact §13.3 verdict
+// domain/authz.Authorize would for actorUserID attempting action against
+// sessionID -- shared by decideAndUpdateMessage (ActionApprovePlan) and
+// handleViewSubmission (ActionPromptSession, this package's own "Request
+// changes" flow) below, both of which need the identical "resolve
+// own/joined, then Authorize" sequencing canActOnPlan/CreateTurn already
+// establish for the REST API (planauthz.go, httpapi/turn.go).
+//
+// actorUserID.Valid == false (still bot-attributed) short-circuits to
+// allowed=true immediately, with NO session/participants lookup at all --
+// preserving §13.2's own "unlinked actors get bot attribution ... the
+// action proceeds" precedent, and avoiding any DB read at all on the
+// common bot-attributed path (this runs inside Slack's own tight
+// interactivity-ack budget).
+func (deps InteractiveDeps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) bool {
+	if !actorUserID.Valid {
+		return true
+	}
+
+	sessionRow, err := deps.Sessions.Get(ctx, sessionID)
+	if err != nil {
+		logger.Error("slack: interactivity: get session for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
+		return false
+	}
+
+	joined, err := ownedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
+	if err != nil {
+		logger.Error("slack: interactivity: check participant for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
+		return false
+	}
+
+	return authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
 }
 
 // decideAndUpdateMessage calls the shared httpapi.DecidePlan (decideplan.go)
@@ -257,7 +365,7 @@ func (deps InteractiveDeps) handleBlockActions(ctx context.Context, logger *slog
 // unconditional 200 right after this function returns, exactly matching
 // Slack's own documented contract of acking within the window regardless of
 // whether the underlying work has actually finished.
-func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *slog.Logger, planIDStr, sessionIDStr, actionID, channel, messageTS string) {
+func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *slog.Logger, planIDStr, sessionIDStr, actionID, channel, messageTS, slackUserID string) {
 	var planID, sessionID pgtype.UUID
 	if err := planID.Scan(planIDStr); err != nil {
 		logger.Warn("slack: interactivity: parse plan id failed", "error", err, "plan_id", planIDStr)
@@ -276,8 +384,48 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	decideCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.SlackInteractivityAckTimeout)
 	defer cancel()
 
-	var noDecider pgtype.UUID // Valid == false: bot/channel attribution, matching sessions.created_by's own existing convention for these two channels.
-	outcome, err := httpapi.DecidePlan(decideCtx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.Registry, sessionID, planID, verdict, noDecider)
+	// Step 39 ("identities + full RBAC", §13.2) update: decidedBy is no
+	// longer unconditionally invalid -- resolveSlackActorSingleAttempt
+	// auto-links (or creates a magic-link prompt for) the clicking Slack
+	// user the first time this package sees them, WITHOUT the general
+	// algorithm's own multi-attempt retry (see that function's own doc
+	// comment for why this tightly-bounded interactivity path can't
+	// afford one). Still bot attribution whenever it can't resolve in
+	// time -- matching this package's own PREVIOUS unconditional
+	// precedent for that case exactly.
+	decidedBy, notice := resolveSlackActorSingleAttempt(decideCtx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts.SlackInteractivityIdentityFetchTimeout, slackUserID)
+
+	// Security-remediation addition (Step 39, "identities + full RBAC",
+	// §13.2): notice (the "connected your account" confirmation, or --
+	// far more sensitive -- the magic-link URL itself) is delivered via
+	// chat.postEphemeral, visible ONLY to slackUserID (the clicking user),
+	// NEVER appended to the chat.update text below anymore -- that text
+	// updates a message the WHOLE channel can see, so appending a magic
+	// link there is exactly the confirmed hijack slackapi.Client.
+	// PostEphemeral's own doc comment describes. Best-effort: a failure
+	// here never blocks the actual plan decision below.
+	if notice != "" {
+		if err := deps.SlackClient.PostEphemeral(decideCtx, channel, slackUserID, messageTS, notice); err != nil {
+			logger.Warn("slack: interactivity: post identity-link ephemeral notice failed", "error", err)
+		}
+	}
+
+	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
+	// that resolved to a REAL, linked user_id must still pass domain/authz.
+	// Authorize(ActionApprovePlan) -- exactly what the REST approve/reject
+	// endpoints already require via canActOnPlan (planauthz.go) -- before
+	// this click is allowed to decide anything. A still-unlinked
+	// (bot-attributed) decidedBy is untouched: authorizeSessionAction
+	// returns true immediately for that case, preserving this package's own
+	// existing "Slack verdicts stay unauthenticated-per-user until linked"
+	// precedent (decideplan.go's own top doc comment).
+	if !deps.authorizeSessionAction(decideCtx, logger, sessionID, decidedBy, authz.ActionApprovePlan) {
+		logger.Warn("slack: interactivity: plan decision denied by authz", "plan_id", planIDStr, "session_id", sessionIDStr, "user_id", decidedBy.String())
+		deps.updateMessage(decideCtx, logger, channel, messageTS, slackPlanForbiddenText)
+		return
+	}
+
+	outcome, err := httpapi.DecidePlan(decideCtx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, verdict, decidedBy)
 
 	var text string
 	switch {
@@ -358,6 +506,22 @@ func (deps InteractiveDeps) openRequestChangesModal(ctx context.Context, logger 
 	}
 }
 
+// viewSubmissionErrorResponse is Slack's own documented shape for
+// rejecting a view_submission with an inline validation error rather than
+// silently closing the modal (docs.slack.dev/surfaces/modals's own
+// "Responding to a view_submission" — "response_action": "errors" plus a
+// block_id -> message map) -- used here for Step 39's own ("identities +
+// full RBAC", §13.2/§13.3) "reply with a clear denial message" fix: this
+// payload type has no channel/thread to post an ordinary message into at
+// all (see handleViewSubmission's own doc comment on why an identity
+// notice is already skipped here for the identical reason), so Slack's
+// own inline-modal-error mechanism is this path's equivalent of the REST
+// API's 403.
+type viewSubmissionErrorResponse struct {
+	ResponseAction string            `json:"response_action"`
+	Errors         map[string]string `json:"errors"`
+}
+
 // handleViewSubmission processes the "Request changes" modal's own
 // submission: the feedback text (read back from view.state.values, keyed
 // by slackapi.RequestChangesBlockID/RequestChangesActionID) becomes a new
@@ -371,20 +535,30 @@ func (deps InteractiveDeps) openRequestChangesModal(ctx context.Context, logger 
 // exactly matching how the existing POST .../turns endpoint already
 // behaves for every other "request changes" submission, Step 37's own
 // design).
-func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, logger *slog.Logger, raw []byte) {
+//
+// w is Step 39's own addition: every early-return path below still writes
+// a bare 200 itself now (this function owns its own response entirely,
+// NewInteractivityHandler's own switch no longer writes one on this
+// branch) so the ONLY path that writes something other than a plain 200
+// is the new authz-denial one, which responds with
+// viewSubmissionErrorResponse instead.
+func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, raw []byte) {
 	var payload viewSubmissionPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		logger.Warn("slack: interactivity: decode view_submission payload failed", "error", err)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 	if payload.View.CallbackID != slackapi.RequestChangesCallbackID {
 		logger.Info("slack: interactivity: unrecognized view_submission callback_id", "callback_id", payload.View.CallbackID)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	_, sessionIDStr, ok := slackapi.DecodePlanActionValue(payload.View.PrivateMetadata)
 	if !ok {
 		logger.Warn("slack: interactivity: malformed private_metadata", "private_metadata", payload.View.PrivateMetadata)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
@@ -396,16 +570,51 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, logger *sl
 	}
 	if strings.TrimSpace(feedback) == "" {
 		logger.Warn("slack: interactivity: empty feedback text in view_submission, ignoring")
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	var sessionID pgtype.UUID
 	if err := sessionID.Scan(sessionIDStr); err != nil {
 		logger.Warn("slack: interactivity: parse session id failed", "error", err, "session_id", sessionIDStr)
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	if _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Registry, sessionID, feedback, nil, true); cerr != nil {
+	// Step 39 ("identities + full RBAC", §13.2) update: actorUserID is no
+	// longer unconditionally invalid -- resolveSlackActorSingleAttempt
+	// (identity.go) auto-links (or creates a magic-link prompt for) the
+	// submitting Slack user the first time this package sees them,
+	// without a multi-attempt retry (this modal-submission response has
+	// its own tight ack requirement, mirroring decideAndUpdateMessage's
+	// own identical reasoning). notice is deliberately NOT posted
+	// anywhere here -- a view_submission response has no channel/message
+	// to post or append it to (Slack's own contract for this payload type
+	// is a bare empty-body 200 that simply closes the modal); the SAME
+	// still-unlinked identity still gets its in-channel notice the next
+	// time any OTHER event from it arrives.
+	actorUserID, _ := resolveSlackActorSingleAttempt(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts.SlackInteractivityIdentityFetchTimeout, payload.User.ID)
+
+	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a resolved,
+	// linked actorUserID must still pass domain/authz.
+	// Authorize(ActionPromptSession) -- this "Request changes" turn is
+	// exactly the same state-changing command POST .../turns itself gates
+	// (turn.go's own authorize call). A still-unlinked (bot-attributed)
+	// actorUserID is untouched (authorizeSessionAction returns true
+	// immediately), preserving this package's own existing precedent.
+	if !deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession) {
+		logger.Warn("slack: interactivity: request-changes turn denied by authz", "session_id", sessionIDStr, "user_id", actorUserID.String())
+		writeJSON(w, http.StatusOK, viewSubmissionErrorResponse{
+			ResponseAction: "errors",
+			Errors: map[string]string{
+				slackapi.RequestChangesBlockID: slackPromptForbiddenErrorText,
+			},
+		})
+		return
+	}
+
+	if _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, sessionID, feedback, nil, true, actorUserID); cerr != nil {
 		logger.Error("slack: interactivity: create request-changes turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionIDStr)
 	}
+	w.WriteHeader(http.StatusOK)
 }

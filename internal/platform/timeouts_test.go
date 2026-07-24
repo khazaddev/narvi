@@ -553,6 +553,45 @@ func TestDefaultTimeouts_Step38StandaloneField(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step39StandaloneFields proves Step 39's ("identities
+// + full RBAC", §13.2) own additions -- the identity profile-email fetch
+// retry knobs and the identity-link-prompt TTL -- are populated with
+// sensible defaults and do not disturb either invariant chain.
+func TestDefaultTimeouts_Step39StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.IdentityEmailFetchTimeout <= 0 {
+		t.Errorf("IdentityEmailFetchTimeout = %v, want > 0", to.IdentityEmailFetchTimeout)
+	}
+	if to.IdentityEmailFetchMaxAttempts < 1 {
+		t.Errorf("IdentityEmailFetchMaxAttempts = %d, want >= 1", to.IdentityEmailFetchMaxAttempts)
+	}
+	if to.IdentityEmailFetchRetryBaseDelay <= 0 {
+		t.Errorf("IdentityEmailFetchRetryBaseDelay = %v, want > 0", to.IdentityEmailFetchRetryBaseDelay)
+	}
+	if to.IdentityEmailFetchRetryMaxDelay < to.IdentityEmailFetchRetryBaseDelay {
+		t.Errorf("IdentityEmailFetchRetryMaxDelay = %v, want >= IdentityEmailFetchRetryBaseDelay = %v",
+			to.IdentityEmailFetchRetryMaxDelay, to.IdentityEmailFetchRetryBaseDelay)
+	}
+	if to.IdentityLinkPromptTTL <= 0 {
+		t.Errorf("IdentityLinkPromptTTL = %v, want > 0", to.IdentityLinkPromptTTL)
+	}
+	if to.SlackInteractivityIdentityFetchTimeout <= 0 {
+		t.Errorf("SlackInteractivityIdentityFetchTimeout = %v, want > 0", to.SlackInteractivityIdentityFetchTimeout)
+	}
+	if to.SlackInteractivityIdentityFetchTimeout >= to.SlackInteractivityAckTimeout {
+		t.Errorf("SlackInteractivityIdentityFetchTimeout = %v, want strictly less than SlackInteractivityAckTimeout = %v "+
+			"(must leave real margin for the DecidePlan+chat.update calls sharing the same budget)",
+			to.SlackInteractivityIdentityFetchTimeout, to.SlackInteractivityAckTimeout)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (these fields must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

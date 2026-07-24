@@ -30,6 +30,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
 	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
+	identitylinkhttp "github.com/khazaddev/narvi/internal/adapters/inbound/identitylink"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
@@ -39,6 +40,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/outboxworker"
@@ -206,6 +208,15 @@ func serve() error {
 	planStore := postgres.NewPlanStore(pool)
 	participantStore := postgres.NewParticipantStore(pool)
 
+	// auditLogStore is Step 39's ("identities + full RBAC", §13.3) own
+	// addition -- every Authorize-gated state change (CreateSession,
+	// CreateTurn, ApprovePlan/RejectPlan below) writes one audit_log row
+	// on the SAME transaction as the change itself; threaded into every
+	// GitHub/Slack/Linear ingress Deps struct too (below), so bot-
+	// attributed session/turn/plan-decision writes get the identical
+	// treatment (actor_user_id NULL), not a second, REST-only code path.
+	auditLogStore := postgres.NewAuditLogStore(pool)
+
 	// outboxStore/linearAgentSessionStore are constructed here (rather than
 	// down where the outbox delivery worker/Linear ingress blocks live
 	// below) because Step 38's ("plan mode, cross-channel", §8.1/§13.3) own
@@ -296,6 +307,27 @@ func serve() error {
 	identityStore := postgres.NewIdentityStore(pool)
 	userSessionStore := postgres.NewUserSessionStore(pool)
 
+	// identityLinkPromptStore/appIdentityLinkDeps are Step 39's own
+	// ("identities + full RBAC", §13.2) auto-linking wiring -- threaded
+	// into every Slack/Linear ingress Deps struct below (so a first event
+	// from an unknown provider identity auto-links or creates a magic-link
+	// prompt instead of always falling back to bot attribution) AND into
+	// the magic-link consume route's own Deps further down. One shared
+	// identitylink.Deps value, built once here from the SAME userStore/
+	// identityStore/auditLogStore every other Step 20/39 caller already
+	// uses -- never a second, independently-constructed copy of any of
+	// them.
+	identityLinkPromptStore := postgres.NewIdentityLinkPromptStore(pool)
+	appIdentityLinkDeps := identitylink.Deps{
+		Pool:          pool,
+		Users:         userStore,
+		Identities:    identityStore,
+		LinkPrompts:   identityLinkPromptStore,
+		AuditLog:      auditLogStore,
+		PublicBaseURL: cfg.PublicBaseURL,
+		PromptTTL:     cfg.Timeouts.IdentityLinkPromptTTL,
+	}
+
 	oauthConfig := auth.NewGitHubOAuthConfig(*cfg)
 	allowlist := auth.AllowlistConfig{
 		EmailDomains: cfg.AllowedEmailDomains,
@@ -345,13 +377,20 @@ func serve() error {
 	// narvi_auth_session cookie. See internal/adapters/inbound/slack's
 	// own doc.go for the full request-handling writeup.
 	router.Post("/webhooks/slack", slack.NewHandler(slack.Deps{
-		Pool:             pool,
-		Sessions:         sessionStore,
-		Turns:            turnStore,
-		Environments:     environmentStore,
-		Registry:         registry,
-		Deliveries:       webhookDeliveryStore,
-		Threads:          slackThreadSessionStore,
+		Pool:         pool,
+		Sessions:     sessionStore,
+		Turns:        turnStore,
+		Environments: environmentStore,
+		Registry:     registry,
+		Deliveries:   webhookDeliveryStore,
+		Threads:      slackThreadSessionStore,
+		AuditLog:     auditLogStore,
+		// Participants (this Step's own SECOND fix-pass addition,
+		// "identities + full RBAC", §13.2/§13.3): the SAME participantStore
+		// instance every other caller (the interactivity route immediately
+		// below, Linear's own Deps) already uses, never a second,
+		// independently-constructed copy.
+		Participants:     participantStore,
 		IntentClassifier: intentClassifierSvc,
 		SigningSecret:    cfg.SlackSigningSecret,
 		BotToken:         cfg.SlackBotToken,
@@ -360,6 +399,14 @@ func serve() error {
 		TimestampWindow:  cfg.Timeouts.WebhookTimestampFreshnessWindow,
 		SlackAPIBaseURL:  slackAPIBaseURL,
 		AckTimeout:       cfg.Timeouts.SlackAckTimeout,
+		// IdentityLink/SlackClient/Timeouts (Step 39, "identities + full
+		// RBAC", §13.2): SlackClient reuses the SAME slackNotifier
+		// instance already constructed above (for the outbox delivery
+		// worker and the interactivity route immediately below), never a
+		// third, independently-constructed client.
+		IdentityLink: appIdentityLinkDeps,
+		SlackClient:  slackNotifier,
+		Timeouts:     cfg.Timeouts,
 	}))
 
 	// Slack INTERACTIVITY ingress (Step 38, "plan mode, cross-channel",
@@ -380,8 +427,15 @@ func serve() error {
 		LinearAgentSessions: linearAgentSessionStore,
 		Registry:            registry,
 		SlackClient:         slackNotifier,
-		SigningSecret:       cfg.SlackSigningSecret,
-		Timeouts:            cfg.Timeouts,
+		AuditLog:            auditLogStore,
+		IdentityLink:        appIdentityLinkDeps,
+		// Participants (Step 39, "identities + full RBAC", §13.2/§13.3):
+		// the SAME participantStore instance Step 37's own REST plan
+		// approve/reject endpoints already use (constructed once, above),
+		// never a second, independently-constructed copy.
+		Participants:  participantStore,
+		SigningSecret: cfg.SlackSigningSecret,
+		Timeouts:      cfg.Timeouts,
 	}))
 
 	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
@@ -400,6 +454,7 @@ func serve() error {
 			Environments:     environmentStore,
 			Registry:         registry,
 			IntentClassifier: intentClassifierSvc,
+			AuditLog:         auditLogStore,
 		},
 		webhookDeliveryStore,
 		githubingress.Config{
@@ -428,6 +483,42 @@ func serve() error {
 	))
 	router.Post("/auth/logout", auth.NewLogoutHandler(userSessionStore, secureCookies))
 
+	// /auth/identity-link/{nonce}: the magic-link consume flow (Step 39,
+	// "identities + full RBAC", §13.2 step 4's own "connect your account"
+	// link) -- deliberately mounted OUTSIDE auth.Middleware entirely, like
+	// the auth routes immediately above: this handler authenticates the
+	// visitor ITSELF (auth.Authenticate), redirecting through the SAME
+	// GitHub OAuth login flow above (with its own ?next= carrying them
+	// back here) when they aren't signed in yet, rather than the bare 401
+	// Middleware would give a not-yet-authenticated request. See internal/
+	// adapters/inbound/identitylink's own doc.go for the complete design.
+	router.Get("/auth/identity-link/{nonce}", identitylinkhttp.NewConsumeHandler(identitylinkhttp.Deps{
+		UserSessions:    userSessionStore,
+		Users:           userStore,
+		AppIdentityLink: appIdentityLinkDeps,
+	}))
+
+	// /api/members, /api/audit-log (Step 39, "identities + full RBAC",
+	// §13.2/§13.3): the backend-only members API -- list members (with
+	// role, linked identities, pending-link state), an admin-only
+	// role-change endpoint, admin manual link/unlink of an identity, and a
+	// read endpoint over audit_log. Gated behind auth.Middleware (a "must
+	// be logged in" gate) exactly like /api/sessions above; each handler
+	// itself renders the REAL admin-only §13.3 verdict via
+	// domain/authz.Authorize. The actual Settings -> Members UI is Phase 7
+	// and out of scope here -- see httpapi/members.go's own doc comment.
+	router.Route("/api/members", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListMembers(userStore, identityStore, identityLinkPromptStore))
+		r.Patch("/{userID}/role", httpapi.UpdateMemberRole(pool, userStore, auditLogStore))
+		r.Post("/{userID}/identities", httpapi.LinkMemberIdentity(pool, userStore, identityStore, auditLogStore))
+		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(pool, identityStore, auditLogStore))
+	})
+	router.Route("/api/audit-log", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListAuditLog(auditLogStore))
+	})
+
 	// REST routes the UI needs (§6.3, Step 19's own plan row: "create/get/
 	// events/artifacts", + ws-token named separately by §6.2), all gated
 	// behind auth.Middleware as of Step 20 — see
@@ -442,7 +533,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, registry, intentClassifierSvc))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
@@ -450,14 +541,14 @@ func serve() error {
 		// turns (Step 28, "turn recovery", §8.7): the relaunch-and-resume
 		// REST API -- enqueues a new turn on an existing session, 409 if
 		// one is already in flight. See httpapi/turn.go's own doc comment.
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, registry))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, participantStore, auditLogStore, registry))
 		// plans (Step 37, "plan mode, web", §8.1/§12.2 item 3): the
 		// approve/reject HITL actions -- see httpapi/planapprove.go's own
 		// doc comment for the full sequencing. outboxStore/
 		// linearAgentSessionStore (Step 38, "plan mode, cross-channel") feed
 		// DecidePlanOnTx's own cross-channel-notify step (decideplan.go).
-		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, registry))
-		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore))
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, registry))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore))
 	})
 
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see
@@ -509,6 +600,14 @@ func serve() error {
 		// handlePrompted's own new plan-verdict keyword check.
 		Plans:  planStore,
 		Outbox: outboxStore,
+		// AuditLog/IdentityLink/Participants (Step 39, "identities + full
+		// RBAC", §13.2/§13.3): Participants is the SAME participantStore
+		// instance Step 37's own REST plan approve/reject endpoints already
+		// use (constructed once, above), never a second, independently-
+		// constructed copy.
+		AuditLog:     auditLogStore,
+		IdentityLink: appIdentityLinkDeps,
+		Participants: participantStore,
 	}))
 
 	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3

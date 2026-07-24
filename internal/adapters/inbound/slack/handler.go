@@ -18,9 +18,12 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -51,6 +54,26 @@ const (
 	ackReplyText         = "Got it — continuing work on this thread."
 	ackBusyText          = "Still working on the previous message in this thread — I'll pick this up next."
 	ackNotConfiguredText = "Slack ingress isn't configured with a default repo yet, so I can't start new work from a mention. A reply on an existing thread still works."
+
+	// ackNotAuthorizedText is Step 39's own addition ("identities + full
+	// RBAC", §13.2/§13.3): posted instead of ackNewSessionText when the
+	// auto-linked/already-linked actor's own role fails domain/authz.
+	// Authorize(ActionCreateSession) -- mirrors the REST API's own 403
+	// semantics ("not authorized to perform this action", helpers.go)
+	// rather than silently creating the session anyway.
+	ackNotAuthorizedText = "Your linked Narvi account isn't authorized to start new sessions from Slack."
+
+	// ackNotAuthorizedReplyText is this Step's own SECOND fix-pass
+	// addition ("identities + full RBAC", §13.2/§13.3 -- a confirmed
+	// re-review finding): posted instead of enqueuing a turn when a
+	// resolved, linked actor's reply on an ALREADY-MAPPED thread (or a
+	// brand-new mention that lost the first-writer-wins race and falls
+	// back onto a DIFFERENT, already-existing session) fails
+	// domain/authz.Authorize(ActionPromptSession) -- mirrors
+	// ackNotAuthorizedText's own wording above, and Linear's identical
+	// denial text for the equivalent ordinary-reply fallthrough
+	// (webhook.go's own handlePrompted).
+	ackNotAuthorizedReplyText = "Your linked Narvi account isn't authorized to prompt this session."
 )
 
 // Deps bundles every dependency NewHandler needs -- a small config
@@ -66,6 +89,47 @@ type Deps struct {
 	Registry     *sessionactor.Registry
 	Deliveries   *postgres.WebhookDeliveryStore
 	Threads      *postgres.SlackThreadSessionStore
+
+	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
+	// httpapi.CreateSessionCore below exactly like Environments already
+	// is, so a Slack-originated session creation gets the SAME audit_log
+	// row every other CreateSessionCore caller now gets. actor_user_id is
+	// NULL only until identity auto-linking (IdentityLink below) resolves
+	// a real user -- see identity.go's own resolveSlackActor for the
+	// replacement of the old unconditional bot-attribution precedent.
+	AuditLog *postgres.AuditLogStore
+
+	// Participants is this Step's own SECOND fix-pass addition
+	// ("identities + full RBAC", §13.2/§13.3): authorizeSessionAction
+	// (identity.go's own ownedOrJoined) needs this to resolve a `member`
+	// actor's own "own/joined" carve-out exactly like InteractiveDeps.
+	// Participants already does for the interactivity route -- so an
+	// ordinary Events-API reply on an already-mapped thread renders the
+	// IDENTICAL §13.3 verdict a REST/interactivity caller would for the
+	// same (actor, session). Production wiring passes the SAME
+	// participantStore instance every other caller already uses, never a
+	// second, independently-constructed copy.
+	Participants *postgres.ParticipantStore
+
+	// IdentityLink/SlackClient are Step 39's own auto-linking wiring
+	// (§13.2): resolveSlackActor (identity.go) uses SlackClient.
+	// GetUserEmail to fetch ev.User's own profile email (with retry, via
+	// Timeouts.IdentityEmailFetch*), then IdentityLink.Resolve to
+	// auto-link or create a magic-link prompt the first time this package
+	// sees a given Slack user id it doesn't already know about.
+	// SlackClient is a SEPARATE client instance from this file's own
+	// internal ackClient (newAckClient below) -- mirrors interactive.go's
+	// own identical InteractiveDeps.SlackClient precedent; production
+	// wiring (cmd/control-plane/main.go) passes the SAME *slackapi.Client
+	// instance already constructed for the outbox delivery worker, rather
+	// than building a third one.
+	IdentityLink identitylink.Deps
+	SlackClient  *slackapi.Client
+	// Timeouts is Step 39's own addition, read for its
+	// IdentityEmailFetch* fields only (identity.go) -- every OTHER
+	// timeout this package needs is still an existing discrete field
+	// below (TimestampWindow, AckTimeout), left untouched.
+	Timeouts platform.Timeouts
 
 	// IntentClassifier is Step 36's own wiring point (§8.3/§18): classify
 	// + record runs ONCE, on the brand-new-thread's own first real turn
@@ -190,7 +254,38 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	key := ev.threadKey()
 	prompt := normalizeMrkdwn(ev.Text)
 
-	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key)
+	// Step 39 ("identities + full RBAC", §13.2) update: resolve the REAL
+	// actor behind ev.User ONCE, regardless of whether this event ends up
+	// starting a brand-new thread or replying to an existing one -- the
+	// auto-link algorithm runs "on first event from an unknown provider
+	// identity" (§13.2), on every event, not only session-creating ones.
+	// actorUserID is only actually CONSUMED by resolveOrClaimSession below
+	// (a bare session's own created_by) -- a reply on an existing thread
+	// has nowhere to attribute it (turns carries no actor column, mirrors
+	// this file's own addTurn, which has never taken one), but identity
+	// resolution/notification still needs to run for it regardless.
+	actorUserID, notice := resolveSlackActor(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts, ev.User)
+
+	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key, actorUserID)
+
+	// Security-remediation addition (Step 39, "identities + full RBAC",
+	// §13.2): notice (the "connected your account" confirmation, or --
+	// far more sensitive -- the magic-link URL itself) is posted via
+	// chat.postEphemeral, visible ONLY to ev.User, NEVER appended to the
+	// ordinary, whole-channel-visible ack below anymore -- see
+	// ack.go's own postEphemeral doc comment for the confirmed hijack
+	// this closes. Posted regardless of ok/res.Skip (a denied/skip
+	// outcome already gets its own ack elsewhere above; the identity
+	// notice, when there is one, is still this user's own business to
+	// see either way) except when ev.User is empty (postEphemeral would
+	// have nothing to scope to -- never expected in practice, see
+	// resolveSlackActor's own identical defensive short-circuit).
+	if notice != "" && ev.User != "" {
+		if err := ack.postEphemeralBounded(ctx, deps.AckTimeout, channel, ev.User, key, notice); err != nil {
+			logger.Warn("slack: post identity-link ephemeral notice failed", "error", err)
+		}
+	}
+
 	if !ok || res.Skip {
 		return
 	}
@@ -221,6 +316,9 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	case !created:
 		ackText = ackBusyText
 	}
+	// notice is no longer appended here -- see this function's own top
+	// doc comment for why it is now posted separately, ephemerally,
+	// scoped to ev.User (Step 39's own security-remediation addition).
 	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
 	}
@@ -230,11 +328,29 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 // existing mapping resolves directly; a brand-new thread creates a bare
 // session, races to claim the mapping, and falls back to the winner's
 // session id on a lost claim. ok reports whether the caller should
-// continue at all (false on a genuine error, already logged).
-func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent, channel, key string) (sessionResolution, bool) {
+// continue at all (false on a genuine error, already logged). creator is
+// handleEvent's own already-resolved actor (Step 39, "identities + full
+// RBAC", §13.2) -- Valid iff the mentioning Slack user is already linked,
+// or was just auto-linked this call; invalid (bot attribution) otherwise,
+// exactly matching this function's own PREVIOUS unconditional-bot-
+// attribution precedent for the still-unresolved case.
+//
+// Both paths that resolve to an ALREADY-EXISTING session this event's own
+// actor did not just create right here (the existing-mapping branch
+// immediately below, and the "lost the race, fall back to the winner"
+// branch at the bottom) route through authorizeExistingSessionReply,
+// gating this event's eventual addTurn (handleEvent) behind exactly the
+// same domain/authz.Authorize(ActionPromptSession) verdict the REST API's
+// own POST .../turns endpoint already renders -- this Step's own SECOND
+// fix pass, closing a confirmed re-review finding: the existing-mapping
+// branch previously returned the resolved session id UNCONDITIONALLY,
+// with no authz check at all, unlike the brand-new-thread/
+// ActionCreateSession branch below (already gated by this Step's FIRST
+// fix pass).
+func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent, channel, key string, creator pgtype.UUID) (sessionResolution, bool) {
 	existing, err := deps.Threads.Get(ctx, channel, key)
 	if err == nil {
-		return sessionResolution{SessionID: existing.SessionID}, true
+		return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, existing.SessionID, creator)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		logger.Error("slack: lookup thread mapping failed", "error", err)
@@ -255,13 +371,30 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		return sessionResolution{Skip: true}, true
 	}
 
-	var noCreator pgtype.UUID // Valid == false: no human caller (§ CreateSessionCore's own doc comment).
-	bare, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.Registry, restdtos.CreateSessionRequest{
+	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: creator is
+	// no longer trusted unconditionally just because it resolved to a
+	// REAL, linked user_id -- that user's own role must still pass
+	// domain/authz.Authorize(ActionCreateSession), exactly like the REST
+	// /api/sessions handler already requires (create.go's own authorize
+	// call). Resource{} is always correct here (no ownership carve-out on
+	// create, mirroring create.go's own identical reasoning). A still-
+	// unlinked (bot-attributed) creator is untouched -- authorizeResolvedActor
+	// returns true immediately for that case, preserving §13.2's own
+	// explicit "the action proceeds" precedent.
+	if !authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
+		logger.Warn("slack: create-session denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
+		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedText); ackErr != nil {
+			logger.Warn("slack: post not-authorized ack failed", "error", ackErr)
+		}
+		return sessionResolution{Skip: true}, true
+	}
+
+	bare, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceSlack,
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: deps.DefaultRepoName, Url: deps.DefaultRepoURL},
 		},
-	}, noCreator)
+	}, creator)
 	if cerr != nil {
 		logger.Error("slack: create bare session failed", "status", cerr.Status, "message", cerr.Message)
 		return sessionResolution{}, false
@@ -279,13 +412,36 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	// Lost the race -- a concurrent first message claimed this thread
 	// first. bare.ID is left as a harmless, never-dispatched orphan (see
 	// doc.go's own tradeoff note); resolve the WINNER's real session
-	// instead and continue exactly like an existing-mapping reply would.
+	// instead and continue exactly like an existing-mapping reply would --
+	// including this Step's own authorizeExistingSessionReply gate: this
+	// actor was only just authorized to CREATE a session (above), never to
+	// prompt the DIFFERENT session a concurrent racer actually won, so the
+	// same ActionPromptSession check applies here too.
 	winner, err := deps.Threads.Get(ctx, channel, key)
 	if err != nil {
 		logger.Error("slack: lookup winning thread mapping after lost claim failed", "error", err)
 		return sessionResolution{}, false
 	}
-	return sessionResolution{SessionID: winner.SessionID}, true
+	return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, winner.SessionID, creator)
+}
+
+// authorizeExistingSessionReply gates a session id that this event's own
+// actor did NOT just create in resolveOrClaimSession above (either branch
+// -- see that function's own doc comment) behind
+// domain/authz.Authorize(ActionPromptSession), replying in-thread with
+// ackNotAuthorizedReplyText on denial instead of letting handleEvent's own
+// addTurn enqueue a turn. A still-unlinked (bot-attributed) creator is
+// untouched: authorizeSessionAction (identity.go) returns true immediately
+// for that case, preserving §13.2's own "the action proceeds" precedent.
+func (deps Deps) authorizeExistingSessionReply(ctx context.Context, ack *ackClient, logger *slog.Logger, channel, key string, sessionID, creator pgtype.UUID) (sessionResolution, bool) {
+	if !deps.authorizeSessionAction(ctx, logger, sessionID, creator, authz.ActionPromptSession) {
+		logger.Warn("slack: reply denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
+		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedReplyText); ackErr != nil {
+			logger.Warn("slack: post not-authorized-reply ack failed", "error", ackErr)
+		}
+		return sessionResolution{Skip: true}, true
+	}
+	return sessionResolution{SessionID: sessionID}, true
 }
 
 // readBoundedBody reads r.Body (capped via http.MaxBytesReader, mirroring

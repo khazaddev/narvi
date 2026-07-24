@@ -943,6 +943,81 @@ type Timeouts struct {
 	// this Step's own choice of a fast/cheap model with no extended
 	// thinking enabled).
 	IntentClassifierLLMTimeout time.Duration
+
+	// --- Step 39 standalone additions ("identities + full RBAC", §13.2):
+	// no ordering relationship with either invariant chain above (or with
+	// any prior Step's standalone additions), so -- per those additions'
+	// own precedent -- plain fields with sensible defaults, not wired into
+	// a fake invariant link.
+
+	// IdentityEmailFetchTimeout bounds ONE outbound provider profile-email
+	// API call (Slack users.info / Linear's `user(id) { email }` query,
+	// internal/app/identitylink's own Resolve) -- a single attempt's own
+	// budget, mirroring RepoSHAResolutionTimeout/CredentialFetchTimeout's
+	// own "lightweight call, not a large data transfer" reasoning. Not
+	// specified in the plan; chosen as 10s, matching those two fields'
+	// own value exactly.
+	IdentityEmailFetchTimeout time.Duration
+
+	// IdentityEmailFetchMaxAttempts is how many times platform.Retry calls
+	// the profile-email fetch before giving up (§13.2: "a provider
+	// email-API failure is a retryable error, not an empty identity...
+	// retry with backoff"). Not specified in the plan; chosen as 3 --
+	// enough to ride out a brief blip without indefinitely delaying the
+	// webhook handler's own response (this whole retry loop runs
+	// SYNCHRONOUSLY, inline, on the ingress request path -- see
+	// internal/app/identitylink's own doc.go for why unbounded/background
+	// retry, like domain/outbox's own persisted-schedule approach, is the
+	// wrong shape for this specific call).
+	IdentityEmailFetchMaxAttempts int
+
+	// IdentityEmailFetchRetryBaseDelay/IdentityEmailFetchRetryMaxDelay
+	// configure platform.Retry's own doubling-capped-at-max backoff
+	// between attempts -- mirrors domain/outbox.BackoffConfig's identical
+	// shape, but MUCH shorter: this retry loop's own caller (a Slack/
+	// Linear webhook handler) is still on the hook to answer promptly,
+	// unlike outbox delivery's own background, persisted-schedule retry.
+	// Not specified in the plan; chosen as 200ms/1s -- with
+	// IdentityEmailFetchMaxAttempts=3 above, the worst case (2 waits: 200ms
+	// then 400ms) adds well under 1s of wall-clock time to the handler's
+	// own critical path before falling back to bot attribution + a link
+	// prompt.
+	IdentityEmailFetchRetryBaseDelay time.Duration
+	IdentityEmailFetchRetryMaxDelay  time.Duration
+
+	// SlackInteractivityIdentityFetchTimeout bounds the ONE identity-
+	// resolution profile-email fetch attempt Slack's own interactivity
+	// path (internal/adapters/inbound/slack's decideAndUpdateMessage/
+	// handleViewSubmission, interactive.go) allows itself, with
+	// deliberately NO retry loop at all (unlike IdentityEmailFetchTimeout/
+	// IdentityEmailFetchMaxAttempts' own general-purpose, retried budget,
+	// used by the Events API ingress path instead) -- this path shares
+	// Slack's own hard ~3s interactivity-ack window with DecidePlan's own
+	// guarded-UPDATE transaction AND the chat.update call that reflects
+	// its outcome (see SlackInteractivityAckTimeout's own doc comment),
+	// so there simply isn't room for a multi-attempt backoff loop here. A
+	// failed/timed-out fetch on this path defers to bot attribution for
+	// THIS click; the SAME still-unlinked identity gets a full, properly-
+	// retried resolution attempt the next time any OTHER event from it
+	// arrives (an Events API message, a later click, a modal submission).
+	// Not specified in the plan; chosen as 800ms -- comfortably inside
+	// SlackInteractivityAckTimeout (2500ms) with real margin left for the
+	// DecidePlan+chat.update calls that follow it in the same shared
+	// budget.
+	SlackInteractivityIdentityFetchTimeout time.Duration
+
+	// IdentityLinkPromptTTL is how long a magic-link identity_link_prompts
+	// row (§13.2 step 4: "a short-lived magic link") stays valid before
+	// GetIdentityLinkPromptByNonceHash's own caller (internal/adapters/
+	// inbound/identitylink's magic-link consume handler) must treat it as
+	// expired. Not specified in the plan beyond "short-lived"; chosen as
+	// 24h -- long enough that a Slack/Linear user who doesn't immediately
+	// click the link (e.g. it arrives outside working hours) still has a
+	// realistic same-day-ish window, but still bounded, unlike
+	// UserSessionTTL's own "stay signed in" 30-day figure, which answers a
+	// genuinely different question (how long a browser stays logged in,
+	// not how long a one-time linking action stays offered).
+	IdentityLinkPromptTTL time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1048,6 +1123,13 @@ func DefaultTimeouts() Timeouts {
 		OutboxClaimDuration:   30 * time.Second, // not specified; chosen, matches TimerClaimDuration's own value/reasoning
 
 		IntentClassifierLLMTimeout: 10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+
+		IdentityEmailFetchTimeout:              10 * time.Second,       // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+		IdentityEmailFetchMaxAttempts:          3,                      // not specified; chosen
+		IdentityEmailFetchRetryBaseDelay:       200 * time.Millisecond, // not specified; chosen, keeps the synchronous ingress path fast
+		IdentityEmailFetchRetryMaxDelay:        1 * time.Second,        // not specified; chosen
+		SlackInteractivityIdentityFetchTimeout: 800 * time.Millisecond, // not specified; chosen, comfortably inside SlackInteractivityAckTimeout with margin for DecidePlan+chat.update
+		IdentityLinkPromptTTL:                  24 * time.Hour,         // not specified beyond "short-lived"; chosen
 	}
 }
 
