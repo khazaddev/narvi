@@ -6,9 +6,9 @@
 
 Narvi runs autonomous coding agents in isolated cloud sandboxes, triggered from the web, Slack, Linear, and GitHub. This document is the self-contained specification for building it in Go. Its design is uncompromising on the properties that make an agent platform trustworthy at scale: one authoritative source of state, a single owner per session, native process supervision, and a resilience test suite (§9.3) that is a first-class exit criterion, not an afterthought.
 
-**What we are building**: two Go services (control plane + in-sandbox agent), packaged as containers and deployable on any Kubernetes cluster or plain Docker/VMs — no cloud lock-in; Postgres as the single source of truth; S3-compatible object storage for media; and a web UI (built in phase 6 from the mockups in §12). The wire contracts in §6 are defined up front, so backend and UI are built against the same generated schemas.
+**What we are building**: two Go services (control plane + in-sandbox agent), packaged as containers and deployable on any Kubernetes cluster or plain Docker/VMs — no cloud lock-in; Postgres as the single source of truth; S3-compatible object storage for media; and a web UI (built in phase 7 from the mockups in §12). The wire contracts in §6 are defined up front, so backend and UI are built against the same generated schemas.
 
-**Non-goals for the initial build** (phases 0-5): the web UI (built in phase 6, §12); a replacement for OpenCode (the agent engine — Narvi wraps it); sandbox providers beyond Modal and RWX (the interface must allow adding them later — a Kubernetes-native sandbox provider is an anticipated adapter); multi-region.
+**Non-goals for the initial build** (phases 0-6): the web UI (built in phase 7, §12); a replacement for OpenCode (the agent engine — Narvi wraps it); sandbox providers beyond Modal and RWX (the interface must allow adding them later — a Kubernetes-native sandbox provider is an anticipated adapter); multi-region.
 
 ## 1. Repository layout
 
@@ -291,19 +291,19 @@ Snapshots/restore/resume; image prebuilds (fingerprint = repo SHAs + runtime ver
 GitHub/Slack/Linear/webhook ingress with shared toolkit (signature verify, atomic dedupe, one `CreateSessionRequest`); intent classifier (shadow first); plan mode end-to-end; outbox delivery to all notifiers; auth hardening (host-scoped cookies, backend-issued session validation).
 *Exit: bot ingress demo; classifier shadow report on real traffic.*
 
-**Phase 3.5 — Warm boot & agent-turn resilience (Steps 40-44; additive, does not gate Phase 3's exit above or block Phase 4's start)**
+**Phase 4 — Warm boot & agent-turn resilience (Steps 40-44; additive, does not gate Phase 3's exit above or block Phase 5's start)**
 Shared, tip-tracking image prebuilds (§19): re-keyed fingerprint, fetch-aware `gitclone.SyncAll`, freshness pump, the `repo_image` setup-rerun contract amendment, hook-output capture, and the telemetry-gated graduated rerun ladder; plus the OpenCode adapter's context-overflow compaction retry (§7.2), fully independent of the warm-boot work.
 *Exit: per-Environment warm-boot staleness window observed within the 10–40 min range §19.2 predicts; §9.3-class fetch-fail/stale-image/non-idempotent-setup scenarios green; compaction-retry contract test green against the pinned OpenCode binary. Step 43 specifically does not start until Step 42's rerun-duration telemetry shows a real need.*
 
-**Phase 4 — Code review & automations (2 wks)**
+**Phase 5 — Code review & automations (2 wks)**
 Full §8.2 code review; automations engine + sweeps; RWX provider + previews; uploads; secrets scopes; model catalog + Codex OAuth.
 *Exit: code review in shadow on live PRs; verdicts reviewed for precision.*
 
-**Phase 5 — Rollout (1-2 wks)**
+**Phase 6 — Rollout (1-2 wks)**
 Config setup (automations, secrets, environments, settings, integrations); cohort-based rollout of sessions; operational dashboards and runbooks; SLO alerts wired.
 *Exit: platform serving production traffic under monitoring.*
 
-**Phase 6 — Web UI (~3-4 wks; see §12)**
+**Phase 7 — Web UI (~3-4 wks; see §12)**
 The SPA on the generated contracts, embedded in the control-plane binary.
 *Exit: all nine views in §12.2 built to the mockups (including the decision-inbox home, §16) + the UX items (§12.3); screenshot-level review against the mockups; `make dist` produces the single self-contained binary.*
 
@@ -316,9 +316,9 @@ The SPA on the generated contracts, embedded in the control-plane binary.
 - When behavior is ambiguous, resolve it against the mockups and the §6 contracts, and keep the domain paths single: repos are always a list, tokens are always hashed, one status taxonomy.
 - Commit per coherent unit with tests; keep `main` green.
 
-## 12. Web UI (phase 6)
+## 12. Web UI (phase 7)
 
-Design mockups of the nine views exist (decision inbox/home, session workspace, code review, release review, plan mode, automations, settings, analytics, sign-in) and are the visual spec; ask the requester for the artifact if not provided. The mockups do not necessarily cover every individual screen or state phase 6 will need (an empty state, an error state, a secondary modal not explicitly drawn) — any such screen must be derived from the same visual design system the mockups establish (tokens, typography, layout, component patterns), never designed independently of it; §11's own resolve-ambiguity-against-the-mockups rule extends to this.
+Design mockups of the nine views exist (decision inbox/home, session workspace, code review, release review, plan mode, automations, settings, analytics, sign-in) and are the visual spec; ask the requester for the artifact if not provided. The mockups do not necessarily cover every individual screen or state phase 7 will need (an empty state, an error state, a secondary modal not explicitly drawn) — any such screen must be derived from the same visual design system the mockups establish (tokens, typography, layout, component patterns), never designed independently of it; §11's own resolve-ambiguity-against-the-mockups rule extends to this.
 
 ### 12.1 Architecture
 - **SPA, no SSR, no BFF.** Vite + React + TanStack Query/Router. Static build embedded in the control-plane binary via `go:embed`; `narvi serve` serves API + WS + UI on one port. Self-host story: one binary + Postgres.
@@ -341,7 +341,7 @@ Design mockups of the nine views exist (decision inbox/home, session workspace, 
 Boot progress phases instead of spinner; failure reason + resume everywhere (matching the Slack/Linear retry affordance); distinct cancelled/failed/timeout chips; sandbox "what happened" panel (transitions + fingerprint + correlation id).
 
 ### 12.4 Sequencing & exit
-Built in phase 6. Definition of done: all nine views built to the mockups + §12.3 items; screenshot-level review against the mockups; `make dist` produces the single self-contained binary.
+Built in phase 7. Definition of done: all nine views built to the mockups + §12.3 items; screenshot-level review against the mockups; `make dist` produces the single self-contained binary.
 
 ## 13. Identity, authentication & RBAC
 
@@ -395,7 +395,7 @@ Enforcement — **server-side only, channel-agnostic**:
 ### 13.4 Phasing
 - **Phase 1**: GitHub OAuth + cookie sessions + `users` table + role skeleton (admin/member) + route middleware — needed before the first end-to-end session.
 - **Phase 3** (with bot ingress): identity auto-linking + link prompts, full four-role matrix, channel-agnostic Authorize on plan/review actions, audit log.
-- **Phase 6** (UI): sign-in page, Settings → Members & access (role management, linked-identity chips with pending/resend, audit log view) — mocked in the design artifact.
+- **Phase 7** (UI): sign-in page, Settings → Members & access (role management, linked-identity chips with pending/resend, audit log view) — mocked in the design artifact.
 - First-run seeding: any imported participants map to `users` by GitHub id; everyone defaults to `member`, initial admins set by config.
 
 ## 14. Product prototyping workflow (new capability)
@@ -449,9 +449,9 @@ Both reuse existing primitives (review sentinels, labels, child sessions, plan m
 - `path_scope` + sparse-checkout enforcement: extends `domain/gitstate` and the Environment/session-creation data model — Phase 1-2 (alongside Step 09/26).
 - `services.yml` supervision: extends `sandbox-agent` process supervision and `boot_progress` reporting — Phase 1-2 (alongside Step 12).
 - Mock contract drift-check: extends the image-build fingerprint work — Phase 2 (alongside Step 24).
-- Handoff sentinel v1: extends the review sentinels — Phase 4 (alongside Step 45).
-- Handoff v2 (child-session escalation): optional; add later in Phase 4 or beyond if the volume of v1 handoffs justifies the extra complexity.
-- UI (Phase 6): Settings → Environments gains a path-scope + services editor; sessions can be filtered/labeled by prototyping provenance; the handoff sentinel surfaces inside the code-review view (§12.2 item 2).
+- Handoff sentinel v1: extends the review sentinels — Phase 5 (alongside Step 45).
+- Handoff v2 (child-session escalation): optional; add later in Phase 5 or beyond if the volume of v1 handoffs justifies the extra complexity.
+- UI (Phase 7): Settings → Environments gains a path-scope + services editor; sessions can be filtered/labeled by prototyping provenance; the handoff sentinel surfaces inside the code-review view (§12.2 item 2).
 
 ## 15. Release PR review (new capability)
 
@@ -475,7 +475,7 @@ A pure decision function (same style as the domain decision functions, §3.2/§9
 When triggered, run one review pass over the full diff `baseRef..headRef` — not per constituent PR — with a prompt **distinct from the standard risk-map verdict**: explicitly framed around composition ("do these already-individually-correct changes conflict, duplicate, or invalidate each other's assumptions"), never re-litigating logic already approved per PR. Reuses the same LLM/review pipeline (§4.3, §8.2) with a separate, versioned prompt template (same mechanism as §8.3/§12.2 item 5).
 
 ### 15.4 Phasing
-Extends the code-review domain and review-session reuse (§8.2, Step 46) plus the intent classifier (§8.3, Step 36) — Phase 4, alongside the rest of the sentinel family (Step 45/46/48/49). No new domain package, no new state machine. UI: a dedicated release-review screen (§12.2 item 9, mocked in the design artifact) — manifest table + trigger banner + composition findings.
+Extends the code-review domain and review-session reuse (§8.2, Step 46) plus the intent classifier (§8.3, Step 36) — Phase 5, alongside the rest of the sentinel family (Step 45/46/48/49). No new domain package, no new state machine. UI: a dedicated release-review screen (§12.2 item 9, mocked in the design artifact) — manifest table + trigger banner + composition findings.
 
 ## 16. Decision inbox (home view — new capability)
 
@@ -497,8 +497,8 @@ Ranking: by decision cost then age — quick confirmations (ready_to_merge) firs
 - Metric: **decision latency** (median time from item entering the queue to its action) joins the analytics KPIs (§12.2 item 6) — the human bottleneck, made visible.
 
 ### 16.3 Phasing
-- **Phase 4**: read model + endpoints (it aggregates code review, plans, automations — they must exist first); `SourceControl` extensions.
-- **Phase 6**: the inbox is the **home view** of the new UI (mocked in the design artifact, decisions 32-34); sessions list moves to the second tab.
+- **Phase 5**: read model + endpoints (it aggregates code review, plans, automations — they must exist first); `SourceControl` extensions.
+- **Phase 7**: the inbox is the **home view** of the new UI (mocked in the design artifact, decisions 32-34); sessions list moves to the second tab.
 
 ## 17. Sentinel auto-fix (new capability)
 
@@ -522,7 +522,7 @@ This is a **system-initiated action, not a delegated human one** — it does not
 The merge is recorded in `audit_log` (§13.3) with `actor_user_id` NULL — using the same allowance already made in the audit_log schema for actions with no human actor — and `action`/`detail_json` capturing the origin PR, the review session, the fix PR, and which of the four checks passed. If the origin PR itself is never merged (closed, abandoned), the fix PR is simply left open as an ordinary review item — never silently discarded.
 
 ### 17.6 Phasing
-Extends the code-review domain and sentinel family (§8.2, Step 45/48) — Phase 4, after the sentinels themselves exist; reuses child sessions (§14.4), the verdict-posting tool, and the label-auto-approval policy, so no new subsystem. UI: the toggle (Settings → Environments) and the fix-PR link on finding cards (§12.2 items 2 and 5) are mocked/built in Phase 6 alongside the rest of those views.
+Extends the code-review domain and sentinel family (§8.2, Step 45/48) — Phase 5, after the sentinels themselves exist; reuses child sessions (§14.4), the verdict-posting tool, and the label-auto-approval policy, so no new subsystem. UI: the toggle (Settings → Environments) and the fix-PR link on finding cards (§12.2 items 2 and 5) are mocked/built in Phase 7 alongside the rest of those views.
 
 ## 18. Unified intent classifier (detailed design)
 
@@ -572,7 +572,7 @@ Persisted **write-once via a guarded update** (`UPDATE sessions SET intent_decis
 See §9.4. Activating the classifier on a surface (shadow → acting) must never delete the shadow code path, its config, or its telemetry — the same mechanism gets reused for every future model swap, prompt change, or new ingress surface, not just the first one. Skipping the shadow-mode window for a change because "tests already prove equivalence" is not a default; it requires an explicit, documented exception.
 
 ### 18.6 Phasing
-Detailed design underlying §8.3 (Step 36, phase 3) and the Settings → Prompt templates screen (§12.2 item 5, phase 6). No prior art exists (anywhere referenced in this document's research) for the DB-backed template storage/versioning/assembled-prompt-preview piece — it is designed from scratch when Step 36 is implemented, using this section's contract, rubric, and record schema as the foundation underneath it.
+Detailed design underlying §8.3 (Step 36, phase 3) and the Settings → Prompt templates screen (§12.2 item 5, phase 7). No prior art exists (anywhere referenced in this document's research) for the DB-backed template storage/versioning/assembled-prompt-preview piece — it is designed from scratch when Step 36 is implemented, using this section's contract, rubric, and record schema as the foundation underneath it.
 
 ## 19. Warm-boot shared-image prebuilds (new capability)
 

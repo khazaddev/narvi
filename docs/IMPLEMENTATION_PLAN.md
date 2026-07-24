@@ -4,8 +4,8 @@
 
 Narvi's technical specification (autonomous coding agents in sandboxes) is in
 [docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§19), and the nine-view UI design spec is in
-[docs/design/mockups.html](design/mockups.html). This plan breaks the 7 phases (0–6) into **~70 ordered Steps**
-(including Phase 3.5's own 5 additive Steps, 40-44), each individually shippable and CI-green,
+[docs/design/mockups.html](design/mockups.html). This plan breaks the 8 phases (0–7) into **~70 ordered Steps**
+(including Phase 4's own 5 additive Steps, 40-44), each individually shippable and CI-green,
 executable by a developer assisted by coding agents (Sonnet 5).
 Every Step references the technical-plan section that specifies it. Each Step becomes exactly one PR when
 implemented — but a Step's number (e.g. Step 06) is the plan's own row number, not the GitHub PR number it
@@ -14,7 +14,7 @@ PR number without consuming a Step), so never write "PR-06" expecting it to mean
 
 **Assumptions** (challenge if needed): mono-module Go, trunk-based (small PRs to `main`, feature flags for
 incomplete paths). The mockups ([docs/design/mockups.html](design/mockups.html)) and the §6 contracts are the
-spec of record for behavior. Note the mockups do not cover every individual screen phase 6 will need — a screen
+spec of record for behavior. Note the mockups do not cover every individual screen phase 7 will need — a screen
 genuinely required but absent from the artifact must be derived from the same design system (docs/
 TECHNICAL_PLAN.md §12), never invented independently of it.
 
@@ -94,12 +94,12 @@ TECHNICAL_PLAN.md §12), never invented independently of it.
 
 **Phase 3 milestone**: GitHub/Slack/Linear ingress live; classifier shadow report on real traffic.
 
-## Phase 3.5 — Warm boot & agent-turn resilience (5 Steps, additive)
+## Phase 4 — Warm boot & agent-turn resilience (5 Steps, additive)
 
 Sequentially-numbered Steps, inserted here rather than appended at the very end of the plan because they gate
-nothing in Phase 3 and don't need to wait for Phase 4 to be scheduled: every Phase 4+ Step below shifts up by 5
-to make room (the Step formerly numbered 40, "domain/review", is now Step 45, and so on through the former
-Step 65, now Step 70).
+nothing in Phase 3 and don't need to wait for Phase 5 to be scheduled: every Step in the phases below (formerly
+Phase 4 onward) shifts up by 5 to make room (the Step formerly numbered 40, "domain/review", is now Step 45, and
+so on through the former Step 65, now Step 70).
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
@@ -109,9 +109,9 @@ Step 65, now Step 70).
 | 43 | warm boot: graduated setup-rerun ladder (telemetry-gated) | Optional repo-authored delta script runs instead of full `setup.sh` when only dependencies drifted (`git diff --quiet <built_sha> HEAD -- setup.sh` against the baked manifest); soft-fails to full `setup.sh`, then warn-and-continue (never fatal); every ladder decision logs a structured reason; scheduled once Step 42's own telemetry shows full reruns eroding warm-boot latency, not shipped alongside it | §19.6 |
 | 44 ∥ | opencode: context-overflow compaction retry | Adapter-local classification on the already-decoded `ContextOverflowError` tagged union; one forced-compaction retry per turn via `POST /session/{id}/summarize` (new `OpenCodeSummarizeTimeout`), entirely inside one `StartTurn` call; no new `FailureReason`; CI contract test pins `/summarize`'s availability on the pinned OpenCode binary | §7.2 |
 
-**Phase 3.5 milestone**: warm-boot staleness window observed within §19.2's predicted 10–40 min range; the new §9.3-class scenarios green; compaction-retry contract test green. Independent of Phase 3's own milestone; Phase 4 Steps may proceed regardless of this phase's status.
+**Phase 4 milestone**: warm-boot staleness window observed within §19.2's predicted 10–40 min range; the new §9.3-class scenarios green; compaction-retry contract test green. Independent of Phase 3's own milestone; Phase 5 Steps may proceed regardless of this phase's status.
 
-## Phase 4 — Code review & automations (12 Steps)
+## Phase 5 — Code review & automations (12 Steps)
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
@@ -128,18 +128,18 @@ Step 65, now Step 70).
 | 55 | models | Catalog, Codex/ChatGPT OAuth plugin, per-session/per-message reasoning effort; shadow-comparison tooling for review | §8.8 |
 | 56 | decision inbox: read model + API | Read-only aggregation (plans, review sessions, sessions, automations, outbox) + `ListOpenPRsForUser` / `ResolveCodeOwners` on the SourceControl port (CODEOWNERS→persons via the identity graph §13.2, short-TTL cache with displayed staleness); ready_to_merge / needs_review / awaiting_approval / needs_attention taxonomy; per-item assignment provenance; Merge endpoint with **server-side re-validation at click time** (CI + approval + Authorize); decision-latency metric | §16 |
 
-**Phase 4 milestone**: code review in shadow on live PRs, verdicts reviewed for precision.
+**Phase 5 milestone**: code review in shadow on live PRs, verdicts reviewed for precision.
 
-## Phase 5 — Rollout (4 Steps)
+## Phase 6 — Rollout (4 Steps)
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
-| 57 | config/data seeding | Scripts to seed automations, secrets, environments, settings, integrations; participants→users mapping (by GitHub id, default member) | §10-P5, §13.4 |
-| 58 | cohort rollout | Feature-flagged cohort rollout of sessions, documented rollback | §10-P5 |
+| 57 | config/data seeding | Scripts to seed automations, secrets, environments, settings, integrations; participants→users mapping (by GitHub id, default member) | §10-P6, §13.4 |
+| 58 | cohort rollout | Feature-flagged cohort rollout of sessions, documented rollback | §10-P6 |
 | 59 | ops | Dashboards/alerts (false failures, outbox lag, orphans, boot p95), runbooks from the resilience catalog (§9.3) | §5.3 |
-| 60 | launch readiness | Production checklist, SLO alerts wired, on-call runbook | §10-P5 |
+| 60 | launch readiness | Production checklist, SLO alerts wired, on-call runbook | §10-P6 |
 
-## Phase 6 — UI (10 Steps, visual spec = nine-view mockups)
+## Phase 7 — UI (10 Steps, visual spec = nine-view mockups)
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
@@ -158,12 +158,12 @@ Step 65, now Step 70).
 
 - **Parallel streams in phase 1**: control-plane (07-08, 09-12, 18-20) ∥ sandbox-agent (13-17) — converge at 21.
 - **Phase 3**: 32/33/34 parallel after 31; 36-38 after 35.
-- **Phase 3.5**: 40 → 41 → 42 are sequential (each builds on the prior Step's own schema/behavior change); 43 starts only once 42's rerun-duration telemetry shows the need. 44 has no dependency on 40-43 or on any Phase 3 Step beyond Step 17 (OpenCode adapter) — it may run in parallel with any of them, or with Phase 4.
-- **Phase 6** can start 61-62 during phase 5 (backend and contracts are frozen by then).
+- **Phase 4**: 40 → 41 → 42 are sequential (each builds on the prior Step's own schema/behavior change); 43 starts only once 42's rerun-duration telemetry shows the need. 44 has no dependency on 40-43 or on any Phase 3 Step beyond Step 17 (OpenCode adapter) — it may run in parallel with any of them, or with Phase 5.
+- **Phase 7** can start 61-62 during phase 6 (backend and contracts are frozen by then).
 - Go/no-go after Step 21 (~1 month).
 
 ## Verification
 
 - Each Step: CI (lint, `go test -race`, contract tests) + its own criterion listed on its row.
-- Phase milestones = blocking gates: e2e via API/UI (P1), 12 resilience scenarios (P2), classifier shadow report (P3), review-verdict diff reviewed for precision (P4), flag-reversible rollout (P5), 9 views built to mockups + screenshot review (P6). Phase 3.5 (Steps 40-44) is additive scope, not a blocking gate — its own milestone verifies warm-boot behavior and compaction-retry recovery but never holds up Phase 4.
+- Phase milestones = blocking gates: e2e via API/UI (P1), 12 resilience scenarios (P2), classifier shadow report (P3), review-verdict diff reviewed for precision (P5), flag-reversible rollout (P6), 9 views built to mockups + screenshot review (P7). Phase 4 (Steps 40-44) is additive scope, not a blocking gate — its own milestone verifies warm-boot behavior and compaction-retry recovery but never holds up Phase 5.
 - Project end: `make dist` produces the standalone `narvi` binary; all phase gates green.
