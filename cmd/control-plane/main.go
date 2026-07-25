@@ -574,13 +574,16 @@ func serve() error {
 	// /auth/linear/install + /auth/linear/callback: the workspace OAuth
 	// connection flow (§8.10's own "OAuth" scope) -- mounted behind
 	// auth.Middleware (a signed-in Narvi user must initiate/complete a
-	// workspace connection; see internal/adapters/inbound/linear's own
-	// doc.go for why role-gating this to admins specifically is left to
-	// Step 39).
+	// workspace connection) AND, additionally, gated admin-only inside
+	// each handler itself via domain/authz.ActionManageIntegrations (see
+	// internal/adapters/inbound/linear's own authz.go for the full
+	// reasoning -- a confirmed audit finding: this was never actually
+	// role-gated, despite an earlier doc comment here deferring it to a
+	// later Step that never added it).
 	router.Route("/auth/linear", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/install", linear.NewInstallHandler(linearOAuthConfig, cfg.Timeouts, secureCookies))
-		r.Get("/callback", linear.NewInstallCallbackHandler(linearOAuthConfig, linearClient, linearInstallationStore, cfg.TokenEncryptionKey, secureCookies))
+		r.Get("/callback", linear.NewInstallCallbackHandler(linearOAuthConfig, linearClient, pool, linearInstallationStore, auditLogStore, cfg.TokenEncryptionKey, secureCookies))
 	})
 
 	// /webhooks/linear: Linear's own real AgentSessionEvent webhook --
