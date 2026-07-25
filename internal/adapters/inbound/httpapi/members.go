@@ -37,6 +37,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -46,6 +47,22 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// uniqueViolationCode is Postgres' own SQLSTATE for a unique-constraint
+// violation -- mirrors internal/app/identitylink/service.go's own
+// identical constant/isUniqueViolation pair (that package's own doc
+// comment on isUniqueViolation explains the general pattern; not reused
+// directly from there since it's unexported and this is a different
+// package). LinkMemberIdentity's own race fix below is this file's one
+// use of it.
+const uniqueViolationCode = "23505"
+
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLSTATE 23505).
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == uniqueViolationCode
+}
 
 // identityDTO is one linked-identity row's own REST wire shape.
 type identityDTO struct {
@@ -180,7 +197,12 @@ var validRoles = map[string]sqlcgen.UserRole{
 // (authz.ActionManageMembers, §13.3's own "members & roles: admin only"
 // row), body {"role": "admin"|"maintainer"|"member"|"viewer"}. 400 on a
 // malformed body or an unrecognized role string; 404 if userID doesn't
-// name a real user; else 200 with the updated memberDTO (identities
+// name a real user; 409 if the target is CURRENTLY an active (non-
+// disabled) admin and this change would leave zero active admins left
+// (the last-admin guard, an audit finding: H8 -- demoting the sole
+// remaining admin would permanently lock the deployment out of every
+// admin-only endpoint, including this one, with no recovery path short
+// of direct DB surgery); else 200 with the updated memberDTO (identities
 // omitted -- this endpoint changes a role, not the identity graph; a
 // caller that also wants the identity list calls ListMembers).
 func UpdateMemberRole(pool *pgxpool.Pool, users *postgres.UserStore, auditLog *postgres.AuditLogStore) http.HandlerFunc {
@@ -230,6 +252,28 @@ func UpdateMemberRole(pool *pgxpool.Pool, users *postgres.UserStore, auditLog *p
 			logger.Error("httpapi: update member role: get user failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
+		}
+
+		// Last-admin guard (audit finding H8): only relevant when this
+		// change actually TAKES admin away from someone who currently HAS
+		// it (a disabled admin, or a no-op admin->admin "change", never
+		// counted as active in the first place, so neither can trip this).
+		if existing.Role == sqlcgen.UserRoleAdmin && !existing.Disabled && newRole != sqlcgen.UserRoleAdmin {
+			activeAdminIDs, err := users.WithTx(tx).ListActiveAdminIDsForUpdate(ctx)
+			if err != nil {
+				logger.Error("httpapi: update member role: list active admins failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			// existing is itself one of the rows ListActiveAdminIDsForUpdate
+			// just locked (its own role/disabled columns, read a moment ago
+			// in this SAME transaction, already satisfy that query's own
+			// WHERE clause) -- so len<=1 here can only mean targetUserID IS
+			// that one remaining active admin.
+			if len(activeAdminIDs) <= 1 {
+				writeError(w, http.StatusConflict, "cannot demote the last remaining admin")
+				return
+			}
 		}
 
 		updated, err := users.WithTx(tx).UpdateRole(ctx, targetUserID, newRole)
@@ -298,6 +342,17 @@ var validProviders = map[string]sqlcgen.IdentityProvider{
 // via UnlinkMemberIdentity, rather than this endpoint silently
 // reassigning it). 200 (not 201) if it's already linked to THIS SAME
 // user -- idempotent, not an error. Else 201 with the new identityDTO.
+//
+// The already-linked check (identities.GetByProviderAndExternalID) and
+// the subsequent Create both run INSIDE the same transaction (an audit
+// finding, H8: they used to straddle two separate transactions/
+// connections, so a concurrent duplicate-link request could race past
+// the check and hit the identities.(provider, external_id) unique
+// constraint directly, surfacing as a raw 500 instead of this handler's
+// own intended 409/200). Running the check inside the transaction
+// narrows that window; the Create call's own isUniqueViolation branch
+// below closes it completely -- mirrors internal/app/identitylink's own
+// autoLink "lost the race, resolve the winner" precedent (service.go).
 func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identities *postgres.IdentityStore, auditLog *postgres.AuditLogStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authz.ActionManageMembers, authz.Resource{}) {
@@ -342,7 +397,15 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 			return
 		}
 
-		existing, err := identities.GetByProviderAndExternalID(ctx, provider, req.ExternalID)
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			logger.Error("httpapi: link member identity: begin tx failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		existing, err := identities.WithTx(tx).GetByProviderAndExternalID(ctx, provider, req.ExternalID)
 		if err == nil {
 			if existing.UserID != targetUserID {
 				writeError(w, http.StatusConflict, "this identity is already linked to a different member")
@@ -357,14 +420,6 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 			return
 		}
 
-		tx, err := pool.Begin(ctx)
-		if err != nil {
-			logger.Error("httpapi: link member identity: begin tx failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		defer func() { _ = tx.Rollback(ctx) }()
-
 		created, err := identities.WithTx(tx).Create(ctx, sqlcgen.CreateIdentityParams{
 			UserID:     targetUserID,
 			Provider:   provider,
@@ -372,6 +427,31 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 			LinkedVia:  sqlcgen.IdentityLinkedViaAdmin,
 		})
 		if err != nil {
+			if isUniqueViolation(err) {
+				// Lost the race: a concurrent LinkMemberIdentity call for
+				// the SAME (provider, externalId) committed its own Create
+				// between our GetByProviderAndExternalID check above and
+				// this INSERT. This tx is now aborted (Postgres refuses
+				// further commands on it after a constraint violation), so
+				// resolve the winner via a fresh, pool-scoped lookup --
+				// mirrors internal/app/identitylink's own autoLink "lost
+				// the race, resolve the winner" precedent (service.go) --
+				// and answer with the exact same 409-vs-200 split the
+				// check above would have given had it merely run a moment
+				// later.
+				winner, getErr := identities.GetByProviderAndExternalID(ctx, provider, req.ExternalID)
+				if getErr != nil {
+					logger.Error("httpapi: link member identity: resolve winner after lost race failed", "error", getErr)
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
+				}
+				if winner.UserID != targetUserID {
+					writeError(w, http.StatusConflict, "this identity is already linked to a different member")
+					return
+				}
+				writeJSON(w, http.StatusOK, identityToDTO(winner))
+				return
+			}
 			logger.Error("httpapi: link member identity: create failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return

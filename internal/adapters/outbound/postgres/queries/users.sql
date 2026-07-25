@@ -51,3 +51,21 @@ UPDATE users
 SET role = $2
 WHERE id = $1
 RETURNING *;
+
+-- An audit finding (H8) confirmed UpdateMemberRole had no protection
+-- against demoting the last remaining admin: doing so permanently locks
+-- the deployment out of every admin-only endpoint, including role
+-- management itself, with no recovery path short of direct DB surgery.
+-- ListActiveAdminIDsForUpdate is that guard's own query -- FOR UPDATE
+-- (not a plain count) so it locks every currently-qualifying row: a
+-- SECOND concurrent demotion of a DIFFERENT admin, running this SAME
+-- query inside its own transaction, blocks here until the first
+-- transaction commits or rolls back, then re-evaluates against the
+-- now-current row versions (Postgres' own read-committed row-locking
+-- semantics) rather than both transactions reading a stale "2 admins"
+-- snapshot and both proceeding.
+
+-- name: ListActiveAdminIDsForUpdate :many
+SELECT id FROM users
+WHERE role = 'admin' AND disabled = false
+FOR UPDATE;

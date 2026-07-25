@@ -149,6 +149,10 @@ type testRig struct {
 	// (cmd/control-plane/main.go).
 	auditLog *narvipg.AuditLogStore
 
+	// linkPrompts backs the members API's own GET /api/members (below) --
+	// ListMembers's own "pending-link state" half (Step 39, §13.2).
+	linkPrompts *narvipg.IdentityLinkPromptStore
+
 	// tokenEncryptionKey is a fixed, valid 32-byte AES-256-GCM key used by
 	// this rig's own scm-credentials tests (real EncryptToken/DecryptToken
 	// round trip, matching the SAME real flow Step 20's own OAuth callback
@@ -197,6 +201,7 @@ func newTestRig(t *testing.T) testRig {
 		outbox:              narvipg.NewOutboxStore(pool),
 		linearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
 		auditLog:            narvipg.NewAuditLogStore(pool),
+		linkPrompts:         narvipg.NewIdentityLinkPromptStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -211,6 +216,22 @@ func newTestRig(t *testing.T) testRig {
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.participants, rig.auditLog, rig.registry))
 		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry))
 		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog))
+	})
+	// /api/members, /api/audit-log (Step 39, "identities + full RBAC",
+	// §13.2/§13.3) -- mounted exactly like cmd/control-plane/main.go's own
+	// wiring (this file's own doc comment on that file's own precedent):
+	// gated behind auth.Middleware only, with each handler rendering its
+	// own admin-only authz.Authorize verdict.
+	router.Route("/api/members", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.ListMembers(rig.users, rig.identities, rig.linkPrompts))
+		r.Patch("/{userID}/role", httpapi.UpdateMemberRole(rig.pool, rig.users, rig.auditLog))
+		r.Post("/{userID}/identities", httpapi.LinkMemberIdentity(rig.pool, rig.users, rig.identities, rig.auditLog))
+		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(rig.pool, rig.identities, rig.auditLog))
+	})
+	router.Route("/api/audit-log", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.ListAuditLog(rig.auditLog))
 	})
 	// scm-credentials is deliberately mounted OUTSIDE /api/sessions and
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc

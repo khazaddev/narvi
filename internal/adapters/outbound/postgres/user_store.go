@@ -70,3 +70,16 @@ func (s *UserStore) List(ctx context.Context) ([]sqlcgen.User, error) {
 func (s *UserStore) UpdateRole(ctx context.Context, id pgtype.UUID, role sqlcgen.UserRole) (sqlcgen.User, error) {
 	return s.q.UpdateUserRole(ctx, sqlcgen.UpdateUserRoleParams{ID: id, Role: role})
 }
+
+// ListActiveAdminIDsForUpdate returns the id of every currently
+// role=admin, disabled=false user, row-locked (FOR UPDATE) for the
+// duration of the caller's own transaction -- backs UpdateMemberRole's
+// own last-admin guard (an audit finding, H8: demoting the sole
+// remaining admin must be refused, not silently allowed). Callers MUST
+// run this WithTx, inside the SAME transaction as whatever UpdateRole
+// call the guard's verdict decides whether to allow, so a concurrent
+// demotion of a DIFFERENT admin blocks on the shared row lock rather
+// than both transactions reading a stale headcount and both proceeding.
+func (s *UserStore) ListActiveAdminIDsForUpdate(ctx context.Context) ([]pgtype.UUID, error) {
+	return s.q.ListActiveAdminIDsForUpdate(ctx)
+}
