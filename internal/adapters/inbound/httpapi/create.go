@@ -128,6 +128,24 @@ const defaultContractsPath = "contracts/api"
 // pool.Begin, the SAME trust-boundary precedent every other request field
 // this handler validates already follows.
 //
+// Audit remediation (wire-contract/security-adjacent lens): req.SpawnSource
+// -- a plain client-supplied JSON field -- previously reached Postgres
+// VERBATIM via CreateSessionOnTx's own session insert below, with no
+// restriction to "web" on this handler, even though this is the ONLY
+// authenticated REST session-creation path (every other spawnSource --
+// Slack/Linear/GitHub ingress -- calls CreateSessionCore/CreateSessionOnTx
+// directly, from its own separate package, never through here). An
+// authenticated web caller could claim spawnSource: "slack"/"linear"/
+// "github" and get it persisted as-is, forging provenance in the UI's own
+// source icons/filters and audit rows, and steering app/sessionactor/
+// outboxenqueue.go's own turn-completion outbox routing (which genuinely
+// branches on sessions.spawn_source) down a channel the session was never
+// actually created through. Fixed below, right after decoding the body and
+// before ever calling CreateSessionCore: any decoded req.SpawnSource other
+// than "web" is rejected with 400 -- CreateSessionCore/CreateSessionOnTx
+// themselves are UNCHANGED by this fix, so the bot-ingress callers above
+// keep passing their own genuine spawnSource exactly as before.
+//
 // Step 31 ("webhook toolkit") update: everything this func used to do
 // AFTER decoding the request body is now CreateSessionCore below -- a
 // pure extraction, not a behavior change (every case this func's own doc
@@ -200,6 +218,35 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
+		// Audit remediation (wire-contract/security-adjacent lens): this
+		// handler is the only authenticated REST session-creation path
+		// (every other spawnSource-bearing caller -- Slack/Linear/GitHub
+		// ingress -- constructs sessions through its own separate code
+		// path, calling CreateSessionCore/CreateSessionOnTx directly, never
+		// this REST handler; see this func's own doc comment above).
+		// req.SpawnSource is nonetheless a plain client-supplied JSON field
+		// on this same request body, and was previously persisted onto the
+		// new session row VERBATIM below -- letting an authenticated web
+		// caller claim spawnSource: "slack"/"linear"/"github" here, forging
+		// provenance in the UI's own source icons/filters and audit rows,
+		// and steering app/sessionactor/outboxenqueue.go's own turn-
+		// completion routing (which genuinely branches on
+		// sessions.spawn_source) down a channel this session was never
+		// actually created through. Rejected here instead: the decode step
+		// above already guarantees req.SpawnSource is one of the 4 valid
+		// enum values (restdtos.CreateSessionRequestSpawnSource's own
+		// UnmarshalJSON rejects a missing key or any value outside
+		// {web,slack,linear,github} before we ever reach this line), so
+		// the only real question left is whether it's "web" -- anything
+		// else is a deliberately-wrong claim, rejected with a 400 rather
+		// than silently coerced, the same reject-don't-silently-coerce
+		// convention validateCreateSessionRequest below already applies to
+		// every other caller-supplied field.
+		if req.SpawnSource != restdtos.CreateSessionRequestSpawnSourceWeb {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("spawnSource: must be %q on this endpoint, got %q", restdtos.CreateSessionRequestSpawnSourceWeb, req.SpawnSource))
+			return
+		}
+
 		created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, createdBy)
 		if cerr != nil {
 			writeError(w, cerr.Status, cerr.Message)
@@ -226,9 +273,12 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 		// hitting /api/sessions directly claim spawnSource: "slack" (or
 		// linear/github) in its JSON body and get an "explicit" decision
 		// recorded against a surface this handler never actually is.
-		// req.SpawnSource itself is still used, unchanged, for the
-		// session's own sessions.spawn_source column below -- that is a
-		// separate, pre-existing concern this fix does not touch.
+		// req.SpawnSource itself is, by this point, already forced to
+		// "web" (the audit-remediation check above, run before
+		// CreateSessionCore was ever called) -- so the "session's own
+		// sessions.spawn_source column below" concern this comment used to
+		// flag as separate and untouched is now closed too, by that same
+		// fix.
 		recordExplicitIntentDecision(ctx, intentSvc, created.ID, "web", req.PlanMode)
 
 		writeJSON(w, http.StatusCreated, sessionToDTO(created))
