@@ -147,8 +147,7 @@ func NewInstallCallbackHandler(
 		}
 
 		if err := auditlog.Record(ctx, auditLog.WithTx(tx), actorUserID, action, "linear_installation", organizationID, map[string]any{
-			"organization_id": organizationID,
-			"app_user_id":     appUserID,
+			"app_user_id": appUserID,
 		}); err != nil {
 			logger.Error("linear: record audit log failed", "error", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)

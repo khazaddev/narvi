@@ -210,8 +210,8 @@ func TestInstallCallback_ValidExchange_StoresInstallation(t *testing.T) {
 	if err := json.Unmarshal(detailJSON, &detail); err != nil {
 		t.Fatalf("unmarshal detail_json: %v", err)
 	}
-	if detail["organization_id"] != organizationID {
-		t.Errorf("audit_log.detail_json[organization_id] = %v, want %q", detail["organization_id"], organizationID)
+	if detail["app_user_id"] == "" || detail["app_user_id"] == nil {
+		t.Errorf("audit_log.detail_json[app_user_id] = %v, want a non-empty value", detail["app_user_id"])
 	}
 }
 
@@ -368,7 +368,7 @@ func TestInstallCallback_StateMismatch_Rejected(t *testing.T) {
 // exchange is never attempted, and no linear_installations/audit_log row
 // is written at all.
 func TestInstallCallback_NonAdmin_Forbidden(t *testing.T) {
-	for _, role := range []sqlcgen.UserRole{sqlcgen.UserRoleViewer, sqlcgen.UserRoleMember} {
+	for _, role := range []sqlcgen.UserRole{sqlcgen.UserRoleViewer, sqlcgen.UserRoleMember, sqlcgen.UserRoleMaintainer} {
 		t.Run(string(role), func(t *testing.T) {
 			pool := newTestPool(t)
 			installations := narvipg.NewLinearInstallationStore(pool)
