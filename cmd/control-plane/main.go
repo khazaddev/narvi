@@ -455,6 +455,14 @@ func serve() error {
 			Registry:         registry,
 			IntentClassifier: intentClassifierSvc,
 			AuditLog:         auditLogStore,
+			// Identities/Users/Participants (batch fix/audit-github-actor-
+			// rbac): the SAME identityStore/userStore/participantStore
+			// instances every other caller above already uses (Step 20's
+			// own auth wiring, Step 37's own plan approve/reject
+			// endpoints), never a second, independently-constructed copy.
+			Identities:   identityStore,
+			Users:        userStore,
+			Participants: participantStore,
 		},
 		webhookDeliveryStore,
 		githubingress.Config{

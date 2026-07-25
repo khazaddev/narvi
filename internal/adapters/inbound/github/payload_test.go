@@ -234,3 +234,95 @@ func TestParseMention_UnrecognizedEventType(t *testing.T) {
 		t.Error("parseMention() ok = true, want false for an event type this adapter doesn't act on")
 	}
 }
+
+// TestParseMention_CommenterIdentity is batch fix/audit-github-actor-rbac's
+// own table-driven test for the new comment.user.{id,login} parsing (the
+// H4 audit finding this batch closes: GitHub ingress never even parsed WHO
+// commented) -- table-driven over BOTH event shapes this package's own
+// parseMention dispatches on, since GitHub uses the identical comment.user
+// shape for each (payload.go's own doc comment on pullRequestReviewCommentPayload.
+// Comment.User).
+func TestParseMention_CommenterIdentity(t *testing.T) {
+	mentionRE := compileMentionPattern(testBotHandle)
+
+	tests := []struct {
+		name               string
+		eventType          string
+		body               string
+		wantCommenterID    int64
+		wantCommenterLogin string
+	}{
+		{
+			name:      "issue_comment carries commenter id/login",
+			eventType: eventTypeIssueComment,
+			body: `{
+				"action": "created",
+				"issue": {"number": 42, "pull_request": {"url": "https://api.github.com/repos/acme/widgets/pulls/42"}},
+				"comment": {"body": "@narvi-bot please review", "user": {"id": 555111, "login": "octo-reviewer"}},
+				"repository": {"full_name": "acme/widgets", "name": "widgets", "clone_url": "https://github.com/acme/widgets.git"}
+			}`,
+			wantCommenterID:    555111,
+			wantCommenterLogin: "octo-reviewer",
+		},
+		{
+			name:      "issue_comment with no comment.user -- zero-valued, never an error",
+			eventType: eventTypeIssueComment,
+			body: `{
+				"action": "created",
+				"issue": {"number": 42, "pull_request": {"url": "https://api.github.com/repos/acme/widgets/pulls/42"}},
+				"comment": {"body": "@narvi-bot please review"},
+				"repository": {"full_name": "acme/widgets", "name": "widgets", "clone_url": "https://github.com/acme/widgets.git"}
+			}`,
+			wantCommenterID:    0,
+			wantCommenterLogin: "",
+		},
+		{
+			name:      "pull_request_review_comment carries commenter id/login",
+			eventType: eventTypePullRequestReviewComment,
+			body: `{
+				"action": "created",
+				"comment": {"body": "@narvi-bot what do you think?", "user": {"id": 777222, "login": "line-commenter"}},
+				"pull_request": {
+					"number": 99,
+					"head": {"ref": "feature-x", "repo": {"name": "widgets", "clone_url": "https://github.com/contributor/widgets.git"}}
+				},
+				"repository": {"full_name": "acme/widgets"}
+			}`,
+			wantCommenterID:    777222,
+			wantCommenterLogin: "line-commenter",
+		},
+		{
+			name:      "pull_request_review_comment with no comment.user -- zero-valued, never an error",
+			eventType: eventTypePullRequestReviewComment,
+			body: `{
+				"action": "created",
+				"comment": {"body": "@narvi-bot what do you think?"},
+				"pull_request": {
+					"number": 99,
+					"head": {"ref": "feature-x", "repo": {"name": "widgets", "clone_url": "https://github.com/contributor/widgets.git"}}
+				},
+				"repository": {"full_name": "acme/widgets"}
+			}`,
+			wantCommenterID:    0,
+			wantCommenterLogin: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, ok, err := parseMention(tc.eventType, []byte(tc.body), mentionRE)
+			if err != nil {
+				t.Fatalf("parseMention() error = %v, want nil", err)
+			}
+			if !ok {
+				t.Fatal("parseMention() ok = false, want true (a genuine, actionable mention)")
+			}
+			if m.CommenterID != tc.wantCommenterID {
+				t.Errorf("CommenterID = %d, want %d", m.CommenterID, tc.wantCommenterID)
+			}
+			if m.CommenterLogin != tc.wantCommenterLogin {
+				t.Errorf("CommenterLogin = %q, want %q", m.CommenterLogin, tc.wantCommenterLogin)
+			}
+		})
+	}
+}
