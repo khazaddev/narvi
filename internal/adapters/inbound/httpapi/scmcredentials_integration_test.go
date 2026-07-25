@@ -638,3 +638,90 @@ func TestScmCredentials_CorrectCurrentGen_Succeeds(t *testing.T) {
 		t.Errorf("Password = %q, want the real decrypted token", got.Password)
 	}
 }
+
+// --- Creator disabled/role recheck (audit finding M8) ---
+
+// TestScmCredentials_DisabledCreator_Denied proves a session whose creator
+// was disabled AFTER session/sandbox creation -- mid-turn, e.g. an admin's
+// own offboarding or incident-response disable -- is denied a credential
+// (403), even though the sandbox bearer token, gen, and host are all
+// otherwise valid. Mirrors internal/app/sessionactor's own
+// TestHandleSandboxEvent_PushComplete_DisabledCreator_SkipsPRCreation
+// (pushpr_integration_test.go): same staleness scenario, same session
+// creator, just exercised at THIS endpoint -- the earlier,
+// credential-minting half of the push_complete chain -- instead of that
+// test's later PR-creation half.
+func TestScmCredentials_DisabledCreator_Denied(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	// Disable the session creator mid-turn, after the session/sandbox
+	// already exist. No UserStore mutation exists for Disabled today
+	// (only ListMembers' own read exposure, httpapi/members.go) -- set it
+	// directly via raw SQL, mirroring pushpr_integration_test.go's own
+	// established precedent for this exact gap.
+	if _, err := rig.pool.Exec(ctx, `UPDATE users SET disabled = true WHERE id = $1`, session.CreatedBy); err != nil {
+		t.Fatalf("disable session creator: %v", err)
+	}
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (session creator is now disabled)", status, http.StatusForbidden)
+	}
+	if got.Password != "" {
+		t.Errorf("Password = %q, want empty (no real credential ever handed back for a disabled creator)", got.Password)
+	}
+}
+
+// TestScmCredentials_DemotedToViewerCreator_Denied proves a session whose
+// creator was demoted to viewer AFTER session/sandbox creation is ALSO
+// denied (403) -- the same §13.3 viewer-guard threshold
+// creatorMayGetPRAttribution already enforces at PR-creation time
+// (internal/app/sessionactor/githubtoken.go), now enforced here too, at
+// credential-minting time. Uses a real UserStore.UpdateRole call (the same
+// mutation an admin's own real role-change endpoint performs), not raw
+// SQL, since that store method already exists.
+func TestScmCredentials_DemotedToViewerCreator_Denied(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	if _, err := rig.users.UpdateRole(ctx, session.CreatedBy, sqlcgen.UserRoleViewer); err != nil {
+		t.Fatalf("demote session creator to viewer: %v", err)
+	}
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (session creator is now a viewer)", status, http.StatusForbidden)
+	}
+	if got.Password != "" {
+		t.Errorf("Password = %q, want empty (no real credential ever handed back for a demoted creator)", got.Password)
+	}
+}
+
+// TestScmCredentials_StillMemberCreator_Succeeds is the positive
+// counterpart to the two tests above: a session creator who is still an
+// active member (never disabled, never demoted) succeeds exactly like
+// TestScmCredentials_Success -- proving the new disabled/role recheck
+// itself introduces no false-positive rejection for the ordinary,
+// still-eligible case.
+func TestScmCredentials_StillMemberCreator_Succeeds(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentity(ctx, t, rig, "gho_realGitHubAccessToken")
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d (creator is still an active member)", status, http.StatusOK)
+	}
+	if got.Password != "gho_realGitHubAccessToken" {
+		t.Errorf("Password = %q, want the real decrypted token", got.Password)
+	}
+}

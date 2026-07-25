@@ -34,11 +34,14 @@
 //
 // # "Never block a spawn" (§10 Phase 2, the one hard invariant)
 //
-// Every failure branch below -- no repos, no usable creator GitHub token,
-// a parse/API/timeout failure for ANY one repo, an image_builds lookup
-// error -- is a plain, logged, early return: plan.spec.Image is simply
-// LEFT at defaultBaseImage (planFreshSpawn/planRestore's own already-
-// committed choice), exactly as if this function had never been called.
+// Every failure branch below -- no repos, a creator now disabled/demoted
+// to viewer (githubtoken.go's own CheckCreatorGuard -- audit finding,
+// cross-step: this check did not exist here at all until this fix), no
+// usable creator GitHub token, a parse/API/timeout failure for ANY one
+// repo, an image_builds lookup error -- is a plain, logged, early return:
+// plan.spec.Image is simply LEFT at defaultBaseImage (planFreshSpawn/
+// planRestore's own already-committed choice), exactly as if this
+// function had never been called.
 // Nothing here can fail or delay executeSpawn/executeRestore's own
 // subsequent call. The one deliberate, bounded exception is LATENCY, not
 // blocking: when a session names real repos, this DOES add real,
@@ -97,6 +100,38 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 		// not panic here. Falls back to the base image, exactly like every
 		// other early-return in this function.
 		a.logger.Warn("sessionactor: resolve image: no SourceControl configured; falling back to base image")
+		return
+	}
+
+	// Creator disabled/role recheck (audit finding, cross-step: this
+	// function minted and used the session creator's real GitHub token
+	// against the live GitHub API below with NO recheck at all -- the
+	// exact gap githubtoken.go's own CheckCreatorGuard exists to close,
+	// already fixed for pushpr.go's createPRBestEffort and
+	// scmcredentials.go's ScmCredentials). Checked fresh, right here,
+	// before ever decrypting/using the creator's token below -- see
+	// CheckCreatorGuard's own doc comment for the complete staleness
+	// rationale. Falls back to the base image on any outcome here,
+	// exactly like every other early return in this function -- a genuine
+	// GetByID failure logs at Error (mirroring this function's own
+	// imageBuild.Get handling just below: Error for an unexpected DB
+	// failure, distinct from an expected miss), Disabled/Viewer log at
+	// Warn (an expected, security-relevant skip, not a malfunction).
+	if v := CheckCreatorGuard(ctx, a.stores.user, plan.createdBy); !v.Allowed {
+		switch {
+		case v.Err != nil && !v.ErrNotFound:
+			a.logger.Error("sessionactor: resolve image: get session creator for disabled/role recheck failed; falling back to base image",
+				"error", v.Err)
+		case v.Err != nil:
+			a.logger.Warn("sessionactor: resolve image: session creator row not found for disabled/role recheck; falling back to base image",
+				"user_id", plan.createdBy.String())
+		case v.Disabled:
+			a.logger.Warn("sessionactor: resolve image: session creator is now disabled; falling back to base image (§13.3 viewer guard parity)",
+				"user_id", plan.createdBy.String())
+		case v.Viewer:
+			a.logger.Warn("sessionactor: resolve image: session creator is now a viewer; falling back to base image (§13.3 viewer guard parity)",
+				"user_id", plan.createdBy.String())
+		}
 		return
 	}
 
