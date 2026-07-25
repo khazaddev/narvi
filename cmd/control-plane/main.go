@@ -359,7 +359,7 @@ func serve() error {
 	// endpoint, not a browser-facing one (see that handler's own doc
 	// comment in internal/adapters/inbound/httpapi/scmcredentials.go).
 	router.Post("/sessions/{sessionID}/scm-credentials",
-		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, cfg.TokenEncryptionKey, cfg.Timeouts))
+		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, cfg.TokenEncryptionKey, cfg.Timeouts))
 
 	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.

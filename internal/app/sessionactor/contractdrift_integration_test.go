@@ -592,6 +592,139 @@ func TestCheckContractDrift_NoUsableGitHubToken_StillSpawnsSuccessfully(t *testi
 	}
 }
 
+// --- Creator disabled/role recheck (audit finding, cross-step: this
+// package's own CheckCreatorGuard, githubtoken.go) ---
+
+// TestCheckContractDrift_DisabledCreator_SkipsDriftCheck proves a
+// mock-configured session whose creator was disabled AFTER session
+// creation -- mid-session, e.g. an admin's own offboarding or
+// incident-response disable -- never even attempts ResolveBranchSHA/
+// ResolveContractsFingerprint, and never writes a contract_drift_snapshots
+// row, even though the creator has an otherwise-real, usable, encrypted
+// GitHub identity/token (proving this is SPECIFICALLY the new
+// CheckCreatorGuard recheck, not an incidental no-usable-token skip like
+// TestCheckContractDrift_NoUsableGitHubToken_StillSpawnsSuccessfully
+// above). Mirrors internal/adapters/inbound/httpapi's own
+// TestScmCredentials_DisabledCreator_Denied and this package's own
+// TestHandleSandboxEvent_PushComplete_DisabledCreator_SkipsPRCreation
+// (pushpr_integration_test.go): same staleness scenario, same session
+// creator, just exercised at THIS call site -- the gap this batch's own
+// audit sweep found left open here.
+func TestCheckContractDrift_DisabledCreator_SkipsDriftCheck(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-disabled-drift")
+	sessionID := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-disabled", "https://github.com/acme/repo-disabled.git", "main")
+
+	// Disable the session creator AFTER the session already exists --
+	// mirrors pushpr_integration_test.go's own established precedent (no
+	// UserStore mutation exists for Disabled today, only ListMembers' own
+	// read exposure, httpapi/members.go).
+	if _, err := pool.Exec(ctx, `UPDATE users SET disabled = true WHERE id = $1`, creator); err != nil {
+		t.Fatalf("disable fixture user: %v", err)
+	}
+
+	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used", nextFingerprint: "fp-should-never-be-used", nextFingerprintExists: true}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-disabled-drift"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := sandboxStore.Get(ctx, sessionID)
+		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
+	})
+
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Errorf("ResolveBranchSHA call count = %d, want 0 (session creator is disabled)", got)
+	}
+	if got := sourceControl.fingerprintCallCount(); got != 0 {
+		t.Errorf("ResolveContractsFingerprint call count = %d, want 0 (session creator is disabled)", got)
+	}
+	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-disabled@main"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("contract_drift_snapshots row: err = %v, want pgx.ErrNoRows (never written for a disabled creator)", err)
+	}
+	if after := readContractDriftDetected(ctx, t, otelReader); after != before {
+		t.Errorf("contract_drift_detected counter delta = %d, want 0 (nothing to check for a disabled creator)", after-before)
+	}
+}
+
+// TestCheckContractDrift_DemotedToViewerCreator_SkipsDriftCheck is the
+// same proof as TestCheckContractDrift_DisabledCreator_SkipsDriftCheck
+// above, for the OTHER half of CheckCreatorGuard's own §13.3 viewer-guard
+// threshold: a creator demoted to viewer (rather than disabled) AFTER
+// session creation. Uses a real UserStore.UpdateRole call (the same
+// mutation an admin's own real role-change endpoint performs), not raw
+// SQL, since that store method already exists -- mirrors
+// scmcredentials_integration_test.go's own
+// TestScmCredentials_DemotedToViewerCreator_Denied precedent exactly.
+func TestCheckContractDrift_DemotedToViewerCreator_SkipsDriftCheck(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-viewer-drift")
+	sessionID := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-viewer", "https://github.com/acme/repo-viewer.git", "main")
+
+	if _, err := narvipg.NewUserStore(pool).UpdateRole(ctx, creator, sqlcgen.UserRoleViewer); err != nil {
+		t.Fatalf("demote fixture user to viewer: %v", err)
+	}
+
+	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used", nextFingerprint: "fp-should-never-be-used", nextFingerprintExists: true}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-viewer-drift"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := sandboxStore.Get(ctx, sessionID)
+		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
+	})
+
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Errorf("ResolveBranchSHA call count = %d, want 0 (session creator is now a viewer)", got)
+	}
+	if got := sourceControl.fingerprintCallCount(); got != 0 {
+		t.Errorf("ResolveContractsFingerprint call count = %d, want 0 (session creator is now a viewer)", got)
+	}
+	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-viewer@main"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("contract_drift_snapshots row: err = %v, want pgx.ErrNoRows (never written for a demoted creator)", err)
+	}
+	if after := readContractDriftDetected(ctx, t, otelReader); after != before {
+		t.Errorf("contract_drift_detected counter delta = %d, want 0 (nothing to check for a demoted creator)", after-before)
+	}
+}
+
 // TestCheckContractDrift_DifferentBranches_SameRepo_NoFalsePositiveDrift
 // proves audit finding F5's own fix: two mock-configured sessions naming
 // the SAME repo but DIFFERENT branches no longer see each other's SHA as

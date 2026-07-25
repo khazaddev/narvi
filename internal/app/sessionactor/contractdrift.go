@@ -23,14 +23,16 @@
 // # "Never block a spawn" (mirrors resolveAndSetImage exactly)
 //
 // Every early return below -- no environment_id, an environment lookup
-// failure, an unscoped (non-mock-configured) Environment, no repos, no
-// usable creator GitHub token, a parse/API/timeout failure for any one
-// repo, a snapshot-lookup failure -- is a plain, logged, no-op. This
-// function has no return value at all (unlike resolveAndSetImage, which
-// mutates plan.spec.Image in place): checkContractDrift's only observable
-// effects are a log line, an OTel counter increment, and a best-effort
-// Postgres upsert, none of which ever influence whether or how a spawn
-// proceeds.
+// failure, an unscoped (non-mock-configured) Environment, no repos, a
+// creator now disabled/demoted to viewer (githubtoken.go's own
+// CheckCreatorGuard -- audit finding, cross-step: this check did not exist
+// here at all until this fix), no usable creator GitHub token, a
+// parse/API/timeout failure for any one repo, a snapshot-lookup failure --
+// is a plain, logged, no-op. This function has no return value at all
+// (unlike resolveAndSetImage, which mutates plan.spec.Image in place):
+// checkContractDrift's only observable effects are a log line, an OTel
+// counter increment, and a best-effort Postgres upsert, none of which ever
+// influence whether or how a spawn proceeds.
 //
 // # Independent per repo, and independent of resolveAndSetImage
 //
@@ -101,6 +103,36 @@ func (a *Actor) checkContractDrift(ctx context.Context, plan *spawnPlan) {
 		// exactly (imageresolve.go) -- some tests, and any future caller
 		// genuinely without one, must not panic here.
 		a.logger.Warn("sessionactor: check contract drift: no SourceControl configured; skipping")
+		return
+	}
+
+	// Creator disabled/role recheck (audit finding, cross-step: this
+	// function minted and used the session creator's real GitHub token
+	// against the live GitHub API below with NO recheck at all -- the
+	// exact gap githubtoken.go's own CheckCreatorGuard exists to close,
+	// already fixed for pushpr.go's createPRBestEffort and
+	// scmcredentials.go's ScmCredentials). Checked fresh, right here,
+	// before ever decrypting/using the creator's token below -- see
+	// CheckCreatorGuard's own doc comment for the complete staleness
+	// rationale. Every outcome here is a plain, logged Warn-and-skip --
+	// this file's own established idiom (mirrors the env.Get/
+	// contractDrift.Get failures above/below, which also Warn rather than
+	// Error even for a genuine, unexpected DB failure): checkContractDrift
+	// never distinguishes WHY it skipped a given spawn's drift check, only
+	// THAT it did, since nothing here ever blocks or fails the spawn
+	// itself either way.
+	if v := CheckCreatorGuard(ctx, a.stores.user, plan.createdBy); !v.Allowed {
+		switch {
+		case v.Err != nil:
+			a.logger.Warn("sessionactor: check contract drift: get session creator for disabled/role recheck failed; skipping",
+				"error", v.Err)
+		case v.Disabled:
+			a.logger.Warn("sessionactor: check contract drift: session creator is now disabled; skipping (§13.3 viewer guard parity)",
+				"user_id", plan.createdBy.String())
+		case v.Viewer:
+			a.logger.Warn("sessionactor: check contract drift: session creator is now a viewer; skipping (§13.3 viewer guard parity)",
+				"user_id", plan.createdBy.String())
+		}
 		return
 	}
 

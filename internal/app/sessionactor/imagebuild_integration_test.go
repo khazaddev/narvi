@@ -198,6 +198,122 @@ func TestResolveAndSetImage_NoUsableGitHubToken_StillSpawnsOnBaseImage(t *testin
 	})
 }
 
+// --- Creator disabled/role recheck (audit finding, cross-step: this
+// package's own CheckCreatorGuard, githubtoken.go) ---
+
+// TestResolveAndSetImage_DisabledCreator_FallsBackToBaseImage proves a
+// session whose creator was disabled AFTER session creation -- mid-
+// session, e.g. an admin's own offboarding or incident-response disable --
+// still spawns successfully, on the base image, WITHOUT ever attempting
+// ResolveBranchSHA, even though the creator has an otherwise-real, usable,
+// encrypted GitHub identity/token (proving this is SPECIFICALLY the new
+// CheckCreatorGuard recheck, not an incidental no-usable-token skip like
+// TestResolveAndSetImage_NoUsableGitHubToken_StillSpawnsOnBaseImage
+// above). Mirrors internal/adapters/inbound/httpapi's own
+// TestScmCredentials_DisabledCreator_Denied and this package's own
+// TestHandleSandboxEvent_PushComplete_DisabledCreator_SkipsPRCreation
+// (pushpr_integration_test.go): same staleness scenario, same session
+// creator, just exercised at THIS call site -- the gap this batch's own
+// audit sweep found left open here.
+func TestResolveAndSetImage_DisabledCreator_FallsBackToBaseImage(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-disabled-image")
+	sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
+		"repo-disabled", "https://github.com/acme/repo-disabled.git", "main")
+
+	// Disable the session creator AFTER the session already exists --
+	// mirrors pushpr_integration_test.go's own established precedent (no
+	// UserStore mutation exists for Disabled today, only ListMembers' own
+	// read exposure, httpapi/members.go).
+	if _, err := pool.Exec(ctx, `UPDATE users SET disabled = true WHERE id = $1`, creator); err != nil {
+		t.Fatalf("disable fixture user: %v", err)
+	}
+
+	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-disabled-image"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	spec := provider.lastSpec()
+	if spec.Image != defaultBaseImage {
+		t.Errorf("CreateSpec.Image = %q, want the base image %q (session creator is disabled)", spec.Image, defaultBaseImage)
+	}
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Errorf("ResolveBranchSHA call count = %d, want 0 (session creator is disabled)", got)
+	}
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := sandboxStore.Get(ctx, sessionID)
+		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
+	})
+}
+
+// TestResolveAndSetImage_DemotedToViewerCreator_FallsBackToBaseImage is the
+// same proof as TestResolveAndSetImage_DisabledCreator_FallsBackToBaseImage
+// above, for the OTHER half of CheckCreatorGuard's own §13.3 viewer-guard
+// threshold: a creator demoted to viewer (rather than disabled) AFTER
+// session creation. Uses a real UserStore.UpdateRole call (the same
+// mutation an admin's own real role-change endpoint performs), not raw
+// SQL, since that store method already exists -- mirrors
+// scmcredentials_integration_test.go's own
+// TestScmCredentials_DemotedToViewerCreator_Denied precedent exactly.
+func TestResolveAndSetImage_DemotedToViewerCreator_FallsBackToBaseImage(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-viewer-image")
+	sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
+		"repo-viewer", "https://github.com/acme/repo-viewer.git", "main")
+
+	if _, err := narvipg.NewUserStore(pool).UpdateRole(ctx, creator, sqlcgen.UserRoleViewer); err != nil {
+		t.Fatalf("demote fixture user to viewer: %v", err)
+	}
+
+	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-viewer-image"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	spec := provider.lastSpec()
+	if spec.Image != defaultBaseImage {
+		t.Errorf("CreateSpec.Image = %q, want the base image %q (session creator is now a viewer)", spec.Image, defaultBaseImage)
+	}
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Errorf("ResolveBranchSHA call count = %d, want 0 (session creator is now a viewer)", got)
+	}
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := sandboxStore.Get(ctx, sessionID)
+		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
+	})
+}
+
 // TestImageBuildPipeline_BackgroundBuilderPicksUpPendingRow_LaterSpawnGetsRealImage
 // proves scenario (b): the FULL pipeline, spanning both dispatch.go's own
 // spawn-time resolution and internal/app/imagebuild.Builder's own

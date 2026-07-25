@@ -41,6 +41,49 @@
 //     ScmCredentials below for why this check is deliberately built anyway
 //     despite being largely redundant with token_hash's own
 //     overwrite-on-respawn behavior.
+//
+// A later, separate audit finding (M8, cross-step): this handler is the
+// EARLIER half of the same push_complete chain internal/app/sessionactor's
+// own pushpr.go createPRBestEffort forms the LATER half of -- both mint/use
+// the session creator's stored GitHub OAuth token, off the SAME session,
+// often mere seconds apart (this endpoint hands the sandbox a credential to
+// `git push` with; createPRBestEffort then opens the PR once that push
+// completes). createPRBestEffort's own creatorMayGetPRAttribution
+// (internal/app/sessionactor/githubtoken.go) already re-checks the
+// creator's CURRENT role and disabled flag fresh, right before using their
+// token, with an explicit staleness rationale: a session can outlive the
+// moment its creator was disabled or demoted. This handler had NO such
+// check at all -- it decrypted and handed back the creator's real token to
+// any caller holding a valid sandbox bearer token, even one whose creator
+// an admin had JUST disabled (e.g. offboarding, incident response) or
+// demoted to viewer mid-turn. Fixed below by re-checking the creator's
+// CURRENT row (Disabled, then Role) immediately after the created_by-NULL
+// check, before ever looking up their identity/token -- the SAME §13.3
+// viewer-guard threshold creatorMayGetPRAttribution itself uses, not a
+// different one invented for this endpoint (403, the same generic body as
+// every other outcome in this class -- see step 8 below).
+//
+// A still later audit sweep (cross-step, cross-package) found TWO MORE
+// call sites inside internal/app/sessionactor itself -- contractdrift.go's
+// checkContractDrift and imageresolve.go's resolveAndSetImage -- carrying
+// this SAME gap, this batch never having touched either. Rather than a
+// third and fourth inline copy of the identical Disabled-then-Role recheck,
+// that check is now sessionactor.CheckCreatorGuard (githubtoken.go), an
+// EXPORTED function all four call sites -- this handler included -- call
+// directly: this package already imports internal/app/sessionactor for
+// Registry/EnsureDispatched, so sharing this one further check across that
+// existing dependency is a smaller, safer surface than a third bespoke
+// copy would have been. This handler's own step 8 (below) now reads
+// sessionactor.CheckCreatorGuard's verdict rather than re-deriving it from
+// a locally fetched sqlcgen.User row -- see that function's own doc
+// comment for the complete rationale, and this handler's own body for how
+// its verdict maps onto THIS endpoint's own status codes (a genuine,
+// unexpected GetByID failure is now a 500, matching sessions.Get/
+// sandboxes.Get's own established discipline elsewhere in this same
+// handler, distinct from the expected "row absent" 403 -- a nitpick this
+// same audit sweep also raised: this handler's own first version of this
+// check logged Warn and returned 403 unconditionally on ANY GetByID
+// failure, never distinguishing the two).
 
 package httpapi
 
@@ -63,6 +106,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -115,7 +159,8 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 // this audit remediation's own additions, deliberately placed at the SAME
 // points internal/adapters/inbound/wshub/sandbox.go's own sandbox-WS
 // handshake places its equivalent checks -- see that file's own doc
-// comment steps 7/8):
+// comment steps 7/8; step 8 below is the M8 audit finding's own addition,
+// calling internal/app/sessionactor's own CheckCreatorGuard):
 //
 //  1. sessionID does not parse as a UUID, or no sandbox row exists for it
 //     -> 404 (mirrors wshub/sandbox.go's own "malformed and nonexistent
@@ -148,16 +193,38 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //  5. Malformed request body -> 400.
 //  6. req.Host does not case-insensitively match ANY host among the
 //     session's own repos (sessions.repos, via sessionRepoHosts) -> 403,
-//     the SAME generic body as step 7 below (§5.2: "scoped https+host
+//     the SAME generic body as steps 7-9 below (§5.2: "scoped https+host
 //     only" -- the decrypted token must never be handed back for a host
 //     the session's own repos don't actually use, e.g. a compromised
 //     in-sandbox dependency probing an arbitrary host via the
 //     credential-helper protocol).
-//  7. The session's own created_by is NULL, OR that user has no linked
+//  7. The session's own created_by is NULL -> 403, the SAME generic body
+//     as steps 6/8/9 -- no bot/service-account fallback exists (§8.11),
+//     nothing further to even check once a session has no creator at all.
+//  8. OR the session's own created_by user is now Disabled, OR their Role
+//     is now viewer -> 403, the SAME generic body as steps 6/7/9 (M8 audit
+//     finding: re-checked FRESH here, right before step 9's identity/token
+//     lookup even begins -- not the role/disabled state as of session
+//     creation). Calls internal/app/sessionactor's own CheckCreatorGuard
+//     (githubtoken.go) -- the SAME §13.3 viewer-guard threshold
+//     creatorMayGetPRAttribution itself uses, via the SAME shared function
+//     (not a separately-maintained copy) -- see this file's own top
+//     comment for the full "why this endpoint needs the identical
+//     staleness recheck the later PR-creation step of the same
+//     push_complete chain already performs" rationale. A missing user row
+//     (should be unreachable -- created_by is a real FK) is treated the
+//     SAME as this outcome class's other sub-cases: no usable credential,
+//     nothing to fail loudly over -- 403, same as Disabled/Viewer. A
+//     GENUINE, unexpected failure fetching that row is instead a 500,
+//     matching how sessions.Get/sandboxes.Get above already treat a real
+//     DB failure (only the row's clean absence is folded into this 403
+//     class, not any other lookup failure).
+//  9. OR (regardless of step 8 passing): that user has no linked
 //     identities row for provider=github, OR that identity's
 //     access_token_encrypted is NULL, OR platform.DecryptToken fails on
-//     it -> 403. These four (plus step 6's host-scoping failure above)
-//     are deliberately grouped as ONE outcome class ("no usable OAuth
+//     it -> 403. These, plus step 6's host-scoping failure, step 7's
+//     no-creator failure, and step 8's disabled/demoted failure above, are
+//     deliberately grouped as ONE outcome class ("no usable OAuth
 //     credential is available for this session/host") -- the honest "no
 //     bot/service-account fallback exists" gap named in this Step's own
 //     brief, not a bug to work around by inventing a fake bot credential
@@ -170,7 +237,7 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //     gen-mismatch reuses the SAME 403 status code but is logged
 //     separately server-side (see the handler body) so it stays
 //     observable without adding a caller-visible distinction.
-//  8. Otherwise -> 200 with scmCredentialsResponse{Username:
+//  10. Otherwise -> 200 with scmCredentialsResponse{Username:
 //     "x-access-token", Password: <decrypted token>, ExpiresAt: now +
 //     timeouts.ScmCredentialTTL}.
 //
@@ -181,6 +248,7 @@ func ScmCredentials(
 	sessions *postgres.SessionStore,
 	sandboxes *postgres.SandboxStore,
 	identities *postgres.IdentityStore,
+	users *postgres.UserStore,
 	tokenEncryptionKey []byte,
 	timeouts platform.Timeouts,
 ) http.HandlerFunc {
@@ -276,6 +344,54 @@ func ScmCredentials(
 
 		if !sessionRow.CreatedBy.Valid {
 			logger.Warn("httpapi: scm-credentials: session has no created_by user; no bot fallback exists (§8.11)")
+			writeError(w, http.StatusForbidden, "no usable git credential for this session")
+			return
+		}
+
+		// Creator disabled/role recheck (this func's own doc comment step
+		// 8, M8 audit finding): re-read the creator's CURRENT row fresh,
+		// right here, before ever looking up their identity/token below --
+		// calls internal/app/sessionactor's own CheckCreatorGuard
+		// (githubtoken.go), the SAME shared function creatorMayGetPRAttribution
+		// itself now calls (same Disabled-then-Role order, same §13.3
+		// viewer-guard threshold), which already gates the LATER
+		// PR-creation step of this SAME push_complete chain. A session can
+		// outlive the moment its creator was disabled or demoted -- that
+		// function's own doc comment's full rationale applies here
+		// identically, since this endpoint mints the very credential that
+		// later push uses.
+		//
+		// A genuine, unexpected GetByID failure (Err set, ErrNotFound
+		// false) is a 500 -- matching sessions.Get/sandboxes.Get's own
+		// established discipline above, and this SAME handler's own
+		// identities.GetByUserAndProvider handling five lines below --
+		// distinct from the expected "row absent" case (Err set,
+		// ErrNotFound true), which denies exactly like Disabled/Viewer:
+		// this endpoint's own first version of this check logged Warn and
+		// returned 403 unconditionally for ANY GetByID failure, never
+		// distinguishing the two (a nitpick this same audit sweep raised).
+		guard := sessionactor.CheckCreatorGuard(ctx, users, sessionRow.CreatedBy)
+		if guard.Err != nil {
+			if !guard.ErrNotFound {
+				logger.Error("httpapi: scm-credentials: get session creator for disabled/role recheck failed",
+					"error", guard.Err, "user_id", sessionRow.CreatedBy.String())
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			logger.Warn("httpapi: scm-credentials: session creator row not found for disabled/role recheck; denying",
+				"user_id", sessionRow.CreatedBy.String())
+			writeError(w, http.StatusForbidden, "no usable git credential for this session")
+			return
+		}
+		if guard.Disabled {
+			logger.Warn("httpapi: scm-credentials: session creator is now disabled; refusing credential (audit M8, §13.3 viewer guard parity)",
+				"user_id", sessionRow.CreatedBy.String())
+			writeError(w, http.StatusForbidden, "no usable git credential for this session")
+			return
+		}
+		if guard.Viewer {
+			logger.Warn("httpapi: scm-credentials: session creator is now a viewer; refusing credential (audit M8, §13.3 viewer guard parity)",
+				"user_id", sessionRow.CreatedBy.String())
 			writeError(w, http.StatusForbidden, "no usable git credential for this session")
 			return
 		}
