@@ -9,8 +9,11 @@ services:
       POSTGRES_USER: narvi
       POSTGRES_PASSWORD: narvi
       POSTGRES_DB: narvi
+    # Override the published port per worktree by dropping an untracked .env
+    # file (Compose auto-loads it for variable substitution even when -f is
+    # passed explicitly) containing NARVI_DEV_PG_PORT=<port>.
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${NARVI_DEV_PG_PORT:-5432}:5432"
     volumes:
       - narvi-dev-postgres:/var/lib/postgresql/data
     healthcheck:
