@@ -27,14 +27,17 @@ const installStateCookieName = "narvi_linear_install_state"
 // LinearOAuthClientSecret securely).
 //
 // Mounted behind auth.Middleware (a Narvi user must already be signed in
-// to initiate a workspace connection) -- see doc.go's own scope note:
-// role-gating this to admins specifically is Step 39's ("identities +
-// full RBAC") job, matching auth.Middleware's own current "logged in
-// only, no role check yet" scope exactly; this route adds no bespoke
-// admin check ahead of that.
+// to initiate a workspace connection) AND, as of this fix, behind
+// requireManageIntegrations (authz.go): only an admin actor may mint a
+// state cookie and be redirected into Linear's own authorization flow at
+// all -- see authz.go's own doc comment for why this is admin-only.
 func NewInstallHandler(oauthConfig *oauth2.Config, timeouts platform.Timeouts, secureCookies bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := platform.Logger(r.Context())
+
+		if _, ok := requireManageIntegrations(w, r); !ok {
+			return
+		}
 
 		state, err := platform.GenerateToken()
 		if err != nil {
