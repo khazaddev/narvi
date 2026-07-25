@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,9 +13,11 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -23,6 +26,18 @@ import (
 // IntentClassifierInput.Surface / §18.4's IntentDecisionRecord.Surface)
 // this package's own mentions are classified/recorded under.
 const intentClassifierSurface = "github"
+
+// ErrActorNotAuthorized is CreateOrJoin's own sentinel for "a resolved,
+// linked commenter's role failed domain/authz.Authorize" -- batch
+// fix/audit-github-actor-rbac's own addition (see identity.go's own top
+// doc comment for the full finding this closes). Deliberately DISTINCT
+// from every other error CreateOrJoin returns: handler.go checks for this
+// one specifically and responds 200 without releasing the claimed webhook
+// delivery for a GitHub redelivery retry -- retrying a denied comment
+// changes nothing (the SAME actor would be denied again), unlike every
+// OTHER CreateOrJoin error (a transient Postgres failure, say), which
+// SHOULD be retried via GitHub's own redelivery mechanism.
+var ErrActorNotAuthorized = errors.New("github: actor not authorized")
 
 // SessionCoalescer bundles the stores/registry CreateOrJoin needs -- a
 // small struct rather than a long positional-parameter list, constructed
@@ -55,10 +70,29 @@ type SessionCoalescer struct {
 	// AuditLog is Step 39's own addition (§13.3): threaded through to the
 	// WINNER path's own httpapi.CreateSessionOnTx call below, exactly like
 	// Environments already is, so a GitHub-originated session creation
-	// gets the SAME audit_log row every other CreateSessionOnTx caller
-	// now gets (actor_user_id NULL -- no human caller here, mirrors
-	// created_by's own identical NULL-for-bot convention).
+	// gets the SAME audit_log row every other CreateSessionOnTx caller now
+	// gets. actor_user_id is NULL only until batch fix/audit-github-actor-
+	// rbac's own commenter-identity resolution (identity.go) resolves a
+	// real user -- otherwise it carries that resolved user_id, exactly
+	// mirroring created_by's own identical convention below.
 	AuditLog *postgres.AuditLogStore
+
+	// Identities/Users/Participants are batch fix/audit-github-actor-rbac's
+	// own additions, closing the H4 audit finding that GitHub ingress never
+	// gated session/turn creation behind domain/authz.Authorize at all
+	// (Slack/Linear ingress already do, since Step 39). Identities backs
+	// handler.go's own resolveCommenterActor (identity.go) -- a direct
+	// (provider, external_id) lookup, no auto-linking algorithm needed (see
+	// that file's own doc comment for why). Users/Participants are exactly
+	// the SAME two collaborators actorauthz.AuthorizeResolvedActor/
+	// actorauthz.OwnedOrJoined need, mirroring Slack's/Linear's own
+	// Deps.IdentityLink.Users / Deps.Participants precedent -- production
+	// wiring (cmd/control-plane/main.go) passes the SAME userStore/
+	// participantStore/identityStore instances every other caller already
+	// uses, never a second, independently-constructed copy of any of them.
+	Identities   *postgres.IdentityStore
+	Users        *postgres.UserStore
+	Participants *postgres.ParticipantStore
 }
 
 // CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
@@ -110,8 +144,45 @@ type SessionCoalescer struct {
 // The REUSE (loser) path below has no such risk: it commits tx BEFORE
 // calling httpapi.CreateTurnForBot, so only ever one connection is open
 // at a time there too.
-func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
+//
+// # actor / domain/authz.Authorize gating (batch fix/audit-github-actor-rbac)
+//
+// actor is handler.go's own already-resolved commenter (identity.go's
+// resolveCommenterActor) -- Valid iff this exact GitHub commenter already
+// has a linked Narvi account, invalid (bot attribution) otherwise, exactly
+// mirroring Slack's/Linear's own resolved-actor precedent (§13.2). An
+// invalid actor short-circuits BOTH authorization checks below to
+// allowed=true with no DB read at all (actorauthz.AuthorizeResolvedActor's
+// own documented behavior) -- this batch's own explicit scope keeps
+// today's existing bot-attributed behavior for an unresolved commenter
+// completely unchanged.
+//
+// The WINNER path's own domain/authz.Authorize(ActionCreateSession) check
+// (createAuthorized below) is deliberately resolved BEFORE tx.Begin, never
+// inside the open claim transaction: actorauthz.AuthorizeResolvedActor
+// performs its own Postgres read (users.GetByID) when actor IS resolved,
+// and acquiring a SECOND pool connection while already holding tx open is
+// exactly the connection-pool exhaustion risk this function's own
+// "connection-pool safety note" above already goes to lengths to avoid
+// for httpapi.CreateSessionForBot -- the same discipline applies here:
+// resolve it once, cheaply, with no ambient transaction, then just
+// consult the already-computed bool once inside the critical section (no
+// query, no risk). The REUSE path's own domain/authz.
+// Authorize(ActionPromptSession) check (below, ownership-aware) runs
+// AFTER that path's own tx.Commit -- by then no transaction is open at
+// all, so there is nothing to protect there either.
+func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
 	logger := platform.Logger(ctx)
+
+	// Resolved BEFORE any transaction opens -- see this function's own
+	// doc comment above for why. Only actually consulted by the WINNER
+	// branch below (Resource{}: creating a session has no ownership
+	// concept); the REUSE branch renders its OWN, ownership-aware
+	// ActionPromptSession verdict further down instead, since a member
+	// who may always create a session might still lack the "own/joined"
+	// carve-out ActionPromptSession requires for the SAME actor against a
+	// DIFFERENT, already-existing session.
+	createAuthorized := actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, c.Users, actor, authz.ActionCreateSession, authz.Resource{})
 
 	tx, err := c.Pool.Begin(ctx)
 	if err != nil {
@@ -155,6 +226,31 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		}
 		committed = true
 
+		// No transaction open from here on -- see this function's own top
+		// doc comment for why the ownership-aware ActionPromptSession check
+		// deliberately runs here, post-commit, rather than inside the
+		// critical section above.
+		existingSession, err := c.Sessions.Get(ctx, existing)
+		if err != nil {
+			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: get existing session: %w", err)
+		}
+
+		// actor.Valid == false (still bot-attributed, by far the common
+		// case today) short-circuits with NO Participants/Users read at
+		// all -- mirrors Slack's/Linear's own identical authorizeSessionAction
+		// short-circuit exactly (§13.2's own "unlinked actors get bot
+		// attribution ... the action proceeds" precedent).
+		if actor.Valid {
+			joined, err := actorauthz.OwnedOrJoined(ctx, c.Participants, existingSession, actor)
+			if err != nil {
+				return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: check participant for authorization: %w", err)
+			}
+			if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, c.Users, actor, authz.ActionPromptSession, authz.Resource{OwnedOrJoined: joined}) {
+				logger.Warn("github: prompt on existing session denied by authz", "session_id", existingSession.ID, "repo", repoFullName, "pr_number", prNumber, "user_id", actor.String())
+				return sqlcgen.Session{}, sqlcgen.Turn{}, false, ErrActorNotAuthorized
+			}
+		}
+
 		var prompt string
 		if req.Prompt != nil {
 			prompt = *req.Prompt
@@ -164,26 +260,34 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}
 
-		existingSession, err := c.Sessions.Get(ctx, existing)
-		if err != nil {
-			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: get existing session: %w", err)
-		}
-
 		logger.Info("github: coalesced mention onto existing review session",
 			"session_id", existingSession.ID, "turn_id", createdTurn.ID, "repo", repoFullName, "pr_number", prNumber)
 		return existingSession, createdTurn, false, nil
 	}
 
 	// Winner case: still holding the claim row lock (this transaction is
-	// uncommitted) -- create the session AND its turn INLINE, on this
-	// SAME tx/connection, via the shared httpapi.CreateSessionOnTx (see
-	// this function's own "connection-pool safety" doc comment above for
-	// why NOT httpapi.CreateSessionForBot here). createdBy is left at its
-	// pgtype.UUID zero value (Valid == false, a genuine SQL NULL) --
-	// every bot/automation-created session has no direct human creator,
-	// exactly CreateSessionOnTx's own documented convention for a nil
-	// creator.
-	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, pgtype.UUID{})
+	// uncommitted). createAuthorized was already resolved, with no ambient
+	// transaction, before this function even opened tx -- see this
+	// function's own top doc comment for why -- so denying here needs no
+	// further query at all: just roll back (the deferred Rollback above
+	// handles it, since committed is still false) and report the denial.
+	if !createAuthorized {
+		logger.Warn("github: create-session denied by authz", "repo", repoFullName, "pr_number", prNumber, "user_id", actor.String())
+		return sqlcgen.Session{}, sqlcgen.Turn{}, false, ErrActorNotAuthorized
+	}
+
+	// Create the session AND its turn INLINE, on this SAME tx/connection,
+	// via the shared httpapi.CreateSessionOnTx (see this function's own
+	// "connection-pool safety" doc comment above for why NOT httpapi.
+	// CreateSessionForBot here). createdBy is actor -- batch
+	// fix/audit-github-actor-rbac's own change: Valid (a real Narvi
+	// user_id, attributed exactly like the REST API/Slack/Linear already
+	// attribute a resolved creator) iff this commenter is linked, still
+	// the pgtype.UUID zero value (Valid == false, a genuine SQL NULL,
+	// today's existing bot-attribution behavior) otherwise -- mirrors
+	// Slack's resolveOrClaimSession / Linear's handleCreated passing their
+	// own resolved creator through to CreateSessionCore identically.
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor)
 	if cerr != nil {
 		return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create session: %w", cerr)
 	}

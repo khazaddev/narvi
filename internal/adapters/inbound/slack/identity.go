@@ -23,13 +23,20 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// authzSurface is this package's own "surface" label passed to every
+// actorauthz.AuthorizeResolvedActor call below -- see that function's own
+// doc comment for why (keeps this package's log lines prefixed "slack: "
+// exactly as they were before the Step 39 shared-helper extraction into
+// internal/app/actorauthz, batch fix/audit-github-actor-rbac).
+const authzSurface = "slack"
 
 // resolveSlackActor resolves slackUserID to a real Narvi user_id via
 // internal/app/identitylink.Resolve, fetching that user's profile email
@@ -118,82 +125,15 @@ func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, sl
 	return res.UserID, res.NotificationText()
 }
 
-// authorizeResolvedActor closes the gap a confirmed security review found
-// in this Step's own auto-linking wiring: resolveSlackActor/
-// resolveSlackActorSingleAttempt above resolve a REAL, auto-linked
-// user_id/role, but until this function existed, NOTHING ever ran that
-// resolved actor's role back through domain/authz.Authorize before the
-// caller's own state-changing effect -- so a `viewer` (or a `member` with
-// no ownership/participation in the target session) could create
-// sessions, approve/reject plans, or request changes via Slack even
-// though the identical action through the REST API (which DOES call
-// authorize()/canActOnPlan) would be rejected. This directly contradicts
-// docs/TECHNICAL_PLAN.md §13.3's own "a Slack approval passes exactly the
-// same check as a web one".
-//
-// actorUserID.Valid == false (still bot-attributed -- the identity has
-// not been linked yet) always returns allowed=true immediately, with NO
-// lookup/Authorize call at all: §13.2's own explicit "unlinked actors get
-// bot attribution + a link prompt ... the action proceeds" precedent for
-// the not-yet-linked case is UNCHANGED by this fix -- the bug this closes
-// is specifically that a RESOLVED, linked identity's role was never
-// actually checked.
-//
-// A role lookup failure (should be unreachable in practice: actorUserID
-// was JUST resolved from identities.user_id, itself FK'd to users.id) or
-// any unexpected Authorize error (ErrUnknownAction -- a caller bug, never
-// a legitimate "no" verdict) fails CLOSED -- logged loudly, allowed=false
-// -- never silently treated as "proceed".
-//
-// user.Disabled is checked BEFORE ever calling domain/authz.Authorize --
-// this Step's own SECOND fix-pass addition (a confirmed re-review
-// finding): a disabled account's role would otherwise still pass
-// Authorize (Disabled and Role are independent columns, migrations/
-// 000002_users.up.sql), letting a disabled user create sessions,
-// approve/reject plans, or prompt sessions via Slack even though
-// auth.Middleware's own Authenticate already rejects that SAME disabled
-// user's web session outright (internal/adapters/inbound/auth/
-// middleware.go). Mirrors that check exactly -- denies immediately, never
-// falls through to a role-based verdict for a disabled user.
-func authorizeResolvedActor(ctx context.Context, logger *slog.Logger, users *postgres.UserStore, actorUserID pgtype.UUID, action authz.Action, resource authz.Resource) bool {
-	if !actorUserID.Valid {
-		return true
-	}
-
-	user, err := users.GetByID(ctx, actorUserID)
-	if err != nil {
-		logger.Error("slack: authz: look up resolved actor's role failed", "error", err, "user_id", actorUserID.String(), "action", string(action))
-		return false
-	}
-
-	if user.Disabled {
-		logger.Warn("slack: authz: resolved actor's linked account is disabled, denying", "user_id", actorUserID.String(), "action", string(action))
-		return false
-	}
-
-	actor := authz.Actor{UserID: actorUserID.String(), Role: authz.Role(user.Role)}
-	if err := authz.Authorize(actor, action, resource); err != nil {
-		if !errors.Is(err, authz.ErrForbidden) {
-			logger.Error("slack: authz.Authorize failed", "error", err, "action", string(action))
-		}
-		return false
-	}
-	return true
-}
-
-// ownedOrJoined mirrors internal/adapters/inbound/httpapi's own
-// canActOnPlan/CreateTurn "own/joined" resolution exactly (§13.3 row 2):
-// true iff sessionRow was created by actorUserID, or actorUserID has an
-// existing participants row for it. Duplicated here (rather than
-// exporting httpapi's own unexported equivalent) mirroring this package's
-// own established "small, documented duplication over a forced shared
-// abstraction" precedent (hasOpenTurn, turn.go).
-func ownedOrJoined(ctx context.Context, participants *postgres.ParticipantStore, sessionRow sqlcgen.Session, actorUserID pgtype.UUID) (bool, error) {
-	if sessionRow.CreatedBy.Valid && sessionRow.CreatedBy == actorUserID {
-		return true, nil
-	}
-	return participants.Exists(ctx, sessionRow.ID, actorUserID)
-}
+// authorizeResolvedActor/ownedOrJoined used to live here (Step 39,
+// "identities + full RBAC", §13.2/§13.3) but moved verbatim into
+// internal/app/actorauthz (batch fix/audit-github-actor-rbac) once GitHub
+// ingress became a third consumer of the identical logic Linear's own
+// identity.go already duplicated once -- see that package's own doc.go for
+// the full "why". authorizeSessionAction below calls
+// actorauthz.AuthorizeResolvedActor/actorauthz.OwnedOrJoined directly now;
+// nothing about ITS OWN behavior (the sequencing, the short-circuit for an
+// unresolved actor, the error logging) changed.
 
 // authorizeSessionAction renders the exact §13.3 verdict domain/authz.
 // Authorize would for actorUserID attempting action against sessionID --
@@ -222,11 +162,11 @@ func (deps Deps) authorizeSessionAction(ctx context.Context, logger *slog.Logger
 		return false
 	}
 
-	joined, err := ownedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
+	joined, err := actorauthz.OwnedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
 	if err != nil {
 		logger.Error("slack: check participant for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
 		return false
 	}
 
-	return authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
+	return actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
 }

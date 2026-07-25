@@ -19,6 +19,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
@@ -378,10 +379,10 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	// /api/sessions handler already requires (create.go's own authorize
 	// call). Resource{} is always correct here (no ownership carve-out on
 	// create, mirroring create.go's own identical reasoning). A still-
-	// unlinked (bot-attributed) creator is untouched -- authorizeResolvedActor
-	// returns true immediately for that case, preserving §13.2's own
-	// explicit "the action proceeds" precedent.
-	if !authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
+	// unlinked (bot-attributed) creator is untouched --
+	// actorauthz.AuthorizeResolvedActor returns true immediately for that
+	// case, preserving §13.2's own explicit "the action proceeds" precedent.
+	if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
 		logger.Warn("slack: create-session denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
 		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedText); ackErr != nil {
 			logger.Warn("slack: post not-authorized ack failed", "error", ackErr)

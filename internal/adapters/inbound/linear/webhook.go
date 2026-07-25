@@ -19,6 +19,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
@@ -296,10 +297,10 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 	// handler already requires (create.go's own authorize call). Resource{}
 	// is always correct here (no ownership carve-out on create). A still-
 	// unlinked (bot-attributed, including every automation-initiated,
-	// nil-CreatorID session) creator is untouched -- authorizeResolvedActor
-	// returns true immediately for that case, preserving §13.2's own
-	// existing precedent.
-	if !authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
+	// nil-CreatorID session) creator is untouched --
+	// actorauthz.AuthorizeResolvedActor returns true immediately for that
+	// case, preserving §13.2's own existing precedent.
+	if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
 		logger.Warn("linear: create session denied by authz", "agent_session_id", payload.AgentSession.ID, "user_id", creator.String())
 		deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("Your linked Narvi account isn't authorized to start new sessions from Linear.", notice))
 		return

@@ -131,8 +131,30 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			},
 		}
 
-		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req)
+		// Batch fix/audit-github-actor-rbac's own addition (the H4 audit
+		// finding this closes, see identity.go's own top doc comment):
+		// resolve the real commenter behind m.CommenterID to a Narvi
+		// user_id, ONCE, regardless of which CreateOrJoin branch this
+		// mention ends up taking -- a direct identities lookup, never an
+		// auto-linking algorithm (unlike Slack/Linear). actor stays invalid
+		// (bot attribution) for a commenter who has never signed into
+		// Narvi, exactly this batch's own explicit "do NOT block them"
+		// scope.
+		actor := resolveCommenterActor(ctx, logger, coalescer.Identities, m.CommenterID)
+
+		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor)
 		if err != nil {
+			if errors.Is(err, ErrActorNotAuthorized) {
+				// The resolved, linked commenter's own role failed
+				// domain/authz.Authorize (coalesce.go already logged the
+				// specific denial) -- acknowledge without releasing the
+				// claim: unlike a transient failure, retrying a genuine
+				// redelivery of the SAME comment would render the exact
+				// same denial again, so there is nothing a GitHub retry
+				// could fix here.
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			logger.Error("github: create-or-join session failed", "error", err, "repo", m.RepoFullName, "pr_number", m.PRNumber)
 			// Same reasoning as the parseMention error path above -- this
 			// delivery was claimed but never actually acted on, so release

@@ -16,12 +16,19 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// authzSurface is this package's own "surface" label passed to every
+// actorauthz.AuthorizeResolvedActor call below -- see that function's own
+// doc comment for why (keeps this package's log lines prefixed "linear: "
+// exactly as they were before the Step 39 shared-helper extraction into
+// internal/app/actorauthz, batch fix/audit-github-actor-rbac).
+const authzSurface = "linear"
 
 // resolveActor resolves externalID (a Linear user id) to a real Narvi
 // user_id via internal/app/identitylink.Resolve, fetching that user's
@@ -174,59 +181,13 @@ func appendNotice(base, notice string) string {
 	return base + "\n\n" + notice
 }
 
-// authorizeResolvedActor mirrors internal/adapters/inbound/slack's own
-// identical helper (identity.go) exactly -- see that copy's own doc
-// comment for the full "why" this closes a confirmed security review
-// finding (a resolved, auto-linked actor's own role was never actually
-// checked against domain/authz.Authorize before Linear's own
-// handleCreated/handlePrompted/handlePlanVerdict performed their
-// state-changing effect). Duplicated here rather than exported from the
-// slack package, mirroring this codebase's own established "small,
-// documented duplication over a forced cross-package dependency"
-// precedent (hasOpenTurn, webhook.go).
-//
-// user.Disabled is checked BEFORE ever calling domain/authz.Authorize --
-// this Step's own SECOND fix-pass addition (a confirmed re-review
-// finding), mirroring slack's own identical addition exactly: a disabled
-// account's role would otherwise still pass Authorize, letting a disabled
-// user create sessions, approve/reject plans, or prompt sessions via
-// Linear even though auth.Middleware's own Authenticate already rejects
-// that SAME disabled user's web session outright (internal/adapters/
-// inbound/auth/middleware.go).
-func authorizeResolvedActor(ctx context.Context, logger *slog.Logger, users *postgres.UserStore, actorUserID pgtype.UUID, action authz.Action, resource authz.Resource) bool {
-	if !actorUserID.Valid {
-		return true
-	}
-
-	user, err := users.GetByID(ctx, actorUserID)
-	if err != nil {
-		logger.Error("linear: authz: look up resolved actor's role failed", "error", err, "user_id", actorUserID.String(), "action", string(action))
-		return false
-	}
-
-	if user.Disabled {
-		logger.Warn("linear: authz: resolved actor's linked account is disabled, denying", "user_id", actorUserID.String(), "action", string(action))
-		return false
-	}
-
-	actor := authz.Actor{UserID: actorUserID.String(), Role: authz.Role(user.Role)}
-	if err := authz.Authorize(actor, action, resource); err != nil {
-		if !errors.Is(err, authz.ErrForbidden) {
-			logger.Error("linear: authz.Authorize failed", "error", err, "action", string(action))
-		}
-		return false
-	}
-	return true
-}
-
-// ownedOrJoined mirrors internal/adapters/inbound/slack's own identical
-// helper exactly (§13.3 row 2's own "own/joined" carve-out).
-func ownedOrJoined(ctx context.Context, participants *postgres.ParticipantStore, sessionRow sqlcgen.Session, actorUserID pgtype.UUID) (bool, error) {
-	if sessionRow.CreatedBy.Valid && sessionRow.CreatedBy == actorUserID {
-		return true, nil
-	}
-	return participants.Exists(ctx, sessionRow.ID, actorUserID)
-}
+// authorizeResolvedActor/ownedOrJoined used to live here (Step 39,
+// "identities + full RBAC", §13.2/§13.3) but moved verbatim into
+// internal/app/actorauthz (batch fix/audit-github-actor-rbac), confirmed
+// identical to Slack's own copy -- see that package's own doc.go for the
+// full "why". authorizeSessionAction below calls actorauthz.
+// AuthorizeResolvedActor/actorauthz.OwnedOrJoined directly now; nothing
+// about ITS OWN behavior changed.
 
 // authorizeSessionAction renders the exact §13.3 verdict domain/authz.
 // Authorize would for actorUserID attempting action against sessionID --
@@ -250,11 +211,11 @@ func (deps Deps) authorizeSessionAction(ctx context.Context, logger *slog.Logger
 		return false
 	}
 
-	joined, err := ownedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
+	joined, err := actorauthz.OwnedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
 	if err != nil {
 		logger.Error("linear: check participant for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
 		return false
 	}
 
-	return authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
+	return actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
 }

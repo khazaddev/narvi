@@ -83,6 +83,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
@@ -335,13 +336,13 @@ func (deps InteractiveDeps) authorizeSessionAction(ctx context.Context, logger *
 		return false
 	}
 
-	joined, err := ownedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
+	joined, err := actorauthz.OwnedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
 	if err != nil {
 		logger.Error("slack: interactivity: check participant for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
 		return false
 	}
 
-	return authorizeResolvedActor(ctx, logger, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
+	return actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
 }
 
 // decideAndUpdateMessage calls the shared httpapi.DecidePlan (decideplan.go)

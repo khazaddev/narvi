@@ -43,6 +43,23 @@ type mention struct {
 	// exactly like every other ingress caller of that same field.
 	HeadBranch  *string
 	CommentBody string
+
+	// CommenterID/CommenterLogin are the GitHub user id/login of the real
+	// human who authored this comment ("comment.user.id"/"comment.user.
+	// login" -- GitHub's own real webhook shape, IDENTICAL field names/
+	// shape across both issue_comment and pull_request_review_comment;
+	// verified against GitHub's own live webhook-events documentation
+	// during this batch's own design phase). CommenterID is 0 only if the
+	// webhook payload itself omitted comment.user entirely (never expected
+	// from a real GitHub delivery, but not assumed away).
+	//
+	// identity.go's own resolveCommenterActor uses CommenterID (never
+	// CommenterLogin, which GitHub allows a user to change at any time) to
+	// look up a matching Narvi identities row -- see that file's own doc
+	// comment for why this needs no auto-linking algorithm, unlike Slack/
+	// Linear. CommenterLogin is carried only for logging.
+	CommenterID    int64
+	CommenterLogin string
 }
 
 // parseMention dispatches on eventType and reports whether body is a
@@ -91,6 +108,17 @@ type issueCommentPayload struct {
 	} `json:"issue"`
 	Comment struct {
 		Body string `json:"body"`
+		// User is "who actually wrote this comment" -- GitHub's own real
+		// issue_comment webhook shape (comment.user.{id,login}), verified
+		// against GitHub's own live webhook-events documentation. Parsed
+		// into mention.CommenterID/CommenterLogin below (see that field's
+		// own doc comment) -- this batch's own addition, closing the H4
+		// audit finding that GitHub ingress never even parsed WHO
+		// commented, let alone authorized them.
+		User struct {
+			ID    int64  `json:"id"`
+			Login string `json:"login"`
+		} `json:"user"`
 	} `json:"comment"`
 	Repository struct {
 		FullName string `json:"full_name"`
@@ -115,12 +143,14 @@ func parseIssueComment(body []byte, mentionRE *regexp.Regexp) (mention, bool, er
 		return mention{}, false, nil
 	}
 	return mention{
-		RepoFullName: p.Repository.FullName,
-		RepoName:     p.Repository.Name,
-		RepoCloneURL: p.Repository.CloneURL,
-		PRNumber:     p.Issue.Number,
-		HeadBranch:   nil, // see issueCommentPayload's own KNOWN LIMITATION doc comment.
-		CommentBody:  p.Comment.Body,
+		RepoFullName:   p.Repository.FullName,
+		RepoName:       p.Repository.Name,
+		RepoCloneURL:   p.Repository.CloneURL,
+		PRNumber:       p.Issue.Number,
+		HeadBranch:     nil, // see issueCommentPayload's own KNOWN LIMITATION doc comment.
+		CommentBody:    p.Comment.Body,
+		CommenterID:    p.Comment.User.ID,
+		CommenterLogin: p.Comment.User.Login,
 	}, true, nil
 }
 
@@ -134,6 +164,14 @@ type pullRequestReviewCommentPayload struct {
 	Action  string `json:"action"`
 	Comment struct {
 		Body string `json:"body"`
+		// User mirrors issueCommentPayload.Comment.User exactly -- GitHub
+		// uses the IDENTICAL comment.user.{id,login} shape for both event
+		// types (verified against GitHub's own live webhook-events
+		// documentation).
+		User struct {
+			ID    int64  `json:"id"`
+			Login string `json:"login"`
+		} `json:"user"`
 	} `json:"comment"`
 	PullRequest struct {
 		Number int32 `json:"number"`
@@ -163,12 +201,14 @@ func parsePullRequestReviewComment(body []byte, mentionRE *regexp.Regexp) (menti
 	}
 	headBranch := p.PullRequest.Head.Ref
 	return mention{
-		RepoFullName: p.Repository.FullName,        // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
-		RepoName:     p.PullRequest.Head.Repo.Name, // head repo -- may be a fork; the repo to actually clone.
-		RepoCloneURL: p.PullRequest.Head.Repo.CloneURL,
-		PRNumber:     p.PullRequest.Number,
-		HeadBranch:   &headBranch,
-		CommentBody:  p.Comment.Body,
+		RepoFullName:   p.Repository.FullName,        // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
+		RepoName:       p.PullRequest.Head.Repo.Name, // head repo -- may be a fork; the repo to actually clone.
+		RepoCloneURL:   p.PullRequest.Head.Repo.CloneURL,
+		PRNumber:       p.PullRequest.Number,
+		HeadBranch:     &headBranch,
+		CommentBody:    p.Comment.Body,
+		CommenterID:    p.Comment.User.ID,
+		CommenterLogin: p.Comment.User.Login,
 	}, true, nil
 }
 
