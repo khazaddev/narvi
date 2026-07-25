@@ -225,7 +225,7 @@ func newTestRig(t *testing.T) testRig {
 	router.Route("/api/members", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.ListMembers(rig.users, rig.identities, rig.linkPrompts))
-		r.Patch("/{userID}/role", httpapi.UpdateMemberRole(rig.pool, rig.users, rig.auditLog))
+		r.Patch("/{userID}/role", httpapi.UpdateMemberRole(rig.pool, rig.users, rig.identities, rig.auditLog))
 		r.Post("/{userID}/identities", httpapi.LinkMemberIdentity(rig.pool, rig.users, rig.identities, rig.auditLog))
 		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(rig.pool, rig.identities, rig.auditLog))
 	})

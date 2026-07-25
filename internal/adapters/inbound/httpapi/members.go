@@ -33,7 +33,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -41,6 +40,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/auditlog"
@@ -64,53 +64,20 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == uniqueViolationCode
 }
 
-// identityDTO is one linked-identity row's own REST wire shape.
-type identityDTO struct {
-	ID         string    `json:"id"`
-	Provider   string    `json:"provider"`
-	ExternalID string    `json:"externalId"`
-	LinkedVia  string    `json:"linkedVia"`
-	CreatedAt  time.Time `json:"createdAt"`
-}
-
-func identityToDTO(i sqlcgen.Identity) identityDTO {
-	return identityDTO{
-		ID:         i.ID.String(),
-		Provider:   string(i.Provider),
-		ExternalID: i.ExternalID,
-		LinkedVia:  string(i.LinkedVia),
+// identityToDTO converts one identities row to its own REST wire shape
+// (contracts/rest/v1/dtos.schema.json's own Identity, generated as
+// restdtos.Identity -- audit finding: wire-contract, this file's own DTOs
+// used to be hand-written outside /contracts' schema-driven codegen
+// pipeline; see contracts/gen/go/restdtos/restdtos.go for the generated
+// type this now returns).
+func identityToDTO(i sqlcgen.Identity) restdtos.Identity {
+	return restdtos.Identity{
+		Id:         i.ID.String(),
+		Provider:   restdtos.IdentityProvider(i.Provider),
+		ExternalId: i.ExternalID,
+		LinkedVia:  restdtos.IdentityLinkedVia(i.LinkedVia),
 		CreatedAt:  i.CreatedAt.Time,
 	}
-}
-
-// memberDTO is one member's own REST wire shape -- role + every identity
-// currently linked to them (§13.3: "linked identity chips").
-type memberDTO struct {
-	ID          string        `json:"id"`
-	Email       string        `json:"email"`
-	DisplayName string        `json:"displayName"`
-	Role        string        `json:"role"`
-	Disabled    bool          `json:"disabled"`
-	CreatedAt   time.Time     `json:"createdAt"`
-	Identities  []identityDTO `json:"identities"`
-}
-
-// pendingLinkPromptDTO is one still-present identity_link_prompts row's
-// own REST wire shape -- deliberately carries NO nonce/nonce hash (a
-// bearer secret, never surfaced over this read endpoint) -- just enough
-// for an admin-facing view to show "someone from Slack/Linear is waiting
-// to connect their account" (§13.2's own "pending-link state").
-type pendingLinkPromptDTO struct {
-	Provider   string    `json:"provider"`
-	ExternalID string    `json:"externalId"`
-	ExpiresAt  time.Time `json:"expiresAt"`
-	CreatedAt  time.Time `json:"createdAt"`
-}
-
-// listMembersResponse is GET /api/members's own response body.
-type listMembersResponse struct {
-	Members            []memberDTO            `json:"members"`
-	PendingLinkPrompts []pendingLinkPromptDTO `json:"pendingLinkPrompts"`
 }
 
 // ListMembers backs GET /api/members: admin-only (authz.ActionManageMembers),
@@ -134,7 +101,7 @@ func ListMembers(users *postgres.UserStore, identities *postgres.IdentityStore, 
 			return
 		}
 
-		memberDTOs := make([]memberDTO, 0, len(userRows))
+		memberDTOs := make([]restdtos.Member, 0, len(userRows))
 		for _, u := range userRows {
 			identityRows, err := identities.ListForUser(ctx, u.ID)
 			if err != nil {
@@ -142,15 +109,15 @@ func ListMembers(users *postgres.UserStore, identities *postgres.IdentityStore, 
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
-			identityDTOs := make([]identityDTO, 0, len(identityRows))
+			identityDTOs := make([]restdtos.Identity, 0, len(identityRows))
 			for _, i := range identityRows {
 				identityDTOs = append(identityDTOs, identityToDTO(i))
 			}
-			memberDTOs = append(memberDTOs, memberDTO{
-				ID:          u.ID.String(),
+			memberDTOs = append(memberDTOs, restdtos.Member{
+				Id:          u.ID.String(),
 				Email:       u.PrimaryEmail,
 				DisplayName: u.DisplayName,
-				Role:        string(u.Role),
+				Role:        restdtos.MemberRole(u.Role),
 				Disabled:    u.Disabled,
 				CreatedAt:   u.CreatedAt.Time,
 				Identities:  identityDTOs,
@@ -163,24 +130,18 @@ func ListMembers(users *postgres.UserStore, identities *postgres.IdentityStore, 
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		promptDTOs := make([]pendingLinkPromptDTO, 0, len(promptRows))
+		promptDTOs := make([]restdtos.PendingLinkPrompt, 0, len(promptRows))
 		for _, p := range promptRows {
-			promptDTOs = append(promptDTOs, pendingLinkPromptDTO{
-				Provider:   string(p.Provider),
-				ExternalID: p.ExternalID,
+			promptDTOs = append(promptDTOs, restdtos.PendingLinkPrompt{
+				Provider:   restdtos.PendingLinkPromptProvider(p.Provider),
+				ExternalId: p.ExternalID,
 				ExpiresAt:  p.ExpiresAt.Time,
 				CreatedAt:  p.CreatedAt.Time,
 			})
 		}
 
-		writeJSON(w, http.StatusOK, listMembersResponse{Members: memberDTOs, PendingLinkPrompts: promptDTOs})
+		writeJSON(w, http.StatusOK, restdtos.ListMembersResponse{Members: memberDTOs, PendingLinkPrompts: promptDTOs})
 	}
-}
-
-// updateMemberRoleRequest is PATCH /api/members/{userID}/role's own
-// request body.
-type updateMemberRoleRequest struct {
-	Role string `json:"role"`
 }
 
 // validRoles is the closed set of role strings UpdateMemberRole accepts --
@@ -202,10 +163,16 @@ var validRoles = map[string]sqlcgen.UserRole{
 // (the last-admin guard, an audit finding: H8 -- demoting the sole
 // remaining admin would permanently lock the deployment out of every
 // admin-only endpoint, including this one, with no recovery path short
-// of direct DB surgery); else 200 with the updated memberDTO (identities
-// omitted -- this endpoint changes a role, not the identity graph; a
-// caller that also wants the identity list calls ListMembers).
-func UpdateMemberRole(pool *pgxpool.Pool, users *postgres.UserStore, auditLog *postgres.AuditLogStore) http.HandlerFunc {
+// of direct DB surgery); else 200 with the updated restdtos.Member,
+// including the target's own actual currently-linked identities (audit
+// finding: wire-contract -- this response used to leave Identities nil,
+// which was merely sloppy before Member.identities became a schema-
+// required, non-nullable array in this same batch's /contracts migration,
+// but is a genuine contract violation now; fetched the same way
+// ListMembers already does for each member, just for this one target,
+// inside the SAME transaction as the role update itself since the
+// identities table is unaffected by it either way).
+func UpdateMemberRole(pool *pgxpool.Pool, users *postgres.UserStore, identities *postgres.IdentityStore, auditLog *postgres.AuditLogStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authz.ActionManageMembers, authz.Resource{}) {
 			return
@@ -224,7 +191,7 @@ func UpdateMemberRole(pool *pgxpool.Pool, users *postgres.UserStore, auditLog *p
 		}
 
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-		var req updateMemberRoleRequest
+		var req restdtos.UpdateMemberRoleRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "malformed request body")
 			return
@@ -292,28 +259,38 @@ func UpdateMemberRole(pool *pgxpool.Pool, users *postgres.UserStore, auditLog *p
 			return
 		}
 
+		// Same query ListMembers itself uses to build each member's own
+		// identities list (see this file's own ListMembers above) -- run
+		// inside this same tx (harmless: the identities table is untouched
+		// by this transaction either way) so the response is assembled
+		// before commit, not as a separate post-commit query.
+		identityRows, err := identities.WithTx(tx).ListForUser(ctx, targetUserID)
+		if err != nil {
+			logger.Error("httpapi: update member role: list identities failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		identityDTOs := make([]restdtos.Identity, 0, len(identityRows))
+		for _, i := range identityRows {
+			identityDTOs = append(identityDTOs, identityToDTO(i))
+		}
+
 		if err := tx.Commit(ctx); err != nil {
 			logger.Error("httpapi: update member role: commit tx failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 
-		writeJSON(w, http.StatusOK, memberDTO{
-			ID:          updated.ID.String(),
+		writeJSON(w, http.StatusOK, restdtos.Member{
+			Id:          updated.ID.String(),
 			Email:       updated.PrimaryEmail,
 			DisplayName: updated.DisplayName,
-			Role:        string(updated.Role),
+			Role:        restdtos.MemberRole(updated.Role),
 			Disabled:    updated.Disabled,
 			CreatedAt:   updated.CreatedAt.Time,
+			Identities:  identityDTOs,
 		})
 	}
-}
-
-// linkMemberIdentityRequest is POST /api/members/{userID}/identities's own
-// request body.
-type linkMemberIdentityRequest struct {
-	Provider   string `json:"provider"`
-	ExternalID string `json:"externalId"`
 }
 
 // validProviders is the closed set of provider strings LinkMemberIdentity
@@ -341,7 +318,7 @@ var validProviders = map[string]sqlcgen.IdentityProvider{
 // is ALREADY linked to a DIFFERENT user (an admin must unlink it first,
 // via UnlinkMemberIdentity, rather than this endpoint silently
 // reassigning it). 200 (not 201) if it's already linked to THIS SAME
-// user -- idempotent, not an error. Else 201 with the new identityDTO.
+// user -- idempotent, not an error. Else 201 with the new restdtos.Identity.
 //
 // The already-linked check (identities.GetByProviderAndExternalID) and
 // the subsequent Create both run INSIDE the same transaction (an audit
@@ -372,7 +349,7 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 		}
 
 		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
-		var req linkMemberIdentityRequest
+		var req restdtos.LinkMemberIdentityRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, "malformed request body")
 			return
@@ -382,7 +359,7 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 			writeError(w, http.StatusBadRequest, "unrecognized provider")
 			return
 		}
-		if req.ExternalID == "" {
+		if req.ExternalId == "" {
 			writeError(w, http.StatusBadRequest, "externalId is required")
 			return
 		}
@@ -405,7 +382,7 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 
-		existing, err := identities.WithTx(tx).GetByProviderAndExternalID(ctx, provider, req.ExternalID)
+		existing, err := identities.WithTx(tx).GetByProviderAndExternalID(ctx, provider, req.ExternalId)
 		if err == nil {
 			if existing.UserID != targetUserID {
 				writeError(w, http.StatusConflict, "this identity is already linked to a different member")
@@ -423,7 +400,7 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 		created, err := identities.WithTx(tx).Create(ctx, sqlcgen.CreateIdentityParams{
 			UserID:     targetUserID,
 			Provider:   provider,
-			ExternalID: req.ExternalID,
+			ExternalID: req.ExternalId,
 			LinkedVia:  sqlcgen.IdentityLinkedViaAdmin,
 		})
 		if err != nil {
@@ -439,7 +416,7 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 				// and answer with the exact same 409-vs-200 split the
 				// check above would have given had it merely run a moment
 				// later.
-				winner, getErr := identities.GetByProviderAndExternalID(ctx, provider, req.ExternalID)
+				winner, getErr := identities.GetByProviderAndExternalID(ctx, provider, req.ExternalId)
 				if getErr != nil {
 					logger.Error("httpapi: link member identity: resolve winner after lost race failed", "error", getErr)
 					writeError(w, http.StatusInternalServerError, "internal error")
@@ -460,7 +437,7 @@ func LinkMemberIdentity(pool *pgxpool.Pool, users *postgres.UserStore, identitie
 		if err := auditlog.Record(ctx, auditLog.WithTx(tx), actorUserID, "identity.force_linked", "identity", created.ID.String(), map[string]any{
 			"user_id":     targetUserID.String(),
 			"provider":    string(provider),
-			"external_id": req.ExternalID,
+			"external_id": req.ExternalId,
 		}); err != nil {
 			logger.Error("httpapi: link member identity: record audit log failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -562,23 +539,6 @@ func UnlinkMemberIdentity(pool *pgxpool.Pool, identities *postgres.IdentityStore
 	}
 }
 
-// auditLogEntryDTO is one audit_log row's own REST wire shape.
-type auditLogEntryDTO struct {
-	ID            string          `json:"id"`
-	ActorUserID   *string         `json:"actorUserId"`
-	Action        string          `json:"action"`
-	ResourceType  string          `json:"resourceType"`
-	ResourceID    string          `json:"resourceId"`
-	Detail        json.RawMessage `json:"detail"`
-	CorrelationID *string         `json:"correlationId"`
-	CreatedAt     time.Time       `json:"createdAt"`
-}
-
-// listAuditLogResponse is GET /api/audit-log's own response body.
-type listAuditLogResponse struct {
-	Entries []auditLogEntryDTO `json:"entries"`
-}
-
 // defaultAuditLogPageSize/maxAuditLogPageSize bound GET /api/audit-log's
 // own ?limit= query param -- a plain, small page size (see queries/
 // audit_log.sql's own doc comment on ListAuditLogEntries for why this is
@@ -596,6 +556,14 @@ const (
 // read-only convenience endpoint for an admin-facing view, not a strict
 // API contract a machine client depends on getting a validation error
 // from.
+//
+// Each row's own detail_json is passed through as opaque raw JSON (see
+// this loop's own inline comment below) rather than decoded into a typed
+// map -- and a single row whose detail_json isn't even a well-formed JSON
+// object (no CHECK constraint at the DB layer rules this out for some
+// bad/legacy row) degrades in isolation -- an empty object substituted,
+// logged with that row's own id -- rather than failing this entire page
+// for every admin (an audit finding: LOW, page-wide 500 on one bad row).
 func ListAuditLog(auditLog *postgres.AuditLogStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, authz.ActionManageMembers, authz.Resource{}) {
@@ -624,26 +592,56 @@ func ListAuditLog(auditLog *postgres.AuditLogStore) http.HandlerFunc {
 			return
 		}
 
-		entries := make([]auditLogEntryDTO, 0, len(rows))
+		entries := make([]restdtos.AuditLogEntry, 0, len(rows))
 		for _, row := range rows {
 			var actorUserID *string
 			if row.ActorUserID.Valid {
 				s := row.ActorUserID.String()
 				actorUserID = &s
 			}
-			entries = append(entries, auditLogEntryDTO{
-				ID:            row.ID.String(),
-				ActorUserID:   actorUserID,
+			// detail_json is EXPECTED to always be a well-formed JSON object
+			// at the DB layer (migrations/000013_audit_log.up.sql's own
+			// "JSONB NOT NULL DEFAULT '{}'::jsonb", and auditlog.Record's own
+			// signature only ever accepts a map[string]any) -- but nothing
+			// enforces that shape at the column level (no CHECK constraint),
+			// so a bad/legacy row can't be ruled out. restdtos.AuditLogEntry.
+			// Detail is json.RawMessage, an opaque raw-JSON passthrough (see
+			// dtos.schema.json's own "detail" field doc comment, audit
+			// finding: LOW, decode-then-re-encode precision loss) rather than
+			// a decoded map -- row.DetailJson's own bytes are used verbatim
+			// below, never rebuilt from a decoded value, so a legitimate
+			// row's own large integers/key order survive untouched end to
+			// end. shapeProbe below decodes ONLY to verify detail_json really
+			// is a JSON object (its own decoded values are discarded
+			// immediately, never used to build the response) -- a row that
+			// fails this check degrades in isolation: logged with its own
+			// row id and substituted with an empty object, rather than
+			// failing this entire page for every admin (an audit finding:
+			// LOW, page-wide 500 on one bad row).
+			detail := json.RawMessage(row.DetailJson)
+			var shapeProbe map[string]json.RawMessage
+			// A top-level JSON `null` unmarshals into a map with err == nil
+			// (encoding/json treats it as a no-op success, not a type
+			// mismatch) -- shapeProbe == nil catches that case too, since a
+			// genuinely-object detail_json ('{}' included) always leaves
+			// shapeProbe non-nil.
+			if err := json.Unmarshal(row.DetailJson, &shapeProbe); err != nil || shapeProbe == nil {
+				logger.Warn("httpapi: list audit log: detail_json is not a well-formed JSON object; substituting {} for this row only", "error", err, "audit_log_id", row.ID.String())
+				detail = json.RawMessage(`{}`)
+			}
+			entries = append(entries, restdtos.AuditLogEntry{
+				Id:            row.ID.String(),
+				ActorUserId:   actorUserID,
 				Action:        row.Action,
 				ResourceType:  row.ResourceType,
-				ResourceID:    row.ResourceID,
-				Detail:        json.RawMessage(row.DetailJson),
-				CorrelationID: row.CorrelationID,
+				ResourceId:    row.ResourceID,
+				Detail:        detail,
+				CorrelationId: row.CorrelationID,
 				CreatedAt:     row.CreatedAt.Time,
 			})
 		}
 
-		writeJSON(w, http.StatusOK, listAuditLogResponse{Entries: entries})
+		writeJSON(w, http.StatusOK, restdtos.ListAuditLogResponse{Entries: entries})
 	}
 }
 

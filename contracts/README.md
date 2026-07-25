@@ -89,3 +89,28 @@ can schema them honestly: environments (PR-10/26/27), automations (PR-46/47),
 uploads (PR-49), and so on. Do not invent field shapes for those ahead of
 the PRs that own them; extend `rest/v1/dtos.schema.json` (or add a new
 versioned sibling) when that PR lands instead.
+
+## Members/audit-log DTOs (§13.2/§13.3)
+
+An audit finding (wire-contract, `internal/adapters/inbound/httpapi/
+members.go`) surfaced that the members API's own 8 response/request shapes
+had been hand-written directly in that file, entirely outside this
+pipeline — contradicting the "no hand-written response types anywhere else
+in the codebase" rule above. These routes are §13.2/§13.3's own members
+API, unrelated to §6.3's REST scope note above; they were promoted into
+`rest/v1/dtos.schema.json` as a pure migration (no wire-shape change):
+`Identity`, `Member`, `PendingLinkPrompt`, `ListMembersResponse`,
+`AuditLogEntry`, `ListAuditLogResponse`, `UpdateMemberRoleRequest`, and
+`LinkMemberIdentityRequest`.
+
+`UpdateMemberRoleRequest.role` and `LinkMemberIdentityRequest.provider` are
+deliberately modeled as unconstrained strings, not enums matching the
+closed `user_role`/`identity_provider` sets those fields actually draw
+from — `members.go`'s own `validRoles`/`validProviders` maps still own that
+validation at the application layer, so an unrecognized value keeps
+surfacing that handler's own specific 400 message instead of a generic
+schema-decode error. Every enum that is purely an OUTPUT concern (`Member.
+role`, `Identity.provider`/`.linkedVia`, `PendingLinkPrompt.provider`) is
+modeled as a closed enum, matching this schema's existing `Session`
+precedent, since encoding a closed Go enum type is byte-identical to
+encoding a plain string.

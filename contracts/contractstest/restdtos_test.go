@@ -1,6 +1,7 @@
 package contractstest
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -125,5 +126,188 @@ func TestWSTokenResponseRoundTrip(t *testing.T) {
 	roundTrip(t, sch, restdtos.WSTokenResponse{
 		Token:     "ws-token-abc",
 		ExpiresAt: time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC),
+	})
+}
+
+// --- Members/audit-log DTOs (audit finding: wire-contract,
+// internal/adapters/inbound/httpapi/members.go) -- these 8 shapes used to
+// be hand-written Go structs entirely outside this schema-driven codegen
+// pipeline (§13.2/§13.3's own members API); promoted here as a pure
+// migration, so the round-trip coverage below mirrors the Session/
+// CreateSessionRequest precedent above exactly rather than inventing a new
+// style.
+
+func TestIdentityRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/Identity")
+
+	roundTrip(t, sch, restdtos.Identity{
+		Id:         testSessionID,
+		Provider:   restdtos.IdentityProviderSlack,
+		ExternalId: "U12345",
+		LinkedVia:  restdtos.IdentityLinkedViaAdmin,
+		CreatedAt:  time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC),
+	})
+}
+
+func TestMemberRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/Member")
+
+	createdAt := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+
+	t.Run("WithIdentities", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.Member{
+			Id:          testSessionID,
+			Email:       "dev@example.com",
+			DisplayName: "Dev Example",
+			Role:        restdtos.MemberRoleMaintainer,
+			Disabled:    false,
+			CreatedAt:   createdAt,
+			Identities: []restdtos.Identity{
+				{
+					Id:         testSandboxID,
+					Provider:   restdtos.IdentityProviderGithub,
+					ExternalId: "gh-12345",
+					LinkedVia:  restdtos.IdentityLinkedViaAutoEmail,
+					CreatedAt:  createdAt,
+				},
+			},
+		})
+	})
+
+	t.Run("NoIdentities", func(t *testing.T) {
+		// A member with zero currently-linked identities (e.g. a brand-new
+		// account nobody has linked anything to yet) -- an empty, non-nil
+		// slice here since this DTO's own "identities" key is schema-required
+		// as a non-nullable array, and roundTrip's own reflect.DeepEqual
+		// comparison needs marshal->unmarshal to reproduce whatever value
+		// goes in.
+		roundTrip(t, sch, restdtos.Member{
+			Id:          testSandboxID,
+			Email:       "disabled@example.com",
+			DisplayName: "Disabled Example",
+			Role:        restdtos.MemberRoleViewer,
+			Disabled:    true,
+			CreatedAt:   createdAt,
+			Identities:  []restdtos.Identity{},
+		})
+	})
+}
+
+func TestPendingLinkPromptRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/PendingLinkPrompt")
+
+	roundTrip(t, sch, restdtos.PendingLinkPrompt{
+		Provider:   restdtos.PendingLinkPromptProviderLinear,
+		ExternalId: "user-abc",
+		ExpiresAt:  time.Date(2026, 7, 25, 9, 0, 0, 0, time.UTC),
+		CreatedAt:  time.Date(2026, 7, 24, 9, 0, 0, 0, time.UTC),
+	})
+}
+
+func TestListMembersResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ListMembersResponse")
+
+	createdAt := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	roundTrip(t, sch, restdtos.ListMembersResponse{
+		Members: []restdtos.Member{
+			{
+				Id:          testSessionID,
+				Email:       "dev@example.com",
+				DisplayName: "Dev Example",
+				Role:        restdtos.MemberRoleAdmin,
+				Disabled:    false,
+				CreatedAt:   createdAt,
+				Identities:  []restdtos.Identity{},
+			},
+		},
+		PendingLinkPrompts: []restdtos.PendingLinkPrompt{
+			{
+				Provider:   restdtos.PendingLinkPromptProviderSlack,
+				ExternalId: "pending-slack-id",
+				ExpiresAt:  createdAt.Add(time.Hour),
+				CreatedAt:  createdAt,
+			},
+		},
+	})
+}
+
+func TestAuditLogEntryRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/AuditLogEntry")
+
+	createdAt := time.Date(2026, 7, 19, 8, 30, 0, 0, time.UTC)
+
+	t.Run("WithActorAndCorrelation", func(t *testing.T) {
+		actorUserID := testSessionID
+		correlationID := "corr-abc-123"
+		// Detail is json.RawMessage (goJSONSchema -> encoding/json.RawMessage
+		// on this schema's own "detail" node, audit finding: LOW,
+		// decode-then-re-encode precision loss) -- a compact literal with no
+		// HTML-unsafe characters, so roundTrip's own marshal -> unmarshal ->
+		// reflect.DeepEqual comparison isn't tripped up by encoding/json's
+		// default HTML-escaping or by compact() reformatting whitespace that
+		// wasn't there to begin with.
+		roundTrip(t, sch, restdtos.AuditLogEntry{
+			Id:            testSandboxID,
+			ActorUserId:   &actorUserID,
+			Action:        "member.role_changed",
+			ResourceType:  "user",
+			ResourceId:    testSessionID,
+			Detail:        json.RawMessage(`{"from_role":"member","to_role":"maintainer"}`),
+			CorrelationId: &correlationID,
+			CreatedAt:     createdAt,
+		})
+	})
+
+	t.Run("NoActorNoCorrelation", func(t *testing.T) {
+		// Null actorUserId (a system/automation-attributed entry) and null
+		// correlationId -- both nullable-but-required keys (§6.3's own
+		// nullability convention: the key is always present, the value may
+		// be null).
+		roundTrip(t, sch, restdtos.AuditLogEntry{
+			Id:            testSandboxID,
+			ActorUserId:   nil,
+			Action:        "identity.unlinked",
+			ResourceType:  "identity",
+			ResourceId:    testSessionID,
+			Detail:        json.RawMessage(`{}`),
+			CorrelationId: nil,
+			CreatedAt:     createdAt,
+		})
+	})
+}
+
+func TestListAuditLogResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ListAuditLogResponse")
+
+	roundTrip(t, sch, restdtos.ListAuditLogResponse{
+		Entries: []restdtos.AuditLogEntry{
+			{
+				Id:            testSandboxID,
+				ActorUserId:   nil,
+				Action:        "identity.force_linked",
+				ResourceType:  "identity",
+				ResourceId:    testSessionID,
+				Detail:        json.RawMessage(`{"provider":"github"}`),
+				CorrelationId: nil,
+				CreatedAt:     time.Date(2026, 7, 19, 8, 30, 0, 0, time.UTC),
+			},
+		},
+	})
+}
+
+func TestUpdateMemberRoleRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/UpdateMemberRoleRequest")
+
+	roundTrip(t, sch, restdtos.UpdateMemberRoleRequest{
+		Role: "maintainer",
+	})
+}
+
+func TestLinkMemberIdentityRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/LinkMemberIdentityRequest")
+
+	roundTrip(t, sch, restdtos.LinkMemberIdentityRequest{
+		Provider:   "slack",
+		ExternalId: "U12345",
 	})
 }

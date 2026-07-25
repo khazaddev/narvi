@@ -518,7 +518,7 @@ func serve() error {
 	router.Route("/api/members", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.ListMembers(userStore, identityStore, identityLinkPromptStore))
-		r.Patch("/{userID}/role", httpapi.UpdateMemberRole(pool, userStore, auditLogStore))
+		r.Patch("/{userID}/role", httpapi.UpdateMemberRole(pool, userStore, identityStore, auditLogStore))
 		r.Post("/{userID}/identities", httpapi.LinkMemberIdentity(pool, userStore, identityStore, auditLogStore))
 		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(pool, identityStore, auditLogStore))
 	})
