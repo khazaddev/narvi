@@ -604,6 +604,89 @@ func TestCreateSession_MultipleRepos_SecondInvalid_Rejected(t *testing.T) {
 	}
 }
 
+// --- CreateSession: spawnSource forced to "web" (audit remediation,
+// wire-contract/security-adjacent lens) ---
+
+// TestCreateSession_NonWebSpawnSource_Rejected proves this REST handler --
+// the ONLY authenticated REST session-creation path -- rejects a request
+// that explicitly claims a non-"web" spawnSource, rather than persisting
+// it verbatim. Before this fix, an authenticated web caller could POST
+// spawnSource: "slack" (or linear/github) and have it land on the new
+// session row as-is, forging provenance in the UI's own source icons/
+// filters and audit rows, and steering app/sessionactor/outboxenqueue.go's
+// own turn-completion outbox routing (which genuinely branches on
+// sessions.spawn_source) down a channel this session was never actually
+// created through. Table-driven over the three non-"web" enum values;
+// each is rejected 400 BEFORE any Postgres write, matching the established
+// repo/pathScope/mockConfig rejection-test precedent above exactly
+// (asserting zero session rows for the calling user, not merely the status
+// code).
+func TestCreateSession_NonWebSpawnSource_Rejected(t *testing.T) {
+	tests := []struct {
+		name        string
+		spawnSource string
+	}{
+		{name: "slack", spawnSource: "slack"},
+		{name: "linear", spawnSource: "linear"},
+		{name: "github", spawnSource: "github"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+			user, token := rig.createAuthenticatedUser(ctx, t)
+
+			body := []byte(fmt.Sprintf(`{"spawnSource":%q,"title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`, tc.spawnSource))
+			var errBody map[string]string
+			status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &errBody, token)
+			if status != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
+			}
+			if errBody["error"] == "" {
+				t.Error(`error body["error"] is empty, want a clear validation error naming spawnSource`)
+			}
+			if count := rig.sessionCountForUser(ctx, t, user.ID); count != 0 {
+				t.Errorf("sessions for user = %d, want 0 (rejected before any Postgres write, and no forged spawn_source ever reached Postgres)", count)
+			}
+		})
+	}
+}
+
+// TestCreateSession_WebSpawnSource_PersistsAsWeb is the companion positive
+// case to TestCreateSession_NonWebSpawnSource_Rejected above: an explicit
+// "web" spawnSource -- the one legitimate value on this endpoint -- is
+// still accepted and persists exactly as sent, both in the response DTO
+// and (queried directly, not merely trusting the handler's own echo) in
+// the sessions.spawn_source column itself.
+func TestCreateSession_WebSpawnSource_PersistsAsWeb(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+	if got.SpawnSource != restdtos.SessionSpawnSourceWeb {
+		t.Errorf("SpawnSource = %q, want %q", got.SpawnSource, restdtos.SessionSpawnSourceWeb)
+	}
+
+	var sessionID pgtype.UUID
+	if err := sessionID.Scan(got.Id); err != nil {
+		t.Fatalf("scan session id: %v", err)
+	}
+	var persisted string
+	if err := rig.pool.QueryRow(ctx, `SELECT spawn_source FROM sessions WHERE id = $1`, sessionID).Scan(&persisted); err != nil {
+		t.Fatalf("query persisted spawn_source: %v", err)
+	}
+	if persisted != "web" {
+		t.Errorf("persisted spawn_source = %q, want %q", persisted, "web")
+	}
+}
+
 // --- CreateSession: pathScope / Environment (row 10, "domain: Environment
 // scoping", §14.1) ---
 
