@@ -218,6 +218,17 @@ func NewHandler(deps Deps) http.HandlerFunc {
 		var ev slackEvent
 		if err := json.Unmarshal(envelope.Event, &ev); err != nil {
 			logger.Error("slack: decode inner event failed", "error", err)
+			// H2 audit fix ("webhook claim/release parity"): this delivery
+			// was claimed above but never actually processed -- release the
+			// claim so that a genuine redelivery of this same event_id (a
+			// human manually resending it, or Slack's own real retry
+			// behavior on a slow/failed response) can actually reprocess it,
+			// rather than being silently skipped forever as an
+			// already-claimed duplicate. Mirrors github's own identical
+			// parse-failure release (handler.go).
+			if releaseErr := deps.Deliveries.Release(ctx, "slack", envelope.EventID); releaseErr != nil {
+				logger.Error("slack: release webhook delivery claim failed", "error", releaseErr, "event_id", envelope.EventID)
+			}
 			writeError(w, http.StatusBadRequest, "malformed event")
 			return
 		}
@@ -227,7 +238,25 @@ func NewHandler(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		handleEvent(ctx, deps, ack, logger, ev)
+		if ok := handleEvent(ctx, deps, ack, logger, ev); !ok {
+			// H2 audit fix: handleEvent hit a genuine post-claim processing
+			// failure (a DB error resolving/creating the session or adding
+			// the turn) -- release the claim and answer non-2xx so a
+			// redelivery of this same event_id can retry, instead of
+			// silently and permanently dropping the event now that it's
+			// (correctly) claimed. Never released for a best-effort
+			// notification failure (the in-thread ack, the identity-link
+			// ephemeral notice) or a deliberate business skip (no default
+			// repo configured, an authz denial) -- see handleEvent's own doc
+			// comment for the exact boundary, mirroring github's own
+			// ErrActorNotAuthorized-vs-genuine-error distinction
+			// (coalesce.go).
+			if releaseErr := deps.Deliveries.Release(ctx, "slack", envelope.EventID); releaseErr != nil {
+				logger.Error("slack: release webhook delivery claim failed", "error", releaseErr, "event_id", envelope.EventID)
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -247,10 +276,21 @@ type sessionResolution struct {
 
 // handleEvent implements doc.go's own thread<->session mapping design
 // (steps 7-8): resolve or create the mapped session, add a turn, then
-// best-effort ack. Every failure here is logged only -- by the time this
-// runs, the delivery is already claimed (see doc.go's own tradeoff note),
-// so the caller above always still answers Slack with 200.
-func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent) {
+// best-effort ack. Returns ok=false ONLY for a genuine post-claim
+// persistence failure (resolveOrClaimSession's own DB errors, or addTurn
+// failing) -- H2 audit fix ("webhook claim/release parity"): the caller
+// (NewHandler) releases the webhook-delivery claim and answers non-2xx
+// when ok is false, so a redelivery of this same event_id can actually
+// retry, instead of the event being silently and permanently dropped now
+// that it's claimed. Every OTHER failure here (a best-effort in-thread
+// ack/ephemeral-notice post failing, or a deliberate business skip -- no
+// default repo configured, an authz denial) is still only ever logged,
+// returning ok=true: retrying those would either change nothing (an authz
+// denial renders the exact same verdict again) or risks double-posting/
+// double-processing something that already fully succeeded (the ack/
+// notice text is best-effort exactly because the underlying session/turn
+// work is already durably committed by the time either runs).
+func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent) bool {
 	channel := ev.Channel
 	key := ev.threadKey()
 	prompt := normalizeMrkdwn(ev.Text)
@@ -287,14 +327,20 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		}
 	}
 
-	if !ok || res.Skip {
-		return
+	if !ok {
+		// A genuine backend error inside resolveOrClaimSession (already
+		// logged there) -- distinct from res.Skip below, which reports a
+		// deliberate business decision (never a failure).
+		return false
+	}
+	if res.Skip {
+		return true
 	}
 
 	created, err := addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Registry, res.SessionID, prompt)
 	if err != nil {
 		logger.Error("slack: add turn failed", "error", err)
-		return
+		return false
 	}
 
 	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE, on
@@ -323,6 +369,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
 	}
+	return true
 }
 
 // resolveOrClaimSession implements doc.go's own numbered design: an

@@ -105,6 +105,40 @@ func (q *Queries) GetLinearAgentSessionBySessionID(ctx context.Context, sessionI
 	return i, err
 }
 
+const releaseLinearAgentSessionClaim = `-- name: ReleaseLinearAgentSessionClaim :exec
+DELETE FROM linear_agent_sessions WHERE agent_session_id = $1 AND session_id IS NULL
+`
+
+// Audit-fix addition (H3, "webhook claim/release parity"): un-claims a
+// first-writer-wins row this same request just won via
+// ClaimLinearAgentSession (Inserted=true), but failed to actually
+// complete -- an authorization denial, a CreateSessionCore error, a
+// SetSessionID error, or a crash between the claim's own commit and the
+// follow-up SetSessionID call (these are NOT one transaction -- see
+// migrations/000030_linear_agent_sessions.up.sql's own doc comment).
+// Without this, ANY of those leaves the row permanently stuck with a NULL
+// session_id: every future prompt/redelivery for that agent_session_id is
+// dropped forever as "still being claimed" (webhook.go's own
+// handlePrompted), with no recovery short of DB surgery -- mirrors
+// ReleaseWebhookDelivery's own reasoning (postgres/queries/
+// webhookdeliveries.sql) for a DIFFERENT claim identity.
+//
+// The `session_id IS NULL` guard is load-bearing: a row that already has
+// a REAL session_id attached backs a session that genuinely exists (and
+// may already be in progress) -- releasing THAT row would let a later,
+// unrelated event re-claim the SAME agent_session_id and attempt to
+// create a SECOND, colliding session, exactly the coalescing failure this
+// table exists to prevent (migrations/000030_linear_agent_sessions.up.sql's
+// own doc comment). Scoping the DELETE to session_id IS NULL makes this
+// safe to call unconditionally on every post-claim failure branch: if
+// SetSessionID already won before this call runs, the DELETE simply
+// matches zero rows, and the real, already-attached session is left
+// completely untouched.
+func (q *Queries) ReleaseLinearAgentSessionClaim(ctx context.Context, agentSessionID string) error {
+	_, err := q.db.Exec(ctx, releaseLinearAgentSessionClaim, agentSessionID)
+	return err
+}
+
 const setLinearAgentSessionSessionID = `-- name: SetLinearAgentSessionSessionID :exec
 UPDATE linear_agent_sessions
 SET session_id = $2

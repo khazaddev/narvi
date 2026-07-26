@@ -74,3 +74,19 @@ func (s *LinearAgentSessionStore) GetByAgentSessionID(ctx context.Context, agent
 func (s *LinearAgentSessionStore) GetBySessionID(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.LinearAgentSession, error) {
 	return s.q.GetLinearAgentSessionBySessionID(ctx, sessionID)
 }
+
+// Release un-claims agentSessionID's own row -- audit-fix addition (H3,
+// "webhook claim/release parity"): this same caller previously won the
+// claim via Claim, but failed to actually complete (see
+// ReleaseLinearAgentSessionClaim's own doc comment, postgres/queries/
+// linearagentsessions.sql, for the full "why this exists" writeup).
+// Guarded by the underlying query's own `session_id IS NULL` WHERE clause
+// -- this can NEVER un-claim a row that already has a REAL session_id
+// attached, so it is always safe to call on any post-claim failure branch
+// regardless of how far handleCreated (webhook.go) got before failing.
+// Mirrors WebhookDeliveryStore's own identical Release, for a DIFFERENT
+// claim identity (this table's own agent_session_id, not a webhook
+// delivery id).
+func (s *LinearAgentSessionStore) Release(ctx context.Context, agentSessionID string) error {
+	return s.q.ReleaseLinearAgentSessionClaim(ctx, agentSessionID)
+}
