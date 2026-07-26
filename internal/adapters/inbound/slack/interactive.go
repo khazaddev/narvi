@@ -72,6 +72,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -306,9 +307,28 @@ func (deps InteractiveDeps) handleBlockActions(ctx context.Context, logger *slog
 // domain/authz.Authorize -- mirroring the REST API's own 403 semantics
 // ("not authorized to ...", helpers.go/planapprove.go) rather than
 // silently dropping the click/submission.
+//
+// slackDecisionErrorText/slackRequestChangesErrorText are this same Step's
+// own MEDIUM audit-fix addition ("Slack's interactive.go has its OWN
+// separate, still-unfixed copy" of identity.go's authorizeSessionAction
+// conflation): shown instead of the two ...ForbiddenText constants above
+// when authorizeSessionAction (below) hits a genuine backend error rather
+// than a real denial, so an internal failure is never misreported to the
+// actor as a permission denial. slackDecisionErrorText reuses the EXACT
+// text decideAndUpdateMessage's own pre-existing DecidePlan-failure branch
+// already shows for a genuine backend error, so the actor sees the
+// identical honest message regardless of which call underneath actually
+// failed. slackRequestChangesErrorText is its handleViewSubmission
+// counterpart -- no equivalent generic-error text existed on that path
+// before this fix (a CreateTurnCore failure there was only ever logged,
+// silently closing the modal), so this is a new, honest addition rather
+// than a reuse.
 const (
 	slackPlanForbiddenText        = "You don't have permission to approve or reject this plan."
 	slackPromptForbiddenErrorText = "You don't have permission to request changes on this plan."
+
+	slackDecisionErrorText       = "Something went wrong recording this decision. Please try again."
+	slackRequestChangesErrorText = "Something went wrong submitting this. Please try again."
 )
 
 // authorizeSessionAction renders the exact §13.3 verdict
@@ -319,30 +339,57 @@ const (
 // own/joined, then Authorize" sequencing canActOnPlan/CreateTurn already
 // establish for the REST API (planauthz.go, httpapi/turn.go).
 //
-// actorUserID.Valid == false (still bot-attributed) short-circuits to
-// allowed=true immediately, with NO session/participants lookup at all --
-// preserving §13.2's own "unlinked actors get bot attribution ... the
-// action proceeds" precedent, and avoiding any DB read at all on the
+// actorUserID.Valid == false (still bot-attributed) short-circuits to a
+// nil (allowed) return immediately, with NO session/participants lookup at
+// all -- preserving §13.2's own "unlinked actors get bot attribution ...
+// the action proceeds" precedent, and avoiding any DB read at all on the
 // common bot-attributed path (this runs inside Slack's own tight
 // interactivity-ack budget).
-func (deps InteractiveDeps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) bool {
+//
+// This is a SEPARATE function from identity.go's own (Deps.
+// authorizeSessionAction, the Events-API ingress's twin) -- a different
+// receiver type (InteractiveDeps, not Deps), never the same function --
+// but both share the package-level ErrActorNotAuthorized sentinel
+// (identity.go) directly: a denial means the identical thing regardless of
+// which route rendered it. Returns ErrActorNotAuthorized when a RESOLVED
+// actor's own role genuinely fails domain/authz.Authorize -- a final,
+// non-retryable denial. Returns any OTHER (non-nil) error for a genuine
+// backend failure encountered while checking (deps.Sessions.Get/
+// actorauthz.OwnedOrJoined erroring) -- MEDIUM audit fix ("Slack's
+// interactive.go has its OWN separate, still-unfixed copy" of the same
+// conflation identity.go's own twin already had fixed): before this fix,
+// this function's own bare bool made a transient backend error
+// indistinguishable from a real denial, so BOTH decideAndUpdateMessage and
+// handleViewSubmission (below) showed the misleading "you don't have
+// permission" text on an internal failure and silently discarded the
+// actor's real click/submission. This endpoint has no webhook-delivery-
+// claim/release plumbing the way the Events-API ingress does (this file's
+// own top doc comment -- Slack's own tight ~3s interactivity-ack budget),
+// so there is no claim to route a backend error into releasing; instead,
+// both call sites now show an honest generic-error message on this branch,
+// which is what makes clicking the button again / resubmitting the modal
+// an actually meaningful retry.
+func (deps InteractiveDeps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) error {
 	if !actorUserID.Valid {
-		return true
+		return nil
 	}
 
 	sessionRow, err := deps.Sessions.Get(ctx, sessionID)
 	if err != nil {
 		logger.Error("slack: interactivity: get session for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
-		return false
+		return fmt.Errorf("slack: interactivity: get session for authorization: %w", err)
 	}
 
 	joined, err := actorauthz.OwnedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
 	if err != nil {
 		logger.Error("slack: interactivity: check participant for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
-		return false
+		return fmt.Errorf("slack: interactivity: check participant for authorization: %w", err)
 	}
 
-	return actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
+	if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined}) {
+		return ErrActorNotAuthorized
+	}
+	return nil
 }
 
 // decideAndUpdateMessage calls the shared httpapi.DecidePlan (decideplan.go)
@@ -420,9 +467,23 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	// returns true immediately for that case, preserving this package's own
 	// existing "Slack verdicts stay unauthenticated-per-user until linked"
 	// precedent (decideplan.go's own top doc comment).
-	if !deps.authorizeSessionAction(decideCtx, logger, sessionID, decidedBy, authz.ActionApprovePlan) {
-		logger.Warn("slack: interactivity: plan decision denied by authz", "plan_id", planIDStr, "session_id", sessionIDStr, "user_id", decidedBy.String())
-		deps.updateMessage(decideCtx, logger, channel, messageTS, slackPlanForbiddenText)
+	if err := deps.authorizeSessionAction(decideCtx, logger, sessionID, decidedBy, authz.ActionApprovePlan); err != nil {
+		if errors.Is(err, ErrActorNotAuthorized) {
+			logger.Warn("slack: interactivity: plan decision denied by authz", "plan_id", planIDStr, "session_id", sessionIDStr, "user_id", decidedBy.String())
+			deps.updateMessage(decideCtx, logger, channel, messageTS, slackPlanForbiddenText)
+			return
+		}
+		// MEDIUM audit fix ("Slack's interactive.go has its OWN separate,
+		// still-unfixed copy" of authorizeSessionAction's conflation): a
+		// genuine backend failure while checking authorization (already
+		// logged inside authorizeSessionAction) is NOT a denial -- show the
+		// same honest generic-error text the DecidePlan-failure branch below
+		// already uses, instead of misreporting an internal error as "you
+		// don't have permission" and silently dropping the actor's real
+		// decision. Clicking the button again is this endpoint's own retry
+		// path (there is no webhook-delivery-claim/release plumbing here to
+		// route into instead -- this file's own top doc comment).
+		deps.updateMessage(decideCtx, logger, channel, messageTS, slackDecisionErrorText)
 		return
 	}
 
@@ -603,12 +664,29 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 	// (turn.go's own authorize call). A still-unlinked (bot-attributed)
 	// actorUserID is untouched (authorizeSessionAction returns true
 	// immediately), preserving this package's own existing precedent.
-	if !deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession) {
-		logger.Warn("slack: interactivity: request-changes turn denied by authz", "session_id", sessionIDStr, "user_id", actorUserID.String())
+	if err := deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession); err != nil {
+		if errors.Is(err, ErrActorNotAuthorized) {
+			logger.Warn("slack: interactivity: request-changes turn denied by authz", "session_id", sessionIDStr, "user_id", actorUserID.String())
+			writeJSON(w, http.StatusOK, viewSubmissionErrorResponse{
+				ResponseAction: "errors",
+				Errors: map[string]string{
+					slackapi.RequestChangesBlockID: slackPromptForbiddenErrorText,
+				},
+			})
+			return
+		}
+		// MEDIUM audit fix ("Slack's interactive.go has its OWN separate,
+		// still-unfixed copy" of authorizeSessionAction's conflation): a
+		// genuine backend failure while checking authorization (already
+		// logged inside authorizeSessionAction) is NOT a denial -- show the
+		// honest generic-error text via the same modal-error mechanism,
+		// instead of misreporting an internal error as "you don't have
+		// permission" and silently discarding the submitter's feedback text.
+		// Resubmitting the modal is this endpoint's own retry path.
 		writeJSON(w, http.StatusOK, viewSubmissionErrorResponse{
 			ResponseAction: "errors",
 			Errors: map[string]string{
-				slackapi.RequestChangesBlockID: slackPromptForbiddenErrorText,
+				slackapi.RequestChangesBlockID: slackRequestChangesErrorText,
 			},
 		})
 		return

@@ -488,18 +488,22 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 // Returns ok=false ONLY for a genuine post-(webhook-delivery-)claim
 // backend failure -- H2 audit fix ("webhook claim/release parity"):
 // GetByAgentSessionID erroring for any reason OTHER than pgx.ErrNoRows,
-// ListForSession erroring, Turns.Create erroring, or (MEDIUM audit fix,
+// ListForSession erroring, Turns.Create erroring, (MEDIUM audit fix,
 // "authorizeSessionAction conflates a genuine backend error with a real
 // authorization denial") authorizeSessionAction returning a genuine
 // backend error (any error other than ErrActorNotAuthorized) while
-// checking whether this reply's own actor may prompt sessionID. The caller
-// (NewWebhookHandler) releases the webhook-delivery claim and answers
-// non-2xx on ok=false, so a redelivery of this same Linear-Delivery id
-// can retry. Every other return (missing agentActivity, a stop signal,
-// an unknown/still-claiming agent session, a genuine ErrActorNotAuthorized
-// denial, an already-open turn) is ok=true: a deliberate business decision
-// or an accepted, already-documented scope limitation (see each branch's
-// own comment), never a failure a retry could plausibly change.
+// checking whether this reply's own actor may prompt sessionID, or (LOW
+// audit fix, second review pass -- "handlePlanVerdict has the same
+// conflation, explicitly left out of the first fix's scope") a plan-verdict
+// reply's own call into handlePlanVerdict below returning ok=false for the
+// identical reason. The caller (NewWebhookHandler) releases the
+// webhook-delivery claim and answers non-2xx on ok=false, so a redelivery
+// of this same Linear-Delivery id can retry. Every other return (missing
+// agentActivity, a stop signal, an unknown/still-claiming agent session, a
+// genuine ErrActorNotAuthorized denial -- ordinary-reply or plan-verdict --
+// an already-open turn) is ok=true: a deliberate business decision or an
+// accepted, already-documented scope limitation (see each branch's own
+// comment), never a failure a retry could plausibly change.
 func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWebhookPayload) bool {
 	logger := platform.Logger(ctx)
 
@@ -548,16 +552,21 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	if deps.Plans != nil {
 		if planID, hasAwaiting := deps.findAwaitingApprovalPlanID(ctx, logger, sessionID); hasAwaiting {
 			if verdict, ok := plandomain.MatchVerdict(payload.AgentActivity.Content.Body); ok {
-				// handlePlanVerdict's own internal failures (DecidePlan
-				// erroring, the outcome-activity post failing) are already
-				// logged and swallowed there, exactly like before this
-				// batch's own H2/H3 changes -- the session this plan belongs
-				// to already exists and is otherwise healthy, so a failed
-				// plan-verdict decision is deliberately left out of THIS
-				// function's own ok signal (never something this batch's
-				// audit findings called out).
-				deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, actorUserID, notice, payload.OrganizationID, payload.AgentSession.ID)
-				return true
+				// handlePlanVerdict's own OTHER internal failures
+				// (DecidePlan erroring, the outcome-activity post failing)
+				// are still logged and swallowed there, exactly like before
+				// this batch's own H2/H3 changes -- the session this plan
+				// belongs to already exists and is otherwise healthy, so a
+				// failed plan-verdict DECISION is deliberately left out of
+				// THIS function's own ok signal. LOW audit fix (second
+				// review pass, "handlePlanVerdict has the same conflation,
+				// explicitly left out of the first fix's scope"): a genuine
+				// backend error from handlePlanVerdict's own
+				// authorizeSessionAction call is NOT swallowed the same
+				// way -- it now returns ok=false here too, exactly mirroring
+				// this function's own ordinary-reply gate below, so it flows
+				// into the same release-the-claim-and-retry path.
+				return deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, actorUserID, notice, payload.OrganizationID, payload.AgentSession.ID)
 			}
 		}
 	}
@@ -676,7 +685,19 @@ func (deps Deps) findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Lo
 // describing the REAL final outcome, whether this call itself won or a
 // different channel already decided first, with identityNotice (§13.2's
 // own "notify in-channel", empty when there's nothing to say) appended.
-func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, decidedBy pgtype.UUID, identityNotice, organizationID, agentSessionID string) {
+//
+// Returns ok=false ONLY for a genuine backend error from its own
+// authorizeSessionAction call -- LOW audit fix, second review pass
+// ("handlePlanVerdict has the same conflation, explicitly left out of the
+// first fix's scope"): this function's own OTHER internal failures
+// (DecidePlan erroring for any reason other than ErrPlanOpenTurnInFlight,
+// the outcome-activity post failing) are still only logged and swallowed
+// here, exactly as before this fix -- the session/plan this verdict
+// targets already exists and is otherwise healthy, so a failed DECISION
+// itself remains an accepted, already-documented scope limitation, not
+// something this fix's own narrow scope (authorizeSessionAction's
+// conflation specifically) touches.
+func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, decidedBy pgtype.UUID, identityNotice, organizationID, agentSessionID string) bool {
 	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
 	// that resolved to a REAL, linked user_id must still pass domain/authz.
 	// Authorize(ActionApprovePlan) -- exactly what the REST approve/reject
@@ -686,33 +707,42 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, ses
 	// existing "Linear verdicts stay unauthenticated-per-user until linked"
 	// precedent (decideplan.go's own top doc comment).
 	//
-	// Unlike handlePrompted's own ordinary-reply gate, this does NOT
-	// distinguish ErrActorNotAuthorized from a genuine backend error --
-	// handlePlanVerdict's own internal failures are already logged and
-	// swallowed here, exactly like before this batch's own H2/H3/MEDIUM
-	// changes (this function's own caller, handlePrompted, deliberately
-	// leaves ITS failures out of its own ok signal too -- see that
-	// function's own call site comment); out of this batch's own explicit
-	// MEDIUM-finding scope (identity.go's own ErrActorNotAuthorized doc
-	// comment), which only rewires handlePrompted's ordinary-reply call
-	// site into the release-the-claim path.
+	// LOW audit fix (second review pass): this NOW distinguishes
+	// ErrActorNotAuthorized from a genuine backend error, using the exact
+	// same pattern already established for handlePrompted's own
+	// ordinary-reply gate above -- a real denial keeps today's behavior
+	// (post the denial message, return ok=true, no claim release); a
+	// genuine backend error (already logged inside authorizeSessionAction)
+	// returns ok=false instead, which this function's own caller
+	// (handlePrompted) now propagates as ITS OWN return value, routing it
+	// into the SAME release-the-claim-and-retry path H2 already wired up
+	// for every other post-claim failure. Before this fix, a genuine
+	// backend error here fell into the SAME branch as a real denial: it
+	// posted the misleading "you don't have permission" message AND never
+	// returned ok=false at all (this function had no return value), so the
+	// webhook-delivery claim was never released and no redelivery could
+	// ever retry the actual plan decision.
 	if err := deps.authorizeSessionAction(ctx, logger, sessionID, decidedBy, authz.ActionApprovePlan); err != nil {
-		logger.Warn("linear: plan decision denied by authz", "plan_id", planID.String(), "session_id", sessionID.String(), "user_id", decidedBy.String())
-		deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("You don't have permission to approve or reject this plan.", identityNotice))
-		return
+		if errors.Is(err, ErrActorNotAuthorized) {
+			logger.Warn("linear: plan decision denied by authz", "plan_id", planID.String(), "session_id", sessionID.String(), "user_id", decidedBy.String())
+			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("You don't have permission to approve or reject this plan.", identityNotice))
+			return true
+		}
+		return false
 	}
 
 	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), decidedBy)
 	if err != nil {
 		if errors.Is(err, httpapi.ErrPlanOpenTurnInFlight) {
 			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("A revision is already in progress for this plan -- try again once it completes.", identityNotice))
-			return
+			return true
 		}
 		logger.Error("linear: decide plan failed", "error", err, "plan_id", planID.String(), "session_id", sessionID.String())
-		return
+		return true
 	}
 
 	deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice(renderLinearPlanOutcomeText(outcome), identityNotice))
+	return true
 }
 
 // renderLinearPlanOutcomeText mirrors internal/adapters/inbound/slack's
