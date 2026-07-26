@@ -411,6 +411,13 @@ func TestWebhookHandler_PlanVerdict_DeniedForUnownedMember(t *testing.T) {
 // comment) fallthrough is likewise denied for an auto-linked `member` with
 // no ownership/participation in the target session: no new turn is
 // created.
+//
+// Also serves as the MEDIUM audit fix's own "denial keeps today's
+// behavior" counterpart proof (authz_backend_error_integration_test.go
+// proves the OTHER half, a genuine backend error): a real
+// ErrActorNotAuthorized denial must still leave the webhook-delivery claim
+// un-released and answer 200 -- unlike a genuine backend error, retrying
+// via redelivery would just render the identical denial again.
 func TestWebhookHandler_Prompted_DeniedForUnownedMember(t *testing.T) {
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
@@ -460,8 +467,9 @@ func TestWebhookHandler_Prompted_DeniedForUnownedMember(t *testing.T) {
 		t.Fatalf("seed producing turn: %v", err)
 	}
 
+	const deliveryID = "delivery-prompt-unowned-1"
 	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, "linear-unowned-prompter-1", "please also fix the tests")
-	rec := postWebhook(t, handler, body, "delivery-prompt-unowned-1")
+	rec := postWebhook(t, handler, body, deliveryID)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
 	}
@@ -475,6 +483,19 @@ func TestWebhookHandler_Prompted_DeniedForUnownedMember(t *testing.T) {
 	}
 	if allTurns[0].ID != producingTurn.ID {
 		t.Errorf("remaining turn = %v, want the seeded producing turn %v", allTurns[0].ID, producingTurn.ID)
+	}
+
+	// MEDIUM audit fix: a genuine denial must NOT release the webhook-
+	// delivery claim -- unlike a genuine backend error, redelivering this
+	// SAME delivery id would just render the identical denial again.
+	var deliveryRowCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'linear' AND delivery_id = $1`, deliveryID,
+	).Scan(&deliveryRowCount); err != nil {
+		t.Fatalf("count webhook_deliveries: %v", err)
+	}
+	if deliveryRowCount != 1 {
+		t.Errorf("webhook_deliveries row count = %d, want 1 (a genuine denial must leave the claim held, never released)", deliveryRowCount)
 	}
 }
 

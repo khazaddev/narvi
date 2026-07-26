@@ -745,6 +745,13 @@ drain:
 // auto-links (only the state-changing effect is denied) -- mirroring
 // TestHandler_AppMention_CreateSessionDeniedForViewer's own "still links,
 // still denies the effect" shape for the create-session path.
+//
+// Also serves as the MEDIUM audit fix's own "denial keeps today's
+// behavior" counterpart proof (authz_backend_error_integration_test.go
+// proves the OTHER half, a genuine backend error): a real
+// ErrActorNotAuthorized denial must still leave the webhook-delivery claim
+// un-released and answer 200 -- unlike a genuine backend error, retrying
+// via redelivery would just render the identical denial again.
 func TestHandler_ReplyOnMappedThread_DeniedForUnownedMember(t *testing.T) {
 	pool := newTestPool(t)
 	ctx := context.Background()
@@ -773,7 +780,8 @@ func TestHandler_ReplyOnMappedThread_DeniedForUnownedMember(t *testing.T) {
 		t.Fatalf("claim thread mapping: %v", err)
 	}
 
-	envelope := messageEnvelopeWithUser("Ev0UNOWNEDREPLY001", "C0UNOWNEDREPLY", "1700000060.000200", "1700000060.000100", "please continue", "U-UNOWNED-REPLY")
+	const eventID = "Ev0UNOWNEDREPLY001"
+	envelope := messageEnvelopeWithUser(eventID, "C0UNOWNEDREPLY", "1700000060.000200", "1700000060.000100", "please continue", "U-UNOWNED-REPLY")
 	req := signedSlackRequest(t, envelope)
 	rec := httptest.NewRecorder()
 	rig.handler(rec, req)
@@ -796,6 +804,19 @@ func TestHandler_ReplyOnMappedThread_DeniedForUnownedMember(t *testing.T) {
 	}
 	if identity.UserID != matchedUser.ID {
 		t.Errorf("identity.UserID = %v, want %v", identity.UserID, matchedUser.ID)
+	}
+
+	// MEDIUM audit fix: a genuine denial must NOT release the webhook-
+	// delivery claim -- unlike a genuine backend error, redelivering this
+	// SAME event_id would just render the identical denial again.
+	var deliveryRowCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'slack' AND delivery_id = $1`, eventID,
+	).Scan(&deliveryRowCount); err != nil {
+		t.Fatalf("count webhook_deliveries: %v", err)
+	}
+	if deliveryRowCount != 1 {
+		t.Errorf("webhook_deliveries row count = %d, want 1 (a genuine denial must leave the claim held, never released)", deliveryRowCount)
 	}
 }
 

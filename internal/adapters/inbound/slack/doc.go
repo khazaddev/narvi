@@ -62,7 +62,11 @@
 //     adds a turn to an existing session or creates a brand-new one via
 //     httpapi.CreateSessionCore. H2 audit fix ("webhook claim/release
 //     parity"): a genuine DB failure here (resolving/claiming the thread
-//     mapping, creating the session, or adding the turn) releases the
+//     mapping, creating the session, or adding the turn) -- including,
+//     MEDIUM audit fix ("authorizeSessionAction conflates a genuine
+//     backend error with a real authorization denial"), a genuine backend
+//     error authorizeExistingSessionReply's own authz check hits, distinct
+//     from a real ErrActorNotAuthorized denial -- releases the
 //     webhook-delivery claim (WebhookDeliveryStore.Release) and answers
 //     non-2xx, mirroring github's own identical release-on-failure
 //     pattern (handler.go) -- so a redelivery of this same event_id can

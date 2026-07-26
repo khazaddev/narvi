@@ -780,6 +780,46 @@ type Timeouts struct {
 	// margin for the rest of the handler's own (fast, no-network) work.
 	LinearOutboundActivityTimeout time.Duration
 
+	// --- Audit-remediation addition (HIGH, "releasing the
+	// linear_agent_sessions claim after a SetSessionID failure can spawn a
+	// duplicate, independently-dispatched agent"): no ordering relationship
+	// with either invariant chain above (or with any prior standalone
+	// addition), so -- per those additions' own precedent -- plain fields
+	// with sensible defaults, not wired into a fake invariant link.
+
+	// LinearSetSessionIDTimeout bounds ONE attempt of the retried
+	// AgentSessions.SetSessionID call in internal/adapters/inbound/linear's
+	// own handleCreated (webhook.go's own setSessionIDWithRetry) -- a
+	// single, local Postgres UPDATE against a row this same request
+	// already won the claim on, never an outbound network call, so this is
+	// deliberately much shorter than IdentityEmailFetchTimeout's own
+	// "lightweight outbound API call" budget. Not specified in the plan
+	// (this fix postdates it); chosen as 2s -- generous for a single-row
+	// UPDATE even under a transient connection blip, while keeping the
+	// retry loop's own worst-case added latency small relative to Linear's
+	// 5s webhook-response requirement.
+	LinearSetSessionIDTimeout time.Duration
+
+	// LinearSetSessionIDMaxAttempts/LinearSetSessionIDRetryBaseDelay/
+	// LinearSetSessionIDRetryMaxDelay configure platform.Retry's own
+	// doubling-capped-at-max backoff for setSessionIDWithRetry -- mirrors
+	// IdentityEmailFetchMaxAttempts/IdentityEmailFetchRetryBaseDelay/
+	// IdentityEmailFetchRetryMaxDelay's own identical shape (a foreground,
+	// in-process retry bounded by the caller's own webhook-response
+	// budget, internal/platform/retry.go), reused here for a DIFFERENT
+	// call: by the time setSessionIDWithRetry ever runs,
+	// httpapi.CreateSessionCore has ALREADY committed the real session
+	// and fired TriggerDispatch (see handleCreated's own top doc comment)
+	// -- retrying this idempotent UPDATE is always safe and never risks a
+	// duplicate session, unlike releasing the claim and letting Linear
+	// redeliver the whole `created` event. Not specified in the plan;
+	// chosen as 3 attempts / 100ms base / 500ms max -- with 3 attempts,
+	// the worst case (2 waits: 100ms then 200ms) adds well under a second
+	// of wall-clock time to the handler's own critical path.
+	LinearSetSessionIDMaxAttempts    int
+	LinearSetSessionIDRetryBaseDelay time.Duration
+	LinearSetSessionIDRetryMaxDelay  time.Duration
+
 	// --- Step 33 standalone addition ("Slack ingress", §8.10): no
 	// ordering relationship with either invariant chain above (or with
 	// any prior Step's standalone additions), so -- per those additions'
@@ -1132,6 +1172,11 @@ func DefaultTimeouts() Timeouts {
 
 		LinearWebhookTimestampWindow:  60 * time.Second, // Linear's own docs, explicit ("within a minute")
 		LinearOutboundActivityTimeout: 3 * time.Second,  // not specified; chosen, comfortably below Linear's own 5s webhook-response requirement
+
+		LinearSetSessionIDTimeout:        2 * time.Second,        // not specified; chosen, generous for a single-row Postgres UPDATE
+		LinearSetSessionIDMaxAttempts:    3,                      // not specified; chosen, matches IdentityEmailFetchMaxAttempts
+		LinearSetSessionIDRetryBaseDelay: 100 * time.Millisecond, // not specified; chosen, keeps the synchronous ingress path fast
+		LinearSetSessionIDRetryMaxDelay:  500 * time.Millisecond, // not specified; chosen
 
 		SlackAckTimeout: 10 * time.Second, // not specified; chosen, generous for a single Slack chat.postMessage POST, mirrors PRCreateTimeout's own reasoning
 

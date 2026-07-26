@@ -277,19 +277,24 @@ type sessionResolution struct {
 // handleEvent implements doc.go's own thread<->session mapping design
 // (steps 7-8): resolve or create the mapped session, add a turn, then
 // best-effort ack. Returns ok=false ONLY for a genuine post-claim
-// persistence failure (resolveOrClaimSession's own DB errors, or addTurn
-// failing) -- H2 audit fix ("webhook claim/release parity"): the caller
-// (NewHandler) releases the webhook-delivery claim and answers non-2xx
-// when ok is false, so a redelivery of this same event_id can actually
-// retry, instead of the event being silently and permanently dropped now
-// that it's claimed. Every OTHER failure here (a best-effort in-thread
+// persistence failure (resolveOrClaimSession's own DB errors, addTurn
+// failing, or -- MEDIUM audit fix, "authorizeSessionAction conflates a
+// genuine backend error with a real authorization denial" --
+// authorizeExistingSessionReply's own authorizeSessionAction call
+// returning a genuine backend error, distinct from ErrActorNotAuthorized)
+// -- H2 audit fix ("webhook claim/release parity"): the caller (NewHandler)
+// releases the webhook-delivery claim and answers non-2xx when ok is
+// false, so a redelivery of this same event_id can actually retry, instead
+// of the event being silently and permanently dropped now that it's
+// claimed. Every OTHER failure here (a best-effort in-thread
 // ack/ephemeral-notice post failing, or a deliberate business skip -- no
-// default repo configured, an authz denial) is still only ever logged,
-// returning ok=true: retrying those would either change nothing (an authz
-// denial renders the exact same verdict again) or risks double-posting/
-// double-processing something that already fully succeeded (the ack/
-// notice text is best-effort exactly because the underlying session/turn
-// work is already durably committed by the time either runs).
+// default repo configured, a genuine ErrActorNotAuthorized denial) is
+// still only ever logged, returning ok=true: retrying those would either
+// change nothing (an authz denial renders the exact same verdict again)
+// or risks double-posting/double-processing something that already fully
+// succeeded (the ack/notice text is best-effort exactly because the
+// underlying session/turn work is already durably committed by the time
+// either runs).
 func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent) bool {
 	channel := ev.Channel
 	key := ev.threadKey()
@@ -479,17 +484,35 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 // domain/authz.Authorize(ActionPromptSession), replying in-thread with
 // ackNotAuthorizedReplyText on denial instead of letting handleEvent's own
 // addTurn enqueue a turn. A still-unlinked (bot-attributed) creator is
-// untouched: authorizeSessionAction (identity.go) returns true immediately
+// untouched: authorizeSessionAction (identity.go) returns nil immediately
 // for that case, preserving §13.2's own "the action proceeds" precedent.
+//
+// ok (the second return value) is false ONLY for a genuine backend error
+// authorizeSessionAction hit while checking (MEDIUM audit fix,
+// "authorizeSessionAction conflates a genuine backend error with a real
+// authorization denial") -- distinct from ErrActorNotAuthorized, a real
+// denial, which still returns ok=true (Skip: true) exactly as before this
+// fix. See handleEvent's own doc comment for how ok=false here flows into
+// the release-the-claim-and-retry path.
 func (deps Deps) authorizeExistingSessionReply(ctx context.Context, ack *ackClient, logger *slog.Logger, channel, key string, sessionID, creator pgtype.UUID) (sessionResolution, bool) {
-	if !deps.authorizeSessionAction(ctx, logger, sessionID, creator, authz.ActionPromptSession) {
+	err := deps.authorizeSessionAction(ctx, logger, sessionID, creator, authz.ActionPromptSession)
+	if err == nil {
+		return sessionResolution{SessionID: sessionID}, true
+	}
+	if errors.Is(err, ErrActorNotAuthorized) {
 		logger.Warn("slack: reply denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
 		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedReplyText); ackErr != nil {
 			logger.Warn("slack: post not-authorized-reply ack failed", "error", ackErr)
 		}
 		return sessionResolution{Skip: true}, true
 	}
-	return sessionResolution{SessionID: sessionID}, true
+	// MEDIUM audit fix: a genuine backend failure while checking
+	// authorization (already logged inside authorizeSessionAction) --
+	// distinct from the real denial above -- must flow into the SAME
+	// release-the-claim-and-retry path H2 already wired up for every other
+	// post-claim failure, not be silently treated as "skip, no release"
+	// the way a one-off DB blip previously was.
+	return sessionResolution{}, false
 }
 
 // readBoundedBody reads r.Body (capped via http.MaxBytesReader, mirroring
