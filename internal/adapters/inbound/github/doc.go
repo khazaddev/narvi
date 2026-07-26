@@ -52,11 +52,16 @@
 //     known limitations). No mention -> acknowledged 200, no session
 //     created.
 //  6. Normalize into a restdtos.CreateSessionRequest (spawnSource:
-//     "github", prompt: the mention comment's own body, repos: derived
-//     from the PR's own head repo/branch when the event type carries it
-//     directly -- see payload.go's own KNOWN LIMITATION note for
-//     "issue_comment", which does not) and hand off to coalesce.go's
-//     SessionCoalescer.CreateOrJoin.
+//     "github", prompt: the mention comment's own body, repos: the PR's
+//     REAL head repo/branch). "pull_request_review_comment" carries this
+//     directly in its own payload; "issue_comment" does not -- for that
+//     event type, handler.go's own resolveIssueCommentHead (headresolve.go)
+//     resolves it via one authenticated GitHub REST API call
+//     (githubapi.Adapter.GetPullRequest) BEFORE this step, closing the H5
+//     audit finding that an issue_comment mention (the PR "Conversation"
+//     tab, the most common way the bot gets mentioned) used to leave the
+//     session cloning the BASE repo's own DEFAULT branch instead -- and
+//     hand off to coalesce.go's SessionCoalescer.CreateOrJoin.
 //
 // # Per-PR coalescing design (coalesce.go) -- the real design work of
 // this Step

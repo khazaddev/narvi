@@ -200,6 +200,44 @@ func TestParsePullRequestReviewComment(t *testing.T) {
 			wantOK:  false,
 			wantErr: true,
 		},
+		{
+			// L15 audit fix: GitHub's own webhook documentation states
+			// pull_request.head.repo is nullable -- null when the head
+			// repository has been deleted (e.g. a fork removed after the
+			// PR was opened). Before this fix, a non-pointer Repo struct
+			// field silently unmarshalled this null into an empty-valued
+			// struct (empty Name/CloneURL), which would have made the
+			// session try to clone an empty repo spec entirely. This
+			// proves the fix: falls back to the BASE repo (repository.name/
+			// clone_url), exactly like parseIssueComment's own existing
+			// fallback for the analogous situation, and is still a genuine,
+			// actionable mention (ok=true, no error).
+			name: "head.repo null (deleted fork) -- falls back to base repo, still actionable",
+			body: `{
+				"action": "created",
+				"comment": {"body": "@narvi-bot what do you think of this line?"},
+				"pull_request": {
+					"number": 99,
+					"head": {"ref": "feature-x", "repo": null}
+				},
+				"repository": {"full_name": "acme/widgets", "name": "widgets", "clone_url": "https://github.com/acme/widgets.git"}
+			}`,
+			wantOK: true,
+			check: func(t *testing.T, m mention) {
+				if m.RepoFullName != "acme/widgets" {
+					t.Errorf("RepoFullName = %q, want %q", m.RepoFullName, "acme/widgets")
+				}
+				if m.RepoName != "widgets" {
+					t.Errorf("RepoName = %q, want %q (base repo fallback)", m.RepoName, "widgets")
+				}
+				if m.RepoCloneURL != "https://github.com/acme/widgets.git" {
+					t.Errorf("RepoCloneURL = %q, want %q (base repo fallback, NOT empty)", m.RepoCloneURL, "https://github.com/acme/widgets.git")
+				}
+				if m.HeadBranch == nil || *m.HeadBranch != "feature-x" {
+					t.Errorf("HeadBranch = %v, want %q (head.ref itself is never null, only head.repo)", m.HeadBranch, "feature-x")
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {

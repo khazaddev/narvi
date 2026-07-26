@@ -300,6 +300,150 @@ func TestResolveContractsFingerprint_EscapesOwnerRepoPathAndRef(t *testing.T) {
 	}
 }
 
+// TestGetPullRequest_Success proves GetPullRequest resolves the real head
+// ref/repo from a realistic GET /repos/{owner}/{repo}/pulls/{number}
+// response -- batch fix/audit-github-pr-payload-correctness's own H5 fix.
+func TestGetPullRequest_Success(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotAuth, gotAccept string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotAccept = r.Header.Get("Accept")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number": 42,
+			"head": map[string]any{
+				"ref": "feature-x",
+				"repo": map[string]any{
+					"name":      "widgets",
+					"clone_url": "https://github.com/contributor/widgets.git",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	pr, err := adapter.GetPullRequest(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequest() error = %v, want nil", err)
+	}
+
+	if gotPath != "/repos/acme/widgets/pulls/42" {
+		t.Errorf("request path = %q, want %q", gotPath, "/repos/acme/widgets/pulls/42")
+	}
+	if gotAuth != "Bearer gho_bottoken" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer gho_bottoken")
+	}
+	if gotAccept != "application/vnd.github+json" {
+		t.Errorf("Accept header = %q, want %q", gotAccept, "application/vnd.github+json")
+	}
+
+	if pr.HeadRef != "feature-x" {
+		t.Errorf("PullRequest.HeadRef = %q, want %q", pr.HeadRef, "feature-x")
+	}
+	if pr.HeadRepoName != "widgets" {
+		t.Errorf("PullRequest.HeadRepoName = %q, want %q", pr.HeadRepoName, "widgets")
+	}
+	if pr.HeadRepoCloneURL != "https://github.com/contributor/widgets.git" {
+		t.Errorf("PullRequest.HeadRepoCloneURL = %q, want %q", pr.HeadRepoCloneURL, "https://github.com/contributor/widgets.git")
+	}
+}
+
+// TestGetPullRequest_NullHeadRepo proves a real "head.repo: null" response
+// (GitHub's own documented shape when the head/fork repo has been deleted)
+// resolves to an empty HeadRepoName/HeadRepoCloneURL rather than an error
+// or a panic -- L15's own sibling fix, mirrored here on the outbound side.
+func TestGetPullRequest_NullHeadRepo(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"number": 42, "head": {"ref": "feature-x", "repo": null}}`))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	pr, err := adapter.GetPullRequest(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequest() error = %v, want nil", err)
+	}
+	if pr.HeadRef != "feature-x" {
+		t.Errorf("PullRequest.HeadRef = %q, want %q", pr.HeadRef, "feature-x")
+	}
+	if pr.HeadRepoName != "" {
+		t.Errorf("PullRequest.HeadRepoName = %q, want empty (head.repo was null)", pr.HeadRepoName)
+	}
+	if pr.HeadRepoCloneURL != "" {
+		t.Errorf("PullRequest.HeadRepoCloneURL = %q, want empty (head.repo was null)", pr.HeadRepoCloneURL)
+	}
+}
+
+// TestGetPullRequest_4xxMapsToRealError proves a realistic GitHub 4xx
+// failure (e.g. PR not found) maps to a real, structured *githubapi.
+// APIError, never a panic or a silently-empty PullRequest mistaken for
+// success.
+func TestGetPullRequest_4xxMapsToRealError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, err := adapter.GetPullRequest(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err == nil {
+		t.Fatal("GetPullRequest() error = nil, want a *githubapi.APIError")
+	}
+
+	var apiErr *githubapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("GetPullRequest() error = %v (%T), want *githubapi.APIError", err, err)
+	}
+	if apiErr.Status != http.StatusNotFound {
+		t.Errorf("APIError.Status = %d, want %d", apiErr.Status, http.StatusNotFound)
+	}
+}
+
+// TestGetPullRequest_EscapesOwnerAndRepo proves a malicious Owner/Repo
+// containing a "/" and a "#" cannot inject an extra path segment or
+// truncate the request via an unintended URL fragment -- mirrors
+// TestCreatePR_EscapesOwnerAndRepo's own identical discipline.
+func TestGetPullRequest_EscapesOwnerAndRepo(t *testing.T) {
+	t.Parallel()
+
+	var gotEscapedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"number": 1, "head": map[string]any{"ref": "x", "repo": nil}})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, err := adapter.GetPullRequest(context.Background(), "acme/evil", "widgets#v1", 7, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequest() error = %v, want nil", err)
+	}
+
+	want := "/repos/acme%2Fevil/widgets%23v1/pulls/7"
+	if gotEscapedPath != want {
+		t.Errorf("request EscapedPath = %q, want %q (owner/repo must be escaped, not interpolated raw)", gotEscapedPath, want)
+	}
+}
+
 // TestNew_DefaultsAPIBaseURL proves an empty apiBaseURL falls back to
 // GitHub's own real API host rather than an empty/unusable base.
 func TestNew_DefaultsAPIBaseURL(t *testing.T) {

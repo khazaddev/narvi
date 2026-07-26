@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -38,6 +39,38 @@ type Config struct {
 	// BotHandle is the bot/app username mention detection matches comment
 	// bodies against (compileMentionPattern, payload.go).
 	BotHandle string
+
+	// BotToken/PullRequests/Timeouts (batch fix/audit-github-pr-payload-
+	// correctness, H5 audit fix) together resolve an issue_comment
+	// mention's TRUE head branch/repo via one authenticated GitHub REST
+	// API call -- see headresolve.go's own doc comments for the full
+	// fallback behavior.
+	//
+	// BotToken is the SAME bot credential githubapi.BotNotifier already
+	// authenticates its own PostIssueComment calls with
+	// (platform.Config.GitHubBotToken) -- never a per-commenter
+	// credential: a GitHub webhook mention carries no OAuth token for the
+	// commenter (unlike CreatePR's own per-session, per-creator token),
+	// and resolving a PR's own already-public head branch/repo needs none
+	// of that per-user identity.
+	//
+	// PullRequests is nil-safe: nil (this package's own handler_test.go,
+	// or any other minimal wiring that doesn't care about this fix) simply
+	// keeps today's pre-fix fallback behavior for every issue_comment
+	// mention -- see resolveIssueCommentHead's own doc comment.
+	// githubapi.Adapter (the SAME instance production wiring already
+	// constructs for CreatePR/ResolveBranchSHA/ResolveContractsFingerprint,
+	// cmd/control-plane/main.go) satisfies this directly.
+	//
+	// Timeouts.GitHubGetPRTimeout bounds the one GetPullRequest call this
+	// handler makes synchronously, inline, in its own request path --
+	// mirrors internal/adapters/inbound/slack's own AckTimeout precedent
+	// exactly (that field's own doc comment): a genuine outbound network
+	// call made inline in a webhook handler must never run against the
+	// bare, deadline-free r.Context() unbounded.
+	BotToken     string
+	PullRequests PullRequestResolver
+	Timeouts     platform.Timeouts
 }
 
 // NewHandler builds the POST /webhooks/github handler (cmd/control-plane/
@@ -117,6 +150,23 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			// acknowledge, nothing to do.
 			w.WriteHeader(http.StatusOK)
 			return
+		}
+
+		// H5 audit fix (batch fix/audit-github-pr-payload-correctness):
+		// issue_comment's own payload never carries the PR's real head
+		// branch/repo directly (see issueCommentPayload's own doc comment)
+		// -- resolve it here, via one authenticated GitHub API call, BEFORE
+		// m is turned into the session's own repo spec below.
+		// pull_request_review_comment already carries the real head
+		// branch/repo straight out of parseMention, so this is never
+		// called for that event type. Bounded by its own timeout (never
+		// the bare, deadline-free ctx) -- see Config.Timeouts' own doc
+		// comment for why; resolveIssueCommentHead itself never fails this
+		// request, only logs and falls back.
+		if eventType == eventTypeIssueComment {
+			resolveCtx, cancel := context.WithTimeout(ctx, cfg.Timeouts.GitHubGetPRTimeout)
+			m = resolveIssueCommentHead(resolveCtx, logger, cfg.PullRequests, cfg.BotToken, m)
+			cancel()
 		}
 
 		req := restdtos.CreateSessionRequest{

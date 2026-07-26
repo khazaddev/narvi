@@ -49,4 +49,17 @@
 // bot token baked in once, rather than duplicating the HTTP plumbing a
 // second time or threading a bot-token special case through Adapter's
 // existing per-call-token methods.
+//
+// Batch fix/audit-github-pr-payload-correctness (H5 audit fix) adds
+// GetPullRequest: a real GET https://api.github.com/repos/{owner}/{repo}/
+// pulls/{pull_number} call, resolving a pull request's TRUE head branch/
+// repo. internal/adapters/inbound/github's own webhook handler calls this
+// for an "issue_comment" mention specifically (that event type's own
+// payload never carries head.ref/head.repo directly, unlike
+// "pull_request_review_comment" -- see that package's own headresolve.go),
+// authenticated with the SAME bot credential BotNotifier already uses
+// (platform.Config.GitHubBotToken) -- a GitHub webhook mention carries no
+// per-commenter OAuth token the way CreatePR's caller already has one in
+// hand, and reading a PR's own already-public head branch/repo needs no
+// per-user identity at all.
 package githubapi

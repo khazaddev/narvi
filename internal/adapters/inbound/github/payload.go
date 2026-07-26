@@ -36,11 +36,20 @@ type mention struct {
 	RepoName     string
 	RepoCloneURL string
 	PRNumber     int32
-	// HeadBranch is nil when the event type doesn't carry the PR's head
-	// ref directly (issue_comment -- see parseIssueComment) -- nil means
-	// "use the repo's own default branch" per restdtos.
-	// CreateSessionRequestReposElemBranch's own documented convention,
-	// exactly like every other ingress caller of that same field.
+	// HeadBranch is nil straight out of parseIssueComment (issue_comment's
+	// own payload never carries the PR's head ref directly -- see
+	// issueCommentPayload's own doc comment) or parsePullRequestReviewComment
+	// (which always sets it, that event's payload embeds head.ref
+	// directly) -- nil means "use the repo's own default branch" per
+	// restdtos.CreateSessionRequestReposElemBranch's own documented
+	// convention, exactly like every other ingress caller of that same
+	// field. handler.go's own resolveIssueCommentHead (headresolve.go)
+	// resolves this to the PR's REAL head branch for an issue_comment
+	// mention via a real GitHub API call BEFORE building the session's
+	// repo spec (H5 audit fix) -- a nil HeadBranch reaching that repo spec
+	// therefore only ever means "that resolution itself failed" (logged,
+	// falls back to today's pre-fix behavior), never "issue_comment can't
+	// carry this".
 	HeadBranch  *string
 	CommentBody string
 
@@ -86,18 +95,20 @@ func parseMention(eventType string, body []byte, mentionRE *regexp.Regexp) (ment
 // -- GitHub's own REST/webhook model treats a PR as a kind of issue --
 // distinguished only by whether Issue.PullRequest is present at all.
 //
-// KNOWN LIMITATION: unlike pull_request_review_comment below, this
-// payload does NOT embed the PR's own head repo/branch anywhere -- only a
-// `pull_request.url` link a caller would need a further, authenticated
-// GitHub REST API call to resolve. No such call is wired here: Step 32 is
-// explicitly the ingress layer only (doc.go), and no GitHub App/bot
-// credential plumbing for an outbound authenticated call exists yet in
-// this codebase. A mention delivered via issue_comment therefore falls
-// back to the BASE repo's own default branch (HeadBranch left nil) rather
-// than the PR's actual head branch -- correct for a same-repo PR, wrong
-// for a fork PR. This is a deliberate, honestly-documented simplification
-// for this Step; resolving it precisely is left to whichever later Step
-// wires a real outbound GitHub API credential for this purpose.
+// Unlike pull_request_review_comment below, this payload does NOT embed
+// the PR's own head repo/branch anywhere -- only a `pull_request.url` link.
+// parseIssueComment below therefore always leaves HeadBranch nil and
+// RepoName/RepoCloneURL set to the base repo; handler.go's own
+// resolveIssueCommentHead (headresolve.go) is what actually resolves the
+// PR's REAL head branch/repo, via one authenticated GitHub REST API call
+// (GET /repos/{owner}/{repo}/pulls/{number}), AFTER parseMention returns
+// and BEFORE the mention is turned into the session's own repo spec (H5
+// audit fix, batch fix/audit-github-pr-payload-correctness) -- Step 32's
+// original version of this file left that resolution as a known,
+// honestly-documented limitation (no outbound GitHub API credential
+// existed in this codebase yet); internal/adapters/outbound/githubapi's
+// existing bot credential (already used for PostIssueComment) closes it
+// without needing any new kind of credential.
 type issueCommentPayload struct {
 	Action string `json:"action"`
 	Issue  struct {
@@ -147,7 +158,7 @@ func parseIssueComment(body []byte, mentionRE *regexp.Regexp) (mention, bool, er
 		RepoName:       p.Repository.Name,
 		RepoCloneURL:   p.Repository.CloneURL,
 		PRNumber:       p.Issue.Number,
-		HeadBranch:     nil, // see issueCommentPayload's own KNOWN LIMITATION doc comment.
+		HeadBranch:     nil, // resolved later, by handler.go's own resolveIssueCommentHead -- see issueCommentPayload's own doc comment.
 		CommentBody:    p.Comment.Body,
 		CommenterID:    p.Comment.User.ID,
 		CommenterLogin: p.Comment.User.Login,
@@ -176,8 +187,19 @@ type pullRequestReviewCommentPayload struct {
 	PullRequest struct {
 		Number int32 `json:"number"`
 		Head   struct {
-			Ref  string `json:"ref"`
-			Repo struct {
+			Ref string `json:"ref"`
+			// Repo is a POINTER (L15 audit fix) -- GitHub's own webhook
+			// documentation states this field is nullable: null when the
+			// head repository has been deleted (e.g. a fork removed after
+			// the PR was opened). A plain, non-pointer struct would
+			// silently unmarshal a JSON null into an empty-valued struct
+			// (empty Name/CloneURL) rather than letting
+			// parsePullRequestReviewComment below detect "no head repo"
+			// and fall back to the base repo -- mirroring
+			// issueCommentPayload.Issue.PullRequest's own identical
+			// nullable-pointer convention (that field's own doc comment)
+			// for the same "GitHub genuinely omits/nulls this" reason.
+			Repo *struct {
 				Name     string `json:"name"`
 				CloneURL string `json:"clone_url"`
 			} `json:"repo"`
@@ -185,6 +207,12 @@ type pullRequestReviewCommentPayload struct {
 	} `json:"pull_request"`
 	Repository struct {
 		FullName string `json:"full_name"`
+		// Name/CloneURL back parsePullRequestReviewComment's own base-repo
+		// fallback below (L15 audit fix) when Head.Repo is nil -- mirrors
+		// issueCommentPayload.Repository's own identical Name/CloneURL
+		// fields, used for exactly the same "clone the base repo" purpose.
+		Name     string `json:"name"`
+		CloneURL string `json:"clone_url"`
 	} `json:"repository"`
 }
 
@@ -200,16 +228,28 @@ func parsePullRequestReviewComment(body []byte, mentionRE *regexp.Regexp) (menti
 		return mention{}, false, nil
 	}
 	headBranch := p.PullRequest.Head.Ref
-	return mention{
-		RepoFullName:   p.Repository.FullName,        // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
-		RepoName:       p.PullRequest.Head.Repo.Name, // head repo -- may be a fork; the repo to actually clone.
-		RepoCloneURL:   p.PullRequest.Head.Repo.CloneURL,
+	m := mention{
+		RepoFullName:   p.Repository.FullName, // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
 		PRNumber:       p.PullRequest.Number,
 		HeadBranch:     &headBranch,
 		CommentBody:    p.Comment.Body,
 		CommenterID:    p.Comment.User.ID,
 		CommenterLogin: p.Comment.User.Login,
-	}, true, nil
+	}
+	if p.PullRequest.Head.Repo != nil {
+		m.RepoName = p.PullRequest.Head.Repo.Name // head repo -- may be a fork; the repo to actually clone.
+		m.RepoCloneURL = p.PullRequest.Head.Repo.CloneURL
+	} else {
+		// L15 audit fix: GitHub's own head.repo was null (the head/fork
+		// repo has since been deleted) -- fall back to the base repo,
+		// exactly like parseIssueComment's own existing fallback for the
+		// analogous "no real head repo info available" situation, rather
+		// than silently proceeding with an empty RepoName/RepoCloneURL
+		// that would make the session try to clone an empty repo spec.
+		m.RepoName = p.Repository.Name
+		m.RepoCloneURL = p.Repository.CloneURL
+	}
+	return m, true, nil
 }
 
 // compileMentionPattern builds the case-insensitive "@handle" detector

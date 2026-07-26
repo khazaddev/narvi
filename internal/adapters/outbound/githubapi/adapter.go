@@ -384,6 +384,78 @@ func (a *Adapter) doPost(ctx context.Context, path, token string, reqBody []byte
 	return body, nil
 }
 
+// pullRequestResponse is the subset of GitHub's real GET
+// /repos/{owner}/{repo}/pulls/{pull_number} response shape this adapter
+// needs (https://docs.github.com/rest/pulls/pulls#get-a-pull-request) --
+// batch fix/audit-github-pr-payload-correctness's own H5 fix: resolving an
+// issue_comment mention's TRUE head branch/repo, since that event type's
+// own webhook payload never carries them directly (unlike
+// pull_request_review_comment, whose payload already embeds this same
+// head.ref/head.repo shape verbatim -- internal/adapters/inbound/github/
+// payload.go's own pullRequestReviewCommentPayload).
+type pullRequestResponse struct {
+	Head struct {
+		Ref string `json:"ref"`
+		// Repo is a pointer -- GitHub's own webhook/REST documentation
+		// states this field is nullable: null when the head repository has
+		// been deleted (e.g. a fork removed after the PR was opened).
+		// Mirrors payload.go's own identical nullable-pointer fix for the
+		// SAME underlying GitHub concept (L15 audit fix).
+		Repo *struct {
+			Name     string `json:"name"`
+			CloneURL string `json:"clone_url"`
+		} `json:"repo"`
+	} `json:"head"`
+}
+
+// PullRequest is GetPullRequest's own return shape: enough to resolve a
+// PR's TRUE head branch/repo (H5 audit fix).
+type PullRequest struct {
+	// HeadRef is the PR's real head branch name (GitHub's own
+	// "head.ref") -- never empty for a real, open GitHub pull request.
+	HeadRef string
+	// HeadRepoName/HeadRepoCloneURL are the PR's real head repo (may be a
+	// fork) -- empty when GitHub's own "head.repo" was null (the head/fork
+	// repo has since been deleted). Callers MUST treat this exactly like
+	// payload.go's own pull_request_review_comment nullable-head-repo
+	// fallback: fall back to the base repo, never proceed with an empty
+	// repo spec.
+	HeadRepoName     string
+	HeadRepoCloneURL string
+}
+
+// GetPullRequest resolves pull request number's real head branch/repo via
+// a real GET https://api.github.com/repos/{owner}/{repo}/pulls/{number}
+// call, authenticated with token as a Bearer token -- like PostIssueComment,
+// this method is agnostic to whose token it's handed (production wiring,
+// cmd/control-plane/main.go, passes the bot's own statically-configured
+// credential, platform.Config.GitHubBotToken, since a GitHub webhook
+// mention carries no per-commenter OAuth token the way CreatePR's caller
+// already has one in hand).
+func (a *Adapter) GetPullRequest(ctx context.Context, owner, repo string, number int32, token string) (PullRequest, error) {
+	// Owner/Repo escaped via url.PathEscape (single opaque segments,
+	// mirroring every other method's own identical discipline -- see
+	// escapePathSegments' own doc comment above); number needs no escaping
+	// (a plain decimal integer).
+	path := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), number)
+	body, err := a.doGet(ctx, path, token)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("githubapi: get pull request: %w", err)
+	}
+
+	var parsed pullRequestResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return PullRequest{}, fmt.Errorf("githubapi: decode pull request response: %w", err)
+	}
+
+	pr := PullRequest{HeadRef: parsed.Head.Ref}
+	if parsed.Head.Repo != nil {
+		pr.HeadRepoName = parsed.Head.Repo.Name
+		pr.HeadRepoCloneURL = parsed.Head.Repo.CloneURL
+	}
+	return pr, nil
+}
+
 // PostIssueComment posts body as a new comment on repo owner/repo's
 // issue/PR prNumber, authenticated with token as a Bearer token (Step 35,
 // "outbox delivery", §5.1). Unlike CreatePR/ResolveBranchSHA above, token
