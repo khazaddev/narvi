@@ -34,13 +34,19 @@ import (
 
 // --- Local wire-shape mirrors ---
 //
-// members.go's own DTOs (identityDTO, memberDTO, pendingLinkPromptDTO,
-// listMembersResponse, auditLogEntryDTO, listAuditLogResponse) are all
-// unexported -- this file lives in package httpapi_test (a different
-// package than the handlers themselves), so it decodes into local
-// shapes matching the real JSON tags exactly, mirroring
-// planapprove_integration_test.go's own planActionResponseForTest
-// precedent.
+// members.go itself no longer has any hand-written DTOs of its own: its 5
+// endpoints now respond with the generated, exported contracts/gen/go/
+// restdtos types directly (restdtos.Identity, restdtos.Member,
+// restdtos.PendingLinkPrompt, restdtos.ListMembersResponse, restdtos.
+// AuditLogEntry, restdtos.ListAuditLogResponse -- an audit finding,
+// wire-contract, promoted these into /contracts as a pure migration; see
+// contracts/README.md's own "Members/audit-log DTOs" section). The local
+// shapes below are kept anyway, purely as a test-side convenience: plain
+// string fields (no restdtos-generated enum type's own strict
+// UnmarshalJSON to fight with when asserting on a response) matching the
+// real JSON tags exactly -- mirroring planapprove_integration_test.go's
+// own planActionResponseForTest precedent, which uses the identical
+// convention for planapprove.go's own STILL-unexported response shape.
 
 type identityDTOForTest struct {
 	ID         string    `json:"id"`
@@ -73,11 +79,12 @@ type listMembersResponseForTest struct {
 }
 
 type auditLogEntryDTOForTest struct {
-	ID           string  `json:"id"`
-	ActorUserID  *string `json:"actorUserId"`
-	Action       string  `json:"action"`
-	ResourceType string  `json:"resourceType"`
-	ResourceID   string  `json:"resourceId"`
+	ID           string                 `json:"id"`
+	ActorUserID  *string                `json:"actorUserId"`
+	Action       string                 `json:"action"`
+	ResourceType string                 `json:"resourceType"`
+	ResourceID   string                 `json:"resourceId"`
+	Detail       map[string]interface{} `json:"detail"`
 }
 
 type listAuditLogResponseForTest struct {
@@ -452,6 +459,56 @@ func TestUpdateMemberRole_ValidTransition_Returns200(t *testing.T) {
 	}
 }
 
+// TestUpdateMemberRole_ResponseIncludesIdentities proves this batch's own
+// fix for an audit finding (HIGH, wire-contract): UpdateMemberRole's own
+// response actually populates identities with the target's real
+// currently-linked identities -- never null, and not merely
+// createUserWithRole's own single seeded identity, but every identity
+// force-linked onto the target afterward too. Before this fix, the
+// response left identities nil (`"identities":null` on the wire), which
+// only became a formal contract violation once this same batch's own
+// /contracts migration made Member.identities schema-required and
+// non-nullable -- a frontend trusting that contract and calling
+// response.identities.map(...) after a role change would otherwise crash.
+func TestUpdateMemberRole_ResponseIncludesIdentities(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, adminToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	target, _ := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMember)
+
+	// Force-link a SECOND identity onto target first, so the assertion
+	// below can't be satisfied merely by createUserWithRole's own default
+	// seeded GitHub identity alone.
+	linkBody := []byte(`{"provider":"slack","externalId":"role-change-probe"}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/members/"+target.ID.String()+"/identities", linkBody, nil, adminToken)
+	if status != http.StatusCreated {
+		t.Fatalf("seed second identity status = %d, want %d", status, http.StatusCreated)
+	}
+
+	body := []byte(`{"role":"maintainer"}`)
+	var got memberDTOForTest
+	status = rig.doJSON(t, http.MethodPatch, "/api/members/"+target.ID.String()+"/role", body, &got, adminToken)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	if got.Identities == nil {
+		t.Fatal("Identities = nil, want a non-nil slice (Member.identities is schema-required and non-nullable)")
+	}
+	if len(got.Identities) != 2 {
+		t.Fatalf("Identities = %d, want 2 (createUserWithRole's own seeded GitHub identity + the Slack one force-linked above)", len(got.Identities))
+	}
+	var sawSlack bool
+	for _, i := range got.Identities {
+		if i.Provider == "slack" && i.ExternalID == "role-change-probe" {
+			sawSlack = true
+		}
+	}
+	if !sawSlack {
+		t.Errorf("Identities = %+v, want to include the force-linked slack identity", got.Identities)
+	}
+}
+
 // TestUpdateMemberRole_InvalidRoleString_Returns400 proves an
 // unrecognized role string is rejected outright, never silently ignored
 // or defaulted, and never touches the target's own row.
@@ -671,5 +728,107 @@ func TestListAuditLog_HappyPath(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected the seeded member.role_changed entry in ListAuditLog's response")
+	}
+}
+
+// TestListAuditLog_OneMalformedDetailJSON_DegradesGracefully seeds one
+// audit_log row via a raw SQL insert (bypassing auditlog.Record entirely
+// -- that helper's own signature only ever accepts a map[string]any, so
+// it could never itself produce this shape) whose detail_json is
+// well-formed JSON but NOT an object (a shape no CHECK constraint on the
+// column rules out for some bad/legacy row) and proves the page still
+// returns 200 with every OTHER row intact, and the malformed row itself
+// present with its own detail degraded to {} -- rather than a raw 500
+// that takes out this entire page for every admin over ONE bad row (an
+// audit finding: LOW).
+func TestListAuditLog_OneMalformedDetailJSON_DegradesGracefully(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	admin, adminToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	target, _ := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMember)
+
+	// A real, well-formed row via the normal role-change path, so there's
+	// something to prove survives alongside the malformed one below.
+	body := []byte(`{"role":"maintainer"}`)
+	status := rig.doJSON(t, http.MethodPatch, "/api/members/"+target.ID.String()+"/role", body, nil, adminToken)
+	if status != http.StatusOK {
+		t.Fatalf("seed well-formed row status = %d, want %d", status, http.StatusOK)
+	}
+
+	// Raw SQL insert, deliberately bypassing auditlog.Record: detail_json
+	// is a JSON array, not an object.
+	if _, err := rig.pool.Exec(ctx,
+		`INSERT INTO audit_log (actor_user_id, action, resource_type, resource_id, detail_json, correlation_id)
+		 VALUES ($1, 'test.malformed_detail', 'test', $2, '[1,2,3]'::jsonb, NULL)`,
+		admin.ID, target.ID.String(),
+	); err != nil {
+		t.Fatalf("seed malformed-detail row: %v", err)
+	}
+
+	var got listAuditLogResponseForTest
+	status = rig.doJSON(t, http.MethodGet, "/api/audit-log", nil, &got, adminToken)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d (one malformed row must never 500 the whole page)", status, http.StatusOK)
+	}
+
+	var sawGoodRow, sawMalformedRow bool
+	for _, e := range got.Entries {
+		if e.Action == "member.role_changed" && e.ResourceID == target.ID.String() {
+			sawGoodRow = true
+		}
+		if e.Action == "test.malformed_detail" {
+			sawMalformedRow = true
+			if len(e.Detail) != 0 {
+				t.Errorf("malformed row's own detail = %+v, want substituted {} (empty)", e.Detail)
+			}
+		}
+	}
+	if !sawGoodRow {
+		t.Error("expected the well-formed member.role_changed row to still be present")
+	}
+	if !sawMalformedRow {
+		t.Error("expected the malformed-detail row itself to still be present (degraded, not dropped)")
+	}
+}
+
+// TestListAuditLog_NullDetailJSON_DegradesGracefully covers the one shape
+// TestListAuditLog_OneMalformedDetailJSON_DegradesGracefully's own probe
+// does NOT catch on its own: a top-level JSON `null`. encoding/json treats
+// unmarshaling `null` into a map as a no-op success (err == nil, dest left
+// nil), not a type mismatch the way an array/number/string/bool detail_json
+// is -- so the isolation check must also treat a nil decoded map as
+// malformed, or this row's own detail would ship as the literal `null`,
+// violating dtos.schema.json's non-nullable AuditLogEntry.detail contract
+// exactly the way Member.identities used to.
+func TestListAuditLog_NullDetailJSON_DegradesGracefully(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	admin, adminToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+
+	if _, err := rig.pool.Exec(ctx,
+		`INSERT INTO audit_log (actor_user_id, action, resource_type, resource_id, detail_json, correlation_id)
+		 VALUES ($1, 'test.null_detail', 'test', $2, 'null'::jsonb, NULL)`,
+		admin.ID, admin.ID.String(),
+	); err != nil {
+		t.Fatalf("seed null-detail row: %v", err)
+	}
+
+	var got listAuditLogResponseForTest
+	status := rig.doJSON(t, http.MethodGet, "/api/audit-log", nil, &got, adminToken)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a null detail_json must never 500 the whole page)", status, http.StatusOK)
+	}
+
+	var sawRow bool
+	for _, e := range got.Entries {
+		if e.Action == "test.null_detail" {
+			sawRow = true
+			if len(e.Detail) != 0 {
+				t.Errorf("null-detail row's own detail = %+v, want substituted {} (empty), never the literal null", e.Detail)
+			}
+		}
+	}
+	if !sawRow {
+		t.Error("expected the null-detail row itself to still be present (degraded, not dropped)")
 	}
 }

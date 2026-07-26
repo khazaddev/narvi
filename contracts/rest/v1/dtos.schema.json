@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://narvi.dev/contracts/rest/v1/dtos.schema.json",
   "title": "RestDtos",
-  "description": "REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, and ws-token are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/automations/uploads DTOs are deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26/27; automations: PR-46/47; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). These 5 shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly.",
+  "description": "REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, and ws-token are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/automations/uploads DTOs are deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26/27; automations: PR-46/47; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). This schema also models the 8 members/audit-log shapes for §13.2/§13.3's own members API (Identity, Member, PendingLinkPrompt, ListMembersResponse, AuditLogEntry, ListAuditLogResponse, UpdateMemberRoleRequest, LinkMemberIdentityRequest) — promoted here as a pure migration off hand-written Go structs in internal/adapters/inbound/httpapi/members.go (see contracts/README.md's own 'Members/audit-log DTOs' section). All of these shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly.",
   "$defs": {
     "Session": {
       "type": "object",
@@ -140,6 +140,136 @@
           "type": "array",
           "items": { "type": "object", "additionalProperties": true }
         }
+      }
+    },
+    "Identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One linked-identity row's own REST wire shape (§13.2/§13.3 members API) -- returned both standalone (POST/DELETE .../identities) and nested inside Member.identities. provider/linkedVia enums match the Postgres identity_provider/identity_linked_via enums (migrations/000003_identities.up.sql) exactly.",
+      "required": ["id", "provider", "externalId", "linkedVia", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "provider": {
+          "type": "string",
+          "enum": ["github", "slack", "linear", "google"],
+          "description": "Matches Postgres identity_provider exactly."
+        },
+        "externalId": { "type": "string" },
+        "linkedVia": {
+          "type": "string",
+          "enum": ["auto_email", "prompt", "admin"],
+          "description": "Matches Postgres identity_linked_via exactly."
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "Member": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One member's own REST wire shape -- role + every identity currently linked to them (§13.3: 'linked identity chips'). role matches the Postgres user_role enum exactly. Every endpoint that returns a Member (ListMembers, UpdateMemberRole) populates identities with the target's own actual currently-linked identities -- never null, empty only when the member genuinely has none linked.",
+      "required": ["id", "email", "displayName", "role", "disabled", "createdAt", "identities"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "maintainer", "member", "viewer"],
+          "description": "Matches Postgres user_role exactly."
+        },
+        "disabled": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "identities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Identity" }
+        }
+      }
+    },
+    "PendingLinkPrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One still-present identity_link_prompts row's own REST wire shape -- deliberately carries NO nonce/nonce hash (a bearer secret, never surfaced over this read endpoint), just enough for an admin-facing view to show 'someone from Slack/Linear is waiting to connect their account' (§13.2: 'pending-link state'). provider matches the Postgres identity_provider enum exactly.",
+      "required": ["provider", "externalId", "expiresAt", "createdAt"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": ["github", "slack", "linear", "google"],
+          "description": "Matches Postgres identity_provider exactly."
+        },
+        "externalId": { "type": "string" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ListMembersResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/members's own response body (§13.2/§13.3): every user with role/disabled and their own currently-linked identities, plus every system-wide still-pending link prompt.",
+      "required": ["members", "pendingLinkPrompts"],
+      "properties": {
+        "members": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Member" }
+        },
+        "pendingLinkPrompts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/PendingLinkPrompt" }
+        }
+      }
+    },
+    "AuditLogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One audit_log row's own REST wire shape (migrations/000013_audit_log.up.sql).",
+      "required": ["id", "actorUserId", "action", "resourceType", "resourceId", "detail", "correlationId", "createdAt"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "actorUserId": { "type": ["string", "null"], "format": "uuid", "description": "Null for a system/automation-attributed entry with no direct actor user." },
+        "action": { "type": "string" },
+        "resourceType": { "type": "string" },
+        "resourceId": { "type": "string" },
+        "detail": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Arbitrary per-action JSON detail (audit_log.detail_json) -- always an object, defaults to {} at the DB layer. Modeled as an opaque raw-JSON passthrough (goJSONSchema -> encoding/json.RawMessage), not a decoded map[string]interface{}, so the response byte stream reproduces the stored jsonb verbatim -- a decode-into-map-then-re-marshal step would risk silently converting any integer beyond 2^53 to a lossy float64 (audit finding: LOW, decode-then-re-encode precision loss). This is still validated as a JSON object at the handler layer (members.go's own ListAuditLog) before being accepted verbatim -- see that handler's own doc comment on the per-row degrade-gracefully behavior for a malformed legacy row.",
+          "goJSONSchema": {
+            "type": "json.RawMessage",
+            "imports": ["encoding/json"]
+          }
+        },
+        "correlationId": { "type": ["string", "null"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ListAuditLogResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/audit-log's own response body.",
+      "required": ["entries"],
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AuditLogEntry" }
+        }
+      }
+    },
+    "UpdateMemberRoleRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "PATCH /api/members/{userID}/role's own request body. role is deliberately modeled as an unconstrained string, not an enum matching user_role -- it is validated against that closed set at the application layer instead (members.go's own validRoles map), so an unrecognized value surfaces the handler's own specific 'unrecognized role' 400 rather than a generic schema-decode error.",
+      "required": ["role"],
+      "properties": {
+        "role": { "type": "string", "description": "One of admin/maintainer/member/viewer at the application layer (matches Postgres user_role); not enforced here, see this shape's own description." }
+      }
+    },
+    "LinkMemberIdentityRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "POST /api/members/{userID}/identities's own request body. provider is deliberately modeled as an unconstrained string, not an enum matching identity_provider, for the same reason UpdateMemberRoleRequest.role is: application-layer validation (members.go's own validProviders map) owns the closed set and its own 'unrecognized provider' 400 message.",
+      "required": ["provider", "externalId"],
+      "properties": {
+        "provider": { "type": "string", "description": "One of github/slack/linear/google at the application layer (matches Postgres identity_provider); not enforced here, see this shape's own description." },
+        "externalId": { "type": "string" }
       }
     }
   }

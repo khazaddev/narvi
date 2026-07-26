@@ -34,6 +34,86 @@ func (j *ArtifactsResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One audit_log row's own REST wire shape (migrations/000013_audit_log.up.sql).
+type AuditLogEntry struct {
+	// Action corresponds to the JSON schema field "action".
+	Action string `json:"action" yaml:"action" mapstructure:"action"`
+
+	// Null for a system/automation-attributed entry with no direct actor user.
+	ActorUserId AuditLogEntryActorUserId `json:"actorUserId" yaml:"actorUserId" mapstructure:"actorUserId"`
+
+	// CorrelationId corresponds to the JSON schema field "correlationId".
+	CorrelationId AuditLogEntryCorrelationId `json:"correlationId" yaml:"correlationId" mapstructure:"correlationId"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Arbitrary per-action JSON detail (audit_log.detail_json) -- always an object,
+	// defaults to {} at the DB layer. Modeled as an opaque raw-JSON passthrough
+	// (goJSONSchema -> encoding/json.RawMessage), not a decoded
+	// map[string]interface{}, so the response byte stream reproduces the stored jsonb
+	// verbatim -- a decode-into-map-then-re-marshal step would risk silently
+	// converting any integer beyond 2^53 to a lossy float64 (audit finding: LOW,
+	// decode-then-re-encode precision loss). This is still validated as a JSON object
+	// at the handler layer (members.go's own ListAuditLog) before being accepted
+	// verbatim -- see that handler's own doc comment on the per-row
+	// degrade-gracefully behavior for a malformed legacy row.
+	Detail json.RawMessage `json:"detail" yaml:"detail" mapstructure:"detail"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// ResourceId corresponds to the JSON schema field "resourceId".
+	ResourceId string `json:"resourceId" yaml:"resourceId" mapstructure:"resourceId"`
+
+	// ResourceType corresponds to the JSON schema field "resourceType".
+	ResourceType string `json:"resourceType" yaml:"resourceType" mapstructure:"resourceType"`
+}
+
+// Null for a system/automation-attributed entry with no direct actor user.
+type AuditLogEntryActorUserId *string
+
+type AuditLogEntryCorrelationId *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AuditLogEntry) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["action"]; raw != nil && !ok {
+		return fmt.Errorf("field action in AuditLogEntry: required")
+	}
+	if _, ok := raw["actorUserId"]; raw != nil && !ok {
+		return fmt.Errorf("field actorUserId in AuditLogEntry: required")
+	}
+	if _, ok := raw["correlationId"]; raw != nil && !ok {
+		return fmt.Errorf("field correlationId in AuditLogEntry: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in AuditLogEntry: required")
+	}
+	if _, ok := raw["detail"]; raw != nil && !ok {
+		return fmt.Errorf("field detail in AuditLogEntry: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in AuditLogEntry: required")
+	}
+	if _, ok := raw["resourceId"]; raw != nil && !ok {
+		return fmt.Errorf("field resourceId in AuditLogEntry: required")
+	}
+	if _, ok := raw["resourceType"]; raw != nil && !ok {
+		return fmt.Errorf("field resourceType in AuditLogEntry: required")
+	}
+	type Plain AuditLogEntry
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = AuditLogEntry(plain)
+	return nil
+}
+
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
@@ -433,6 +513,393 @@ func (j *EventsResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One linked-identity row's own REST wire shape (§13.2/§13.3 members API) --
+// returned both standalone (POST/DELETE .../identities) and nested inside
+// Member.identities. provider/linkedVia enums match the Postgres
+// identity_provider/identity_linked_via enums
+// (migrations/000003_identities.up.sql) exactly.
+type Identity struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// ExternalId corresponds to the JSON schema field "externalId".
+	ExternalId string `json:"externalId" yaml:"externalId" mapstructure:"externalId"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Matches Postgres identity_linked_via exactly.
+	LinkedVia IdentityLinkedVia `json:"linkedVia" yaml:"linkedVia" mapstructure:"linkedVia"`
+
+	// Matches Postgres identity_provider exactly.
+	Provider IdentityProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
+}
+
+type IdentityLinkedVia string
+
+const IdentityLinkedViaAdmin IdentityLinkedVia = "admin"
+const IdentityLinkedViaAutoEmail IdentityLinkedVia = "auto_email"
+const IdentityLinkedViaPrompt IdentityLinkedVia = "prompt"
+
+var enumValues_IdentityLinkedVia = []interface{}{
+	"auto_email",
+	"prompt",
+	"admin",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *IdentityLinkedVia) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_IdentityLinkedVia {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_IdentityLinkedVia, v)
+	}
+	*j = IdentityLinkedVia(v)
+	return nil
+}
+
+type IdentityProvider string
+
+const IdentityProviderGithub IdentityProvider = "github"
+const IdentityProviderGoogle IdentityProvider = "google"
+const IdentityProviderLinear IdentityProvider = "linear"
+const IdentityProviderSlack IdentityProvider = "slack"
+
+var enumValues_IdentityProvider = []interface{}{
+	"github",
+	"slack",
+	"linear",
+	"google",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *IdentityProvider) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_IdentityProvider {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_IdentityProvider, v)
+	}
+	*j = IdentityProvider(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *Identity) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in Identity: required")
+	}
+	if _, ok := raw["externalId"]; raw != nil && !ok {
+		return fmt.Errorf("field externalId in Identity: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in Identity: required")
+	}
+	if _, ok := raw["linkedVia"]; raw != nil && !ok {
+		return fmt.Errorf("field linkedVia in Identity: required")
+	}
+	if _, ok := raw["provider"]; raw != nil && !ok {
+		return fmt.Errorf("field provider in Identity: required")
+	}
+	type Plain Identity
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = Identity(plain)
+	return nil
+}
+
+// POST /api/members/{userID}/identities's own request body. provider is
+// deliberately modeled as an unconstrained string, not an enum matching
+// identity_provider, for the same reason UpdateMemberRoleRequest.role is:
+// application-layer validation (members.go's own validProviders map) owns the
+// closed set and its own 'unrecognized provider' 400 message.
+type LinkMemberIdentityRequest struct {
+	// ExternalId corresponds to the JSON schema field "externalId".
+	ExternalId string `json:"externalId" yaml:"externalId" mapstructure:"externalId"`
+
+	// One of github/slack/linear/google at the application layer (matches Postgres
+	// identity_provider); not enforced here, see this shape's own description.
+	Provider string `json:"provider" yaml:"provider" mapstructure:"provider"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *LinkMemberIdentityRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["externalId"]; raw != nil && !ok {
+		return fmt.Errorf("field externalId in LinkMemberIdentityRequest: required")
+	}
+	if _, ok := raw["provider"]; raw != nil && !ok {
+		return fmt.Errorf("field provider in LinkMemberIdentityRequest: required")
+	}
+	type Plain LinkMemberIdentityRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = LinkMemberIdentityRequest(plain)
+	return nil
+}
+
+// GET /api/audit-log's own response body.
+type ListAuditLogResponse struct {
+	// Entries corresponds to the JSON schema field "entries".
+	Entries []AuditLogEntry `json:"entries" yaml:"entries" mapstructure:"entries"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListAuditLogResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["entries"]; raw != nil && !ok {
+		return fmt.Errorf("field entries in ListAuditLogResponse: required")
+	}
+	type Plain ListAuditLogResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListAuditLogResponse(plain)
+	return nil
+}
+
+// GET /api/members's own response body (§13.2/§13.3): every user with
+// role/disabled and their own currently-linked identities, plus every system-wide
+// still-pending link prompt.
+type ListMembersResponse struct {
+	// Members corresponds to the JSON schema field "members".
+	Members []Member `json:"members" yaml:"members" mapstructure:"members"`
+
+	// PendingLinkPrompts corresponds to the JSON schema field "pendingLinkPrompts".
+	PendingLinkPrompts []PendingLinkPrompt `json:"pendingLinkPrompts" yaml:"pendingLinkPrompts" mapstructure:"pendingLinkPrompts"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListMembersResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["members"]; raw != nil && !ok {
+		return fmt.Errorf("field members in ListMembersResponse: required")
+	}
+	if _, ok := raw["pendingLinkPrompts"]; raw != nil && !ok {
+		return fmt.Errorf("field pendingLinkPrompts in ListMembersResponse: required")
+	}
+	type Plain ListMembersResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListMembersResponse(plain)
+	return nil
+}
+
+// One member's own REST wire shape -- role + every identity currently linked to
+// them (§13.3: 'linked identity chips'). role matches the Postgres user_role enum
+// exactly. Every endpoint that returns a Member (ListMembers, UpdateMemberRole)
+// populates identities with the target's own actual currently-linked identities --
+// never null, empty only when the member genuinely has none linked.
+type Member struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Disabled corresponds to the JSON schema field "disabled".
+	Disabled bool `json:"disabled" yaml:"disabled" mapstructure:"disabled"`
+
+	// DisplayName corresponds to the JSON schema field "displayName".
+	DisplayName string `json:"displayName" yaml:"displayName" mapstructure:"displayName"`
+
+	// Email corresponds to the JSON schema field "email".
+	Email string `json:"email" yaml:"email" mapstructure:"email"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Identities corresponds to the JSON schema field "identities".
+	Identities []Identity `json:"identities" yaml:"identities" mapstructure:"identities"`
+
+	// Matches Postgres user_role exactly.
+	Role MemberRole `json:"role" yaml:"role" mapstructure:"role"`
+}
+
+type MemberRole string
+
+const MemberRoleAdmin MemberRole = "admin"
+const MemberRoleMaintainer MemberRole = "maintainer"
+const MemberRoleMember MemberRole = "member"
+const MemberRoleViewer MemberRole = "viewer"
+
+var enumValues_MemberRole = []interface{}{
+	"admin",
+	"maintainer",
+	"member",
+	"viewer",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *MemberRole) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_MemberRole {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_MemberRole, v)
+	}
+	*j = MemberRole(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *Member) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in Member: required")
+	}
+	if _, ok := raw["disabled"]; raw != nil && !ok {
+		return fmt.Errorf("field disabled in Member: required")
+	}
+	if _, ok := raw["displayName"]; raw != nil && !ok {
+		return fmt.Errorf("field displayName in Member: required")
+	}
+	if _, ok := raw["email"]; raw != nil && !ok {
+		return fmt.Errorf("field email in Member: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in Member: required")
+	}
+	if _, ok := raw["identities"]; raw != nil && !ok {
+		return fmt.Errorf("field identities in Member: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in Member: required")
+	}
+	type Plain Member
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = Member(plain)
+	return nil
+}
+
+// One still-present identity_link_prompts row's own REST wire shape --
+// deliberately carries NO nonce/nonce hash (a bearer secret, never surfaced over
+// this read endpoint), just enough for an admin-facing view to show 'someone from
+// Slack/Linear is waiting to connect their account' (§13.2: 'pending-link state').
+// provider matches the Postgres identity_provider enum exactly.
+type PendingLinkPrompt struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// ExpiresAt corresponds to the JSON schema field "expiresAt".
+	ExpiresAt time.Time `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
+
+	// ExternalId corresponds to the JSON schema field "externalId".
+	ExternalId string `json:"externalId" yaml:"externalId" mapstructure:"externalId"`
+
+	// Matches Postgres identity_provider exactly.
+	Provider PendingLinkPromptProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
+}
+
+type PendingLinkPromptProvider string
+
+const PendingLinkPromptProviderGithub PendingLinkPromptProvider = "github"
+const PendingLinkPromptProviderGoogle PendingLinkPromptProvider = "google"
+const PendingLinkPromptProviderLinear PendingLinkPromptProvider = "linear"
+const PendingLinkPromptProviderSlack PendingLinkPromptProvider = "slack"
+
+var enumValues_PendingLinkPromptProvider = []interface{}{
+	"github",
+	"slack",
+	"linear",
+	"google",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PendingLinkPromptProvider) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PendingLinkPromptProvider {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PendingLinkPromptProvider, v)
+	}
+	*j = PendingLinkPromptProvider(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PendingLinkPrompt) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in PendingLinkPrompt: required")
+	}
+	if _, ok := raw["expiresAt"]; raw != nil && !ok {
+		return fmt.Errorf("field expiresAt in PendingLinkPrompt: required")
+	}
+	if _, ok := raw["externalId"]; raw != nil && !ok {
+		return fmt.Errorf("field externalId in PendingLinkPrompt: required")
+	}
+	if _, ok := raw["provider"]; raw != nil && !ok {
+		return fmt.Errorf("field provider in PendingLinkPrompt: required")
+	}
+	type Plain PendingLinkPrompt
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PendingLinkPrompt(plain)
+	return nil
+}
+
 // Mirrors the sessions table (migrations/000004_sessions.up.sql).
 // status/failureReason/spawnSource enums match
 // session_status/session_failure_reason/session_spawn_source exactly.
@@ -620,6 +1087,35 @@ func (j *Session) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = Session(plain)
+	return nil
+}
+
+// PATCH /api/members/{userID}/role's own request body. role is deliberately
+// modeled as an unconstrained string, not an enum matching user_role -- it is
+// validated against that closed set at the application layer instead (members.go's
+// own validRoles map), so an unrecognized value surfaces the handler's own
+// specific 'unrecognized role' 400 rather than a generic schema-decode error.
+type UpdateMemberRoleRequest struct {
+	// One of admin/maintainer/member/viewer at the application layer (matches
+	// Postgres user_role); not enforced here, see this shape's own description.
+	Role string `json:"role" yaml:"role" mapstructure:"role"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateMemberRoleRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in UpdateMemberRoleRequest: required")
+	}
+	type Plain UpdateMemberRoleRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpdateMemberRoleRequest(plain)
 	return nil
 }
 
