@@ -1018,6 +1018,27 @@ type Timeouts struct {
 	// genuinely different question (how long a browser stays logged in,
 	// not how long a one-time linking action stays offered).
 	IdentityLinkPromptTTL time.Duration
+
+	// --- Audit-remediation (completeness-vs-plan lens, GitHub PR-payload-
+	// correctness batch): no ordering relationship with either invariant
+	// chain above (or with any prior standalone addition), so -- per those
+	// additions' own precedent -- a plain field with a sensible default,
+	// not wired into a fake invariant link.
+
+	// GitHubGetPRTimeout bounds a single internal/adapters/outbound/
+	// githubapi.Adapter.GetPullRequest call (a real outbound GET
+	// https://api.github.com/repos/{owner}/{repo}/pulls/{number}), made
+	// synchronously from inside internal/adapters/inbound/github's own
+	// webhook handler (H5 audit fix: resolving an issue_comment mention's
+	// TRUE head branch/repo, since that event type's own payload never
+	// carries them directly -- see headresolve.go's own doc comment) --
+	// mirrors PRCreateTimeout's/SlackAckTimeout's own identical "a genuine
+	// outbound network call made inline in a webhook handler must never
+	// run against an unbounded context" precedent exactly. Not specified
+	// in the plan (this fix postdates it); chosen as 10s, generous for a
+	// single lightweight GitHub REST GET while still keeping the whole
+	// webhook response prompt.
+	GitHubGetPRTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1130,6 +1151,8 @@ func DefaultTimeouts() Timeouts {
 		IdentityEmailFetchRetryMaxDelay:        1 * time.Second,        // not specified; chosen
 		SlackInteractivityIdentityFetchTimeout: 800 * time.Millisecond, // not specified; chosen, comfortably inside SlackInteractivityAckTimeout with margin for DecidePlan+chat.update
 		IdentityLinkPromptTTL:                  24 * time.Hour,         // not specified beyond "short-lived"; chosen
+
+		GitHubGetPRTimeout: 10 * time.Second, // not specified (fix postdates the plan); chosen, generous for a single GitHub REST GET, mirrors PRCreateTimeout/SlackAckTimeout's own reasoning
 	}
 }
 

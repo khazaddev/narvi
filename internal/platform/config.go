@@ -206,6 +206,14 @@ const (
 // operator provisions), baked into the GitHub Notifier adapter once at
 // construction time (cmd/control-plane/main.go), never looked up per
 // session the way CreatePR's own spec.Token is.
+//
+// Batch fix/audit-github-pr-payload-correctness (H5 audit fix) adds a
+// SECOND consumer of this SAME credential: internal/adapters/inbound/
+// github's own webhook handler authenticates its own GetPullRequest call
+// (resolving an issue_comment mention's TRUE head branch/repo) with it too
+// -- the same "no logged-in Narvi user's own token available" reasoning
+// applies identically there (a GitHub webhook mention carries no
+// per-commenter OAuth token either).
 const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 
 // tokenEncryptionKeyEnvVarName is the env var Load reads for the AES-256-GCM
@@ -519,7 +527,10 @@ type Config struct {
 	// GitHub Notifier adapter, read from NARVI_GITHUB_BOT_TOKEN. Required
 	// in every stage -- never defaulted. See gitHubBotTokenEnvVarName's own
 	// doc comment above for why this is a distinct credential from every
-	// other GitHub-flavored value in this struct. Never logged.
+	// other GitHub-flavored value in this struct -- and, since batch
+	// fix/audit-github-pr-payload-correctness (H5 audit fix), also for
+	// GitHub ingress's own GetPullRequest call (cmd/control-plane/main.go's
+	// githubingress.Config.BotToken). Never logged.
 	GitHubBotToken string
 
 	// PublicBaseURL is this control plane's own externally-reachable base

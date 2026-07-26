@@ -468,6 +468,19 @@ func serve() error {
 		githubingress.Config{
 			WebhookSecret: cfg.GitHubWebhookSecret,
 			BotHandle:     cfg.GitHubBotHandle,
+			// BotToken/PullRequests (batch fix/audit-github-pr-payload-
+			// correctness, H5 audit fix): resolve an issue_comment
+			// mention's TRUE head branch/repo via one authenticated
+			// GET /repos/{owner}/{repo}/pulls/{number} call. sourceControl
+			// is the SAME *githubapi.Adapter instance already constructed
+			// above for CreatePR/ResolveBranchSHA/ResolveContractsFingerprint
+			// -- never a second, independently-constructed copy -- and
+			// cfg.GitHubBotToken is the SAME bot credential githubNotifier
+			// (below) already authenticates its own PostIssueComment calls
+			// with, never a per-commenter credential.
+			BotToken:     cfg.GitHubBotToken,
+			PullRequests: sourceControl,
+			Timeouts:     cfg.Timeouts,
 		},
 	))
 

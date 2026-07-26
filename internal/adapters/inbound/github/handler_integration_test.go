@@ -33,6 +33,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -111,7 +112,13 @@ type testRig struct {
 	server *httptest.Server
 }
 
-func newTestRig(t *testing.T) testRig {
+// newTestRig builds the default rig (no PullRequestResolver wired -- every
+// pre-existing test in this file exercises the pre-H5-fix-compatible
+// path). mutate (variadic so every EXISTING newTestRig(t) call site keeps
+// compiling unchanged) lets a caller override githubingress.Config fields
+// -- see this file's own H5 fix coverage below (TestGitHubIntegration_
+// IssueCommentResolvesRealHeadBranch / ...APIFailureFallsBack).
+func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 	t.Helper()
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -144,10 +151,15 @@ func newTestRig(t *testing.T) testRig {
 	}
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 
-	handler := githubingress.NewHandler(coalescer, deliveries, githubingress.Config{
+	cfg := githubingress.Config{
 		WebhookSecret: testWebhookSecret,
 		BotHandle:     testBotHandleIntegration,
-	})
+	}
+	for _, m := range mutate {
+		m(&cfg)
+	}
+
+	handler := githubingress.NewHandler(coalescer, deliveries, cfg)
 
 	mux := http.NewServeMux()
 	mux.Handle("/webhooks/github", handler)
@@ -155,6 +167,18 @@ func newTestRig(t *testing.T) testRig {
 	t.Cleanup(rig.server.Close)
 
 	return rig
+}
+
+// fakePullRequestResolver is a test-only githubingress.PullRequestResolver
+// -- no real HTTP round trip to GitHub, exactly the point of that
+// interface being narrow and locally defined in the github package.
+type fakePullRequestResolver struct {
+	pr  githubapi.PullRequest
+	err error
+}
+
+func (f *fakePullRequestResolver) GetPullRequest(_ context.Context, _, _ string, _ int32, _ string) (githubapi.PullRequest, error) {
+	return f.pr, f.err
 }
 
 // sign mirrors GitHub's own "X-Hub-Signature-256: sha256=<hex>" scheme.
@@ -421,5 +445,96 @@ func TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns(t *te
 	}
 	if turnCount != n {
 		t.Errorf("turn count = %d, want exactly %d (one turn per concurrent mention, all on the SAME session)", turnCount, n)
+	}
+}
+
+// TestGitHubIntegration_IssueCommentResolvesRealHeadBranch is the H5 audit
+// fix's own headline end-to-end proof: a mention arriving via GitHub's
+// "issue_comment" webhook event (the PR "Conversation" tab, the most
+// common way the bot gets mentioned) on a PR whose real head branch
+// differs from the base repo's own default branch resolves to that REAL
+// head branch being cloned -- never left nil/falling back to the default,
+// which is exactly what the pre-fix behavior did.
+func TestGitHubIntegration_IssueCommentResolvesRealHeadBranch(t *testing.T) {
+	ctx := context.Background()
+
+	resolver := &fakePullRequestResolver{
+		pr: githubapi.PullRequest{
+			HeadRef:          "feature-real-branch",
+			HeadRepoName:     "widgets",
+			HeadRepoCloneURL: "https://github.com/acme/widgets.git",
+		},
+	}
+	rig := newTestRig(t, func(cfg *githubingress.Config) {
+		cfg.PullRequests = resolver
+		cfg.BotToken = "test-bot-token"
+		cfg.Timeouts = platform.DefaultTimeouts()
+	})
+
+	body := issueCommentBody("acme/widgets", "widgets", "https://github.com/acme/widgets.git", 555, "real-head-branch")
+	status := postWebhook(t, rig, body, "delivery-real-head-branch-1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	var branch, repoName string
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT repos->0->>'branch', repos->0->>'name' FROM sessions WHERE spawn_source = 'github' ORDER BY created_at DESC LIMIT 1`,
+	).Scan(&branch, &repoName); err != nil {
+		t.Fatalf("query session repos: %v", err)
+	}
+
+	if branch != "feature-real-branch" {
+		t.Errorf("stored branch = %q, want %q (the PR's REAL head branch, not nil/default)", branch, "feature-real-branch")
+	}
+	if repoName != "widgets" {
+		t.Errorf("stored repo name = %q, want %q", repoName, "widgets")
+	}
+}
+
+// TestGitHubIntegration_IssueCommentGetPullRequestFailureFallsBack proves
+// the OTHER half of the H5 fix: when the outbound GetPullRequest call
+// itself fails (a GitHub API outage, a network error), the mention is
+// NOT dropped and the webhook delivery does NOT fail -- it falls back to
+// today's pre-fix behavior (a session still gets created, with HeadBranch
+// left nil / the base repo's own default branch), exactly like
+// createPRBestEffort's own log-and-continue convention for a failed
+// outbound GitHub API call elsewhere in this codebase.
+func TestGitHubIntegration_IssueCommentGetPullRequestFailureFallsBack(t *testing.T) {
+	ctx := context.Background()
+
+	resolver := &fakePullRequestResolver{err: errors.New("simulated GitHub API outage")}
+	rig := newTestRig(t, func(cfg *githubingress.Config) {
+		cfg.PullRequests = resolver
+		cfg.BotToken = "test-bot-token"
+		cfg.Timeouts = platform.DefaultTimeouts()
+	})
+
+	body := issueCommentBody("acme/fallback-repo", "fallback-repo", "https://github.com/acme/fallback-repo.git", 556, "api-failure-fallback")
+	status := postWebhook(t, rig, body, "delivery-api-failure-fallback-1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a failed GetPullRequest must never fail the whole webhook delivery)", status, http.StatusOK)
+	}
+
+	var branchIsNull bool
+	var repoName string
+	if err := rig.pool.QueryRow(ctx,
+		// repos->0->>'branch' (the ->> TEXT-extraction operator), NOT
+		// repos->0->'branch' (-> alone): Postgres's -> operator returns a
+		// JSONB null SCALAR for a stored `"branch":null`, which is NOT SQL
+		// NULL and would make `IS NULL` always false here -- ->> is what
+		// actually converts a JSON null into a genuine SQL NULL (exactly
+		// like the OTHER test's own successful repos->0->>'branch' text
+		// read above, TestGitHubIntegration_IssueCommentResolvesRealHeadBranch).
+		`SELECT repos->0->>'branch' IS NULL, repos->0->>'name' FROM sessions WHERE spawn_source = 'github' ORDER BY created_at DESC LIMIT 1`,
+	).Scan(&branchIsNull, &repoName); err != nil {
+		t.Fatalf("query session repos: %v", err)
+	}
+
+	if !branchIsNull {
+		t.Error("stored branch is NOT null, want null (GetPullRequest failed -- fall back to the base repo's own default branch)")
+	}
+	if repoName != "fallback-repo" {
+		t.Errorf("stored repo name = %q, want %q (base repo, unchanged)", repoName, "fallback-repo")
 	}
 }

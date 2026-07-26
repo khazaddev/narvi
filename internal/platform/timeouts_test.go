@@ -592,6 +592,26 @@ func TestDefaultTimeouts_Step39StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_GitHubPRPayloadCorrectnessStandaloneField proves the
+// audit-remediation (completeness-vs-plan lens, GitHub PR-payload-
+// correctness batch) standalone addition (GitHubGetPRTimeout) ships with a
+// sane, non-zero default, and that adding it did not disturb either
+// pre-existing invariant chain (it is a standalone field, wired into
+// neither).
+func TestDefaultTimeouts_GitHubPRPayloadCorrectnessStandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.GitHubGetPRTimeout <= 0 {
+		t.Errorf("GitHubGetPRTimeout = %v, want > 0", to.GitHubGetPRTimeout)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (GitHubGetPRTimeout must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
