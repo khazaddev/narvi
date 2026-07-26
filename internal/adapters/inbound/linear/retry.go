@@ -10,6 +10,7 @@
 // agent_session_id, while the first (real, already-running) session
 // becomes permanently unreachable by any future Linear event for it. See
 // setSessionIDWithRetry's own doc comment below for the fix.
+
 package linear
 
 import (
