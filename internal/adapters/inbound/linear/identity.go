@@ -11,6 +11,7 @@ package linear
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/jackc/pgx/v5"
@@ -189,6 +190,26 @@ func appendNotice(base, notice string) string {
 // AuthorizeResolvedActor/actorauthz.OwnedOrJoined directly now; nothing
 // about ITS OWN behavior changed.
 
+// ErrActorNotAuthorized is authorizeSessionAction's own sentinel for "a
+// resolved, linked actor's role genuinely failed domain/authz.Authorize"
+// -- MEDIUM audit fix ("authorizeSessionAction conflates a genuine backend
+// error with a real authorization denial"), mirroring github's own
+// identical ErrActorNotAuthorized (coalesce.go). Deliberately DISTINCT from
+// any other error authorizeSessionAction returns: a caller checks for this
+// one specifically and treats it as a final, non-retryable denial (skip
+// without releasing the webhook-delivery claim -- redelivering the
+// identical event would just render the same denial again), while any
+// OTHER error is a genuine backend failure encountered WHILE checking
+// authorization (e.g. deps.Sessions.Get hitting a dropped connection),
+// which the caller instead routes into the SAME release-the-claim-and-
+// retry path this batch's H2 fix already wired up for every other
+// post-claim failure -- BEFORE this fix, authorizeSessionAction's own bare
+// bool made the two indistinguishable, so a one-off DB blip was silently
+// treated as a deliberate "skip, no release" business decision, dropping
+// the user's legitimate message forever with no chance of redelivery ever
+// retrying it.
+var ErrActorNotAuthorized = errors.New("linear: actor not authorized")
+
 // authorizeSessionAction renders the exact §13.3 verdict domain/authz.
 // Authorize would for actorUserID attempting action against sessionID --
 // shared by handlePrompted's own ordinary-reply ("request changes")
@@ -196,26 +217,36 @@ func appendNotice(base, notice string) string {
 // (ActionApprovePlan) below, mirroring internal/adapters/inbound/slack's
 // own identical InteractiveDeps.authorizeSessionAction exactly.
 //
-// actorUserID.Valid == false (still bot-attributed) short-circuits to
-// allowed=true immediately, with NO session/participants lookup at all --
-// preserving §13.2's own "unlinked actors get bot attribution ... the
-// action proceeds" precedent.
-func (deps Deps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) bool {
+// actorUserID.Valid == false (still bot-attributed) short-circuits to a
+// nil (allowed) return immediately, with NO session/participants lookup at
+// all -- preserving §13.2's own "unlinked actors get bot attribution ...
+// the action proceeds" precedent.
+//
+// Returns ErrActorNotAuthorized when a RESOLVED actor's own role
+// genuinely fails domain/authz.Authorize -- a final, non-retryable denial.
+// Returns any OTHER (non-nil) error for a genuine backend failure
+// encountered while checking (deps.Sessions.Get/actorauthz.OwnedOrJoined
+// erroring) -- MEDIUM audit fix, see ErrActorNotAuthorized's own doc
+// comment for why this distinction matters to the caller.
+func (deps Deps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) error {
 	if !actorUserID.Valid {
-		return true
+		return nil
 	}
 
 	sessionRow, err := deps.Sessions.Get(ctx, sessionID)
 	if err != nil {
 		logger.Error("linear: get session for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
-		return false
+		return fmt.Errorf("linear: get session for authorization: %w", err)
 	}
 
 	joined, err := actorauthz.OwnedOrJoined(ctx, deps.Participants, sessionRow, actorUserID)
 	if err != nil {
 		logger.Error("linear: check participant for authorization failed", "error", err, "session_id", sessionID.String(), "action", string(action))
-		return false
+		return fmt.Errorf("linear: check participant for authorization: %w", err)
 	}
 
-	return actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined})
+	if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, actorUserID, action, authz.Resource{OwnedOrJoined: joined}) {
+		return ErrActorNotAuthorized
+	}
+	return nil
 }

@@ -122,8 +122,14 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 		if !claim.Inserted {
-			// A real redelivery of an already-claimed delivery id (GitHub
-			// retries on timeout/5xx) -- acknowledge without reprocessing.
+			// A redelivery of an already-claimed delivery id -- L4 audit
+			// fix: GitHub does NOT automatically retry/redeliver a webhook
+			// on a non-2xx response or a timeout (corrected from this
+			// comment's own previous, factually wrong claim that it does);
+			// redelivery is manual-only, triggered by a human via GitHub's
+			// own "Redeliver" UI/API action once they notice a failure and
+			// choose to retry it. Acknowledge without reprocessing either
+			// way.
 			logger.Info("github: duplicate webhook delivery, skipping", "delivery_id", deliveryID)
 			w.WriteHeader(http.StatusOK)
 			return
@@ -134,10 +140,14 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		if err != nil {
 			logger.Error("github: parse webhook payload failed", "error", err, "event_type", eventType, "delivery_id", deliveryID)
 			// This delivery was claimed above but never actually processed --
-			// release the claim so a genuine GitHub redelivery of this same
-			// X-GitHub-Delivery id (GitHub retries on any non-2xx response,
-			// exactly what this path returns) can retry rather than being
-			// silently skipped forever as an already-claimed duplicate.
+			// release the claim so that IF a human notices this failure and
+			// manually redelivers this same X-GitHub-Delivery id (L4 audit
+			// fix: via GitHub's own "Redeliver" UI/API action -- GitHub does
+			// NOT automatically retry/redeliver on a non-2xx response or a
+			// timeout, corrected from this comment's own previous, factually
+			// wrong claim that it does), that redelivery can actually
+			// reprocess it rather than being silently skipped forever as an
+			// already-claimed duplicate.
 			if releaseErr := deliveries.Release(ctx, githubDeliveryProvider, deliveryID); releaseErr != nil {
 				logger.Error("github: release webhook delivery claim failed", "error", releaseErr, "delivery_id", deliveryID)
 			}

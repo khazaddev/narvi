@@ -105,6 +105,48 @@ func (q *Queries) GetLinearAgentSessionBySessionID(ctx context.Context, sessionI
 	return i, err
 }
 
+const releaseLinearAgentSessionClaim = `-- name: ReleaseLinearAgentSessionClaim :exec
+DELETE FROM linear_agent_sessions WHERE agent_session_id = $1 AND session_id IS NULL
+`
+
+// Audit-fix addition (H3, "webhook claim/release parity"): un-claims a
+// first-writer-wins row this same request just won via
+// ClaimLinearAgentSession (Inserted=true), but failed to actually
+// complete -- an authorization denial or a CreateSessionCore error (both
+// happen BEFORE any real session/turn/dispatch exists, so releasing is
+// always safe here). Without this, either would leave the row permanently
+// stuck with a NULL session_id: every future prompt/redelivery for that
+// agent_session_id is dropped forever as "still being claimed" (webhook.go's
+// own handlePrompted), with no recovery short of DB surgery -- mirrors
+// ReleaseWebhookDelivery's own reasoning (postgres/queries/
+// webhookdeliveries.sql) for a DIFFERENT claim identity.
+//
+// Deliberately NOT called for a SetSessionID failure (a later, HIGH audit
+// fix, "releasing the linear_agent_sessions claim after a SetSessionID
+// failure can spawn a duplicate, independently-dispatched agent"): by the
+// time SetSessionID could ever fail, createSessionCore has ALREADY
+// committed a real, DISPATCHED session -- releasing this claim then would
+// let a redelivery spawn a SECOND, independently-dispatched session for the
+// same agent_session_id instead of closing a gap. See webhook.go's own
+// handleCreated/setSessionIDWithRetry for the retry that replaces this call
+// on that specific branch.
+//
+// The `session_id IS NULL` guard is load-bearing: a row that already has
+// a REAL session_id attached backs a session that genuinely exists (and
+// may already be in progress) -- releasing THAT row would let a later,
+// unrelated event re-claim the SAME agent_session_id and attempt to
+// create a SECOND, colliding session, exactly the coalescing failure this
+// table exists to prevent (migrations/000030_linear_agent_sessions.up.sql's
+// own doc comment). Scoping the DELETE to session_id IS NULL makes this
+// safe to call unconditionally on every post-claim failure branch: if
+// SetSessionID already won before this call runs, the DELETE simply
+// matches zero rows, and the real, already-attached session is left
+// completely untouched.
+func (q *Queries) ReleaseLinearAgentSessionClaim(ctx context.Context, agentSessionID string) error {
+	_, err := q.db.Exec(ctx, releaseLinearAgentSessionClaim, agentSessionID)
+	return err
+}
+
 const setLinearAgentSessionSessionID = `-- name: SetLinearAgentSessionSessionID :exec
 UPDATE linear_agent_sessions
 SET session_id = $2

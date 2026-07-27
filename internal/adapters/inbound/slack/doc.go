@@ -60,14 +60,24 @@
 //     logged and 200'd as a no-op.
 //  7. Thread<->session mapping (design decision, see below) then either
 //     adds a turn to an existing session or creates a brand-new one via
-//     httpapi.CreateSessionCore.
+//     httpapi.CreateSessionCore. H2 audit fix ("webhook claim/release
+//     parity"): a genuine DB failure here (resolving/claiming the thread
+//     mapping, creating the session, or adding the turn) -- including,
+//     MEDIUM audit fix ("authorizeSessionAction conflates a genuine
+//     backend error with a real authorization denial"), a genuine backend
+//     error authorizeExistingSessionReply's own authz check hits, distinct
+//     from a real ErrActorNotAuthorized denial -- releases the
+//     webhook-delivery claim (WebhookDeliveryStore.Release) and answers
+//     non-2xx, mirroring github's own identical release-on-failure
+//     pattern (handler.go) -- so a redelivery of this same event_id can
+//     actually retry, rather than the event being silently and
+//     permanently dropped now that it's claimed.
 //  8. Best-effort in-thread ack (see the scoping note below): a failure
-//     here is logged, never turned into a non-2xx response -- the core
-//     session/turn work already succeeded by this point, and failing the
-//     whole request over the ack alone would make Slack redeliver an
-//     event WebhookDeliveryStore has already (correctly) claimed, which
-//     would then be silently skipped forever (see the delivery-claim-
-//     before-process tradeoff note below).
+//     here is logged, never turned into a non-2xx response and never
+//     released -- unlike step 7's genuine persistence failures, the core
+//     session/turn work has ALREADY succeeded by this point, so releasing
+//     the claim over the ack alone would risk a redelivery re-running
+//     step 7 and double-processing an event that already fully landed.
 //
 // # Thread<->session mapping design
 //

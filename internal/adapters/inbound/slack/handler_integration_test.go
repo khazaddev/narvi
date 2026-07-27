@@ -333,6 +333,71 @@ func TestHandler_Redelivery_DoesNotDoubleProcess(t *testing.T) {
 	}
 }
 
+// TestHandler_FailedFirstAttemptReleasesClaimForRedelivery is the H2
+// audit fix's own headline proof, mirroring github's own identical
+// TestGitHubIntegration_FailedFirstAttemptReleasesClaimForRedelivery
+// (handler_integration_test.go): the webhook-delivery dedupe claim must
+// NOT permanently poison an event_id when the first attempt fails AFTER
+// the claim succeeds but BEFORE the event is actually processed --
+// Slack's own real redelivery behavior (retrying on a non-2xx response or
+// a timeout) means the SAME event_id must be reprocessable, not silently
+// swallowed as an "already claimed" duplicate forever.
+func TestHandler_FailedFirstAttemptReleasesClaimForRedelivery(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	rig := newSlackTestRig(t, pool)
+
+	const eventID = "Ev0RETRYAFTERFAIL001"
+
+	// First attempt: the outer envelope is well-formed (so it gets past
+	// url_verification detection and claims the delivery), but the inner
+	// "event" field is a JSON string, not the object slackEvent requires --
+	// json.Unmarshal into ev fails AFTER the claim has already succeeded.
+	malformedEnvelope := fmt.Sprintf(`{"type":"event_callback","event_id":%q,"team_id":"T0TEST","event":"not-an-object"}`, eventID)
+	req := signedSlackRequest(t, malformedEnvelope)
+	rec := httptest.NewRecorder()
+	rig.handler(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("first (malformed) delivery status = %d, want %d (body=%s)", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	// The claim row must have been released by the failure path, not left
+	// behind poisoning this event_id.
+	var deliveryRowCountAfterFailure int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'slack' AND delivery_id = $1`, eventID,
+	).Scan(&deliveryRowCountAfterFailure); err != nil {
+		t.Fatalf("count webhook_deliveries rows after failure: %v", err)
+	}
+	if deliveryRowCountAfterFailure != 0 {
+		t.Fatalf("webhook_deliveries row count after failed attempt = %d, want 0 (claim must be released on failure)", deliveryRowCountAfterFailure)
+	}
+
+	// Redelivery: the SAME event_id, this time a genuine, well-formed
+	// app_mention payload. It must be processed, not skipped as an
+	// already-claimed duplicate.
+	validEnvelope := appMentionEnvelope(eventID, "C0RETRYAFTERFAIL", "1700000040.000100", "", "please help again")
+	req2 := signedSlackRequest(t, validEnvelope)
+	rec2 := httptest.NewRecorder()
+	rig.handler(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("redelivered (valid) status = %d, want %d (body=%s)", rec2.Code, http.StatusOK, rec2.Body.String())
+	}
+
+	mapping, err := rig.threads.Get(ctx, "C0RETRYAFTERFAIL", "1700000040.000100")
+	if err != nil {
+		t.Fatalf("Get thread mapping: %v", err)
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, mapping.SessionID)
+	if err != nil {
+		t.Fatalf("ListForSession: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Errorf("len(turns) = %d, want exactly 1 (the redelivered valid payload must actually be processed)", len(turns))
+	}
+}
+
 // TestHandler_ReplyOnMappedThread_AddsTurnToSameSession proves the core
 // thread<->session mapping requirement: a first message in a NEW thread
 // creates a session, and a second message with the SAME (channel_id,

@@ -117,6 +117,18 @@ type Deps struct {
 	DefaultRepoURL     string
 
 	Timeouts platform.Timeouts
+
+	// SessionIDSetter, when non-nil, is used INSTEAD of AgentSessions for
+	// setSessionIDWithRetry's own retried call (retry.go) -- nil-safe:
+	// every real caller (cmd/control-plane/main.go) leaves this unset,
+	// falling back to AgentSessions itself (which already satisfies this
+	// narrow interface), exactly as if this field did not exist at all.
+	// Exists ONLY so this package's own tests can substitute a fake that
+	// fails SetSessionID a controlled number of times before delegating to
+	// a real store, without needing to also fake Claim/Release/
+	// GetByAgentSessionID (mirrors github's own PullRequestResolver
+	// nil-safe-fallback precedent, headresolve.go).
+	SessionIDSetter sessionIDSetter
 }
 
 // NewWebhookHandler backs POST /webhooks/linear: verifies Linear's own
@@ -130,10 +142,20 @@ type Deps struct {
 // webhookTimestamp (fail closed -- Linear's own request is never trusted
 // enough to even parse further); 400 on a malformed body or a missing
 // Linear-Delivery header (this handler refuses to process anything it
-// cannot dedupe); 200 for everything else, INCLUDING a downstream
-// processing failure after the delivery has already been claimed -- see
-// this func's own inline comment on why a genuine internal error is
-// logged, not surfaced as a 5xx, once the delivery is claimed.
+// cannot dedupe); 200 for a duplicate delivery, an ignored event category,
+// or a genuinely handled `created`/`prompted` event (including a
+// deliberate business decision inside it, like an authz denial -- see
+// handleCreated's/handlePrompted's own doc comments for which branches
+// those are); 500, WITH the webhook-delivery claim released
+// (WebhookDeliveryStore.Release), for a genuine post-claim processing
+// failure (a DB error resolving/creating the session or turn) --
+// H2 audit fix ("webhook claim/release parity"), correcting this
+// comment's own previous, factually stale claim that no such release
+// mechanism exists: WebhookDeliveryStore.Release has existed since Step
+// 31 (postgres/webhookdelivery_store.go) and github's own handler.go
+// already uses it identically. Releasing lets a redelivery of this same
+// Linear-Delivery id actually retry, rather than the event being silently
+// and permanently dropped now that it's claimed.
 func NewWebhookHandler(deps Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -201,13 +223,15 @@ func NewWebhookHandler(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		// From here on, the delivery is claimed -- see this func's own doc
-		// comment on why every path below responds 200 (even a genuine
-		// processing failure, logged instead): ClaimWebhookDelivery's own
-		// design (Step 31) has no "un-claim on failure" mechanism, so
-		// returning 5xx here to provoke a Linear retry would only ever hit
-		// this SAME claim again and be silently skipped as a "duplicate" --
-		// worse than just logging the failure once, clearly, here.
+		// From here on, the delivery is claimed. H2 audit fix ("webhook
+		// claim/release parity"): handleCreated/handlePrompted below report
+		// ok=false ONLY for a genuine post-claim processing failure -- see
+		// each one's own doc comment for the exact ok=false branches --
+		// which this func releases the claim for and answers non-2xx,
+		// mirroring github's own identical release-on-failure pattern
+		// (handler.go), so a redelivery of this same Linear-Delivery id can
+		// actually retry rather than being silently skipped forever as an
+		// already-claimed duplicate.
 		eventType := eventTypeFrom(r)
 		if eventType != agentSessionEventType && payload.Type != agentSessionEventType {
 			logger.Info("linear: ignoring non-AgentSessionEvent webhook category", "event_type", eventType)
@@ -215,13 +239,22 @@ func NewWebhookHandler(deps Deps) http.HandlerFunc {
 			return
 		}
 
+		ok := true
 		switch payload.Action {
 		case "created":
-			deps.handleCreated(ctx, payload)
+			ok = deps.handleCreated(ctx, payload)
 		case "prompted":
-			deps.handlePrompted(ctx, payload)
+			ok = deps.handlePrompted(ctx, payload)
 		default:
 			logger.Warn("linear: unrecognized AgentSessionEvent action, ignoring", "action", payload.Action)
+		}
+
+		if !ok {
+			if releaseErr := deps.Deliveries.Release(ctx, "linear", deliveryID); releaseErr != nil {
+				logger.Error("linear: release webhook delivery claim failed", "error", releaseErr, "delivery_id", deliveryID)
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -234,17 +267,76 @@ func NewWebhookHandler(deps Deps) http.HandlerFunc {
 // and -- only for the winner -- creates the backing Narvi session via
 // CreateSessionCore, attaches the resulting session id back onto the
 // claimed row, and posts the minimal acknowledgment Agent Activity.
-func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWebhookPayload) {
+//
+// Returns ok=false ONLY for a genuine post-(webhook-delivery-)claim
+// processing failure that happens BEFORE any session/turn exists at all --
+// H2 audit fix ("webhook claim/release parity"): the AgentSessions.Claim
+// call itself erroring, or a CreateSessionCore error. The caller
+// (NewWebhookHandler) releases the WEBHOOK-DELIVERY claim and answers
+// non-2xx on ok=false, so a redelivery of this same Linear-Delivery id can
+// retry -- safe here specifically because nothing has been created or
+// dispatched yet, so a redelivery-triggered re-run of this whole function
+// can only ever produce ONE session, never a duplicate. Every other return
+// (a duplicate `created` event, an authz denial, and -- see below -- a
+// SetSessionID failure) is ok=true: either a deliberate business decision
+// (retrying would render the identical duplicate/denial verdict again,
+// mirroring github's own ErrActorNotAuthorized-vs-genuine-error
+// distinction, coalesce.go) or, for SetSessionID, a case where a retry via
+// redelivery would actively make things WORSE (see below).
+//
+// Independently of the webhook-delivery claim above, THIS function also
+// manages the SEPARATE linear_agent_sessions claim it wins via
+// AgentSessions.Claim (H3 audit fix, same "webhook claim/release parity"
+// finding): on the authz-denial and CreateSessionCore-error branches ONLY,
+// it releases that claim too (AgentSessions.Release, guarded to a
+// still-NULL session_id) -- otherwise EITHER would leave the row
+// permanently stuck (NULL session_id forever), dropping every future
+// prompt/redelivery for this agent_session_id regardless of what the
+// webhook-delivery claim itself does. The authz-denial branch releases the
+// AGENT-SESSION claim but deliberately does NOT release the webhook-
+// delivery claim (still ok=true) -- these are genuinely different
+// identities with different "would a retry help" answers: a redelivery of
+// this SAME delivery id would hit the identical denial again (no help),
+// but a LATER, distinct event for this SAME agent_session_id (e.g. a
+// subsequent `prompted` event, once the actor is actually granted access)
+// must not find the agent-session claim already permanently poisoned.
+//
+// A SetSessionID failure is deliberately NOT a third release branch (HIGH
+// audit fix, "releasing the linear_agent_sessions claim after a
+// SetSessionID failure can spawn a duplicate, independently-dispatched
+// agent" -- correcting this function's own PREVIOUS behavior, which
+// treated it exactly like the two branches above): by the time
+// SetSessionID could ever fail, CreateSessionCore has ALREADY committed a
+// real session with a Pending turn AND fired TriggerDispatch below -- the
+// session is genuinely alive and already being worked on, NOT an inert,
+// never-dispatched row the way Slack's own lost-the-race orphan is (that
+// prior comparison was wrong: Slack's bare-session orphan never sets
+// Prompt, so it is genuinely never dispatched; Linear's is). Releasing
+// either claim here and answering non-2xx would let Linear redeliver this
+// SAME `created` event, running this ENTIRE function again and spawning a
+// SECOND, independently-dispatched session/turn for the identical
+// agent_session_id, while the FIRST, real, already-running session becomes
+// permanently unreachable by any future Linear event for it -- strictly
+// worse than the gap it would claim to close. setSessionIDWithRetry
+// (retry.go) instead retries the safe, idempotent UPDATE itself a bounded
+// number of times; if every attempt still fails, this logs at Error (this
+// specific agent_session_id now needs manual reconciliation -- its
+// linear_agent_sessions row has no session_id even though a real,
+// dispatched session exists) and continues on to the SAME success path
+// (acknowledgment, intent classification, ok=true) as if SetSessionID had
+// succeeded -- the task IS genuinely progressing from Linear's own
+// perspective regardless.
+func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWebhookPayload) bool {
 	logger := platform.Logger(ctx)
 
 	claim, err := deps.AgentSessions.Claim(ctx, payload.AgentSession.ID, payload.OrganizationID)
 	if err != nil {
 		logger.Error("linear: claim agent session failed", "error", err, "agent_session_id", payload.AgentSession.ID)
-		return
+		return false
 	}
 	if !claim.Inserted {
 		logger.Info("linear: duplicate created event for agent session, skipping", "agent_session_id", payload.AgentSession.ID)
-		return
+		return true
 	}
 
 	var title *string
@@ -302,19 +394,56 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 	// case, preserving §13.2's own existing precedent.
 	if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
 		logger.Warn("linear: create session denied by authz", "agent_session_id", payload.AgentSession.ID, "user_id", creator.String())
+		// H3 audit fix: release the SEPARATE linear_agent_sessions claim
+		// this call just won -- see this function's own top doc comment for
+		// why this is safe/needed even though the webhook-delivery claim
+		// below is deliberately left alone.
+		if releaseErr := deps.AgentSessions.Release(ctx, payload.AgentSession.ID); releaseErr != nil {
+			logger.Error("linear: release agent session claim failed", "error", releaseErr, "agent_session_id", payload.AgentSession.ID)
+		}
 		deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("Your linked Narvi account isn't authorized to start new sessions from Linear.", notice))
-		return
+		return true
 	}
 
 	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, creator)
 	if cerr != nil {
 		logger.Error("linear: create session failed", "status", cerr.Status, "message", cerr.Message, "agent_session_id", payload.AgentSession.ID)
-		return
+		// H2/H3 audit fix: release BOTH claims this delivery is holding --
+		// the linear_agent_sessions claim (guarded, see this function's own
+		// top doc comment) and, via this func's own false return, the
+		// webhook-delivery claim (NewWebhookHandler) -- a transient DB
+		// failure here must not permanently strand either one.
+		if releaseErr := deps.AgentSessions.Release(ctx, payload.AgentSession.ID); releaseErr != nil {
+			logger.Error("linear: release agent session claim failed", "error", releaseErr, "agent_session_id", payload.AgentSession.ID)
+		}
+		return false
 	}
 
-	if err := deps.AgentSessions.SetSessionID(ctx, payload.AgentSession.ID, created.ID); err != nil {
-		logger.Error("linear: attach session id to agent session claim failed", "error", err, "agent_session_id", payload.AgentSession.ID)
-		return
+	if err := deps.setSessionIDWithRetry(ctx, payload.AgentSession.ID, created.ID); err != nil {
+		// HIGH audit fix ("releasing the linear_agent_sessions claim after
+		// a SetSessionID failure can spawn a duplicate, independently-
+		// dispatched agent"): created.ID is a REAL, ALREADY-DISPATCHED
+		// session (CreateSessionCore committed it and fired TriggerDispatch
+		// before this point) -- setSessionIDWithRetry (retry.go) already
+		// retried this safe, idempotent UPDATE a bounded number of times.
+		// Every attempt failing means this specific agent_session_id's own
+		// linear_agent_sessions row now needs MANUAL reconciliation (it has
+		// no session_id even though a real, dispatched session exists) --
+		// logged at Error for exactly that. The claim is deliberately left
+		// exactly as it is: NEVER released here (unlike the two branches
+		// above), since releasing it would let a redelivery of this
+		// identical `created` event run this whole function again,
+		// spawning a SECOND, independently-dispatched session for the same
+		// agent_session_id while this first, real one becomes permanently
+		// unreachable -- see this function's own top doc comment for the
+		// full failure mode this replaces. Falls through to the SAME
+		// success path (acknowledgment, intent classification, ok=true)
+		// below as if SetSessionID had succeeded: the task IS genuinely
+		// progressing from Linear's own perspective regardless, and
+		// returning a failure code here would only trigger the exact
+		// duplicate-dispatch redelivery this fix exists to prevent.
+		logger.Error("linear: attach session id to agent session claim failed after exhausting retries, manual reconciliation needed",
+			"error", err, "agent_session_id", payload.AgentSession.ID, "session_id", created.ID.String())
 	}
 
 	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE,
@@ -333,6 +462,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 	logger.Info("linear: created session from agent session", "agent_session_id", payload.AgentSession.ID, "session_id", created.ID.String())
 
 	deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(acknowledgmentBody, notice))
+	return true
 }
 
 // handlePrompted processes a `prompted` AgentSessionEvent: routes to the
@@ -354,12 +484,32 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 // completely unchanged -- this IS "request changes" (Step 37 already
 // established that reusing ordinary turn-creation for feedback is
 // correct).
-func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWebhookPayload) {
+//
+// Returns ok=false ONLY for a genuine post-(webhook-delivery-)claim
+// backend failure -- H2 audit fix ("webhook claim/release parity"):
+// GetByAgentSessionID erroring for any reason OTHER than pgx.ErrNoRows,
+// ListForSession erroring, Turns.Create erroring, (MEDIUM audit fix,
+// "authorizeSessionAction conflates a genuine backend error with a real
+// authorization denial") authorizeSessionAction returning a genuine
+// backend error (any error other than ErrActorNotAuthorized) while
+// checking whether this reply's own actor may prompt sessionID, or (LOW
+// audit fix, second review pass -- "handlePlanVerdict has the same
+// conflation, explicitly left out of the first fix's scope") a plan-verdict
+// reply's own call into handlePlanVerdict below returning ok=false for the
+// identical reason. The caller (NewWebhookHandler) releases the
+// webhook-delivery claim and answers non-2xx on ok=false, so a redelivery
+// of this same Linear-Delivery id can retry. Every other return (missing
+// agentActivity, a stop signal, an unknown/still-claiming agent session, a
+// genuine ErrActorNotAuthorized denial -- ordinary-reply or plan-verdict --
+// an already-open turn) is ok=true: a deliberate business decision or an
+// accepted, already-documented scope limitation (see each branch's own
+// comment), never a failure a retry could plausibly change.
+func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWebhookPayload) bool {
 	logger := platform.Logger(ctx)
 
 	if payload.AgentActivity == nil {
 		logger.Warn("linear: prompted event missing agentActivity, ignoring", "agent_session_id", payload.AgentSession.ID)
-		return
+		return true
 	}
 
 	if payload.AgentActivity.Signal != nil && *payload.AgentActivity.Signal == stopSignal {
@@ -370,21 +520,21 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		// silently swallowed or forced through a mechanism that doesn't
 		// exist.
 		logger.Warn("linear: received stop signal, no stop mechanism wired yet (out of scope for this Step)", "agent_session_id", payload.AgentSession.ID)
-		return
+		return true
 	}
 
 	row, err := deps.AgentSessions.GetByAgentSessionID(ctx, payload.AgentSession.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			logger.Warn("linear: prompted event for unknown agent session, ignoring", "agent_session_id", payload.AgentSession.ID)
-			return
+			return true
 		}
 		logger.Error("linear: look up agent session failed", "error", err, "agent_session_id", payload.AgentSession.ID)
-		return
+		return false
 	}
 	if !row.SessionID.Valid {
 		logger.Warn("linear: prompted event for agent session still being claimed, ignoring", "agent_session_id", payload.AgentSession.ID)
-		return
+		return true
 	}
 	sessionID := row.SessionID
 
@@ -402,8 +552,21 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	if deps.Plans != nil {
 		if planID, hasAwaiting := deps.findAwaitingApprovalPlanID(ctx, logger, sessionID); hasAwaiting {
 			if verdict, ok := plandomain.MatchVerdict(payload.AgentActivity.Content.Body); ok {
-				deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, actorUserID, notice, payload.OrganizationID, payload.AgentSession.ID)
-				return
+				// handlePlanVerdict's own OTHER internal failures
+				// (DecidePlan erroring, the outcome-activity post failing)
+				// are still logged and swallowed there, exactly like before
+				// this batch's own H2/H3 changes -- the session this plan
+				// belongs to already exists and is otherwise healthy, so a
+				// failed plan-verdict DECISION is deliberately left out of
+				// THIS function's own ok signal. LOW audit fix (second
+				// review pass, "handlePlanVerdict has the same conflation,
+				// explicitly left out of the first fix's scope"): a genuine
+				// backend error from handlePlanVerdict's own
+				// authorizeSessionAction call is NOT swallowed the same
+				// way -- it now returns ok=false here too, exactly mirroring
+				// this function's own ordinary-reply gate below, so it flows
+				// into the same release-the-claim-and-retry path.
+				return deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, actorUserID, notice, payload.OrganizationID, payload.AgentSession.ID)
 			}
 		}
 	}
@@ -415,19 +578,30 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// call). An actorUserID that resolved to a REAL, linked user_id must
 	// pass that same check before this reply is allowed to create a turn.
 	// A still-unlinked (bot-attributed) actorUserID is untouched --
-	// authorizeSessionAction returns true immediately for that case,
+	// authorizeSessionAction returns nil immediately for that case,
 	// preserving §13.2's own "the action proceeds" precedent for the
 	// not-yet-linked case.
-	if !deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession) {
-		logger.Warn("linear: prompted reply denied by authz", "session_id", sessionID.String(), "user_id", actorUserID.String())
-		deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("Your linked Narvi account isn't authorized to prompt this session.", notice))
-		return
+	if err := deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession); err != nil {
+		if errors.Is(err, ErrActorNotAuthorized) {
+			logger.Warn("linear: prompted reply denied by authz", "session_id", sessionID.String(), "user_id", actorUserID.String())
+			deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("Your linked Narvi account isn't authorized to prompt this session.", notice))
+			return true
+		}
+		// MEDIUM audit fix ("authorizeSessionAction conflates a genuine
+		// backend error with a real authorization denial"): a transient
+		// backend failure WHILE checking authorization (already logged
+		// inside authorizeSessionAction) is NOT a denial -- flows into the
+		// SAME release-the-claim-and-retry path H2 already wired up for
+		// every other post-claim failure in this function, instead of
+		// being silently treated as "skip, no release" the way a one-off
+		// DB blip previously was.
+		return false
 	}
 
 	existingTurns, err := deps.Turns.ListForSession(ctx, sessionID)
 	if err != nil {
 		logger.Error("linear: list turns failed", "error", err, "session_id", sessionID.String())
-		return
+		return false
 	}
 	if hasOpenTurn(existingTurns) {
 		// Scope decision (Step 34): mirrors httpapi.CreateTurn's own 409
@@ -438,7 +612,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		// (mirroring Linear's own "queued activities" concept) is a
 		// natural follow-up, not built here.
 		logger.Warn("linear: session already has an open turn, dropping prompted message", "session_id", sessionID.String())
-		return
+		return true
 	}
 
 	prompt := payload.AgentActivity.Content.Body
@@ -448,7 +622,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		Prompt:    &prompt,
 	}); err != nil {
 		logger.Error("linear: create turn failed", "error", err, "session_id", sessionID.String())
-		return
+		return false
 	}
 	// turns carries no per-row actor column at all (migrations/
 	// 000005_turns.up.sql) -- unlike sessions.created_by/plans.decided_by,
@@ -461,14 +635,22 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// append it to.
 	deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, notice)
 
+	// GetOrSpawn/Send below are dispatch-trigger side effects on a turn
+	// that has ALREADY been durably created and persisted above -- a
+	// failure here (like the in-thread ack/notice posts elsewhere in this
+	// package) is logged only, never treated as a release-worthy failure:
+	// the turn itself is safely committed regardless, and hasOpenTurn's
+	// own guard above means a retry would find this exact turn already
+	// open and simply drop again, never double-create.
 	actor, err := deps.Registry.GetOrSpawn(ctx, sessionID)
 	if err != nil {
 		logger.Warn("linear: GetOrSpawn after turn create failed", "error", err)
-		return
+		return true
 	}
 	if err := actor.Send(ctx, sessionactor.EnsureDispatched{}); err != nil {
 		logger.Warn("linear: send EnsureDispatched after turn create failed", "error", err)
 	}
+	return true
 }
 
 // findAwaitingApprovalPlanID reports sessionID's own current
@@ -503,32 +685,64 @@ func (deps Deps) findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Lo
 // describing the REAL final outcome, whether this call itself won or a
 // different channel already decided first, with identityNotice (§13.2's
 // own "notify in-channel", empty when there's nothing to say) appended.
-func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, decidedBy pgtype.UUID, identityNotice, organizationID, agentSessionID string) {
+//
+// Returns ok=false ONLY for a genuine backend error from its own
+// authorizeSessionAction call -- LOW audit fix, second review pass
+// ("handlePlanVerdict has the same conflation, explicitly left out of the
+// first fix's scope"): this function's own OTHER internal failures
+// (DecidePlan erroring for any reason other than ErrPlanOpenTurnInFlight,
+// the outcome-activity post failing) are still only logged and swallowed
+// here, exactly as before this fix -- the session/plan this verdict
+// targets already exists and is otherwise healthy, so a failed DECISION
+// itself remains an accepted, already-documented scope limitation, not
+// something this fix's own narrow scope (authorizeSessionAction's
+// conflation specifically) touches.
+func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, sessionID, planID pgtype.UUID, verdict string, decidedBy pgtype.UUID, identityNotice, organizationID, agentSessionID string) bool {
 	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
 	// that resolved to a REAL, linked user_id must still pass domain/authz.
 	// Authorize(ActionApprovePlan) -- exactly what the REST approve/reject
 	// endpoints already require via canActOnPlan (planauthz.go). A still-
 	// unlinked (bot-attributed) decidedBy is untouched -- authorizeSessionAction
-	// returns true immediately for that case, preserving this package's own
+	// returns nil immediately for that case, preserving this package's own
 	// existing "Linear verdicts stay unauthenticated-per-user until linked"
 	// precedent (decideplan.go's own top doc comment).
-	if !deps.authorizeSessionAction(ctx, logger, sessionID, decidedBy, authz.ActionApprovePlan) {
-		logger.Warn("linear: plan decision denied by authz", "plan_id", planID.String(), "session_id", sessionID.String(), "user_id", decidedBy.String())
-		deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("You don't have permission to approve or reject this plan.", identityNotice))
-		return
+	//
+	// LOW audit fix (second review pass): this NOW distinguishes
+	// ErrActorNotAuthorized from a genuine backend error, using the exact
+	// same pattern already established for handlePrompted's own
+	// ordinary-reply gate above -- a real denial keeps today's behavior
+	// (post the denial message, return ok=true, no claim release); a
+	// genuine backend error (already logged inside authorizeSessionAction)
+	// returns ok=false instead, which this function's own caller
+	// (handlePrompted) now propagates as ITS OWN return value, routing it
+	// into the SAME release-the-claim-and-retry path H2 already wired up
+	// for every other post-claim failure. Before this fix, a genuine
+	// backend error here fell into the SAME branch as a real denial: it
+	// posted the misleading "you don't have permission" message AND never
+	// returned ok=false at all (this function had no return value), so the
+	// webhook-delivery claim was never released and no redelivery could
+	// ever retry the actual plan decision.
+	if err := deps.authorizeSessionAction(ctx, logger, sessionID, decidedBy, authz.ActionApprovePlan); err != nil {
+		if errors.Is(err, ErrActorNotAuthorized) {
+			logger.Warn("linear: plan decision denied by authz", "plan_id", planID.String(), "session_id", sessionID.String(), "user_id", decidedBy.String())
+			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("You don't have permission to approve or reject this plan.", identityNotice))
+			return true
+		}
+		return false
 	}
 
 	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), decidedBy)
 	if err != nil {
 		if errors.Is(err, httpapi.ErrPlanOpenTurnInFlight) {
 			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("A revision is already in progress for this plan -- try again once it completes.", identityNotice))
-			return
+			return true
 		}
 		logger.Error("linear: decide plan failed", "error", err, "plan_id", planID.String(), "session_id", sessionID.String())
-		return
+		return true
 	}
 
 	deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice(renderLinearPlanOutcomeText(outcome), identityNotice))
+	return true
 }
 
 // renderLinearPlanOutcomeText mirrors internal/adapters/inbound/slack's

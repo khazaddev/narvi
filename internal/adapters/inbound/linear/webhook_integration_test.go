@@ -250,6 +250,97 @@ func TestWebhookHandler_Created_CreatesSessionAndTurn(t *testing.T) {
 	}
 }
 
+// TestWebhookHandler_FailedFirstAttemptReleasesBothClaimsForRedelivery is
+// the H2/H3 audit fix's own headline proof, mirroring github's identical
+// TestGitHubIntegration_FailedFirstAttemptReleasesClaimForRedelivery
+// (internal/adapters/inbound/github/handler_integration_test.go): neither
+// the webhook-delivery claim (H2, the shared toolkit mechanism) NOR the
+// SEPARATE linear_agent_sessions claim (H3, this package's own first-
+// writer-wins table) may permanently poison a delivery/agent-session
+// identity when the first attempt fails AFTER both claims succeed but
+// BEFORE the session is actually created -- a redelivery of the SAME
+// Linear-Delivery id (Linear's own real retry behavior on a non-2xx
+// response or a timeout) must actually reprocess the event, not be
+// silently swallowed as an already-claimed duplicate forever.
+func TestWebhookHandler_FailedFirstAttemptReleasesBothClaimsForRedelivery(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	const agentSessionID = "agent-session-retry-after-failure"
+	const organizationID = "org-retry-after-failure"
+	const deliveryID = "delivery-retry-after-failure-1"
+
+	// First attempt: DefaultRepoURL is deliberately invalid (fails
+	// reposource.ValidateRepoURL's own https-scheme requirement) --
+	// CreateSessionCore fails INSIDE handleCreated, AFTER both the
+	// webhook-delivery claim and the linear_agent_sessions claim have
+	// already succeeded.
+	failingDeps := newHandlerDeps(t, pool)
+	failingDeps.DefaultRepoURL = "not-a-valid-https-url"
+	failingHandler := linear.NewWebhookHandler(failingDeps)
+
+	body := agentSessionCreatedPayload(agentSessionID, organizationID)
+	first := postWebhook(t, failingHandler, body, deliveryID)
+	if first.Code != http.StatusInternalServerError {
+		t.Fatalf("first (failing) delivery status = %d, want %d; body = %s", first.Code, http.StatusInternalServerError, first.Body.String())
+	}
+
+	// H2: the webhook-delivery claim must have been released -- no row
+	// left behind poisoning this delivery id.
+	var deliveryRowCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'linear' AND delivery_id = $1`, deliveryID,
+	).Scan(&deliveryRowCount); err != nil {
+		t.Fatalf("count webhook_deliveries rows after failure: %v", err)
+	}
+	if deliveryRowCount != 0 {
+		t.Fatalf("webhook_deliveries row count after failed attempt = %d, want 0 (H2: the webhook-delivery claim must be released on failure)", deliveryRowCount)
+	}
+
+	// H3: the SEPARATE linear_agent_sessions claim must ALSO have been
+	// released -- no row left behind with a permanently-NULL session_id.
+	var agentSessionRowCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM linear_agent_sessions WHERE agent_session_id = $1`, agentSessionID,
+	).Scan(&agentSessionRowCount); err != nil {
+		t.Fatalf("count linear_agent_sessions rows after failure: %v", err)
+	}
+	if agentSessionRowCount != 0 {
+		t.Fatalf("linear_agent_sessions row count after failed attempt = %d, want 0 (H3: the agent-session claim must be released on failure)", agentSessionRowCount)
+	}
+
+	// Redelivery: the SAME Linear-Delivery id AND the SAME agentSession.id,
+	// this time against a correctly-configured handler. It must be
+	// processed, not skipped as an already-claimed duplicate.
+	workingDeps := newHandlerDeps(t, pool)
+	workingHandler := linear.NewWebhookHandler(workingDeps)
+
+	second := postWebhook(t, workingHandler, body, deliveryID)
+	if second.Code != http.StatusOK {
+		t.Fatalf("redelivered (valid config) status = %d, want %d; body = %s", second.Code, http.StatusOK, second.Body.String())
+	}
+
+	var sessionCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM sessions WHERE spawn_source = 'linear'`,
+	).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Errorf("session count = %d, want exactly 1 (the redelivered valid payload must actually be processed)", sessionCount)
+	}
+
+	var mappedSessionID string
+	if err := pool.QueryRow(ctx,
+		`SELECT session_id::text FROM linear_agent_sessions WHERE agent_session_id = $1`, agentSessionID,
+	).Scan(&mappedSessionID); err != nil {
+		t.Fatalf("query linear_agent_sessions after redelivery: %v", err)
+	}
+	if mappedSessionID == "" {
+		t.Error("linear_agent_sessions.session_id is empty after redelivery, want the newly-created session's id")
+	}
+}
+
 // TestWebhookHandler_DuplicateDelivery_NoSecondSession proves the
 // webhook_deliveries dedupe layer alone stops a REDELIVERED webhook (the
 // SAME Linear-Delivery id) from creating a second session.

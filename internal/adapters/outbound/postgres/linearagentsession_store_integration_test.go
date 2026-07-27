@@ -177,3 +177,118 @@ func TestLinearAgentSessionStore_SetSessionID_AttachesRealID(t *testing.T) {
 		t.Errorf("SessionID = %v, want %v", got.SessionID, created.ID)
 	}
 }
+
+// TestLinearAgentSessionStore_Release_UnclaimsRowWithNoSessionID proves
+// the H3 audit-fix's own headline case: Release genuinely un-claims a row
+// still stuck at a NULL session_id (an authz denial, a CreateSessionCore
+// error, or a SetSessionID error -- any post-claim failure BEFORE
+// SetSessionID ever won) -- the row is gone afterward, and a fresh Claim
+// for the SAME agent_session_id is reported as a brand-new insert, not a
+// duplicate.
+func TestLinearAgentSessionStore_Release_UnclaimsRowWithNoSessionID(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewLinearAgentSessionStore(pool)
+
+	const agentSessionID = "agent-session-release-no-session-id"
+
+	claimed, err := store.Claim(ctx, agentSessionID, "org-release")
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if !claimed.Inserted {
+		t.Fatal("Claim: Inserted = false, want true")
+	}
+	if claimed.SessionID.Valid {
+		t.Fatal("Claim: SessionID.Valid = true, want false before SetSessionID ever runs")
+	}
+
+	if err := store.Release(ctx, agentSessionID); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM linear_agent_sessions WHERE agent_session_id = $1`, agentSessionID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count rows after Release: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("row count after Release = %d, want 0 (a row with no session_id must be genuinely un-claimed)", count)
+	}
+
+	// A later, distinct `created` event (or a manual redelivery) for the
+	// SAME agent_session_id must be free to claim it again from scratch --
+	// this is exactly what H3 says was impossible before this fix (the row
+	// would otherwise be stuck forever).
+	reclaimed, err := store.Claim(ctx, agentSessionID, "org-release-retry")
+	if err != nil {
+		t.Fatalf("re-Claim after Release: %v", err)
+	}
+	if !reclaimed.Inserted {
+		t.Error("re-Claim after Release: Inserted = false, want true (the released row must be claimable again as fresh)")
+	}
+	if reclaimed.OrganizationID != "org-release-retry" {
+		t.Errorf("re-Claim OrganizationID = %q, want %q (a genuinely fresh row, not a stale one)", reclaimed.OrganizationID, "org-release-retry")
+	}
+}
+
+// TestLinearAgentSessionStore_Release_GuardedAgainstRowWithRealSessionID
+// proves Release's own load-bearing guard: a row that already has a REAL
+// session_id attached (SetSessionID already won) is left COMPLETELY
+// untouched by a later, unrelated Release call -- releasing it would let
+// a future event re-claim the SAME agent_session_id and attempt to create
+// a SECOND, colliding session, exactly the coalescing failure
+// linear_agent_sessions exists to prevent.
+func TestLinearAgentSessionStore_Release_GuardedAgainstRowWithRealSessionID(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewLinearAgentSessionStore(pool)
+	sessions := narvipg.NewSessionStore(pool)
+
+	const agentSessionID = "agent-session-release-guard"
+
+	if _, err := store.Claim(ctx, agentSessionID, "org-guard"); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	created, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceLinear,
+		Repos:       []byte(`[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := store.SetSessionID(ctx, agentSessionID, created.ID); err != nil {
+		t.Fatalf("SetSessionID: %v", err)
+	}
+
+	// A later, entirely unrelated failure elsewhere in the SAME request
+	// (or a completely separate, buggy caller) tries to Release this SAME
+	// agent_session_id anyway -- this must be a safe no-op.
+	if err := store.Release(ctx, agentSessionID); err != nil {
+		t.Fatalf("Release (on an already-attached row): %v", err)
+	}
+
+	got, err := store.GetByAgentSessionID(ctx, agentSessionID)
+	if err != nil {
+		t.Fatalf("GetByAgentSessionID after guarded Release: %v", err)
+	}
+	if !got.SessionID.Valid {
+		t.Fatal("SessionID.Valid = false after guarded Release, want true (a row with a REAL session_id must never be un-claimed)")
+	}
+	if got.SessionID != created.ID {
+		t.Errorf("SessionID = %v after guarded Release, want unchanged %v", got.SessionID, created.ID)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM linear_agent_sessions WHERE agent_session_id = $1`, agentSessionID,
+	).Scan(&count); err != nil {
+		t.Fatalf("count rows after guarded Release: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("row count after guarded Release = %d, want 1 (row must survive untouched)", count)
+	}
+}
