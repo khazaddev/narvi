@@ -288,3 +288,88 @@ func TestDecidePlan_CrossSessionPlanIDDoesNotLeakStatus(t *testing.T) {
 		t.Errorf("session B's plan db status = %q, want %q (untouched by session A's mismatched call)", dbStatus, sqlcgen.PlanStatusApproved)
 	}
 }
+
+// auditLogDetailForPlanDecision fetches the single plan.<verdict> audit_log
+// row's own detail_json for planID, decoded into a plain map -- this file's
+// own assertion helper for the audit-fix batch's own M2-part-1 fix
+// (decideplan.go's DecidePlanOnTx now includes the created implementation
+// turn's own id in this detail, when one was created).
+func auditLogDetailForPlanDecision(ctx context.Context, t *testing.T, rig testRig, action, planID string) map[string]any {
+	t.Helper()
+	var detailRaw []byte
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT detail_json FROM audit_log WHERE resource_type = 'plan' AND resource_id = $1 AND action = $2`,
+		planID, action,
+	).Scan(&detailRaw); err != nil {
+		t.Fatalf("query audit_log detail_json for action %q: %v", action, err)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(detailRaw, &detail); err != nil {
+		t.Fatalf("unmarshal audit_log detail_json: %v", err)
+	}
+	return detail
+}
+
+// TestDecidePlanOnTx_Approve_AuditDetailCarriesTurnID proves the audit-fix
+// batch's own M2 part 1: an Approve verdict's own "plan.approve" audit_log
+// row now carries the newly-created implementation turn's own id in its
+// detail JSON, alongside the pre-existing session_id/verdict fields.
+func TestDecidePlanOnTx_Approve_AuditDetailCarriesTurnID(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	var noDecider pgtype.UUID
+	outcome, err := httpapi.DecidePlan(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry,
+		session.ID, plan.ID, httpapi.PlanVerdictApprove, noDecider)
+	if err != nil {
+		t.Fatalf("DecidePlan: %v", err)
+	}
+	if !outcome.Won || outcome.TurnID == nil || *outcome.TurnID == "" {
+		t.Fatalf("outcome = %+v, want Won=true and a non-empty TurnID", outcome)
+	}
+
+	detail := auditLogDetailForPlanDecision(ctx, t, rig, "plan.approve", plan.ID.String())
+	gotTurnID, ok := detail["turn_id"].(string)
+	if !ok || gotTurnID != *outcome.TurnID {
+		t.Errorf("detail_json[turn_id] = %v, want %q", detail["turn_id"], *outcome.TurnID)
+	}
+	if detail["session_id"] != session.ID.String() {
+		t.Errorf("detail_json[session_id] = %v, want %q", detail["session_id"], session.ID.String())
+	}
+	if detail["verdict"] != "approve" {
+		t.Errorf("detail_json[verdict] = %v, want %q", detail["verdict"], "approve")
+	}
+}
+
+// TestDecidePlanOnTx_Reject_AuditDetailHasNoTurnID is the Approve test's
+// sibling: a Reject verdict creates no turn at all, so its own
+// "plan.reject" audit_log row's detail JSON must carry no turn_id key
+// whatsoever -- never a present-but-null one.
+func TestDecidePlanOnTx_Reject_AuditDetailHasNoTurnID(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	var noDecider pgtype.UUID
+	outcome, err := httpapi.DecidePlan(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry,
+		session.ID, plan.ID, httpapi.PlanVerdictReject, noDecider)
+	if err != nil {
+		t.Fatalf("DecidePlan: %v", err)
+	}
+	if !outcome.Won || outcome.TurnID != nil {
+		t.Fatalf("outcome = %+v, want Won=true and a nil TurnID", outcome)
+	}
+
+	detail := auditLogDetailForPlanDecision(ctx, t, rig, "plan.reject", plan.ID.String())
+	if _, ok := detail["turn_id"]; ok {
+		t.Errorf("detail_json carries a turn_id key (%v), want none -- a reject verdict creates no turn", detail["turn_id"])
+	}
+	if detail["verdict"] != "reject" {
+		t.Errorf("detail_json[verdict] = %v, want %q", detail["verdict"], "reject")
+	}
+}

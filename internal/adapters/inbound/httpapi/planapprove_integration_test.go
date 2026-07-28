@@ -3,9 +3,11 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"testing"
 	"time"
@@ -371,6 +373,117 @@ func TestRejectPlan_Owner_HappyPath(t *testing.T) {
 	}
 	if len(turns) != 1 {
 		t.Errorf("len(turns) = %d, want 1 (only the seeded producing turn, no new one)", len(turns))
+	}
+}
+
+// --- Observability: REST success log line (audit-fix batch, M2 part 2) ---
+
+// captureDefaultLoggerJSON temporarily replaces slog.Default() with a JSON
+// handler writing into a *bytes.Buffer, restoring the original on cleanup
+// -- mirrors internal/app/outboxworker/builder_integration_test.go's own
+// established "capture slog.Default() into a buffer" convention exactly
+// (that package's own TestPumpOnce_AttemptLogsCorrelationIDAndSessionID),
+// since platform.Logger(ctx) (what every httpapi handler actually calls)
+// is itself built on top of slog.Default().
+func captureDefaultLoggerJSON(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+	return &buf
+}
+
+// findLogEntry scans buf's own newline-delimited JSON log lines for the
+// first one whose "msg" field equals wantMsg -- fails the test if none is
+// found.
+func findLogEntry(t *testing.T, buf *bytes.Buffer, wantMsg string) map[string]any {
+	t.Helper()
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if entry["msg"] == wantMsg {
+			return entry
+		}
+	}
+	t.Fatalf("no log line with msg %q found; full log output:\n%s", wantMsg, buf.String())
+	return nil
+}
+
+// TestApprovePlan_HappyPath_LogsDecidedPlanSuccessLine proves the audit-fix
+// batch's own M2 part 2 fix: ApprovePlan (a REST handler that calls
+// DecidePlanOnTx directly, never DecidePlan's own pool-based wrapper --
+// previously the ONLY place that logged this line) now logs an equivalent
+// "httpapi: decided plan" success line after its own commit, with the same
+// field shape (plan_id/session_id/verdict/won/final_status) DecidePlan's
+// wrapper already uses.
+func TestApprovePlan_HappyPath_LogsDecidedPlanSuccessLine(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	buf := captureDefaultLoggerJSON(t)
+
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/approve", []byte{}, nil, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	entry := findLogEntry(t, buf, "httpapi: decided plan")
+	if got, _ := entry["plan_id"].(string); got != plan.ID.String() {
+		t.Errorf("plan_id = %q, want %q", got, plan.ID.String())
+	}
+	if got, _ := entry["session_id"].(string); got != session.ID.String() {
+		t.Errorf("session_id = %q, want %q", got, session.ID.String())
+	}
+	if got, _ := entry["verdict"].(string); got != "approve" {
+		t.Errorf("verdict = %q, want %q", got, "approve")
+	}
+	if got, ok := entry["won"].(bool); !ok || !got {
+		t.Errorf("won = %v, want true", entry["won"])
+	}
+	if got, _ := entry["final_status"].(string); got != "approved" {
+		t.Errorf("final_status = %q, want %q", got, "approved")
+	}
+}
+
+// TestRejectPlan_HappyPath_LogsDecidedPlanSuccessLine is the reject twin of
+// the approve case above.
+func TestRejectPlan_HappyPath_LogsDecidedPlanSuccessLine(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	buf := captureDefaultLoggerJSON(t)
+
+	status := rig.doJSON(t, http.MethodPost,
+		"/api/sessions/"+session.ID.String()+"/plans/"+plan.ID.String()+"/reject", []byte{}, nil, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	entry := findLogEntry(t, buf, "httpapi: decided plan")
+	if got, _ := entry["plan_id"].(string); got != plan.ID.String() {
+		t.Errorf("plan_id = %q, want %q", got, plan.ID.String())
+	}
+	if got, _ := entry["verdict"].(string); got != "reject" {
+		t.Errorf("verdict = %q, want %q", got, "reject")
+	}
+	if got, ok := entry["won"].(bool); !ok || !got {
+		t.Errorf("won = %v, want true", entry["won"])
+	}
+	if got, _ := entry["final_status"].(string); got != "rejected" {
+		t.Errorf("final_status = %q, want %q", got, "rejected")
 	}
 }
 

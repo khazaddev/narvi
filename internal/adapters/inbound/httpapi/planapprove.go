@@ -209,6 +209,17 @@ func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *pos
 			return
 		}
 
+		// Audit-fix batch (completeness/observability, M2 part 2): this REST
+		// entry point calls DecidePlanOnTx directly (it already holds its own
+		// open transaction from authorizePlanAction's lock above), so it
+		// never went through DecidePlan's own pool-based wrapper -- the ONLY
+		// place that previously logged a "decided plan" success line. Same
+		// message/field shape as that wrapper's own log line
+		// (decideplan.go), logged at the same point in the flow (right after
+		// commit), so a REST-originated decision is exactly as observable as
+		// a Slack/Linear-originated one.
+		logger.Info("httpapi: decided plan", "plan_id", planID.String(), "session_id", sessionID.String(), "verdict", string(PlanVerdictApprove), "won", outcome.Won, "final_status", outcome.FinalStatus)
+
 		// Fire-and-forget, OUTSIDE the transaction above, mirroring
 		// CreateTurn's own identical post-commit sequencing exactly
 		// (turn.go).
@@ -274,6 +285,11 @@ func RejectPlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+
+		// Audit-fix batch (completeness/observability, M2 part 2): see
+		// ApprovePlan's own identical addition above for the full "why" --
+		// same message/field shape as DecidePlan's own wrapper log line.
+		logger.Info("httpapi: decided plan", "plan_id", planID.String(), "session_id", sessionID.String(), "verdict", string(PlanVerdictReject), "won", outcome.Won, "final_status", outcome.FinalStatus)
 
 		writeJSON(w, http.StatusOK, planActionResponse{PlanID: planID.String(), Status: "rejected"})
 	}
