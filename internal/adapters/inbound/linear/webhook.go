@@ -27,7 +27,6 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
-	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -48,6 +47,23 @@ const maxRequestBodyBytes = 1 << 20 // 1 MiB
 // see internal/adapters/outbound/linearapi's own doc.go for why this is
 // the one, minimal, direct outbound call this Step makes.
 const acknowledgmentBody = "Narvi has started working on this."
+
+// busyReplyText is the M6 audit fix's own honest reply, posted back to
+// the thread when handlePrompted's own ordinary-reply path (below) drops
+// a reply because a turn is already open for this session -- PREVIOUSLY
+// this case was only ever logged, with NO visible response to the user at
+// all (worse than Slack's own false "I'll pick this up next" promise,
+// which at least said something). Mirrors Slack's own ackBusyText
+// wording/tone (internal/adapters/inbound/slack/handler.go).
+const busyReplyText = "Still working on the previous message in this thread — this reply wasn't queued, please try again once it's done."
+
+// stopNotSupportedText is the L7 audit fix's own minimal, honest reply for
+// Linear's `stop` signal (see handlePrompted's own doc comment on the
+// stop-signal branch) -- posted instead of the PREVIOUS silent
+// log-and-discard. Narrow scope only: this does NOT implement any real
+// turn/session cancellation (that remains separate, later work) -- it
+// only tells the user the truth instead of nothing at all.
+const stopNotSupportedText = "Stopping an in-progress turn isn't supported yet — this request wasn't cancelled."
 
 // Deps bundles every dependency NewWebhookHandler needs -- a plain struct
 // (rather than 10+ positional constructor parameters) since this handler
@@ -480,30 +496,36 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 // call's own verdict if it won, or "already decided elsewhere" if a
 // different channel won first -- outcome.Won/outcome.FinalStatus report
 // the truth). On NO match (including when there is no awaiting_approval
-// plan at all), this falls through to the EXISTING create-turn behavior
-// completely unchanged -- this IS "request changes" (Step 37 already
-// established that reusing ordinary turn-creation for feedback is
-// correct).
+// plan at all), this falls through to the ordinary create-turn path -- this
+// IS "request changes" (Step 37 already established that reusing ordinary
+// turn-creation for feedback is correct). Audit-fix batch update: that
+// create-turn path is no longer this function's own direct, unlocked
+// deps.Turns.Create call (the L2 finding: a genuine check-then-act race) --
+// it now goes through the SAME shared httpapi.CreateTurnCore core
+// (DropIfOpen) every other turn-creation call site in this codebase uses,
+// closing that race and adding the turn.create audit_log row (H7).
 //
 // Returns ok=false ONLY for a genuine post-(webhook-delivery-)claim
 // backend failure -- H2 audit fix ("webhook claim/release parity"):
 // GetByAgentSessionID erroring for any reason OTHER than pgx.ErrNoRows,
-// ListForSession erroring, Turns.Create erroring, (MEDIUM audit fix,
-// "authorizeSessionAction conflates a genuine backend error with a real
-// authorization denial") authorizeSessionAction returning a genuine
-// backend error (any error other than ErrActorNotAuthorized) while
-// checking whether this reply's own actor may prompt sessionID, or (LOW
-// audit fix, second review pass -- "handlePlanVerdict has the same
+// httpapi.CreateTurnCore returning a non-nil *CreateTurnError, (MEDIUM
+// audit fix, "authorizeSessionAction conflates a genuine backend error
+// with a real authorization denial") authorizeSessionAction returning a
+// genuine backend error (any error other than ErrActorNotAuthorized)
+// while checking whether this reply's own actor may prompt sessionID, or
+// (LOW audit fix, second review pass -- "handlePlanVerdict has the same
 // conflation, explicitly left out of the first fix's scope") a plan-verdict
 // reply's own call into handlePlanVerdict below returning ok=false for the
 // identical reason. The caller (NewWebhookHandler) releases the
 // webhook-delivery claim and answers non-2xx on ok=false, so a redelivery
 // of this same Linear-Delivery id can retry. Every other return (missing
-// agentActivity, a stop signal, an unknown/still-claiming agent session, a
-// genuine ErrActorNotAuthorized denial -- ordinary-reply or plan-verdict --
-// an already-open turn) is ok=true: a deliberate business decision or an
-// accepted, already-documented scope limitation (see each branch's own
-// comment), never a failure a retry could plausibly change.
+// agentActivity, a stop signal -- now with an honest reply, L7 -- an
+// unknown/still-claiming agent session, a genuine ErrActorNotAuthorized
+// denial -- ordinary-reply or plan-verdict -- an already-open turn -- now
+// with an honest busy reply, M6, instead of a silent drop) is ok=true: a
+// deliberate business decision or an accepted, already-documented scope
+// limitation (see each branch's own comment), never a failure a retry
+// could plausibly change.
 func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWebhookPayload) bool {
 	logger := platform.Logger(ctx)
 
@@ -513,13 +535,16 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	}
 
 	if payload.AgentActivity.Signal != nil && *payload.AgentActivity.Signal == stopSignal {
-		// Scope decision (Step 34): no session/turn STOP mechanism exists
-		// in internal/app/sessionactor yet (confirmed during this Step's
-		// investigation -- no Stop command type). Wiring a real stop is
-		// out of this Step's own scope; this is logged clearly rather than
-		// silently swallowed or forced through a mechanism that doesn't
-		// exist.
-		logger.Warn("linear: received stop signal, no stop mechanism wired yet (out of scope for this Step)", "agent_session_id", payload.AgentSession.ID)
+		// Scope decision (Step 34, narrowed further by the L7 audit fix
+		// below): no session/turn STOP mechanism exists in
+		// internal/app/sessionactor yet (confirmed during this Step's
+		// investigation -- no Stop command type). Wiring a real stop
+		// remains out of scope (separate, later work) -- but PREVIOUSLY
+		// this was only ever logged, with no reply telling the user `stop`
+		// isn't supported at all. L7 audit fix: post a minimal, honest
+		// reply instead of silently discarding the signal.
+		logger.Info("linear: received stop signal, replying that cancellation isn't supported yet", "agent_session_id", payload.AgentSession.ID)
+		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, stopNotSupportedText)
 		return true
 	}
 
@@ -598,58 +623,59 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		return false
 	}
 
-	existingTurns, err := deps.Turns.ListForSession(ctx, sessionID)
-	if err != nil {
-		logger.Error("linear: list turns failed", "error", err, "session_id", sessionID.String())
+	// Audit-fix batch update (L2/H7/L12/M6/L20): this ordinary-reply
+	// insert used to call deps.Turns.Create DIRECTLY on the raw pool, with
+	// NO transaction and NO lock at all -- a genuine check-then-act race
+	// (L2): a concurrent turn-creation request, or a plan-mode
+	// implementation-turn insert, could race the hasOpenTurn check this
+	// path used to do just above the insert. It now goes through the SAME
+	// shared httpapi.CreateTurnCore core (turn.go) every other
+	// turn-creation call site in this codebase uses, with
+	// httpapi.DropIfOpen as its own policy -- the core's own
+	// GetActorEpochForUpdate row lock (held BEFORE its own hasOpenTurn-
+	// equivalent check) is what actually closes L2, not a change to the
+	// business rule itself: an already-open session still drops this
+	// reply exactly as before, just without the race window. This also
+	// closes H7 (the turn.create audit_log row is now written, with
+	// actorUserID attributed) and L12 (this package's own copy-pasted
+	// hasOpenTurn helper is gone entirely -- httpapi's own copy, already
+	// unexported there, is the only one left).
+	prompt := payload.AgentActivity.Content.Body
+	createdTurn, wasCreated, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, sessionID, prompt, nil, false, actorUserID, httpapi.DropIfOpen)
+	if cerr != nil {
+		logger.Error("linear: create turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionID.String())
 		return false
 	}
-	if hasOpenTurn(existingTurns) {
-		// Scope decision (Step 34): mirrors httpapi.CreateTurn's own 409
-		// precondition (§8.7, "exactly one processing per session"), but
-		// there is no HTTP caller here to return a 409 to -- so a prompt
-		// that arrives while a turn is already in flight is simply
-		// dropped (logged), rather than queued or forced in. A real queue
-		// (mirroring Linear's own "queued activities" concept) is a
-		// natural follow-up, not built here.
+	if !wasCreated {
+		// M6 audit fix: PREVIOUSLY this case was only ever logged, with NO
+		// visible response to the user at all -- worse than Slack's own
+		// false "I'll pick this up next" promise (which at least said
+		// something, even if untrue). Post an honest reply instead.
 		logger.Warn("linear: session already has an open turn, dropping prompted message", "session_id", sessionID.String())
+		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(busyReplyText, notice))
 		return true
 	}
 
-	prompt := payload.AgentActivity.Content.Body
-	if _, err := deps.Turns.Create(ctx, sqlcgen.CreateTurnParams{
-		SessionID: sessionID,
-		Status:    sqlcgen.TurnStatusPending,
-		Prompt:    &prompt,
-	}); err != nil {
-		logger.Error("linear: create turn failed", "error", err, "session_id", sessionID.String())
-		return false
-	}
+	// L20 audit fix: this path previously logged session creation
+	// (handleCreated above) but NOT a reply turn -- an on-call engineer
+	// investigating a bad push from a Linear-originated reply turn had no
+	// session_id/turn_id to correlate against. Mirrors github's own
+	// identical successful-mention log line shape (coalesce.go).
+	logger.Info("linear: added turn", "session_id", sessionID, "turn_id", createdTurn.ID)
+
 	// turns carries no per-row actor column at all (migrations/
 	// 000005_turns.up.sql) -- unlike sessions.created_by/plans.decided_by,
 	// there is nothing further to attribute actorUserID onto for this
 	// ordinary-reply path (mirrors internal/adapters/inbound/slack's own
-	// addTurn, which has never taken an actor parameter either). notice
-	// (if any) still needs to reach the user, though -- posted as its own
-	// best-effort activity, since (unlike the plan-verdict branch above)
-	// there is no other outbound activity this path already sends to
-	// append it to.
+	// addTurn, which attributes actorUserID onto the SAME audit_log row
+	// only, for the identical reason). notice (if any) still needs to
+	// reach the user, though -- posted as its own best-effort activity,
+	// since (unlike the plan-verdict branch above) there is no other
+	// outbound activity this path already sends to append it to.
+	// httpapi.CreateTurnCore itself already fired the SAME
+	// GetOrSpawn+EnsureDispatched post-commit dispatch sequencing this
+	// function used to do here directly (turn.go's own createTurnLocked).
 	deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, notice)
-
-	// GetOrSpawn/Send below are dispatch-trigger side effects on a turn
-	// that has ALREADY been durably created and persisted above -- a
-	// failure here (like the in-thread ack/notice posts elsewhere in this
-	// package) is logged only, never treated as a release-worthy failure:
-	// the turn itself is safely committed regardless, and hasOpenTurn's
-	// own guard above means a retry would find this exact turn already
-	// open and simply drop again, never double-create.
-	actor, err := deps.Registry.GetOrSpawn(ctx, sessionID)
-	if err != nil {
-		logger.Warn("linear: GetOrSpawn after turn create failed", "error", err)
-		return true
-	}
-	if err := actor.Send(ctx, sessionactor.EnsureDispatched{}); err != nil {
-		logger.Warn("linear: send EnsureDispatched after turn create failed", "error", err)
-	}
 	return true
 }
 
@@ -803,18 +829,30 @@ func (deps Deps) postPlanOutcomeActivity(ctx context.Context, logger *slog.Logge
 	}
 }
 
-// hasOpenTurn reports whether ANY turn in turns is non-terminal --
-// mirrors internal/adapters/inbound/httpapi's own identical helper
-// (CreateTurn's own precondition, turn.go) exactly; not reachable from
-// this package since it is unexported there, so duplicated here rather
-// than exported solely for this one call site.
-func hasOpenTurn(turns []sqlcgen.Turn) bool {
-	for _, t := range turns {
-		if !turn.IsTerminal(turn.State(t.Status)) {
-			return true
-		}
+// postThoughtNotice posts body as a best-effort `thought` Agent Activity --
+// used by handlePrompted's own M6/L7 audit-fix reply paths (the busy-drop
+// notice and the stop-not-supported notice), which -- unlike
+// postIdentityNotice (identity.go) -- must ALWAYS post something, never
+// no-op on an empty string (there is no "nothing to say" case for either
+// of these two messages). Mirrors postAcknowledgment's/postIdentityNotice's
+// own identical lookup+decrypt+bounded-call shape exactly (this package's
+// own established "small, documented duplication over a forced shared
+// abstraction" precedent -- see identity.go's own decryptLinearAccessToken
+// doc comment).
+func (deps Deps) postThoughtNotice(ctx context.Context, organizationID, agentSessionID, body string) {
+	logger := platform.Logger(ctx)
+
+	accessToken, ok := deps.decryptLinearAccessToken(ctx, logger, organizationID)
+	if !ok {
+		return
 	}
-	return false
+
+	activityCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.LinearOutboundActivityTimeout)
+	defer cancel()
+
+	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, accessToken, agentSessionID, body); err != nil {
+		logger.Warn("linear: post thought notice activity failed", "error", err, "agent_session_id", agentSessionID)
+	}
 }
 
 // postAcknowledgment posts the single, minimal `thought` Agent Activity

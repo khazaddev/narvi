@@ -51,9 +51,14 @@ const slackWebhookSignatureVersion = "v0"
 // this Step's own "smallest possible direct call" scoping decision
 // (doc.go).
 const (
-	ackNewSessionText    = "On it — starting work on this now."
-	ackReplyText         = "Got it — continuing work on this thread."
-	ackBusyText          = "Still working on the previous message in this thread — I'll pick this up next."
+	ackNewSessionText = "On it — starting work on this now."
+	ackReplyText      = "Got it — continuing work on this thread."
+	// ackBusyText's wording is the M6 audit fix: the PREVIOUS text ("...
+	// I'll pick this up next.") promised a retry/queue that never
+	// actually happened -- a turn dropped for an already-busy session was
+	// simply discarded, never picked up later. This wording is honest
+	// about that instead.
+	ackBusyText          = "Still working on the previous message in this thread — this one wasn't queued, please try again once it's done."
 	ackNotConfiguredText = "Slack ingress isn't configured with a default repo yet, so I can't start new work from a mention. A reply on an existing thread still works."
 
 	// ackNotAuthorizedText is Step 39's own addition ("identities + full
@@ -342,10 +347,22 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		return true
 	}
 
-	created, err := addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Registry, res.SessionID, prompt)
+	createdTurn, created, err := addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, res.SessionID, prompt, actorUserID)
 	if err != nil {
 		logger.Error("slack: add turn failed", "error", err)
 		return false
+	}
+
+	// L20 audit fix: this package previously logged NOTHING on a
+	// successful turn add at all -- an on-call engineer investigating a
+	// bad push from a Slack-originated turn had no session_id/turn_id to
+	// correlate against in the logs. Mirrors github's own identical
+	// successful-mention log line shape (coalesce.go). The busy/dropped
+	// case (M6) gets its own, distinct log line instead of silence.
+	if created {
+		logger.Info("slack: added turn", "session_id", res.SessionID, "turn_id", createdTurn.ID)
+	} else {
+		logger.Warn("slack: session already has an open turn, dropping message", "session_id", res.SessionID)
 	}
 
 	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE, on

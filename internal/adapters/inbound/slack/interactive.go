@@ -692,7 +692,7 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 		return
 	}
 
-	if _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, sessionID, feedback, nil, true, actorUserID); cerr != nil {
+	if _, _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, sessionID, feedback, nil, true, actorUserID, httpapi.RejectIfOpen); cerr != nil {
 		logger.Error("slack: interactivity: create request-changes turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionIDStr)
 	}
 	w.WriteHeader(http.StatusOK)
