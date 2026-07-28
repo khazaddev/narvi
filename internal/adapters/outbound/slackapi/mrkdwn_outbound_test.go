@@ -187,6 +187,24 @@ func TestMarkdownToMrkdwn_Conversions(t *testing.T) {
 			in:   "[see here](../docs/readme.md)",
 			want: "see here (../docs/readme.md)",
 		},
+
+		// --- Audit-fix batch: link-target pipe smuggling (MEDIUM finding) ---
+		// A link target containing a raw "|" must never be linkified, even
+		// when it otherwise starts with an allowed scheme -- Slack's own
+		// "<target|label>" grammar splits on only the FIRST "|" inside the
+		// tag, so a target's own embedded "|" would smuggle the rest of the
+		// target (and anything after it) into the rendered, visible label.
+
+		{
+			name: "confirmed reproduction: a link target containing a raw pipe must fall back to safe plain text, never producing a tag with more than one | inside it",
+			in:   "[Click here](https://good.example.com/path|!channel)",
+			want: "Click here (https://good.example.com/path|!channel)",
+		},
+		{
+			name: "an otherwise-valid https target containing a raw pipe in a query string also falls back to safe plain text",
+			in:   "[docs](https://example.com/x?a=1|b=2)",
+			want: "docs (https://example.com/x?a=1|b=2)",
+		},
 	}
 
 	for _, tc := range tests {

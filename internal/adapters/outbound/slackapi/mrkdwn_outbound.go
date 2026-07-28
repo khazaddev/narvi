@@ -118,6 +118,30 @@
 // Note this is deliberately NOT an attempt to allow Slack's own
 // special-mention forms through on purpose -- generating THOSE
 // intentionally is not this converter's job either.
+//
+// # Link-target pipe smuggling (audit-fix batch: target-delimiter finding)
+//
+// The scheme allowlist above stops a link target from becoming a live
+// Slack special mention, but it never checked whether the target ITSELF
+// contains a literal "|" character. Slack's own "<target|label>" tag
+// grammar splits on only the FIRST "|" it finds inside the tag -- so a
+// target like "https://good.example.com/path|!channel" would produce
+// "<https://good.example.com/path|!channel|Click here>", which Slack
+// renders with the REAL link truncated to just
+// "https://good.example.com/path" and the visible clickable text becoming
+// "!channel|Click here" -- attacker/LLM-controlled content spilling into
+// the display label. This can never mint a LIVE special mention this way
+// (the tag's type is fixed by the first character after "<", which is
+// always "h" or "m" for an allowed scheme here, never "!"/"@"/"#"), but it
+// is still a genuine target-shaped smuggling gap via the delimiter itself.
+//
+// isAllowedLinkTarget therefore also rejects any target containing a raw
+// "|", falling back to the exact same safe plain-text "label (target)"
+// rendering already used for any other disallowed target -- as if the
+// scheme itself simply hadn't matched. A URL containing a raw, unencoded
+// "|" is not a normal well-formed URL to begin with, so refusing to
+// linkify it is both safe and unsurprising; no attempt is made to escape
+// or percent-encode the pipe instead.
 
 package slackapi
 
@@ -143,10 +167,21 @@ var allowedLinkSchemes = []string{"http://", "https://", "mailto:"}
 
 // isAllowedLinkTarget reports whether target is a genuine, recognizable
 // URL this converter is willing to turn into a live Slack <target|label>
-// link tag (see allowedLinkSchemes above). The check is case-insensitive
-// since URL schemes are; target itself is returned/used verbatim
-// (unmodified case) by the caller regardless of this check's outcome.
+// link tag: it must both (a) start with one of allowedLinkSchemes above,
+// and (b) not itself contain a literal "|" character -- see this file's
+// own top doc comment's "Link-target pipe smuggling" section for why (b)
+// is checked here, alongside the scheme check, rather than elsewhere. The
+// scheme check is case-insensitive since URL schemes are; target itself is
+// returned/used verbatim (unmodified case) by the caller regardless of
+// this check's outcome.
 func isAllowedLinkTarget(target string) bool {
+	if strings.Contains(target, "|") {
+		// A target containing its own raw "|" would smuggle content past
+		// Slack's own "<target|label>" delimiter split even though it
+		// can't mint a live special mention this way -- reject it exactly
+		// like an unrecognized scheme, falling back to safe plain text.
+		return false
+	}
 	lower := strings.ToLower(target)
 	for _, scheme := range allowedLinkSchemes {
 		if strings.HasPrefix(lower, scheme) {
