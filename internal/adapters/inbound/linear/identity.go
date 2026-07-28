@@ -191,29 +191,44 @@ func appendNotice(base, notice string) string {
 // about ITS OWN behavior changed.
 
 // ErrActorNotAuthorized is authorizeSessionAction's own sentinel for a
-// final, non-retryable denial -- either "a resolved, linked actor's role
-// genuinely failed domain/authz.Authorize", OR (audit-fix batch update,
-// "block unlinked actor state changes") "actorUserID never resolved to a
-// linked account at all". Originally added for the first case only (MEDIUM
-// audit fix, "authorizeSessionAction conflates a genuine backend error with
-// a real authorization denial"), mirroring github's own identical
-// ErrActorNotAuthorized (coalesce.go) -- reused rather than duplicated for
-// the second case, since every caller's existing errors.Is(err,
-// ErrActorNotAuthorized) handling already does exactly the right thing for
-// both: post the honest denial message, do not release the webhook claim,
-// do not treat it as retryable. Deliberately DISTINCT from any other error
-// authorizeSessionAction returns: a caller checks for this one specifically
-// and treats it as a final, non-retryable denial (skip without releasing
-// the webhook-delivery claim -- redelivering the identical event would just
-// render the same denial again), while any OTHER error is a genuine backend
-// failure encountered WHILE checking authorization (e.g. deps.Sessions.Get
-// hitting a dropped connection), which the caller instead routes into the
-// SAME release-the-claim-and-retry path this batch's H2 fix already wired
-// up for every other post-claim failure -- BEFORE the MEDIUM fix,
-// authorizeSessionAction's own bare bool made the two indistinguishable, so
-// a one-off DB blip was silently treated as a deliberate "skip, no release"
-// business decision, dropping the user's legitimate message forever with no
-// chance of redelivery ever retrying it.
+// final, non-retryable denial -- "a resolved, linked actor's role
+// genuinely failed domain/authz.Authorize" (MEDIUM audit fix,
+// "authorizeSessionAction conflates a genuine backend error with a real
+// authorization denial"), mirroring github's own identical
+// ErrActorNotAuthorized (coalesce.go). Deliberately DISTINCT from any other
+// error authorizeSessionAction returns: a caller checks for this one
+// specifically and treats it as a final, non-retryable denial (skip
+// without releasing the webhook-delivery claim -- redelivering the
+// identical event would just render the same denial again), while any
+// OTHER error is a genuine backend failure encountered WHILE checking
+// authorization (e.g. deps.Sessions.Get hitting a dropped connection),
+// which the caller instead routes into the SAME release-the-claim-and-
+// retry path this batch's H2 fix already wired up for every other
+// post-claim failure -- BEFORE the MEDIUM fix, authorizeSessionAction's own
+// bare bool made the two indistinguishable, so a one-off DB blip was
+// silently treated as a deliberate "skip, no release" business decision,
+// dropping the user's legitimate message forever with no chance of
+// redelivery ever retrying it.
+//
+// Audit-fix batch update ("block unlinked actor state changes", SECOND
+// review pass): this sentinel USED to also cover "actorUserID never
+// resolved to a linked account at all" -- collapsed into this same value
+// because every existing caller's own errors.Is(err, ErrActorNotAuthorized)
+// handling already did the right generic thing for both cases. A confirmed
+// 3-lens adversarial review of that batch checked whether this package has
+// the SAME button/message-stripping regression Slack's own interactive.go
+// does for that collapse (see slack/identity.go's own identical doc
+// comment for the full incident) -- it does NOT: handleCreated's own
+// denial branch (webhook.go) posts a NEW `thought` Agent Activity
+// (postAcknowledgment) and handlePlanVerdict's own denial branch posts a
+// NEW `response` Agent Activity (postPlanOutcomeActivity); neither ever
+// calls anything resembling Slack's own destructive chat.update (there is
+// no Linear API call this package uses that mutates/replaces an existing
+// Activity at all -- internal/adapters/outbound/linearapi only ever
+// CREATES one). So collapsing "not yet linked" into ErrActorNotAuthorized
+// here has no equivalent hidden side effect: kept as a single sentinel,
+// deliberately NOT split into a second one the way Slack's was, since there
+// is nothing here for a second sentinel to protect against.
 var ErrActorNotAuthorized = errors.New("linear: actor not authorized")
 
 // authorizeSessionAction renders the exact §13.3 verdict domain/authz.
