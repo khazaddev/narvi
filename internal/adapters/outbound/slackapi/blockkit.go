@@ -170,6 +170,22 @@ const maxSectionTextRunes = 2800
 // case, plus a realistic link-straddling-the-cutoff case.
 const maxRawTextRunes = 550
 
+// init asserts the sizing math documented on maxRawTextRunes above still
+// holds -- turning that doc comment's arithmetic into a real, enforced
+// invariant (rather than one only a human re-checks by eye) so a future
+// change to either constant that breaks the guarantee fails loudly at
+// package load instead of silently shipping a truncation that overruns
+// Slack's own real section-text limit.
+func init() {
+	const worstCaseConvertedRunes = 5*maxRawTextRunes + 15
+	if worstCaseConvertedRunes > maxSectionTextRunes {
+		panic(fmt.Sprintf(
+			"slackapi: maxRawTextRunes=%d/maxSectionTextRunes=%d invariant violated: "+
+				"worst-case converted text is %d runes, want <= %d",
+			maxRawTextRunes, maxSectionTextRunes, worstCaseConvertedRunes, maxSectionTextRunes))
+	}
+}
+
 // truncateForSection bounds RAW markdown text (BEFORE MarkdownToMrkdwn
 // conversion -- see maxRawTextRunes's own doc comment above for why
 // truncation happens here, pre-conversion, rather than on the converted
