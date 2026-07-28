@@ -1,9 +1,11 @@
 // This file (retry_test.go) proves the M19 audit fix's own distinction for
 // FetchEmailWithRetry (retry.go): every retry attempt genuinely failing
-// with a real error (platform.Retry exhausts every attempt) must log a
-// Warn line AND increment the new identity_email_fetch_failures_total
-// counter -- while a fetch that SUCCEEDS but reports a genuine "no email on
-// file" outcome (ok=false, err=nil) must trigger NEITHER, proving the two
+// TRANSIENTLY (platform.Retry exhausts every attempt) must log a Warn line
+// AND increment the new identity_email_fetch_failures_total counter --
+// while a fetch that SUCCEEDS but reports a genuine "no email on file"
+// outcome (ok=false, err=nil), OR one where the fetch closure positively
+// identifies the failure as PERMANENT (platform.Permanent, e.g. Slack's own
+// definitive user-not-found), must trigger NEITHER -- proving all three
 // cases this finding cares about are actually told apart in the real code,
 // not just superficially satisfied (e.g. by logging/counting on every
 // ok=false return regardless of why).
@@ -156,6 +158,54 @@ func TestFetchEmailWithRetry_AllAttemptsFail_LogsWarnAndIncrementsCounter(t *tes
 	after := readEmailFetchFailureCount(ctx, t, provider)
 	if delta := after - before; delta != 1 {
 		t.Errorf("identity_email_fetch_failures_total delta = %d, want 1", delta)
+	}
+}
+
+// TestFetchEmailWithRetry_PermanentError_LogsNothingAndDoesNotIncrementCounter
+// proves the follow-up audit fix's own "case 3" (the fetch closure
+// positively identifies the failure as PERMANENT via platform.Permanent --
+// e.g. slackapi.ErrSlackUserNotFound for a Slack user id that no longer
+// resolves): a closure that returns platform.Permanent(someErr) on its
+// FIRST call must NOT trigger the Warn log or the counter, and must stop
+// after exactly one call (platform.Retry's own "stop immediately on a
+// Permanent error" behavior) -- distinct from
+// TestFetchEmailWithRetry_AllAttemptsFail_LogsWarnAndIncrementsCounter
+// above, which proves a genuine TRANSIENT error that exhausts every retry
+// attempt SHOULD still trigger both.
+func TestFetchEmailWithRetry_PermanentError_LogsNothingAndDoesNotIncrementCounter(t *testing.T) {
+	ctx := context.Background()
+	const provider = sqlcgen.IdentityProviderSlack
+	to := fastRetryTimeouts()
+
+	before := readEmailFetchFailureCount(ctx, t, provider)
+
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	wantErr := errors.New("slackapi: user_not_found")
+	callCount := 0
+	email, ok := identitylink.FetchEmailWithRetry(ctx, logger, to, provider, func(context.Context) (string, bool, error) {
+		callCount++
+		return "", false, platform.Permanent(wantErr)
+	})
+
+	if ok {
+		t.Errorf("ok = true, want false (a permanent error never resolves to a real email)")
+	}
+	if email != "" {
+		t.Errorf("email = %q, want empty", email)
+	}
+	if callCount != 1 {
+		t.Errorf("call count = %d, want 1 (a Permanent error must stop retrying immediately)", callCount)
+	}
+
+	if logOut := logBuf.String(); logOut != "" {
+		t.Errorf("expected NO log output for a Permanent error (normal, expected outcome, e.g. user-not-found), got: %s", logOut)
+	}
+
+	after := readEmailFetchFailureCount(ctx, t, provider)
+	if delta := after - before; delta != 0 {
+		t.Errorf("identity_email_fetch_failures_total delta = %d, want 0 (a Permanent error is not a broken fetch)", delta)
 	}
 }
 

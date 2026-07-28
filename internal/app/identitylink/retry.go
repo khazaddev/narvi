@@ -28,13 +28,25 @@ const meterName = "narvi/identitylink"
 // logging and ZERO metrics whenever platform.Retry exhausted every retry
 // attempt with a genuine error -- indistinguishable, from the outside,
 // from the provider simply having no email on file for this user. This
-// counter records ONLY the former ("the fetch itself is broken", an
-// operationally actionable signal) -- see FetchEmailWithRetry's own doc
+// counter records ONLY the case where every attempt genuinely failed
+// TRANSIENTLY and attempts were exhausted ("the fetch itself is broken",
+// an operationally actionable signal) -- see FetchEmailWithRetry's own doc
 // comment for the exact line this distinction is drawn on. Labeled by
 // provider (attribute "provider", sqlcgen.IdentityProvider's own string
 // value) so a broken Slack fetch and a broken Linear fetch are
 // distinguishable in the metric itself, since both providers share this
 // one package's own FetchEmailWithRetry.
+//
+// Audit fix ("the Warn log/counter fire on a normal, expected 'user not
+// found' outcome, diluting the 'broken fetch' signal"): a
+// platform.Permanent-wrapped error (e.g. slackapi.ErrSlackUserNotFound,
+// wrapped by internal/adapters/inbound/slack/identity.go's own
+// resolveSlackActor closure for a Slack user id that no longer resolves --
+// a deactivated/deleted account, or an old/redelivered webhook event
+// referencing a user who's since left the workspace) is a normal, expected,
+// NON-actionable outcome -- routine workspace member churn, not evidence
+// the profile-email fetch API itself is broken. FetchEmailWithRetry below
+// now excludes this case from both the Warn log and this counter.
 //
 // Constructed once, as a package-level var, rather than through a
 // NewBuilder-style fallible constructor (outboxworker.NewBuilder/
@@ -64,7 +76,7 @@ var emailFetchFailures = newEmailFetchFailuresCounter()
 func newEmailFetchFailuresCounter() metric.Int64Counter {
 	counter, err := otel.Meter(meterName).Int64Counter(
 		"identity_email_fetch_failures_total",
-		metric.WithDescription("Count of FetchEmailWithRetry calls where every retry attempt genuinely failed with a real error (platform.Retry exhausted every attempt, or hit a Permanent error) -- a broken provider profile-email API (M19 audit fix). Deliberately excludes the provider simply reporting no email on file for a user, a normal, non-actionable outcome. Labeled by provider."),
+		metric.WithDescription("Count of FetchEmailWithRetry calls where every retry attempt genuinely failed transiently and attempts were exhausted -- a broken provider profile-email API (M19 audit fix). Deliberately excludes both (1) the provider simply reporting no email on file for a user, and (2) a platform.Permanent error (e.g. Slack's definitive user-not-found) -- both normal, non-actionable outcomes, never evidence the fetch API itself is broken. Labeled by provider."),
 		metric.WithUnit("{fetch}"),
 	)
 	if err != nil {
@@ -111,14 +123,16 @@ func newEmailFetchFailuresCounter() metric.Int64Counter {
 // M19 audit fix ("a permanently broken provider email-fetch API disables
 // auto-link platform-wide in total silence"): ok=false's two cases above
 // are IDENTICAL for Resolve's own purposes, by design, but must be told
-// apart for OBSERVABILITY:
+// apart for OBSERVABILITY -- and, per the follow-up audit fix below, a
+// THIRD case must also be told apart from the first:
 //
-//  1. Every retry attempt failed with a genuine error (platform.Retry
-//     returns non-nil, below) -- "the fetch itself is broken". Logged at
-//     Warn (provider + the real underlying error) and counted by
-//     emailFetchFailures above -- an operationally actionable signal a
-//     permanently broken Slack/Linear profile-email API would otherwise
-//     disable auto-linking platform-wide with zero trace anywhere.
+//  1. Every retry attempt failed with a genuine, TRANSIENT error and
+//     platform.Retry exhausted every attempt (below) -- "the fetch itself
+//     is broken". Logged at Warn (provider + the real underlying error)
+//     and counted by emailFetchFailures above -- an operationally
+//     actionable signal a permanently broken Slack/Linear profile-email
+//     API would otherwise disable auto-linking platform-wide with zero
+//     trace anywhere.
 //  2. A fetch attempt SUCCEEDED (platform.Retry returns nil) but the
 //     provider's own API genuinely reported no email for this user
 //     (fetch's own second return value, ok, is false) -- "the user simply
@@ -127,13 +141,37 @@ func newEmailFetchFailuresCounter() metric.Int64Counter {
 //     entire point of this distinction, burying the one actionable signal
 //     (case 1) under routine noise from case 2, which is expected to be
 //     common and is not, by itself, ever a sign of anything broken.
+//  3. Audit fix ("the Warn log/counter fire on a normal, expected 'user
+//     not found' outcome"): the fetch closure itself positively identified
+//     the failure as PERMANENT (platform.Permanent, e.g.
+//     slackapi.ErrSlackUserNotFound for a Slack user id that no longer
+//     resolves -- a deactivated/deleted account, or an old/redelivered
+//     webhook event referencing a user who's since left the workspace).
+//     platform.Retry stops immediately on this and returns the WRAPPED
+//     error unchanged (see that function's own doc comment) -- from the
+//     OUTSIDE this is indistinguishable from case 1 by error value alone,
+//     so this function checks platform.IsPermanent on the error the fetch
+//     closure itself returned, BEFORE it ever reaches platform.Retry's own
+//     unwrapping (platform.IsPermanent's own doc comment explains why it
+//     must be checked there and not on Retry's own return value). Routine
+//     workspace member churn, not evidence the fetch API is broken --
+//     deliberately NEITHER logged NOR counted, exactly like case 2.
 func FetchEmailWithRetry(ctx context.Context, logger *slog.Logger, timeouts platform.Timeouts, provider sqlcgen.IdentityProvider, fetch func(ctx context.Context) (email string, ok bool, err error)) (email string, ok bool) {
+	permanent := false
 	err := platform.Retry(ctx, timeouts.IdentityEmailFetchMaxAttempts, timeouts.IdentityEmailFetchRetryBaseDelay, timeouts.IdentityEmailFetchRetryMaxDelay, func() error {
 		attemptCtx, cancel := context.WithTimeout(ctx, timeouts.IdentityEmailFetchTimeout)
 		defer cancel()
 
 		fetchedEmail, fetchedOK, fetchErr := fetch(attemptCtx)
 		if fetchErr != nil {
+			// Captured HERE, on the fetch closure's own returned error,
+			// before platform.Retry's own internal unwrapping strips the
+			// Permanent marker off the value IT hands back below (see
+			// platform.IsPermanent's own doc comment) -- this is the only
+			// point in this function where that marker is still visible.
+			if platform.IsPermanent(fetchErr) {
+				permanent = true
+			}
 			return fetchErr
 		}
 		email, ok = fetchedEmail, fetchedOK
@@ -145,10 +183,15 @@ func FetchEmailWithRetry(ctx context.Context, logger *slog.Logger, timeouts plat
 		// means this is NOT "confirmed no email", just "unknown right
 		// now"; the caller (Resolve) treats ok=false identically either
 		// way, never guessing and never writing anything. M19 audit fix:
-		// THIS case -- a genuine error, not a successful "no email"
-		// report -- is the one this package now surfaces to an operator.
-		logger.Warn("identitylink: profile-email fetch exhausted every retry attempt", "provider", string(provider), "error", err)
-		emailFetchFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", string(provider))))
+		// a genuine, TRANSIENT error that exhausted every retry attempt is
+		// the one case this package surfaces to an operator -- the
+		// follow-up audit fix above excludes a Permanent error (case 3)
+		// from this same signal, since it is a normal, expected,
+		// non-actionable outcome, not evidence of a broken fetch API.
+		if !permanent {
+			logger.Warn("identitylink: profile-email fetch exhausted every retry attempt", "provider", string(provider), "error", err)
+			emailFetchFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", string(provider))))
+		}
 		return "", false
 	}
 	return email, ok
