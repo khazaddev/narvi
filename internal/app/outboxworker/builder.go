@@ -55,10 +55,11 @@ type Builder struct {
 // OutboxPumpInterval/OutboxClaimDuration/OutboxDeliveryTimeout/backoff
 // config, consulted by Run/PumpOnce).
 //
-// The outbox_lag gauge and outbox_dead_letter counter are constructed
-// exactly once, here, at construction time -- not per-tick, not per-row --
-// mirroring app/imagebuild.NewBuilder's own image_build_failure_streak
-// precedent exactly.
+// The outbox_lag gauge, the outbox_due_backlog gauge, and the
+// outbox_dead_letter counter are constructed exactly once, here, at
+// construction time -- not per-tick, not per-row -- mirroring
+// app/imagebuild.NewBuilder's own image_build_failure_streak precedent
+// exactly.
 func NewBuilder(store *postgres.OutboxStore, pool *pgxpool.Pool, notifiers map[ports.NotificationKind]ports.Notifier, timeouts platform.Timeouts) (*Builder, error) {
 	meter := otel.Meter(meterName)
 
