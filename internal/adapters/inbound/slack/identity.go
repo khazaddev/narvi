@@ -68,7 +68,7 @@ func resolveSlackActor(ctx context.Context, logger *slog.Logger, slackClient *sl
 		return pgtype.UUID{}, ""
 	}
 
-	email, ok := identitylink.FetchEmailWithRetry(ctx, timeouts, func(attemptCtx context.Context) (string, bool, error) {
+	email, ok := identitylink.FetchEmailWithRetry(ctx, logger, timeouts, sqlcgen.IdentityProviderSlack, func(attemptCtx context.Context) (string, bool, error) {
 		e, o, err := slackClient.GetUserEmail(attemptCtx, slackUserID)
 		if err != nil {
 			if errors.Is(err, slackapi.ErrSlackUserNotFound) {

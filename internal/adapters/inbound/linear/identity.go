@@ -61,7 +61,7 @@ func (deps Deps) resolveActor(ctx context.Context, logger *slog.Logger, organiza
 		return pgtype.UUID{}, ""
 	}
 
-	email, emailOK := identitylink.FetchEmailWithRetry(ctx, deps.Timeouts, func(attemptCtx context.Context) (string, bool, error) {
+	email, emailOK := identitylink.FetchEmailWithRetry(ctx, logger, deps.Timeouts, sqlcgen.IdentityProviderLinear, func(attemptCtx context.Context) (string, bool, error) {
 		e, err := deps.LinearClient.GetUserEmail(attemptCtx, accessToken, externalID)
 		if err != nil {
 			return "", false, err
