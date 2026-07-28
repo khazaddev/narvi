@@ -15,12 +15,12 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
 
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -268,27 +268,36 @@ func TestCreateTurnCore_RejectIfOpen_ConcurrentRequests_OnlyOneSucceeds(t *testi
 	session := rig.newFixtureSession(t, ctx)
 
 	const n = 8
-	var succeeded, conflicted int
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
-			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("relaunch %d", i), nil, false, pgtype.UUID{}, RejectIfOpen)
-			mu.Lock()
-			defer mu.Unlock()
-			switch {
-			case cerr == nil && wasCreated:
-				succeeded++
-			case cerr != nil && cerr.Status == http.StatusConflict:
-				conflicted++
-			default:
-				t.Errorf("goroutine %d: unexpected result wasCreated=%v cerr=%+v", i, wasCreated, cerr)
-			}
-		}(i)
+	type result struct {
+		wasCreated bool
+		cerr       *CreateTurnError
 	}
-	wg.Wait()
+	results := make(chan result, n)
+	var eg errgroup.Group
+	for i := 0; i < n; i++ {
+		i := i
+		eg.Go(func() error {
+			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("relaunch %d", i), nil, false, pgtype.UUID{}, RejectIfOpen)
+			results <- result{wasCreated: wasCreated, cerr: cerr}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("errgroup.Wait: %v", err)
+	}
+	close(results)
+
+	var succeeded, conflicted int
+	for r := range results {
+		switch {
+		case r.cerr == nil && r.wasCreated:
+			succeeded++
+		case r.cerr != nil && r.cerr.Status == http.StatusConflict:
+			conflicted++
+		default:
+			t.Errorf("unexpected result wasCreated=%v cerr=%+v", r.wasCreated, r.cerr)
+		}
+	}
 
 	if succeeded != 1 {
 		t.Errorf("succeeded = %d, want exactly 1", succeeded)
@@ -321,28 +330,37 @@ func TestCreateTurnCore_DropIfOpen_ConcurrentRequests_OnlyOneSucceeds(t *testing
 	session := rig.newFixtureSession(t, ctx)
 
 	const n = 8
-	var succeeded, dropped int
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
-			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("reply %d", i), nil, false, pgtype.UUID{}, DropIfOpen)
-			mu.Lock()
-			defer mu.Unlock()
-			if cerr != nil {
-				t.Errorf("goroutine %d: cerr = %+v, want nil", i, cerr)
-				return
-			}
-			if wasCreated {
-				succeeded++
-			} else {
-				dropped++
-			}
-		}(i)
+	type result struct {
+		wasCreated bool
+		cerr       *CreateTurnError
 	}
-	wg.Wait()
+	results := make(chan result, n)
+	var eg errgroup.Group
+	for i := 0; i < n; i++ {
+		i := i
+		eg.Go(func() error {
+			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("reply %d", i), nil, false, pgtype.UUID{}, DropIfOpen)
+			results <- result{wasCreated: wasCreated, cerr: cerr}
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("errgroup.Wait: %v", err)
+	}
+	close(results)
+
+	var succeeded, dropped int
+	for r := range results {
+		if r.cerr != nil {
+			t.Errorf("cerr = %+v, want nil", r.cerr)
+			continue
+		}
+		if r.wasCreated {
+			succeeded++
+		} else {
+			dropped++
+		}
+	}
 
 	if succeeded != 1 {
 		t.Errorf("succeeded = %d, want exactly 1", succeeded)
@@ -376,24 +394,26 @@ func TestCreateTurnCore_AlwaysQueue_ConcurrentRequests_AllSucceed(t *testing.T) 
 
 	const n = 8
 	ids := make([]pgtype.UUID, n)
-	var wg sync.WaitGroup
-	wg.Add(n)
+	var eg errgroup.Group
 	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
+		i := i
+		eg.Go(func() error {
 			created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("mention %d", i), nil, false, pgtype.UUID{}, AlwaysQueue)
 			if cerr != nil {
 				t.Errorf("goroutine %d: cerr = %+v, want nil", i, cerr)
-				return
+				return nil
 			}
 			if !wasCreated {
 				t.Errorf("goroutine %d: wasCreated = false, want true (AlwaysQueue never declines)", i)
-				return
+				return nil
 			}
 			ids[i] = created.ID
-		}(i)
+			return nil
+		})
 	}
-	wg.Wait()
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("errgroup.Wait: %v", err)
+	}
 
 	seen := make(map[string]bool, n)
 	for i, id := range ids {

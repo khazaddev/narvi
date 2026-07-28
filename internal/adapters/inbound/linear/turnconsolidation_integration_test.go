@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
@@ -117,11 +118,10 @@ func TestWebhookHandler_Prompted_ConcurrentReplies_L2_OnlyOneSucceeds(t *testing
 
 	const n = 8
 	statuses := make([]int, n)
-	var wg sync.WaitGroup
-	wg.Add(n)
+	var eg errgroup.Group
 	for i := 0; i < n; i++ {
-		go func(i int) {
-			defer wg.Done()
+		i := i
+		eg.Go(func() error {
 			// A distinct userId per goroutine -- keeps each reply's own
 			// identity resolution independent, so this test's own
 			// assertions stay about the turn-creation LOCK, never
@@ -130,9 +130,12 @@ func TestWebhookHandler_Prompted_ConcurrentReplies_L2_OnlyOneSucceeds(t *testing
 			body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, fmt.Sprintf("linear-l2-user-%d", i), fmt.Sprintf("reply %d", i))
 			r := postWebhook(t, handler, body, fmt.Sprintf("delivery-l2-prompted-%d", i))
 			statuses[i] = r.Code
-		}(i)
+			return nil
+		})
 	}
-	wg.Wait()
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("errgroup.Wait: %v", err)
+	}
 
 	for i, s := range statuses {
 		if s != http.StatusOK {
