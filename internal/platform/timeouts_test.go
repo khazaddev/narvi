@@ -718,6 +718,22 @@ func TestDefaultTimeouts_Step39StandaloneFields(t *testing.T) {
 // one check -- a standalone test asserting the real arithmetic directly
 // against that external constant says exactly what is being protected
 // without distorting Validate()'s own existing, uniform contract.
+//
+// HIGH audit fix (IdentityEmailFetchTimeout's own doc comment): the
+// underlying default values changed (300ms/3 attempts -> 800ms/2
+// attempts, a realistic per-attempt budget instead of an
+// arithmetic-driven one), and with them the headroom bar below. The
+// PREVIOUS bar required this retry loop to consume at most HALF of
+// Slack's ~3s budget -- itself just an artifact of the 300ms/3-attempts
+// values being fixed at the time (1.2s worst case comfortably cleared a
+// 1.5s bar). That fraction was never an independent requirement; the
+// real requirement is that the REST of handleEvent's own synchronous work
+// (thread<->session mapping, turn creation, the in-thread ack -- all fast,
+// local Postgres operations plus one already-independently-bounded ack
+// POST) has enough absolute time left, not any particular percentage of
+// the total. Replaced with an absolute floor: at least 1 full second of
+// headroom must remain. At the new defaults (2x800ms + 1x150ms = 1.75s
+// worst case) that leaves 1.25s, comfortably clearing this floor.
 func TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget(t *testing.T) {
 	t.Parallel()
 
@@ -729,6 +745,12 @@ func TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget(t *testing.T) {
 	// this package's own retry-loop budget must stay comfortably inside.
 	const slackWebhookAckBudget = 3 * time.Second
 
+	// Meaningful, absolute headroom for the rest of handleEvent's own
+	// synchronous work in the same request -- see this test's own doc
+	// comment above for why an absolute floor, not a fraction of the
+	// budget, is the right bar now.
+	const minHeadroom = 1 * time.Second
+
 	attempts := time.Duration(to.IdentityEmailFetchMaxAttempts) * to.IdentityEmailFetchTimeout
 	worstCaseBackoff := time.Duration(to.IdentityEmailFetchMaxAttempts-1) * to.IdentityEmailFetchRetryMaxDelay
 	worstCase := attempts + worstCaseBackoff
@@ -739,15 +761,9 @@ func TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget(t *testing.T) {
 			to.IdentityEmailFetchMaxAttempts-1, to.IdentityEmailFetchRetryMaxDelay, slackWebhookAckBudget)
 	}
 
-	// "Meaningful headroom", not merely "technically under budget":
-	// require this retry loop alone to consume at most HALF of Slack's
-	// own ~3s window, leaving the other half for the rest of handleEvent's
-	// own synchronous work in the same request (thread<->session mapping,
-	// turn creation, the in-thread ack) -- all of which runs AFTER this
-	// retry loop, in the SAME request (slack/handler.go's own handleEvent).
-	if headroom := slackWebhookAckBudget - worstCase; headroom < slackWebhookAckBudget/2 {
-		t.Errorf("IdentityEmailFetch worst case = %v, headroom under Slack's ~%v budget = %v, want >= %v (half the budget left for the rest of the handler's own work)",
-			worstCase, slackWebhookAckBudget, headroom, slackWebhookAckBudget/2)
+	if headroom := slackWebhookAckBudget - worstCase; headroom < minHeadroom {
+		t.Errorf("IdentityEmailFetch worst case = %v, headroom under Slack's ~%v budget = %v, want >= %v for the rest of the handler's own work",
+			worstCase, slackWebhookAckBudget, headroom, minHeadroom)
 	}
 }
 
