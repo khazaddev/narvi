@@ -33,6 +33,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 	"github.com/khazaddev/narvi/internal/domain/turn"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // planApprovalLinearText builds the Linear plan-approval-request
@@ -207,10 +208,27 @@ func (a *Actor) enqueueOutboxNotification(ctx context.Context, tx pgx.Tx, sessio
 		return fmt.Errorf("sessionactor: enqueue outbox notification: marshal payload: %w", err)
 	}
 
+	// Correlation ID propagation (Batch 11 audit-fix scope): carries the
+	// enclosing request/webhook's own correlation id (platform.
+	// CorrelationIDFromContext, minted at ingress -- see internal/platform/
+	// correlation.go's own doc comment) through to the enqueued row, so
+	// outboxworker.Builder's own attempt() (builder.go) can log it
+	// alongside session_id at delivery time -- mirrors
+	// internal/app/auditlog.Record's own identical "read from ctx if
+	// present, else NULL" convention exactly. A turn completed outside such
+	// a context (should be rare for a non-'web'-origin session, which by
+	// definition originated from an inbound webhook) simply enqueues a null
+	// correlation_id -- no id is ever invented here.
+	var correlationID *string
+	if id, ok := platform.CorrelationIDFromContext(ctx); ok && id != "" {
+		correlationID = &id
+	}
+
 	if _, err := a.stores.outbox.WithTx(tx).Create(ctx, sqlcgen.CreateOutboxEntryParams{
-		SessionID: a.sessionID,
-		Kind:      string(kind),
-		Payload:   rawPayload,
+		SessionID:     a.sessionID,
+		Kind:          string(kind),
+		Payload:       rawPayload,
+		CorrelationID: correlationID,
 	}); err != nil {
 		return fmt.Errorf("sessionactor: enqueue outbox notification: create outbox entry: %w", err)
 	}

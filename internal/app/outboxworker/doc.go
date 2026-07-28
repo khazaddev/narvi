@@ -21,11 +21,15 @@
 //     claimBatch/app/sessionactor/timerpump.go's own claimDueTimers
 //     precedent exactly.
 //  2. For each claimed row, OUTSIDE any transaction, bounded by platform.
-//     Timeouts.OutboxDeliveryTimeout: routes to whichever of the three
-//     ports.Notifier implementations (internal/adapters/outbound/
-//     {slackapi,linearapi via linearNotifier,githubapi}) owns the row's
-//     own kind, via a caller-supplied kind->Notifier map (constructed once
-//     in cmd/control-plane/main.go). On success: MarkOutboxEntryDelivered.
+//     Timeouts.OutboxDeliveryTimeout: renews THIS row's own
+//     claim-protection window (RenewOutboxClaim, from a fresh time.Now()
+//     taken right before the real call, WITHOUT incrementing attempts
+//     again -- audit fix H6, see attempt()'s own doc comment for the
+//     batch-level claim-lease race this closes), then routes to whichever
+//     of the three ports.Notifier implementations (internal/adapters/
+//     outbound/{slackapi,linearapi via linearNotifier,githubapi}) owns the
+//     row's own kind, via a caller-supplied kind->Notifier map (constructed
+//     once in cmd/control-plane/main.go). On success: MarkOutboxEntryDelivered.
 //     On failure: domain/outbox.EvaluateBackoff (fed the row's own
 //     post-claim attempts count) decides RecordOutboxEntryFailure
 //     (schedule next_attempt_at) vs MarkOutboxEntryDeadLetter (attempts
@@ -35,14 +39,25 @@
 // logged and does NOT abort the rest of the batch -- exactly like
 // app/imagebuild.Builder.attempt's own per-row isolation.
 //
-// Two OTel instruments are constructed once, at NewBuilder time (mirroring
-// app/imagebuild's own image_build_failure_streak precedent): the
-// outbox_lag gauge (IMPLEMENTATION_PLAN.md row 35's own explicit
+// Three OTel instruments are constructed once, at NewBuilder time
+// (mirroring app/imagebuild's own image_build_failure_streak precedent):
+// the outbox_lag gauge (IMPLEMENTATION_PLAN.md row 35's own explicit
 // requirement, §5.3's "outbox lag" observability item) observes, once per
 // tick, the age (in seconds) of the oldest still-due pending row at the
-// START of that tick's own claim step -- zero when nothing is overdue --
-// and the outbox_dead_letter counter increments once per row this Builder
-// dead-letters.
+// START of that tick's own claim step -- zero when nothing is overdue;
+// the outbox_due_backlog_count gauge (audit fix M15/M17) observes, once
+// per tick, a genuine COUNT(*) of every 'pending' row regardless of
+// whether it is due yet -- independent of outbox_lag_seconds, which reads
+// zero whenever every currently-pending row happens to be mid-backoff, a
+// real blind spot during a sustained outage; and the outbox_dead_letter
+// counter increments once per row this Builder dead-letters.
+//
+// attempt() also logs correlation_id (Batch 11 audit-fix scope) alongside
+// session_id -- the enqueueing request/webhook's own platform.
+// CorrelationIDFromContext value, threaded through from app/sessionactor's
+// own enqueueOutboxNotification (outboxenqueue.go) at enqueue time via the
+// outbox table's own correlation_id column, null when the enqueuing
+// context carried none.
 //
 // linearnotifier.go's own linearNotifier is this package's own small
 // Linear-specific ports.Notifier wrapper (holding a *linearapi.Client, a

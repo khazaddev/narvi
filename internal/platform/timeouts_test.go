@@ -29,11 +29,15 @@ func TestDefaultTimeouts_Valid(t *testing.T) {
 // "ReconcilerInterval > ReconcilerOrphanConfirmationPeriod", needed for
 // app/reconciler.Reconciler's own "confirmed on the SECOND consecutive
 // tick" guarantee to actually hold under the shipped defaults -- see that
-// field's own doc comment). Each case starts from DefaultTimeouts
-// (known-valid) and mutates exactly one field so exactly one link breaks,
-// then asserts Validate reports a *TimeoutInvariantError naming that
-// exact chain -- so the test actually catches someone breaking one
-// specific link later, not merely "some error happened".
+// field's own doc comment; the H6 audit fix (outbox claim-lease race) adds
+// a 7th, independent link: "OutboxClaimDuration > OutboxDeliveryTimeout",
+// needed for outboxworker.Builder's own per-row claim-renewal heartbeat to
+// actually protect a single delivery attempt -- see OutboxClaimDuration's
+// own doc comment). Each case starts from DefaultTimeouts (known-valid)
+// and mutates exactly one field so exactly one link breaks, then asserts
+// Validate reports a *TimeoutInvariantError naming that exact chain -- so
+// the test actually catches someone breaking one specific link later, not
+// merely "some error happened".
 func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 	t.Parallel()
 
@@ -83,6 +87,13 @@ func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 				to.ReconcilerOrphanConfirmationPeriod = to.ReconcilerInterval
 			},
 			wantChain: "ReconcilerInterval > ReconcilerOrphanConfirmationPeriod",
+		},
+		{
+			name: "OutboxClaimDuration not > OutboxDeliveryTimeout",
+			mutate: func(to *platform.Timeouts) {
+				to.OutboxClaimDuration = to.OutboxDeliveryTimeout
+			},
+			wantChain: "OutboxClaimDuration > OutboxDeliveryTimeout",
 		},
 	}
 
@@ -517,6 +528,82 @@ func TestDefaultTimeouts_Step33StandaloneField(t *testing.T) {
 
 	if err := to.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
+// TestDefaultTimeouts_Step35StandaloneFields proves Step 35's ("outbox
+// delivery", §5.1) own additions -- OutboxPumpInterval, OutboxBackoffBase,
+// OutboxBackoffMax, OutboxDeliveryTimeout, OutboxClaimDuration -- are
+// populated with sensible defaults and that Validate() still returns nil.
+// Retroactively added by the H6/M15/M17/L13 audit-fix batch (this family
+// previously had zero TestDefaultTimeouts_* coverage of its own, despite
+// the established per-Step/per-batch "StandaloneField(s)" pattern every
+// other family above already follows) -- named for the Step that
+// introduced the fields, per that same precedent (e.g.
+// TestDefaultTimeouts_Step31StandaloneField/Step33StandaloneField above),
+// not for the later audit-fix batch that finally covers them.
+//
+// Unlike its four siblings, OutboxClaimDuration is NOT purely standalone
+// any more: the H6 audit fix (per-row claim renewal, see that field's own
+// doc comment) wired it into a new, independent Validate() invariant
+// against OutboxDeliveryTimeout, mirroring Step 25's own
+// ReconcilerInterval/ReconcilerOrphanConfirmationPeriod precedent of a
+// later fix adding one narrow pairwise check outside either named chain --
+// so this test also asserts that specific relationship explicitly (not
+// just "Validate() returns nil"), the same way
+// TestDefaultTimeouts_Step38StandaloneField below asserts
+// SlackInteractivityAckTimeout < SlackAckTimeout explicitly rather than
+// only checking Validate().
+func TestDefaultTimeouts_Step35StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.OutboxPumpInterval <= 0 {
+		t.Errorf("OutboxPumpInterval = %v, want > 0", to.OutboxPumpInterval)
+	}
+	if to.OutboxPumpInterval != 5*time.Second {
+		t.Errorf("OutboxPumpInterval = %v, want %v", to.OutboxPumpInterval, 5*time.Second)
+	}
+
+	if to.OutboxBackoffBase <= 0 {
+		t.Errorf("OutboxBackoffBase = %v, want > 0", to.OutboxBackoffBase)
+	}
+	if to.OutboxBackoffBase != 30*time.Second {
+		t.Errorf("OutboxBackoffBase = %v, want %v", to.OutboxBackoffBase, 30*time.Second)
+	}
+
+	if to.OutboxBackoffMax < to.OutboxBackoffBase {
+		t.Errorf("OutboxBackoffMax = %v, want >= OutboxBackoffBase = %v", to.OutboxBackoffMax, to.OutboxBackoffBase)
+	}
+	if to.OutboxBackoffMax != 5*time.Minute {
+		t.Errorf("OutboxBackoffMax = %v, want %v", to.OutboxBackoffMax, 5*time.Minute)
+	}
+
+	if to.OutboxDeliveryTimeout <= 0 {
+		t.Errorf("OutboxDeliveryTimeout = %v, want > 0", to.OutboxDeliveryTimeout)
+	}
+	if to.OutboxDeliveryTimeout != 15*time.Second {
+		t.Errorf("OutboxDeliveryTimeout = %v, want %v", to.OutboxDeliveryTimeout, 15*time.Second)
+	}
+
+	if to.OutboxClaimDuration <= 0 {
+		t.Errorf("OutboxClaimDuration = %v, want > 0", to.OutboxClaimDuration)
+	}
+	if to.OutboxClaimDuration != 45*time.Second {
+		t.Errorf("OutboxClaimDuration = %v, want %v", to.OutboxClaimDuration, 45*time.Second)
+	}
+	// The H6 audit-fix invariant this field's own doc comment describes:
+	// a single OutboxDeliveryTimeout-bounded delivery attempt must never
+	// be able to outlive the claim-renewal window attempt() just
+	// refreshed to protect it, with at least MinTimeoutMargin of headroom.
+	if to.OutboxClaimDuration < to.OutboxDeliveryTimeout+platform.MinTimeoutMargin {
+		t.Errorf("OutboxClaimDuration = %v, want >= OutboxDeliveryTimeout (%v) + MinTimeoutMargin (%v)",
+			to.OutboxClaimDuration, to.OutboxDeliveryTimeout, platform.MinTimeoutMargin)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil", err)
 	}
 }
 

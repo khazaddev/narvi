@@ -9,10 +9,12 @@
 package outboxworker_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"sync"
 	"testing"
@@ -21,6 +23,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/testcontainers/testcontainers-go"
@@ -99,21 +102,42 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 // fakeNotifier is a test-only ports.Notifier recording every Deliver call
 // and returning a caller-configured error -- mirrors internal/app/
 // imagebuild's own fakeBuildProvider precedent (configurable behavior + a
-// recorded-calls slice, mutex-guarded).
+// recorded-calls slice, mutex-guarded). delay (audit fix H6's own lease
+// test, see TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery
+// below), when non-zero, makes Deliver actually block for that long
+// (real wall-clock time, honoring ctx cancellation) before returning --
+// simulating a genuinely slow, sequential outbound notifier call rather
+// than an instant fake, since H6's own race only manifests when one
+// row's real delivery duration is comparable to (or exceeds) the claim
+// window.
 type fakeNotifier struct {
 	mu sync.Mutex
 
 	delivered []ports.Notification
 	nextErr   error
+	delay     time.Duration
 }
 
 var _ ports.Notifier = (*fakeNotifier)(nil)
 
-func (f *fakeNotifier) Deliver(_ context.Context, n ports.Notification) error {
+func (f *fakeNotifier) Deliver(ctx context.Context, n ports.Notification) error {
+	f.mu.Lock()
+	delay := f.delay
+	err := f.nextErr
+	f.mu.Unlock()
+
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.delivered = append(f.delivered, n)
-	return f.nextErr
+	return err
 }
 
 func (f *fakeNotifier) deliverCount() int {
@@ -177,6 +201,42 @@ func readDeadLetterCount(ctx context.Context, t *testing.T, reader *sdkmetric.Ma
 		}
 	}
 	return 0
+}
+
+// readInt64Gauge returns the latest recorded value of the narvi/outboxworker
+// meter's own int64 gauge named metricName (outbox_lag_seconds or, audit fix
+// M15/M17's own addition, outbox_due_backlog_count), and whether any data
+// point was found at all. Unlike readDeadLetterCount's own counter (which
+// sums CUMULATIVE data points), a gauge reading reflects the CURRENT value
+// as of the most recent Record call -- exactly what PumpOnce sets fresh
+// every tick, so no before/after diffing is needed here.
+func readInt64Gauge(ctx context.Context, t *testing.T, reader *sdkmetric.ManualReader, metricName string) (int64, bool) {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		if sm.Scope.Name != "narvi/outboxworker" {
+			continue
+		}
+		for _, m := range sm.Metrics {
+			if m.Name != metricName {
+				continue
+			}
+			gauge, ok := m.Data.(metricdata.Gauge[int64])
+			if !ok {
+				t.Fatalf("%s metric data = %T, want metricdata.Gauge[int64]", metricName, m.Data)
+			}
+			if len(gauge.DataPoints) == 0 {
+				return 0, false
+			}
+			return gauge.DataPoints[len(gauge.DataPoints)-1].Value, true
+		}
+	}
+	return 0, false
 }
 
 // seedOutboxEntry inserts a fresh 'pending' outbox row directly (bypassing
@@ -494,3 +554,292 @@ func TestPumpOnce_NoNotifierRegistered_TreatedAsFailure(t *testing.T) {
 		t.Fatalf("Attempts = %d, want 1", got.Attempts)
 	}
 }
+
+// TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery
+// is audit fix H6's own lease test: it drives a REAL, wall-clock-slow,
+// SEQUENTIAL delivery of a 3-row batch (fakeNotifier's own delay field,
+// not an instant fake) and proves a concurrent second PumpOnce call --
+// simulating another pod's own independent Builder, or this pod's own
+// next tick -- can never cause the SAME row to be delivered twice, even
+// though it deliberately lands in exactly the window the pre-fix bug
+// exploited: AFTER the batch's own shared claim-time protection for a
+// late row has already elapsed, but BEFORE that row's own turn in
+// builderA's sequential processing.
+//
+// Timing (see the constants below): builderA claims all 3 rows in one
+// transaction at t0, each stamped with the SAME provisional
+// next_attempt_at = t0+claimDuration (400ms) -- the pre-fix bug's own
+// root cause. builderA then delivers them ONE AT A TIME, each taking
+// rowDeliveryDelay (300ms) of REAL wall-clock time: row1 [t0, t0+300ms],
+// row2 [t0+300ms, t0+600ms], row3 [t0+600ms, t0+900ms]. Row3's own
+// batch-level claim (t0+400ms) has therefore already expired a full
+// 200ms before row3's own turn even starts (t0+600ms) -- exactly the H6
+// race window (§ builder.go's own claimBatch doc comment). builderB fires
+// its OWN concurrent PumpOnce at t0+500ms, squarely inside that
+// [400ms, 600ms] window, using a FAST (zero-delay) notifier -- mirroring
+// a second pod's tick winning the SKIP LOCKED race for a row this pod's
+// own builderA has not yet reached.
+//
+// Without the H6 fix (attempt()'s own per-row RenewOutboxClaim heartbeat,
+// called immediately before Deliver), builderB would successfully
+// re-claim row3 (still 'pending', next_attempt_at already elapsed) and
+// call Deliver on it, WHILE builderA -- reaching row3's own turn 100ms
+// later at t0+600ms, having no knowledge of builderB's own concurrent
+// claim -- would ALSO call Deliver on it: a genuine double notifier.
+// Deliver call for the same row. With the fix, builderA's own attempt()
+// for row3 first calls RenewOutboxClaim, which by t0+600ms finds row3 no
+// longer 'pending' (builderB's own fast delivery has already completed
+// and marked it 'delivered' well before t0+600ms) and skips Deliver
+// entirely -- so row3 is delivered EXACTLY once, by builderB, and rows 1
+// and 2 (never stolen -- see the per-row analysis in this function's own
+// body) are delivered exactly once each, by builderA.
+func TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewOutboxStore(pool)
+
+	row1 := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "row1"})
+	row2 := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "row2"})
+	row3 := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "row3"})
+	rows := []sqlcgen.Outbox{row1, row2, row3}
+
+	const (
+		// rowDeliveryDelay is builderA's own per-row REAL wall-clock
+		// Deliver duration -- big enough, relative to claimDuration below,
+		// that the 3rd row's own turn genuinely starts after the FIRST
+		// row's own claim-duration window has elapsed twice over.
+		rowDeliveryDelay = 300 * time.Millisecond
+		// claimDuration deliberately sits BETWEEN one row's own delivery
+		// duration (so a freshly-renewed claim always comfortably
+		// outlives the single delivery attempt it protects -- the H6 fix's
+		// own real invariant, platform.Timeouts.Validate()'s new
+		// "OutboxClaimDuration > OutboxDeliveryTimeout" check) and TWO
+		// rows' cumulative delivery duration (so the ORIGINAL, unrenewed
+		// batch-level claim for a row queued behind two others is
+		// genuinely stale by the time that row's own turn arrives).
+		claimDuration = 400 * time.Millisecond
+		// concurrentTickDelay lands builderB's own PumpOnce call squarely
+		// inside [claimDuration, 2*rowDeliveryDelay] = [400ms, 600ms]: the
+		// window where row3's own original claim has expired but its own
+		// renewal (due at row3's own turn, 2*rowDeliveryDelay = 600ms)
+		// has not yet happened.
+		concurrentTickDelay = 500 * time.Millisecond
+	)
+
+	slowNotifier := &fakeNotifier{delay: rowDeliveryDelay}
+	fastNotifier := &fakeNotifier{}
+
+	timeouts := platform.DefaultTimeouts()
+	timeouts.OutboxClaimDuration = claimDuration
+	timeouts.OutboxDeliveryTimeout = 5 * time.Second // generous; never the limiting factor here
+
+	builderA, err := outboxworker.NewBuilder(store, pool, map[ports.NotificationKind]ports.Notifier{
+		ports.NotificationKindSlack: slowNotifier,
+	}, timeouts)
+	if err != nil {
+		t.Fatalf("NewBuilder A: %v", err)
+	}
+	builderB, err := outboxworker.NewBuilder(store, pool, map[ports.NotificationKind]ports.Notifier{
+		ports.NotificationKindSlack: fastNotifier,
+	}, timeouts)
+	if err != nil {
+		t.Fatalf("NewBuilder B: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := builderA.PumpOnce(ctx); err != nil {
+			t.Errorf("builderA PumpOnce: %v", err)
+		}
+	}()
+
+	time.Sleep(concurrentTickDelay)
+	if err := builderB.PumpOnce(ctx); err != nil {
+		t.Fatalf("builderB PumpOnce: %v", err)
+	}
+
+	wg.Wait()
+
+	slowNotifier.mu.Lock()
+	fastNotifier.mu.Lock()
+	all := make([]ports.Notification, 0, len(slowNotifier.delivered)+len(fastNotifier.delivered))
+	all = append(all, slowNotifier.delivered...)
+	all = append(all, fastNotifier.delivered...)
+	slowNotifier.mu.Unlock()
+	fastNotifier.mu.Unlock()
+
+	if len(all) != len(rows) {
+		t.Fatalf("total Deliver() calls across both builders = %d, want exactly %d (one per row, no double-delivery)", len(all), len(rows))
+	}
+
+	deliveredCount := map[string]int{}
+	for _, n := range all {
+		deliveredCount[string(n.Payload)]++
+	}
+	for _, row := range rows {
+		if got := deliveredCount[string(row.Payload)]; got != 1 {
+			t.Errorf("outbox row %s (payload %s) delivered %d times, want exactly 1", row.ID.String(), row.Payload, got)
+		}
+	}
+
+	for _, row := range rows {
+		got, err := store.Get(ctx, row.ID)
+		if err != nil {
+			t.Fatalf("get outbox entry %s: %v", row.ID.String(), err)
+		}
+		if got.Status != sqlcgen.OutboxStatusDelivered {
+			t.Errorf("outbox row %s Status = %q, want %q", row.ID.String(), got.Status, sqlcgen.OutboxStatusDelivered)
+		}
+	}
+}
+
+// TestPumpOnce_OutboxDueBacklogCount_ReflectsBacklogIndependentOfCurrentTickClaim
+// is audit fix M15/M17's own test: several rows are seeded then pushed
+// into the future (mid-backoff, next_attempt_at well past "now"), so
+// claimBatch's own ListDuePendingOutboxEntries claims NONE of them this
+// tick -- proving the pre-existing outbox_lag_seconds gauge would read
+// exactly zero here (nothing was due), while the NEW, independent
+// outbox_due_backlog_count gauge still reports the real backlog, because
+// its own CountPendingOutboxEntries query is deliberately NOT restricted
+// to next_attempt_at <= now().
+func TestPumpOnce_OutboxDueBacklogCount_ReflectsBacklogIndependentOfCurrentTickClaim(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewOutboxStore(pool)
+
+	const backlogSize = 3
+	for i := 0; i < backlogSize; i++ {
+		row := seedOutboxEntry(ctx, t, store, "slack", map[string]any{"channel_id": "C1", "thread_ts": "1.1", "text": "hi"})
+		// Push this row's own next_attempt_at an hour into the future --
+		// simulating a row genuinely mid-backoff during a sustained outage,
+		// not merely "not yet processed this millisecond". Direct SQL
+		// (rather than a store method) mirrors this file's own
+		// "bypassing app/sessionactor entirely" precedent for seedOutboxEntry
+		// above -- no existing OutboxStore method sets next_attempt_at
+		// without also touching status/attempts.
+		if _, err := pool.Exec(ctx, `UPDATE outbox SET next_attempt_at = now() + interval '1 hour' WHERE id = $1`, row.ID); err != nil {
+			t.Fatalf("push row %s next_attempt_at into the future: %v", row.ID.String(), err)
+		}
+	}
+
+	notifier := &fakeNotifier{}
+	builder, err := outboxworker.NewBuilder(store, pool, map[ports.NotificationKind]ports.Notifier{
+		ports.NotificationKindSlack: notifier,
+	}, platform.DefaultTimeouts())
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	// Nothing was due -- claimBatch's own ListDuePendingOutboxEntries
+	// claimed none of the backlogSize rows, so no delivery was even
+	// attempted.
+	if notifier.deliverCount() != 0 {
+		t.Fatalf("deliverCount = %d, want 0 (every row is mid-backoff, none due this tick)", notifier.deliverCount())
+	}
+
+	lag, lagFound := readInt64Gauge(ctx, t, otelReader, "outbox_lag_seconds")
+	if !lagFound {
+		t.Fatal("outbox_lag_seconds: no data point recorded")
+	}
+	if lag != 0 {
+		t.Errorf("outbox_lag_seconds = %d, want 0 (this is the pre-existing gauge's own blind spot: nothing was due, so it reads zero even with a real backlog)", lag)
+	}
+
+	backlog, backlogFound := readInt64Gauge(ctx, t, otelReader, "outbox_due_backlog_count")
+	if !backlogFound {
+		t.Fatal("outbox_due_backlog_count: no data point recorded")
+	}
+	if backlog != backlogSize {
+		t.Errorf("outbox_due_backlog_count = %d, want %d (every 'pending' row, regardless of next_attempt_at)", backlog, backlogSize)
+	}
+}
+
+// TestPumpOnce_AttemptLogsCorrelationIDAndSessionID proves attempt()'s own
+// log line carries both correlation_id (Batch 11 audit-fix scope, read
+// from the outbox row's own correlation_id column) and session_id (already
+// logged pre-fix) -- forcing the "no notifier registered" error log line
+// (deterministic, single call, exactly like
+// TestPumpOnce_NoNotifierRegistered_TreatedAsFailure above) rather than the
+// happy path, which emits no log line of its own to inspect.
+func TestPumpOnce_AttemptLogsCorrelationIDAndSessionID(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewOutboxStore(pool)
+
+	var sessionID pgtype.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO sessions (spawn_source) VALUES ('slack') RETURNING id`).Scan(&sessionID); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	const wantCorrelationID = "corr-h6-audit-fix-test"
+	row, err := store.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+		SessionID:     sessionID,
+		Kind:          "linear",
+		Payload:       []byte(`{"agent_session_id":"as1","organization_id":"org1","text":"hi","success":true}`),
+		CorrelationID: strPtr(wantCorrelationID),
+	})
+	if err != nil {
+		t.Fatalf("seed outbox entry: %v", err)
+	}
+
+	var logBuf bytes.Buffer
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+
+	timeouts := platform.DefaultTimeouts()
+	timeouts.OutboxBackoffBase = 1 * time.Millisecond
+	timeouts.OutboxBackoffMax = 2 * time.Millisecond
+	timeouts.OutboxClaimDuration = 45 * time.Millisecond
+
+	builder, err := outboxworker.NewBuilder(store, pool, map[ports.NotificationKind]ports.Notifier{
+		// Deliberately no NotificationKindLinear entry -- forces the "no
+		// notifier registered" error log line.
+	}, timeouts)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	var found bool
+	for _, line := range bytes.Split(logBuf.Bytes(), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if entry["msg"] != "outboxworker: no notifier registered for kind; recording as a failed attempt" {
+			continue
+		}
+		found = true
+		if got, _ := entry["correlation_id"].(string); got != wantCorrelationID {
+			t.Errorf("log line correlation_id = %q, want %q (full entry: %v)", got, wantCorrelationID, entry)
+		}
+		if got, _ := entry["session_id"].(string); got != sessionID.String() {
+			t.Errorf("log line session_id = %q, want %q (full entry: %v)", got, sessionID.String(), entry)
+		}
+		if got, _ := entry["outbox_id"].(string); got != row.ID.String() {
+			t.Errorf("log line outbox_id = %q, want %q", got, row.ID.String())
+		}
+	}
+	if !found {
+		t.Fatalf("no log line with the expected msg found; full log output:\n%s", logBuf.String())
+	}
+}
+
+// strPtr returns a pointer to s -- a small helper so
+// sqlcgen.CreateOutboxEntryParams.CorrelationID (a *string) can be
+// populated from a string literal inline above without a throwaway local
+// variable at each call site.
+func strPtr(s string) *string { return &s }
