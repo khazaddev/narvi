@@ -62,9 +62,13 @@
 // even after auto-linking already existed, contradicting §13.3's own
 // "channel-agnostic" requirement; see decideplan.go's own top doc comment
 // for the full "why" writeup. A still-UNLINKED (bot-attributed, Valid ==
-// false) actor is untouched: it still proceeds with no per-user gate at
-// all, exactly matching §13.2's own explicit "unlinked actors get bot
-// attribution ... the action proceeds" precedent for that case.
+// false) actor is now DENIED too (audit-fix batch, "block unlinked actor
+// state changes") rather than let through under bot attribution -- see
+// authorizeSessionAction's own doc comment below for the current behavior,
+// the distinct ErrActorNotLinked sentinel it returns for this case, and
+// why decideAndUpdateMessage/handleViewSubmission respond to it WITHOUT
+// stripping the original message's Approve/Reject buttons (so the same
+// click can be retried once the actor links).
 
 package slack
 
@@ -340,6 +344,20 @@ const (
 
 	slackDecisionErrorText       = "Something went wrong recording this decision. Please try again."
 	slackRequestChangesErrorText = "Something went wrong submitting this. Please try again."
+
+	// slackActorNotLinkedDecisionText is the SECOND review pass's own fix
+	// for the HIGH-severity button-stripping regression (see
+	// authorizeSessionAction's own doc comment, and ErrActorNotLinked's,
+	// identity.go, for the full incident): posted via chat.postEphemeral
+	// (visible ONLY to the clicking user) INSTEAD OF calling
+	// deps.updateMessage, so the original message's Approve/Reject buttons
+	// are never touched -- the magic-link URL itself was already posted
+	// ephemerally, separately, just above this check (decideAndUpdateMessage's
+	// own resolveSlackActorSingleAttempt call) regardless of this denial;
+	// this text's own job is only to explain that THIS click specifically
+	// did not go through, so the actor knows to link first, then click
+	// Approve/Reject again -- not to repeat the link itself.
+	slackActorNotLinkedDecisionText = "Your Slack account isn't linked to a Narvi account yet, so this decision wasn't recorded. Once you're linked (see the message just above), click Approve/Reject again."
 )
 
 // authorizeSessionAction renders the exact §13.3 verdict
@@ -351,10 +369,10 @@ const (
 // establish for the REST API (planauthz.go, httpapi/turn.go).
 //
 // actorUserID.Valid == false (not yet linked -- the auto-link attempt for
-// this identity did not resolve) now returns ErrActorNotAuthorized
-// immediately, with NO session/participants lookup at all -- audit-fix
-// batch update ("block unlinked actor state changes"): this used to return
-// nil (allowed), preserving §13.2's own original "unlinked actors get bot
+// this identity did not resolve) now returns ErrActorNotLinked immediately,
+// with NO session/participants lookup at all -- audit-fix batch update
+// ("block unlinked actor state changes"): this used to return nil
+// (allowed), preserving §13.2's own original "unlinked actors get bot
 // attribution ... the action proceeds" precedent. That precedent was a
 // deliberate, user-decided hardening target, not a "keep as-is": a
 // not-yet-linked actor's plan decision / request-changes submission is now
@@ -366,30 +384,55 @@ const (
 // This is a SEPARATE function from identity.go's own (Deps.
 // authorizeSessionAction, the Events-API ingress's twin) -- a different
 // receiver type (InteractiveDeps, not Deps), never the same function --
-// but both share the package-level ErrActorNotAuthorized sentinel
-// (identity.go) directly: a denial means the identical thing regardless of
-// which route rendered it. Returns ErrActorNotAuthorized when actorUserID
-// is not linked at all (above) OR when a RESOLVED actor's own role
-// genuinely fails domain/authz.Authorize -- both are final, non-retryable
-// denials, handled identically by both call sites below. Returns any OTHER
-// (non-nil) error for a genuine backend failure encountered while checking
-// (deps.Sessions.Get/actorauthz.OwnedOrJoined erroring) -- MEDIUM audit fix
-// ("Slack's interactive.go has its OWN separate, still-unfixed copy" of the
-// same conflation identity.go's own twin already had fixed): before that
-// fix, this function's own bare bool made a transient backend error
-// indistinguishable from a real denial, so BOTH decideAndUpdateMessage and
-// handleViewSubmission (below) showed the misleading "you don't have
-// permission" text on an internal failure and silently discarded the
-// actor's real click/submission. This endpoint has no webhook-delivery-
-// claim/release plumbing the way the Events-API ingress does (this file's
-// own top doc comment -- Slack's own tight ~3s interactivity-ack budget),
-// so there is no claim to route a backend error into releasing; instead,
-// both call sites now show an honest generic-error message on this branch,
-// which is what makes clicking the button again / resubmitting the modal
-// an actually meaningful retry.
+// but both share the package-level ErrActorNotAuthorized/ErrActorNotLinked
+// sentinels (identity.go) directly: a denial means the identical thing
+// regardless of which route rendered it. Returns ErrActorNotLinked when
+// actorUserID is not linked at all (above -- itself ALSO matched by
+// errors.Is(err, ErrActorNotAuthorized), since ErrActorNotLinked wraps it,
+// see identity.go's own doc comment) OR ErrActorNotAuthorized directly when
+// a RESOLVED actor's own role genuinely fails domain/authz.Authorize.
+//
+// Audit-fix batch update (SECOND review pass, "unlinked-actor plan-decision
+// denial permanently strips Slack's Approve/Reject buttons"): UNLIKE
+// identity.go's own Deps.authorizeSessionAction (whose only caller,
+// authorizeExistingSessionReply, responds to EITHER denial identically),
+// decideAndUpdateMessage/handleViewSubmission below MUST tell these two
+// denials apart -- a confirmed 3-lens adversarial review found that
+// decideAndUpdateMessage's own (pre-this-fix) single `errors.Is(err,
+// ErrActorNotAuthorized)` branch called deps.updateMessage for BOTH cases,
+// and that function's own underlying chat.update request carries no
+// "blocks" field at all (slackapi.Client.UpdateMessage's own doc comment),
+// which Slack's own API treats as "strip every block from this message" --
+// permanently removing the Approve/Reject buttons. For a genuinely
+// resolved-but-denied actor that is an existing, arguably-acceptable
+// side effect (nothing useful to retry). For the NOT-YET-LINKED case it
+// broke this batch's own headline guarantee outright: clicking the SAME
+// button again, after linking, had nothing left to click. See below:
+// decideAndUpdateMessage/handleViewSubmission now check for
+// ErrActorNotLinked FIRST (before the more general ErrActorNotAuthorized
+// check), and respond WITHOUT touching the original message's blocks at
+// all for that case -- an ephemeral notice only, so the actor's own
+// Approve/Reject buttons (or the request-changes modal) remain clickable
+// after they link.
+//
+// Returns any OTHER (non-nil) error for a genuine backend failure
+// encountered while checking (deps.Sessions.Get/actorauthz.OwnedOrJoined
+// erroring) -- MEDIUM audit fix ("Slack's interactive.go has its OWN
+// separate, still-unfixed copy" of the same conflation identity.go's own
+// twin already had fixed): before that fix, this function's own bare bool
+// made a transient backend error indistinguishable from a real denial, so
+// BOTH decideAndUpdateMessage and handleViewSubmission (below) showed the
+// misleading "you don't have permission" text on an internal failure and
+// silently discarded the actor's real click/submission. This endpoint has
+// no webhook-delivery-claim/release plumbing the way the Events-API
+// ingress does (this file's own top doc comment -- Slack's own tight ~3s
+// interactivity-ack budget), so there is no claim to route a backend error
+// into releasing; instead, both call sites show an honest generic-error
+// message on that branch, which is what makes clicking the button again /
+// resubmitting the modal an actually meaningful retry.
 func (deps InteractiveDeps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) error {
 	if !actorUserID.Valid {
-		return ErrActorNotAuthorized
+		return ErrActorNotLinked
 	}
 
 	sessionRow, err := deps.Sessions.Get(ctx, sessionID)
@@ -484,12 +527,39 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	//
 	// Audit-fix batch update ("block unlinked actor state changes"): a
 	// still-unlinked (bot-attributed) decidedBy is NO LONGER let through --
-	// authorizeSessionAction now returns ErrActorNotAuthorized immediately
-	// for that case too, replacing this package's previous "Slack verdicts
-	// stay unauthenticated-per-user until linked" precedent (decideplan.go's
-	// own top doc comment describes the OLD behavior) with a denial, exactly
-	// like a linked-but-insufficient-role decidedBy.
+	// authorizeSessionAction now returns ErrActorNotLinked immediately for
+	// that case (SECOND review pass: a DISTINCT sentinel from
+	// ErrActorNotAuthorized, checked FIRST below -- see identity.go's own
+	// ErrActorNotLinked doc comment for why), replacing this package's
+	// previous "Slack verdicts stay unauthenticated-per-user until linked"
+	// precedent (decideplan.go's own top doc comment describes the OLD
+	// behavior) with a denial, exactly like a linked-but-insufficient-role
+	// decidedBy -- EXCEPT for how this specific branch responds, see below.
 	if err := deps.authorizeSessionAction(decideCtx, logger, sessionID, decidedBy, authz.ActionApprovePlan); err != nil {
+		if errors.Is(err, ErrActorNotLinked) {
+			// HIGH audit fix (SECOND review pass, confirmed 3-lens
+			// adversarial review): deliberately does NOT call
+			// deps.updateMessage here -- that function's own chat.update
+			// request carries no "blocks" field (slackapi.Client.
+			// UpdateMessage's own doc comment), which Slack's API treats as
+			// "strip every block from this message", PERMANENTLY removing
+			// the Approve/Reject buttons. Doing that for a not-yet-linked
+			// actor would directly break this batch's own headline
+			// guarantee: the SAME actor retrying the SAME click once linked
+			// needs those buttons to still be there. The magic-link URL
+			// itself was already posted ephemerally above (notice, from
+			// resolveSlackActorSingleAttempt) regardless of this denial --
+			// this second, distinct ephemeral message only explains that
+			// THIS click specifically wasn't recorded, so the actor knows to
+			// link first and then click Approve/Reject again. Best-effort:
+			// a failure here is logged, never escalated (this endpoint's
+			// own established tolerance for ephemeral-notice failures).
+			logger.Warn("slack: interactivity: plan decision denied, actor not yet linked", "plan_id", planIDStr, "session_id", sessionIDStr)
+			if pErr := deps.SlackClient.PostEphemeral(decideCtx, channel, slackUserID, messageTS, slackActorNotLinkedDecisionText); pErr != nil {
+				logger.Warn("slack: interactivity: post not-yet-linked ephemeral notice failed", "error", pErr)
+			}
+			return
+		}
 		if errors.Is(err, ErrActorNotAuthorized) {
 			logger.Warn("slack: interactivity: plan decision denied by authz", "plan_id", planIDStr, "session_id", sessionIDStr, "user_id", decidedBy.String())
 			deps.updateMessage(decideCtx, logger, channel, messageTS, slackPlanForbiddenText)
@@ -639,7 +709,13 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 		return
 	}
 
-	_, sessionIDStr, ok := slackapi.DecodePlanActionValue(payload.View.PrivateMetadata)
+	// planIDStr is now ALSO kept (previously discarded via `_`) -- LOW audit
+	// fix (SECOND review pass, "handleViewSubmission discards the
+	// magic-link notice on denial"): postViewSubmissionLinkNotice below
+	// needs it to look up this plan's own stored Slack channel/message-ts,
+	// the only way this payload shape can scope an ephemeral notice at all
+	// (see that function's own doc comment).
+	planIDStr, sessionIDStr, ok := slackapi.DecodePlanActionValue(payload.View.PrivateMetadata)
 	if !ok {
 		logger.Warn("slack: interactivity: malformed private_metadata", "private_metadata", payload.View.PrivateMetadata)
 		w.WriteHeader(http.StatusOK)
@@ -671,13 +747,22 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 	// submitting Slack user the first time this package sees them,
 	// without a multi-attempt retry (this modal-submission response has
 	// its own tight ack requirement, mirroring decideAndUpdateMessage's
-	// own identical reasoning). notice is deliberately NOT posted
-	// anywhere here -- a view_submission response has no channel/message
-	// to post or append it to (Slack's own contract for this payload type
-	// is a bare empty-body 200 that simply closes the modal); the SAME
-	// still-unlinked identity still gets its in-channel notice the next
-	// time any OTHER event from it arrives.
-	actorUserID, _ := resolveSlackActorSingleAttempt(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts.SlackInteractivityIdentityFetchTimeout, payload.User.ID)
+	// own identical reasoning).
+	//
+	// LOW audit fix (SECOND review pass, "handleViewSubmission discards the
+	// magic-link notice on denial"): notice USED to be discarded outright
+	// here (`actorUserID, _ := ...`) -- a confirmed 3-lens adversarial
+	// review found that meant a submission denied because the actor isn't
+	// linked yet got a generic "not authorized" modal error with NO
+	// magic-link prompt anywhere, contradicting this batch's own "the
+	// magic-link prompt is still sent on every denial" principle. notice is
+	// now captured and, specifically for that denial case (below,
+	// ErrActorNotLinked), delivered via postViewSubmissionLinkNotice --
+	// this modal-submission payload STILL has no channel/message field of
+	// its own the way an ordinary event does (unlike handler.go's ack.go),
+	// so that helper looks the plan's own already-stored Slack channel/
+	// message-ts back up instead of relying on one being handed in here.
+	actorUserID, notice := resolveSlackActorSingleAttempt(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts.SlackInteractivityIdentityFetchTimeout, payload.User.ID)
 
 	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a resolved,
 	// linked actorUserID must still pass domain/authz.
@@ -687,15 +772,27 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 	//
 	// Audit-fix batch update ("block unlinked actor state changes"): a
 	// still-unlinked (bot-attributed) actorUserID is NO LONGER let through
-	// -- authorizeSessionAction now returns ErrActorNotAuthorized
-	// immediately for that case too, denying this submission exactly like a
-	// linked-but-insufficient-role actorUserID. This modal-submission
-	// response has no channel/message to deliver a magic-link notice into
-	// either way (see resolveSlackActorSingleAttempt's own call just above)
-	// -- the same still-unlinked identity still gets its in-channel notice
-	// the next time any OTHER event from it arrives, unaffected by this
-	// denial.
+	// -- authorizeSessionAction now returns ErrActorNotLinked immediately
+	// for that case (SECOND review pass: a distinct sentinel, checked
+	// FIRST below), denying this submission exactly like a
+	// linked-but-insufficient-role actorUserID (ErrActorNotAuthorized).
 	if err := deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession); err != nil {
+		if errors.Is(err, ErrActorNotLinked) {
+			logger.Warn("slack: interactivity: request-changes turn denied, actor not yet linked", "session_id", sessionIDStr)
+			// LOW audit fix (SECOND review pass): deliver the magic-link
+			// notice this denial's actor is otherwise never told about on
+			// this payload shape -- see postViewSubmissionLinkNotice's own
+			// doc comment and this function's own top doc comment on notice
+			// above. Best-effort: never blocks the modal response below.
+			deps.postViewSubmissionLinkNotice(ctx, logger, planIDStr, payload.User.ID, notice)
+			writeJSON(w, http.StatusOK, viewSubmissionErrorResponse{
+				ResponseAction: "errors",
+				Errors: map[string]string{
+					slackapi.RequestChangesBlockID: slackPromptForbiddenErrorText,
+				},
+			})
+			return
+		}
 		if errors.Is(err, ErrActorNotAuthorized) {
 			logger.Warn("slack: interactivity: request-changes turn denied by authz", "session_id", sessionIDStr, "user_id", actorUserID.String())
 			writeJSON(w, http.StatusOK, viewSubmissionErrorResponse{
@@ -727,4 +824,59 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 		logger.Error("slack: interactivity: create request-changes turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionIDStr)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// postViewSubmissionLinkNotice is handleViewSubmission's own best-effort
+// delivery of notice (the magic-link URL, or the "connected your account"
+// confirmation -- empty when there's nothing to say) for the SPECIFIC
+// "actor not yet linked" denial (ErrActorNotLinked) -- LOW audit fix
+// (SECOND review pass, "handleViewSubmission discards the magic-link
+// notice on denial"). A view_submission payload carries no channel/
+// message-ts of its own the way an ordinary block_actions click does
+// (blockActionsPayload's own Channel/Message fields have no view_submission
+// equivalent -- verified against Slack's own reference docs during the
+// original Step's investigation, see this file's own top doc comment), so
+// this looks planIDStr's own stored Slack channel/message-ts back up
+// (PlanStore.SetSlackMessageRef, populated when the approval message this
+// modal's own "Request changes" button lives on was first posted via
+// PostPlanApprovalMessage) to scope a chat.postEphemeral call to --
+// mirroring decideAndUpdateMessage's own identical ephemeral-delivery
+// pattern for this exact kind of sensitive, single-user-scoped text.
+//
+// A deliberate no-op (never an error, never escalated) when: notice is
+// empty (nothing to say); planIDStr fails to parse or look up (should be
+// unreachable -- it was already validated shaped-correctly by
+// DecodePlanActionValue above, and the plan it names is the SAME one this
+// modal's own private_metadata was built from); or the plan has no stored
+// Slack message ref at all (e.g., a defensive fallback -- every REAL
+// Slack-originated plan approval message sets this, but this function
+// never assumes it). Every failure path is logged and swallowed -- the
+// same still-unlinked identity still gets this SAME notice the next time
+// any OTHER event from it arrives (resolveSlackActor's own general
+// algorithm, identity.go), so silently skipping delivery here never loses
+// the notice permanently, only defers it.
+func (deps InteractiveDeps) postViewSubmissionLinkNotice(ctx context.Context, logger *slog.Logger, planIDStr, slackUserID, notice string) {
+	if notice == "" {
+		return
+	}
+
+	var planID pgtype.UUID
+	if err := planID.Scan(planIDStr); err != nil {
+		logger.Warn("slack: interactivity: parse plan id for link-notice delivery failed", "error", err, "plan_id", planIDStr)
+		return
+	}
+
+	plan, err := deps.Plans.Get(ctx, planID)
+	if err != nil {
+		logger.Warn("slack: interactivity: look up plan for link-notice delivery failed", "error", err, "plan_id", planIDStr)
+		return
+	}
+	if plan.SlackChannelID == nil || plan.SlackMessageTs == nil || *plan.SlackChannelID == "" || *plan.SlackMessageTs == "" {
+		logger.Warn("slack: interactivity: plan has no stored Slack message ref, skipping link-notice delivery", "plan_id", planIDStr)
+		return
+	}
+
+	if err := deps.SlackClient.PostEphemeral(ctx, *plan.SlackChannelID, slackUserID, *plan.SlackMessageTs, notice); err != nil {
+		logger.Warn("slack: interactivity: post identity-link ephemeral notice failed", "error", err)
+	}
 }

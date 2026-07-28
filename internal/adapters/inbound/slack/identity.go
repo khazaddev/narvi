@@ -137,19 +137,13 @@ func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, sl
 // unresolved actor, the error logging) changed.
 
 // ErrActorNotAuthorized is authorizeSessionAction's own sentinel for a
-// final, non-retryable denial -- either "a resolved, linked actor's role
-// genuinely failed domain/authz.Authorize", OR (audit-fix batch update,
-// "block unlinked actor state changes") "actorUserID never resolved to a
-// linked account at all". Originally added for the first case only (MEDIUM
-// audit fix, "authorizeSessionAction conflates a genuine backend error with
-// a real authorization denial"), mirroring github's own identical
-// ErrActorNotAuthorized (coalesce.go) -- reused rather than duplicated for
-// the second case, since every caller's existing errors.Is(err,
-// ErrActorNotAuthorized) handling already does exactly the right thing for
-// both: post the honest denial message, do not release the webhook claim,
-// do not treat it as retryable. Deliberately DISTINCT from
-// any other error authorizeSessionAction returns: a caller checks for this
-// one specifically and treats it as a final, non-retryable denial (skip
+// final, non-retryable denial -- "a resolved, linked actor's role
+// genuinely failed domain/authz.Authorize" (MEDIUM audit fix,
+// "authorizeSessionAction conflates a genuine backend error with a real
+// authorization denial"), mirroring github's own identical
+// ErrActorNotAuthorized (coalesce.go). Deliberately DISTINCT from any other
+// error authorizeSessionAction returns: a caller checks for this one
+// specifically and treats it as a final, non-retryable denial (skip
 // without releasing the webhook-delivery claim -- redelivering the
 // identical event would just render the same denial again), while any
 // OTHER error is a genuine backend failure encountered WHILE checking
@@ -161,7 +155,54 @@ func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, sl
 // treated as a deliberate "skip, no release" business decision, dropping
 // the user's legitimate message forever with no chance of redelivery ever
 // retrying it.
+//
+// Audit-fix batch update ("block unlinked actor state changes", SECOND
+// review pass): this sentinel USED to also cover "actorUserID never
+// resolved to a linked account at all" -- collapsed into this same value
+// because every existing caller's own errors.Is(err, ErrActorNotAuthorized)
+// handling already did the right generic thing for both cases (post a
+// denial, don't release the claim). A confirmed 3-lens adversarial review
+// of that batch found this collapse actively harmful for exactly ONE
+// caller: interactive.go's own decideAndUpdateMessage responds to a denial
+// by calling deps.updateMessage, whose own chat.update request (see
+// slackapi.Client.UpdateMessage's own doc comment) carries no "blocks"
+// field at all -- Slack's own API treats that as "remove every block from
+// this message", PERMANENTLY stripping the Approve/Reject buttons. For a
+// genuinely resolved-but-insufficient-role denial that is an existing,
+// arguably-acceptable side effect (a viewer will always be a viewer, so
+// there is nothing to usefully retry). For the NOT-YET-LINKED case it
+// directly broke this batch's own headline guarantee: the SAME actor
+// clicking the SAME button again, after linking, should succeed -- but
+// there was nothing left in Slack to click. See ErrActorNotLinked below,
+// the fix: a SEPARATE, more specific sentinel for the not-yet-linked case,
+// so decideAndUpdateMessage (and handleViewSubmission) can tell the two
+// apart and respond differently, while every OTHER caller's existing
+// errors.Is(err, ErrActorNotAuthorized) check keeps matching BOTH cases
+// unchanged (ErrActorNotLinked wraps this error, see below).
 var ErrActorNotAuthorized = errors.New("slack: actor not authorized")
+
+// ErrActorNotLinked is authorizeSessionAction's own MORE SPECIFIC sentinel
+// for the "actorUserID never resolved to a linked account at all" half of
+// ErrActorNotAuthorized's own denial space (see that var's own doc comment
+// for the full "why" -- this is the SECOND review pass's own fix for the
+// button-stripping regression that collapsing the two cases into one
+// sentinel caused).
+//
+// Deliberately WRAPS ErrActorNotAuthorized (via fmt.Errorf's own %w) rather
+// than being a wholly independent error: every EXISTING caller's own
+// errors.Is(err, ErrActorNotAuthorized) check must keep matching this case
+// too, with NO caller-side change required, exactly as it did before this
+// sentinel existed -- errors.Is(ErrActorNotLinked, ErrActorNotAuthorized)
+// is true, but errors.Is(ErrActorNotAuthorized, ErrActorNotLinked) is
+// false, so only a caller that explicitly wants to distinguish "not yet
+// linked" from "resolved but denied" needs to check for THIS sentinel
+// specifically (and must do so BEFORE the more general
+// ErrActorNotAuthorized check, since the general check would otherwise
+// swallow it first). Today, that is ONLY interactive.go's own
+// decideAndUpdateMessage/handleViewSubmission -- every other caller
+// (handler.go's authorizeExistingSessionReply) is unaffected and needs no
+// changes at all.
+var ErrActorNotLinked = fmt.Errorf("slack: actor not yet linked: %w", ErrActorNotAuthorized)
 
 // authorizeSessionAction renders the exact §13.3 verdict domain/authz.
 // Authorize would for actorUserID attempting action against sessionID --
@@ -176,7 +217,7 @@ var ErrActorNotAuthorized = errors.New("slack: actor not authorized")
 //
 // actorUserID.Valid == false (not yet linked -- the auto-link attempt for
 // this identity did not resolve, e.g. no email match found) now returns
-// ErrActorNotAuthorized immediately, with NO session/participants lookup at
+// ErrActorNotLinked immediately, with NO session/participants lookup at
 // all -- audit-fix batch update ("block unlinked actor state changes"):
 // this used to return nil (allowed), preserving §13.2's own original
 // "unlinked actors get bot attribution ... the action proceeds" precedent.
@@ -185,25 +226,33 @@ var ErrActorNotAuthorized = errors.New("slack: actor not authorized")
 // denied exactly like a linked-but-insufficient-role one, and the SAME
 // magic-link prompt this identity already gets (resolveSlackActor's own
 // notice, delivered by every caller regardless of this denial) is how they
-// retry once actually linked. Reusing ErrActorNotAuthorized here (rather
-// than a new sentinel) means every existing caller's own
+// retry once actually linked. ErrActorNotLinked WRAPS ErrActorNotAuthorized
+// (see that var's own doc comment, and ErrActorNotLinked's own, for the
+// SECOND review pass's own fix for a confirmed button-stripping regression
+// this distinction closes) -- so every existing caller's own
 // errors.Is(err, ErrActorNotAuthorized) handling -- post the honest denial
 // message, do NOT release the webhook claim, do NOT treat it as a
-// retryable backend failure -- applies unchanged; see handler.go's own
-// authorizeExistingSessionReply and interactive.go's own
-// decideAndUpdateMessage/handleViewSubmission for the confirmed call sites.
+// retryable backend failure -- applies UNCHANGED, with no caller-side edit
+// required; see handler.go's own authorizeExistingSessionReply (unchanged)
+// and interactive.go's own decideAndUpdateMessage/handleViewSubmission
+// (which DO need to tell ErrActorNotLinked apart from a resolved-but-denied
+// ErrActorNotAuthorized, to avoid destructively stripping the Approve/
+// Reject buttons off a message that a not-yet-linked actor should still be
+// able to retry once linked) for the confirmed call sites.
 //
-// Returns ErrActorNotAuthorized when actorUserID is not linked at all
-// (above) OR when a RESOLVED actor's own role genuinely fails
-// domain/authz.Authorize -- both are final, non-retryable denials, handled
-// identically by every caller. Returns any OTHER (non-nil) error for a
-// genuine backend failure encountered while checking (deps.Sessions.Get/
-// actorauthz.OwnedOrJoined erroring) -- MEDIUM audit fix, see
-// ErrActorNotAuthorized's own doc comment for why this distinction matters
-// to the caller.
+// Returns ErrActorNotLinked when actorUserID is not linked at all (above,
+// itself matched by errors.Is(err, ErrActorNotAuthorized) too, see that
+// wrapping relationship above) OR ErrActorNotAuthorized directly when a
+// RESOLVED actor's own role genuinely fails domain/authz.Authorize -- both
+// are final, non-retryable denials, handled identically by every caller
+// that only checks for ErrActorNotAuthorized. Returns any OTHER (non-nil)
+// error for a genuine backend failure encountered while checking
+// (deps.Sessions.Get/actorauthz.OwnedOrJoined erroring) -- MEDIUM audit
+// fix, see ErrActorNotAuthorized's own doc comment for why this distinction
+// matters to the caller.
 func (deps Deps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) error {
 	if !actorUserID.Valid {
-		return ErrActorNotAuthorized
+		return ErrActorNotLinked
 	}
 
 	sessionRow, err := deps.Sessions.Get(ctx, sessionID)
