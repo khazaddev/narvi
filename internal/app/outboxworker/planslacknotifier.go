@@ -24,6 +24,8 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // planSlackNotifier implements ports.Notifier for both
@@ -78,10 +80,47 @@ func (n *planSlackNotifier) Deliver(ctx context.Context, notification ports.Noti
 // honestly-documented tradeoff of "correctness over avoiding a rare
 // duplicate post", matching this codebase's own outbox-retry precedent for
 // every other notifier) than to silently leave the ref unset.
+//
+// Audit fix M1: outbox delivery can be arbitrarily delayed (retries,
+// backoff -- OutboxBackoffBase/OutboxBackoffMax, platform/timeouts.go, up
+// to several minutes), so by the time this row is actually delivered the
+// plan may already have been decided (approved/rejected) or superseded by
+// a newer version, through a completely different entry point (REST
+// decideplan.go, Slack interactivity, Linear's handlePlanVerdict) --
+// posting a brand-new "Approve/Reject" message for a plan that is already
+// settled. planID is therefore parsed and the plan's own CURRENT status
+// re-fetched (PlanStore.Get) BEFORE the real Slack API call, and the post
+// is skipped entirely (a legitimate "no longer needed" outcome, returned
+// as nil, never retried/dead-lettered) if the plan is no longer
+// plandomain.StatusAwaitingApproval. This narrows (does not eliminate --
+// a fresh read-then-POST still has an inherent small window, same as
+// every other "recheck fresh state right before the side effect" fix in
+// this audit series, e.g. the SCM-credentials disabled/role recheck) the
+// staleness window from "the entire outbox delivery delay" down to "the
+// moment between this read and the Slack API call".
 func (n *planSlackNotifier) deliverApproval(ctx context.Context, raw json.RawMessage) error {
 	var payload slackapi.PlanApprovalPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return fmt.Errorf("outboxworker: decode slack plan-approval payload: %w", err)
+	}
+
+	var planID pgtype.UUID
+	if err := planID.Scan(payload.PlanID); err != nil {
+		return fmt.Errorf("outboxworker: parse plan id %q from slack plan-approval payload: %w", payload.PlanID, err)
+	}
+
+	planRow, err := n.plans.Get(ctx, planID)
+	if err != nil {
+		return fmt.Errorf("outboxworker: get plan %s for slack plan-approval staleness check: %w", payload.PlanID, err)
+	}
+	if plandomain.Status(planRow.Status) != plandomain.StatusAwaitingApproval {
+		// Guarded no-op -- same idiom as builder.go's own RenewClaim/
+		// MarkDelivered no-op logging: a legitimate "no longer needed"
+		// outcome, not a delivery failure, so this is never retried or
+		// dead-lettered.
+		platform.Logger(ctx).Warn("outboxworker: skip slack plan-approval post: plan no longer awaiting approval",
+			"plan_id", payload.PlanID, "status", string(planRow.Status))
+		return nil
 	}
 
 	channel, ts, err := n.client.PostPlanApprovalMessage(ctx, payload)
@@ -89,10 +128,6 @@ func (n *planSlackNotifier) deliverApproval(ctx context.Context, raw json.RawMes
 		return err
 	}
 
-	var planID pgtype.UUID
-	if err := planID.Scan(payload.PlanID); err != nil {
-		return fmt.Errorf("outboxworker: parse plan id %q from slack plan-approval payload: %w", payload.PlanID, err)
-	}
 	if err := n.plans.SetSlackMessageRef(ctx, planID, channel, ts); err != nil {
 		return fmt.Errorf("outboxworker: persist slack message ref for plan %s: %w", payload.PlanID, err)
 	}
