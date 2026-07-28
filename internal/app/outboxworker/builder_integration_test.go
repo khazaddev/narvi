@@ -31,6 +31,7 @@ import (
 	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"golang.org/x/sync/errgroup"
 
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -675,21 +676,24 @@ func TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery
 		t.Fatalf("NewBuilder B: %v", err)
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := builderA.PumpOnce(ctx); err != nil {
-			t.Errorf("builderA PumpOnce: %v", err)
-		}
-	}()
+	// errgroup (not a naked goroutine + sync.WaitGroup, CLAUDE.md §11)
+	// runs builderA's own PumpOnce concurrently with builderB's own,
+	// fired concurrentTickDelay later from this goroutine -- its error,
+	// if any, surfaces from eg.Wait() below, never via t.Errorf/t.Fatalf
+	// called from inside the goroutine itself.
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return builderA.PumpOnce(ctx)
+	})
 
 	time.Sleep(concurrentTickDelay)
 	if err := builderB.PumpOnce(ctx); err != nil {
 		t.Fatalf("builderB PumpOnce: %v", err)
 	}
 
-	wg.Wait()
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("builderA PumpOnce: %v", err)
+	}
 
 	notifierA.mu.Lock()
 	notifierB.mu.Lock()
