@@ -74,6 +74,13 @@ func TestWebhookHandler_Prompted_ConcurrentReplies_L2_OnlyOneSucceeds(t *testing
 	ctx := context.Background()
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
+	// installLinearFixture below (needed for this test's own GraphQL stub)
+	// means decryptLinearAccessToken succeeds, so resolveActor (identity.go)
+	// proceeds past its "no installation" short-circuit into
+	// identitylink.Resolve -- deps.IdentityLink must be wired up first,
+	// exactly like every other Linear test that reaches real identity
+	// resolution (see authz_backend_error_integration_test.go).
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, deps.AuditLog)
 
 	organizationID := "org-l2-concurrent-1"
 	installLinearFixture(ctx, t, pool, organizationID, deps.TokenEncryptionKey)
