@@ -141,6 +141,52 @@ func TestMarkdownToMrkdwn_Conversions(t *testing.T) {
 			in:   "[A|B](https://example.com/x)",
 			want: "<https://example.com/x|A|B>",
 		},
+
+		// --- Audit-fix batch: link-target allowlist (HIGH finding) ---
+		// A Markdown link's own TARGET, not just its label, must be
+		// checked before being wrapped in Slack's live <target|label>
+		// syntax -- otherwise a target that happens to look like one of
+		// Slack's own special forms (a bare "!channel" broadcast, a
+		// "#anchor" channel-reference shape, or an "@U123" user mention)
+		// becomes a real, live Slack tag purely because the converter
+		// wrapped it in "<...>" itself, with no raw "<"/">" literal in
+		// the source for escapeMrkdwnEntities to have caught.
+
+		{
+			name: "confirmed reproduction: a link target of bare !channel must never become a live @channel broadcast",
+			in:   "Please review and [ping the team](!channel) once ready.",
+			want: "Please review and ping the team (!channel) once ready.",
+		},
+		{
+			name: "an internal anchor link target must never become a live #channel-reference tag",
+			in:   "# [Overview](#overview)",
+			want: "*Overview (#overview)*",
+		},
+		{
+			name: "a link target of bare @U123 must never become a live user mention",
+			in:   "[cc the owner](@U0123ABCD)",
+			want: "cc the owner (@U0123ABCD)",
+		},
+		{
+			name: "a genuine https:// link target still converts normally (the fix must not over-correct)",
+			in:   "[text](https://example.com/path)",
+			want: "<https://example.com/path|text>",
+		},
+		{
+			name: "a genuine http:// link target still converts normally",
+			in:   "[docs](http://example.com/docs)",
+			want: "<http://example.com/docs|docs>",
+		},
+		{
+			name: "a mailto: link target still converts normally",
+			in:   "[email us](mailto:team@example.com)",
+			want: "<mailto:team@example.com|email us>",
+		},
+		{
+			name: "a relative path link target is rendered as safe plain text, not linkified",
+			in:   "[see here](../docs/readme.md)",
+			want: "see here (../docs/readme.md)",
+		},
 	}
 
 	for _, tc := range tests {

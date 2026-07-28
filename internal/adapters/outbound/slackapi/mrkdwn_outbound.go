@@ -55,13 +55,20 @@
 //     link's own label/URL text.
 //   - **bold** / __bold__ (common Markdown's two bold spellings) -> Slack
 //     mrkdwn's single-asterisk *bold*.
-//   - [text](url) -> Slack mrkdwn's <url|text> link form. A literal "|"
-//     inside the captured label is deliberately left unescaped -- Slack's
-//     own <url|text> parser splits on only the FIRST "|" it finds inside
-//     the tag, so a "|" appearing later, inside the label itself, is
-//     already correctly treated as part of the label text, not a second
-//     separator; there is no HTML-style entity for "|" in Slack's mrkdwn
-//     dialect to escape it into regardless.
+//   - [text](url) -> Slack mrkdwn's <url|text> link form -- but ONLY when
+//     "url" is a genuine URL this converter recognizes (currently
+//     "http://", "https://", "mailto:"; see allowedLinkSchemes below). A
+//     literal "|" inside the captured label is deliberately left
+//     unescaped -- Slack's own <url|text> parser splits on only the FIRST
+//     "|" it finds inside the tag, so a "|" appearing later, inside the
+//     label itself, is already correctly treated as part of the label
+//     text, not a second separator; there is no HTML-style entity for "|"
+//     in Slack's mrkdwn dialect to escape it into regardless.
+//   - A Markdown link whose target is NOT a recognized URL (e.g. bare
+//     "!channel", "#anchor", "@U0123ABCD", or a relative path) is
+//     deliberately NOT wrapped in Slack's <target|label> syntax at all --
+//     see the "Link-target allowlist" section below for why, and what
+//     renders instead.
 //   - # / ## / ... ATX headings -> Slack mrkdwn has NO heading syntax at
 //     all; the best honest degradation is rendering the heading text as a
 //     bold line (*Heading*), which at least visually sets it apart from
@@ -80,6 +87,37 @@
 //     ...) passes through unchanged -- not a construct this converter
 //     claims to handle, and not observed in practice in this codebase's own
 //     plan-mode content.
+//
+// # Link-target allowlist (audit-fix batch: link-target-constructed mentions)
+//
+// mdLinkPattern's captured "url" group is, by construction, ANY
+// non-whitespace, non-paren string -- it has no scheme/URL validation of
+// its own. Wrapping that capture verbatim into Slack's own "<target|
+// label>" syntax (as an earlier version of this converter did
+// unconditionally) means a Markdown link whose TARGET happens to look
+// like one of Slack's own special forms produces a live, syntactically
+// valid Slack tag: "[ping the team](!channel)" -> "<!channel|ping the
+// team>" (a real @channel broadcast), "[Overview](#overview)" ->
+// "<#overview|Overview>" (Slack's own channel-reference tag shape), or
+// "[cc the owner](@U0123ABCD)" -> "<@U0123ABCD|cc the owner>" (a real
+// user mention). None of this is a raw literal substring the
+// escapeMrkdwnEntities pass above could have caught -- the "<"/">"
+// wrapper characters are produced by THIS converter, after escaping
+// already ran, so escaping the source text can never neutralize it.
+//
+// This converter's job is rendering an LLM-generated plan's Markdown
+// content, not minting live Slack mentions/broadcasts/channel-references
+// out of whatever a link's target happens to look like -- so
+// isAllowedLinkTarget (below) restricts which targets are actually
+// allowed to become a Slack <target|label> tag to a deliberately small
+// allowlist of genuine URL schemes ("http://", "https://", "mailto:"). A
+// link whose target does NOT match renders as safe plain text instead --
+// "label (target)" -- so the reader still sees both the link's label and
+// its (inert, never-linkified) target, but Slack has nothing shaped like
+// "<...>" to ever interpret as a mention/broadcast/channel-reference.
+// Note this is deliberately NOT an attempt to allow Slack's own
+// special-mention forms through on purpose -- generating THOSE
+// intentionally is not this converter's job either.
 
 package slackapi
 
@@ -93,6 +131,30 @@ import (
 // contain "**bold**" and have that converted afterward (Slack's own
 // <url|text> form permits mrkdwn markup inside the "text" half).
 var mdLinkPattern = regexp.MustCompile(`\[([^\]]*)\]\(([^)\s]+)\)`)
+
+// allowedLinkSchemes is the deliberately small allowlist of URL schemes a
+// Markdown link's target must start with (case-insensitively) to be
+// rendered as Slack's own <target|label> link syntax -- see this file's
+// own top doc comment's "Link-target allowlist" section for why. Anything
+// that doesn't match (including Slack's own special-mention/channel/user
+// forms, or a relative path) is rendered as safe plain text instead by
+// mdLinkPattern's own replacement function in MarkdownToMrkdwn below.
+var allowedLinkSchemes = []string{"http://", "https://", "mailto:"}
+
+// isAllowedLinkTarget reports whether target is a genuine, recognizable
+// URL this converter is willing to turn into a live Slack <target|label>
+// link tag (see allowedLinkSchemes above). The check is case-insensitive
+// since URL schemes are; target itself is returned/used verbatim
+// (unmodified case) by the caller regardless of this check's outcome.
+func isAllowedLinkTarget(target string) bool {
+	lower := strings.ToLower(target)
+	for _, scheme := range allowedLinkSchemes {
+		if strings.HasPrefix(lower, scheme) {
+			return true
+		}
+	}
+	return false
+}
 
 // mdBoldPattern matches common Markdown's two bold-emphasis spellings --
 // "**bold**" and "__bold__" -- capturing whichever one matched in group 1
@@ -138,7 +200,22 @@ func MarkdownToMrkdwn(text string) string {
 	// re-escaped.
 	out := escapeMrkdwnEntities(text)
 
-	out = mdLinkPattern.ReplaceAllString(out, "<$2|$1>")
+	out = mdLinkPattern.ReplaceAllStringFunc(out, func(m string) string {
+		sub := mdLinkPattern.FindStringSubmatch(m)
+		label, target := sub[1], sub[2]
+		if isAllowedLinkTarget(target) {
+			return "<" + target + "|" + label + ">"
+		}
+		// target isn't a recognized URL scheme -- do NOT emit Slack's own
+		// <target|label> syntax, since target might be shaped like one of
+		// Slack's own special-mention/channel/user forms (e.g. "!channel",
+		// "#anchor", "@U0123ABCD"), which Slack would interpret as a live
+		// broadcast/channel-reference/mention once this text is posted.
+		// Render both the label and the (inert, never-linkified) target as
+		// plain text instead -- see this file's own top doc comment's
+		// "Link-target allowlist" section.
+		return label + " (" + target + ")"
+	})
 
 	out = mdBoldPattern.ReplaceAllStringFunc(out, func(m string) string {
 		sub := mdBoldPattern.FindStringSubmatch(m)
