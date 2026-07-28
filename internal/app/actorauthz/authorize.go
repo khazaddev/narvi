@@ -75,6 +75,45 @@ func AuthorizeResolvedActor(ctx context.Context, logger *slog.Logger, surface st
 	return true
 }
 
+// AuthorizeLinkedActor is the audit-hardening counterpart to
+// AuthorizeResolvedActor above, for exactly ONE call shape: an inbound
+// Slack/Linear actor that has NOT (yet) resolved to a real Narvi user_id at
+// all (actorUserID.Valid == false) is DENIED outright, rather than allowed
+// to proceed under bot attribution -- the audit finding this function
+// exists to close (docs/TECHNICAL_PLAN.md §13.2's own previous "the action
+// proceeds, a magic-link prompt is sent in parallel" behavior was a
+// user-decided hardening target, not a "keep as-is": letting a
+// not-yet-linked identity's state-changing action through at all, even
+// under bot attribution, is no longer acceptable). The magic-link prompt
+// itself is UNCHANGED and still sent by the caller exactly as before -- only
+// whether the state-changing action proceeds while that prompt is pending
+// changes. Once actorUserID IS Valid, this delegates to
+// AuthorizeResolvedActor unchanged, so an already-linked actor's role/
+// disabled/ownership verdict is identical either way.
+//
+// Do NOT collapse this back into AuthorizeResolvedActor, and do NOT change
+// AuthorizeResolvedActor's own actorUserID.Valid == false short-circuit to
+// match this one -- the two functions exist specifically BECAUSE Slack and
+// Linear have a mechanism GitHub does not. Slack/Linear's own auto-link
+// algorithm (internal/app/identitylink) treats an unresolved identity as
+// "not yet linked, but a magic link is on its way" -- a transient,
+// self-resolving state the actor can clear themselves by clicking the link
+// and retrying the identical action. GitHub's own commenter-identity
+// resolution (github/identity.go) is structurally different: it resolves
+// directly from an existing GitHub-OAuth-login identity with no deferred
+// "auto-link pending" mechanism at all -- an unresolved GitHub commenter has
+// simply never logged into Narvi via GitHub OAuth, a different and more
+// permanent case with no pending link to wait for. GitHub's own callers
+// (github/coalesce.go) must keep calling AuthorizeResolvedActor exactly as
+// today; only Slack/Linear's own direct session-creation gates and their
+// authorizeSessionAction helpers call this function instead.
+func AuthorizeLinkedActor(ctx context.Context, logger *slog.Logger, surface string, users *postgres.UserStore, actorUserID pgtype.UUID, action authz.Action, resource authz.Resource) bool {
+	if !actorUserID.Valid {
+		return false
+	}
+	return AuthorizeResolvedActor(ctx, logger, surface, users, actorUserID, action, resource)
+}
+
 // OwnedOrJoined mirrors internal/adapters/inbound/httpapi's own
 // canActOnPlan/CreateTurn "own/joined" resolution exactly (§13.3 row 2):
 // true iff sessionRow was created by actorUserID, or actorUserID has an

@@ -303,10 +303,21 @@ func (deps InteractiveDeps) handleBlockActions(ctx context.Context, logger *slog
 
 // slackPlanForbiddenText/slackPromptForbiddenErrorText are Step 39's own
 // additions ("identities + full RBAC", §13.2/§13.3): posted/shown instead
-// of proceeding when a resolved, linked actor's own role fails
-// domain/authz.Authorize -- mirroring the REST API's own 403 semantics
-// ("not authorized to ...", helpers.go/planapprove.go) rather than
-// silently dropping the click/submission.
+// of proceeding when the acting user isn't authorized -- mirroring the
+// REST API's own 403 semantics ("not authorized to ...",
+// helpers.go/planapprove.go) rather than silently dropping the
+// click/submission.
+//
+// Audit-fix batch update ("block unlinked actor state changes"): these same
+// two constants are now ALSO shown when the actor isn't linked to a Narvi
+// account at all yet (authorizeSessionAction below denies that case
+// immediately too, not only a resolved-but-insufficient-role denial).
+// Unlike handler.go's own ackNotAuthorizedText/ackNotAuthorizedReplyText,
+// no wording change was needed here -- neither constant ever claimed a link
+// already existed, so both already read correctly either way. The
+// separately-delivered magic-link ephemeral notice (decideAndUpdateMessage's
+// own notice via SlackClient.PostEphemeral) is what tells an unlinked actor
+// specifically how to fix it.
 //
 // slackDecisionErrorText/slackRequestChangesErrorText are this same Step's
 // own MEDIUM audit-fix addition ("Slack's interactive.go has its OWN
@@ -339,26 +350,33 @@ const (
 // own/joined, then Authorize" sequencing canActOnPlan/CreateTurn already
 // establish for the REST API (planauthz.go, httpapi/turn.go).
 //
-// actorUserID.Valid == false (still bot-attributed) short-circuits to a
-// nil (allowed) return immediately, with NO session/participants lookup at
-// all -- preserving §13.2's own "unlinked actors get bot attribution ...
-// the action proceeds" precedent, and avoiding any DB read at all on the
-// common bot-attributed path (this runs inside Slack's own tight
-// interactivity-ack budget).
+// actorUserID.Valid == false (not yet linked -- the auto-link attempt for
+// this identity did not resolve) now returns ErrActorNotAuthorized
+// immediately, with NO session/participants lookup at all -- audit-fix
+// batch update ("block unlinked actor state changes"): this used to return
+// nil (allowed), preserving §13.2's own original "unlinked actors get bot
+// attribution ... the action proceeds" precedent. That precedent was a
+// deliberate, user-decided hardening target, not a "keep as-is": a
+// not-yet-linked actor's plan decision / request-changes submission is now
+// denied exactly like a linked-but-insufficient-role one, and the SAME
+// magic-link prompt this identity already gets (resolveSlackActorSingleAttempt's
+// own notice, delivered by both callers regardless of this denial) is how
+// they retry once actually linked.
 //
 // This is a SEPARATE function from identity.go's own (Deps.
 // authorizeSessionAction, the Events-API ingress's twin) -- a different
 // receiver type (InteractiveDeps, not Deps), never the same function --
 // but both share the package-level ErrActorNotAuthorized sentinel
 // (identity.go) directly: a denial means the identical thing regardless of
-// which route rendered it. Returns ErrActorNotAuthorized when a RESOLVED
-// actor's own role genuinely fails domain/authz.Authorize -- a final,
-// non-retryable denial. Returns any OTHER (non-nil) error for a genuine
-// backend failure encountered while checking (deps.Sessions.Get/
-// actorauthz.OwnedOrJoined erroring) -- MEDIUM audit fix ("Slack's
-// interactive.go has its OWN separate, still-unfixed copy" of the same
-// conflation identity.go's own twin already had fixed): before this fix,
-// this function's own bare bool made a transient backend error
+// which route rendered it. Returns ErrActorNotAuthorized when actorUserID
+// is not linked at all (above) OR when a RESOLVED actor's own role
+// genuinely fails domain/authz.Authorize -- both are final, non-retryable
+// denials, handled identically by both call sites below. Returns any OTHER
+// (non-nil) error for a genuine backend failure encountered while checking
+// (deps.Sessions.Get/actorauthz.OwnedOrJoined erroring) -- MEDIUM audit fix
+// ("Slack's interactive.go has its OWN separate, still-unfixed copy" of the
+// same conflation identity.go's own twin already had fixed): before that
+// fix, this function's own bare bool made a transient backend error
 // indistinguishable from a real denial, so BOTH decideAndUpdateMessage and
 // handleViewSubmission (below) showed the misleading "you don't have
 // permission" text on an internal failure and silently discarded the
@@ -371,7 +389,7 @@ const (
 // an actually meaningful retry.
 func (deps InteractiveDeps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) error {
 	if !actorUserID.Valid {
-		return nil
+		return ErrActorNotAuthorized
 	}
 
 	sessionRow, err := deps.Sessions.Get(ctx, sessionID)
@@ -462,11 +480,15 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 	// that resolved to a REAL, linked user_id must still pass domain/authz.
 	// Authorize(ActionApprovePlan) -- exactly what the REST approve/reject
 	// endpoints already require via canActOnPlan (planauthz.go) -- before
-	// this click is allowed to decide anything. A still-unlinked
-	// (bot-attributed) decidedBy is untouched: authorizeSessionAction
-	// returns true immediately for that case, preserving this package's own
-	// existing "Slack verdicts stay unauthenticated-per-user until linked"
-	// precedent (decideplan.go's own top doc comment).
+	// this click is allowed to decide anything.
+	//
+	// Audit-fix batch update ("block unlinked actor state changes"): a
+	// still-unlinked (bot-attributed) decidedBy is NO LONGER let through --
+	// authorizeSessionAction now returns ErrActorNotAuthorized immediately
+	// for that case too, replacing this package's previous "Slack verdicts
+	// stay unauthenticated-per-user until linked" precedent (decideplan.go's
+	// own top doc comment describes the OLD behavior) with a denial, exactly
+	// like a linked-but-insufficient-role decidedBy.
 	if err := deps.authorizeSessionAction(decideCtx, logger, sessionID, decidedBy, authz.ActionApprovePlan); err != nil {
 		if errors.Is(err, ErrActorNotAuthorized) {
 			logger.Warn("slack: interactivity: plan decision denied by authz", "plan_id", planIDStr, "session_id", sessionIDStr, "user_id", decidedBy.String())
@@ -661,9 +683,18 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 	// linked actorUserID must still pass domain/authz.
 	// Authorize(ActionPromptSession) -- this "Request changes" turn is
 	// exactly the same state-changing command POST .../turns itself gates
-	// (turn.go's own authorize call). A still-unlinked (bot-attributed)
-	// actorUserID is untouched (authorizeSessionAction returns true
-	// immediately), preserving this package's own existing precedent.
+	// (turn.go's own authorize call).
+	//
+	// Audit-fix batch update ("block unlinked actor state changes"): a
+	// still-unlinked (bot-attributed) actorUserID is NO LONGER let through
+	// -- authorizeSessionAction now returns ErrActorNotAuthorized
+	// immediately for that case too, denying this submission exactly like a
+	// linked-but-insufficient-role actorUserID. This modal-submission
+	// response has no channel/message to deliver a magic-link notice into
+	// either way (see resolveSlackActorSingleAttempt's own call just above)
+	// -- the same still-unlinked identity still gets its in-channel notice
+	// the next time any OTHER event from it arrives, unaffected by this
+	// denial.
 	if err := deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession); err != nil {
 		if errors.Is(err, ErrActorNotAuthorized) {
 			logger.Warn("slack: interactivity: request-changes turn denied by authz", "session_id", sessionIDStr, "user_id", actorUserID.String())

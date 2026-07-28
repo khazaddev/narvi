@@ -403,12 +403,38 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 	// that resolved to a REAL, linked user_id must still pass domain/authz.
 	// Authorize(ActionCreateSession) -- exactly what the REST /api/sessions
 	// handler already requires (create.go's own authorize call). Resource{}
-	// is always correct here (no ownership carve-out on create). A still-
-	// unlinked (bot-attributed, including every automation-initiated,
-	// nil-CreatorID session) creator is untouched --
-	// actorauthz.AuthorizeResolvedActor returns true immediately for that
-	// case, preserving §13.2's own existing precedent.
-	if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
+	// is always correct here (no ownership carve-out on create).
+	//
+	// Audit-fix batch update ("block unlinked actor state changes"): a
+	// still-unlinked (bot-attributed) creator whose event DID carry a real
+	// Linear user id (creatorID != "") is NO LONGER let through -- that is
+	// exactly the "actor not yet linked" case this hardening targets
+	// (resolveActor above already attempted to auto-link it and either
+	// failed or minted a magic-link prompt), so it now denies via
+	// actorauthz.AuthorizeLinkedActor instead of AuthorizeResolvedActor: the
+	// magic-link prompt already sent means this same actor can simply retry
+	// the identical delegation once their account is linked. See that
+	// function's own doc comment for why this is the correct call here
+	// (Linear has a pending-link mechanism GitHub does not).
+	//
+	// A genuinely automation-initiated session (creatorID == "", Linear's
+	// own "unset if automation-initiated") is DELIBERATELY carved OUT of
+	// this hardening -- it is not "an actor not yet linked" at all: there is
+	// no external id to ever resolve, resolveActor's own short-circuit for
+	// an empty externalID never even attempts a lookup, and no magic-link
+	// prompt is ever minted for it (identical to today, pre-batch). Denying
+	// it would have NO possible retry path -- unlike a real Linear user
+	// whose auto-link genuinely failed, there is no human who could ever
+	// click a link to unblock it -- so this specific case keeps calling the
+	// unconditional AuthorizeResolvedActor, preserving its existing
+	// bot-attributed pass-through exactly as before this batch (still
+	// covered by TestWebhookHandler_Created_CreatesSessionAndTurn,
+	// webhook_integration_test.go, which exercises exactly this shape).
+	authorize := actorauthz.AuthorizeLinkedActor
+	if creatorID == "" {
+		authorize = actorauthz.AuthorizeResolvedActor
+	}
+	if !authorize(ctx, logger, authzSurface, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
 		logger.Warn("linear: create session denied by authz", "agent_session_id", payload.AgentSession.ID, "user_id", creator.String())
 		// H3 audit fix: release the SEPARATE linear_agent_sessions claim
 		// this call just won -- see this function's own top doc comment for
@@ -417,7 +443,13 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 		if releaseErr := deps.AgentSessions.Release(ctx, payload.AgentSession.ID); releaseErr != nil {
 			logger.Error("linear: release agent session claim failed", "error", releaseErr, "agent_session_id", payload.AgentSession.ID)
 		}
-		deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("Your linked Narvi account isn't authorized to start new sessions from Linear.", notice))
+		// Audit-fix batch update: wording no longer says "Your linked Narvi
+		// account" -- that phrasing assumed a link already existed, which is
+		// now wrong for the NEW denial case this same text also covers (an
+		// actor whose auto-link attempt hasn't resolved at all). Reads
+		// correctly either way; the appended notice (when non-empty) is what
+		// tells an unlinked actor specifically how to fix it.
+		deps.postAcknowledgment(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("This actor is not authorized to start new sessions from Linear.", notice))
 		return true
 	}
 
@@ -602,14 +634,30 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// itself gates behind ActionPromptSession (turn.go's own authorize
 	// call). An actorUserID that resolved to a REAL, linked user_id must
 	// pass that same check before this reply is allowed to create a turn.
-	// A still-unlinked (bot-attributed) actorUserID is untouched --
-	// authorizeSessionAction returns nil immediately for that case,
-	// preserving §13.2's own "the action proceeds" precedent for the
-	// not-yet-linked case.
+	//
+	// Audit-fix batch update ("block unlinked actor state changes"): a
+	// still-unlinked (bot-attributed) actorUserID is NO LONGER let through
+	// -- authorizeSessionAction (identity.go) now returns
+	// ErrActorNotAuthorized immediately for that case too (its own
+	// top-of-function short-circuit changed from "return nil" to "return
+	// ErrActorNotAuthorized"), replacing §13.2's own original "the action
+	// proceeds" precedent for the not-yet-linked case with a denial,
+	// identical to a linked-but-insufficient-role actorUserID.
+	// AgentActivity.UserID is Linear's own REQUIRED field (never empty the
+	// way AgentSession.CreatorID can be, see resolveActor's own call
+	// above) -- so there is no automation-initiated carve-out needed here
+	// the way handleCreated's own creator gate needs one.
 	if err := deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionPromptSession); err != nil {
 		if errors.Is(err, ErrActorNotAuthorized) {
 			logger.Warn("linear: prompted reply denied by authz", "session_id", sessionID.String(), "user_id", actorUserID.String())
-			deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("Your linked Narvi account isn't authorized to prompt this session.", notice))
+			// Audit-fix batch update: wording no longer says "Your linked
+			// Narvi account" -- that phrasing assumed a link already
+			// existed, which is now wrong for the NEW denial case this same
+			// text also covers (an actor whose auto-link attempt hasn't
+			// resolved at all). Reads correctly either way; the appended
+			// notice (when non-empty) is what tells an unlinked actor
+			// specifically how to fix it.
+			deps.postIdentityNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice("This actor is not authorized to prompt this session.", notice))
 			return true
 		}
 		// MEDIUM audit fix ("authorizeSessionAction conflates a genuine
@@ -727,11 +775,15 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, ses
 	// Step 39 ("identities + full RBAC", §13.2/§13.3) update: a decidedBy
 	// that resolved to a REAL, linked user_id must still pass domain/authz.
 	// Authorize(ActionApprovePlan) -- exactly what the REST approve/reject
-	// endpoints already require via canActOnPlan (planauthz.go). A still-
-	// unlinked (bot-attributed) decidedBy is untouched -- authorizeSessionAction
-	// returns nil immediately for that case, preserving this package's own
-	// existing "Linear verdicts stay unauthenticated-per-user until linked"
-	// precedent (decideplan.go's own top doc comment).
+	// endpoints already require via canActOnPlan (planauthz.go).
+	//
+	// Audit-fix batch update ("block unlinked actor state changes"): a
+	// still-unlinked (bot-attributed) decidedBy is NO LONGER let through --
+	// authorizeSessionAction now returns ErrActorNotAuthorized immediately
+	// for that case too, replacing this package's previous "Linear verdicts
+	// stay unauthenticated-per-user until linked" precedent (decideplan.go's
+	// own top doc comment describes the OLD behavior) with a denial, exactly
+	// like a linked-but-insufficient-role decidedBy.
 	//
 	// LOW audit fix (second review pass): this NOW distinguishes
 	// ErrActorNotAuthorized from a genuine backend error, using the exact

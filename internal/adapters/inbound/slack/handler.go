@@ -63,23 +63,34 @@ const (
 
 	// ackNotAuthorizedText is Step 39's own addition ("identities + full
 	// RBAC", §13.2/§13.3): posted instead of ackNewSessionText when the
-	// auto-linked/already-linked actor's own role fails domain/authz.
-	// Authorize(ActionCreateSession) -- mirrors the REST API's own 403
-	// semantics ("not authorized to perform this action", helpers.go)
-	// rather than silently creating the session anyway.
-	ackNotAuthorizedText = "Your linked Narvi account isn't authorized to start new sessions from Slack."
+	// acting user isn't authorized to create a session -- mirrors the REST
+	// API's own 403 semantics ("not authorized to perform this action",
+	// helpers.go) rather than silently creating the session anyway.
+	//
+	// Audit-fix batch update ("block unlinked actor state changes"): the
+	// wording no longer says "Your linked Narvi account" -- that phrasing
+	// assumed a link already existed, which is now wrong for the NEW
+	// denial case this same text also covers: an actor whose auto-link
+	// attempt hasn't resolved at all (AuthorizeLinkedActor denies before
+	// ever consulting a role). The wording below reads correctly for
+	// EITHER case (not linked yet, or linked but insufficient role) --
+	// the separately-posted magic-link notice (resolveSlackActor's own
+	// notice, delivered regardless of this denial) is what tells an
+	// unlinked actor specifically how to fix it.
+	ackNotAuthorizedText = "You're not authorized to start new sessions from Slack."
 
 	// ackNotAuthorizedReplyText is this Step's own SECOND fix-pass
 	// addition ("identities + full RBAC", §13.2/§13.3 -- a confirmed
-	// re-review finding): posted instead of enqueuing a turn when a
-	// resolved, linked actor's reply on an ALREADY-MAPPED thread (or a
-	// brand-new mention that lost the first-writer-wins race and falls
-	// back onto a DIFFERENT, already-existing session) fails
-	// domain/authz.Authorize(ActionPromptSession) -- mirrors
-	// ackNotAuthorizedText's own wording above, and Linear's identical
-	// denial text for the equivalent ordinary-reply fallthrough
-	// (webhook.go's own handlePrompted).
-	ackNotAuthorizedReplyText = "Your linked Narvi account isn't authorized to prompt this session."
+	// re-review finding): posted instead of enqueuing a turn when the
+	// acting user isn't authorized to prompt this session (a reply on an
+	// ALREADY-MAPPED thread, or a brand-new mention that lost the
+	// first-writer-wins race and falls back onto a DIFFERENT,
+	// already-existing session) -- mirrors ackNotAuthorizedText's own
+	// wording above (same audit-fix-batch update: no longer assumes a
+	// link already exists), and Linear's identical denial text for the
+	// equivalent ordinary-reply fallthrough (webhook.go's own
+	// handlePrompted).
+	ackNotAuthorizedReplyText = "You're not authorized to prompt this session."
 )
 
 // Deps bundles every dependency NewHandler needs -- a small config
@@ -447,11 +458,17 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	// domain/authz.Authorize(ActionCreateSession), exactly like the REST
 	// /api/sessions handler already requires (create.go's own authorize
 	// call). Resource{} is always correct here (no ownership carve-out on
-	// create, mirroring create.go's own identical reasoning). A still-
-	// unlinked (bot-attributed) creator is untouched --
-	// actorauthz.AuthorizeResolvedActor returns true immediately for that
-	// case, preserving §13.2's own explicit "the action proceeds" precedent.
-	if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
+	// create, mirroring create.go's own identical reasoning).
+	//
+	// Audit-fix batch update ("block unlinked actor state changes"): a
+	// still-unlinked (bot-attributed) creator is NO LONGER let through --
+	// actorauthz.AuthorizeLinkedActor (unlike AuthorizeResolvedActor) denies
+	// immediately when creator.Valid is false, since the magic-link prompt
+	// already sent by resolveSlackActor above means this same actor can
+	// simply retry the identical mention once their account is linked. See
+	// that function's own doc comment for why this is the correct call here
+	// (Slack has a pending-link mechanism GitHub does not).
+	if !actorauthz.AuthorizeLinkedActor(ctx, logger, authzSurface, deps.IdentityLink.Users, creator, authz.ActionCreateSession, authz.Resource{}) {
 		logger.Warn("slack: create-session denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
 		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedText); ackErr != nil {
 			logger.Warn("slack: post not-authorized ack failed", "error", ackErr)
@@ -500,9 +517,17 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 // -- see that function's own doc comment) behind
 // domain/authz.Authorize(ActionPromptSession), replying in-thread with
 // ackNotAuthorizedReplyText on denial instead of letting handleEvent's own
-// addTurn enqueue a turn. A still-unlinked (bot-attributed) creator is
-// untouched: authorizeSessionAction (identity.go) returns nil immediately
-// for that case, preserving §13.2's own "the action proceeds" precedent.
+// addTurn enqueue a turn.
+//
+// Audit-fix batch update ("block unlinked actor state changes"): a
+// still-unlinked (bot-attributed) creator is NO LONGER let through --
+// authorizeSessionAction (identity.go) now returns ErrActorNotAuthorized
+// immediately for that case (its own top-of-function short-circuit changed
+// from "return nil" to "return ErrActorNotAuthorized"), which this function
+// handles identically to a resolved-but-insufficient-role denial below: an
+// in-thread ackNotAuthorizedReplyText reply, no turn enqueued. The magic-
+// link notice (resolveSlackActor's own notice, delivered by the caller
+// regardless of this denial) is what tells this actor how to fix it.
 //
 // ok (the second return value) is false ONLY for a genuine backend error
 // authorizeSessionAction hit while checking (MEDIUM audit fix,

@@ -190,24 +190,30 @@ func appendNotice(base, notice string) string {
 // AuthorizeResolvedActor/actorauthz.OwnedOrJoined directly now; nothing
 // about ITS OWN behavior changed.
 
-// ErrActorNotAuthorized is authorizeSessionAction's own sentinel for "a
-// resolved, linked actor's role genuinely failed domain/authz.Authorize"
-// -- MEDIUM audit fix ("authorizeSessionAction conflates a genuine backend
-// error with a real authorization denial"), mirroring github's own
-// identical ErrActorNotAuthorized (coalesce.go). Deliberately DISTINCT from
-// any other error authorizeSessionAction returns: a caller checks for this
-// one specifically and treats it as a final, non-retryable denial (skip
-// without releasing the webhook-delivery claim -- redelivering the
-// identical event would just render the same denial again), while any
-// OTHER error is a genuine backend failure encountered WHILE checking
-// authorization (e.g. deps.Sessions.Get hitting a dropped connection),
-// which the caller instead routes into the SAME release-the-claim-and-
-// retry path this batch's H2 fix already wired up for every other
-// post-claim failure -- BEFORE this fix, authorizeSessionAction's own bare
-// bool made the two indistinguishable, so a one-off DB blip was silently
-// treated as a deliberate "skip, no release" business decision, dropping
-// the user's legitimate message forever with no chance of redelivery ever
-// retrying it.
+// ErrActorNotAuthorized is authorizeSessionAction's own sentinel for a
+// final, non-retryable denial -- either "a resolved, linked actor's role
+// genuinely failed domain/authz.Authorize", OR (audit-fix batch update,
+// "block unlinked actor state changes") "actorUserID never resolved to a
+// linked account at all". Originally added for the first case only (MEDIUM
+// audit fix, "authorizeSessionAction conflates a genuine backend error with
+// a real authorization denial"), mirroring github's own identical
+// ErrActorNotAuthorized (coalesce.go) -- reused rather than duplicated for
+// the second case, since every caller's existing errors.Is(err,
+// ErrActorNotAuthorized) handling already does exactly the right thing for
+// both: post the honest denial message, do not release the webhook claim,
+// do not treat it as retryable. Deliberately DISTINCT from any other error
+// authorizeSessionAction returns: a caller checks for this one specifically
+// and treats it as a final, non-retryable denial (skip without releasing
+// the webhook-delivery claim -- redelivering the identical event would just
+// render the same denial again), while any OTHER error is a genuine backend
+// failure encountered WHILE checking authorization (e.g. deps.Sessions.Get
+// hitting a dropped connection), which the caller instead routes into the
+// SAME release-the-claim-and-retry path this batch's H2 fix already wired
+// up for every other post-claim failure -- BEFORE the MEDIUM fix,
+// authorizeSessionAction's own bare bool made the two indistinguishable, so
+// a one-off DB blip was silently treated as a deliberate "skip, no release"
+// business decision, dropping the user's legitimate message forever with no
+// chance of redelivery ever retrying it.
 var ErrActorNotAuthorized = errors.New("linear: actor not authorized")
 
 // authorizeSessionAction renders the exact §13.3 verdict domain/authz.
@@ -217,20 +223,36 @@ var ErrActorNotAuthorized = errors.New("linear: actor not authorized")
 // (ActionApprovePlan) below, mirroring internal/adapters/inbound/slack's
 // own identical InteractiveDeps.authorizeSessionAction exactly.
 //
-// actorUserID.Valid == false (still bot-attributed) short-circuits to a
-// nil (allowed) return immediately, with NO session/participants lookup at
-// all -- preserving §13.2's own "unlinked actors get bot attribution ...
-// the action proceeds" precedent.
+// actorUserID.Valid == false (not yet linked -- the auto-link attempt for
+// this identity did not resolve) now returns ErrActorNotAuthorized
+// immediately, with NO session/participants lookup at all -- audit-fix
+// batch update ("block unlinked actor state changes"): this used to return
+// nil (allowed), preserving §13.2's own original "unlinked actors get bot
+// attribution ... the action proceeds" precedent. That precedent was a
+// deliberate, user-decided hardening target, not a "keep as-is": a
+// not-yet-linked actor's ordinary reply or plan decision is now denied
+// exactly like a linked-but-insufficient-role one, and the SAME magic-link
+// prompt this identity already gets (resolveActor's own notice, appended by
+// every caller regardless of this denial) is how they retry once actually
+// linked. AgentActivity.UserID (the only actorUserID either caller below
+// ever passes in) is Linear's own REQUIRED field -- never empty the way
+// AgentSession.CreatorID can be (see webhook.go's own handleCreated for the
+// separate, deliberately-carved-out automation-initiated case that
+// authorizeSessionAction is never involved in at all) -- so every call
+// here really is a genuine attempted identity, never a "no actor at all"
+// case being swept up by this change.
 //
-// Returns ErrActorNotAuthorized when a RESOLVED actor's own role
-// genuinely fails domain/authz.Authorize -- a final, non-retryable denial.
-// Returns any OTHER (non-nil) error for a genuine backend failure
-// encountered while checking (deps.Sessions.Get/actorauthz.OwnedOrJoined
-// erroring) -- MEDIUM audit fix, see ErrActorNotAuthorized's own doc
-// comment for why this distinction matters to the caller.
+// Returns ErrActorNotAuthorized when actorUserID is not linked at all
+// (above) OR when a RESOLVED actor's own role genuinely fails
+// domain/authz.Authorize -- both are final, non-retryable denials, handled
+// identically by every caller. Returns any OTHER (non-nil) error for a
+// genuine backend failure encountered while checking (deps.Sessions.Get/
+// actorauthz.OwnedOrJoined erroring) -- MEDIUM audit fix, see
+// ErrActorNotAuthorized's own doc comment for why this distinction matters
+// to the caller.
 func (deps Deps) authorizeSessionAction(ctx context.Context, logger *slog.Logger, sessionID, actorUserID pgtype.UUID, action authz.Action) error {
 	if !actorUserID.Valid {
-		return nil
+		return ErrActorNotAuthorized
 	}
 
 	sessionRow, err := deps.Sessions.Get(ctx, sessionID)

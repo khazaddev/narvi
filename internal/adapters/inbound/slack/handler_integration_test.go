@@ -114,12 +114,64 @@ type slackTestRig struct {
 	threads  *narvipg.SlackThreadSessionStore
 }
 
+// linkSlackIdentityForTest links slackUserID directly to a NEW fixture
+// Narvi user (role) via identities.Create -- bypassing any profile-email
+// fetch entirely: identitylink.Resolve's own fast path
+// (GetByProviderAndExternalID) always wins first regardless of what any
+// fake Slack /users.info stub answers, so this package's many baseline
+// HTTP-level tests (which only care about session/turn/audit-log/redelivery
+// mechanics, never about the auto-linking algorithm itself) can exercise a
+// genuinely LINKED, authorized actor.
+//
+// Audit-fix batch addition ("block unlinked actor state changes"): BEFORE
+// this batch, every one of this package's baseline tests relied
+// (incidentally, never as their own point) on the OLD "an actor that never
+// resolves at all still gets its state-changing action allowed through,
+// under bot attribution" precedent -- resolveSlackActor's own
+// GetUserEmail call against these tests' generic {"ok":true}-only fake
+// Slack servers never found a real email, so EVERY fixture event's own
+// actor was, and stayed, unresolved. That precedent is exactly what this
+// batch's own hardening removes (actorauthz.AuthorizeLinkedActor), so every
+// baseline test's own fixture Slack user id must now be pre-linked here
+// instead, to a role with unconditional (no ownership-carve-out-dependent)
+// permission for every action these tests exercise.
+func linkSlackIdentityForTest(ctx context.Context, t *testing.T, pool *pgxpool.Pool, slackUserID string, role sqlcgen.UserRole) sqlcgen.User {
+	t.Helper()
+	user, err := narvipg.NewUserStore(pool).Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: slackUserID + "@narvi-test.example.com",
+		DisplayName:  slackUserID,
+		Role:         role,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user for %s: %v", slackUserID, err)
+	}
+	if _, err := narvipg.NewIdentityStore(pool).Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:     user.ID,
+		Provider:   sqlcgen.IdentityProviderSlack,
+		ExternalID: slackUserID,
+		LinkedVia:  sqlcgen.IdentityLinkedViaAdmin,
+	}); err != nil {
+		t.Fatalf("link fixture identity for %s: %v", slackUserID, err)
+	}
+	return user
+}
+
 // newSlackTestRig wires a real handler against pool -- a fake Slack Web
 // API server (ackServer) stands in for chat.postMessage, so this
 // package's own tests never make a real network call.
 func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	t.Helper()
 	ctx := context.Background()
+
+	// Audit-fix batch addition: appMentionEnvelope/messageEnvelope's own
+	// fixed "U0TESTUSER"/"U0OTHERUSER" ids (below) must now resolve to a
+	// genuinely LINKED, sufficiently-privileged actor -- see
+	// linkSlackIdentityForTest's own doc comment above for why. RoleMaintainer
+	// is allowed unconditionally for every action this package's baseline
+	// tests exercise (ActionCreateSession/ActionPromptSession/
+	// ActionApprovePlan), regardless of session ownership.
+	linkSlackIdentityForTest(ctx, t, pool, "U0TESTUSER", sqlcgen.UserRoleMaintainer)
+	linkSlackIdentityForTest(ctx, t, pool, "U0OTHERUSER", sqlcgen.UserRoleMaintainer)
 
 	ackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

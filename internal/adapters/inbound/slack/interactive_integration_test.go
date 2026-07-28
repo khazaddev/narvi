@@ -28,6 +28,7 @@ import (
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -52,12 +53,32 @@ type interactiveTestRig struct {
 	plans    *narvipg.PlanStore
 
 	requests chan recordedSlackRequest
+
+	// defaultActorUserID is the fixture Narvi user interactivityDefaultUserID
+	// (below) is pre-linked to -- audit-fix batch addition, exposed so a
+	// test can assert plans.decided_by against a REAL, linked actor now that
+	// this package's own "unresolved actor still proceeds under bot
+	// attribution" precedent no longer holds.
+	defaultActorUserID pgtype.UUID
 }
 
 func newInteractiveTestRig(t *testing.T, pool *pgxpool.Pool) *interactiveTestRig {
 	t.Helper()
 	return newInteractiveTestRigWithTimeouts(t, pool, platform.DefaultTimeouts())
 }
+
+// interactivityDefaultUserID is the fixed Slack user id every baseline
+// test in this file attributes its button-click/modal-submission payloads
+// to (blockActionsPayloadJSON below, and the view_submission literal in
+// TestInteractivityHandler_ViewSubmission_CreatesRequestChangesTurn) --
+// pre-linked (below) to a RoleMaintainer fixture user so these tests keep
+// exercising DecidePlan/CreateTurnCore's own real mechanics after the
+// "block unlinked actor state changes" audit fix, rather than relying on
+// the OLD "an unresolved actor's action still proceeds" precedent these
+// tests were never actually about in the first place -- see
+// linkSlackIdentityForTest's own doc comment (handler_integration_test.go)
+// for the full reasoning.
+const interactivityDefaultUserID = "U0INTERACTIVE-DEFAULT"
 
 // newInteractiveTestRigWithTimeouts is newInteractiveTestRig's own
 // parameterized twin, letting a test (e.g. the SlackInteractivityAckTimeout
@@ -67,6 +88,8 @@ func newInteractiveTestRig(t *testing.T, pool *pgxpool.Pool) *interactiveTestRig
 func newInteractiveTestRigWithTimeouts(t *testing.T, pool *pgxpool.Pool, timeouts platform.Timeouts) *interactiveTestRig {
 	t.Helper()
 	ctx := context.Background()
+
+	defaultActor := linkSlackIdentityForTest(ctx, t, pool, interactivityDefaultUserID, sqlcgen.UserRoleMaintainer)
 
 	requests := make(chan recordedSlackRequest, 16)
 	fakeSlack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -103,11 +126,27 @@ func newInteractiveTestRigWithTimeouts(t *testing.T, pool *pgxpool.Pool, timeout
 		Registry:            registry,
 		SlackClient:         slackClient,
 		AuditLog:            auditLog,
-		SigningSecret:       testSigningSecret,
-		Timeouts:            timeouts,
+		// Participants/IdentityLink (audit-fix batch addition): now that
+		// interactivityDefaultUserID above resolves to a genuinely LINKED
+		// actor, authorizeSessionAction's own OwnedOrJoined/
+		// AuthorizeResolvedActor calls need real, non-nil stores to run
+		// against -- mirrors newSlackTestRig's own identical wiring
+		// (handler_integration_test.go).
+		Participants: narvipg.NewParticipantStore(pool),
+		IdentityLink: identitylink.Deps{
+			Pool:          pool,
+			Users:         narvipg.NewUserStore(pool),
+			Identities:    narvipg.NewIdentityStore(pool),
+			LinkPrompts:   narvipg.NewIdentityLinkPromptStore(pool),
+			AuditLog:      auditLog,
+			PublicBaseURL: "https://narvi.example.com",
+			PromptTTL:     time.Hour,
+		},
+		SigningSecret: testSigningSecret,
+		Timeouts:      timeouts,
 	})
 
-	return &interactiveTestRig{handler: handler, pool: pool, sessions: sessions, turns: turns, plans: plans, requests: requests}
+	return &interactiveTestRig{handler: handler, pool: pool, sessions: sessions, turns: turns, plans: plans, requests: requests, defaultActorUserID: defaultActor.ID}
 }
 
 // signedInteractivityRequest builds a real, correctly-signed POST
@@ -166,7 +205,11 @@ func seedSessionTurnAndAwaitingPlan(ctx context.Context, t *testing.T, rig *inte
 }
 
 // blockActionsPayloadJSON builds a real-shaped block_actions interaction
-// payload JSON string.
+// payload JSON string. The "user" field is always interactivityDefaultUserID
+// (audit-fix batch update: pre-linked, above, to a RoleMaintainer fixture
+// user) -- a real block_actions payload always carries one (blockActionsPayload.
+// User, interactive.go), and this package's own baseline tests need it
+// resolved to a genuinely linked actor now that an unresolved one is denied.
 func blockActionsPayloadJSON(actionID, value, channel, messageTS, triggerID string) string {
 	payload := map[string]any{
 		"type":       "block_actions",
@@ -174,9 +217,36 @@ func blockActionsPayloadJSON(actionID, value, channel, messageTS, triggerID stri
 		"channel":    map[string]string{"id": channel},
 		"message":    map[string]string{"ts": messageTS},
 		"actions":    []map[string]string{{"action_id": actionID, "value": value}},
+		"user":       map[string]string{"id": interactivityDefaultUserID},
 	}
 	raw, _ := json.Marshal(payload)
 	return string(raw)
+}
+
+// awaitRequestWithPath drains rig.requests until it finds one whose path
+// matches want, or times out -- audit-fix batch addition: now that
+// interactivityDefaultUserID resolves to a real, linked actor,
+// resolveSlackActorSingleAttempt's own GetUserEmail call (identity.go)
+// ALSO hits this rig's fake Slack server (a /users.info request), landing
+// on rig.requests ahead of the chat.update/views.open call each of this
+// file's own tests actually cares about -- a plain single-receive select
+// (this file's own PREVIOUS precedent, back when no "user" field meant
+// GetUserEmail was never called at all) would flakily grab that /users.info
+// request instead.
+func awaitRequestWithPath(t *testing.T, requests chan recordedSlackRequest, want string) recordedSlackRequest {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case got := <-requests:
+			if got.path == want {
+				return got
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for a recorded request with path %q", want)
+			return recordedSlackRequest{}
+		}
+	}
 }
 
 // TestInteractivityHandler_BlockActions_ApprovePlan proves the full,
@@ -209,8 +279,13 @@ func TestInteractivityHandler_BlockActions_ApprovePlan(t *testing.T) {
 	if dbStatus != sqlcgen.PlanStatusApproved {
 		t.Errorf("db status = %q, want %q", dbStatus, sqlcgen.PlanStatusApproved)
 	}
-	if decidedBy.Valid {
-		t.Errorf("decided_by = %v, want NULL (bot/channel attribution, no per-user gate for Slack)", decidedBy)
+	// Audit-fix batch update: decidedBy is no longer NULL/bot-attributed --
+	// interactivityDefaultUserID (blockActionsPayloadJSON's own "user"
+	// field) is pre-linked (newInteractiveTestRigWithTimeouts) to a REAL,
+	// RoleMaintainer fixture user, so the decision is genuinely attributed
+	// to that user, exactly like a REST-API-originated decision would be.
+	if !decidedBy.Valid || decidedBy != rig.defaultActorUserID {
+		t.Errorf("decided_by = %v, want %v (the pre-linked fixture actor)", decidedBy, rig.defaultActorUserID)
 	}
 
 	turns, err := rig.turns.ListForSession(ctx, session.ID)
@@ -221,16 +296,9 @@ func TestInteractivityHandler_BlockActions_ApprovePlan(t *testing.T) {
 		t.Fatalf("len(turns) = %d, want 2 (the seeded producing turn + the new implementation turn)", len(turns))
 	}
 
-	select {
-	case got := <-rig.requests:
-		if got.path != "/chat.update" {
-			t.Errorf("recorded request path = %q, want %q", got.path, "/chat.update")
-		}
-		if got.body["channel"] != "C1" || got.body["ts"] != "1700000000.000001" {
-			t.Errorf("chat.update (channel, ts) = (%v, %v), want (%q, %q)", got.body["channel"], got.body["ts"], "C1", "1700000000.000001")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the synchronous chat.update call")
+	got := awaitRequestWithPath(t, rig.requests, "/chat.update")
+	if got.body["channel"] != "C1" || got.body["ts"] != "1700000000.000001" {
+		t.Errorf("chat.update (channel, ts) = (%v, %v), want (%q, %q)", got.body["channel"], got.body["ts"], "C1", "1700000000.000001")
 	}
 }
 
@@ -269,14 +337,7 @@ func TestInteractivityHandler_BlockActions_RejectPlan(t *testing.T) {
 		t.Errorf("len(turns) = %d, want 1 (reject never creates a new turn)", len(turns))
 	}
 
-	select {
-	case got := <-rig.requests:
-		if got.path != "/chat.update" {
-			t.Errorf("recorded request path = %q, want %q", got.path, "/chat.update")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for the synchronous chat.update call")
-	}
+	awaitRequestWithPath(t, rig.requests, "/chat.update")
 }
 
 // TestInteractivityHandler_ViewSubmission_CreatesRequestChangesTurn proves
@@ -293,6 +354,10 @@ func TestInteractivityHandler_ViewSubmission_CreatesRequestChangesTurn(t *testin
 
 	viewSubmission := map[string]any{
 		"type": "view_submission",
+		// user (audit-fix batch update): pre-linked, above, to a
+		// RoleMaintainer fixture user -- see blockActionsPayloadJSON's own
+		// identical doc comment for why this is now required.
+		"user": map[string]string{"id": interactivityDefaultUserID},
 		"view": map[string]any{
 			"callback_id":      slackapi.RequestChangesCallbackID,
 			"private_metadata": privateMetadata,

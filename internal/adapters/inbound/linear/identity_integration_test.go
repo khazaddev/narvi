@@ -169,12 +169,18 @@ func TestWebhookHandler_Created_AutoLinksUniqueEmailMatch(t *testing.T) {
 	}
 }
 
-// TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptButStillCreatesTurn
-// proves a `prompted` reply from a NEVER-BEFORE-SEEN Linear user whose
-// fetched email matches no one still creates the turn (bot attribution,
-// §13.2's own "the action proceeds ... until linked") AND leaves a
-// link-prompt row behind (§13.2 step 4).
-func TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptButStillCreatesTurn(t *testing.T) {
+// TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptAndIsDenied is the
+// audit-fix batch's own regression test for the finding this batch closes
+// ("block unlinked actor state changes", docs/TECHNICAL_PLAN.md §13.2): a
+// `prompted` reply from a NEVER-BEFORE-SEEN Linear user whose fetched email
+// matches no one is now DENIED -- the reply must NOT create a turn -- while
+// still leaving a link-prompt row behind (§13.2 step 4) so the SAME magic
+// link is delivered exactly as before. This test's own PREVIOUS name/
+// assertions (TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptButStillCreatesTurn)
+// described the OLD, now user-decided-hardened-away behavior ("...But Still
+// Creates Turn") -- renamed and rewritten to prove the inverted outcome:
+// same link prompt, NO turn.
+func TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptAndIsDenied(t *testing.T) {
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
 
@@ -238,10 +244,15 @@ func TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptButStillCreatesTurn
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM turns`).Scan(&turnCount); err != nil {
 		t.Fatalf("count turns: %v", err)
 	}
-	if turnCount != 2 {
-		t.Errorf("turnCount = %d, want 2 (the created event's own initial turn, plus the prompted reply's)", turnCount)
+	// Audit-fix batch update: the reply is now DENIED -- only the `created`
+	// event's own initial turn exists; the prompted reply must never create
+	// a second one.
+	if turnCount != 1 {
+		t.Errorf("turnCount = %d, want 1 (only the created event's own initial turn -- the prompted reply must be denied, never create a turn)", turnCount)
 	}
 
+	// The magic-link prompt is still sent exactly as before -- only the
+	// state-changing effect (the turn) is now refused.
 	linkPrompts := narvipg.NewIdentityLinkPromptStore(pool)
 	if _, err := linkPrompts.GetLatestForProviderAndExternalID(ctx, sqlcgen.IdentityProviderLinear, "linear-unknown-user-1"); err != nil {
 		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
@@ -262,6 +273,43 @@ func newIdentityLinkDepsForTest(pool *pgxpool.Pool, auditLog *narvipg.AuditLogSt
 		PublicBaseURL: "https://narvi.example.com",
 		PromptTTL:     time.Hour,
 	}
+}
+
+// linkLinearIdentityForTest links externalID directly to a NEW fixture
+// Narvi user (role) via identities.Create -- bypassing any profile-email
+// fetch entirely: identitylink.Resolve's own fast path
+// (GetByProviderAndExternalID) always wins first, mirroring
+// internal/adapters/inbound/slack's own identical linkSlackIdentityForTest
+// (handler_integration_test.go, that package).
+//
+// Audit-fix batch addition ("block unlinked actor state changes"): resolveActor
+// (identity.go) ALSO requires decryptLinearAccessToken to succeed before it
+// ever consults an already-linked identity at all -- so a caller wiring this
+// in for a test must ALSO have called installLinearFixture for organizationID
+// and given deps a reachable LinearClient (its response content is
+// irrelevant once the identity is already linked, since Resolve's own fast
+// path never inspects it -- see newGenericLinearGraphQLStub,
+// turnconsolidation_integration_test.go, for a stub answering both possible
+// GraphQL call shapes generically).
+func linkLinearIdentityForTest(ctx context.Context, t *testing.T, pool *pgxpool.Pool, externalID string, role sqlcgen.UserRole) sqlcgen.User {
+	t.Helper()
+	user, err := narvipg.NewUserStore(pool).Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: externalID + "@narvi-test.example.com",
+		DisplayName:  externalID,
+		Role:         role,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user for %s: %v", externalID, err)
+	}
+	if _, err := narvipg.NewIdentityStore(pool).Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:     user.ID,
+		Provider:   sqlcgen.IdentityProviderLinear,
+		ExternalID: externalID,
+		LinkedVia:  sqlcgen.IdentityLinkedViaAdmin,
+	}); err != nil {
+		t.Fatalf("link fixture identity for %s: %v", externalID, err)
+	}
+	return user
 }
 
 // TestWebhookHandler_Created_DeniedForViewer is this Step's own regression
@@ -554,7 +602,7 @@ func TestWebhookHandler_Created_DeniedForDisabledUser(t *testing.T) {
 	// own read exposure, httpapi/members.go) -- set it directly, mirroring
 	// this file's own established precedent of a raw SQL statement where
 	// no store method exists yet (e.g. this file's own UPDATE turns,
-	// TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptButStillCreatesTurn
+	// TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptAndIsDenied
 	// above).
 	if _, err := pool.Exec(context.Background(), `UPDATE users SET disabled = true WHERE id = $1`, matchedUser.ID); err != nil {
 		t.Fatalf("disable fixture user: %v", err)
