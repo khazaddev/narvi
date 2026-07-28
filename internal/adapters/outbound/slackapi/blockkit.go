@@ -208,12 +208,19 @@ type postMessageWithBlocksResponse struct {
 // per this Step's own brief): a header section naming the version, a
 // section carrying the plan's own rendered content (truncated via
 // truncateForSection), a context line, a divider, then the actions row.
+//
+// Audit-fix batch (§8.10's own "missing outbound mrkdwn contract" finding):
+// payload.Text is an LLM's own freeform Markdown, embedded here into a
+// mrkdwn-typed Block Kit text object -- Markdown syntax like "**bold**" or
+// "[text](url)" does not render in Slack's own mrkdwn dialect, so it is run
+// through MarkdownToMrkdwn (mrkdwn_outbound.go) BEFORE truncation, so both
+// the conversion and the length bound apply to what is actually rendered.
 func (c *Client) PostPlanApprovalMessage(ctx context.Context, payload PlanApprovalPayload) (channel, ts string, err error) {
 	value := EncodePlanActionValue(payload.PlanID, payload.SessionID)
 
 	blocks := []any{
 		sectionBlock{Type: "section", Text: &textObject{Type: "mrkdwn", Text: fmt.Sprintf("*Plan v%d ready for review*", payload.Version)}},
-		sectionBlock{Type: "section", Text: &textObject{Type: "mrkdwn", Text: truncateForSection(payload.Text)}},
+		sectionBlock{Type: "section", Text: &textObject{Type: "mrkdwn", Text: truncateForSection(MarkdownToMrkdwn(payload.Text))}},
 		contextBlock{Type: "context", Elements: []textObject{
 			{Type: "mrkdwn", Text: "Awaiting approval — first verdict wins, across Slack/Linear/web."},
 		}},
@@ -262,9 +269,13 @@ type chatUpdateRequest struct {
 // used both when Slack's own button click decided it (grey out/replace the
 // buttons with the outcome) and when a DIFFERENT channel (Linear, web)
 // decided it first (replace the still-pending buttons with an honest
-// "already decided elsewhere" outcome line).
+// "already decided elsewhere" outcome line), AND for the plan-supersession
+// notification (internal/app/sessionactor/planrecord.go's own audit-fix
+// addition) -- all three share this one call site, so text is run through
+// MarkdownToMrkdwn (mrkdwn_outbound.go, §8.10's own audit-fix finding)
+// exactly once here rather than requiring each caller to remember to.
 func (c *Client) UpdateMessage(ctx context.Context, channel, ts, text string) error {
-	reqBody, err := json.Marshal(chatUpdateRequest{Channel: channel, Ts: ts, Text: text})
+	reqBody, err := json.Marshal(chatUpdateRequest{Channel: channel, Ts: ts, Text: MarkdownToMrkdwn(text)})
 	if err != nil {
 		return fmt.Errorf("slackapi: encode chat.update request: %w", err)
 	}
