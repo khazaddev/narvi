@@ -3,8 +3,10 @@
 package sessionactor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -17,6 +19,51 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// captureDefaultLoggerJSON temporarily replaces slog.Default() with a JSON
+// handler writing into a *bytes.Buffer, restoring the original on cleanup --
+// mirrors internal/app/outboxworker/builder_integration_test.go's own
+// established "capture slog.Default() into a buffer" convention
+// (TestPumpOnce_AttemptLogsCorrelationIDAndSessionID), also already reused
+// by internal/adapters/inbound/httpapi/planapprove_integration_test.go's own
+// identically-named helper for THIS SAME batch's M2 fix.
+//
+// CALLER MUST install this BEFORE the Actor under test is hydrated/spawned
+// (i.e. before any GetOrSpawn call): platform.Logger(ctx) resolves
+// slog.Default() exactly once, at hydrate.go's own hydrateAndAcquire time,
+// and the result is cached onto the Actor struct (a.logger) for that
+// Actor's whole lifetime -- installing the capture afterward would miss
+// every log line the actor emits, since it would keep writing through the
+// ORIGINAL logger it already captured.
+func captureDefaultLoggerJSON(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(origLogger) })
+	return &buf
+}
+
+// findLogEntry scans buf's own newline-delimited JSON log lines for the
+// first one whose "msg" field equals wantMsg -- fails the test if none is
+// found. Mirrors planapprove_integration_test.go's own identical helper.
+func findLogEntry(t *testing.T, buf *bytes.Buffer, wantMsg string) map[string]any {
+	t.Helper()
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if entry["msg"] == wantMsg {
+			return entry
+		}
+	}
+	t.Fatalf("no log line with msg %q found; full log output:\n%s", wantMsg, buf.String())
+	return nil
+}
 
 // This file proves Step 37's ("plan mode, web", §8.1/§12.2 item 3) own
 // plan-row-creation hook (planrecord.go, called from pushpr.go's
@@ -328,6 +375,14 @@ func countOutboxRowsForKind(ctx context.Context, t *testing.T, pool *pgxpool.Poo
 // stored channel/ts, so the stale message's Approve/Reject buttons get
 // stripped via a real chat.update rather than staying interactively (and
 // confusingly) alive.
+//
+// Also proves this same batch's own LOW/observability fix: planrecord.go's
+// own "sessionactor: plan superseded by a newer version" log line (added by
+// commit bcc8746 alongside the audit_log row above) actually fires, with
+// plan_id/session_id/superseded_by_version fields -- previously asserted
+// nowhere. captureDefaultLoggerJSON is installed BEFORE GetOrSpawn below,
+// not after, since platform.Logger(ctx) is resolved once at hydrate time
+// and cached onto the Actor (see that helper's own doc comment).
 func TestCompleteProcessingTurn_Supersede_WithSlackRef_RecordsAuditLogAndEnqueuesOutbox(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -345,6 +400,10 @@ func TestCompleteProcessingTurn_Supersede_WithSlackRef_RecordsAuditLogAndEnqueue
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Shutdown() })
+
+	// Installed BEFORE GetOrSpawn (hydrate time) -- see this test's own doc
+	// comment and captureDefaultLoggerJSON's own doc comment above.
+	buf := captureDefaultLoggerJSON(t)
 
 	a, err := r.GetOrSpawn(ctx, sessionID)
 	if err != nil {
@@ -406,6 +465,19 @@ func TestCompleteProcessingTurn_Supersede_WithSlackRef_RecordsAuditLogAndEnqueue
 	}
 	if v, ok := detail["superseded_by_version"].(float64); !ok || v != 2 {
 		t.Errorf("detail_json[superseded_by_version] = %v, want 2", detail["superseded_by_version"])
+	}
+
+	// The supersession log line (LOW/observability fix -- previously had no
+	// test coverage at all).
+	logEntry := findLogEntry(t, buf, "sessionactor: plan superseded by a newer version")
+	if got, _ := logEntry["plan_id"].(string); got != v1.ID.String() {
+		t.Errorf("log line plan_id = %q, want %q", got, v1.ID.String())
+	}
+	if got, _ := logEntry["session_id"].(string); got != sessionID.String() {
+		t.Errorf("log line session_id = %q, want %q", got, sessionID.String())
+	}
+	if got, ok := logEntry["superseded_by_version"].(float64); !ok || got != 2 {
+		t.Errorf("log line superseded_by_version = %v, want 2", logEntry["superseded_by_version"])
 	}
 
 	// The outbox row.
