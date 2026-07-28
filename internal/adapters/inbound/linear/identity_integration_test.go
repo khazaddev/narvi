@@ -12,12 +12,14 @@ package linear_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -255,6 +257,68 @@ func TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptAndIsDenied(t *test
 	// state-changing effect (the turn) is now refused.
 	linkPrompts := narvipg.NewIdentityLinkPromptStore(pool)
 	if _, err := linkPrompts.GetLatestForProviderAndExternalID(ctx, sqlcgen.IdentityProviderLinear, "linear-unknown-user-1"); err != nil {
+		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
+	}
+}
+
+// TestWebhookHandler_Created_UnknownActorDeniedWithNoSessionCreated is this
+// batch's own SECOND review pass's direct-denial test for handleCreated's
+// own AuthorizeLinkedActor call site (LOW audit fix, "5 of the 6 hardened
+// call sites have no DIRECT denial test (only indirect coverage via
+// fixture pre-linking)") -- mirrors
+// TestWebhookHandler_Prompted_UnknownUserCreatesLinkPromptAndIsDenied's own
+// shape exactly (a `created` event whose creatorId's fetched profile email
+// matches no existing user at all -- a genuinely NEVER-resolved actor, not
+// merely a resolved-but-insufficient-role one, unlike
+// TestWebhookHandler_Created_DeniedForViewer above), proving: no session is
+// ever created, the identity itself is NOT linked (there was nothing to
+// link it to), and the magic-link prompt is still minted so the same
+// delegation can be retried once a real Narvi account is linked.
+func TestWebhookHandler_Created_UnknownActorDeniedWithNoSessionCreated(t *testing.T) {
+	pool := newTestPool(t)
+	deps := newHandlerDeps(t, pool)
+
+	organizationID := "org-created-unknown-1"
+	installLinearFixture(context.Background(), t, pool, organizationID, deps.TokenEncryptionKey)
+
+	graphqlStub := newLinearGraphQLStub(t, "nobody-matches@example.com")
+	deps.LinearClient = linearapi.New(graphqlStub.Client(), graphqlStub.URL)
+
+	auditLog := narvipg.NewAuditLogStore(pool)
+	deps.AuditLog = auditLog
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, auditLog)
+
+	handler := linear.NewWebhookHandler(deps)
+
+	agentSessionID := "agent-session-created-unknown-1"
+	const creatorID = "linear-created-unknown-1"
+	body := agentSessionCreatedPayloadWithCreator(agentSessionID, organizationID, creatorID)
+
+	rec := postWebhook(t, handler, body, "delivery-created-unknown-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	ctx := context.Background()
+	var sessionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE spawn_source = 'linear'`).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Errorf("session count = %d, want 0 (a genuinely never-resolved actor must never create a session)", sessionCount)
+	}
+
+	// Unlike TestWebhookHandler_Created_DeniedForViewer (a RESOLVED but
+	// insufficiently-privileged actor, whose identity still auto-links),
+	// this actor never resolved at all -- there is no identities row.
+	if _, err := narvipg.NewIdentityStore(pool).GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderLinear, creatorID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("GetByProviderAndExternalID = %v, want pgx.ErrNoRows (never resolved, nothing to link)", err)
+	}
+
+	// The magic-link prompt is still sent exactly as before -- only the
+	// state-changing effect (the session) is refused.
+	linkPrompts := narvipg.NewIdentityLinkPromptStore(pool)
+	if _, err := linkPrompts.GetLatestForProviderAndExternalID(ctx, sqlcgen.IdentityProviderLinear, creatorID); err != nil {
 		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
 	}
 }

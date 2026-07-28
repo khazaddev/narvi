@@ -193,6 +193,91 @@ func TestWebhookHandler_Prompted_NonKeywordText_FallsThroughToOrdinaryTurn(t *te
 	}
 }
 
+// TestWebhookHandler_Prompted_ApproveKeyword_UnknownActorDenied is this
+// batch's own SECOND review pass's direct-denial test for handlePlanVerdict
+// itself (LOW audit fix, "5 of the 6 hardened call sites have no DIRECT
+// denial test") -- unlike TestWebhookHandler_PlanVerdict_DeniedForUnownedMember
+// (identity_integration_test.go, a RESOLVED-but-unowned `member`), this
+// decider's own fetched profile email matches NO existing user at all: a
+// genuinely never-resolved actor. Proves the plan stays awaiting_approval,
+// decided_by stays NULL, the identity is never linked, and the magic-link
+// prompt is still minted so the SAME "approve" reply can be retried once
+// linked.
+func TestWebhookHandler_Prompted_ApproveKeyword_UnknownActorDenied(t *testing.T) {
+	pool := newTestPool(t)
+	deps := newHandlerDeps(t, pool)
+	deps.Plans = narvipg.NewPlanStore(pool)
+	deps.Outbox = narvipg.NewOutboxStore(pool)
+	deps.Participants = narvipg.NewParticipantStore(pool)
+
+	ctx := context.Background()
+	agentSessionID := "agent-session-plan-approve-unknown"
+	organizationID := "org-plan-approve-unknown"
+
+	installLinearFixture(ctx, t, pool, organizationID, deps.TokenEncryptionKey)
+	graphqlStub := newLinearGraphQLStub(t, "nobody-matches@example.com")
+	deps.LinearClient = linearapi.New(graphqlStub.Client(), graphqlStub.URL)
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, deps.AuditLog)
+	const deciderID = "linear-planverdict-approve-unknown-1"
+
+	handler := linear.NewWebhookHandler(deps)
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	plans := narvipg.NewPlanStore(pool)
+	agentSessions := narvipg.NewLinearAgentSessionStore(pool)
+
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceLinear})
+	if err != nil {
+		t.Fatalf("create linear-origin session: %v", err)
+	}
+	if _, err := agentSessions.Claim(ctx, agentSessionID, organizationID); err != nil {
+		t.Fatalf("claim agent session: %v", err)
+	}
+	if err := agentSessions.SetSessionID(ctx, agentSessionID, session.ID); err != nil {
+		t.Fatalf("attach session id: %v", err)
+	}
+	producingTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	plan, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: session.ID, TurnID: producingTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval})
+	if err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+
+	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, deciderID, "approve")
+	rec := postWebhook(t, handler, body, "delivery-plan-approve-unknown")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var dbStatus sqlcgen.PlanStatus
+	var decidedBy pgtype.UUID
+	if err := pool.QueryRow(ctx, `SELECT status, decided_by FROM plans WHERE id = $1`, plan.ID).Scan(&dbStatus, &decidedBy); err != nil {
+		t.Fatalf("query plan row: %v", err)
+	}
+	if dbStatus != sqlcgen.PlanStatusAwaitingApproval {
+		t.Errorf("db status = %q, want %q (a genuinely never-resolved actor must never decide)", dbStatus, sqlcgen.PlanStatusAwaitingApproval)
+	}
+	if decidedBy.Valid {
+		t.Errorf("decided_by = %v, want invalid", decidedBy)
+	}
+
+	allTurns, err := turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(allTurns) != 1 {
+		t.Errorf("len(turns) = %d, want 1 (only the seeded producing turn)", len(allTurns))
+	}
+
+	linkPrompts := narvipg.NewIdentityLinkPromptStore(pool)
+	if _, err := linkPrompts.GetLatestForProviderAndExternalID(ctx, sqlcgen.IdentityProviderLinear, deciderID); err != nil {
+		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
+	}
+}
+
 // Cross-channel "already decided" honesty (this Step's own point 5) is
 // proved two ways elsewhere, deliberately NOT re-derived as a third,
 // timing-sensitive integration test here: (1) renderLinearPlanOutcomeText
