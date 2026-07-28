@@ -25,10 +25,43 @@
 // against the real API/format before writing a converter" discipline (see
 // mrkdwn.go's own identical precedent for the inbound direction).
 //
+// # Entity escaping (audit-fix batch: literal Slack-special characters)
+//
+// Slack's own mrkdwn dialect reserves bare "&", "<", ">" for its own syntax
+// (entity references, <url|text> links, <!channel>/<@U123> special
+// mentions) -- exactly like HTML. The input to this converter is an LLM's
+// own freeform, ordinary Markdown prose; it was never written with Slack's
+// dialect in mind, so any bare "&"/"<"/">" it happens to contain (ordinary
+// technical prose like "latency < 200ms", or -- worse -- a literal,
+// unintentionally-quoted "<!channel>" substring) is ALWAYS incidental plain
+// text, never an intentional Slack construct the LLM meant to produce.
+// escapeMrkdwnEntities therefore runs FIRST, unconditionally, on the whole
+// raw input, turning every such character into its "&amp;"/"&lt;"/"&gt;"
+// entity form -- before any of this file's own bold/link/heading syntax
+// conversion runs. Every later conversion step below then both (a) reads
+// already-escaped text for whatever it captures out of the source (so a
+// literal ">" trapped inside a converted link's own label/URL is already
+// "&gt;", never breaking the <url|text> tag Slack terminates at the first
+// raw ">" it sees) and (b) only ever WRITES genuinely raw, unescaped
+// "<"/">"/"|" for the new Slack-syntax sequences it intentionally
+// constructs (e.g. mdLinkPattern's own "<$2|$1>" replacement) -- since
+// escapeMrkdwnEntities runs exactly once, before any of that construction,
+// this file's own generated syntax is never itself re-escaped into
+// something broken.
+//
 // Coverage and its own deliberate limits, decided rather than guessed:
+//   - Bare "&", "<", ">" anywhere in the source -> "&amp;", "&lt;", "&gt;"
+//     (see above) -- applies everywhere, including inside a converted
+//     link's own label/URL text.
 //   - **bold** / __bold__ (common Markdown's two bold spellings) -> Slack
 //     mrkdwn's single-asterisk *bold*.
-//   - [text](url) -> Slack mrkdwn's <url|text> link form.
+//   - [text](url) -> Slack mrkdwn's <url|text> link form. A literal "|"
+//     inside the captured label is deliberately left unescaped -- Slack's
+//     own <url|text> parser splits on only the FIRST "|" it finds inside
+//     the tag, so a "|" appearing later, inside the label itself, is
+//     already correctly treated as part of the label text, not a second
+//     separator; there is no HTML-style entity for "|" in Slack's mrkdwn
+//     dialect to escape it into regardless.
 //   - # / ## / ... ATX headings -> Slack mrkdwn has NO heading syntax at
 //     all; the best honest degradation is rendering the heading text as a
 //     bold line (*Heading*), which at least visually sets it apart from
@@ -71,6 +104,22 @@ var mdBoldPattern = regexp.MustCompile(`\*\*([^*\n]+)\*\*|__([^_\n]+)__`)
 // heading is a whole-line construct, never an inline span.
 var mdHeadingPattern = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.*)$`)
 
+// escapeMrkdwnEntities escapes the three characters Slack's own mrkdwn
+// dialect reserves for its own syntax -- "&", "<", ">" -- into their
+// "&amp;"/"&lt;"/"&gt;" entity forms, exactly as Slack's own mrkdwn
+// formatting reference requires for any literal occurrence of these
+// characters (see this file's own top doc comment's "Entity escaping"
+// section for why this must run FIRST, before any of this file's own
+// syntax conversion). "&" is escaped BEFORE "<"/">" so the ampersand
+// INSIDE the "&lt;"/"&gt;" entities this function itself just produced is
+// never escaped a second time.
+func escapeMrkdwnEntities(text string) string {
+	text = strings.ReplaceAll(text, "&", "&amp;")
+	text = strings.ReplaceAll(text, "<", "&lt;")
+	text = strings.ReplaceAll(text, ">", "&gt;")
+	return text
+}
+
 // MarkdownToMrkdwn converts a best-effort subset of common Markdown (bold,
 // links, ATX headings) into Slack's own mrkdwn dialect -- see this file's
 // own top doc comment for exactly what is and is not handled, and why.
@@ -81,7 +130,15 @@ var mdHeadingPattern = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.*)$`)
 // alike -- gets the conversion automatically, with no caller needing to
 // remember to apply it separately.
 func MarkdownToMrkdwn(text string) string {
-	out := mdLinkPattern.ReplaceAllString(text, "<$2|$1>")
+	// Escape any PRE-EXISTING literal "&"/"<"/">" in the raw source FIRST,
+	// before any Slack syntax of our own is generated below -- see this
+	// file's own top doc comment. Every later step below reads from (and
+	// only ever adds new raw "<"/">"/"|" on top of) this already-escaped
+	// text, so this file's own generated <url|text> syntax is never itself
+	// re-escaped.
+	out := escapeMrkdwnEntities(text)
+
+	out = mdLinkPattern.ReplaceAllString(out, "<$2|$1>")
 
 	out = mdBoldPattern.ReplaceAllStringFunc(out, func(m string) string {
 		sub := mdBoldPattern.FindStringSubmatch(m)

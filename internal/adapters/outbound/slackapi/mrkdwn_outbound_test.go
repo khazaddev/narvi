@@ -84,6 +84,63 @@ func TestMarkdownToMrkdwn_Conversions(t *testing.T) {
 			in:   "",
 			want: "",
 		},
+
+		// --- Audit-fix batch: entity escaping of pre-existing literal
+		// Slack-special characters (HIGH finding) ---
+
+		{
+			name: "ordinary technical prose with bare < and > is escaped, not mangled",
+			in:   "latency < 200ms and throughput > 500rps",
+			want: "latency &lt; 200ms and throughput &gt; 500rps",
+		},
+		{
+			name: "bare ampersand is escaped",
+			in:   "A & B",
+			want: "A &amp; B",
+		},
+		{
+			name: "a literal <!channel> substring never becomes a live @channel broadcast",
+			in:   "As discussed in <!channel> earlier, ship it.",
+			want: "As discussed in &lt;!channel&gt; earlier, ship it.",
+		},
+		{
+			name: "a literal <@U123> substring never becomes a live user mention",
+			in:   "cc <@U12345> for review",
+			want: "cc &lt;@U12345&gt; for review",
+		},
+		{
+			name: "escaping runs before heading conversion without interfering",
+			in:   "# Latency < 200ms & throughput > 500rps",
+			want: "*Latency &lt; 200ms &amp; throughput &gt; 500rps*",
+		},
+		{
+			name: "escaping runs before bold conversion without interfering",
+			in:   "**A < B & C > D**",
+			want: "*A &lt; B &amp; C &gt; D*",
+		},
+
+		// --- Audit-fix batch: link label/URL escaping (MEDIUM finding) ---
+
+		{
+			name: "link whose label contains > still produces a validly-terminated tag",
+			in:   "[latency > 200ms](https://dashboard.example.com/metric)",
+			want: "<https://dashboard.example.com/metric|latency &gt; 200ms>",
+		},
+		{
+			name: "link whose label contains < and & is also escaped",
+			in:   "[A < B & C](https://example.com/x)",
+			want: "<https://example.com/x|A &lt; B &amp; C>",
+		},
+		{
+			name: "link whose URL contains a literal ampersand query separator is escaped, and this file's own generated <url|text> syntax is never re-escaped",
+			in:   "[docs](https://example.com/a?x=1&y=2)",
+			want: "<https://example.com/a?x=1&amp;y=2|docs>",
+		},
+		{
+			name: "link whose label contains a literal pipe still renders correctly (Slack splits on only the first |)",
+			in:   "[A|B](https://example.com/x)",
+			want: "<https://example.com/x|A|B>",
+		},
 	}
 
 	for _, tc := range tests {
