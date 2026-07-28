@@ -2,16 +2,18 @@
 // within an already-mapped thread" half of doc.go's own thread<->session
 // mapping design, and also the final step of the "brand-new thread"
 // path once its own session id is resolved (see doc.go's own numbered
-// design writeup). Deliberately mirrors internal/adapters/inbound/
-// httpapi/turn.go's own CreateTurn precondition/locking exactly (lock
-// the session row, refuse a second turn while one is already Pending/
-// Dispatched/Processing, dispatch post-commit) minus everything specific
-// to being an HTTP handler (no *http.Request/ResponseWriter, no
-// parseSessionID/writeError) -- there is no exported, HTTP-independent
-// equivalent of that logic to import instead (turn.go's own hasOpenTurn
-// and the whole precondition-then-insert sequence are unexported,
-// package-private to httpapi), so it is duplicated here at the same
-// small scale rather than exporting httpapi internals for one caller.
+// design writeup).
+//
+// Audit-fix batch update (findings H7/L12/L2/M6): addTurn used to be a
+// copy-pasted reimplementation of internal/adapters/inbound/httpapi/
+// turn.go's own CreateTurn precondition/locking -- its own doc comment
+// used to say so explicitly, since no shared, HTTP-independent core
+// existed at the time it was written. httpapi.CreateTurnCore's own
+// hasOpenTurn 409 gate is now parameterized by a CreateTurnPolicy
+// (turn.go), so addTurn below is a thin wrapper over that ONE shared core
+// instead: this closes L12 (hasOpenTurn was copy-pasted here, not shared)
+// and H7 (this call now writes the SAME turn.create audit_log row every
+// other CreateTurnCore caller gets).
 
 package slack
 
@@ -21,89 +23,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
-	"github.com/khazaddev/narvi/internal/domain/turn"
-	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// hasOpenTurn reports whether ANY turn in turns is non-terminal --
-// mirrors httpapi's own identical helper (turn.go) exactly; see that
-// function's own doc comment for why this is deliberately stricter than
-// turn.HasInFlightTurn (Pending must also block a second insert, not
-// just Dispatched/Processing).
-func hasOpenTurn(turns []sqlcgen.Turn) bool {
-	for _, t := range turns {
-		if !turn.IsTerminal(turn.State(t.Status)) {
-			return true
-		}
-	}
-	return false
-}
-
 // addTurn enqueues a new Pending turn carrying prompt on the EXISTING
-// session sessionID, then fires the same post-commit GetOrSpawn+
-// Send(EnsureDispatched{}) sequencing CreateSessionCore/CreateTurn both
-// already use. created reports whether a turn was actually inserted:
-// false (err == nil) means a turn was already open for this session
-// (Pending/Dispatched/Processing) and this call was a deliberate no-op --
-// the caller's own in-thread ack wording (handler.go) reflects that case
-// distinctly ("still working on the previous message") rather than
-// silently queuing a second turn behind it.
+// session sessionID, via httpapi.CreateTurnCore's own DropIfOpen policy --
+// the SAME shared core REST's own CreateTurn, Linear's handlePrompted, and
+// Slack's own "Request changes" modal submission (interactive.go) all now
+// go through too (see CreateTurnPolicy's own doc comment, httpapi/turn.go).
+// created reports whether a turn was actually inserted: false (err == nil)
+// means a turn was already open for this session (Pending/Dispatched/
+// Processing) and this call was a deliberate no-op, exactly as before this
+// batch -- the caller's own in-thread ack wording (handler.go) reflects
+// that case distinctly ("still working on the previous message") rather
+// than silently queuing a second turn behind it.
 //
-// The locking sequence -- GetActorEpochForUpdate BEFORE ListForSession,
-// both inside the SAME transaction -- is httpapi.CreateTurn's own
-// documented race-closing precedent verbatim: without it, two concurrent
-// calls for the same session could each observe "nothing open" before
-// either commits.
-func addTurn(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string) (created bool, err error) {
-	tx, err := pool.Begin(ctx)
-	if err != nil {
-		return false, err
+// actorUserID (audit-fix batch addition) is attributed onto the resulting
+// turn.create audit_log row only -- turns itself carries no per-row actor
+// column (migrations/000005_turns.up.sql), so this mirrors handleEvent's
+// own already-resolved actorUserID, which previously had nowhere at all to
+// flow into for a reply on an existing thread.
+func addTurn(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, actorUserID pgtype.UUID) (turn sqlcgen.Turn, created bool, err error) {
+	turnRow, wasCreated, cerr := httpapi.CreateTurnCore(ctx, pool, sessions, turns, auditLog, registry, sessionID, prompt, nil, false, actorUserID, httpapi.DropIfOpen)
+	if cerr != nil {
+		return sqlcgen.Turn{}, false, cerr
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := sessions.WithTx(tx).GetActorEpochForUpdate(ctx, sessionID); err != nil {
-		return false, err
-	}
-
-	existingTurns, err := turns.WithTx(tx).ListForSession(ctx, sessionID)
-	if err != nil {
-		return false, err
-	}
-	if hasOpenTurn(existingTurns) {
-		return false, nil
-	}
-
-	if _, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-		SessionID: sessionID,
-		Status:    sqlcgen.TurnStatusPending,
-		Prompt:    &prompt,
-	}); err != nil {
-		return false, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
-	}
-
-	// Fire-and-forget, OUTSIDE the transaction above -- mirrors
-	// CreateSessionCore/CreateTurn's own identical post-commit
-	// sequencing exactly (see either's own doc comment for why this
-	// never blocks on how long the resulting spawn/dispatch decision
-	// takes). A failure here is logged and swallowed into the return
-	// value already committed as created=true: the turn itself is
-	// durably persisted regardless of whether dispatch could be kicked
-	// off immediately, exactly like both of those callers already treat
-	// it (log-and-continue, never surfaced as this call's own error).
-	logger := platform.Logger(ctx)
-	actor, spawnErr := registry.GetOrSpawn(ctx, sessionID)
-	if spawnErr != nil {
-		logger.Warn("slack: GetOrSpawn after turn create failed", "error", spawnErr)
-	} else if sendErr := actor.Send(ctx, sessionactor.EnsureDispatched{}); sendErr != nil {
-		logger.Warn("slack: send EnsureDispatched after turn create failed", "error", sendErr)
-	}
-
-	return true, nil
+	return turnRow, wasCreated, nil
 }

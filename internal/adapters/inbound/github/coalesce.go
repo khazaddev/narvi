@@ -255,7 +255,13 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		if req.Prompt != nil {
 			prompt = *req.Prompt
 		}
-		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode)
+		// c.AuditLog/actor (audit-fix batch addition, H7): CreateTurnForBot
+		// now writes the SAME turn.create audit_log row every other
+		// createTurnLocked caller does, inside its own transaction -- actor
+		// is the SAME already-resolved commenter identity passed to the
+		// authz checks above (Valid iff linked, invalid/bot-attributed
+		// otherwise), never a second, independently-resolved actor.
+		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, actor)
 		if err != nil {
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}

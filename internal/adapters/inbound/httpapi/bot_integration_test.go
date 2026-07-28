@@ -21,6 +21,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/testcontainers/testcontainers-go"
@@ -200,12 +201,12 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 		t.Fatalf("CreateSessionForBot (setup): %v", err)
 	}
 
-	first, err := CreateTurnForBot(ctx, pool, sessions, turns, registry, created.ID, "first mention", nil, false)
+	first, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "first mention", nil, false, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("CreateTurnForBot (first): %v", err)
 	}
 
-	second, err := CreateTurnForBot(ctx, pool, sessions, turns, registry, created.ID, "second concurrent mention", nil, false)
+	second, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "second concurrent mention", nil, false, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("CreateTurnForBot (second, while first still pending): %v", err)
 	}
@@ -219,5 +220,77 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 	}
 	if len(turnRows) != 2 {
 		t.Fatalf("len(turns) = %d, want 2 (both enqueued despite neither having reached a terminal state)", len(turnRows))
+	}
+}
+
+// TestCreateTurnForBot_WritesAuditLogRowWithActor is the audit-fix batch's
+// own regression test for H7 ("every turn created via ... GitHub bot-
+// ingress is invisible in the audit trail"): CreateTurnForBot now writes
+// the SAME turn.create audit_log row every other createTurnLocked caller
+// gets, attributing the SAME resolved actor github/coalesce.go's own
+// CreateOrJoin already passes through to it (a real user_id when the
+// commenter is linked, an explicit invalid pgtype.UUID{} -- proven by
+// TestCreateTurnForBot_EnqueuesTurnOnExistingSession above -- otherwise).
+func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
+	ctx := context.Background()
+	pool := newBotTestPool(t)
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	environments := narvipg.NewEnvironmentStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
+	users := narvipg.NewUserStore(pool)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = registry.Shutdown() })
+
+	actor, err := users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: "bot-turn-actor@example.com", DisplayName: "Linked Commenter", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create fixture actor: %v", err)
+	}
+
+	created, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, restdtos.CreateSessionRequest{
+		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
+		Repos: []restdtos.CreateSessionRequestReposElem{
+			{Name: "widgets", Url: "https://github.com/acme/widgets.git"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSessionForBot (setup): %v", err)
+	}
+
+	turnRow, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "please take a look", nil, false, actor.ID)
+	if err != nil {
+		t.Fatalf("CreateTurnForBot: %v", err)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM audit_log WHERE action = 'turn.create' AND resource_type = 'turn' AND resource_id = $1`,
+		turnRow.ID.String(),
+	).Scan(&count); err != nil {
+		t.Fatalf("count audit_log: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("audit_log row count = %d, want 1", count)
+	}
+
+	// Postgres's built-in uuid type has no MAX/MIN aggregate registered
+	// (unlike text/int/timestamp) despite supporting ordering operators --
+	// a plain, non-aggregated SELECT is used instead, safe here since
+	// count == 1 was just proven above.
+	var actorUserID pgtype.UUID
+	if err := pool.QueryRow(ctx,
+		`SELECT actor_user_id FROM audit_log WHERE action = 'turn.create' AND resource_type = 'turn' AND resource_id = $1`,
+		turnRow.ID.String(),
+	).Scan(&actorUserID); err != nil {
+		t.Fatalf("query actor_user_id: %v", err)
+	}
+	if actorUserID != actor.ID {
+		t.Errorf("audit_log.actor_user_id = %v, want %v", actorUserID, actor.ID)
 	}
 }
