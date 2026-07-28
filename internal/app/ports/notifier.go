@@ -50,7 +50,12 @@ const (
 	// PlanDecidedPayload) to reflect a plan's final approved/rejected
 	// outcome, whichever entry point (Slack itself, Linear, or the web
 	// REST endpoints) actually rendered the decision -- §16.1/§13.3's own
-	// "first verdict wins + notify the other channels".
+	// "first verdict wins + notify the other channels". An audit-fix batch
+	// (completeness/observability, internal/app/sessionactor/planrecord.go)
+	// reuses this SAME kind for a third case: a plan SUPERSEDED by a newer
+	// plan-mode turn's completion (rather than decided) -- chat.update's own
+	// "omit blocks to strip them" behavior is exactly right there too, to
+	// clear the now-stale Approve/Reject buttons.
 	NotificationKindSlackPlanDecided NotificationKind = "slack_plan_decided"
 )
 

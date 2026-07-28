@@ -280,10 +280,22 @@ func DecidePlanOnTx(
 		outcome.TurnID = &turnIDStr
 	}
 
-	if err := recordAuditLog(ctx, auditLog.WithTx(tx), decidedBy, "plan."+string(verdict), "plan", planID.String(), map[string]any{
+	// Audit-fix batch (completeness/observability, M2 part 1): the created
+	// implementation turn's own id (outcome.TurnID, just computed above for
+	// an Approve verdict) is included in this audit row's own detail JSON
+	// too -- previously omitted despite being available at this exact point
+	// in this same function. The key is present only when a turn was
+	// actually created (Approve); a Reject verdict never creates one, so
+	// its own detail JSON carries no turn_id key at all, rather than an
+	// always-present-but-sometimes-null one.
+	detail := map[string]any{
 		"session_id": sessionRow.ID.String(),
 		"verdict":    string(verdict),
-	}); err != nil {
+	}
+	if outcome.TurnID != nil {
+		detail["turn_id"] = *outcome.TurnID
+	}
+	if err := recordAuditLog(ctx, auditLog.WithTx(tx), decidedBy, "plan."+string(verdict), "plan", planID.String(), detail); err != nil {
 		return DecidePlanOutcome{}, fmt.Errorf("httpapi: record plan decision audit log: %w", err)
 	}
 

@@ -119,23 +119,85 @@ type actionsBlock struct {
 	Elements []buttonElement `json:"elements"`
 }
 
-// maxSectionTextRunes bounds how much of a plan's own rendered content this
-// package ever embeds in one Block Kit section's own "text" -- Slack's own
-// real limit for a section's plain_text/mrkdwn text object is 3000
-// characters; this stays comfortably under that so the header/context/
-// actions blocks around it are never at risk of pushing the WHOLE message
-// over Slack's own separate, larger total-payload limit either.
+// maxSectionTextRunes states the invariant this package actually owes
+// Slack: how much of a plan's own FINAL, rendered (post-MarkdownToMrkdwn)
+// content this package ever embeds in one Block Kit section's own "text"
+// -- Slack's own real limit for a section's plain_text/mrkdwn text object
+// is 3000 characters; this stays comfortably under that so the header/
+// context/actions blocks around it are never at risk of pushing the WHOLE
+// message over Slack's own separate, larger total-payload limit either.
+// This invariant is about the text Slack actually receives -- it holds
+// regardless of where truncation itself happens to be implemented; see
+// maxRawTextRunes and truncateForSection below for that.
 const maxSectionTextRunes = 2800
 
-// truncateForSection bounds text to maxSectionTextRunes runes, appending an
-// honest "(truncated)" marker when it does -- never silently drops content
+// maxRawTextRunes bounds truncateForSection's own cut point on the RAW
+// markdown text, BEFORE MarkdownToMrkdwn ever runs on it (audit-fix batch:
+// "truncation tag-boundary safety" finding -- LOW). Truncating the raw
+// text rather than the already-converted mrkdwn means a chopped Markdown
+// construct (e.g. a link's own unterminated "[text](url" with no closing
+// paren, or a bold span's dangling "**" opener) degrades to harmless
+// leftover plain-text-ish characters -- or an incomplete pattern that
+// MarkdownToMrkdwn's own regexes then simply never match at all, rendering
+// as literal text -- once conversion runs, rather than ever leaving a
+// truncated, dangling, unterminated Slack "<url|label>" TAG in what is
+// actually posted to Slack.
+//
+// This bound must still guarantee maxSectionTextRunes's own invariant
+// above holds on the FINAL, converted text -- even though MarkdownToMrkdwn
+// can make text LONGER than its raw input, not just shorter. Concretely:
+// mdLinkPattern/mdBoldPattern/mdHeadingPattern (mrkdwn_outbound.go) each
+// either shrink text (their converted form is never longer than the raw
+// Markdown they replace) or leave it roughly unchanged -- but
+// escapeMrkdwnEntities, which runs FIRST over the whole raw text, can grow
+// it: a single raw "&" becomes the 5-rune entity "&amp;", this converter's
+// single largest per-rune growth factor ("<"/">" each grow to a smaller
+// 4-rune "&lt;"/"&gt;"). A raw input consisting entirely of "&" characters
+// is therefore this converter's own mathematical worst case -- N raw runes
+// become EXACTLY 5*N converted runes, since no other pattern in this file
+// (no "**"/"__", no "[...](...)", no "#") can ever match a string of bare
+// "&" characters.
+//
+// maxRawTextRunes is sized so even that worst case, PLUS the up-to-15-rune
+// "\n\n_(truncated)_" marker truncateForSection appends when it truncates
+// (itself immune to further growth -- it carries no "&"/"<"/">" of its
+// own), still lands at or under maxSectionTextRunes:
+//
+//	5*550 + 15 = 2765 <= 2800 (maxSectionTextRunes) <= 3000 (Slack's real limit)
+//
+// See TestPostPlanApprovalMessage_TruncationHappensOnRawMarkdown
+// (blockkit_test.go) for the empirical proof against this exact worst
+// case, plus a realistic link-straddling-the-cutoff case.
+const maxRawTextRunes = 550
+
+// init asserts the sizing math documented on maxRawTextRunes above still
+// holds -- turning that doc comment's arithmetic into a real, enforced
+// invariant (rather than one only a human re-checks by eye) so a future
+// change to either constant that breaks the guarantee fails loudly at
+// package load instead of silently shipping a truncation that overruns
+// Slack's own real section-text limit.
+func init() {
+	const worstCaseConvertedRunes = 5*maxRawTextRunes + 15
+	if worstCaseConvertedRunes > maxSectionTextRunes {
+		panic(fmt.Sprintf(
+			"slackapi: maxRawTextRunes=%d/maxSectionTextRunes=%d invariant violated: "+
+				"worst-case converted text is %d runes, want <= %d",
+			maxRawTextRunes, maxSectionTextRunes, worstCaseConvertedRunes, maxSectionTextRunes))
+	}
+}
+
+// truncateForSection bounds RAW markdown text (BEFORE MarkdownToMrkdwn
+// conversion -- see maxRawTextRunes's own doc comment above for why
+// truncation happens here, pre-conversion, rather than on the converted
+// mrkdwn output) to maxRawTextRunes runes, appending an honest
+// "(truncated)" marker when it does -- never silently drops content
 // without saying so.
 func truncateForSection(text string) string {
 	runes := []rune(text)
-	if len(runes) <= maxSectionTextRunes {
+	if len(runes) <= maxRawTextRunes {
 		return text
 	}
-	return string(runes[:maxSectionTextRunes]) + "\n\n_(truncated)_"
+	return string(runes[:maxRawTextRunes]) + "\n\n_(truncated)_"
 }
 
 // PlanApprovalPayload is the JSON shape this package expects to find in an
@@ -208,12 +270,31 @@ type postMessageWithBlocksResponse struct {
 // per this Step's own brief): a header section naming the version, a
 // section carrying the plan's own rendered content (truncated via
 // truncateForSection), a context line, a divider, then the actions row.
+//
+// Audit-fix batch (§8.10's own "missing outbound mrkdwn contract" finding):
+// payload.Text is an LLM's own freeform Markdown, embedded here into a
+// mrkdwn-typed Block Kit text object -- Markdown syntax like "**bold**" or
+// "[text](url)" does not render in Slack's own mrkdwn dialect, so it is run
+// through MarkdownToMrkdwn (mrkdwn_outbound.go).
+//
+// A LATER audit-fix batch ("truncation tag-boundary safety" finding, LOW)
+// reordered this to truncate BEFORE conversion (truncateForSection(payload.
+// Text), then MarkdownToMrkdwn on the result) rather than after: truncating
+// the already-converted mrkdwn risked chopping a generated "<url|label>"
+// tag mid-construct, leaving a dangling, unterminated "<" fragment in what
+// is actually posted. Truncating the raw Markdown first means a chopped
+// construct degrades to harmless leftover plain-text-ish characters (or an
+// incomplete pattern MarkdownToMrkdwn's own regexes simply never match)
+// instead -- see maxRawTextRunes's own doc comment above for why the
+// truncation bound itself is sized the way it is, so this reordering still
+// keeps the FINAL, converted text within Slack's own real section-text
+// length limit.
 func (c *Client) PostPlanApprovalMessage(ctx context.Context, payload PlanApprovalPayload) (channel, ts string, err error) {
 	value := EncodePlanActionValue(payload.PlanID, payload.SessionID)
 
 	blocks := []any{
 		sectionBlock{Type: "section", Text: &textObject{Type: "mrkdwn", Text: fmt.Sprintf("*Plan v%d ready for review*", payload.Version)}},
-		sectionBlock{Type: "section", Text: &textObject{Type: "mrkdwn", Text: truncateForSection(payload.Text)}},
+		sectionBlock{Type: "section", Text: &textObject{Type: "mrkdwn", Text: MarkdownToMrkdwn(truncateForSection(payload.Text))}},
 		contextBlock{Type: "context", Elements: []textObject{
 			{Type: "mrkdwn", Text: "Awaiting approval — first verdict wins, across Slack/Linear/web."},
 		}},
@@ -262,9 +343,13 @@ type chatUpdateRequest struct {
 // used both when Slack's own button click decided it (grey out/replace the
 // buttons with the outcome) and when a DIFFERENT channel (Linear, web)
 // decided it first (replace the still-pending buttons with an honest
-// "already decided elsewhere" outcome line).
+// "already decided elsewhere" outcome line), AND for the plan-supersession
+// notification (internal/app/sessionactor/planrecord.go's own audit-fix
+// addition) -- all three share this one call site, so text is run through
+// MarkdownToMrkdwn (mrkdwn_outbound.go, §8.10's own audit-fix finding)
+// exactly once here rather than requiring each caller to remember to.
 func (c *Client) UpdateMessage(ctx context.Context, channel, ts, text string) error {
-	reqBody, err := json.Marshal(chatUpdateRequest{Channel: channel, Ts: ts, Text: text})
+	reqBody, err := json.Marshal(chatUpdateRequest{Channel: channel, Ts: ts, Text: MarkdownToMrkdwn(text)})
 	if err != nil {
 		return fmt.Errorf("slackapi: encode chat.update request: %w", err)
 	}

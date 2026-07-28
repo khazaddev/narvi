@@ -94,6 +94,16 @@ type storeBundle struct {
 	// terminal state, inside that SAME transaction, exactly mirroring
 	// outbox's own precedent above.
 	plan *postgres.PlanStore
+
+	// auditLog is an audit-fix batch's own addition (completeness/
+	// observability finding against planrecord.go): recordPlanIfNeeded now
+	// writes a "plan.superseded" audit_log row, in the SAME transaction, for
+	// every prior awaiting_approval plan a new plan-mode turn's completion
+	// supersedes -- mirroring httpapi.DecidePlanOnTx's own identical
+	// "audit_log written in the same tx as the change" precedent (§13.3) for
+	// a real human/bot decision, now extended to this automatic,
+	// system-triggered transition too.
+	auditLog *postgres.AuditLogStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
@@ -114,6 +124,7 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		githubPRSession:    postgres.NewGitHubPRSessionStore(pool),
 		linearAgentSession: postgres.NewLinearAgentSessionStore(pool),
 		plan:               postgres.NewPlanStore(pool),
+		auditLog:           postgres.NewAuditLogStore(pool),
 	}
 }
 

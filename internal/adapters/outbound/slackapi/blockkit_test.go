@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
@@ -142,6 +144,164 @@ func TestPostPlanApprovalMessage_APIError(t *testing.T) {
 	if err == nil {
 		t.Fatal("PostPlanApprovalMessage() error = nil, want non-nil")
 	}
+}
+
+// assumedMaxRawTextRunes mirrors blockkit.go's own unexported
+// maxRawTextRunes constant -- kept here only so this test can position a
+// Markdown construct precisely relative to the truncation cutoff. If
+// blockkit.go's own constant ever changes, update this to match (the
+// assertions below are otherwise generic and would still catch a
+// real regression either way).
+const assumedMaxRawTextRunes = 550
+
+// TestPostPlanApprovalMessage_TruncationHappensOnRawMarkdown proves the
+// audit-fix batch's "truncation tag-boundary safety" finding (LOW):
+// truncateForSection now cuts payload.Text's RAW markdown BEFORE
+// MarkdownToMrkdwn ever runs, not the already-converted mrkdwn -- so (a) a
+// long plan whose raw Markdown link straddles the truncation cutoff never
+// leaves a dangling, unterminated Slack "<url|label" tag fragment in what
+// is actually posted, and (b) even the mathematical worst case for
+// post-conversion growth (raw text saturated with literal "&" characters,
+// which each expand to the 5-rune "&amp;" entity) still lands the FINAL
+// converted text comfortably under Slack's own real 3000-character
+// section-text limit.
+func TestPostPlanApprovalMessage_TruncationHappensOnRawMarkdown(t *testing.T) {
+	t.Parallel()
+
+	// Position a valid link (which SHOULD survive intact) followed by a
+	// second link engineered to straddle the truncation cutoff -- filler
+	// sized so the cut lands 5 runes into the second link's own "[Click
+	// here](...)" markdown, well before either its "]" or its closing ")".
+	firstLink := "[Read more](https://example.com/full-link) "
+	secondLink := "[Click here](https://example.com/dashboard/very/long/path)"
+	fillerLen := assumedMaxRawTextRunes - len([]rune(firstLink)) - 5
+	if fillerLen < 0 {
+		t.Fatalf("test setup: assumedMaxRawTextRunes too small for firstLink (%d runes)", len([]rune(firstLink)))
+	}
+
+	tests := []struct {
+		name string
+		text string
+	}{
+		{
+			name: "a raw Markdown link straddling the truncation cutoff never leaves a dangling tag, while an earlier complete link still converts normally",
+			text: firstLink + strings.Repeat("x", fillerLen) + secondLink,
+		},
+		{
+			name: "worst-case expansion (raw text saturated with literal & characters) still fits Slack's real section-text limit",
+			text: strings.Repeat("&", 5000),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+					t.Fatalf("decode request body: %v", err)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C999", "ts": "1700000000.000100"})
+			}))
+			defer server.Close()
+
+			client := slackapi.New(server.Client(), server.URL, "xoxb-test-token")
+			_, _, err := client.PostPlanApprovalMessage(context.Background(), slackapi.PlanApprovalPayload{
+				ChannelID: "C123",
+				ThreadTS:  "1.1",
+				Version:   1,
+				Text:      tc.text,
+			})
+			if err != nil {
+				t.Fatalf("PostPlanApprovalMessage() error = %v, want nil", err)
+			}
+
+			blocks, ok := gotBody["blocks"].([]any)
+			if !ok || len(blocks) < 2 {
+				t.Fatalf("blocks = %v, want at least 2 blocks", gotBody["blocks"])
+			}
+			contentBlock, ok := blocks[1].(map[string]any)
+			if !ok {
+				t.Fatalf("blocks[1] = %v, not an object", blocks[1])
+			}
+			textObj, ok := contentBlock["text"].(map[string]any)
+			if !ok {
+				t.Fatalf("blocks[1].text = %v, not an object", contentBlock["text"])
+			}
+			gotText, _ := textObj["text"].(string)
+
+			// (b) Slack's own REAL section text-object limit is 3000
+			// characters -- the final, actually-posted converted+truncated
+			// text must comfortably fit under it regardless of how much the
+			// raw input happened to expand during conversion.
+			const slackRealSectionLimit = 3000
+			if n := len([]rune(gotText)); n > slackRealSectionLimit {
+				t.Errorf("final section text = %d runes, want <= %d (Slack's own real limit)", n, slackRealSectionLimit)
+			}
+
+			// (a) No dangling, unterminated Slack tag fragment: every "<" in
+			// the final text must be part of a complete "<target|label>"
+			// tag -- remove every well-formed tag and confirm nothing
+			// shaped like a broken one remains.
+			tagPattern := regexp.MustCompile(`<[^<>]*\|[^<>]*>`)
+			remaining := tagPattern.ReplaceAllString(gotText, "")
+			if strings.ContainsAny(remaining, "<>") {
+				t.Errorf("final section text contains a dangling/unterminated tag fragment: %q", gotText)
+			}
+		})
+	}
+
+	// Sanity-check the straddling scenario actually exercises what it
+	// claims to: the earlier, complete link must still have converted into
+	// a real, well-formed Slack tag (proving truncation didn't just delete
+	// it outright), and the straddled second link must NOT appear as any
+	// kind of tag at all (complete or dangling).
+	t.Run("earlier complete link converts normally alongside the straddled one", func(t *testing.T) {
+		t.Parallel()
+
+		var gotBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatalf("decode request body: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C999", "ts": "1700000000.000100"})
+		}))
+		defer server.Close()
+
+		client := slackapi.New(server.Client(), server.URL, "xoxb-test-token")
+		_, _, err := client.PostPlanApprovalMessage(context.Background(), slackapi.PlanApprovalPayload{
+			ChannelID: "C123",
+			ThreadTS:  "1.1",
+			Version:   1,
+			Text:      firstLink + strings.Repeat("x", fillerLen) + secondLink,
+		})
+		if err != nil {
+			t.Fatalf("PostPlanApprovalMessage() error = %v, want nil", err)
+		}
+		blocks, ok := gotBody["blocks"].([]any)
+		if !ok || len(blocks) < 2 {
+			t.Fatalf("blocks = %v, want at least 2 blocks", gotBody["blocks"])
+		}
+		contentBlock, ok := blocks[1].(map[string]any)
+		if !ok {
+			t.Fatalf("blocks[1] = %v, not an object", blocks[1])
+		}
+		textObj, ok := contentBlock["text"].(map[string]any)
+		if !ok {
+			t.Fatalf("blocks[1].text = %v, not an object", contentBlock["text"])
+		}
+		gotText, _ := textObj["text"].(string)
+
+		if !strings.Contains(gotText, "<https://example.com/full-link|Read more>") {
+			t.Errorf("final section text = %q, want it to still contain the earlier complete link's converted tag", gotText)
+		}
+		if strings.Contains(gotText, "dashboard") {
+			t.Errorf("final section text = %q, want the straddled second link's target never to appear at all (cut well before it)", gotText)
+		}
+	})
 }
 
 // TestUpdateMessage_Success proves chat.update's own request shape
