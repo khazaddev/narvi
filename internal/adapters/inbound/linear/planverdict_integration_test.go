@@ -10,53 +10,49 @@ package linear_test
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
-// agentSessionPromptedPayload builds a synthetic, real-shaped
-// AgentSessionEvent "prompted" webhook body carrying body as the reply's
-// own agentActivity.content.body -- mirrors agentSessionCreatedPayload's
-// own identical "every field name mirrors Linear's own live schema"
-// precedent (webhook_integration_test.go).
-func agentSessionPromptedPayload(agentSessionID, organizationID, body string) []byte {
-	raw, _ := json.Marshal(map[string]any{
-		"action":           "prompted",
-		"type":             "AgentSessionEvent",
-		"organizationId":   organizationID,
-		"webhookTimestamp": time.Now().UnixMilli(),
-		"agentSession":     map[string]string{"id": agentSessionID},
-		"agentActivity": map[string]any{
-			"content": map[string]string{"type": "prompt", "body": body},
-		},
-	})
-	return raw
-}
-
 // TestWebhookHandler_Prompted_ApproveKeyword_DecidesPlan proves a
 // deterministic approve-keyword reply calls the shared decide-plan path
-// instead of creating an ordinary turn: the plan flips to 'approved' with
-// decided_by NULL (bot/channel attribution, no per-user gate for these two
-// channels) and a new implementation turn is created -- exactly the SAME
-// outcome the Slack button / REST endpoint produce.
+// instead of creating an ordinary turn: the plan flips to 'approved' and a
+// new implementation turn is created -- exactly the SAME outcome the Slack
+// button / REST endpoint produce.
+//
+// Audit-fix batch update ("block unlinked actor state changes"): the
+// replying Linear user id is now pre-linked (linkLinearIdentityForTest) to
+// a real, RoleMaintainer fixture user -- an unresolved actor is denied
+// outright now, so this test (never actually ABOUT identity resolution)
+// must exercise a genuinely linked, authorized one to keep proving what it
+// always meant to prove (the approve-keyword decide-plan mechanics).
+// decided_by is consequently that REAL user, not NULL.
 func TestWebhookHandler_Prompted_ApproveKeyword_DecidesPlan(t *testing.T) {
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
 	deps.Plans = narvipg.NewPlanStore(pool)
 	deps.Outbox = narvipg.NewOutboxStore(pool)
-	handler := linear.NewWebhookHandler(deps)
+	deps.Participants = narvipg.NewParticipantStore(pool)
 
 	ctx := context.Background()
 	agentSessionID := "agent-session-plan-approve"
 	organizationID := "org-plan-approve"
+
+	installLinearFixture(ctx, t, pool, organizationID, deps.TokenEncryptionKey)
+	stub, _ := newGenericLinearGraphQLStub(t)
+	deps.LinearClient = linearapi.New(stub.Client(), stub.URL)
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, deps.AuditLog)
+	const deciderID = "linear-planverdict-approve-1"
+	decider := linkLinearIdentityForTest(ctx, t, pool, deciderID, sqlcgen.UserRoleMaintainer)
+
+	handler := linear.NewWebhookHandler(deps)
 
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
@@ -82,7 +78,7 @@ func TestWebhookHandler_Prompted_ApproveKeyword_DecidesPlan(t *testing.T) {
 		t.Fatalf("seed awaiting_approval plan: %v", err)
 	}
 
-	body := agentSessionPromptedPayload(agentSessionID, organizationID, "approve")
+	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, deciderID, "approve")
 	rec := postWebhook(t, handler, body, "delivery-plan-approve")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -96,8 +92,8 @@ func TestWebhookHandler_Prompted_ApproveKeyword_DecidesPlan(t *testing.T) {
 	if dbStatus != sqlcgen.PlanStatusApproved {
 		t.Errorf("db status = %q, want %q", dbStatus, sqlcgen.PlanStatusApproved)
 	}
-	if decidedBy.Valid {
-		t.Errorf("decided_by = %v, want NULL", decidedBy)
+	if !decidedBy.Valid || decidedBy != decider.ID {
+		t.Errorf("decided_by = %v, want %v (the pre-linked fixture actor)", decidedBy, decider.ID)
 	}
 
 	allTurns, err := turns.ListForSession(ctx, session.ID)
@@ -118,11 +114,25 @@ func TestWebhookHandler_Prompted_NonKeywordText_FallsThroughToOrdinaryTurn(t *te
 	deps := newHandlerDeps(t, pool)
 	deps.Plans = narvipg.NewPlanStore(pool)
 	deps.Outbox = narvipg.NewOutboxStore(pool)
-	handler := linear.NewWebhookHandler(deps)
+	deps.Participants = narvipg.NewParticipantStore(pool)
 
 	ctx := context.Background()
 	agentSessionID := "agent-session-plan-feedback"
 	organizationID := "org-plan-feedback"
+
+	// Audit-fix batch update ("block unlinked actor state changes"): the
+	// replying Linear user id must now be pre-linked -- an unresolved actor
+	// is denied outright, so this test (never actually ABOUT identity
+	// resolution) must exercise a genuinely linked, authorized one to keep
+	// proving what it always meant to prove (the non-keyword fallthrough).
+	installLinearFixture(ctx, t, pool, organizationID, deps.TokenEncryptionKey)
+	stub, _ := newGenericLinearGraphQLStub(t)
+	deps.LinearClient = linearapi.New(stub.Client(), stub.URL)
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, deps.AuditLog)
+	const replierID = "linear-planverdict-feedback-1"
+	linkLinearIdentityForTest(ctx, t, pool, replierID, sqlcgen.UserRoleMaintainer)
+
+	handler := linear.NewWebhookHandler(deps)
 
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
@@ -148,7 +158,7 @@ func TestWebhookHandler_Prompted_NonKeywordText_FallsThroughToOrdinaryTurn(t *te
 		t.Fatalf("seed awaiting_approval plan: %v", err)
 	}
 
-	body := agentSessionPromptedPayload(agentSessionID, organizationID, "please keep the env fallback path")
+	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, replierID, "please keep the env fallback path")
 	rec := postWebhook(t, handler, body, "delivery-plan-feedback")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
@@ -180,6 +190,91 @@ func TestWebhookHandler_Prompted_NonKeywordText_FallsThroughToOrdinaryTurn(t *te
 	}
 	if newTurn.Prompt == nil || *newTurn.Prompt != "please keep the env fallback path" {
 		t.Errorf("new turn prompt = %v, want %q", newTurn.Prompt, "please keep the env fallback path")
+	}
+}
+
+// TestWebhookHandler_Prompted_ApproveKeyword_UnknownActorDenied is this
+// batch's own SECOND review pass's direct-denial test for handlePlanVerdict
+// itself (LOW audit fix, "5 of the 6 hardened call sites have no DIRECT
+// denial test") -- unlike TestWebhookHandler_PlanVerdict_DeniedForUnownedMember
+// (identity_integration_test.go, a RESOLVED-but-unowned `member`), this
+// decider's own fetched profile email matches NO existing user at all: a
+// genuinely never-resolved actor. Proves the plan stays awaiting_approval,
+// decided_by stays NULL, the identity is never linked, and the magic-link
+// prompt is still minted so the SAME "approve" reply can be retried once
+// linked.
+func TestWebhookHandler_Prompted_ApproveKeyword_UnknownActorDenied(t *testing.T) {
+	pool := newTestPool(t)
+	deps := newHandlerDeps(t, pool)
+	deps.Plans = narvipg.NewPlanStore(pool)
+	deps.Outbox = narvipg.NewOutboxStore(pool)
+	deps.Participants = narvipg.NewParticipantStore(pool)
+
+	ctx := context.Background()
+	agentSessionID := "agent-session-plan-approve-unknown"
+	organizationID := "org-plan-approve-unknown"
+
+	installLinearFixture(ctx, t, pool, organizationID, deps.TokenEncryptionKey)
+	graphqlStub := newLinearGraphQLStub(t, "nobody-matches@example.com")
+	deps.LinearClient = linearapi.New(graphqlStub.Client(), graphqlStub.URL)
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, deps.AuditLog)
+	const deciderID = "linear-planverdict-approve-unknown-1"
+
+	handler := linear.NewWebhookHandler(deps)
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	plans := narvipg.NewPlanStore(pool)
+	agentSessions := narvipg.NewLinearAgentSessionStore(pool)
+
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceLinear})
+	if err != nil {
+		t.Fatalf("create linear-origin session: %v", err)
+	}
+	if _, err := agentSessions.Claim(ctx, agentSessionID, organizationID); err != nil {
+		t.Fatalf("claim agent session: %v", err)
+	}
+	if err := agentSessions.SetSessionID(ctx, agentSessionID, session.ID); err != nil {
+		t.Fatalf("attach session id: %v", err)
+	}
+	producingTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	plan, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: session.ID, TurnID: producingTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval})
+	if err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+
+	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, deciderID, "approve")
+	rec := postWebhook(t, handler, body, "delivery-plan-approve-unknown")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var dbStatus sqlcgen.PlanStatus
+	var decidedBy pgtype.UUID
+	if err := pool.QueryRow(ctx, `SELECT status, decided_by FROM plans WHERE id = $1`, plan.ID).Scan(&dbStatus, &decidedBy); err != nil {
+		t.Fatalf("query plan row: %v", err)
+	}
+	if dbStatus != sqlcgen.PlanStatusAwaitingApproval {
+		t.Errorf("db status = %q, want %q (a genuinely never-resolved actor must never decide)", dbStatus, sqlcgen.PlanStatusAwaitingApproval)
+	}
+	if decidedBy.Valid {
+		t.Errorf("decided_by = %v, want invalid", decidedBy)
+	}
+
+	allTurns, err := turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(allTurns) != 1 {
+		t.Errorf("len(turns) = %d, want 1 (only the seeded producing turn)", len(allTurns))
+	}
+
+	linkPrompts := narvipg.NewIdentityLinkPromptStore(pool)
+	if _, err := linkPrompts.GetLatestForProviderAndExternalID(ctx, sqlcgen.IdentityProviderLinear, deciderID); err != nil {
+		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
 	}
 }
 

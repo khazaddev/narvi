@@ -934,3 +934,459 @@ func TestHandler_AppMention_CreateSessionDeniedForDisabledUser(t *testing.T) {
 		t.Errorf("identity.UserID = %v, want %v", identity.UserID, matchedUser.ID)
 	}
 }
+
+// TestHandler_AppMention_UnknownActorDeniedWithNoSessionCreated is this
+// batch's own SECOND review pass's direct-denial test for
+// resolveOrClaimSession's own AuthorizeLinkedActor call site (LOW audit
+// fix, "5 of the 6 hardened call sites have no DIRECT denial test (only
+// indirect coverage via fixture pre-linking)") -- unlike
+// TestHandler_AppMention_CreateSessionDeniedForViewer (a RESOLVED but
+// insufficiently-privileged `viewer`), this mentioning Slack user's own
+// fetched profile email matches NO existing user at all: a genuinely
+// never-resolved actor. Proves no session/thread mapping is ever created,
+// the identity is never linked (there was nothing to link it to), and the
+// magic-link prompt is still minted so the SAME mention can be retried
+// once linked.
+func TestHandler_AppMention_UnknownActorDeniedWithNoSessionCreated(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	const slackUserID = "U-UNKNOWN-MENTION"
+	fakeSlack := newFakeSlackWithUsersInfo(t, slackUserID, "nobody-matches@example.com")
+	auditLog := narvipg.NewAuditLogStore(pool)
+	rig := newSlackHandlerRigForIdentityTests(t, pool, fakeSlack, auditLog)
+
+	envelope := appMentionEnvelopeWithUser("Ev0UNKNOWNMENTION001", "C0UNKNOWNMENTION", "1700000090.000100", "", "please help", slackUserID)
+	req := signedSlackRequest(t, envelope)
+	rec := httptest.NewRecorder()
+	rig.handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	if _, err := rig.threads.Get(ctx, "C0UNKNOWNMENTION", "1700000090.000100"); err == nil {
+		t.Error("expected NO thread mapping row (denied by authz), got one")
+	}
+
+	var sessionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Errorf("session count = %d, want 0 (a genuinely never-resolved actor must never create a session)", sessionCount)
+	}
+
+	// Unlike TestHandler_AppMention_CreateSessionDeniedForViewer (a
+	// RESOLVED actor, whose identity still auto-links), this actor never
+	// resolved at all -- there is no identities row.
+	if _, err := narvipg.NewIdentityStore(pool).GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderSlack, slackUserID); err == nil {
+		t.Error("expected NO identities row (never resolved, nothing to link), got one")
+	}
+
+	// The magic-link prompt is still sent exactly as before -- only the
+	// state-changing effect (the session) is refused.
+	linkPrompts := narvipg.NewIdentityLinkPromptStore(pool)
+	if _, err := linkPrompts.GetLatestForProviderAndExternalID(ctx, sqlcgen.IdentityProviderSlack, slackUserID); err != nil {
+		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
+	}
+}
+
+// TestHandler_ReplyOnMappedThread_UnknownActorDenied is this batch's own
+// SECOND review pass's direct-denial test for authorizeExistingSessionReply
+// (LOW audit fix, same finding as
+// TestHandler_AppMention_UnknownActorDeniedWithNoSessionCreated above) --
+// unlike TestHandler_ReplyOnMappedThread_DeniedForUnownedMember (a RESOLVED
+// but unowned `member`), this replying Slack user's own fetched profile
+// email matches NO existing user at all: a genuinely never-resolved actor.
+// Proves no turn is ever added, the identity is never linked, and the
+// webhook-delivery claim is left held (not released) -- exactly like every
+// other real denial, never treated as a retryable backend failure.
+func TestHandler_ReplyOnMappedThread_UnknownActorDenied(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	const slackUserID = "U-UNKNOWN-REPLY"
+	fakeSlack := newFakeSlackWithUsersInfo(t, slackUserID, "nobody-matches@example.com")
+	auditLog := narvipg.NewAuditLogStore(pool)
+	rig := newSlackHandlerRigForIdentityTests(t, pool, fakeSlack, auditLog)
+
+	// Seed an existing mapped thread directly (bypassing the app_mention
+	// creation path) -- ownership is irrelevant here, since a genuinely
+	// never-resolved actor is denied before ANY own/joined lookup at all
+	// (authorizeSessionAction's own top-of-function short-circuit,
+	// identity.go).
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceSlack})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, _, err := rig.threads.Claim(ctx, "C0UNKNOWNREPLY", "1700000091.000100", session.ID); err != nil {
+		t.Fatalf("claim thread mapping: %v", err)
+	}
+
+	const eventID = "Ev0UNKNOWNREPLY001"
+	envelope := messageEnvelopeWithUser(eventID, "C0UNKNOWNREPLY", "1700000091.000200", "1700000091.000100", "please continue", slackUserID)
+	req := signedSlackRequest(t, envelope)
+	rec := httptest.NewRecorder()
+	rig.handler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("ListForSession: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Errorf("len(turns) = %d, want 0 (denied by authz, must not add a turn)", len(turns))
+	}
+
+	if _, err := narvipg.NewIdentityStore(pool).GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderSlack, slackUserID); err == nil {
+		t.Error("expected NO identities row (never resolved, nothing to link), got one")
+	}
+
+	linkPrompts := narvipg.NewIdentityLinkPromptStore(pool)
+	if _, err := linkPrompts.GetLatestForProviderAndExternalID(ctx, sqlcgen.IdentityProviderSlack, slackUserID); err != nil {
+		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
+	}
+
+	var deliveryRowCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'slack' AND delivery_id = $1`, eventID,
+	).Scan(&deliveryRowCount); err != nil {
+		t.Fatalf("count webhook_deliveries: %v", err)
+	}
+	if deliveryRowCount != 1 {
+		t.Errorf("webhook_deliveries row count = %d, want 1 (a genuine denial must leave the claim held, never released)", deliveryRowCount)
+	}
+}
+
+// TestInteractivityHandler_ViewSubmission_UnknownActorDeniedAndNoticeDelivered
+// is this batch's own SECOND review pass's direct-denial test for
+// handleViewSubmission (LOW audit fix, "5 of the 6 hardened call sites
+// have no DIRECT denial test") -- unlike
+// TestInteractivityHandler_ViewSubmission_DeniedForUnownedMember (a
+// RESOLVED but unowned `member`), this submitting Slack user's own fetched
+// profile email matches NO existing user at all: a genuinely never-resolved
+// actor. Proves no request-changes turn is ever created, AND (the LOW audit
+// fix, "handleViewSubmission discards the magic-link notice on denial")
+// that the magic-link notice IS now delivered via chat.postEphemeral,
+// scoped to the submitting user and the plan's own stored Slack message
+// ref -- BEFORE this fix, `actorUserID, _ := resolveSlackActorSingleAttempt(...)`
+// discarded it outright, leaving this actor with no hint a magic link was
+// ever sent.
+func TestInteractivityHandler_ViewSubmission_UnknownActorDeniedAndNoticeDelivered(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	const slackUserID = "U-UNKNOWN-SUBMITTER"
+	fakeSlack, requests := newFakeSlackRecordingWithUsersInfo(t, slackUserID, "nobody-matches-submitter@example.com")
+	slackClient := slackapi.New(fakeSlack.Client(), fakeSlack.URL, "test-bot-token")
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	plans := narvipg.NewPlanStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
+
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = registry.Shutdown() })
+
+	handler := slack.NewInteractivityHandler(slack.InteractiveDeps{
+		Pool:                pool,
+		Sessions:            sessions,
+		Turns:               turns,
+		Plans:               plans,
+		Outbox:              narvipg.NewOutboxStore(pool),
+		LinearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
+		Registry:            registry,
+		SlackClient:         slackClient,
+		AuditLog:            auditLog,
+		IdentityLink:        newIdentityLinkDepsForTest(pool, auditLog),
+		Participants:        narvipg.NewParticipantStore(pool),
+		SigningSecret:       testSigningSecret,
+		Timeouts:            platform.DefaultTimeouts(),
+	})
+
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceSlack})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	turn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	plan, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: session.ID, TurnID: turn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval})
+	if err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+	// postViewSubmissionLinkNotice (interactive.go) looks the plan's own
+	// stored Slack channel/message-ts back up to scope the ephemeral notice
+	// to -- a real Slack-originated plan always has this set
+	// (PostPlanApprovalMessage/SetSlackMessageRef), so this mirrors that.
+	if err := plans.SetSlackMessageRef(ctx, plan.ID, "C-SUBMITTER", "1700000098.000100"); err != nil {
+		t.Fatalf("SetSlackMessageRef: %v", err)
+	}
+
+	privateMetadata := slackapi.EncodePlanActionValue(plan.ID.String(), session.ID.String())
+	viewSubmission := map[string]any{
+		"type": "view_submission",
+		"user": map[string]string{"id": slackUserID},
+		"view": map[string]any{
+			"callback_id":      slackapi.RequestChangesCallbackID,
+			"private_metadata": privateMetadata,
+			"state": map[string]any{
+				"values": map[string]any{
+					slackapi.RequestChangesBlockID: map[string]any{
+						slackapi.RequestChangesActionID: map[string]any{
+							"type":  "plain_text_input",
+							"value": "please also fix the tests",
+						},
+					},
+				},
+			},
+		},
+	}
+	raw, err := json.Marshal(viewSubmission)
+	if err != nil {
+		t.Fatalf("marshal view_submission payload: %v", err)
+	}
+
+	req := signedInteractivityRequest(t, string(raw))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"response_action":"errors"`) {
+		t.Errorf("body = %s, want a response_action:errors body (denied by authz)", rec.Body.String())
+	}
+
+	turnsAfter, err := turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turnsAfter) != 1 {
+		t.Errorf("len(turns) = %d, want 1 (only the seeded producing turn -- a never-resolved actor must never create a turn)", len(turnsAfter))
+	}
+
+	if _, err := narvipg.NewIdentityStore(pool).GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderSlack, slackUserID); err == nil {
+		t.Error("expected NO identities row (never resolved, nothing to link), got one")
+	}
+	linkPrompts := narvipg.NewIdentityLinkPromptStore(pool)
+	if _, err := linkPrompts.GetLatestForProviderAndExternalID(ctx, sqlcgen.IdentityProviderSlack, slackUserID); err != nil {
+		t.Errorf("GetLatestForProviderAndExternalID = %v, want a real link-prompt row", err)
+	}
+
+	// LOW audit fix ("handleViewSubmission discards the magic-link notice
+	// on denial"): the magic-link URL must now actually reach the actor,
+	// via chat.postEphemeral, scoped to slackUserID and the plan's own
+	// stored channel/message-ts.
+	var sawEphemeralWithLink bool
+drain:
+	for {
+		select {
+		case got := <-requests:
+			if got.path == "/chat.postEphemeral" {
+				text, _ := got.body["text"].(string)
+				if strings.Contains(text, identitylink.MagicLinkPath) {
+					sawEphemeralWithLink = true
+					if got.body["channel"] != "C-SUBMITTER" || got.body["user"] != slackUserID {
+						t.Errorf("chat.postEphemeral (channel, user) = (%v, %v), want (%q, %q)", got.body["channel"], got.body["user"], "C-SUBMITTER", slackUserID)
+					}
+				}
+			}
+		default:
+			break drain
+		}
+	}
+	if !sawEphemeralWithLink {
+		t.Error("no chat.postEphemeral call carried the magic-link notice -- want it delivered even though this denial has no channel/message field of its own on the inbound payload")
+	}
+}
+
+// TestInteractivityHandler_BlockActions_ApprovePlan_RetrySucceedsOnceLinked
+// is the MEDIUM audit fix's own headline end-to-end regression test (audit-
+// fix batch "block unlinked actor state changes", SECOND review pass,
+// "no test for the end-to-end 'retry succeeds once linked' guarantee, for
+// ANY of the 6 flows") -- prioritized for the Slack plan-decision flow
+// specifically, since decideAndUpdateMessage is the ONE call site the SAME
+// review pass found the HIGH-severity button-stripping bug in (see
+// identity.go's own ErrActorNotLinked doc comment for the full incident).
+// Proves the actual, full guarantee this whole batch exists to provide:
+//
+//  1. A click from an actor who has NEVER been seen before (fetched profile
+//     email matches no existing user) is denied with ZERO side effects --
+//     the plan stays awaiting_approval, decided_by stays invalid, no new
+//     turn is created, and (the HIGH fix's own proof) NO /chat.update call
+//     ever fires, so the Approve/Reject buttons are never stripped off the
+//     original message. Only an ephemeral notice (carrying the magic-link
+//     URL) is delivered.
+//  2. The SAME identity is then linked via the REAL magic-link-consume flow
+//     -- extracting the nonce from that EXACT magic-link URL text and
+//     calling identitylink.Consume directly, mirroring identitylink's own
+//     TestConsume_LinksIdentityAndDeletesPrompt (the established helper
+//     pattern other tests in this codebase already use for this).
+//  3. The IDENTICAL click (same channel/message/plan/session/action) is
+//     retried -- and now succeeds: the plan flips to approved, decided_by
+//     is the newly-linked user, and a real /chat.update call reflects the
+//     outcome on the SAME message the first click's own buttons survived
+//     on.
+func TestInteractivityHandler_BlockActions_ApprovePlan_RetrySucceedsOnceLinked(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	const slackUserID = "U-RETRY-ONCE-LINKED"
+	fakeSlack, requests := newFakeSlackRecordingWithUsersInfo(t, slackUserID, "nobody-matches-retry@example.com")
+	slackClient := slackapi.New(fakeSlack.Client(), fakeSlack.URL, "test-bot-token")
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	plans := narvipg.NewPlanStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
+	identityLinkDeps := newIdentityLinkDepsForTest(pool, auditLog)
+
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = registry.Shutdown() })
+
+	handler := slack.NewInteractivityHandler(slack.InteractiveDeps{
+		Pool:                pool,
+		Sessions:            sessions,
+		Turns:               turns,
+		Plans:               plans,
+		Outbox:              narvipg.NewOutboxStore(pool),
+		LinearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
+		Registry:            registry,
+		SlackClient:         slackClient,
+		AuditLog:            auditLog,
+		IdentityLink:        identityLinkDeps,
+		Participants:        narvipg.NewParticipantStore(pool),
+		SigningSecret:       testSigningSecret,
+		Timeouts:            platform.DefaultTimeouts(),
+	})
+
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceSlack})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	turn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	plan, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: session.ID, TurnID: turn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval})
+	if err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+
+	value := slackapi.EncodePlanActionValue(plan.ID.String(), session.ID.String())
+	payload := blockActionsPayloadJSONWithUser(slackapi.ActionApprovePlan, value, "C-RETRY", "1700000099.000100", "trigger-retry", slackUserID)
+
+	// --- First click: NOT yet linked -- must be denied with ZERO side
+	// effects, and the Approve/Reject buttons must be left untouched.
+	req := signedInteractivityRequest(t, payload)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first click: status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	afterFirstClick, err := plans.Get(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("get plan after first click: %v", err)
+	}
+	if afterFirstClick.Status != sqlcgen.PlanStatusAwaitingApproval {
+		t.Fatalf("Status after first click = %v, want %v (not-yet-linked actor must be denied)", afterFirstClick.Status, sqlcgen.PlanStatusAwaitingApproval)
+	}
+	if afterFirstClick.DecidedBy.Valid {
+		t.Fatalf("DecidedBy after first click = %v, want invalid", afterFirstClick.DecidedBy)
+	}
+	turnsAfterFirstClick, err := turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns after first click: %v", err)
+	}
+	if len(turnsAfterFirstClick) != 1 {
+		t.Fatalf("len(turns) after first click = %d, want 1 (the seeded producing turn only -- zero side effects)", len(turnsAfterFirstClick))
+	}
+
+	// HIGH audit fix's own headline proof: no /chat.update call ever fired
+	// for the first click -- the Approve/Reject buttons must still be on
+	// the original message, retryable, never stripped.
+	var magicLinkURL string
+drainFirst:
+	for {
+		select {
+		case got := <-requests:
+			if got.path == "/chat.update" {
+				t.Errorf("first click: unexpected /chat.update call (body=%v) -- this would strip the Approve/Reject buttons off a message a not-yet-linked actor still needs to retry", got.body)
+			}
+			if got.path == "/chat.postEphemeral" {
+				if text, _ := got.body["text"].(string); strings.Contains(text, identitylink.MagicLinkPath) {
+					magicLinkURL = text[strings.Index(text, "https://"):]
+				}
+			}
+		default:
+			break drainFirst
+		}
+	}
+	if magicLinkURL == "" {
+		t.Fatal("first click: no ephemeral notice carried a magic-link URL")
+	}
+	nonce := magicLinkURL[len(identityLinkDeps.PublicBaseURL+identitylink.MagicLinkPath):]
+
+	// --- Link the SAME identity via the REAL magic-link-consume flow.
+	linkedUser, err := narvipg.NewUserStore(pool).Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: "retry-once-linked@example.com", DisplayName: "Retry Once Linked", Role: sqlcgen.UserRoleMaintainer,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user to link: %v", err)
+	}
+	if _, err := identitylink.Consume(ctx, identityLinkDeps, nonce, linkedUser.ID); err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+
+	// --- Retry: the IDENTICAL click now succeeds.
+	req2 := signedInteractivityRequest(t, payload)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("retry: status = %d, want %d; body = %s", rec2.Code, http.StatusOK, rec2.Body.String())
+	}
+
+	finalPlan, err := plans.Get(ctx, plan.ID)
+	if err != nil {
+		t.Fatalf("get plan after retry: %v", err)
+	}
+	if finalPlan.Status != sqlcgen.PlanStatusApproved {
+		t.Errorf("Status after retry = %v, want %v (the identical click must now succeed once linked)", finalPlan.Status, sqlcgen.PlanStatusApproved)
+	}
+	if !finalPlan.DecidedBy.Valid || finalPlan.DecidedBy != linkedUser.ID {
+		t.Errorf("DecidedBy after retry = %v, want %v (the newly-linked user)", finalPlan.DecidedBy, linkedUser.ID)
+	}
+	turnsAfterRetry, err := turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns after retry: %v", err)
+	}
+	if len(turnsAfterRetry) != 2 {
+		t.Errorf("len(turns) after retry = %d, want 2 (the seeded producing turn + the new implementation turn)", len(turnsAfterRetry))
+	}
+
+	sawChatUpdateAfterRetry := false
+drainSecond:
+	for {
+		select {
+		case got := <-requests:
+			if got.path == "/chat.update" {
+				sawChatUpdateAfterRetry = true
+			}
+		default:
+			break drainSecond
+		}
+	}
+	if !sawChatUpdateAfterRetry {
+		t.Error("retry: expected a /chat.update call reflecting the now-successful decision")
+	}
+}

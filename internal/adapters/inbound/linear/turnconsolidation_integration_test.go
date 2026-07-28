@@ -82,6 +82,10 @@ func TestWebhookHandler_Prompted_ConcurrentReplies_L2_OnlyOneSucceeds(t *testing
 	// exactly like every other Linear test that reaches real identity
 	// resolution (see authz_backend_error_integration_test.go).
 	deps.IdentityLink = newIdentityLinkDepsForTest(pool, deps.AuditLog)
+	// Participants (audit-fix batch addition): authorizeSessionAction's own
+	// OwnedOrJoined call (identity.go) needs this now that the replying
+	// actors below resolve to genuinely linked (non-bot-attributed) users.
+	deps.Participants = narvipg.NewParticipantStore(pool)
 
 	organizationID := "org-l2-concurrent-1"
 	installLinearFixture(ctx, t, pool, organizationID, deps.TokenEncryptionKey)
@@ -117,6 +121,18 @@ func TestWebhookHandler_Prompted_ConcurrentReplies_L2_OnlyOneSucceeds(t *testing
 	sessionID := mapping.SessionID
 
 	const n = 8
+	// Audit-fix batch update ("block unlinked actor state changes"): each
+	// goroutine's own distinct "linear-l2-user-%d" id must now be pre-linked
+	// -- an unresolved actor is denied outright, which would deny every one
+	// of these replies before ever reaching the turn-creation lock this test
+	// is actually about. RoleMaintainer passes ActionPromptSession
+	// unconditionally regardless of session ownership (the `created` event
+	// above is automation-initiated, so the session has no CreatedBy at
+	// all).
+	for i := 0; i < n; i++ {
+		linkLinearIdentityForTest(ctx, t, pool, fmt.Sprintf("linear-l2-user-%d", i), sqlcgen.UserRoleMaintainer)
+	}
+
 	statuses := make([]int, n)
 	var eg errgroup.Group
 	for i := 0; i < n; i++ {
@@ -258,12 +274,25 @@ func TestWebhookHandler_Prompted_LogsSessionAndTurnID(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 	deps := newHandlerDeps(t, pool)
-	// Deliberately NO installLinearFixture call for this organization --
-	// mirrors newHandlerDeps' own doc comment ("never actually called: no
-	// installation row exists ... so postAcknowledgment skips before any
-	// HTTP call"): this test only cares about the LOG line, not the
-	// (best-effort, separately tested above) outbound activity post.
 	organizationID := "org-log-prompted-1"
+
+	// Audit-fix batch update ("block unlinked actor state changes"): this
+	// test's own reply must now resolve to a genuinely linked actor -- an
+	// unresolved one is denied outright, which would deny the reply before
+	// ever reaching the addTurn/log line this test is actually about. This
+	// now needs installLinearFixture (so resolveActor's own
+	// decryptLinearAccessToken succeeds) and a reachable LinearClient stub,
+	// unlike this test's own PREVIOUS "deliberately no installation" setup
+	// (which relied on the OLD "an unresolved actor's action still
+	// proceeds" precedent, never actually testing installation absence
+	// itself).
+	installLinearFixture(ctx, t, pool, organizationID, deps.TokenEncryptionKey)
+	stub, _ := newGenericLinearGraphQLStub(t)
+	deps.LinearClient = linearapi.New(stub.Client(), stub.URL)
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, deps.AuditLog)
+	deps.Participants = narvipg.NewParticipantStore(pool)
+	const replierID = "linear-log-user-1"
+	linkLinearIdentityForTest(ctx, t, pool, replierID, sqlcgen.UserRoleMaintainer)
 
 	handler := linear.NewWebhookHandler(deps)
 
@@ -285,7 +314,7 @@ func TestWebhookHandler_Prompted_LogsSessionAndTurnID(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 
-	promptedBody := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, "linear-log-user-1", "please continue")
+	promptedBody := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, replierID, "please continue")
 	rec2 := postWebhook(t, handler, promptedBody, "delivery-log-prompted-1")
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("prompted status = %d, want %d; body=%s", rec2.Code, http.StatusOK, rec2.Body.String())

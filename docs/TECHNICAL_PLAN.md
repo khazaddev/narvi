@@ -367,12 +367,12 @@ Auto-link algorithm (runs on first event from an unknown provider identity — S
 1. Fetch the actor's profile email from the provider API.
 2. Match against `users.primary_email` and verified identity emails.
 3. Exactly **one** verified match → auto-link (`linked_via=auto_email`), notify the user in-channel and in-app.
-4. Zero or multiple matches → **never guess**: create a link prompt and reply in-channel with a short-lived magic link ("connect your account"); the action proceeds with bot attribution until linked.
+4. Zero or multiple matches → **never guess**: create a link prompt and reply in-channel with a short-lived magic link ("connect your account"). A state-changing action from this not-yet-linked identity is **denied** (audit-fix batch "block unlinked actor state changes" — hardened from an earlier version of this section, which let the action proceed under bot attribution while the prompt was pending; that was a confirmed audit finding, not a design that survived review) — the magic-link prompt is still sent exactly as before, and the actor simply retries the identical action once they've clicked it and linked.
 5. Manual link/unlink in Settings → Members; admin can force-link.
 
 Failure rules: a provider email-API failure is a **retryable error, not an empty identity** — retry with backoff and keep the last known value; never null-out an email on transient failure (nulling it breaks both sign-in and identity linking).
 
-Every cross-channel action (prompt from Slack, plan approval from Linear, review re-trigger from a GitHub comment) resolves to a `user_id` before it reaches the domain; unlinked actors get bot attribution + a link prompt.
+Every cross-channel action (prompt from Slack, plan approval from Linear, review re-trigger from a GitHub comment) resolves to a `user_id` before it reaches the domain; a not-yet-linked actor's state-changing action is denied (never bot attribution) while a link prompt is sent in parallel, so the same action succeeds on retry once linked. (GitHub is the one exception: a GitHub commenter resolves directly from an existing GitHub-OAuth-login identity, with no deferred "auto-link pending" mechanism at all, so there is nothing to retry — an unresolved GitHub commenter has simply never logged into Narvi via GitHub OAuth, a permanent case `AuthorizeResolvedActor`, not this section's `AuthorizeLinkedActor`, still governs.)
 
 ### 13.3 RBAC
 Roles (global, one per user): **admin > maintainer > member > viewer**.

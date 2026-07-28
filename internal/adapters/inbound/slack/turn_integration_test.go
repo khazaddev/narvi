@@ -61,6 +61,13 @@ func newSlackAckTestRig(t *testing.T, pool *pgxpool.Pool) *slackAckTestRig {
 	t.Helper()
 	ctx := context.Background()
 
+	// Audit-fix batch addition: see newSlackTestRig's own identical call
+	// (handler_integration_test.go) -- this file's own tests reuse the SAME
+	// appMentionEnvelope/messageEnvelope fixed user ids, which must now
+	// resolve to a genuinely linked, sufficiently-privileged actor.
+	linkSlackIdentityForTest(ctx, t, pool, "U0TESTUSER", sqlcgen.UserRoleMaintainer)
+	linkSlackIdentityForTest(ctx, t, pool, "U0OTHERUSER", sqlcgen.UserRoleMaintainer)
+
 	requests := make(chan recordedSlackRequestBody, 16)
 	ackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any

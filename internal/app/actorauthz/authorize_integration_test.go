@@ -119,6 +119,22 @@ func TestAuthorizeResolvedActor_UnresolvedActorAllowedWithNoLookup(t *testing.T)
 	}
 }
 
+// TestAuthorizeLinkedActor_UnresolvedActorDeniedWithNoLookup mirrors
+// TestAuthorizeResolvedActor_UnresolvedActorAllowedWithNoLookup above --
+// same shape, opposite verdict: AuthorizeLinkedActor is the audit-hardening
+// counterpart that DENIES (rather than allows) an unresolved actor, and
+// does so with NO users lookup at all, proven here identically by passing
+// a nil *postgres.UserStore (which would panic on any actual dereference).
+func TestAuthorizeLinkedActor_UnresolvedActorDeniedWithNoLookup(t *testing.T) {
+	ctx := context.Background()
+	logger := discardLogger()
+
+	got := actorauthz.AuthorizeLinkedActor(ctx, logger, "test", nil, pgtype.UUID{}, authz.ActionCreateSession, authz.Resource{})
+	if got {
+		t.Error("AuthorizeLinkedActor() = true, want false for an unresolved (invalid) actor")
+	}
+}
+
 // TestAuthorizeResolvedActor_UnknownUserFailsClosed proves a role-lookup
 // failure (here: a syntactically valid but nonexistent user id) denies
 // rather than silently proceeding -- "should be unreachable in practice"
