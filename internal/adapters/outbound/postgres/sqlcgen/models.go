@@ -659,6 +659,7 @@ type Outbox struct {
 	DeliveredAt   pgtype.Timestamptz `json:"delivered_at"`
 	LastError     *string            `json:"last_error"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	CorrelationID *string            `json:"correlation_id"`
 }
 
 type Participant struct {

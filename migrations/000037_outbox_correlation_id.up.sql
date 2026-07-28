@@ -1,0 +1,17 @@
+-- Audit fix (correlation ID propagation, Batch 11 scope): the outbox
+-- table (migrations/000010_outbox.up.sql) has no correlation_id column,
+-- unlike audit_log (migrations/000013_audit_log.up.sql), whose own
+-- correlation_id TEXT column platform.CorrelationIDFromContext(ctx)
+-- already feeds (internal/app/auditlog/record.go) -- this migration adds
+-- the same nullable column here so an outbox row enqueued from within a
+-- request/webhook context can carry that same correlation id through to
+-- delivery, where internal/app/outboxworker/builder.go's own attempt()
+-- logs it alongside session_id. Two call sites populate it: internal/app/
+-- sessionactor/outboxenqueue.go's own enqueueOutboxNotification (turn
+-- completions) and internal/adapters/inbound/httpapi/decideplan.go's own
+-- enqueuePlanDecisionNotifications (cross-channel plan decisions).
+--
+-- Nullable, exactly like audit_log.correlation_id: a row enqueued outside
+-- an HTTP/webhook request context simply gets a null correlation_id (no
+-- id is ever invented for it).
+ALTER TABLE outbox ADD COLUMN correlation_id TEXT;

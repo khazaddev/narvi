@@ -887,7 +887,11 @@ type Timeouts struct {
 	// ordering relationship with either invariant chain above (or with any
 	// prior Step's standalone additions), so -- per those additions' own
 	// precedent -- plain fields with sensible defaults, not wired into a
-	// fake invariant link.
+	// fake invariant link. OutboxClaimDuration is the one exception: see
+	// the audit-fix note directly above that field below, matching Step
+	// 25's own ReconcilerOrphanConfirmationPeriod precedent of a Step's
+	// later fix adding its own single, independent pairwise check without
+	// retroactively promoting the whole family into either named chain.
 
 	// OutboxPumpInterval is how often the process-wide background outbox
 	// delivery loop (internal/app/outboxworker, mirroring app/imagebuild's
@@ -936,28 +940,98 @@ type Timeouts struct {
 	// next pump tick's own batch.
 	OutboxDeliveryTimeout time.Duration
 
-	// OutboxClaimDuration protects a just-claimed outbox row from being
-	// re-selected by a concurrent/later pump tick (this pod's or another
-	// pod's own outboxworker.Builder) before THIS tick's own real delivery
-	// attempt has recorded an outcome -- mirrors TimerClaimDuration's own
-	// identical "push the due-again time forward by a protection window at
-	// claim time" mechanism exactly, needed here because the outbox table
-	// (unlike image_builds' own 'building' status) has no third, in-flight
-	// status distinct from pending/delivered/dead_letter to mark a row
-	// claimed with. ClaimOutboxEntry bumps next_attempt_at forward by this
-	// duration (and increments attempts) BEFORE the real notifier call ever
-	// runs; RecordOutboxEntryFailure/MarkOutboxEntryDeadLetter then
+	// --- Audit fix (H6, correctness -- internal/app/outboxworker/
+	// builder.go): the ORIGINAL model below computed ONE now := time.Now()
+	// per batch-level claimBatch call and stamped every row in that batch
+	// (up to pumpBatchSize=20) with the identical claim-expiry timestamp,
+	// before ANY of them were actually delivered. PumpOnce then attempts
+	// each claimed row SEQUENTIALLY, one at a time, each bounded by
+	// OutboxDeliveryTimeout -- so a row late in the batch could still be
+	// waiting for its own attempt() call to even START, long after its
+	// shared claim-expiry timestamp had already elapsed, letting a
+	// concurrent tick (this pod's next tick, or another pod's own
+	// Builder -- ListDuePendingOutboxEntries' own FOR UPDATE SKIP LOCKED
+	// exists specifically so multiple pods run this loop concurrently)
+	// re-claim that same row while the first delivery was still in
+	// flight -- and, if that second builder's own delivery was ALSO still
+	// in flight when the first builder finally reached its own turn, a
+	// naive renewal guarded only by "status = 'pending'" (both builders'
+	// own claims leave status at 'pending' -- the outbox table has no
+	// third, in-flight status) would succeed for BOTH builders, and BOTH
+	// would call notifier.Deliver on the same row concurrently: a genuine
+	// double-delivery race, empirically reproduced against a real
+	// Postgres testcontainer with a deliberately slow concurrent
+	// claimant. Status alone cannot tell "untouched since I last observed
+	// it" apart from "a different builder already re-claimed/renewed it
+	// and is mid-delivery on it right now".
+	//
+	// The fix is a per-row re-claim/heartbeat (RenewOutboxClaim, called
+	// from attempt() in internal/app/outboxworker/builder.go immediately
+	// before the real notifier.Deliver call, using time.Now() at THAT
+	// moment -- not the batch's shared claim-time now) that is ALSO a
+	// genuine optimistic-concurrency compare-and-swap against the row's
+	// own next_attempt_at: it only renews (and only succeeds) if the
+	// row's CURRENT next_attempt_at still matches the value THIS caller
+	// last observed (row.NextAttemptAt, from its own prior
+	// ClaimOutboxEntry/RenewOutboxClaim return). If a different builder
+	// already won the race, that builder's own claim/renewal already
+	// changed next_attempt_at away from the value this caller observed,
+	// so this caller's own renewal correctly fails (pgx.ErrNoRows) instead
+	// of proceeding to deliver -- attempt() already treats that error as
+	// "stop, do not deliver". This CAS is what actually gives the renewal
+	// single-writer teeth: at most one builder's renewal for a given prior
+	// next_attempt_at value can ever succeed, so at most one builder ever
+	// proceeds to notifier.Deliver for a given row at a time. It never
+	// increments attempts again (that already happened once, at
+	// claimBatch time, via ClaimOutboxEntry). See that query's own doc
+	// comment (queries/outbox.sql) for the full mechanism.
+	//
+	// This changes what OutboxClaimDuration itself protects: no longer "one
+	// batch's own worst-case total sequential processing time" (which the
+	// original doc comment reasoned about, and which no fixed value could
+	// ever safely bound against an arbitrarily large pumpBatchSize/attempt
+	// backlog), but "one row's own renewal window, renewed fresh
+	// immediately before each real delivery attempt" -- so it now only
+	// ever needs to comfortably outlast a SINGLE OutboxDeliveryTimeout-
+	// bounded attempt, which Validate() below enforces as a new,
+	// independent pairwise check (OutboxClaimDuration > OutboxDeliveryTimeout,
+	// mirroring Step 25's own ReconcilerInterval > ReconcilerOrphanConfirmationPeriod
+	// precedent of a single, narrow link added outside either named chain).
+
+	// OutboxClaimDuration protects a just-claimed (or just-renewed) outbox
+	// row from being re-selected by a concurrent/later pump tick (this
+	// pod's or another pod's own outboxworker.Builder) before THIS row's
+	// own real delivery attempt has recorded an outcome -- mirrors
+	// TimerClaimDuration's own identical "push the due-again time forward
+	// by a protection window at claim time" mechanism exactly, needed here
+	// because the outbox table (unlike image_builds' own 'building'
+	// status) has no third, in-flight status distinct from
+	// pending/delivered/dead_letter to mark a row claimed with.
+	// ClaimOutboxEntry bumps next_attempt_at forward by this duration (and
+	// increments attempts) at batch-claim time; attempt() then RENEWS the
+	// SAME row's own next_attempt_at by this same duration, from a FRESH
+	// time.Now(), immediately before its own real notifier call, via the
+	// genuine compare-and-swap described in the audit-fix note directly
+	// above (guarded by the row's own next_attempt_at still matching what
+	// this caller last observed, not merely status='pending') -- WITHOUT
+	// incrementing attempts again. RecordOutboxEntryFailure/
+	// MarkOutboxEntryDeadLetter then
 	// overwrite that provisional value with the real domain/outbox.
 	// EvaluateBackoff decision once the attempt's real outcome is known.
 	// Self-healing exactly like TimerClaimDuration's own precedent: a pod
 	// that crashes mid-delivery simply leaves the row due again once this
 	// window elapses, picked up by a later tick with no separate sweep
-	// needed. Not specified in the plan; chosen as 30s, matching
-	// TimerClaimDuration's own value and reasoning ("comfortably longer than
-	// a single [attempt]'s expected processing time, short enough that a
-	// genuinely crashed pod's claimed row is retried reasonably quickly") --
-	// OutboxDeliveryTimeout (15s) above is this claim window's own
-	// worst-case real attempt duration, so 30s leaves meaningful margin.
+	// needed. Not specified in the plan; chosen as 45s -- OutboxDeliveryTimeout
+	// (15s) above is this window's own worst-case real single-attempt
+	// duration, and Validate() below requires at least MinTimeoutMargin
+	// (30s) of headroom beyond it, so 45s sits exactly at that minimum
+	// margin (matching ReconcilerInterval/ReconcilerOrphanConfirmationPeriod's
+	// own identical "exactly at the minimum margin, not extra slack beyond
+	// it" precedent) rather than TimerClaimDuration's own unrelated 30s
+	// value, which this field no longer needs to match now that it
+	// protects one renewed row's own window rather than reasoning (as the
+	// pre-fix comment above used to) about an entire batch's own
+	// sequential processing time.
 	OutboxClaimDuration time.Duration
 
 	// --- Step 36 standalone addition ("intent classifier", §8.3/§18): no
@@ -1186,7 +1260,7 @@ func DefaultTimeouts() Timeouts {
 		OutboxBackoffBase:     30 * time.Second, // not specified; chosen -- see domain/outbox.EvaluateBackoff's own doc comment for the schedule this produces
 		OutboxBackoffMax:      5 * time.Minute,  // not specified; chosen, shorter than ImageBuildBackoffMax since a live notification is being waited on
 		OutboxDeliveryTimeout: 15 * time.Second, // not specified; chosen, generous for a single outbound notifier POST
-		OutboxClaimDuration:   30 * time.Second, // not specified; chosen, matches TimerClaimDuration's own value/reasoning
+		OutboxClaimDuration:   45 * time.Second, // not specified; chosen -- exactly MinTimeoutMargin above OutboxDeliveryTimeout (audit fix H6, see field doc comment)
 
 		IntentClassifierLLMTimeout: 10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 
@@ -1275,6 +1349,14 @@ func (t Timeouts) Validate() error {
 	// exactly at that minimum margin, not with extra slack beyond it.
 	check("ReconcilerInterval > ReconcilerOrphanConfirmationPeriod",
 		"ReconcilerInterval", t.ReconcilerInterval, "ReconcilerOrphanConfirmationPeriod", t.ReconcilerOrphanConfirmationPeriod)
+
+	// Audit fix (H6, outbox claim-lease race): OutboxClaimDuration must
+	// stay at least MinTimeoutMargin above OutboxDeliveryTimeout, or a
+	// single real delivery attempt's own worst-case duration could outlive
+	// the very claim-renewal window attempt() just refreshed to protect it
+	// -- see OutboxClaimDuration's own doc comment for the full reasoning.
+	check("OutboxClaimDuration > OutboxDeliveryTimeout",
+		"OutboxClaimDuration", t.OutboxClaimDuration, "OutboxDeliveryTimeout", t.OutboxDeliveryTimeout)
 
 	return errors.Join(errs...)
 }

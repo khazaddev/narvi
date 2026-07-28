@@ -15,7 +15,7 @@ const claimOutboxEntry = `-- name: ClaimOutboxEntry :one
 UPDATE outbox
 SET attempts = attempts + 1, next_attempt_at = $2
 WHERE id = $1 AND status = 'pending'
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
 `
 
 type ClaimOutboxEntryParams struct {
@@ -48,31 +48,63 @@ func (q *Queries) ClaimOutboxEntry(ctx context.Context, arg ClaimOutboxEntryPara
 		&i.DeliveredAt,
 		&i.LastError,
 		&i.CreatedAt,
+		&i.CorrelationID,
 	)
 	return i, err
 }
 
+const countPendingOutboxEntries = `-- name: CountPendingOutboxEntries :one
+SELECT COUNT(*) FROM outbox
+WHERE status = 'pending'
+`
+
+// Audit fix (M15/M17, the lag-metric blind spot): outboxworker.Builder's
+// own outbox_lag_seconds gauge is computed ONLY from rows the CURRENT
+// tick's own claimBatch actually claimed (ListDuePendingOutboxEntries
+// above, which only returns rows whose own next_attempt_at <= now()) --
+// during a sustained notifier outage, every failed delivery schedules a
+// real domain/outbox.EvaluateBackoff-computed retry, so at any given tick
+// it is entirely possible every currently-pending row is mid-backoff (its
+// own next_attempt_at in the future, not due yet) even though there is a
+// large, genuinely stuck backlog -- in that moment outbox_lag_seconds
+// silently reads zero. This query backs a SECOND, independent gauge
+// (outbox_due_backlog_count) that counts EVERY 'pending' row, deliberately
+// NOT restricted to next_attempt_at <= now() like ListDuePendingOutboxEntries
+// -- the whole point is to see rows currently cooling down in backoff too,
+// which the due-only lag metric structurally cannot see. Deliberately
+// outside claimBatch's own transaction: a cheap, standalone read, no FOR
+// UPDATE, no lock contention with the claim step.
+func (q *Queries) CountPendingOutboxEntries(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingOutboxEntries)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createOutboxEntry = `-- name: CreateOutboxEntry :one
 
-INSERT INTO outbox (session_id, kind, payload)
-VALUES ($1, $2, $3)
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at
+INSERT INTO outbox (session_id, kind, payload, correlation_id)
+VALUES ($1, $2, $3, $4)
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
 `
 
 type CreateOutboxEntryParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	Kind      string      `json:"kind"`
-	Payload   []byte      `json:"payload"`
+	SessionID     pgtype.UUID `json:"session_id"`
+	Kind          string      `json:"kind"`
+	Payload       []byte      `json:"payload"`
+	CorrelationID *string     `json:"correlation_id"`
 }
 
 // Queries backing Outbox (§4.3, §5.1). CreateOutboxEntry/GetOutboxEntry
-// prove the pipeline end to end (Step 31); the remaining five back Step
-// 35's ("outbox delivery") own claim/attempt/record delivery-worker loop
+// prove the pipeline end to end (Step 31); the next five back Step 35's
+// ("outbox delivery") own claim/attempt/record delivery-worker loop
 // (internal/app/outboxworker), mirroring internal/adapters/outbound/
 // postgres/queries/image_builds.sql's own ListDue/Claim/RecordSuccess/
 // RecordFailure shape closely -- see that file's own doc comments for the
 // general "claim inside one transaction, attempt outside any transaction"
-// discipline this mirrors.
+// discipline this mirrors. RenewOutboxClaim/CountPendingOutboxEntries at
+// the bottom are a later audit fix (H6/M15-M17) -- see each query's own
+// doc comment below.
 //
 // Unlike image_builds, the outbox table has no third, in-flight status
 // distinct from pending/delivered/dead_letter (migrations/000010_outbox.
@@ -84,8 +116,21 @@ type CreateOutboxEntryParams struct {
 // ClaimDueTimer precedent exactly -- see that query's own doc comment for
 // why a provisional forward-bump at claim time is the correct mechanism
 // here.
+// correlation_id (migrations/000037_outbox_correlation_id.up.sql) is
+// nullable, mirroring audit_log.correlation_id's own identical
+// convention: every caller (internal/app/sessionactor/outboxenqueue.go's
+// own enqueueOutboxNotification; internal/adapters/inbound/httpapi/
+// decideplan.go's own enqueuePlanDecisionNotifications) passes
+// platform.CorrelationIDFromContext(ctx)'s value when the enclosing
+// request/webhook context carried one, else NULL -- no id is ever invented
+// at enqueue time for a row created outside such a context.
 func (q *Queries) CreateOutboxEntry(ctx context.Context, arg CreateOutboxEntryParams) (Outbox, error) {
-	row := q.db.QueryRow(ctx, createOutboxEntry, arg.SessionID, arg.Kind, arg.Payload)
+	row := q.db.QueryRow(ctx, createOutboxEntry,
+		arg.SessionID,
+		arg.Kind,
+		arg.Payload,
+		arg.CorrelationID,
+	)
 	var i Outbox
 	err := row.Scan(
 		&i.ID,
@@ -98,12 +143,13 @@ func (q *Queries) CreateOutboxEntry(ctx context.Context, arg CreateOutboxEntryPa
 		&i.DeliveredAt,
 		&i.LastError,
 		&i.CreatedAt,
+		&i.CorrelationID,
 	)
 	return i, err
 }
 
 const getOutboxEntry = `-- name: GetOutboxEntry :one
-SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at FROM outbox
+SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
 WHERE id = $1
 `
 
@@ -121,12 +167,13 @@ func (q *Queries) GetOutboxEntry(ctx context.Context, id pgtype.UUID) (Outbox, e
 		&i.DeliveredAt,
 		&i.LastError,
 		&i.CreatedAt,
+		&i.CorrelationID,
 	)
 	return i, err
 }
 
 const listDuePendingOutboxEntries = `-- name: ListDuePendingOutboxEntries :many
-SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at FROM outbox
+SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
 WHERE status = 'pending' AND next_attempt_at <= now()
 ORDER BY next_attempt_at
 LIMIT $1
@@ -160,6 +207,7 @@ func (q *Queries) ListDuePendingOutboxEntries(ctx context.Context, limit int32) 
 			&i.DeliveredAt,
 			&i.LastError,
 			&i.CreatedAt,
+			&i.CorrelationID,
 		); err != nil {
 			return nil, err
 		}
@@ -175,7 +223,7 @@ const markOutboxEntryDeadLetter = `-- name: MarkOutboxEntryDeadLetter :one
 UPDATE outbox
 SET status = 'dead_letter', last_error = $2
 WHERE id = $1 AND status = 'pending'
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
 `
 
 type MarkOutboxEntryDeadLetterParams struct {
@@ -201,6 +249,7 @@ func (q *Queries) MarkOutboxEntryDeadLetter(ctx context.Context, arg MarkOutboxE
 		&i.DeliveredAt,
 		&i.LastError,
 		&i.CreatedAt,
+		&i.CorrelationID,
 	)
 	return i, err
 }
@@ -209,7 +258,7 @@ const markOutboxEntryDelivered = `-- name: MarkOutboxEntryDelivered :one
 UPDATE outbox
 SET status = 'delivered', delivered_at = now()
 WHERE id = $1 AND status = 'pending'
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
 `
 
 // Records a successful delivery: status='delivered', delivered_at=now().
@@ -229,6 +278,7 @@ func (q *Queries) MarkOutboxEntryDelivered(ctx context.Context, id pgtype.UUID) 
 		&i.DeliveredAt,
 		&i.LastError,
 		&i.CreatedAt,
+		&i.CorrelationID,
 	)
 	return i, err
 }
@@ -237,7 +287,7 @@ const recordOutboxEntryFailure = `-- name: RecordOutboxEntryFailure :one
 UPDATE outbox
 SET next_attempt_at = $2, last_error = $3
 WHERE id = $1 AND status = 'pending'
-RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
 `
 
 type RecordOutboxEntryFailureParams struct {
@@ -267,6 +317,85 @@ func (q *Queries) RecordOutboxEntryFailure(ctx context.Context, arg RecordOutbox
 		&i.DeliveredAt,
 		&i.LastError,
 		&i.CreatedAt,
+		&i.CorrelationID,
+	)
+	return i, err
+}
+
+const renewOutboxClaim = `-- name: RenewOutboxClaim :one
+UPDATE outbox
+SET next_attempt_at = $2
+WHERE id = $1 AND status = 'pending' AND next_attempt_at = $3
+RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
+`
+
+type RenewOutboxClaimParams struct {
+	ID                    pgtype.UUID        `json:"id"`
+	NextAttemptAt         pgtype.Timestamptz `json:"next_attempt_at"`
+	ExpectedNextAttemptAt pgtype.Timestamptz `json:"expected_next_attempt_at"`
+}
+
+// Audit fix (H6, correctness -- internal/app/outboxworker/builder.go): the
+// per-row re-claim/heartbeat outboxworker.Builder's own attempt() calls
+// immediately before the real notifier.Deliver call, closing the batch-
+// level claim-lease race ClaimOutboxEntry above cannot close on its own.
+// claimBatch computes ONE shared time.Now() and calls ClaimOutboxEntry for
+// EVERY row in a batch (up to pumpBatchSize) before any of them are
+// actually delivered; PumpOnce then attempts each claimed row
+// SEQUENTIALLY, so a row late in the batch could still be waiting for its
+// own attempt() call to even start after its shared claim-expiry
+// timestamp has already elapsed -- letting a concurrent tick (this pod's
+// next one, or another pod's own Builder) re-claim this same row.
+//
+// A first version of this fix guarded only "AND status = 'pending'",
+// exactly like every other guarded outbox UPDATE in this file -- but
+// status alone CANNOT distinguish "no one else has touched this row since
+// I last observed it" from "a DIFFERENT builder already re-claimed (or
+// renewed) this row and is now mid-delivery on it": both leave status at
+// 'pending' (the outbox table has no third, in-flight status). That gap
+// is real and empirically reproducible: builder A's batch-level claim on
+// a row can lapse before A's own sequential attempt() loop reaches it;
+// builder B then legitimately re-claims and starts delivering the SAME
+// row; if B's own delivery is still in flight when A finally reaches its
+// turn, a status-only renewal would ALSO succeed for A (status is still
+// 'pending' -- B has not called MarkDelivered yet), so A would ALSO call
+// notifier.Deliver on the same row concurrently with B.
+//
+// This query is therefore a genuine optimistic-concurrency compare-and-
+// swap, not just a status check: sqlc.arg('expected_next_attempt_at') is
+// the next_attempt_at value the CALLER last observed for this row (from
+// its own prior ClaimOutboxEntry or RenewOutboxClaim return), and the
+// WHERE clause requires the row's CURRENT next_attempt_at to still match
+// it. If a different builder won the race in between, THAT builder's own
+// claim/renewal already changed next_attempt_at away from the value this
+// caller last observed, so this CAS correctly matches zero rows here
+// (pgx.ErrNoRows) instead of renewing a lease someone else already holds
+// -- attempt() already treats that error as "stop, do not deliver". This
+// is what gives the renewal real single-writer teeth: at most one
+// builder's renewal for a given prior next_attempt_at value can ever
+// succeed, so at most one builder proceeds to notifier.Deliver for this
+// row at a time.
+//
+// Bumps next_attempt_at forward by the caller's own OutboxClaimDuration
+// from a FRESH time.Now() taken at the moment of the real attempt -- not
+// the batch's shared claim-time now. Deliberately does NOT touch attempts:
+// ClaimOutboxEntry already counted this attempt at batch-claim time, and
+// this is purely a claim-protection renewal, not a new delivery attempt.
+func (q *Queries) RenewOutboxClaim(ctx context.Context, arg RenewOutboxClaimParams) (Outbox, error) {
+	row := q.db.QueryRow(ctx, renewOutboxClaim, arg.ID, arg.NextAttemptAt, arg.ExpectedNextAttemptAt)
+	var i Outbox
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Attempts,
+		&i.NextAttemptAt,
+		&i.DeliveredAt,
+		&i.LastError,
+		&i.CreatedAt,
+		&i.CorrelationID,
 	)
 	return i, err
 }

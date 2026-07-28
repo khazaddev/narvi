@@ -64,6 +64,42 @@ func (s *OutboxStore) Claim(ctx context.Context, id pgtype.UUID, nextAttemptAt p
 	})
 }
 
+// RenewClaim renews id's row own claim-protection window (bumping
+// next_attempt_at forward to nextAttemptAt, WITHOUT incrementing
+// attempts) -- audit fix H6's per-row heartbeat, called by
+// outboxworker.Builder's own attempt() immediately before the real
+// notifier call, from a FRESH time.Now() at that moment rather than
+// claimBatch's own shared, batch-level claim-time now.
+//
+// expectedNextAttemptAt is a genuine optimistic-concurrency compare-and-
+// swap value, not a mere status check: the next_attempt_at the CALLER
+// last observed for this row (i.e. row.NextAttemptAt as returned by its
+// own prior Claim/RenewClaim call). The renewal only succeeds if the
+// row's CURRENT next_attempt_at still matches it -- see
+// RenewOutboxClaim's own generated doc comment for why "status =
+// 'pending'" alone cannot distinguish "untouched since I last observed
+// it" from "a different builder already re-claimed/renewed it and is now
+// mid-delivery". Returns pgx.ErrNoRows if id's row is no longer 'pending'
+// OR its next_attempt_at no longer matches expectedNextAttemptAt (a
+// different builder won the race in between) -- both cases mean this
+// caller must not proceed to deliver.
+func (s *OutboxStore) RenewClaim(ctx context.Context, id pgtype.UUID, nextAttemptAt, expectedNextAttemptAt pgtype.Timestamptz) (sqlcgen.Outbox, error) {
+	return s.q.RenewOutboxClaim(ctx, sqlcgen.RenewOutboxClaimParams{
+		ID:                    id,
+		NextAttemptAt:         nextAttemptAt,
+		ExpectedNextAttemptAt: expectedNextAttemptAt,
+	})
+}
+
+// CountPending returns the number of 'pending' outbox rows total,
+// deliberately NOT restricted to next_attempt_at <= now() -- audit fix
+// M15/M17's own outbox_due_backlog_count gauge query, run standalone
+// (outside claimBatch's own transaction) once per outboxworker.Builder
+// pump tick.
+func (s *OutboxStore) CountPending(ctx context.Context) (int64, error) {
+	return s.q.CountPendingOutboxEntries(ctx)
+}
+
 // MarkDelivered records a successful delivery. Returns pgx.ErrNoRows if
 // id's row is no longer 'pending' (an already-superseded/stale outcome --
 // see MarkOutboxEntryDelivered's own generated doc comment).

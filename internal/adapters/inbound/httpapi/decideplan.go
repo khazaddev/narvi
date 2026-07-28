@@ -336,6 +336,21 @@ func enqueuePlanDecisionNotifications(
 ) error {
 	logger := platform.Logger(ctx)
 
+	// Correlation ID propagation (Batch 11 audit-fix scope, extended here
+	// for consistency): this function is DecidePlanOnTx's own second
+	// outbox-enqueue call site (alongside sessionactor/outboxenqueue.go's
+	// enqueueOutboxNotification), reachable from the REST approve/reject
+	// endpoints, Slack's block_actions handler, and Linear's text-verdict
+	// handler -- every one of which runs inside a real request/webhook ctx.
+	// Mirrors internal/app/auditlog.Record's own "read from ctx if present,
+	// else NULL" convention exactly, so a plan-decision notification's own
+	// correlation_id is no less complete than a turn-completion
+	// notification's.
+	var correlationID *string
+	if id, ok := platform.CorrelationIDFromContext(ctx); ok && id != "" {
+		correlationID = &id
+	}
+
 	if planRow.SlackChannelID != nil && planRow.SlackMessageTs != nil && *planRow.SlackChannelID != "" && *planRow.SlackMessageTs != "" {
 		payload, err := json.Marshal(slackapi.PlanDecidedPayload{
 			ChannelID: *planRow.SlackChannelID,
@@ -346,9 +361,10 @@ func enqueuePlanDecisionNotifications(
 			return fmt.Errorf("marshal slack plan-decided payload: %w", err)
 		}
 		if _, err := outbox.WithTx(tx).Create(ctx, sqlcgen.CreateOutboxEntryParams{
-			SessionID: sessionRow.ID,
-			Kind:      string(ports.NotificationKindSlackPlanDecided),
-			Payload:   payload,
+			SessionID:     sessionRow.ID,
+			Kind:          string(ports.NotificationKindSlackPlanDecided),
+			Payload:       payload,
+			CorrelationID: correlationID,
 		}); err != nil {
 			return fmt.Errorf("enqueue slack plan-decided outbox entry: %w", err)
 		}
@@ -377,9 +393,10 @@ func enqueuePlanDecisionNotifications(
 				return fmt.Errorf("marshal linear plan-decided payload: %w", err)
 			}
 			if _, err := outbox.WithTx(tx).Create(ctx, sqlcgen.CreateOutboxEntryParams{
-				SessionID: sessionRow.ID,
-				Kind:      string(ports.NotificationKindLinear),
-				Payload:   payload,
+				SessionID:     sessionRow.ID,
+				Kind:          string(ports.NotificationKindLinear),
+				Payload:       payload,
+				CorrelationID: correlationID,
 			}); err != nil {
 				return fmt.Errorf("enqueue linear plan-decided outbox entry: %w", err)
 			}
