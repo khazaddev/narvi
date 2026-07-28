@@ -679,6 +679,78 @@ func TestDefaultTimeouts_Step39StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget is the L13
+// audit fix's own ("identity slice") extension of
+// TestDefaultTimeouts_Step39StandaloneFields above: that test only checks
+// basic field presence/relative ordering, never the actual worst-case
+// timing invariant the L5 audit fix (see IdentityEmailFetchTimeout's own
+// doc comment) exists to guarantee.
+//
+// FetchEmailWithRetry's own retry loop (internal/app/identitylink/
+// retry.go) runs SYNCHRONOUSLY, inline, on the Slack Events API webhook
+// request path, BEFORE thread<->session mapping, turn creation, or the
+// in-thread ack (internal/adapters/inbound/slack's own handler.go
+// handleEvent, and that package's own doc.go: "a real, common occurrence
+// any time this handler doesn't answer within Slack's own ~3s budget").
+// This test proves the REAL worst case -- IdentityEmailFetchMaxAttempts
+// attempts, EACH genuinely consuming its own IdentityEmailFetchTimeout,
+// PLUS every backoff wait between them, pessimistically every wait at
+// IdentityEmailFetchRetryMaxDelay (a looser bound than the smaller value
+// platform.Retry's own doubling-from-base sequence would actually reach
+// for these defaults) -- leaves MEANINGFUL headroom under that ~3s budget
+// for the rest of handleEvent's own synchronous work in the same request.
+//
+// Deliberately a STANDALONE test, not a new Validate() invariant (this
+// batch's own L13 finding asks for exactly this choice to be made
+// explicitly): every existing Validate() pairwise check (Chain A, Chain
+// B, and the two independent additions -- ReconcilerInterval/
+// ReconcilerOrphanConfirmationPeriod's and OutboxClaimDuration/
+// OutboxDeliveryTimeout's own) compares two Timeouts fields AGAINST EACH
+// OTHER, requiring at least MinTimeoutMargin (30s) of headroom between
+// them. This budget is different in kind: it compares a computed worst
+// case -- built by multiplying/summing THREE Timeouts fields together,
+// not comparing one field directly against another -- against an
+// EXTERNAL constant (Slack's own real platform requirement, which is not
+// itself a Timeouts field at all). A sub-3s budget can never clear a 30s
+// margin requirement, so reusing Validate()'s own "check" helper here
+// would either be meaningless against MinTimeoutMargin or require a
+// SECOND, differently-scaled margin constant that exists solely for this
+// one check -- a standalone test asserting the real arithmetic directly
+// against that external constant says exactly what is being protected
+// without distorting Validate()'s own existing, uniform contract.
+func TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	// Slack's own real platform requirement (internal/adapters/inbound/
+	// slack's own doc.go): answer the webhook within ~3s or Slack
+	// redelivers it. Not a platform.Timeouts field -- an external constant
+	// this package's own retry-loop budget must stay comfortably inside.
+	const slackWebhookAckBudget = 3 * time.Second
+
+	attempts := time.Duration(to.IdentityEmailFetchMaxAttempts) * to.IdentityEmailFetchTimeout
+	worstCaseBackoff := time.Duration(to.IdentityEmailFetchMaxAttempts-1) * to.IdentityEmailFetchRetryMaxDelay
+	worstCase := attempts + worstCaseBackoff
+
+	if worstCase >= slackWebhookAckBudget {
+		t.Fatalf("IdentityEmailFetch worst case = %v (MaxAttempts=%d x Timeout=%v + %d waits x RetryMaxDelay=%v), want < Slack's own ~%v webhook-ack budget",
+			worstCase, to.IdentityEmailFetchMaxAttempts, to.IdentityEmailFetchTimeout,
+			to.IdentityEmailFetchMaxAttempts-1, to.IdentityEmailFetchRetryMaxDelay, slackWebhookAckBudget)
+	}
+
+	// "Meaningful headroom", not merely "technically under budget":
+	// require this retry loop alone to consume at most HALF of Slack's
+	// own ~3s window, leaving the other half for the rest of handleEvent's
+	// own synchronous work in the same request (thread<->session mapping,
+	// turn creation, the in-thread ack) -- all of which runs AFTER this
+	// retry loop, in the SAME request (slack/handler.go's own handleEvent).
+	if headroom := slackWebhookAckBudget - worstCase; headroom < slackWebhookAckBudget/2 {
+		t.Errorf("IdentityEmailFetch worst case = %v, headroom under Slack's ~%v budget = %v, want >= %v (half the budget left for the rest of the handler's own work)",
+			worstCase, slackWebhookAckBudget, headroom, slackWebhookAckBudget/2)
+	}
+}
+
 // TestDefaultTimeouts_GitHubPRPayloadCorrectnessStandaloneField proves the
 // audit-remediation (completeness-vs-plan lens, GitHub PR-payload-
 // correctness batch) standalone addition (GitHubGetPRTimeout) ships with a

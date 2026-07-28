@@ -1067,10 +1067,37 @@ type Timeouts struct {
 	// IdentityEmailFetchTimeout bounds ONE outbound provider profile-email
 	// API call (Slack users.info / Linear's `user(id) { email }` query,
 	// internal/app/identitylink's own Resolve) -- a single attempt's own
-	// budget, mirroring RepoSHAResolutionTimeout/CredentialFetchTimeout's
-	// own "lightweight call, not a large data transfer" reasoning. Not
-	// specified in the plan; chosen as 10s, matching those two fields'
-	// own value exactly.
+	// budget.
+	//
+	// Audit fix (L5, "the retry timing doc is wrong, and the real worst
+	// case blocks Slack's actual ~3s webhook ack window"): this used to be
+	// 10s, matching RepoSHAResolutionTimeout/CredentialFetchTimeout's own
+	// "lightweight call, not a large data transfer" reasoning -- but unlike
+	// those two fields, THIS timeout is spent inside a loop of
+	// IdentityEmailFetchMaxAttempts attempts (platform.Retry, via
+	// identitylink.FetchEmailWithRetry), run SYNCHRONOUSLY, inline, on the
+	// Slack Events API webhook request path (internal/adapters/inbound/
+	// slack/identity.go's own resolveSlackActor, called from handler.go's
+	// handleEvent BEFORE thread<->session mapping, turn creation, or the
+	// in-thread ack -- see that package's own doc.go for the full request-
+	// handling order). So the REAL worst case this field feeds into is
+	// IdentityEmailFetchMaxAttempts x IdentityEmailFetchTimeout PLUS every
+	// backoff wait between attempts -- not the backoff waits in isolation.
+	// At the OLD 10s/3-attempts value that real worst case was
+	// 3x10s+600ms =~ 30.6s -- catastrophically over Slack's own real ~3s
+	// "answer this webhook or it gets redelivered" budget (see slack's own
+	// doc.go), for JUST this one step, with the entire rest of the
+	// handler's own work (thread mapping, session/turn creation, the ack)
+	// still to come in the SAME request. Lowered to 300ms so the whole
+	// retry loop's own worst case (see IdentityEmailFetchRetryBaseDelay/
+	// IdentityEmailFetchRetryMaxDelay's own doc comment for the full
+	// arithmetic) leaves real, meaningful headroom under that ~3s budget
+	// for everything else the handler still has to do. Short enough that
+	// one attempt failing this way is a perfectly ordinary, expected
+	// outcome under real network jitter -- exactly what
+	// IdentityEmailFetchMaxAttempts' own retry loop exists to absorb,
+	// rather than leaning on one long, generous per-attempt budget the way
+	// SlackAckTimeout's own single, non-retried POST still reasonably can.
 	IdentityEmailFetchTimeout time.Duration
 
 	// IdentityEmailFetchMaxAttempts is how many times platform.Retry calls
@@ -1082,7 +1109,12 @@ type Timeouts struct {
 	// SYNCHRONOUSLY, inline, on the ingress request path -- see
 	// internal/app/identitylink's own doc.go for why unbounded/background
 	// retry, like domain/outbox's own persisted-schedule approach, is the
-	// wrong shape for this specific call).
+	// wrong shape for this specific call). Kept at 3 by the L5 audit fix
+	// above (see IdentityEmailFetchTimeout's own doc comment) -- the real
+	// worst-case budget it was blowing past was fixed by shrinking the
+	// per-attempt timeout instead, not this count; see
+	// IdentityEmailFetchRetryBaseDelay/IdentityEmailFetchRetryMaxDelay's
+	// own doc comment for the full arithmetic this field is one factor of.
 	IdentityEmailFetchMaxAttempts int
 
 	// IdentityEmailFetchRetryBaseDelay/IdentityEmailFetchRetryMaxDelay
@@ -1091,11 +1123,46 @@ type Timeouts struct {
 	// shape, but MUCH shorter: this retry loop's own caller (a Slack/
 	// Linear webhook handler) is still on the hook to answer promptly,
 	// unlike outbox delivery's own background, persisted-schedule retry.
-	// Not specified in the plan; chosen as 200ms/1s -- with
-	// IdentityEmailFetchMaxAttempts=3 above, the worst case (2 waits: 200ms
-	// then 400ms) adds well under 1s of wall-clock time to the handler's
-	// own critical path before falling back to bot attribution + a link
-	// prompt.
+	//
+	// Audit fix (L5, see IdentityEmailFetchTimeout's own doc comment for
+	// the full incident): the PREVIOUS doc comment here claimed the worst
+	// case "adds well under 1s of wall-clock time to the handler's own
+	// critical path" -- true of the two backoff WAITS alone (200ms+400ms
+	// at the old values), but this silently omitted that each of
+	// IdentityEmailFetchMaxAttempts (3) attempts is ITSELF bounded by
+	// IdentityEmailFetchTimeout and can genuinely take that long if the
+	// provider API hangs rather than erroring quickly -- the REAL worst
+	// case is IdentityEmailFetchMaxAttempts x IdentityEmailFetchTimeout +
+	// every backoff wait summed, not the backoff waits in isolation. This
+	// mirrors how OutboxClaimDuration's own doc comment (audit fix H6) was
+	// corrected to describe its real mechanism instead of an incomplete
+	// one -- no more silent omission of the per-attempt timeout's own
+	// contribution to the total.
+	//
+	// With IdentityEmailFetchTimeout=300ms and IdentityEmailFetchMaxAttempts=3
+	// above, the REAL worst case -- 3 attempts at 300ms EACH genuinely
+	// timing out, plus 2 backoff waits, pessimistically both at
+	// IdentityEmailFetchRetryMaxDelay (150ms, a looser bound than the
+	// doubling-from-base sequence below would actually reach) -- is
+	// 3x300ms + 2x150ms = 1.2s total. That leaves roughly 1.8s (60%) of
+	// headroom under Slack's own real ~3s webhook-ack budget (internal/
+	// adapters/inbound/slack's own doc.go) for the REST of the handler's
+	// own work in the same request (thread<->session mapping, turn
+	// creation, the in-thread ack) -- see internal/platform/
+	// timeouts_test.go's own
+	// TestDefaultTimeouts_IdentityEmailFetchWorstCaseTimingBudget, which
+	// asserts this invariant directly against that external ~3s constant.
+	// Linear's own equivalent path (internal/adapters/inbound/linear/
+	// identity.go's own resolveActor) shares these SAME fields but has a
+	// looser real budget of its own (~10s to post its one required
+	// acknowledgment activity -- internal/adapters/inbound/linear's own
+	// doc.go) -- comfortably protected by a fix sized for Slack's tighter
+	// requirement, with no separate Linear-specific tuning needed.
+	//
+	// Chosen as 100ms/150ms: the ACTUAL (non-pessimistic) backoff sequence
+	// with these values is 100ms then 150ms (200ms doubled from 100ms,
+	// capped at 150ms) = 250ms real worst-case total wait, comfortably
+	// under the 300ms pessimistic bound used above.
 	IdentityEmailFetchRetryBaseDelay time.Duration
 	IdentityEmailFetchRetryMaxDelay  time.Duration
 
@@ -1264,10 +1331,10 @@ func DefaultTimeouts() Timeouts {
 
 		IntentClassifierLLMTimeout: 10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 
-		IdentityEmailFetchTimeout:              10 * time.Second,       // not specified; chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+		IdentityEmailFetchTimeout:              300 * time.Millisecond, // audit fix L5 -- was 10s; see field doc comment for the real worst-case arithmetic this value now protects
 		IdentityEmailFetchMaxAttempts:          3,                      // not specified; chosen
-		IdentityEmailFetchRetryBaseDelay:       200 * time.Millisecond, // not specified; chosen, keeps the synchronous ingress path fast
-		IdentityEmailFetchRetryMaxDelay:        1 * time.Second,        // not specified; chosen
+		IdentityEmailFetchRetryBaseDelay:       100 * time.Millisecond, // audit fix L5 -- was 200ms; see IdentityEmailFetchRetryMaxDelay's own doc comment
+		IdentityEmailFetchRetryMaxDelay:        150 * time.Millisecond, // audit fix L5 -- was 1s; see field doc comment for the full worst-case timing budget
 		SlackInteractivityIdentityFetchTimeout: 800 * time.Millisecond, // not specified; chosen, comfortably inside SlackInteractivityAckTimeout with margin for DecidePlan+chat.update
 		IdentityLinkPromptTTL:                  24 * time.Hour,         // not specified beyond "short-lived"; chosen
 
