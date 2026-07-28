@@ -253,9 +253,29 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.Outbox, time.Time, 
 // -- audit fix H6: without this, a row late in a sequentially-processed
 // batch could have its shared batch-level claim already expired by the
 // time its own attempt() call even starts, letting a concurrent tick
-// re-claim and redeliver it while this delivery is still in flight. The
-// renewal never increments attempts -- claimBatch already counted this
-// attempt.
+// re-claim it.
+//
+// This renewal is a genuine optimistic-concurrency compare-and-swap, not
+// just a status check: it passes row.NextAttemptAt (the value THIS row
+// carried when claimBatch's own ClaimOutboxEntry call -- or a prior
+// attempt() call's own RenewOutboxClaim -- last returned it) as the
+// expected prior value, and the guarded UPDATE only succeeds if the row's
+// CURRENT next_attempt_at still matches it. A "status = 'pending'" guard
+// alone cannot tell "untouched since I last observed it" apart from "a
+// DIFFERENT builder already re-claimed/renewed this row and is now
+// mid-delivery on it" -- both leave status at 'pending' (the outbox table
+// has no third, in-flight status) -- so a status-only renewal would
+// spuriously succeed for BOTH builders in that scenario, and both would
+// call notifier.Deliver on the same row concurrently: a genuine duplicate
+// side effect (see RenewOutboxClaim's own generated doc comment,
+// queries/outbox.sql, for the full mechanism and how this was
+// empirically reproduced). With the CAS, whichever builder wins re-claims
+// the row first changes next_attempt_at away from the value this caller
+// observed, so this caller's own renewal correctly returns pgx.ErrNoRows
+// instead -- handled below by skipping delivery entirely. This makes the
+// renewal a real single-writer lease: at most one builder proceeds to
+// notifier.Deliver for this row at a time. The renewal never increments
+// attempts -- claimBatch already counted this attempt.
 func (b *Builder) attempt(ctx context.Context, row sqlcgen.Outbox) {
 	var correlationID string
 	if row.CorrelationID != nil {
@@ -276,14 +296,20 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.Outbox) {
 		return
 	}
 
-	renewed, err := b.store.RenewClaim(ctx, row.ID, pgtype.Timestamptz{Time: time.Now().Add(b.timeouts.OutboxClaimDuration), Valid: true})
+	renewed, err := b.store.RenewClaim(ctx, row.ID,
+		pgtype.Timestamptz{Time: time.Now().Add(b.timeouts.OutboxClaimDuration), Valid: true},
+		row.NextAttemptAt, // CAS: only renew if next_attempt_at still matches what THIS caller last observed.
+	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// The row is no longer 'pending' -- a should-be-rare, benign
-			// race (mirrors MarkDelivered/RecordFailure's own identical
-			// no-op guard below); skip delivery entirely rather than
-			// deliver a row whose claim has already been superseded.
-			logger.Warn("outboxworker: renew claim no-op: row no longer pending")
+			// The row is no longer 'pending', OR (the CAS's own real job)
+			// its next_attempt_at no longer matches what this caller last
+			// observed -- meaning a DIFFERENT builder already re-claimed
+			// or renewed this row in between and may be mid-delivery on
+			// it right now. Either way: skip delivery entirely rather
+			// than risk a duplicate notifier.Deliver call for a row
+			// whose claim has already been superseded.
+			logger.Warn("outboxworker: renew claim no-op: row no longer pending or claim superseded by another builder")
 			return
 		}
 		logger.Error("outboxworker: renew claim failed", "error", err)

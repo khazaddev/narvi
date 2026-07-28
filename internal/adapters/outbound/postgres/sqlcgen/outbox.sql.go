@@ -325,13 +325,14 @@ func (q *Queries) RecordOutboxEntryFailure(ctx context.Context, arg RecordOutbox
 const renewOutboxClaim = `-- name: RenewOutboxClaim :one
 UPDATE outbox
 SET next_attempt_at = $2
-WHERE id = $1 AND status = 'pending'
+WHERE id = $1 AND status = 'pending' AND next_attempt_at = $3
 RETURNING id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id
 `
 
 type RenewOutboxClaimParams struct {
-	ID            pgtype.UUID        `json:"id"`
-	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+	ID                    pgtype.UUID        `json:"id"`
+	NextAttemptAt         pgtype.Timestamptz `json:"next_attempt_at"`
+	ExpectedNextAttemptAt pgtype.Timestamptz `json:"expected_next_attempt_at"`
 }
 
 // Audit fix (H6, correctness -- internal/app/outboxworker/builder.go): the
@@ -344,19 +345,44 @@ type RenewOutboxClaimParams struct {
 // SEQUENTIALLY, so a row late in the batch could still be waiting for its
 // own attempt() call to even start after its shared claim-expiry
 // timestamp has already elapsed -- letting a concurrent tick (this pod's
-// next one, or another pod's own Builder) re-claim and redeliver the same
-// row while the first delivery is still in flight.
+// next one, or another pod's own Builder) re-claim this same row.
 //
-// This query renews ONLY the ONE row about to be delivered, bumping
-// next_attempt_at forward by the caller's own OutboxClaimDuration from a
-// FRESH time.Now() taken at the moment of the real attempt -- not the
-// batch's shared claim-time now. Deliberately does NOT touch attempts:
+// A first version of this fix guarded only "AND status = 'pending'",
+// exactly like every other guarded outbox UPDATE in this file -- but
+// status alone CANNOT distinguish "no one else has touched this row since
+// I last observed it" from "a DIFFERENT builder already re-claimed (or
+// renewed) this row and is now mid-delivery on it": both leave status at
+// 'pending' (the outbox table has no third, in-flight status). That gap
+// is real and empirically reproducible: builder A's batch-level claim on
+// a row can lapse before A's own sequential attempt() loop reaches it;
+// builder B then legitimately re-claims and starts delivering the SAME
+// row; if B's own delivery is still in flight when A finally reaches its
+// turn, a status-only renewal would ALSO succeed for A (status is still
+// 'pending' -- B has not called MarkDelivered yet), so A would ALSO call
+// notifier.Deliver on the same row concurrently with B.
+//
+// This query is therefore a genuine optimistic-concurrency compare-and-
+// swap, not just a status check: sqlc.arg('expected_next_attempt_at') is
+// the next_attempt_at value the CALLER last observed for this row (from
+// its own prior ClaimOutboxEntry or RenewOutboxClaim return), and the
+// WHERE clause requires the row's CURRENT next_attempt_at to still match
+// it. If a different builder won the race in between, THAT builder's own
+// claim/renewal already changed next_attempt_at away from the value this
+// caller last observed, so this CAS correctly matches zero rows here
+// (pgx.ErrNoRows) instead of renewing a lease someone else already holds
+// -- attempt() already treats that error as "stop, do not deliver". This
+// is what gives the renewal real single-writer teeth: at most one
+// builder's renewal for a given prior next_attempt_at value can ever
+// succeed, so at most one builder proceeds to notifier.Deliver for this
+// row at a time.
+//
+// Bumps next_attempt_at forward by the caller's own OutboxClaimDuration
+// from a FRESH time.Now() taken at the moment of the real attempt -- not
+// the batch's shared claim-time now. Deliberately does NOT touch attempts:
 // ClaimOutboxEntry already counted this attempt at batch-claim time, and
 // this is purely a claim-protection renewal, not a new delivery attempt.
-// Same "AND status = 'pending'" guard as every other guarded outbox
-// UPDATE above -- a no-op if the row is no longer pending.
 func (q *Queries) RenewOutboxClaim(ctx context.Context, arg RenewOutboxClaimParams) (Outbox, error) {
-	row := q.db.QueryRow(ctx, renewOutboxClaim, arg.ID, arg.NextAttemptAt)
+	row := q.db.QueryRow(ctx, renewOutboxClaim, arg.ID, arg.NextAttemptAt, arg.ExpectedNextAttemptAt)
 	var i Outbox
 	err := row.Scan(
 		&i.ID,

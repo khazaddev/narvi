@@ -952,15 +952,39 @@ type Timeouts struct {
 	// concurrent tick (this pod's next tick, or another pod's own
 	// Builder -- ListDuePendingOutboxEntries' own FOR UPDATE SKIP LOCKED
 	// exists specifically so multiple pods run this loop concurrently)
-	// re-claim and redeliver that same row while the first delivery was
-	// still in flight: a genuine double-delivery race. The fix is a
-	// per-row re-claim/heartbeat (RenewOutboxClaim, called from attempt()
-	// in internal/app/outboxworker/builder.go immediately before the real
-	// notifier.Deliver call, using time.Now() at THAT moment -- not the
-	// batch's shared claim-time now) that renews ONLY this one row's own
-	// protection window, without incrementing attempts again (that already
-	// happened once, at claimBatch time, via ClaimOutboxEntry). See that
-	// query's own doc comment (queries/outbox.sql) for the full mechanism.
+	// re-claim that same row while the first delivery was still in
+	// flight -- and, if that second builder's own delivery was ALSO still
+	// in flight when the first builder finally reached its own turn, a
+	// naive renewal guarded only by "status = 'pending'" (both builders'
+	// own claims leave status at 'pending' -- the outbox table has no
+	// third, in-flight status) would succeed for BOTH builders, and BOTH
+	// would call notifier.Deliver on the same row concurrently: a genuine
+	// double-delivery race, empirically reproduced against a real
+	// Postgres testcontainer with a deliberately slow concurrent
+	// claimant. Status alone cannot tell "untouched since I last observed
+	// it" apart from "a different builder already re-claimed/renewed it
+	// and is mid-delivery on it right now".
+	//
+	// The fix is a per-row re-claim/heartbeat (RenewOutboxClaim, called
+	// from attempt() in internal/app/outboxworker/builder.go immediately
+	// before the real notifier.Deliver call, using time.Now() at THAT
+	// moment -- not the batch's shared claim-time now) that is ALSO a
+	// genuine optimistic-concurrency compare-and-swap against the row's
+	// own next_attempt_at: it only renews (and only succeeds) if the
+	// row's CURRENT next_attempt_at still matches the value THIS caller
+	// last observed (row.NextAttemptAt, from its own prior
+	// ClaimOutboxEntry/RenewOutboxClaim return). If a different builder
+	// already won the race, that builder's own claim/renewal already
+	// changed next_attempt_at away from the value this caller observed,
+	// so this caller's own renewal correctly fails (pgx.ErrNoRows) instead
+	// of proceeding to deliver -- attempt() already treats that error as
+	// "stop, do not deliver". This CAS is what actually gives the renewal
+	// single-writer teeth: at most one builder's renewal for a given prior
+	// next_attempt_at value can ever succeed, so at most one builder ever
+	// proceeds to notifier.Deliver for a given row at a time. It never
+	// increments attempts again (that already happened once, at
+	// claimBatch time, via ClaimOutboxEntry). See that query's own doc
+	// comment (queries/outbox.sql) for the full mechanism.
 	//
 	// This changes what OutboxClaimDuration itself protects: no longer "one
 	// batch's own worst-case total sequential processing time" (which the
@@ -986,9 +1010,12 @@ type Timeouts struct {
 	// ClaimOutboxEntry bumps next_attempt_at forward by this duration (and
 	// increments attempts) at batch-claim time; attempt() then RENEWS the
 	// SAME row's own next_attempt_at by this same duration, from a FRESH
-	// time.Now(), immediately before its own real notifier call --
-	// WITHOUT incrementing attempts again (see the audit-fix note directly
-	// above). RecordOutboxEntryFailure/MarkOutboxEntryDeadLetter then
+	// time.Now(), immediately before its own real notifier call, via the
+	// genuine compare-and-swap described in the audit-fix note directly
+	// above (guarded by the row's own next_attempt_at still matching what
+	// this caller last observed, not merely status='pending') -- WITHOUT
+	// incrementing attempts again. RecordOutboxEntryFailure/
+	// MarkOutboxEntryDeadLetter then
 	// overwrite that provisional value with the real domain/outbox.
 	// EvaluateBackoff decision once the attempt's real outcome is known.
 	// Self-healing exactly like TimerClaimDuration's own precedent: a pod

@@ -566,6 +566,28 @@ func TestPumpOnce_NoNotifierRegistered_TreatedAsFailure(t *testing.T) {
 // late row has already elapsed, but BEFORE that row's own turn in
 // builderA's sequential processing.
 //
+// Critically, builderB's OWN notifier is ALSO slow here (delay =
+// rowDeliveryDelay, matching builderA's own per-row delay) -- NOT an
+// instant fake. An earlier version of this test used a zero-delay
+// notifier for builderB, which passed even against the FIRST, incomplete
+// fix (RenewOutboxClaim guarded only by "AND status = 'pending'", no
+// compare-and-swap): with an instant concurrent claimant, builderB's own
+// delivery (claim -> Deliver -> MarkDelivered) always completed and
+// flipped the row to 'delivered' well before builderA's own renewal
+// attempt ever ran, so builderA's status-only renewal correctly found the
+// row no longer 'pending' and skipped it -- by TIMING COINCIDENCE, not
+// because the guard actually had CAS teeth. A genuinely slow concurrent
+// claimant (this version) reproduces the real-world case where BOTH
+// builders' own deliveries are still in flight at the moment the first
+// builder's renewal runs: row3's own status is still 'pending' (builderB
+// has re-claimed it but not yet delivered), so a status-only guard would
+// ALSO succeed for builderA -- letting both builders call Deliver on the
+// same row concurrently. Only a genuine optimistic-concurrency
+// compare-and-swap against the row's own next_attempt_at (RenewOutboxClaim's
+// current guard, queries/outbox.sql) can tell "untouched" apart from
+// "a different builder already re-claimed it and is mid-delivery", which
+// is what this test now actually exercises and asserts.
+//
 // Timing (see the constants below): builderA claims all 3 rows in one
 // transaction at t0, each stamped with the SAME provisional
 // next_attempt_at = t0+claimDuration (400ms) -- the pre-fix bug's own
@@ -576,23 +598,26 @@ func TestPumpOnce_NoNotifierRegistered_TreatedAsFailure(t *testing.T) {
 // 200ms before row3's own turn even starts (t0+600ms) -- exactly the H6
 // race window (§ builder.go's own claimBatch doc comment). builderB fires
 // its OWN concurrent PumpOnce at t0+500ms, squarely inside that
-// [400ms, 600ms] window, using a FAST (zero-delay) notifier -- mirroring
-// a second pod's tick winning the SKIP LOCKED race for a row this pod's
-// own builderA has not yet reached.
+// [400ms, 600ms] window -- mirroring a second pod's tick winning the SKIP
+// LOCKED race for a row this pod's own builderA has not yet reached --
+// and its own Deliver call for row3 then runs [500ms, 800ms], still very
+// much in flight when builderA reaches row3's own turn at 600ms.
 //
-// Without the H6 fix (attempt()'s own per-row RenewOutboxClaim heartbeat,
-// called immediately before Deliver), builderB would successfully
-// re-claim row3 (still 'pending', next_attempt_at already elapsed) and
-// call Deliver on it, WHILE builderA -- reaching row3's own turn 100ms
-// later at t0+600ms, having no knowledge of builderB's own concurrent
-// claim -- would ALSO call Deliver on it: a genuine double notifier.
-// Deliver call for the same row. With the fix, builderA's own attempt()
-// for row3 first calls RenewOutboxClaim, which by t0+600ms finds row3 no
-// longer 'pending' (builderB's own fast delivery has already completed
-// and marked it 'delivered' well before t0+600ms) and skips Deliver
-// entirely -- so row3 is delivered EXACTLY once, by builderB, and rows 1
+// Without the CAS fix, builderA reaching row3's own turn at t0+600ms
+// would find it STILL 'pending' (builderB's own slow delivery does not
+// complete until t0+800ms) and its renewal would succeed on status alone,
+// so builderA would ALSO call Deliver on row3 WHILE builderB's own
+// Deliver call for the SAME row is still in flight -- a genuine
+// concurrent double notifier.Deliver call for the same row. With the CAS
+// fix, builderA's own attempt() for row3 calls RenewOutboxClaim expecting
+// row3's ORIGINAL next_attempt_at (the value from builderA's own
+// claimBatch, t0+400ms) -- but builderB's own claim at t0+500ms already
+// changed it (to t0+900ms), so builderA's renewal matches zero rows
+// (pgx.ErrNoRows) regardless of row3's status, and builderA skips Deliver
+// entirely. So row3 is delivered EXACTLY once, by builderB, and rows 1
 // and 2 (never stolen -- see the per-row analysis in this function's own
-// body) are delivered exactly once each, by builderA.
+// body) are delivered exactly once each, by builderA -- asserted below via
+// a per-row delivery-count map, not merely "no error".
 func TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -604,10 +629,14 @@ func TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery
 	rows := []sqlcgen.Outbox{row1, row2, row3}
 
 	const (
-		// rowDeliveryDelay is builderA's own per-row REAL wall-clock
+		// rowDeliveryDelay is EVERY builder's own per-row REAL wall-clock
 		// Deliver duration -- big enough, relative to claimDuration below,
 		// that the 3rd row's own turn genuinely starts after the FIRST
-		// row's own claim-duration window has elapsed twice over.
+		// row's own claim-duration window has elapsed twice over, AND
+		// that builderB's own concurrent delivery for row3 is still in
+		// flight at the moment builderA reaches row3's own turn (the
+		// exact adversarial timing the reviewers reproduced -- see this
+		// function's own doc comment above).
 		rowDeliveryDelay = 300 * time.Millisecond
 		// claimDuration deliberately sits BETWEEN one row's own delivery
 		// duration (so a freshly-renewed claim always comfortably
@@ -626,21 +655,21 @@ func TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery
 		concurrentTickDelay = 500 * time.Millisecond
 	)
 
-	slowNotifier := &fakeNotifier{delay: rowDeliveryDelay}
-	fastNotifier := &fakeNotifier{}
+	notifierA := &fakeNotifier{delay: rowDeliveryDelay}
+	notifierB := &fakeNotifier{delay: rowDeliveryDelay}
 
 	timeouts := platform.DefaultTimeouts()
 	timeouts.OutboxClaimDuration = claimDuration
 	timeouts.OutboxDeliveryTimeout = 5 * time.Second // generous; never the limiting factor here
 
 	builderA, err := outboxworker.NewBuilder(store, pool, map[ports.NotificationKind]ports.Notifier{
-		ports.NotificationKindSlack: slowNotifier,
+		ports.NotificationKindSlack: notifierA,
 	}, timeouts)
 	if err != nil {
 		t.Fatalf("NewBuilder A: %v", err)
 	}
 	builderB, err := outboxworker.NewBuilder(store, pool, map[ports.NotificationKind]ports.Notifier{
-		ports.NotificationKindSlack: fastNotifier,
+		ports.NotificationKindSlack: notifierB,
 	}, timeouts)
 	if err != nil {
 		t.Fatalf("NewBuilder B: %v", err)
@@ -662,18 +691,22 @@ func TestPumpOnce_SlowSequentialDelivery_ConcurrentTickNeverStealsRowMidDelivery
 
 	wg.Wait()
 
-	slowNotifier.mu.Lock()
-	fastNotifier.mu.Lock()
-	all := make([]ports.Notification, 0, len(slowNotifier.delivered)+len(fastNotifier.delivered))
-	all = append(all, slowNotifier.delivered...)
-	all = append(all, fastNotifier.delivered...)
-	slowNotifier.mu.Unlock()
-	fastNotifier.mu.Unlock()
+	notifierA.mu.Lock()
+	notifierB.mu.Lock()
+	all := make([]ports.Notification, 0, len(notifierA.delivered)+len(notifierB.delivered))
+	all = append(all, notifierA.delivered...)
+	all = append(all, notifierB.delivered...)
+	notifierA.mu.Unlock()
+	notifierB.mu.Unlock()
 
 	if len(all) != len(rows) {
 		t.Fatalf("total Deliver() calls across both builders = %d, want exactly %d (one per row, no double-delivery)", len(all), len(rows))
 	}
 
+	// Per-row delivery-count map -- the real assertion this test exists
+	// for: not merely that no error occurred, but that EVERY row was
+	// delivered EXACTLY once even under the adversarial slow-concurrent-
+	// claimant timing above.
 	deliveredCount := map[string]int{}
 	for _, n := range all {
 		deliveredCount[string(n.Payload)]++

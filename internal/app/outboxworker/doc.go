@@ -22,10 +22,14 @@
 //     precedent exactly.
 //  2. For each claimed row, OUTSIDE any transaction, bounded by platform.
 //     Timeouts.OutboxDeliveryTimeout: renews THIS row's own
-//     claim-protection window (RenewOutboxClaim, from a fresh time.Now()
-//     taken right before the real call, WITHOUT incrementing attempts
-//     again -- audit fix H6, see attempt()'s own doc comment for the
-//     batch-level claim-lease race this closes), then routes to whichever
+//     claim-protection window via a genuine optimistic-concurrency
+//     compare-and-swap (RenewOutboxClaim, guarded by both status='pending'
+//     AND next_attempt_at still matching the value this row carried when
+//     last claimed/renewed, from a fresh time.Now() taken right before the
+//     real call, WITHOUT incrementing attempts again -- audit fix H6, see
+//     attempt()'s own doc comment for the batch-level claim-lease race
+//     this closes, and why status alone is not enough to close it), then
+//     routes to whichever
 //     of the three ports.Notifier implementations (internal/adapters/
 //     outbound/{slackapi,linearapi via linearNotifier,githubapi}) owns the
 //     row's own kind, via a caller-supplied kind->Notifier map (constructed
