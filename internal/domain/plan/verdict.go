@@ -24,9 +24,9 @@ import "strings"
 // reply against one of these exact words, never a substring/contains
 // check.
 var (
-	// ApproveKeywords is the reject twin of RejectKeywords below.
+	// ApproveKeywords is the approve twin of RejectKeywords below.
 	ApproveKeywords = []string{"approve", "approved", "lgtm"}
-	// RejectKeywords is the approve twin of ApproveKeywords above.
+	// RejectKeywords is the reject twin of ApproveKeywords above.
 	RejectKeywords = []string{"reject", "rejected", "no"}
 )
 

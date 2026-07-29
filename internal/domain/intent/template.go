@@ -83,11 +83,15 @@ func ValidateTemplate(tmpl string, allowedVars []string) error {
 // that then gets sent to the model verbatim.
 func AssembleTemplate(tmpl string, vars map[string]string) (string, error) {
 	var missing []string
+	seen := make(map[string]struct{})
 	result := placeholderPattern.ReplaceAllStringFunc(tmpl, func(match string) string {
 		name := placeholderPattern.FindStringSubmatch(match)[1]
 		val, ok := vars[name]
 		if !ok {
-			missing = append(missing, name)
+			if _, dup := seen[name]; !dup {
+				seen[name] = struct{}{}
+				missing = append(missing, name)
+			}
 			return match
 		}
 		return val
