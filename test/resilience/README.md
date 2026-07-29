@@ -310,7 +310,7 @@ opposed to any other bot-spawned session Step 32's own generic coalescing
 already produces. That domain concept, and the atomic-claim reuse built on
 top of it, is **Step 45, "domain/review", and Step 46, "review sessions"**
 (both Phase 5 — renumbered from the formerly-Phase-4 Steps 40/41; see
-`docs/IMPLEMENTATION_PLAN.md`'s Phase 4 intro and its rows 118-119), and
+`docs/IMPLEMENTATION_PLAN.md`'s Phase 4 intro and its lines 106-109), and
 both remain genuinely unbuilt: `internal/domain/review/doc.go` is still
 exactly the empty stub it always was: "Package review will hold
 code-review domain logic: risk-map verdicts, sentinels, and the verdict
