@@ -297,19 +297,24 @@ delivered twice.
 > Concurrent @mentions on one PR → exactly one review session (atomic
 > claim).
 
-**Status: deferred to a later phase.** This scenario depends on
-functionality that does not exist yet:
-
-- **Step 40/41, "domain/review" / "review sessions" (Phase 4)** — the
-  review-session domain logic and its atomic-claim mechanism.
-  `internal/domain/review/doc.go`: "Package review will hold code-review
-  domain logic: risk-map verdicts, sentinels, and the verdict floor —
-  implemented in PR-40."
-- **Step 32, "GitHub ingress" (Phase 3)** — the inbound webhook adapter
-  that would even observe an `@mention`. `internal/adapters/inbound/github/doc.go`:
-  "Package github will hold the GitHub webhook ingress adapter,
-  normalizing events into the shared CreateSessionRequest — implemented
-  in PR-32."
+**Status: deferred to a later phase** — but for a narrower reason than this
+doc previously stated. Step 32 ("GitHub ingress") is no longer a blocking
+dependency: it is long since merged and real (`internal/adapters/inbound/github`
+is a fully-implemented package — webhook signature verification, mention
+detection, and its own per-PR atomic-claim session coalescing via
+`coalesce.go`'s `SessionCoalescer.CreateOrJoin` — not the stub this doc used
+to quote). What is still missing is the *review session* this scenario
+actually asks about: a session the domain recognizes as a code-review
+session (risk-map verdict, severities, re-trigger via label/button), as
+opposed to any other bot-spawned session Step 32's own generic coalescing
+already produces. That domain concept, and the atomic-claim reuse built on
+top of it, is **Step 45, "domain/review", and Step 46, "review sessions"**
+(both Phase 5 — renumbered from the formerly-Phase-4 Steps 40/41; see
+`docs/IMPLEMENTATION_PLAN.md`'s Phase 4 intro and its lines 106-109), and
+both remain genuinely unbuilt: `internal/domain/review/doc.go` is still
+exactly the empty stub it always was: "Package review will hold
+code-review domain logic: risk-map verdicts, sentinels, and the verdict
+floor — implemented in PR-40."
 
 Nothing here is built or faked to simulate coverage; there is genuinely
 nothing yet to test.
@@ -362,6 +367,6 @@ resumable, not merely "not yet marked failed".
 | 7 | WS-drop ack redelivery | Covered (all 6 critical types) |
 | 8 | Provider down during spawn | Covered (backoff-retry mechanism an accepted, user-confirmed gap) |
 | 9 | Outbox: Slack API 500s | Covered — this Step (35) |
-| 10 | Concurrent @mentions | Deferred — needs Step 32 (Phase 3) + Step 40/41 (Phase 4) |
+| 10 | Concurrent @mentions | Deferred — needs Step 45/46 (Phase 5, domain/review + review sessions); Step 32 (Phase 3, GitHub ingress) is done and no longer blocking |
 | 11 | Dirty working tree at relaunch | Covered |
 | 12 | Deploy rollout (rolling restart) | Covered — this PR |
