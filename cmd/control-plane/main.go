@@ -673,9 +673,14 @@ func serve() error {
 	// gitHubBotTokenEnvVarName doc comment for why). linearNotifier looks
 	// up each workspace's own real Linear API credential fresh, by
 	// organization_id, at delivery time (linearInstallationStore +
-	// cfg.TokenEncryptionKey) -- never a token cached in this map itself.
-	// slackNotifier/planSlackNotifier are constructed earlier, alongside
-	// outboxStore -- see that construction site's own doc comment for why.
+	// cfg.TokenEncryptionKey) -- never a token cached in this map itself --
+	// and, as of an audit-fix batch (finding M16, "completeness"), is
+	// registered under BOTH NotificationKindLinear and
+	// NotificationKindLinearProgress below (the SAME instance/Deliver
+	// implementation for both -- see that type's own doc comment,
+	// linearnotifier.go). slackNotifier/planSlackNotifier are constructed
+	// earlier, alongside outboxStore -- see that construction site's own
+	// doc comment for why.
 	githubNotifier := githubapi.NewBotNotifier(sourceControl, cfg.GitHubBotToken)
 	linearNotifier := outboxworker.NewLinearNotifier(linearClient, linearInstallationStore, cfg.TokenEncryptionKey)
 
@@ -685,6 +690,7 @@ func serve() error {
 		ports.NotificationKindSlack:             slackNotifier,
 		ports.NotificationKindGitHub:            githubNotifier,
 		ports.NotificationKindLinear:            linearNotifier,
+		ports.NotificationKindLinearProgress:    linearNotifier,
 		ports.NotificationKindSlackPlanApproval: planSlackNotifier,
 		ports.NotificationKindSlackPlanDecided:  planSlackNotifier,
 	}, cfg.Timeouts)

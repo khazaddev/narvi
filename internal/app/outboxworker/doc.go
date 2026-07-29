@@ -75,5 +75,14 @@
 // outbox payload at rest, and this package -- not linearapi -- is where
 // the postgres.LinearInstallationStore dependency this lookup needs
 // already naturally lives, alongside every other store this Builder's own
-// wiring already threads through).
+// wiring already threads through). An audit-fix batch (finding M16,
+// "completeness", internal/adapters/outbound/linearapi/doc.go's own
+// "future Step" note) extends linearNotifier to ALSO handle
+// ports.NotificationKindLinearProgress rows -- a mid-turn "thought"
+// AgentActivity, enqueued by app/sessionactor (progressnotify.go) the
+// first time a Linear-origin session's turn processes a tool_call wire
+// event -- routed to the exact SAME linearNotifier instance already
+// registered for ports.NotificationKindLinear, which now dispatches on
+// notification.Kind internally (mirroring planSlackNotifier's own
+// established precedent for one wrapper type handling more than one kind).
 package outboxworker

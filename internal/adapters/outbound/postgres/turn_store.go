@@ -53,3 +53,17 @@ func (s *TurnStore) ListForSession(ctx context.Context, sessionID pgtype.UUID) (
 func (s *TurnStore) UpdateStatus(ctx context.Context, arg sqlcgen.UpdateTurnStatusParams) (sqlcgen.Turn, error) {
 	return s.q.UpdateTurnStatus(ctx, arg)
 }
+
+// MarkProgressNotified atomically sets id's own progress_notified_at to
+// now, but ONLY if it is still NULL -- an audit-fix batch's own addition
+// (finding M16, "completeness") -- see MarkTurnProgressNotified's own
+// generated doc comment (sqlcgen/turns.sql.go, sourced from queries/
+// turns.sql) for the full race this guards against. Returns the number of
+// rows actually updated (0 or 1): 0 means this turn already had its
+// progress milestone fired by an earlier call.
+func (s *TurnStore) MarkProgressNotified(ctx context.Context, id pgtype.UUID, now pgtype.Timestamptz) (int64, error) {
+	return s.q.MarkTurnProgressNotified(ctx, sqlcgen.MarkTurnProgressNotifiedParams{
+		ID:                 id,
+		ProgressNotifiedAt: now,
+	})
+}

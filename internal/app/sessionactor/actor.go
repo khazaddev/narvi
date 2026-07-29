@@ -305,7 +305,15 @@ func (a *Actor) drainMailbox() {
 // (Inserted false) rather than appended as an indistinguishable duplicate
 // row; see this function's own broadcast-queueing guard below for why a
 // deduped resend must never reach a.pendingBroadcast twice.
-func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string, messageID string, raw json.RawMessage) error {
+//
+// Returns row.Inserted (an audit-fix batch's own addition, finding M16,
+// "completeness"): handleSandboxEvent's own cmd.Type == "tool_call" case
+// (sandboxevent.go) reuses this SAME already-computed signal to gate its
+// mid-turn Linear progress notification against a wire-level redelivery
+// of an already-processed tool_call, rather than inventing a second,
+// separate dedupe check for the same underlying fact -- see
+// progressnotify.go's own doc comment for the full reasoning.
+func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string, messageID string, raw json.RawMessage) (bool, error) {
 	row, err := a.stores.event.WithTx(tx).Create(ctx, sqlcgen.CreateEventParams{
 		SessionID: a.sessionID,
 		Type:      eventType,
@@ -313,7 +321,7 @@ func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string,
 		Payload:   raw,
 	})
 	if err != nil {
-		return fmt.Errorf("sessionactor: append raw %s event: %w", eventType, err)
+		return false, fmt.Errorf("sessionactor: append raw %s event: %w", eventType, err)
 	}
 	// Queue for broadcast AFTER commit (§6.2's "→ broadcast stream", made
 	// generic rather than per-handler -- see transact's own doc comment
@@ -324,7 +332,7 @@ func (a *Actor) appendRawEvent(ctx context.Context, tx pgx.Tx, eventType string,
 	if row.Inserted {
 		a.pendingBroadcast = append(a.pendingBroadcast, raw)
 	}
-	return nil
+	return row.Inserted, nil
 }
 
 // transact is the ONLY way this package writes session/turn/sandbox state

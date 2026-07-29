@@ -1,6 +1,6 @@
 //go:build integration
 
-// This file (audit finding M13) proves linearNotifier's own four distinct
+// This file (audit finding M13) proves linearNotifier's own distinct
 // Deliver branches -- payload decode failure, LinearInstallationStore.
 // GetByOrganizationID returning pgx.ErrNoRows (no admin has connected this
 // workspace), platform.DecryptToken failure, and routing payload.Success to
@@ -8,7 +8,11 @@
 // NewLinearNotifier, driven via its own .Deliver, never through
 // Builder/fakeNotifier (which only exercises Builder's own dispatch/retry
 // logic, not linearNotifier's own internal decode/lookup/decrypt/route
-// behavior at all).
+// behavior at all). Extended for audit finding M16 ("completeness"): two
+// more tests below prove the NEW ports.NotificationKindLinearProgress path
+// routes to CreateThoughtActivity (never response/error), and that an
+// unrecognized Kind is rejected as an error rather than silently
+// mis-routed.
 //
 // n.installations is a concrete *postgres.LinearInstallationStore wrapping
 // a real *pgxpool.Pool -- there is no interface to fake, so the
@@ -278,6 +282,103 @@ func TestLinearNotifier_Deliver_Success_RoutesToResponseActivity(t *testing.T) {
 	}
 	if got.body != "outcome text" {
 		t.Errorf("content.body = %q, want %q", got.body, "outcome text")
+	}
+}
+
+// linearProgressPayload marshals a linearapi.ProgressPayload for
+// organizationID -- this file's own only ports.NotificationKindLinearProgress
+// payload shape (audit finding M16, "completeness").
+func linearProgressPayload(t *testing.T, organizationID string) []byte {
+	t.Helper()
+	payload, err := json.Marshal(linearapi.ProgressPayload{
+		AgentSessionID: "agent-session-1",
+		OrganizationID: organizationID,
+		Text:           "progress text",
+	})
+	if err != nil {
+		t.Fatalf("marshal linear progress payload: %v", err)
+	}
+	return payload
+}
+
+// TestLinearNotifier_Deliver_Progress_RoutesToThoughtActivity proves audit
+// finding M16's own new path: a ports.NotificationKindLinearProgress
+// notification decodes as linearapi.ProgressPayload and routes to
+// CreateThoughtActivity -- a "thought"-typed AgentActivity, NEVER
+// "response"/"error" -- using the FRESHLY decrypted access token from the
+// real installation row, exactly like the outcome path already proves for
+// ports.NotificationKindLinear above.
+func TestLinearNotifier_Deliver_Progress_RoutesToThoughtActivity(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	const plaintextToken = "real-linear-access-token"
+	ciphertext, err := platform.EncryptToken(linearTokenEncryptionKey, []byte(plaintextToken))
+	if err != nil {
+		t.Fatalf("encrypt token: %v", err)
+	}
+	seedLinearInstallation(ctx, t, pool, "org-progress", ciphertext)
+
+	var calls []linearActivityRequest
+	server := captureLinearActivityServer(t, &calls)
+	defer server.Close()
+
+	client := linearapi.New(server.Client(), server.URL)
+	installations := narvipg.NewLinearInstallationStore(pool)
+	notifier := outboxworker.NewLinearNotifier(client, installations, linearTokenEncryptionKey)
+
+	err = notifier.Deliver(ctx, ports.Notification{
+		Kind:    ports.NotificationKindLinearProgress,
+		Payload: linearProgressPayload(t, "org-progress"),
+	})
+	if err != nil {
+		t.Fatalf("Deliver() error = %v, want nil", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("linear API calls = %d, want exactly 1", len(calls))
+	}
+	got := calls[0]
+	if got.auth != "Bearer "+plaintextToken {
+		t.Errorf("Authorization = %q, want %q", got.auth, "Bearer "+plaintextToken)
+	}
+	if got.contentType != "thought" {
+		t.Errorf("content.type = %q, want %q (NotificationKindLinearProgress must route to CreateThoughtActivity, never response/error)", got.contentType, "thought")
+	}
+	if got.body != "progress text" {
+		t.Errorf("content.body = %q, want %q", got.body, "progress text")
+	}
+}
+
+// TestLinearNotifier_Deliver_UnrecognizedKind_ReturnsError proves
+// Deliver's own defensive default branch: a Kind other than
+// NotificationKindLinear/NotificationKindLinearProgress is rejected as an
+// error, never silently no-oped, and never reaches the Linear API.
+func TestLinearNotifier_Deliver_UnrecognizedKind_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"agentActivityCreate": map[string]any{"success": true}}})
+	}))
+	defer server.Close()
+
+	client := linearapi.New(server.Client(), server.URL)
+	installations := narvipg.NewLinearInstallationStore(pool)
+	notifier := outboxworker.NewLinearNotifier(client, installations, linearTokenEncryptionKey)
+
+	err := notifier.Deliver(ctx, ports.Notification{
+		Kind:    ports.NotificationKind("linear_something_else"),
+		Payload: linearPayload(t, "org-success", true),
+	})
+	if err == nil {
+		t.Fatal("Deliver() error = nil, want non-nil (unrecognized kind)")
+	}
+	if requests != 0 {
+		t.Fatalf("linear API requests = %d, want 0 (must never call the API for an unrecognized kind)", requests)
 	}
 }
 

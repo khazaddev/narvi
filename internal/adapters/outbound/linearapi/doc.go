@@ -22,4 +22,17 @@
 // retried, asynchronous AgentActivity updates (the "progressive" half of
 // §8.10) on top of this same Client without this Step's own minimal call
 // needing to change.
+//
+// Audit finding M16 ("completeness"): that future Step is this one. Step
+// 35 shipped the real Notifier/outbox consumer, but nothing ever enqueued
+// a mid-turn update through it -- a Linear-origin session's own agent
+// session got exactly one outbox notification ever (the terminal one, at
+// turn completion), no matter how long the turn ran. An audit-fix batch
+// now layers exactly the "progressive" update this comment anticipated on
+// top of THIS SAME Client, unchanged: internal/app/outboxworker's own
+// linearNotifier calls CreateThoughtActivity below (the same call, now
+// ALSO reachable asynchronously, via ports.NotificationKindLinearProgress)
+// once a Linear-origin session's turn processes its first tool_call wire
+// event -- see internal/app/sessionactor/progressnotify.go's own doc
+// comment for the full design.
 package linearapi
