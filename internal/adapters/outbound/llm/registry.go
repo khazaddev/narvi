@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -70,8 +69,8 @@ type unsupportedAdapter struct {
 
 var _ ports.LLM = (*unsupportedAdapter)(nil)
 
-func (a *unsupportedAdapter) Complete(_ context.Context, _ ports.CompletionRequest) (json.RawMessage, error) {
-	return nil, &ports.LLMError{
+func (a *unsupportedAdapter) Complete(_ context.Context, _ ports.CompletionRequest) (ports.CompletionResponse, error) {
+	return ports.CompletionResponse{}, &ports.LLMError{
 		Code:     ports.CodeUnsupportedProvider,
 		Provider: a.provider,
 		Err:      fmt.Errorf("llm: unsupported provider %q", a.provider),

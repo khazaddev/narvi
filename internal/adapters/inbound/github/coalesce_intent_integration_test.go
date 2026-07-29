@@ -44,7 +44,7 @@ type fakeIntentLLM struct {
 	target string
 }
 
-func (f fakeIntentLLM) Complete(_ context.Context, _ ports.CompletionRequest) (json.RawMessage, error) {
+func (f fakeIntentLLM) Complete(_ context.Context, _ ports.CompletionRequest) (ports.CompletionResponse, error) {
 	body := map[string]string{
 		"target":     f.target,
 		"mode":       intentdomain.ModeBuild,
@@ -55,7 +55,7 @@ func (f fakeIntentLLM) Complete(_ context.Context, _ ports.CompletionRequest) (j
 	if err != nil {
 		panic(err)
 	}
-	return raw, nil
+	return ports.CompletionResponse{Raw: raw}, nil
 }
 
 // newTestRigWithIntentClassifier mirrors newTestRig exactly (same

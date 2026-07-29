@@ -2,6 +2,7 @@ package intentclassifier
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -123,5 +124,83 @@ func TestService_ClassifyAndRecord_RecordFailure_LogsWarnAndNeverPanics(t *testi
 	errAttr, _ := entries[0]["error"].(string)
 	if errAttr != wantErr.Error() {
 		t.Errorf("error attr = %q, want %q", errAttr, wantErr.Error())
+	}
+}
+
+// TestService_ClassifyAndRecord_ClassifierSuccess_RecordsCostUSD is the
+// L18 audit fix's own end-to-end coverage: a genuine classifier verdict
+// whose underlying ports.LLM.Complete call reports a real
+// CompletionResponse.CostUSD flows, unchanged, all the way from Classify's
+// own ports.IntentDecision.CostUSD into the intentdomain.
+// IntentDecisionRecord ClassifyAndRecord actually persists -- the exact
+// field IntentDecisionRecord.CostUSD's own doc comment says stays nil
+// "omitted, never guessed" until something actually populates it. Asserts
+// against the real persisted payload (via fakeSessionStore's own captured
+// bytes), not just the returned decision, so this test would catch a bug
+// where CostUSD reaches Classify's return value but never makes it into
+// the record ClassifyAndRecord builds for RecordDecision.
+func TestService_ClassifyAndRecord_ClassifierSuccess_RecordsCostUSD(t *testing.T) {
+	cost := 0.00011 // see TestAnthropicAdapter_Complete_Success_ReportsUsageAndCost for the arithmetic this figure mirrors
+	llm := &fakeLLM{
+		response: successResponse(intentdomain.TargetReview, intentdomain.ModeBuild, intentdomain.ConfidenceHigh, "clear ask to review"),
+		costUSD:  &cost,
+	}
+	sessions := newFakeSessionStore()
+	svc := New(llm, "anthropic", "claude-haiku-4-5", validTemplates(), sessions, nil)
+
+	id := testSessionID()
+	decision := svc.ClassifyAndRecord(context.Background(), id, ports.IntentClassifierInput{
+		Text:    "please review this PR",
+		Surface: "github",
+	}, intentdomain.DecidedAtStageCreate)
+
+	if decision.CostUSD == nil || *decision.CostUSD != cost {
+		t.Fatalf("decision.CostUSD = %v, want %v", decision.CostUSD, cost)
+	}
+
+	payload, ok := sessions.payloads[id]
+	if !ok {
+		t.Fatal("no decision payload recorded for this session id")
+	}
+	var rec intentdomain.IntentDecisionRecord
+	if err := json.Unmarshal(payload, &rec); err != nil {
+		t.Fatalf("unmarshal recorded payload: %v", err)
+	}
+	if rec.CostUSD == nil || *rec.CostUSD != cost {
+		t.Fatalf("recorded IntentDecisionRecord.CostUSD = %v, want %v", rec.CostUSD, cost)
+	}
+}
+
+// TestService_ClassifyAndRecord_Fallback_CostUSDNil proves a fallback
+// decision (no real LLM call succeeded, so there is no real cost to
+// report) records CostUSD as nil in the actual persisted
+// IntentDecisionRecord -- exactly that field's own "omitted, never
+// guessed" contract, mirroring
+// TestService_ClassifyAndRecord_Fallback_NilConfidenceAndReasoning's own
+// coverage of Confidence/Reasoning.
+func TestService_ClassifyAndRecord_Fallback_CostUSDNil(t *testing.T) {
+	sessions := newFakeSessionStore()
+	svc := New(&fakeLLM{err: errors.New("boom")}, "anthropic", "claude-haiku-4-5", validTemplates(), sessions, nil)
+
+	id := testSessionID()
+	decision := svc.ClassifyAndRecord(context.Background(), id, ports.IntentClassifierInput{
+		Text:    "hello",
+		Surface: "slack",
+	}, intentdomain.DecidedAtStageFirstPrompt)
+
+	if decision.CostUSD != nil {
+		t.Errorf("decision.CostUSD = %v, want nil for a fallback decision", *decision.CostUSD)
+	}
+
+	payload, ok := sessions.payloads[id]
+	if !ok {
+		t.Fatal("no decision payload recorded for this session id")
+	}
+	var rec intentdomain.IntentDecisionRecord
+	if err := json.Unmarshal(payload, &rec); err != nil {
+		t.Fatalf("unmarshal recorded payload: %v", err)
+	}
+	if rec.CostUSD != nil {
+		t.Errorf("recorded IntentDecisionRecord.CostUSD = %v, want nil", *rec.CostUSD)
 	}
 }

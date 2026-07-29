@@ -20,6 +20,16 @@ import "context"
 // constants below exist purely as named string values for callers to
 // compare against, never as a different Go type the struct's own fields
 // would have to change shape to hold).
+//
+// CostUSD is an ADDITIVE field beyond §18.1's original fixed shape (audit
+// fix L18, "IntentDecisionRecord.CostUSD is structurally dead"): populated
+// by Classify only for a genuine IntentSourceClassifier verdict, from the
+// underlying ports.LLM.Complete call's own now-available
+// CompletionResponse.CostUSD; left nil for every IntentSourceFallback
+// decision (no real LLM call succeeded, so there is no real cost to
+// report) -- mirrors intentdomain.IntentDecisionRecord.CostUSD's identical
+// "populated only when the real cost is known, omitted, never guessed"
+// contract, since that record field is what this one ultimately feeds.
 type IntentDecision struct {
 	Source         string
 	Target         string
@@ -27,6 +37,7 @@ type IntentDecision struct {
 	Confidence     string
 	Reasoning      string
 	FallbackReason string
+	CostUSD        *float64
 }
 
 // The two IntentDecision.Source values (§18.1).

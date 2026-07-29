@@ -18,14 +18,19 @@ type fakeLLM struct {
 	response json.RawMessage
 	err      error
 	calls    int
+	// costUSD is the CompletionResponse.CostUSD this fake reports on a
+	// successful Complete call -- nil by default, exactly matching a real
+	// ports.LLM implementation that either never computes cost, or (the
+	// Anthropic adapter's own case) genuinely couldn't for this model.
+	costUSD *float64
 }
 
-func (f *fakeLLM) Complete(_ context.Context, _ ports.CompletionRequest) (json.RawMessage, error) {
+func (f *fakeLLM) Complete(_ context.Context, _ ports.CompletionRequest) (ports.CompletionResponse, error) {
 	f.calls++
 	if f.err != nil {
-		return nil, f.err
+		return ports.CompletionResponse{}, f.err
 	}
-	return f.response, nil
+	return ports.CompletionResponse{Raw: f.response, CostUSD: f.costUSD}, nil
 }
 
 type fakeTemplates struct {
@@ -316,13 +321,20 @@ func TestService_Classify_ShadowModeNeverChangesDecision(t *testing.T) {
 
 type fakeSessionStore struct {
 	set map[pgtype.UUID]bool
+	// payloads captures the decisionJSON bytes passed to the most recent
+	// UpdateIntentDecisionIfNull call for a given id -- lets tests
+	// unmarshal and inspect the actual persisted intentdomain.
+	// IntentDecisionRecord (e.g. its CostUSD field) rather than only the
+	// win/lose outcome the set map already tracks.
+	payloads map[pgtype.UUID][]byte
 }
 
 func newFakeSessionStore() *fakeSessionStore {
-	return &fakeSessionStore{set: make(map[pgtype.UUID]bool)}
+	return &fakeSessionStore{set: make(map[pgtype.UUID]bool), payloads: make(map[pgtype.UUID][]byte)}
 }
 
-func (f *fakeSessionStore) UpdateIntentDecisionIfNull(_ context.Context, id pgtype.UUID, _ []byte) (bool, error) {
+func (f *fakeSessionStore) UpdateIntentDecisionIfNull(_ context.Context, id pgtype.UUID, decisionJSON []byte) (bool, error) {
+	f.payloads[id] = decisionJSON
 	if f.set[id] {
 		return false, nil
 	}

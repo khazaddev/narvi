@@ -145,7 +145,7 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 		return fallbackDecision(ports.FallbackReasonAPIError)
 	}
 
-	raw, err := s.llm.Complete(ctx, ports.CompletionRequest{
+	completion, err := s.llm.Complete(ctx, ports.CompletionRequest{
 		Provider:       s.provider,
 		Model:          s.model,
 		System:         systemPrompt,
@@ -166,10 +166,10 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 	}
 
 	var parsed structuredOutput
-	if unmarshalErr := json.Unmarshal(raw, &parsed); unmarshalErr != nil || !parsed.valid() {
+	if unmarshalErr := json.Unmarshal(completion.Raw, &parsed); unmarshalErr != nil || !parsed.valid() {
 		logger.Warn("intentclassifier: llm returned invalid output, falling back",
 			"fallback_branch", fallbackBranchInvalidOutput, "surface", input.Surface,
-			"unmarshal_error", unmarshalErr, "raw_output", string(raw))
+			"unmarshal_error", unmarshalErr, "raw_output", string(completion.Raw))
 		return fallbackDecision(ports.FallbackReasonInvalidOutput)
 	}
 
@@ -224,6 +224,11 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 		Mode:       parsed.Mode,
 		Confidence: confidence,
 		Reasoning:  intentdomain.TruncateReasoning(parsed.Reasoning),
+		// L18 audit fix: the real cost of THIS call, when the underlying
+		// ports.LLM implementation could compute one -- nil (never
+		// guessed) when it couldn't (see CompletionResponse.CostUSD's own
+		// doc comment).
+		CostUSD: completion.CostUSD,
 	}
 }
 
@@ -329,6 +334,11 @@ func (s *Service) ClassifyAndRecord(ctx context.Context, sessionID pgtype.UUID, 
 		Reasoning:      reasoning,
 		DecidedAt:      time.Now(),
 		DecidedAtStage: stage,
+		// L18 audit fix: carried straight across from decision.CostUSD --
+		// already nil for every fallback decision (Classify never
+		// populates it on that path), so no separate Source check is
+		// needed here the way Confidence/Reasoning above require one.
+		CostUSD: decision.CostUSD,
 	}); err != nil {
 		// Never fatal to the caller -- mirrors every pre-existing call
 		// site's own identical "log and otherwise ignore" handling: the
