@@ -494,6 +494,7 @@ func serve() error {
 		oauthConfig,
 		userStore,
 		identityStore,
+		auditLogStore,
 		userSessionStore,
 		allowlist,
 		cfg.InitialAdminEmails,
