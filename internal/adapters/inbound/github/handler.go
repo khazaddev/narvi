@@ -191,18 +191,28 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// Matching both closes the gap this comment used to document as an
 		// unresolved, known limitation: a GitHub App's own turn-outcome
 		// comment on its own PR is now correctly filtered, not
-		// mistaken for a fresh mention. The one genuine residual gap left
-		// for either shape: if the deploying operator ever reconfigures
-		// BotHandle to a value that no longer matches the ACTUAL identity
-		// posting comments (the PAT account renamed, or the GitHub App
-		// installed under a different slug than the newly configured
-		// handle), this filter -- keyed entirely off BotHandle -- would
-		// silently stop recognizing that identity's own comments as
-		// self-comments. Closing that fully would need this codebase to
-		// independently discover/verify the bot's own real login (e.g. a GET
-		// /user call against GitHubBotToken at startup), which is out of
-		// this batch's own minimal-filter scope. Compared
-		// case-insensitively, mirroring compileMentionPattern's own
+		// mistaken for a fresh mention. Two genuine residual gaps remain,
+		// both accepted as out of this minimal filter's scope:
+		//  - Under-inclusion: if the deploying operator ever reconfigures
+		//    BotHandle to a value that no longer matches the ACTUAL identity
+		//    posting comments (the PAT account renamed, or the GitHub App
+		//    installed under a different slug than the newly configured
+		//    handle), this filter -- keyed entirely off BotHandle -- would
+		//    silently stop recognizing that identity's own comments as
+		//    self-comments. Closing that fully would need this codebase to
+		//    independently discover/verify the bot's own real login (e.g. a
+		//    GET /user call against GitHubBotToken at startup).
+		//  - Over-inclusion (the "[bot]" branch specifically): GitHub App
+		//    slugs are globally unique, but nothing stops an unrelated,
+		//    independently-installed third-party App from happening to share
+		//    this deployment's configured BotHandle string -- that app's own
+		//    genuine comment on the same PR would then also match and be
+		//    silently dropped, never spawning a session/turn. Low likelihood
+		//    (requires that exact slug coincidence) and not a new class of
+		//    risk (the plain-BotHandle-equality branch already accepts the
+		//    analogous risk for a human/org account named exactly
+		//    BotHandle), but worth naming alongside the drift gap above.
+		// Compared case-insensitively, mirroring compileMentionPattern's own
 		// case-insensitive ("(?i)") mention matching.
 		if m.CommenterLogin != "" && cfg.BotHandle != "" &&
 			(strings.EqualFold(m.CommenterLogin, cfg.BotHandle) || strings.EqualFold(m.CommenterLogin, cfg.BotHandle+"[bot]")) {
