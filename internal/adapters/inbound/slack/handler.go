@@ -562,7 +562,18 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// text whatsoever). A later reply on the SAME thread (res.IsNewThread
 	// == false) never re-classifies.
 	if res.IsNewThread && created && deps.IntentClassifier != nil {
-		recordIntentDecision(ctx, deps, logger, res.SessionID, prompt)
+		// classify+record is now the shared intentclassifier.Service.
+		// ClassifyAndRecord (H9/L11 audit fix) -- see that method's own
+		// doc comment for the full "why a single shared call" reasoning.
+		// This package's own one genuine difference from GitHub/Linear is
+		// DecidedAtStageFirstPrompt below (a bare Slack thread carries no
+		// prompt text of its own -- see this function's own doc comment
+		// above for why classification only happens here, at the first
+		// real turn).
+		deps.IntentClassifier.ClassifyAndRecord(ctx, res.SessionID, ports.IntentClassifierInput{
+			Text:    prompt,
+			Surface: intentClassifierSurface,
+		}, intentdomain.DecidedAtStageFirstPrompt)
 	}
 
 	ackText := ackReplyText
@@ -813,43 +824,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-// recordIntentDecision runs Step 36's own classify+record step (§8.3/§18)
-// against prompt, never fatal to the caller -- see handleEvent's own doc
-// comment for why this is only ever called once per session, at the
-// brand-new thread's first real turn. Runs entirely OUTSIDE any Postgres
-// transaction (a real outbound LLM call must never hold one open,
-// mirroring ports.Notifier.Deliver's/ports.SourceControl.CreatePR's own
-// identical discipline) and never blocks the caller's own in-thread ack
-// beyond this synchronous call -- shadow mode (§18.5, the default for
-// every surface until explicitly configured active) means nothing
-// downstream yet consumes the recorded Target/Mode for real behavior
-// regardless.
-func recordIntentDecision(ctx context.Context, deps Deps, logger *slog.Logger, sessionID pgtype.UUID, prompt string) {
-	decision := deps.IntentClassifier.Classify(ctx, ports.IntentClassifierInput{
-		Text:    prompt,
-		Surface: intentClassifierSurface,
-	})
-
-	var confidence, reasoning *string
-	if decision.Source == ports.IntentSourceClassifier {
-		confVal := decision.Confidence
-		confidence = &confVal
-		reasonVal := intentdomain.TruncateReasoning(decision.Reasoning)
-		reasoning = &reasonVal
-	}
-
-	if _, err := deps.IntentClassifier.RecordDecision(ctx, sessionID, intentdomain.IntentDecisionRecord{
-		Surface:        intentClassifierSurface,
-		Source:         decision.Source,
-		Target:         decision.Target,
-		Mode:           decision.Mode,
-		Confidence:     confidence,
-		Reasoning:      reasoning,
-		DecidedAt:      time.Now(),
-		DecidedAtStage: intentdomain.DecidedAtStageFirstPrompt,
-	}); err != nil {
-		logger.Warn("slack: record intent decision failed", "error", err, "session_id", sessionID)
-	}
 }

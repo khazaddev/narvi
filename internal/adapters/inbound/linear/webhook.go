@@ -504,7 +504,17 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 	// is explicitly configured active) means nothing downstream yet
 	// consumes the recorded Target/Mode for real behavior regardless.
 	if deps.IntentClassifier != nil {
-		deps.recordIntentDecision(ctx, logger, created.ID, prompt)
+		// classify+record is now the shared intentclassifier.Service.
+		// ClassifyAndRecord (H9/L11 audit fix) -- see that method's own
+		// doc comment for the full "why a single shared call" reasoning.
+		// This package's own DecidedAtStage matches GitHub's exactly
+		// (DecidedAtStageCreate: the full prompt is always in hand at
+		// session-create time), and it has no deterministic Target signal
+		// of its own to supply (DeterministicTarget left empty).
+		deps.IntentClassifier.ClassifyAndRecord(ctx, created.ID, ports.IntentClassifierInput{
+			Text:    prompt,
+			Surface: intentClassifierSurface,
+		}, intentdomain.DecidedAtStageCreate)
 	}
 
 	logger.Info("linear: created session from agent session", "agent_session_id", payload.AgentSession.ID, "session_id", created.ID.String())
@@ -954,36 +964,5 @@ func (deps Deps) postAcknowledgment(ctx context.Context, organizationID, agentSe
 
 	if err := deps.LinearClient.CreateThoughtActivity(activityCtx, string(accessToken), agentSessionID, body); err != nil {
 		logger.Error("linear: post acknowledgment activity failed", "error", err, "agent_session_id", agentSessionID)
-	}
-}
-
-// recordIntentDecision runs Step 36's own classify+record step (§8.3/§18)
-// against prompt -- see handleCreated's own doc comment for why this is
-// only ever called once per session, right after its own creation.
-func (deps Deps) recordIntentDecision(ctx context.Context, logger *slog.Logger, sessionID pgtype.UUID, prompt string) {
-	decision := deps.IntentClassifier.Classify(ctx, ports.IntentClassifierInput{
-		Text:    prompt,
-		Surface: intentClassifierSurface,
-	})
-
-	var confidence, reasoning *string
-	if decision.Source == ports.IntentSourceClassifier {
-		confVal := decision.Confidence
-		confidence = &confVal
-		reasonVal := intentdomain.TruncateReasoning(decision.Reasoning)
-		reasoning = &reasonVal
-	}
-
-	if _, err := deps.IntentClassifier.RecordDecision(ctx, sessionID, intentdomain.IntentDecisionRecord{
-		Surface:        intentClassifierSurface,
-		Source:         decision.Source,
-		Target:         decision.Target,
-		Mode:           decision.Mode,
-		Confidence:     confidence,
-		Reasoning:      reasoning,
-		DecidedAt:      time.Now(),
-		DecidedAtStage: intentdomain.DecidedAtStageCreate,
-	}); err != nil {
-		logger.Warn("linear: record intent decision failed", "error", err, "session_id", sessionID)
 	}
 }
