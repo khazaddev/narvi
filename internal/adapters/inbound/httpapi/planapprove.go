@@ -39,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
@@ -50,20 +51,6 @@ import (
 // SAME OpenCode conversation the plan turn itself ran in already has the
 // full plan context (see this file's own top doc comment).
 const implementPlanPrompt = "Implement the plan you just proposed."
-
-// planActionResponse is both endpoints' own response body. Not a
-// /contracts-defined DTO: this repo has no frontend code yet (this Step's
-// own explicit scope note), and neither this Step's brief nor §6.3 names
-// a specific wire shape for these two actions -- kept as a small, honest,
-// locally-scoped shape rather than inventing a contract nothing consumes
-// yet; a future Step building the actual UI can promote this into
-// /contracts once a real consumer exists, the same way every other
-// contract here was added when its own Step first needed it.
-type planActionResponse struct {
-	PlanID string  `json:"planId"`
-	Status string  `json:"status"`
-	TurnID *string `json:"turnId,omitempty"`
-}
 
 // parsePlanID parses chi's own "planId" URL path param as a UUID --
 // mirrors parseSessionID's own exact shape (helpers.go).
@@ -230,7 +217,11 @@ func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *pos
 			logger.Warn("httpapi: send EnsureDispatched after plan approval failed", "error", sendErr)
 		}
 
-		writeJSON(w, http.StatusOK, planActionResponse{PlanID: planID.String(), Status: "approved", TurnID: outcome.TurnID})
+		writeJSON(w, http.StatusOK, restdtos.PlanActionResponse{
+			PlanId: planID.String(),
+			Status: restdtos.PlanActionResponseStatusApproved,
+			TurnId: restdtos.PlanActionResponseTurnId(outcome.TurnID),
+		})
 	}
 }
 
@@ -291,6 +282,10 @@ func RejectPlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 		// same message/field shape as DecidePlan's own wrapper log line.
 		logger.Info("httpapi: decided plan", "plan_id", planID.String(), "session_id", sessionID.String(), "verdict", string(PlanVerdictReject), "won", outcome.Won, "final_status", outcome.FinalStatus)
 
-		writeJSON(w, http.StatusOK, planActionResponse{PlanID: planID.String(), Status: "rejected"})
+		writeJSON(w, http.StatusOK, restdtos.PlanActionResponse{
+			PlanId: planID.String(),
+			Status: restdtos.PlanActionResponseStatusRejected,
+			TurnId: nil,
+		})
 	}
 }

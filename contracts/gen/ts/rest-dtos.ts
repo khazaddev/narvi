@@ -7,7 +7,7 @@
  */
 
 /**
- * REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, and ws-token are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/automations/uploads DTOs are deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26/27; automations: PR-46/47; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). This schema also models the 8 members/audit-log shapes for §13.2/§13.3's own members API (Identity, Member, PendingLinkPrompt, ListMembersResponse, AuditLogEntry, ListAuditLogResponse, UpdateMemberRoleRequest, LinkMemberIdentityRequest) — promoted here as a pure migration off hand-written Go structs in internal/adapters/inbound/httpapi/members.go (see contracts/README.md's own 'Members/audit-log DTOs' section). All of these shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly.
+ * REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, and ws-token are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/automations/uploads DTOs are deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26/27; automations: PR-46/47; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). This schema also models the 8 members/audit-log shapes for §13.2/§13.3's own members API (Identity, Member, PendingLinkPrompt, ListMembersResponse, AuditLogEntry, ListAuditLogResponse, UpdateMemberRoleRequest, LinkMemberIdentityRequest) — promoted here as a pure migration off hand-written Go structs in internal/adapters/inbound/httpapi/members.go (see contracts/README.md's own 'Members/audit-log DTOs' section). It also models the 3 plan-mode shapes for GET/POST /api/sessions/:id/plans... (Plan, ListPlansResponse, PlanActionResponse) — audit-fix batch, closing findings M3 (a GET .../plans discoverability gap Step 37 left open) and L14/L16 (promoting planapprove.go's own hand-written planActionResponse now that this same area has a real DTO-consuming sibling endpoint). All of these shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly (plan-mode's own status enum instead matches migrations/000034_plan_mode.up.sql's plan_status).
  */
 export interface RestDtos {
   [k: string]: unknown;
@@ -291,4 +291,61 @@ export interface LinkMemberIdentityRequest {
    */
   provider: string;
   externalId: string;
+}
+/**
+ * One plan-mode VERSION's own REST wire shape (migrations/000034_plan_mode.up.sql), returned by GET /api/sessions/:id/plans (audit finding M3, completeness: Step 37 shipped approve/reject with no way for a web client to ever discover a planId to approve). Deliberately omits turnId and slack_channel_id/slack_message_ts, both present on the underlying plans row: turnId is an internal linkage to the producing turn's own event stream (where the plan's actual text/steps live, per that migration's own doc comment), not needed for a client whose job here is discovering/approving a planId; slack_channel_id/slack_message_ts (migrations/000035_plan_mode_cross_channel.up.sql) are Slack cross-channel-notify plumbing that should never leak into a REST response, mirroring PlanActionResponse's own equally minimal shape below.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "Plan".
+ */
+export interface Plan {
+  id: string;
+  sessionId: string;
+  /**
+   * 1-based, monotonically increasing per session (internal/domain/plan.NextVersion) -- v1 is the first plan proposed, v2 a 'request changes' revision, and so on.
+   */
+  version: number;
+  /**
+   * Matches Postgres plan_status exactly (migrations/000034_plan_mode.up.sql).
+   */
+  status: 'awaiting_approval' | 'approved' | 'rejected' | 'superseded';
+  /**
+   * The model that produced this plan version, copied from the producing turn's own model_id AT CREATION TIME (migrations/000034_plan_mode.up.sql's own doc comment on plan_model_id). Null means that turn had no explicit model id (the default model catalog entry).
+   */
+  planModelId: string | null;
+  createdAt: string;
+  /**
+   * Null while status is 'awaiting_approval'; set the moment a decision (approve/reject, from any entry point) is recorded. goJSONSchema forces the literal *time.Time type (rather than go-jsonschema's own default generated named-pointer-type wrapper, e.g. PlanModelId's own PlanPlanModelId *string above): a NAMED type whose underlying type is *time.Time (e.g. 'type PlanDecidedAt *time.Time') does NOT inherit time.Time's own UnmarshalJSON/MarshalJSON method set in Go (methods attach to the exact named type they're declared on, never promoted across a distinct named-pointer-type indirection), so encoding/json falls through to its generic struct decoder and fails on a date-time STRING value with 'cannot unmarshal string into Go struct field ... of type time.Time' -- this is the first nullable date-time field this schema has ever needed (no prior nullable-date-time property existed to surface this), caught by this batch's own new Plan round-trip test.
+   */
+  decidedAt: string | null;
+  /**
+   * The user who decided this plan's verdict. Null while status is 'awaiting_approval', or for a decision attributed to no direct human user.
+   */
+  decidedBy: string | null;
+}
+/**
+ * GET /api/sessions/:id/plans's own response body (audit finding M3, completeness) -- every plan VERSION for the session, ordered by version, so a web client can render v1->v2 history and find the currently awaiting_approval version's own id to approve/reject. Deliberately minimal: no pagination (a session's own plan history is expected to stay small, matching ArtifactsResponse's own identical 'unbounded' precedent above) and no new WS/event notification on plan creation -- later Steps (decision inbox, plan-mode UI) are already planned to build richer surfaces; this endpoint only closes the discoverability gap.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ListPlansResponse".
+ */
+export interface ListPlansResponse {
+  plans: Plan[];
+}
+/**
+ * 200 response body for POST /api/sessions/:id/plans/:planId/approve and its reject twin (§12.2 item 3) -- promoted from a hand-written Go struct (internal/adapters/inbound/httpapi/planapprove.go's own planActionResponse) now that GET .../plans above gives this same area a real DTO-consuming sibling endpoint, the exact condition that struct's own doc comment named as the trigger to eventually promote it.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PlanActionResponse".
+ */
+export interface PlanActionResponse {
+  planId: string;
+  /**
+   * The plan's own real, current status after this call -- always 'approved' on a winning approve and 'rejected' on a winning reject in practice (a losing/conflicting call never reaches this response body at all, see DecidePlanOnTx's own doc comment), but modeled as the full plan_status enum for forward-compatibility rather than a literal, matching CreateTurnResponse.status's own identical precedent above.
+   */
+  status: 'awaiting_approval' | 'approved' | 'rejected' | 'superseded';
+  /**
+   * The newly enqueued implementation turn's id, set iff this call was ApprovePlan and it won. Always null for RejectPlan (reject never dispatches a new turn).
+   */
+  turnId: string | null;
 }

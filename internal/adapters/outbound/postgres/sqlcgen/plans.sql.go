@@ -163,6 +163,54 @@ func (q *Queries) ListPlanSummariesForSession(ctx context.Context, sessionID pgt
 	return items, nil
 }
 
+const listPlansForSession = `-- name: ListPlansForSession :many
+SELECT id, session_id, turn_id, version, status, plan_model_id, created_at, decided_at, decided_by, slack_channel_id, slack_message_ts FROM plans
+WHERE session_id = $1
+ORDER BY version
+`
+
+// Audit-fix batch (completeness/discoverability, M3): backs GET
+// /api/sessions/:id/plans (internal/adapters/inbound/httpapi/plans.go) --
+// the endpoint that closes the "Step 37 shipped approve/reject with no way
+// for a web client to ever discover a planId to approve" gap. Unlike
+// ListPlanSummariesForSession above (an internal, minimal shape feeding
+// internal/domain/plan's own NextVersion/ShouldSupersede), this returns
+// every FULL plan row for sessionID -- ordered by version for the same
+// "natural, human-debuggable order" reason -- so the handler can map each
+// one to restdtos.Plan (contracts/rest/v1/dtos.schema.json) for a real,
+// versioned v1->v2 history view.
+func (q *Queries) ListPlansForSession(ctx context.Context, sessionID pgtype.UUID) ([]Plan, error) {
+	rows, err := q.db.Query(ctx, listPlansForSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Plan
+	for rows.Next() {
+		var i Plan
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.TurnID,
+			&i.Version,
+			&i.Status,
+			&i.PlanModelID,
+			&i.CreatedAt,
+			&i.DecidedAt,
+			&i.DecidedBy,
+			&i.SlackChannelID,
+			&i.SlackMessageTs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const rejectPlanIfAwaitingApproval = `-- name: RejectPlanIfAwaitingApproval :execrows
 UPDATE plans
 SET status = 'rejected', decided_at = now(), decided_by = $3

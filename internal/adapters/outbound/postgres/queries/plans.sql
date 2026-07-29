@@ -40,6 +40,21 @@ SELECT id, version, status FROM plans
 WHERE session_id = $1
 ORDER BY version;
 
+-- name: ListPlansForSession :many
+-- Audit-fix batch (completeness/discoverability, M3): backs GET
+-- /api/sessions/:id/plans (internal/adapters/inbound/httpapi/plans.go) --
+-- the endpoint that closes the "Step 37 shipped approve/reject with no way
+-- for a web client to ever discover a planId to approve" gap. Unlike
+-- ListPlanSummariesForSession above (an internal, minimal shape feeding
+-- internal/domain/plan's own NextVersion/ShouldSupersede), this returns
+-- every FULL plan row for sessionID -- ordered by version for the same
+-- "natural, human-debuggable order" reason -- so the handler can map each
+-- one to restdtos.Plan (contracts/rest/v1/dtos.schema.json) for a real,
+-- versioned v1->v2 history view.
+SELECT * FROM plans
+WHERE session_id = $1
+ORDER BY version;
+
 -- name: ApprovePlanIfAwaitingApproval :execrows
 UPDATE plans
 SET status = 'approved', decided_at = now(), decided_by = $3

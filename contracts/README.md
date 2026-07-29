@@ -114,3 +114,39 @@ role`, `Identity.provider`/`.linkedVia`, `PendingLinkPrompt.provider`) is
 modeled as a closed enum, matching this schema's existing `Session`
 precedent, since encoding a closed Go enum type is byte-identical to
 encoding a plain string.
+
+## Plan DTOs (§8.1/§12.2 item 3, §16.1)
+
+An audit-fix batch closed three related findings that all touch
+`internal/adapters/inbound/httpapi/planapprove.go`:
+
+- **M3 (completeness)**: Step 37 ("plan mode, web") shipped plan mode
+  write-only — `POST .../plans/:planId/approve|reject` — with no way for a
+  web client to ever discover a `planId` to approve in the first place.
+  `GET /api/sessions/:id/plans` (`ListPlans`, `internal/adapters/inbound/
+  httpapi/plans.go`) closes that gap: every plan VERSION for the session,
+  ordered by version, no extra RBAC beyond "session exists" (mirroring
+  `ListArtifacts`/`ListEvents`'s own precedent exactly — a plan action
+  changes state and needs `canActOnPlan`; a read of the list does not).
+- **L14 (wire-contract, plan-endpoint portion) / L16**: `planapprove.go`'s
+  own `planActionResponse` struct was hand-written outside this codegen
+  pipeline, with an explicit doc comment noting it had no frontend consumer
+  yet. Now that `GET .../plans` gives this same area a real DTO-consuming
+  sibling endpoint, that reasoning no longer held — it was promoted in the
+  same pass.
+
+Three new shapes: `Plan` (one plan-mode version's own wire shape — id,
+sessionId, version, status, planModelId, createdAt, decidedAt, decidedBy;
+deliberately omits `turnId` and `slack_channel_id`/`slack_message_ts`,
+present on the underlying row but internal plumbing not meant for a REST
+client, see `Plan`'s own schema doc comment), `ListPlansResponse` (the
+`{"plans": Plan[]}` wrapper, following `ListMembersResponse`/
+`ListAuditLogResponse`'s own exact "wrapper object with one array field"
+shape), and `PlanActionResponse` (the promoted `planActionResponse`
+replacement — planId, status, turnId nullable).
+
+`status` on both `Plan` and `PlanActionResponse` is modeled as the full
+`plan_status` enum (`awaiting_approval`/`approved`/`rejected`/`superseded`,
+matching Postgres `plan_status` exactly, `migrations/000034_plan_mode.up.
+sql`) rather than a narrower literal set, for forward-compatibility —
+matching `CreateTurnResponse.status`'s own identical precedent above.

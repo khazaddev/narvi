@@ -60,6 +60,15 @@ func TestCreateSessionRequestRoundTrip(t *testing.T) {
 	prompt := "implement the feature"
 	modelID := "claude-sonnet-5"
 	branch := "main"
+	// buildModelID is deliberately distinct from modelID above (audit finding
+	// L16: BuildModelId had zero round-trip coverage anywhere in this file,
+	// despite its own unusual type alias/struct tag, contracts/gen/go/
+	// restdtos/restdtos.go's own CreateSessionRequestBuildModelId) -- a
+	// reader diffing this fixture's own two model-id values against the
+	// assertions below can tell modelID (the PLAN turn's own model) apart
+	// from buildModelID (the eventual approval-dispatched IMPLEMENTATION
+	// turn's own model, §12.2 item 3's own "plan: opus · build: sonnet").
+	buildModelID := "claude-opus-4-8"
 
 	roundTrip(t, sch, restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceSlack,
@@ -68,8 +77,9 @@ func TestCreateSessionRequestRoundTrip(t *testing.T) {
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git", Branch: &branch},
 		},
-		ModelId:  &modelID,
-		PlanMode: true,
+		ModelId:      &modelID,
+		PlanMode:     true,
+		BuildModelId: restdtos.CreateSessionRequestBuildModelId(&buildModelID),
 	})
 }
 
@@ -78,6 +88,14 @@ func TestCreateSessionRequestRoundTrip_NullOptionals(t *testing.T) {
 
 	// title/prompt/modelId null, and no first turn dispatched (§5.1 "single
 	// CreateSessionRequest" shape used by every ingress surface).
+	// BuildModelId is deliberately left at its Go zero value (nil) too --
+	// unlike title/prompt/modelId above, this key is genuinely OPTIONAL
+	// (`omitempty` in its own struct tag, see restdtos.
+	// CreateSessionRequestBuildModelId's own schema doc comment), so a nil
+	// value here exercises "the key is absent from the request body
+	// entirely" rather than "present with a null value" -- the null-value
+	// case is exercised by TestCreateSessionRequestRoundTrip's own explicit
+	// buildModelID above.
 	roundTrip(t, sch, restdtos.CreateSessionRequest{
 		SpawnSource: restdtos.CreateSessionRequestSpawnSourceLinear,
 		Title:       nil,
@@ -309,5 +327,97 @@ func TestLinkMemberIdentityRequestRoundTrip(t *testing.T) {
 	roundTrip(t, sch, restdtos.LinkMemberIdentityRequest{
 		Provider:   "slack",
 		ExternalId: "U12345",
+	})
+}
+
+// --- Plan DTOs (audit-fix batch: M3, completeness -- GET .../plans had no
+// way to ever discover a planId; L14/L16, wire-contract -- planapprove.go's
+// own hand-written planActionResponse struct) -- Plan/ListPlansResponse back
+// the new GET /api/sessions/:id/plans; PlanActionResponse promotes
+// planapprove.go's former hand-written response struct now that this same
+// area has a real DTO-consuming sibling endpoint. Follows TestMemberRoundTrip/
+// TestListMembersResponseRoundTrip's own exact pattern above.
+
+func TestPlanRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/Plan")
+
+	createdAt := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+
+	t.Run("AwaitingApproval", func(t *testing.T) {
+		// Never decided yet: decidedAt/decidedBy both null, planModelId set
+		// (copied from the producing turn's own model_id at creation time).
+		planModelID := "claude-opus-4-8"
+		roundTrip(t, sch, restdtos.Plan{
+			Id:          testSessionID,
+			SessionId:   testSandboxID,
+			Version:     1,
+			Status:      restdtos.PlanStatusAwaitingApproval,
+			PlanModelId: restdtos.PlanPlanModelId(&planModelID),
+			CreatedAt:   createdAt,
+			DecidedAt:   nil,
+			DecidedBy:   nil,
+		})
+	})
+
+	t.Run("DecidedApproved", func(t *testing.T) {
+		// Decided: decidedAt/decidedBy both set, planModelId null (the
+		// producing turn had no explicit model id).
+		decidedAt := createdAt.Add(time.Hour)
+		decidedBy := testSessionID
+		roundTrip(t, sch, restdtos.Plan{
+			Id:          testSandboxID,
+			SessionId:   testSessionID,
+			Version:     2,
+			Status:      restdtos.PlanStatusApproved,
+			PlanModelId: nil,
+			CreatedAt:   createdAt,
+			DecidedAt:   &decidedAt,
+			DecidedBy:   restdtos.PlanDecidedBy(&decidedBy),
+		})
+	})
+}
+
+func TestListPlansResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ListPlansResponse")
+
+	createdAt := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	roundTrip(t, sch, restdtos.ListPlansResponse{
+		Plans: []restdtos.Plan{
+			{
+				Id:          testSessionID,
+				SessionId:   testSandboxID,
+				Version:     1,
+				Status:      restdtos.PlanStatusSuperseded,
+				PlanModelId: nil,
+				CreatedAt:   createdAt,
+				DecidedAt:   nil,
+				DecidedBy:   nil,
+			},
+		},
+	})
+}
+
+func TestPlanActionResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/PlanActionResponse")
+
+	t.Run("Approved", func(t *testing.T) {
+		turnID := testSandboxID
+		roundTrip(t, sch, restdtos.PlanActionResponse{
+			PlanId: testSessionID,
+			Status: restdtos.PlanActionResponseStatusApproved,
+			TurnId: restdtos.PlanActionResponseTurnId(&turnID),
+		})
+	})
+
+	t.Run("Rejected", func(t *testing.T) {
+		// RejectPlan never dispatches a new turn -- turnId is present but
+		// null, matching this DTO's own "required key, nullable value"
+		// convention (never omitted, per this schema's own top-level
+		// nullability note).
+		roundTrip(t, sch, restdtos.PlanActionResponse{
+			PlanId: testSessionID,
+			Status: restdtos.PlanActionResponseStatusRejected,
+			TurnId: nil,
+		})
 	})
 }
