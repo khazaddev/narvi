@@ -15,10 +15,11 @@
 //
 // # Milestone chosen
 //
-// The plan's own explicit scope note ("bounded to a few generic
-// milestones, not a detailed feed matching the full future UI timeline")
-// rules out instrumenting every possible turn phase -- exactly ONE
-// milestone is picked here: the FIRST tool_call wire event of a turn
+// This audit fix deliberately instruments exactly ONE milestone rather
+// than every possible turn phase -- a bounded presence signal, not a
+// detailed progress feed (that richer surface is left to a future UI
+// Step, not this fix). The milestone picked: the FIRST tool_call wire event
+// of a turn
 // (contracts/sandbox-ws/v1/events.schema.json's own ToolCall def) -- a
 // hard, discrete, already-flowing signal that unambiguously means "the
 // agent is now actively working". This was chosen over a boot-progress
@@ -36,13 +37,12 @@
 //
 // # Scope containment (Linear-only)
 //
-// M16 is explicitly Linear-scoped (§8.10 names Linear specifically; the
-// plan's own framing elsewhere already treats GitHub/Slack as having
-// adequate presence signals of their own -- a GitHub PR's own check-run/
-// comment history and a Slack thread's own visible message history each
-// already show progress natively, unlike a Linear AgentSession's activity
-// feed, which shows nothing between a `thought` ack and a final outcome
-// without this batch). maybeEnqueueLinearProgress below is therefore
+// M16 is explicitly Linear-scoped (§8.10 names Linear specifically): a
+// GitHub PR's own check-run/comment history and a Slack thread's own
+// visible message history each already show progress natively, unlike a
+// Linear AgentSession's activity feed, which shows nothing between a
+// `thought` ack and a final outcome without this batch.
+// maybeEnqueueLinearProgress below is therefore
 // gated on sessionRow.SpawnSource == SessionSpawnSourceLinear and is a
 // deliberate no-op for every other origin (including 'web', which has no
 // external channel to notify at all, exactly like enqueueOutboxNotification's
@@ -114,9 +114,9 @@ import (
 
 // linearProgressText is the fixed, human-readable body posted as the
 // mid-turn "thought" AgentActivity's own content -- deliberately generic
-// (no tool name/input echoed back): §8.10's own scope is a presence
-// signal ("the agent is working"), not a detailed live transcript of tool
-// calls, which the plan's own "not a detailed feed" note rules out here.
+// (no tool name/input echoed back): this fix's own scope (see this file's
+// top doc comment) is a presence signal ("the agent is working"), not a
+// detailed live transcript of tool calls.
 const linearProgressText = "Still working on it -- the agent is now actively using tools to complete this turn."
 
 // maybeEnqueueLinearProgress implements this file's own top doc comment.
