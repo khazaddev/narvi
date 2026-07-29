@@ -113,19 +113,35 @@ func (a *Actor) recordPlanIfNeeded(ctx context.Context, tx pgx.Tx, processing sq
 			return nil, fmt.Errorf("sessionactor: parse plan id to supersede: %w", err)
 		}
 
+		// findSummaryStatus reads THIS row's own ACTUAL current Status back
+		// out of summaries (the same already-loaded data ShouldSupersede
+		// itself just filtered, no new DB read needed) -- see the
+		// defense-in-depth check right below for why this matters.
+		status, ok := findSummaryStatus(summaries, id)
+		if !ok {
+			// Can't happen: ShouldSupersede only ever returns ids it read
+			// out of this exact summaries slice. Guarded anyway so the
+			// domain-transition check below never silently falls back to
+			// the zero Status value.
+			return nil, fmt.Errorf("sessionactor: no summary found for plan id %s to supersede", id)
+		}
+
 		// Defense-in-depth (audit-fix batch, L10): an explicit Go-level
 		// check, alongside the SQL guard SupersedePlan's own comment
 		// (queries/plans.sql) already describes ("belt-and-suspenders
-		// against ever superseding an already-decided row"), that
-		// AwaitingApproval -> Superseded is a legal edge in
-		// internal/domain/plan's own transitions table. ShouldSupersede
-		// above already filters to StatusAwaitingApproval rows only, so
-		// this can never actually fail given today's code -- it exists so
-		// the domain model itself, not just this package's own filtering
-		// logic, is the thing asserting the edge is legal, catching a
-		// future regression here (rather than only at the SQL layer) if
-		// that filtering ever changes.
-		if _, err := plandomain.Transition(plandomain.StatusAwaitingApproval, plandomain.TriggerSupersede); err != nil {
+		// against ever superseding an already-decided row"), that THIS
+		// SPECIFIC row's own real current status -> Superseded is a legal
+		// edge in internal/domain/plan's own transitions table.
+		// Deliberately checks status (this row's actual Status, just read
+		// back above) rather than assuming the constant
+		// StatusAwaitingApproval: if plandomain.ShouldSupersede ever
+		// regressed to also return the id of an already-approved/rejected/
+		// superseded row, status here would still be that row's true
+		// status, so Transition would genuinely reject it -- catching the
+		// regression here (rather than only at the SQL layer), instead of
+		// (as a hardcoded-constant check would) merely re-checking the
+		// static transitions table against itself.
+		if _, err := plandomain.Transition(status, plandomain.TriggerSupersede); err != nil {
 			return nil, fmt.Errorf("sessionactor: domain transition check for plan supersede: %w", err)
 		}
 
@@ -195,4 +211,18 @@ func (a *Actor) recordPlanIfNeeded(ctx context.Context, tx pgx.Tx, processing sq
 		return nil, fmt.Errorf("sessionactor: create plan: %w", err)
 	}
 	return &created, nil
+}
+
+// findSummaryStatus returns the Status recorded for id in summaries (and
+// true), or ("", false) if summaries carries no entry with that id.
+// Factored out of the supersede loop above purely so the defense-in-depth
+// domain-transition check it feeds is unit-testable without a live
+// transaction/DB (see planrecord_test.go).
+func findSummaryStatus(summaries []plandomain.Summary, id plandomain.ID) (plandomain.Status, bool) {
+	for _, s := range summaries {
+		if s.ID == id {
+			return s.Status, true
+		}
+	}
+	return "", false
 }
