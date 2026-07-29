@@ -91,11 +91,12 @@ func TestValidateTemplate(t *testing.T) {
 
 func TestAssembleTemplate(t *testing.T) {
 	tests := []struct {
-		name    string
-		tmpl    string
-		vars    map[string]string
-		want    string
-		wantErr bool
+		name      string
+		tmpl      string
+		vars      map[string]string
+		want      string
+		wantErr   bool
+		wantNames []string
 	}{
 		{
 			name: "no placeholders",
@@ -128,6 +129,13 @@ func TestAssembleTemplate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:      "same missing placeholder repeated is reported once",
+			tmpl:      "{{missing}} and {{missing}} again",
+			vars:      nil,
+			wantErr:   true,
+			wantNames: []string{"missing"},
+		},
+		{
 			name:    "extra vars not referenced by the template are simply unused",
 			tmpl:    "Surface: {{surface}}",
 			vars:    map[string]string{"surface": "linear", "unused": "ignored"},
@@ -158,6 +166,9 @@ func TestAssembleTemplate(t *testing.T) {
 				var upe *UnknownPlaceholderError
 				if !errors.As(err, &upe) {
 					t.Fatalf("error is not *UnknownPlaceholderError: %v (%T)", err, err)
+				}
+				if tt.wantNames != nil && !stringSlicesEqual(upe.Names, tt.wantNames) {
+					t.Errorf("Names = %v, want %v", upe.Names, tt.wantNames)
 				}
 				return
 			}
