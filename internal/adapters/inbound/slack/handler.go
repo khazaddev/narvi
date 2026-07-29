@@ -45,6 +45,38 @@ const maxRequestBodyBytes = 1 << 20 // 1 MiB
 // documentation -- see doc.go's own step 2).
 const slackWebhookSignatureVersion = "v0"
 
+// slackMessageClaimProvider is a SECOND, distinct WebhookDeliveryStore
+// "provider" value (deliberately never "slack") used ONLY for the
+// message-level coalescing claim below -- L3 audit fix ("Slack's own
+// dual-delivery for one logical mention isn't coalesced"): Slack sends
+// BOTH an app_mention event AND a message event (two DISTINCT event_id
+// values) for a single @mention posted inside a thread this adapter
+// already has mapped to a session. The outer (provider="slack",
+// event_id) claim already made below can't coalesce them -- the two
+// deliveries carry different event_ids, so both independently win that
+// claim, both pass isIgnorable, and both would otherwise flow all the way
+// through resolveOrClaimSession's existing-mapping branch into
+// handleEvent's own addTurn call for the exact same underlying human
+// action (a redundant resolveSlackActor call each, and -- absent this fix
+// -- a confusing double ack: one "on it" for whichever twin wins the
+// addTurn race, immediately followed by a second, separate "still
+// working on the previous message" for its sibling).
+//
+// This claim is reused against the SAME (provider, delivery_id)-keyed
+// webhook_deliveries table/primitive the outer claim already uses (§5.1's
+// own "INSERT ... ON CONFLICT atomic claims" house style), keyed by
+// messageClaimKey (event.go) -- the identity of the underlying MESSAGE
+// OBJECT itself (channel, ts), NOT threadKey()/ThreadTS, which identifies
+// the THREAD: both twin events carry the IDENTICAL ts value, since they
+// describe the same Slack message object twice, while a genuinely
+// DIFFERENT message posted later in the same thread carries a different
+// ts and must NOT be coalesced with this one. Using a distinct provider
+// value (rather than reusing "slack") keeps this claim space from ever
+// colliding with a real event_id claimed above, even in the
+// vanishingly-unlikely case a real event_id happened to look exactly like
+// a "channel:ts" pair.
+const slackMessageClaimProvider = "slack-message"
+
 // ackNewSessionText/ackReplyText/ackBusyText/ackNotConfiguredText are the
 // fixed in-thread ack messages this Step posts -- deliberately plain,
 // static strings (no templating beyond what's inlined here), matching
@@ -254,6 +286,36 @@ func NewHandler(deps Deps) http.HandlerFunc {
 			return
 		}
 
+		// L3 audit fix ("Slack's own dual-delivery for one logical mention
+		// isn't coalesced") -- see slackMessageClaimProvider's own doc
+		// comment above for the full "why". Claimed right here: after
+		// isIgnorable (no need to coalesce an event that would never reach
+		// handleEvent anyway) and before handleEvent ever runs (so a
+		// coalesced twin never redundantly calls resolveSlackActor or
+		// posts a second ack).
+		msgClaim, err := deps.Deliveries.Claim(ctx, slackMessageClaimProvider, ev.messageClaimKey())
+		if err != nil {
+			logger.Error("slack: claim message-level webhook delivery failed", "error", err)
+			// Mirrors the "decode inner event failed" release just above:
+			// the outer event_id claim already succeeded, but this event
+			// was never actually processed, so release it too and let a
+			// redelivery retry from scratch.
+			if releaseErr := deps.Deliveries.Release(ctx, "slack", envelope.EventID); releaseErr != nil {
+				logger.Error("slack: release webhook delivery claim failed", "error", releaseErr, "event_id", envelope.EventID)
+			}
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if !msgClaim.Inserted {
+			// This exact underlying Slack message was already handled via
+			// its twin event type (app_mention <-> message, or a genuine
+			// redelivery of this same event type) -- skip entirely, never
+			// reaching resolveSlackActor/addTurn a second time and never
+			// posting a second, confusing ack.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		if ok := handleEvent(ctx, deps, ack, logger, ev); !ok {
 			// H2 audit fix: handleEvent hit a genuine post-claim processing
 			// failure (a DB error resolving/creating the session or adding
@@ -269,6 +331,18 @@ func NewHandler(deps Deps) http.HandlerFunc {
 			// (coalesce.go).
 			if releaseErr := deps.Deliveries.Release(ctx, "slack", envelope.EventID); releaseErr != nil {
 				logger.Error("slack: release webhook delivery claim failed", "error", releaseErr, "event_id", envelope.EventID)
+			}
+			// L3 audit fix: the message-level claim above must ALSO be
+			// released on this exact same failure path -- otherwise a
+			// later genuine retry (of either twin event_id) would find this
+			// claim already taken and be silently, incorrectly dropped
+			// forever. Deliberately NOT released on any other path (a
+			// deliberate business skip -- no default repo configured, an
+			// authz denial, an honest "already busy" ack -- all return
+			// ok=true above and never reach here), since none of those
+			// should let the twin event reprocess.
+			if releaseErr := deps.Deliveries.Release(ctx, slackMessageClaimProvider, ev.messageClaimKey()); releaseErr != nil {
+				logger.Error("slack: release message-level webhook delivery claim failed", "error", releaseErr, "claim_key", ev.messageClaimKey())
 			}
 			w.WriteHeader(http.StatusInternalServerError)
 			return
