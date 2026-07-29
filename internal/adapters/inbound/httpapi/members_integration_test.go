@@ -21,6 +21,7 @@ package httpapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -97,6 +98,33 @@ type errorResponseForTest struct {
 	Error string `json:"error"`
 }
 
+// auditLogDetailFor fetches the single action audit_log row's own
+// detail_json for resourceID, decoded into a plain map -- mirrors
+// decideplan_integration_test.go's own auditLogDetailForPlanDecision
+// precedent exactly (that file's own identically-shaped helper, scoped to
+// resource_type='plan'), generalized here since this file's own audit-fix
+// (M9, completeness) additions below need the same shape for THREE
+// different (action, resource_type) pairs -- member.role_changed/user,
+// identity.force_linked/identity, identity.unlinked/identity -- each of
+// which, before this fix, had an existing test proving the row EXISTS with
+// the right action/actor (see each test's own doc comment below) but never
+// decoded/asserted its own detail_json shape at all.
+func auditLogDetailFor(ctx context.Context, t *testing.T, r testRig, action, resourceID string) map[string]any {
+	t.Helper()
+	var detailRaw []byte
+	if err := r.pool.QueryRow(ctx,
+		`SELECT detail_json FROM audit_log WHERE action = $1 AND resource_id = $2`,
+		action, resourceID,
+	).Scan(&detailRaw); err != nil {
+		t.Fatalf("query audit_log detail_json for action %q resource_id %q: %v", action, resourceID, err)
+	}
+	var detail map[string]any
+	if err := json.Unmarshal(detailRaw, &detail); err != nil {
+		t.Fatalf("unmarshal audit_log detail_json: %v", err)
+	}
+	return detail
+}
+
 // --- authorize()'s admin-only gate: all 5 endpoints, every non-admin role ---
 
 // TestMembersRoutes_NonAdmin_Returns403 proves every one of the 5
@@ -169,6 +197,22 @@ func TestLinkMemberIdentity_HappyPath_Returns201(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("audit log rows = %d, want 1", count)
+	}
+
+	// Audit-fix batch addition (M9, completeness): the row's own existence
+	// was already proven above -- this is the previously-missing half, that
+	// its detail_json actually carries the shape members.go's own
+	// LinkMemberIdentity writes (user_id/provider/external_id), not merely
+	// SOME detail blob.
+	detail := auditLogDetailFor(ctx, t, rig, "identity.force_linked", got.ID)
+	if detail["user_id"] != target.ID.String() {
+		t.Errorf("detail_json[user_id] = %v, want %q", detail["user_id"], target.ID.String())
+	}
+	if detail["provider"] != "slack" {
+		t.Errorf("detail_json[provider] = %v, want %q", detail["provider"], "slack")
+	}
+	if detail["external_id"] != "U12345" {
+		t.Errorf("detail_json[external_id] = %v, want %q", detail["external_id"], "U12345")
 	}
 }
 
@@ -363,6 +407,21 @@ func TestUnlinkMemberIdentity_HappyPath_Returns204(t *testing.T) {
 	if count != 1 {
 		t.Errorf("audit log rows = %d, want 1", count)
 	}
+
+	// Audit-fix batch addition (M9, completeness): decode/assert the
+	// detail_json shape members.go's own UnlinkMemberIdentity writes
+	// (user_id/provider/external_id) -- the row's own existence was already
+	// proven above.
+	detail := auditLogDetailFor(ctx, t, rig, "identity.unlinked", linked.ID)
+	if detail["user_id"] != target.ID.String() {
+		t.Errorf("detail_json[user_id] = %v, want %q", detail["user_id"], target.ID.String())
+	}
+	if detail["provider"] != "github" {
+		t.Errorf("detail_json[provider] = %v, want %q", detail["provider"], "github")
+	}
+	if detail["external_id"] != "unlink-me" {
+		t.Errorf("detail_json[external_id] = %v, want %q", detail["external_id"], "unlink-me")
+	}
 }
 
 // TestUnlinkMemberIdentity_NoDifferentialNotFoundSignal proves the
@@ -456,6 +515,19 @@ func TestUpdateMemberRole_ValidTransition_Returns200(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("audit log rows = %d, want 1", count)
+	}
+
+	// Audit-fix batch addition (M9, completeness): decode/assert the
+	// detail_json shape members.go's own UpdateMemberRole writes
+	// (from_role/to_role) -- the row's own existence was already proven
+	// above. target was seeded as UserRoleMember (createUserWithRole) and
+	// this test's own request body above changed it to "maintainer".
+	detail := auditLogDetailFor(ctx, t, rig, "member.role_changed", target.ID.String())
+	if detail["from_role"] != string(sqlcgen.UserRoleMember) {
+		t.Errorf("detail_json[from_role] = %v, want %q", detail["from_role"], sqlcgen.UserRoleMember)
+	}
+	if detail["to_role"] != string(sqlcgen.UserRoleMaintainer) {
+		t.Errorf("detail_json[to_role] = %v, want %q", detail["to_role"], sqlcgen.UserRoleMaintainer)
 	}
 }
 

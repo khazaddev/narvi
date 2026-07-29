@@ -484,6 +484,62 @@ func TestCreateSession_HappyPath(t *testing.T) {
 	}
 }
 
+// TestCreateSession_HappyPath_WritesSessionCreateAuditRow proves the
+// audit-fix batch's own M9 fix: unlike plan.approve/plan.reject (already
+// fully covered, existence AND detail-JSON shape, by
+// decideplan_integration_test.go's own TestDecidePlanOnTx_Approve_
+// AuditDetailCarriesTurnID/_Reject_AuditDetailHasNoTurnID), session.create
+// (create.go's own CreateSessionOnTx, "session.create" written right after
+// the session insert) had ZERO test coverage of any kind before this fix
+// -- no existence check, nothing. This proves a real session.create row
+// exists after a successful POST /api/sessions, with the correct action
+// string/actor, AND that its own detail_json actually carries
+// {"spawn_source": ...} -- mirrors internal/app/identitylink/
+// service_integration_test.go's own TestResolve_ExactlyOneMatchAutoLinks
+// AuditLog.List(ctx, 10, 0) idiom, extended (that precedent itself never
+// does) to also decode entries[i].DetailJson.
+func TestCreateSession_HappyPath_WritesSessionCreateAuditRow(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	var got restdtos.Session
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	entries, err := rig.auditLog.List(ctx, 10, 0)
+	if err != nil {
+		t.Fatalf("AuditLog.List: %v", err)
+	}
+	var entry *sqlcgen.AuditLog
+	for i := range entries {
+		if entries[i].Action == "session.create" && entries[i].ResourceID == got.Id {
+			entry = &entries[i]
+			break
+		}
+	}
+	if entry == nil {
+		t.Fatalf("no session.create audit_log row found for session %s among %d entries", got.Id, len(entries))
+	}
+	if entry.ResourceType != "session" {
+		t.Errorf("ResourceType = %q, want %q", entry.ResourceType, "session")
+	}
+	if !entry.ActorUserID.Valid || entry.ActorUserID != user.ID {
+		t.Errorf("ActorUserID = %v, want %v (the authenticated caller)", entry.ActorUserID, user.ID)
+	}
+
+	var detail map[string]any
+	if err := json.Unmarshal(entry.DetailJson, &detail); err != nil {
+		t.Fatalf("unmarshal detail_json: %v", err)
+	}
+	if detail["spawn_source"] != "web" {
+		t.Errorf("detail_json[spawn_source] = %v, want %q", detail["spawn_source"], "web")
+	}
+}
+
 // TestCreateSession_NoPrompt_NoTurnCreated proves a nil prompt creates the
 // session with NO turn row at all -- CreateSessionRequest.Prompt being
 // nil means "create the session without dispatching a first turn".
