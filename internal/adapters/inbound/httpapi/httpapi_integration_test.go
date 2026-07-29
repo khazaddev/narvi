@@ -153,6 +153,11 @@ type testRig struct {
 	// ListMembers's own "pending-link state" half (Step 39, §13.2).
 	linkPrompts *narvipg.IdentityLinkPromptStore
 
+	// promptTemplates backs POST /api/intent-templates(/preview) below
+	// (audit finding M5, completeness) -- the first-ever caller of
+	// postgres.PromptTemplateStore's own Upsert method.
+	promptTemplates *narvipg.PromptTemplateStore
+
 	// tokenEncryptionKey is a fixed, valid 32-byte AES-256-GCM key used by
 	// this rig's own scm-credentials tests (real EncryptToken/DecryptToken
 	// round trip, matching the SAME real flow Step 20's own OAuth callback
@@ -202,6 +207,7 @@ func newTestRig(t *testing.T) testRig {
 		linearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
 		auditLog:            narvipg.NewAuditLogStore(pool),
 		linkPrompts:         narvipg.NewIdentityLinkPromptStore(pool),
+		promptTemplates:     narvipg.NewPromptTemplateStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -232,6 +238,14 @@ func newTestRig(t *testing.T) testRig {
 	router.Route("/api/audit-log", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.ListAuditLog(rig.auditLog))
+	})
+	// /api/intent-templates, /api/intent-templates/preview (audit finding
+	// M5, completeness) -- mounted exactly like cmd/control-plane/main.go's
+	// own wiring (see classifiertemplates.go's own doc comment).
+	router.Route("/api/intent-templates", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/preview", httpapi.PreviewIntentTemplate())
+		r.Post("/", httpapi.UpsertIntentTemplate(rig.pool, rig.promptTemplates, rig.auditLog))
 	})
 	// scm-credentials is deliberately mounted OUTSIDE /api/sessions and
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc
