@@ -13,6 +13,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
@@ -132,11 +133,27 @@ func TestCreateTurnCore_RejectIfOpen_Success_WritesAuditRowWithActor(t *testing.
 	}
 
 	var actorUserID pgtype.UUID
-	if err := rig.pool.QueryRow(ctx, `SELECT actor_user_id FROM audit_log WHERE action = 'turn.create' AND resource_id = $1`, created.ID.String()).Scan(&actorUserID); err != nil {
-		t.Fatalf("query actor_user_id: %v", err)
+	var detailRaw []byte
+	if err := rig.pool.QueryRow(ctx, `SELECT actor_user_id, detail_json FROM audit_log WHERE action = 'turn.create' AND resource_id = $1`, created.ID.String()).Scan(&actorUserID, &detailRaw); err != nil {
+		t.Fatalf("query actor_user_id/detail_json: %v", err)
 	}
 	if actorUserID != actor.ID {
 		t.Errorf("audit_log.actor_user_id = %v, want %v", actorUserID, actor.ID)
+	}
+
+	// Audit-fix batch addition (M9, completeness): this test's own
+	// existence/actor assertions above predate this fix -- decode/assert
+	// the detail_json shape createTurnLocked (turn.go) actually writes
+	// (session_id/plan_mode), never checked before.
+	var detail map[string]any
+	if err := json.Unmarshal(detailRaw, &detail); err != nil {
+		t.Fatalf("unmarshal detail_json: %v", err)
+	}
+	if detail["session_id"] != session.ID.String() {
+		t.Errorf("detail_json[session_id] = %v, want %q", detail["session_id"], session.ID.String())
+	}
+	if detail["plan_mode"] != false {
+		t.Errorf("detail_json[plan_mode] = %v, want false", detail["plan_mode"])
 	}
 }
 
