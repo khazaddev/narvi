@@ -209,6 +209,60 @@ func TestFetchEmailWithRetry_PermanentError_LogsNothingAndDoesNotIncrementCounte
 	}
 }
 
+// TestFetchEmailWithRetry_ParentContextEnds_LogsNothingAndDoesNotIncrementCounter
+// proves the re-review follow-up fix: platform.Retry returns ctx.Err()
+// directly (unwrapped, never touching the `permanent` flag) when the
+// CALLER's own context is canceled/expires while sleeping between
+// attempts -- e.g. the enclosing webhook handler's own request context
+// ending for reasons that have nothing to do with the Slack/Linear API.
+// That must NOT be conflated with a genuinely broken fetch either.
+//
+// Deterministic by construction, not a wall-clock race: the fetch closure
+// itself cancels the outer context on its FIRST call (after returning a
+// plain transient error), so platform.Retry's own backoff-sleep select
+// sees ctx.Done() already closed before its timer fires, guaranteeing
+// ctx.Err() is what FetchEmailWithRetry receives back.
+func TestFetchEmailWithRetry_ParentContextEnds_LogsNothingAndDoesNotIncrementCounter(t *testing.T) {
+	bgCtx := context.Background()
+	ctx, cancel := context.WithCancel(bgCtx)
+	const provider = sqlcgen.IdentityProviderSlack
+	to := fastRetryTimeouts()
+
+	// bgCtx (never canceled), not ctx, for both metric reads -- ctx is
+	// deliberately canceled by the closure below partway through, and an
+	// already-canceled context could make otelReader.Collect itself fail.
+	before := readEmailFetchFailureCount(bgCtx, t, provider)
+
+	var logBuf strings.Builder
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	callCount := 0
+	email, ok := identitylink.FetchEmailWithRetry(ctx, logger, to, provider, func(context.Context) (string, bool, error) {
+		callCount++
+		cancel()
+		return "", false, errors.New("slackapi: transient network error")
+	})
+
+	if ok {
+		t.Errorf("ok = true, want false (the caller's own context ended before a real answer)")
+	}
+	if email != "" {
+		t.Errorf("email = %q, want empty", email)
+	}
+	if callCount != 1 {
+		t.Errorf("call count = %d, want 1 (the canceled context must stop retrying during the backoff sleep, before a second attempt)", callCount)
+	}
+
+	if logOut := logBuf.String(); logOut != "" {
+		t.Errorf("expected NO log output when the caller's own context ends (not evidence of a broken fetch), got: %s", logOut)
+	}
+
+	after := readEmailFetchFailureCount(bgCtx, t, provider)
+	if delta := after - before; delta != 0 {
+		t.Errorf("identity_email_fetch_failures_total delta = %d, want 0 (the caller's own context ending is not a broken fetch)", delta)
+	}
+}
+
 // TestFetchEmailWithRetry_NoEmailOnFile_LogsNothingAndDoesNotIncrementCounter
 // proves M19's own "case 2" (the fetch SUCCEEDS but the provider genuinely
 // reports no email on file -- ok=false, err=nil): NEITHER the Warn log NOR

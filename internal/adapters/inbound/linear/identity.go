@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
@@ -64,6 +65,13 @@ func (deps Deps) resolveActor(ctx context.Context, logger *slog.Logger, organiza
 	email, emailOK := identitylink.FetchEmailWithRetry(ctx, logger, deps.Timeouts, sqlcgen.IdentityProviderLinear, func(attemptCtx context.Context) (string, bool, error) {
 		e, err := deps.LinearClient.GetUserEmail(attemptCtx, accessToken, externalID)
 		if err != nil {
+			if errors.Is(err, linearapi.ErrLinearUserNotFound) {
+				// Linear's own definitive "no such user" -- never
+				// retryable (see that sentinel's own doc comment),
+				// mirroring slack/identity.go's own identical
+				// ErrSlackUserNotFound handling.
+				return "", false, platform.Permanent(err)
+			}
 			return "", false, err
 		}
 		if e == "" {

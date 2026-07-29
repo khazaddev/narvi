@@ -2,6 +2,7 @@ package identitylink
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -39,14 +40,17 @@ const meterName = "narvi/identitylink"
 //
 // Audit fix ("the Warn log/counter fire on a normal, expected 'user not
 // found' outcome, diluting the 'broken fetch' signal"): a
-// platform.Permanent-wrapped error (e.g. slackapi.ErrSlackUserNotFound,
+// platform.Permanent-wrapped error -- slackapi.ErrSlackUserNotFound,
 // wrapped by internal/adapters/inbound/slack/identity.go's own
-// resolveSlackActor closure for a Slack user id that no longer resolves --
-// a deactivated/deleted account, or an old/redelivered webhook event
-// referencing a user who's since left the workspace) is a normal, expected,
-// NON-actionable outcome -- routine workspace member churn, not evidence
-// the profile-email fetch API itself is broken. FetchEmailWithRetry below
-// now excludes this case from both the Warn log and this counter.
+// resolveSlackActor closure, or its exact Linear-side counterpart,
+// linearapi.ErrLinearUserNotFound, wrapped by internal/adapters/inbound/
+// linear/identity.go's own resolveActor closure -- for a provider user id
+// that no longer resolves (a deactivated/deleted account, or an old/
+// redelivered webhook event referencing a user who's since left the
+// workspace) is a normal, expected, NON-actionable outcome -- routine
+// workspace member churn, not evidence the profile-email fetch API itself
+// is broken. FetchEmailWithRetry below now excludes this case from both
+// the Warn log and this counter, for EITHER provider.
 //
 // Constructed once, as a package-level var, rather than through a
 // NewBuilder-style fallible constructor (outboxworker.NewBuilder/
@@ -143,10 +147,11 @@ func newEmailFetchFailuresCounter() metric.Int64Counter {
 //     common and is not, by itself, ever a sign of anything broken.
 //  3. Audit fix ("the Warn log/counter fire on a normal, expected 'user
 //     not found' outcome"): the fetch closure itself positively identified
-//     the failure as PERMANENT (platform.Permanent, e.g.
-//     slackapi.ErrSlackUserNotFound for a Slack user id that no longer
-//     resolves -- a deactivated/deleted account, or an old/redelivered
-//     webhook event referencing a user who's since left the workspace).
+//     the failure as PERMANENT (platform.Permanent -- slackapi.
+//     ErrSlackUserNotFound, or linearapi.ErrLinearUserNotFound, for a
+//     provider user id that no longer resolves -- a deactivated/deleted
+//     account, or an old/redelivered webhook event referencing a user
+//     who's since left the workspace).
 //     platform.Retry stops immediately on this and returns the WRAPPED
 //     error unchanged (see that function's own doc comment) -- from the
 //     OUTSIDE this is indistinguishable from case 1 by error value alone,
@@ -188,7 +193,17 @@ func FetchEmailWithRetry(ctx context.Context, logger *slog.Logger, timeouts plat
 		// follow-up audit fix above excludes a Permanent error (case 3)
 		// from this same signal, since it is a normal, expected,
 		// non-actionable outcome, not evidence of a broken fetch API.
-		if !permanent {
+		//
+		// Audit fix (re-review, "ctx.Err() during a backoff sleep is also
+		// miscounted as a broken fetch"): platform.Retry returns ctx.Err()
+		// directly (unwrapped) if THIS function's own ctx is canceled or
+		// hits its deadline while sleeping between attempts -- e.g. the
+		// enclosing webhook handler's own request context ending for
+		// reasons that have nothing to do with the Slack/Linear API. That
+		// is the CALLER's own context ending, not evidence of a broken
+		// fetch, so it is excluded here too, exactly like case 3.
+		ctxEnded := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+		if !permanent && !ctxEnded {
 			logger.Warn("identitylink: profile-email fetch exhausted every retry attempt", "provider", string(provider), "error", err)
 			emailFetchFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("provider", string(provider))))
 		}

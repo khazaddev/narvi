@@ -3,6 +3,7 @@ package linearapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -54,11 +55,14 @@ func TestGetUserEmail_Success(t *testing.T) {
 	}
 }
 
-// TestGetUserEmail_GraphQLError proves a GraphQL-level error (Linear's own
-// "not found") surfaces as a plain error, unclassified -- the caller
-// (internal/app/identitylink.Resolve) is what decides retryable vs
-// permanent.
-func TestGetUserEmail_GraphQLError(t *testing.T) {
+// TestGetUserEmail_EntityNotFound proves Linear's own real "Entity not
+// found" GraphQL error (a user id that no longer resolves -- deactivated/
+// removed from the workspace) surfaces as ErrLinearUserNotFound
+// specifically, so internal/adapters/inbound/linear/identity.go's own
+// fetch closure can classify it as platform.Permanent -- mirroring
+// slackapi.ErrSlackUserNotFound's identical role for Slack's own
+// "user_not_found" response.
+func TestGetUserEmail_EntityNotFound(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -72,8 +76,36 @@ func TestGetUserEmail_GraphQLError(t *testing.T) {
 	client := linearapi.New(server.Client(), server.URL)
 
 	_, err := client.GetUserEmail(context.Background(), "test-access-token", "unknown-user")
+	if !errors.Is(err, linearapi.ErrLinearUserNotFound) {
+		t.Fatalf("GetUserEmail() error = %v, want errors.Is(err, ErrLinearUserNotFound)", err)
+	}
+}
+
+// TestGetUserEmail_OtherGraphQLError proves a GraphQL-level error OTHER
+// than "Entity not found" (e.g. a permission-denied field error) still
+// surfaces as a plain, unclassified error -- the caller (internal/
+// adapters/inbound/linear/identity.go's own fetch closure) treats it as
+// retryable, never as platform.Permanent, distinguishing it from the
+// definitive-not-found case above.
+func TestGetUserEmail_OtherGraphQLError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"errors": []map[string]any{{"message": "You do not have permission to access this resource"}},
+		})
+	}))
+	defer server.Close()
+
+	client := linearapi.New(server.Client(), server.URL)
+
+	_, err := client.GetUserEmail(context.Background(), "test-access-token", "some-user")
 	if err == nil {
 		t.Fatal("GetUserEmail() error = nil, want non-nil")
+	}
+	if errors.Is(err, linearapi.ErrLinearUserNotFound) {
+		t.Errorf("GetUserEmail() error = %v, want NOT errors.Is(err, ErrLinearUserNotFound)", err)
 	}
 }
 
