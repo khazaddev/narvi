@@ -26,3 +26,22 @@ type Payload struct {
 	// domain/turn.TriggerComplete vs TriggerFail/TriggerCancel.
 	Success bool `json:"success"`
 }
+
+// ProgressPayload is the JSON shape internal/app/outboxworker expects to
+// find in an outbox entry's own payload column for a
+// ports.NotificationKindLinearProgress row -- an audit-fix batch's own
+// addition (finding M16, "completeness": this package's own doc.go
+// explicitly deferred this "progressive" half of §8.10 to "a future
+// Step"). Enqueued by internal/app/sessionactor (progressnotify.go) the
+// first time a Linear-origin session's turn processes a tool_call wire
+// event -- the mid-turn milestone this finding closes, distinct from
+// Payload above in both WHEN it fires (mid-turn, never at turn
+// completion) and WHAT it means (always a "thought", never an outcome --
+// so there is no Success field to select between response/error).
+type ProgressPayload struct {
+	AgentSessionID string `json:"agent_session_id"`
+	OrganizationID string `json:"organization_id"`
+	// Text is the human-readable progress message posted as the Agent
+	// Activity's own "thought" body.
+	Text string `json:"text"`
+}

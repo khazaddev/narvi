@@ -57,6 +57,29 @@ const (
 	// "omit blocks to strip them" behavior is exactly right there too, to
 	// clear the now-stale Approve/Reject buttons.
 	NotificationKindSlackPlanDecided NotificationKind = "slack_plan_decided"
+
+	// NotificationKindLinearProgress is an audit-fix batch's own addition
+	// (finding M16, "completeness", internal/adapters/outbound/linearapi/
+	// doc.go): that package's own top comment explicitly deferred a
+	// richer, asynchronous, retried "progressive" AgentActivity update
+	// (the "progressive" half of §8.10) to "a future Step" once the real
+	// Notifier/outbox consumer existed -- Step 35 shipped that consumer,
+	// but nothing ever enqueued a mid-turn update through it until now.
+	// Routes to the SAME internal/app/outboxworker linearNotifier already
+	// registered under NotificationKindLinear (reused, not a second
+	// client/credential-lookup path), but posts a "thought"-shaped
+	// AgentActivity (linearapi.Client.CreateThoughtActivity) instead of an
+	// outcome-shaped response/error one. A NEW, distinct Kind -- rather
+	// than a payload-level discriminator squeezed onto
+	// NotificationKindLinear -- mirroring NotificationKindSlackPlanApproval/
+	// NotificationKindSlackPlanDecided's own established precedent just
+	// above for "more than one shape needs to travel under one channel":
+	// each of those is its own Kind with its own distinct payload struct,
+	// even though both are delivered by the SAME planSlackNotifier
+	// instance; linearNotifier's own Deliver now dispatches on
+	// notification.Kind the exact same way planSlackNotifier's already
+	// does.
+	NotificationKindLinearProgress NotificationKind = "linear_progress"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

@@ -763,6 +763,7 @@ type Turn struct {
 	ModelID              *string            `json:"model_id"`
 	PlanMode             bool               `json:"plan_mode"`
 	DispatchedSandboxGen *int32             `json:"dispatched_sandbox_gen"`
+	ProgressNotifiedAt   pgtype.Timestamptz `json:"progress_notified_at"`
 }
 
 type User struct {

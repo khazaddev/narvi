@@ -262,8 +262,14 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 
 		// Persist ALWAYS, for every recognized event type -- this is the
 		// append-only per-session event log Step 19's client hub will
-		// replay from, not limited to the 6 critical types.
-		if err := a.appendRawEvent(ctx, tx, cmd.Type, cmd.MessageID, cmd.Raw); err != nil {
+		// replay from, not limited to the 6 critical types. inserted (an
+		// audit-fix batch's own addition, finding M16) is reused a few
+		// lines down, in the cmd.Type == "tool_call" case, to gate the new
+		// mid-turn Linear progress notification against a wire-level
+		// redelivery of an already-processed tool_call -- see
+		// progressnotify.go's own doc comment.
+		inserted, err := a.appendRawEvent(ctx, tx, cmd.Type, cmd.MessageID, cmd.Raw)
+		if err != nil {
 			return err
 		}
 
@@ -437,6 +443,21 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 			// case needed, just an outside-transact reply" shape a few
 			// lines below in this same function.
 			gitSyncReceived = true
+		case "tool_call":
+			// Audit finding M16 ("completeness", internal/adapters/outbound/
+			// linearapi/doc.go): the FIRST tool_call event of a turn is
+			// this batch's own chosen mid-turn milestone -- a hard,
+			// discrete, already-flowing signal that unambiguously means
+			// "the agent is now actively working" (contracts/sandbox-ws/
+			// v1/events.schema.json's own ToolCall def). See
+			// progressnotify.go's own doc comment for the full design,
+			// including why this needs BOTH inserted (guards a wire-level
+			// redelivery of an already-processed tool_call) and its own
+			// internal turns.progress_notified_at marker (guards a LATER,
+			// genuinely-distinct tool_call in the SAME turn).
+			if err := a.maybeEnqueueLinearProgress(ctx, tx, inserted, pgtype.Timestamptz{Time: now, Valid: true}); err != nil {
+				return err
+			}
 		}
 
 		outcome.Persisted = true

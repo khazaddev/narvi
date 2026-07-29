@@ -51,3 +51,19 @@ RETURNING *;
 SELECT * FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC;
+
+-- name: MarkTurnProgressNotified :execrows
+-- Audit finding M16 ("completeness", internal/adapters/outbound/linearapi/
+-- doc.go): atomic, race-safe "has this turn already had its one mid-turn
+-- progress milestone fired" guard -- mirrors ApprovePlanIfAwaitingApproval/
+-- RejectPlanIfAwaitingApproval's own "guarded UPDATE, observed via
+-- :execrows" idiom exactly (queries/plans.sql), just for a nullable
+-- timestamp rather than an enum status. 0 rows affected means
+-- progress_notified_at was already set for this turn (a second, later
+-- tool_call event in the same turn -- the expected, common case once the
+-- milestone has already fired once -- or a race); exactly 1 row affected
+-- means THIS call is the one that gets to enqueue the Linear progress
+-- notification (see internal/app/sessionactor/progressnotify.go).
+UPDATE turns
+SET progress_notified_at = $2
+WHERE id = $1 AND progress_notified_at IS NULL;

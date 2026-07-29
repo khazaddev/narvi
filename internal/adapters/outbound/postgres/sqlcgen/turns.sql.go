@@ -15,7 +15,7 @@ const createTurn = `-- name: CreateTurn :one
 
 INSERT INTO turns (session_id, status, prompt, model_id, plan_mode)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at
 `
 
 type CreateTurnParams struct {
@@ -56,12 +56,13 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.ModelID,
 		&i.PlanMode,
 		&i.DispatchedSandboxGen,
+		&i.ProgressNotifiedAt,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at FROM turns
 WHERE id = $1
 `
 
@@ -80,12 +81,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.ModelID,
 		&i.PlanMode,
 		&i.DispatchedSandboxGen,
+		&i.ProgressNotifiedAt,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -114,6 +116,7 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.ModelID,
 			&i.PlanMode,
 			&i.DispatchedSandboxGen,
+			&i.ProgressNotifiedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -125,6 +128,36 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 	return items, nil
 }
 
+const markTurnProgressNotified = `-- name: MarkTurnProgressNotified :execrows
+UPDATE turns
+SET progress_notified_at = $2
+WHERE id = $1 AND progress_notified_at IS NULL
+`
+
+type MarkTurnProgressNotifiedParams struct {
+	ID                 pgtype.UUID        `json:"id"`
+	ProgressNotifiedAt pgtype.Timestamptz `json:"progress_notified_at"`
+}
+
+// Audit finding M16 ("completeness", internal/adapters/outbound/linearapi/
+// doc.go): atomic, race-safe "has this turn already had its one mid-turn
+// progress milestone fired" guard -- mirrors ApprovePlanIfAwaitingApproval/
+// RejectPlanIfAwaitingApproval's own "guarded UPDATE, observed via
+// :execrows" idiom exactly (queries/plans.sql), just for a nullable
+// timestamp rather than an enum status. 0 rows affected means
+// progress_notified_at was already set for this turn (a second, later
+// tool_call event in the same turn -- the expected, common case once the
+// milestone has already fired once -- or a race); exactly 1 row affected
+// means THIS call is the one that gets to enqueue the Linear progress
+// notification (see internal/app/sessionactor/progressnotify.go).
+func (q *Queries) MarkTurnProgressNotified(ctx context.Context, arg MarkTurnProgressNotifiedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markTurnProgressNotified, arg.ID, arg.ProgressNotifiedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateTurnStatus = `-- name: UpdateTurnStatus :one
 UPDATE turns
 SET status = $2,
@@ -132,7 +165,7 @@ SET status = $2,
     completed_at = COALESCE($4, completed_at),
     dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at
 `
 
 type UpdateTurnStatusParams struct {
@@ -182,6 +215,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.ModelID,
 		&i.PlanMode,
 		&i.DispatchedSandboxGen,
+		&i.ProgressNotifiedAt,
 	)
 	return i, err
 }

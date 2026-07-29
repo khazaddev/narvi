@@ -1,0 +1,20 @@
+-- Audit finding M16 ("completeness", internal/adapters/outbound/linearapi/
+-- doc.go): that package's own top comment explicitly deferred the
+-- "progressive" half of §8.10 -- richer, asynchronous, retried
+-- AgentActivity updates layered on top of the real Notifier/outbox
+-- consumer Step 35 built -- to "a future Step". This is that Step: a
+-- Linear-origin session's turn now gets exactly one mid-turn progress
+-- signal (a "thought"-shaped AgentActivity), fired the first time the
+-- turn's own tool_call wire event is processed.
+--
+-- progress_notified_at is a per-turn, set-at-most-once marker -- the
+-- SAME shape as this table's own existing dispatched_at/completed_at
+-- columns (migrations/000005_turns.up.sql) -- guarding against firing
+-- more than once per turn for a LATER, genuinely-distinct tool_call event
+-- in the same turn (see internal/app/sessionactor/progressnotify.go's own
+-- doc comment for the full "why two separate guards" reasoning: this
+-- column is the per-turn half, appendRawEvent's own row.Inserted is the
+-- wire-redelivery half). Nullable, like its siblings: never set at all
+-- for a non-Linear-origin session's turn, or for a turn whose sandbox
+-- never emitted a tool_call before it completed.
+ALTER TABLE turns ADD COLUMN progress_notified_at TIMESTAMPTZ;
