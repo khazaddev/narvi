@@ -12,7 +12,6 @@ You are building the system specified in `docs/TECHNICAL_PLAN.md`, following the
 ## Commit, PR, and branch naming
 
 Every commit message and PR title follows [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
-Merge commits are exempt — GitHub's own auto-generated "Merge pull request #N from `<branch>`" subject is produced by the merge action itself, not authored per this convention.
 
 ```
 <type>[(scope)]: <short, imperative description>
@@ -22,6 +21,7 @@ Merge commits are exempt — GitHub's own auto-generated "Merge pull request #N 
 [optional footer(s)]
 ```
 
+- **Merge commits are exempt** — GitHub's own auto-generated "Merge pull request #N from `<branch>`" subject is produced by the merge action itself, not authored per this convention.
 - **Type** — pick the one that matches what actually changed: `feat` (new capability), `fix` (bug fix), `docs` (documentation only, no code), `chore` (tooling/scaffolding/maintenance with no production behavior change — e.g. repo bootstrap), `refactor` (no behavior change), `test` (test-only), `perf`, `ci`, `build`.
 - **Scope** — the primary package or directory touched (`platform`, `postgres`, `contracts`, `sandbox`, `turn`, …), matching §1's repo layout naming; omit it if the change is genuinely repo-wide.
 - **Breaking changes** — `!` right after the type/scope (e.g. `feat(contracts)!: …`) or a `BREAKING CHANGE:` footer. Reserve this for changes to an already-merged `/contracts` schema or any other interface other code already depends on — most Steps land behind feature flags before anything consumes them, so this should be rare early on.
