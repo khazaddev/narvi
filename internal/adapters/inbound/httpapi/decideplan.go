@@ -95,6 +95,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -214,10 +215,13 @@ func DecidePlanOnTx(
 
 	var rowsAffected int64
 	var err error
+	var trig plandomain.Trigger
 	switch verdict {
 	case PlanVerdictApprove:
+		trig = plandomain.TriggerApprove
 		rowsAffected, err = plans.WithTx(tx).ApproveIfAwaitingApproval(ctx, planID, sessionRow.ID, decidedBy)
 	case PlanVerdictReject:
+		trig = plandomain.TriggerReject
 		rowsAffected, err = plans.WithTx(tx).RejectIfAwaitingApproval(ctx, planID, sessionRow.ID, decidedBy)
 	default:
 		return DecidePlanOutcome{}, fmt.Errorf("httpapi: unrecognized plan verdict %q", verdict)
@@ -260,6 +264,38 @@ func DecidePlanOnTx(
 
 	won := rowsAffected > 0
 	outcome := DecidePlanOutcome{Won: won, FinalStatus: string(planRow.Status)}
+
+	// Defense-in-depth (audit-fix batch, L10): sanity-check the guarded
+	// SQL UPDATE's own real outcome (won, planRow.Status -- the plan's
+	// CURRENT status, re-fetched above and already confirmed to belong to
+	// THIS session by the mismatch check above) against internal/domain/
+	// plan's own Transition table. The guarded UPDATE remains the sole
+	// authority for whether the decision itself took effect -- this check
+	// can only ever log a loud, should-be-unreachable mismatch; it never
+	// changes won/outcome itself.
+	//
+	// won == true means the UPDATE's own "AND status = 'awaiting_approval'"
+	// clause matched, so the plan's status immediately before this call was
+	// necessarily StatusAwaitingApproval -- no extra read is needed to know
+	// the "from" status for this branch. won == false means that guard did
+	// NOT match, so planRow.Status (unaffected by our own UPDATE, and
+	// unable to have changed from under us: sessionRow's own actor-epoch
+	// row lock taken above is held for this transaction's whole duration,
+	// and every other writer of this session's own plan rows -- planrecord.
+	// go's own Supersede call -- takes that SAME lock before ever touching
+	// a plan row) must already be a status with no legal outgoing edge for
+	// trig.
+	if won {
+		wantStatus, transErr := plandomain.Transition(plandomain.StatusAwaitingApproval, trig)
+		if transErr != nil || plandomain.Status(planRow.Status) != wantStatus {
+			logger.Error("httpapi: decide plan: domain transition sanity check mismatch: guarded SQL update won but domain model disagrees with the resulting status",
+				"plan_id", planID.String(), "session_id", sessionRow.ID.String(), "trigger", trig.String(), "want_status", string(wantStatus), "actual_status", string(planRow.Status), "domain_error", transErr)
+		}
+	} else if _, transErr := plandomain.Transition(plandomain.Status(planRow.Status), trig); transErr == nil {
+		logger.Error("httpapi: decide plan: domain transition sanity check mismatch: guarded SQL update affected no rows but domain model deems the transition legal from the plan's current status",
+			"plan_id", planID.String(), "session_id", sessionRow.ID.String(), "trigger", trig.String(), "current_status", string(planRow.Status))
+	}
+
 	if !won {
 		return outcome, nil
 	}

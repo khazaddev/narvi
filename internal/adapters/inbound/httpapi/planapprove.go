@@ -209,13 +209,18 @@ func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *pos
 
 		// Fire-and-forget, OUTSIDE the transaction above, mirroring
 		// CreateTurn's own identical post-commit sequencing exactly
-		// (turn.go).
-		actor, spawnErr := registry.GetOrSpawn(ctx, sessionID)
-		if spawnErr != nil {
-			logger.Warn("httpapi: GetOrSpawn after plan approval failed", "error", spawnErr)
-		} else if sendErr := actor.Send(ctx, sessionactor.EnsureDispatched{}); sendErr != nil {
-			logger.Warn("httpapi: send EnsureDispatched after plan approval failed", "error", sendErr)
-		}
+		// (turn.go). Audit-fix batch (C1): now via the shared TriggerDispatch
+		// helper (create.go) -- the identical GetOrSpawn + Send
+		// (EnsureDispatched{}) sequence this used to hand-inline, already
+		// reused by DecidePlan's own pool-wrapper (decideplan.go) and
+		// github/coalesce.go. The only observable difference is the log
+		// message wording on either step's failure (now TriggerDispatch's
+		// own generic text rather than this call site's former "after plan
+		// approval" text) -- an accepted side effect of this consolidation,
+		// not a behavior change to session/turn state; DecidePlan's own
+		// existing TriggerDispatch call site already uses this same generic
+		// wording for an identical plan-decision-triggered dispatch.
+		TriggerDispatch(ctx, registry, sessionID)
 
 		writeJSON(w, http.StatusOK, restdtos.PlanActionResponse{
 			PlanId: planID.String(),
