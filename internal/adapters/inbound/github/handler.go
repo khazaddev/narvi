@@ -162,6 +162,46 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
+		// M14 audit fix (completeness, self-comment filter): a comment
+		// authored by the bot's OWN GitHub identity must never be treated as
+		// a fresh mention-worthy event. Without this, the bot's own posted
+		// comment (githubapi.Adapter's async turn-outcome notification back
+		// to this SAME PR, wired via GitHubBotToken) could itself satisfy
+		// compileMentionPattern -- e.g. quoting or echoing the handle back --
+		// and re-trigger mention detection, a bot-replies-to-its-own-comment
+		// loop this filter closes. Checked as early as possible (before the
+		// resolveIssueCommentHead network call and before actor
+		// resolution/CreateOrJoin below), so a self-authored comment does
+		// none of that work either.
+		//
+		// cfg.BotHandle (m.CommenterLogin's own comparison target) is the
+		// best available signal for "is this the bot" today -- the SAME
+		// configured handle mention-detection itself already matches comment
+		// bodies against (Config.BotHandle's own doc comment) -- but this is
+		// a KNOWN, deliberately NOT fully general check, not a silently
+		// papered-over one: there is no single field anywhere in this
+		// codebase verified to be the bot's own real GitHub login.
+		// internal/platform/config.go's own GitHubBotToken doc comment
+		// describes that credential as "a real GitHub personal access token
+		// or a GitHub App installation token, whichever the deploying
+		// operator provisions" -- never pinned to one specific identity
+		// shape. A GitHub App installation typically posts its own comments
+		// under a "<slug>[bot]" login (e.g. "narvi-bot[bot]"), which would
+		// NOT equal a plain configured mention handle like "narvi-bot" -- so
+		// this filter correctly catches a PAT-style bot account whose own
+		// comment.user.login matches BotHandle exactly, but is knowingly
+		// incomplete for a GitHub App installation's own "[bot]"-suffixed
+		// login. Closing that gap fully would need this codebase to
+		// independently discover/verify the bot's own real login (e.g. a GET
+		// /user call against GitHubBotToken at startup), which is out of
+		// this batch's own minimal scope. Compared case-insensitively,
+		// mirroring compileMentionPattern's own case-insensitive ("(?i)")
+		// mention matching.
+		if m.CommenterLogin != "" && cfg.BotHandle != "" && strings.EqualFold(m.CommenterLogin, cfg.BotHandle) {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		// H5 audit fix (batch fix/audit-github-pr-payload-correctness):
 		// issue_comment's own payload never carries the PR's real head
 		// branch/repo directly (see issueCommentPayload's own doc comment)

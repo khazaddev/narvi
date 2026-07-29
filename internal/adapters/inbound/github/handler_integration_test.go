@@ -148,6 +148,25 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 		Environments: narvipg.NewEnvironmentStore(pool),
 		Registry:     registry,
 		AuditLog:     narvipg.NewAuditLogStore(pool),
+		// Identities/Users/Participants (M14 audit-fix batch addition):
+		// every pre-existing test in this file drives resolveCommenterActor
+		// (identity.go) with commenterID == 0 (issueCommentBody never sets
+		// comment.user), which short-circuits before ever touching
+		// Identities at all -- so this rig never needed a REAL store here
+		// before. selfcomment_integration_test.go's own new coverage is the
+		// first in this file to supply a genuine, non-zero CommenterID,
+		// which surfaced this as a real gap (a nil *postgres.IdentityStore
+		// panics on the first real lookup) -- wired here for real, exactly
+		// like cmd/control-plane/main.go's own production wiring (the SAME
+		// three stores, never a second, independently-constructed copy).
+		// Users/Participants were never actually exercised by any existing
+		// test either (actorauthz.AuthorizeResolvedActor/OwnedOrJoined both
+		// short-circuit on an invalid actor before touching either), but are
+		// wired for the same reason -- so a future test resolving a REAL
+		// commenter identity doesn't hit the identical latent nil-store trap.
+		Identities:   narvipg.NewIdentityStore(pool),
+		Users:        narvipg.NewUserStore(pool),
+		Participants: narvipg.NewParticipantStore(pool),
 	}
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 
