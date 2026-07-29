@@ -269,6 +269,7 @@ type testRig struct {
 	pool         *pgxpool.Pool
 	users        *narvipg.UserStore
 	identities   *narvipg.IdentityStore
+	auditLog     *narvipg.AuditLogStore
 	userSessions *narvipg.UserSessionStore
 	github       *fakeGitHubAPI
 	token        *fakeTokenServer
@@ -301,6 +302,7 @@ func newTestRig(t *testing.T, opts riggedOptions) testRig {
 		pool:         pool,
 		users:        narvipg.NewUserStore(pool),
 		identities:   narvipg.NewIdentityStore(pool),
+		auditLog:     narvipg.NewAuditLogStore(pool),
 		userSessions: narvipg.NewUserSessionStore(pool),
 		github:       githubAPI,
 		token:        tokenServer,
@@ -331,6 +333,7 @@ func newTestRig(t *testing.T, opts riggedOptions) testRig {
 		oauthConfig,
 		rig.users,
 		rig.identities,
+		rig.auditLog,
 		rig.userSessions,
 		opts.allowlist,
 		opts.initialAdminEmails,
@@ -614,6 +617,153 @@ func TestCallback_FirstTimeSignIn_InitialAdminGetsAdminRole(t *testing.T) {
 	}
 }
 
+// getAuditLogRowsForResource fetches every audit_log row matching
+// (resourceType, resourceID) -- mirrors internal/app/sessionactor's own
+// identically-named test helper (planrecord_integration_test.go), rebuilt
+// locally since this package's own integration tests live in a separate
+// (auth_test) package and so cannot reach that one's unexported helper.
+func getAuditLogRowsForResource(ctx context.Context, t *testing.T, pool *pgxpool.Pool, resourceType, resourceID string) []sqlcgen.AuditLog {
+	t.Helper()
+	rows, err := pool.Query(ctx,
+		`SELECT id, actor_user_id, action, resource_type, resource_id, detail_json, correlation_id, created_at FROM audit_log WHERE resource_type = $1 AND resource_id = $2`,
+		resourceType, resourceID)
+	if err != nil {
+		t.Fatalf("query audit_log rows: %v", err)
+	}
+	defer rows.Close()
+
+	var out []sqlcgen.AuditLog
+	for rows.Next() {
+		var a sqlcgen.AuditLog
+		if err := rows.Scan(&a.ID, &a.ActorUserID, &a.Action, &a.ResourceType, &a.ResourceID, &a.DetailJson, &a.CorrelationID, &a.CreatedAt); err != nil {
+			t.Fatalf("scan audit_log row: %v", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate audit_log rows: %v", err)
+	}
+	return out
+}
+
+// TestCallback_FirstTimeSignIn_RecordsUserCreatedAuditLog proves the
+// audit-fix batch's own M18 fix: an ordinary (non-admin-email) first-time
+// sign-in writes exactly one "user.created" audit_log row -- previously
+// this codebase's one identity/role mutation with no audit trail at all --
+// attributed to the newly-created user's OWN id (a self-registration
+// event: there is no OTHER, distinct acting user to attribute it to).
+func TestCallback_FirstTimeSignIn_RecordsUserCreatedAuditLog(t *testing.T) {
+	rig := newTestRig(t, defaultRiggedOptions())
+	ctx := context.Background()
+	client := newClient(t)
+
+	state := doLogin(t, client, rig.server.URL)
+	resp := doCallback(t, client, rig.server.URL, state, "audit-happy-path-code")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("callback status = %d, want %d", resp.StatusCode, http.StatusFound)
+	}
+
+	identity, err := rig.identities.GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderGithub, "555000111")
+	if err != nil {
+		t.Fatalf("GetByProviderAndExternalID: %v", err)
+	}
+	user, err := rig.users.GetByID(ctx, identity.UserID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if user.Role != sqlcgen.UserRoleMember {
+		t.Fatalf("user.Role = %q, want %q (sanity check on the fixture itself)", user.Role, sqlcgen.UserRoleMember)
+	}
+
+	auditRows := getAuditLogRowsForResource(ctx, t, rig.pool, "user", user.ID.String())
+	if len(auditRows) != 1 {
+		t.Fatalf("audit_log rows for created user = %d, want exactly 1", len(auditRows))
+	}
+	auditRow := auditRows[0]
+	if auditRow.Action != "user.created" {
+		t.Errorf("Action = %q, want %q", auditRow.Action, "user.created")
+	}
+	if auditRow.ResourceType != "user" {
+		t.Errorf("ResourceType = %q, want %q", auditRow.ResourceType, "user")
+	}
+	if auditRow.ResourceID != user.ID.String() {
+		t.Errorf("ResourceID = %q, want %q", auditRow.ResourceID, user.ID.String())
+	}
+	if !auditRow.ActorUserID.Valid || auditRow.ActorUserID != user.ID {
+		t.Errorf("ActorUserID = %v, want %v (the newly-created user's own id -- a self-registration event has no OTHER human actor to attribute it to)", auditRow.ActorUserID, user.ID)
+	}
+
+	var detail map[string]any
+	if err := json.Unmarshal(auditRow.DetailJson, &detail); err != nil {
+		t.Fatalf("unmarshal detail_json: %v", err)
+	}
+	if detail["role"] != "member" {
+		t.Errorf("detail_json[role] = %v, want %q", detail["role"], "member")
+	}
+	if detail["github_login"] != "octocat" {
+		t.Errorf("detail_json[github_login] = %v, want %q", detail["github_login"], "octocat")
+	}
+}
+
+// TestCallback_FirstTimeSignIn_BootstrapAdmin_RecordsUserCreatedAuditLog is
+// TestCallback_FirstTimeSignIn_RecordsUserCreatedAuditLog's sibling for the
+// bootstrap-admin case (verified email matches InitialAdminEmails): same
+// assertions, except detail_json["role"] must be "admin" -- this is
+// exactly the case the finding calls out as silently granting a role with
+// no audit trail.
+func TestCallback_FirstTimeSignIn_BootstrapAdmin_RecordsUserCreatedAuditLog(t *testing.T) {
+	opts := defaultRiggedOptions()
+	opts.initialAdminEmails = []string{"octocat@example.com"}
+	rig := newTestRig(t, opts)
+	ctx := context.Background()
+	client := newClient(t)
+
+	state := doLogin(t, client, rig.server.URL)
+	resp := doCallback(t, client, rig.server.URL, state, "audit-bootstrap-admin-code")
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("callback status = %d, want %d", resp.StatusCode, http.StatusFound)
+	}
+
+	identity, err := rig.identities.GetByProviderAndExternalID(ctx, sqlcgen.IdentityProviderGithub, "555000111")
+	if err != nil {
+		t.Fatalf("GetByProviderAndExternalID: %v", err)
+	}
+	user, err := rig.users.GetByID(ctx, identity.UserID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if user.Role != sqlcgen.UserRoleAdmin {
+		t.Fatalf("user.Role = %q, want %q (sanity check on the fixture itself)", user.Role, sqlcgen.UserRoleAdmin)
+	}
+
+	auditRows := getAuditLogRowsForResource(ctx, t, rig.pool, "user", user.ID.String())
+	if len(auditRows) != 1 {
+		t.Fatalf("audit_log rows for created user = %d, want exactly 1", len(auditRows))
+	}
+	auditRow := auditRows[0]
+	if auditRow.Action != "user.created" {
+		t.Errorf("Action = %q, want %q", auditRow.Action, "user.created")
+	}
+	if !auditRow.ActorUserID.Valid || auditRow.ActorUserID != user.ID {
+		t.Errorf("ActorUserID = %v, want %v (the newly-created user's own id)", auditRow.ActorUserID, user.ID)
+	}
+
+	var detail map[string]any
+	if err := json.Unmarshal(auditRow.DetailJson, &detail); err != nil {
+		t.Fatalf("unmarshal detail_json: %v", err)
+	}
+	if detail["role"] != "admin" {
+		t.Errorf("detail_json[role] = %v, want %q (bootstrap-admin case)", detail["role"], "admin")
+	}
+	if detail["github_login"] != "octocat" {
+		t.Errorf("detail_json[github_login] = %v, want %q", detail["github_login"], "octocat")
+	}
+}
+
 // --- (b) returning user skips the allowlist entirely ---
 
 func TestCallback_ReturningUser_SkipsAllowlistAndRefreshesToken(t *testing.T) {
@@ -685,6 +835,7 @@ func newRigSharingPool(t *testing.T, base testRig, opts riggedOptions) testRig {
 		pool:         base.pool,
 		users:        base.users,
 		identities:   base.identities,
+		auditLog:     base.auditLog,
 		userSessions: base.userSessions,
 		github:       newFakeGitHubAPI(t),
 		token:        newFakeTokenServer(t),
@@ -716,6 +867,7 @@ func newRigSharingPool(t *testing.T, base testRig, opts riggedOptions) testRig {
 		oauthConfig,
 		rig.users,
 		rig.identities,
+		rig.auditLog,
 		rig.userSessions,
 		opts.allowlist,
 		opts.initialAdminEmails,

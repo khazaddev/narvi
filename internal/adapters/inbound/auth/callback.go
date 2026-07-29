@@ -18,6 +18,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/auditlog"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -77,11 +78,19 @@ const (
 // IdentityStore.Create inside ONE real Postgres transaction (§13.1: "in ONE
 // transaction"); initialAdminEmails is what lets that same branch decide
 // admin-vs-member at creation time (§13.4: "initial admins set by config").
+//
+// auditLog (audit-fix batch, observability M18) is what lets that SAME
+// first-time-sign-in branch write a "user.created" audit_log row inside
+// that identical transaction -- see createUserAndIdentity's own doc
+// comment for why a first-time sign-in (bootstrap admin included) was
+// previously the one identity/role mutation in this codebase with no
+// audit trail at all.
 func NewCallbackHandler(
 	pool *pgxpool.Pool,
 	oauthConfig *oauth2.Config,
 	users *postgres.UserStore,
 	identities *postgres.IdentityStore,
+	auditLog *postgres.AuditLogStore,
 	userSessions *postgres.UserSessionStore,
 	allowlist AllowlistConfig,
 	initialAdminEmails []string,
@@ -220,7 +229,7 @@ func NewCallbackHandler(
 				return
 			}
 
-			createdUserID, createErr := createUserAndIdentity(ctx, pool, users, identities, createUserAndIdentityParams{
+			createdUserID, createErr := createUserAndIdentity(ctx, pool, users, identities, auditLog, createUserAndIdentityParams{
 				verifiedEmail:      verifiedEmail,
 				githubLogin:        ghUser.Login,
 				githubName:         ghUser.Name,
@@ -284,10 +293,25 @@ type createUserAndIdentityParams struct {
 }
 
 // createUserAndIdentity runs the first-time-sign-in write path: a users row
-// then an identities row, in ONE Postgres transaction (§13.1's own explicit
-// requirement) so a failure partway through never leaves an orphaned user
-// with no identity or vice versa.
-func createUserAndIdentity(ctx context.Context, pool *pgxpool.Pool, users *postgres.UserStore, identities *postgres.IdentityStore, p createUserAndIdentityParams) (pgtype.UUID, error) {
+// then an identities row, then a "user.created" audit_log row, in ONE
+// Postgres transaction (§13.1's own explicit requirement) so a failure
+// partway through never leaves an orphaned user with no identity (or no
+// audit trail) or vice versa.
+//
+// Audit-fix batch (observability, M18): this was previously the one
+// identity/role mutation in this codebase's own audit-fix series with NO
+// auditlog.Record call at all -- including the bootstrap-admin case, where
+// a verified email matching initialAdminEmails silently grants the admin
+// role with no audit trail (§13.3/auditlog.Record's own doc comment: "the
+// audit row is not best-effort, it is transactionally bound to the change
+// it describes"). actorUserID is the newly-created user's OWN id, not a
+// NULL/system actor: unlike a genuinely system-triggered transition (e.g.
+// sessionactor's own "plan.superseded" row, attributed to no one because
+// nothing a human did caused it), THIS event has a real, meaningful human
+// actor -- the person who just authenticated is exactly who this action
+// should be attributed to; there is simply no OTHER, distinct user to
+// attribute it to instead (a self-registration/self-authentication event).
+func createUserAndIdentity(ctx context.Context, pool *pgxpool.Pool, users *postgres.UserStore, identities *postgres.IdentityStore, auditLog *postgres.AuditLogStore, p createUserAndIdentityParams) (pgtype.UUID, error) {
 	role := sqlcgen.UserRoleMember
 	for _, adminEmail := range p.initialAdminEmails {
 		if strings.EqualFold(adminEmail, p.verifiedEmail) {
@@ -338,6 +362,13 @@ func createUserAndIdentity(ctx context.Context, pool *pgxpool.Pool, users *postg
 		AccessTokenEncrypted: p.encryptedToken,
 	}); err != nil {
 		return pgtype.UUID{}, fmt.Errorf("auth: create identity: %w", err)
+	}
+
+	if err := auditlog.Record(ctx, auditLog.WithTx(tx), createdUser.ID, "user.created", "user", createdUser.ID.String(), map[string]any{
+		"role":         string(role),
+		"github_login": p.githubLogin,
+	}); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("auth: record user-creation audit log: %w", err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
