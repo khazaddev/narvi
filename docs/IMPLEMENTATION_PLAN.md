@@ -83,7 +83,7 @@ TECHNICAL_PLAN.md §12), never invented independently of it.
 | Step | Title | Content | Ref. |
 |---|---|---|---|
 | 31 | webhook toolkit | Signature verify, dedupe/claims `INSERT ON CONFLICT`, single `CreateSessionRequest` | §5.1 |
-| 32 ∥ | GitHub ingress | PR mentions, events → automations, per-PR coalescing | §8.2 |
+| 32 ∥ | GitHub ingress | PR mentions, per-PR coalescing (see note below on "events → automations") | §8.2 |
 | 33 ∥ | Slack ingress | Thread↔session in Postgres, bidirectional mrkdwn contract, in-thread acks | §8.10 |
 | 34 ∥ | Linear ingress | AgentSession webhooks, progressive AgentActivity, OAuth | §8.10 |
 | 35 | outbox delivery | Slack/Linear/GitHub delivery workers, retry backoff, dead-letter, outbox-lag metric | §5.1 |
@@ -91,6 +91,13 @@ TECHNICAL_PLAN.md §12), never invented independently of it.
 | 37 | plan mode (web) | Persistent versioned plan, approval, **server-side implementation dispatch**, plan/build model split | §8.1 |
 | 38 | plan mode (cross-channel) | Slack/Linear verdicts via the same `Authorize`, first-wins + notify the other channels | §8.1, §13.3 |
 | 39 | identities + full RBAC | Auto-linking (verified-email match, magic link if ambiguous, email-API retry), table-driven 4-role matrix + exhaustive tests, viewer guard, transactional audit log, members API | §13.2, §13.3 |
+
+Note on Step 32's row: "events → automations" is aspirational/forward-looking, not a
+Step-32 deliverable — Step 32 (`internal/adapters/inbound/github`) is ingress-only and
+deliberately does not touch `internal/domain/automation` (confirmed still an empty
+stub today; see that Step's own `doc.go` for the divergence). The automation-trigger
+wiring the phrase describes is actually delivered later, by Step 51 ("automations:
+engine") and Step 52 ("automations: triggers & extras"), both Phase 5.
 
 **Phase 3 milestone**: GitHub/Slack/Linear ingress live; classifier shadow report on real traffic.
 

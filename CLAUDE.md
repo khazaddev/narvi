@@ -12,6 +12,7 @@ You are building the system specified in `docs/TECHNICAL_PLAN.md`, following the
 ## Commit, PR, and branch naming
 
 Every commit message and PR title follows [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+Merge commits are exempt — GitHub's own auto-generated "Merge pull request #N from `<branch>`" subject is produced by the merge action itself, not authored per this convention.
 
 ```
 <type>[(scope)]: <short, imperative description>
