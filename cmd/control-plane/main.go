@@ -541,6 +541,23 @@ func serve() error {
 		r.Get("/", httpapi.ListAuditLog(auditLogStore))
 	})
 
+	// /api/intent-templates, /api/intent-templates/preview (audit finding
+	// M5, completeness): postgres.PromptTemplateStore's own Upsert method
+	// (constructed above, alongside intentClassifierSvc) had ZERO callers
+	// anywhere in this codebase until this batch -- these two routes are
+	// its first ones. Gated behind auth.Middleware (a "must be logged in"
+	// gate) exactly like /api/members above; each handler itself renders
+	// the REAL admin-only §13.3 verdict via domain/authz.Authorize
+	// (authz.ActionActivatePromptTemplate -- row 6's own "prompt-template
+	// activation" action, itself likewise unused anywhere before this
+	// batch). See httpapi/classifiertemplates.go's own doc comment for the
+	// full design.
+	router.Route("/api/intent-templates", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/preview", httpapi.PreviewIntentTemplate())
+		r.Post("/", httpapi.UpsertIntentTemplate(pool, promptTemplateStore, auditLogStore))
+	})
+
 	// REST routes the UI needs (§6.3, Step 19's own plan row: "create/get/
 	// events/artifacts", + ws-token named separately by §6.2), all gated
 	// behind auth.Middleware as of Step 20 — see
