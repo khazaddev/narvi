@@ -45,6 +45,38 @@ const maxRequestBodyBytes = 1 << 20 // 1 MiB
 // documentation -- see doc.go's own step 2).
 const slackWebhookSignatureVersion = "v0"
 
+// slackMessageClaimProvider is a SECOND, distinct WebhookDeliveryStore
+// "provider" value (deliberately never "slack") used ONLY for the
+// message-level coalescing claim below -- L3 audit fix ("Slack's own
+// dual-delivery for one logical mention isn't coalesced"): Slack sends
+// BOTH an app_mention event AND a message event (two DISTINCT event_id
+// values) for a single @mention posted inside a thread this adapter
+// already has mapped to a session. The outer (provider="slack",
+// event_id) claim already made below can't coalesce them -- the two
+// deliveries carry different event_ids, so both independently win that
+// claim, both pass isIgnorable, and both would otherwise flow all the way
+// through resolveOrClaimSession's existing-mapping branch into
+// handleEvent's own addTurn call for the exact same underlying human
+// action (a redundant resolveSlackActor call each, and -- absent this fix
+// -- a confusing double ack: one "on it" for whichever twin wins the
+// addTurn race, immediately followed by a second, separate "still
+// working on the previous message" for its sibling).
+//
+// This claim is reused against the SAME (provider, delivery_id)-keyed
+// webhook_deliveries table/primitive the outer claim already uses (§5.1's
+// own "INSERT ... ON CONFLICT atomic claims" house style), keyed by
+// messageClaimKey (event.go) -- the identity of the underlying MESSAGE
+// OBJECT itself (channel, ts), NOT threadKey()/ThreadTS, which identifies
+// the THREAD: both twin events carry the IDENTICAL ts value, since they
+// describe the same Slack message object twice, while a genuinely
+// DIFFERENT message posted later in the same thread carries a different
+// ts and must NOT be coalesced with this one. Using a distinct provider
+// value (rather than reusing "slack") keeps this claim space from ever
+// colliding with a real event_id claimed above, even in the
+// vanishingly-unlikely case a real event_id happened to look exactly like
+// a "channel:ts" pair.
+const slackMessageClaimProvider = "slack-message"
+
 // ackNewSessionText/ackReplyText/ackBusyText/ackNotConfiguredText are the
 // fixed in-thread ack messages this Step posts -- deliberately plain,
 // static strings (no templating beyond what's inlined here), matching
@@ -254,7 +286,53 @@ func NewHandler(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		if ok := handleEvent(ctx, deps, ack, logger, ev); !ok {
+		// L3 audit fix ("Slack's own dual-delivery for one logical mention
+		// isn't coalesced") -- see slackMessageClaimProvider's own doc
+		// comment above for the full "why". Claimed right here: after
+		// isIgnorable (no need to coalesce an event that would never reach
+		// handleEvent anyway) and before handleEvent ever runs (so a
+		// coalesced twin never redundantly calls resolveSlackActor or
+		// posts a second ack).
+		msgClaim, err := deps.Deliveries.Claim(ctx, slackMessageClaimProvider, ev.messageClaimKey())
+		if err != nil {
+			logger.Error("slack: claim message-level webhook delivery failed", "error", err)
+			// Mirrors the "decode inner event failed" release just above:
+			// the outer event_id claim already succeeded, but this event
+			// was never actually processed, so release it too and let a
+			// redelivery retry from scratch.
+			if releaseErr := deps.Deliveries.Release(ctx, "slack", envelope.EventID); releaseErr != nil {
+				logger.Error("slack: release webhook delivery claim failed", "error", releaseErr, "event_id", envelope.EventID)
+			}
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if !msgClaim.Inserted {
+			// This exact underlying Slack message was already handled via
+			// its twin event type (app_mention <-> message, or a genuine
+			// redelivery of this same event type) -- skip entirely, never
+			// posting a second, confusing ack.
+			//
+			// Residual, accepted tradeoff (re-review, mirrors this
+			// codebase's own established "narrow the race, don't
+			// eliminate every last window" precedent used throughout this
+			// audit series): in the ONE case handleEvent's own
+			// ReleaseMessageClaim signal below deliberately releases this
+			// claim (a plain "message" event skipping as "not ours" on a
+			// brand-new, not-yet-mapped thread), the differently-typed
+			// twin that later reclaims it (the app_mention that actually
+			// creates the session) DOES call resolveSlackActor a second
+			// time -- the "never a redundant second one" guarantee below
+			// holds for every OTHER outcome (the common already-mapped-
+			// thread coalescing case, and every Skip that keeps this claim
+			// held), just not this specific reclaim path, where a second
+			// call is the deliberate cost of not losing the mention
+			// entirely.
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		result := handleEvent(ctx, deps, ack, logger, ev)
+		if !result.OK {
 			// H2 audit fix: handleEvent hit a genuine post-claim processing
 			// failure (a DB error resolving/creating the session or adding
 			// the turn) -- release the claim and answer non-2xx so a
@@ -270,8 +348,34 @@ func NewHandler(deps Deps) http.HandlerFunc {
 			if releaseErr := deps.Deliveries.Release(ctx, "slack", envelope.EventID); releaseErr != nil {
 				logger.Error("slack: release webhook delivery claim failed", "error", releaseErr, "event_id", envelope.EventID)
 			}
+			// L3 audit fix: the message-level claim above must ALSO be
+			// released on this exact same failure path -- otherwise a
+			// later genuine retry (of either twin event_id) would find this
+			// claim already taken and be silently, incorrectly dropped
+			// forever.
+			if releaseErr := deps.Deliveries.Release(ctx, slackMessageClaimProvider, ev.messageClaimKey()); releaseErr != nil {
+				logger.Error("slack: release message-level webhook delivery claim failed", "error", releaseErr, "claim_key", ev.messageClaimKey())
+			}
 			w.WriteHeader(http.StatusInternalServerError)
 			return
+		}
+		// HIGH audit fix ("message-level claim can permanently orphan its
+		// own app_mention twin on a brand-new thread"): result.OK is true
+		// here, so this is NOT the failure path just above, yet the
+		// message-level claim can still need releasing -- see
+		// sessionResolution's own ReleaseMessageClaim field and
+		// handleEvent's own doc comment for the full "why" (the ONE
+		// asymmetric Skip outcome between the two twin event types: a plain
+		// "message" event landing first on a brand-new, not-yet-mapped
+		// thread). Every OTHER ok=true outcome (a deliberate business skip
+		// reached identically by either twin -- no default repo configured,
+		// an authz denial -- or a fully successful addTurn) leaves
+		// ReleaseMessageClaim false, so the claim stays held exactly as
+		// before this fix.
+		if result.ReleaseMessageClaim {
+			if releaseErr := deps.Deliveries.Release(ctx, slackMessageClaimProvider, ev.messageClaimKey()); releaseErr != nil {
+				logger.Error("slack: release message-level webhook delivery claim failed (asymmetric message-before-app_mention skip)", "error", releaseErr, "claim_key", ev.messageClaimKey())
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 	}
@@ -288,30 +392,96 @@ type sessionResolution struct {
 	SessionID   pgtype.UUID
 	IsNewThread bool
 	Skip        bool
+
+	// ReleaseMessageClaim is HIGH audit fix ("message-level claim can
+	// permanently orphan its own app_mention twin on a brand-new thread"):
+	// set ONLY by the "no mapping yet AND this event is not an app_mention"
+	// Skip branch immediately below in resolveOrClaimSession -- the ONE
+	// outcome in this function that is genuinely ASYMMETRIC between the two
+	// twin event types Slack sends for a single logical mention
+	// (app_mention and message, see slackMessageClaimProvider's own doc
+	// comment above). A plain "message" event can NEVER create a new
+	// session/thread mapping (only an app_mention can, see the check right
+	// below), so if that message twin happens to win NewHandler's own
+	// (channel, ts)-keyed message-level claim race on a brand-new thread, it
+	// takes THIS branch, and unless the claim is released here, it stays
+	// held forever -- silently discarding the app_mention twin (the ONLY
+	// one that could ever have actually created the session) the moment it
+	// arrives afterward, with both Slack deliveries still answering 200 OK
+	// (so Slack never retries) and zero operator-visible signal.
+	//
+	// Every OTHER Skip outcome in this function (no default repo
+	// configured, an authz denial on create, an authz denial on an
+	// existing-thread reply via authorizeExistingSessionReply) is reached
+	// IDENTICALLY regardless of which twin got there first -- both twins
+	// would render the exact same verdict, so releasing the message-level
+	// claim there would only let a genuinely-denied/misconfigured twin
+	// retry pointlessly. Those leave this field false (the default), and
+	// NewHandler's own release-path comment (above) still applies to them
+	// unchanged.
+	//
+	// Residual, ACCEPTED race (re-review; mirrors this codebase's own
+	// established "narrow the window, don't eliminate every last one"
+	// tradeoff already used throughout this audit series, e.g. the SCM-
+	// credentials disabled/role recheck, the outbox claim-lease CAS): this
+	// release still depends on ORDERING relative to the twin's own Claim
+	// attempt. If the two twin deliveries are handled by truly concurrent
+	// requests (not just arbitrarily ORDERED ones, which this fix fully
+	// closes) and the app_mention twin's own Claim call lands inside the
+	// narrow window between the message twin's INSERT and its later
+	// Release, the app_mention twin can still lose the race and be
+	// skipped-with-200, same failure mode as the bug this field exists to
+	// close, just requiring genuine concurrency rather than firing on
+	// every ordering. Closing this fully would need a held, cross-request
+	// lock spanning the whole message-twin attempt rather than a point-in-
+	// time claim -- a materially bigger, more invasive mechanism than this
+	// narrow finding warrants; the window this fix leaves is small (a
+	// handful of DB round trips) and, given Slack's own real-world twin-
+	// delivery timing, expected to be rare in practice.
+	ReleaseMessageClaim bool
+}
+
+// handleEventResult is handleEvent's own result -- mirrors
+// sessionResolution's own small, explicit struct shape rather than a bare
+// bool (this codebase's own established preference, see that type's doc
+// comment) now that handleEvent has two independent things to report: OK
+// (see handleEvent's own doc comment below) and, orthogonally,
+// ReleaseMessageClaim (HIGH audit fix, "message-level claim can
+// permanently orphan its own app_mention twin on a brand-new thread") --
+// whether NewHandler's own message-level claim (slackMessageClaimProvider)
+// must ALSO be released even though OK is true, because
+// resolveOrClaimSession's own res.ReleaseMessageClaim fired (see that
+// field's own doc comment for the full "why"). ReleaseMessageClaim is
+// meaningless when OK is false -- NewHandler's own failure path already
+// unconditionally releases both claims regardless of this field.
+type handleEventResult struct {
+	OK                  bool
+	ReleaseMessageClaim bool
 }
 
 // handleEvent implements doc.go's own thread<->session mapping design
 // (steps 7-8): resolve or create the mapped session, add a turn, then
-// best-effort ack. Returns ok=false ONLY for a genuine post-claim
+// best-effort ack. Returns OK=false ONLY for a genuine post-claim
 // persistence failure (resolveOrClaimSession's own DB errors, addTurn
 // failing, or -- MEDIUM audit fix, "authorizeSessionAction conflates a
 // genuine backend error with a real authorization denial" --
 // authorizeExistingSessionReply's own authorizeSessionAction call
 // returning a genuine backend error, distinct from ErrActorNotAuthorized)
 // -- H2 audit fix ("webhook claim/release parity"): the caller (NewHandler)
-// releases the webhook-delivery claim and answers non-2xx when ok is
+// releases the webhook-delivery claim and answers non-2xx when OK is
 // false, so a redelivery of this same event_id can actually retry, instead
 // of the event being silently and permanently dropped now that it's
 // claimed. Every OTHER failure here (a best-effort in-thread
 // ack/ephemeral-notice post failing, or a deliberate business skip -- no
 // default repo configured, a genuine ErrActorNotAuthorized denial) is
-// still only ever logged, returning ok=true: retrying those would either
+// still only ever logged, returning OK=true: retrying those would either
 // change nothing (an authz denial renders the exact same verdict again)
 // or risks double-posting/double-processing something that already fully
 // succeeded (the ack/notice text is best-effort exactly because the
 // underlying session/turn work is already durably committed by the time
-// either runs).
-func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent) bool {
+// either runs). See handleEventResult's own doc comment for the SECOND,
+// orthogonal thing this now reports: ReleaseMessageClaim.
+func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent) handleEventResult {
 	channel := ev.Channel
 	key := ev.threadKey()
 	prompt := normalizeMrkdwn(ev.Text)
@@ -351,17 +521,23 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	if !ok {
 		// A genuine backend error inside resolveOrClaimSession (already
 		// logged there) -- distinct from res.Skip below, which reports a
-		// deliberate business decision (never a failure).
-		return false
+		// deliberate business decision (never a failure). ReleaseMessageClaim
+		// is irrelevant here (see handleEventResult's own doc comment) --
+		// NewHandler's own OK==false path always releases both claims
+		// regardless.
+		return handleEventResult{OK: false}
 	}
 	if res.Skip {
-		return true
+		// HIGH audit fix: propagate res.ReleaseMessageClaim straight through
+		// -- see sessionResolution's own doc comment for exactly which Skip
+		// outcome sets this, and why every other one leaves it false.
+		return handleEventResult{OK: true, ReleaseMessageClaim: res.ReleaseMessageClaim}
 	}
 
 	createdTurn, created, err := addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, res.SessionID, prompt, actorUserID)
 	if err != nil {
 		logger.Error("slack: add turn failed", "error", err)
-		return false
+		return handleEventResult{OK: false}
 	}
 
 	// L20 audit fix: this package previously logged NOTHING on a
@@ -402,7 +578,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
 	}
-	return true
+	return handleEventResult{OK: true}
 }
 
 // resolveOrClaimSession implements doc.go's own numbered design: an
@@ -441,8 +617,18 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 	// No mapping yet. Only an app_mention may start a brand-new thread --
 	// a plain, unmapped "message" event is simply not ours (doc.go's own
 	// step 6/7 reasoning).
+	//
+	// HIGH audit fix ("message-level claim can permanently orphan its own
+	// app_mention twin on a brand-new thread"): ReleaseMessageClaim: true
+	// here is load-bearing, not decorative -- this is the ONE asymmetric
+	// outcome between the two twin event types (see sessionResolution's own
+	// ReleaseMessageClaim doc comment for the full reasoning). Without it, a
+	// plain "message" twin that wins NewHandler's own message-level claim
+	// race on a brand-new thread would hold that claim forever, silently
+	// discarding its app_mention sibling -- the ONLY twin that can ever
+	// actually create the session -- the moment it arrives afterward.
 	if !ev.isAppMention() {
-		return sessionResolution{Skip: true}, true
+		return sessionResolution{Skip: true, ReleaseMessageClaim: true}, true
 	}
 
 	if deps.DefaultRepoName == "" || deps.DefaultRepoURL == "" {

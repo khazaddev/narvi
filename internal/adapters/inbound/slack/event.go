@@ -57,6 +57,20 @@ func (ev slackEvent) threadKey() string {
 	return ev.TS
 }
 
+// messageClaimKey returns the (channel, ts) identity of the underlying
+// Slack MESSAGE OBJECT this event describes -- L3 audit fix ("Slack's own
+// dual-delivery for one logical mention isn't coalesced", handler.go's own
+// slackMessageClaimProvider): Slack sends BOTH an app_mention event AND a
+// message event (two distinct event_id values) for the SAME physical
+// message, and both carry the IDENTICAL ts value, since they describe the
+// same message object twice. Deliberately NOT threadKey()/ThreadTS above,
+// which identifies the THREAD, not the individual message -- a genuine
+// SECOND, different message posted later in the SAME thread carries a
+// different ts and must NOT be coalesced with this one.
+func (ev slackEvent) messageClaimKey() string {
+	return ev.Channel + ":" + ev.TS
+}
+
 // isAppMention/isPlainMessage/isIgnorable implement doc.go's own step 6
 // filtering: an event this adapter should never act on at all.
 func (ev slackEvent) isAppMention() bool { return ev.Type == "app_mention" }
