@@ -5,11 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/internal/app/ports"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
+	"github.com/khazaddev/narvi/internal/platform"
+)
+
+// The 4 fallback_branch values H9's own audit fix logs on Classify's own
+// internal fallback paths -- named exactly as the audit finding itself
+// names them, distinct from (and deliberately more granular than) the
+// coarse ports.FallbackReason* enum RecordDecision still persists
+// unchanged (that enum's own shape is fixed -- TestLLMErrorCode_
+// MatchesFallbackReason's own wire-parity guarantee -- so these values
+// exist purely as structured-log attributes, never written to Postgres).
+const (
+	fallbackBranchTemplateFetch    = "template_fetch"
+	fallbackBranchTemplateAssemble = "template_assemble"
+	fallbackBranchLLMError         = "llm_error"
+	fallbackBranchInvalidOutput    = "invalid_output"
 )
 
 // TemplateFetcher is the minimal template-lookup dependency Classify
@@ -34,11 +51,17 @@ type Service struct {
 	model     string
 	templates TemplateFetcher
 	sessions  DecisionStore
-	// activeSurfaces is §18.5's permanent shadow-vs-active gate: a
-	// surface present (true) here drives real Mode/Target behavior; any
-	// other surface (absent, or explicitly false) is shadow -- computed
-	// and recorded only, never consumed for real behavior. Built once, at
-	// construction, from platform.Config.IntentClassifierActiveSurfaces.
+	// activeSurfaces is §18.5's permanent shadow-vs-active gate, exposed
+	// via IsActive: a surface present (true) here is INTENDED to drive
+	// real Mode/Target behavior once some future caller actually
+	// consults IsActive; any other surface (absent, or explicitly false)
+	// is shadow. Honesty note (audit fix, observability/consolidation):
+	// as of this batch IsActive has ZERO production callers anywhere in
+	// this codebase (confirmed by direct search) -- every decision is
+	// still only computed and recorded, never consumed for real
+	// behavior, regardless of what this map holds. See IsActive's own
+	// doc comment below, and New's own boot-time Warn log. Built once,
+	// at construction, from platform.Config.IntentClassifierActiveSurfaces.
 	activeSurfaces map[string]bool
 }
 
@@ -54,6 +77,19 @@ func New(llmClient ports.LLM, provider, model string, templates TemplateFetcher,
 	for _, surface := range activeSurfaces {
 		active[surface] = true
 	}
+	// L8 audit fix: told at boot, not left to be discovered the hard way --
+	// an operator who sets NARVI_INTENT_CLASSIFIER_ACTIVE_SURFACES believes
+	// (per IsActive's own, otherwise-accurate doc comment) that this
+	// changes real behavior. It does not, yet: nothing in this codebase
+	// calls IsActive outside this package's own tests. No ctx is available
+	// this early (construction happens once, at process boot, before any
+	// request/session scope exists), so this logs via the process-wide
+	// default logger directly, exactly like cmd/control-plane/main.go's own
+	// other boot-time log lines.
+	if len(active) > 0 {
+		slog.Warn("intentclassifier: active surfaces configured, but IsActive has no production caller yet -- this setting currently has zero effect on real routing/behavior",
+			"active_surfaces", activeSurfaces)
+	}
 	return &Service{
 		llm:            llmClient,
 		provider:       provider,
@@ -68,6 +104,16 @@ func New(llmClient ports.LLM, provider, model string, templates TemplateFetcher,
 // surface. A surface never explicitly configured active defaults to
 // shadow -- §18.5: "never silently flip a surface to active without an
 // explicit config value saying so".
+//
+// Honesty note (audit fix, observability/consolidation): the gate itself
+// is real and correctly built, but this method currently has NO
+// production caller anywhere in this codebase -- nothing yet consults
+// IsActive to change real behavior for any surface, active or shadow.
+// Building the actual active-mode consumer (some caller that branches on
+// this to act on Target/Mode instead of only recording them) is a
+// separate, later decision, deliberately out of this batch's own scope.
+// New's own boot-time Warn log tells an operator this directly the moment
+// they configure a non-empty active-surfaces list.
 func (s *Service) IsActive(surface string) bool {
 	return s.activeSurfaces[surface]
 }
@@ -76,8 +122,12 @@ func (s *Service) IsActive(surface string) bool {
 // contract): every code path below resolves to a returned
 // ports.IntentDecision, never a caller-fatal error.
 func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInput) ports.IntentDecision {
+	logger := platform.Logger(ctx)
+
 	rawTemplate, err := s.templates.GetTemplate(ctx, templateNameSystem)
 	if err != nil {
+		logger.Warn("intentclassifier: template fetch failed, falling back",
+			"fallback_branch", fallbackBranchTemplateFetch, "surface", input.Surface, "error", err)
 		return fallbackDecision(ports.FallbackReasonAPIError)
 	}
 
@@ -90,6 +140,8 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 		// per-request failure this classifier can recover from mid-call
 		// -- §18.1's never-throw contract still applies: fall back
 		// rather than propagate.
+		logger.Warn("intentclassifier: template assemble failed, falling back",
+			"fallback_branch", fallbackBranchTemplateAssemble, "surface", input.Surface, "error", err)
 		return fallbackDecision(ports.FallbackReasonAPIError)
 	}
 
@@ -101,11 +153,23 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 		ResponseSchema: responseSchema,
 	})
 	if err != nil {
+		// err's own Error() string already embeds LLMError's Code/
+		// Provider/wrapped-Err trio (ports/llm.go) when the ports.LLM
+		// implementation honors its own contract -- logged here
+		// unconditionally (never re-typed), so this line stays correct
+		// even for the "non-typed error, itself a bug in that LLM
+		// implementation" case fallbackFromLLMError below still handles
+		// gracefully.
+		logger.Warn("intentclassifier: llm call failed, falling back",
+			"fallback_branch", fallbackBranchLLMError, "surface", input.Surface, "error", err)
 		return fallbackFromLLMError(err)
 	}
 
 	var parsed structuredOutput
 	if unmarshalErr := json.Unmarshal(raw, &parsed); unmarshalErr != nil || !parsed.valid() {
+		logger.Warn("intentclassifier: llm returned invalid output, falling back",
+			"fallback_branch", fallbackBranchInvalidOutput, "surface", input.Surface,
+			"unmarshal_error", unmarshalErr, "raw_output", string(raw))
 		return fallbackDecision(ports.FallbackReasonInvalidOutput)
 	}
 
@@ -132,6 +196,27 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 			confidence = intentdomain.ConfidenceLow
 		}
 	}
+
+	// H9 audit fix: a genuine classifier verdict was, until this batch,
+	// invisible in the logs entirely -- an operator had nothing beyond
+	// the persisted decision record itself to confirm what was
+	// classified and why. Info, not Warn/Debug: this fires once per
+	// session across every surface, exactly matching the log-volume/
+	// level this codebase already uses for other once-per-session events
+	// (e.g. github's own "created new review session for mention").
+	// Reasoning itself is deliberately NOT logged here (unlike target/
+	// mode/confidence/source) -- it is already persisted to the decision
+	// record for audit, and §18.4 explicitly bars rendering it on any
+	// ingress-facing surface by default; logging is a smaller, but still
+	// real, exposure surface than doing so purely for observability buys.
+	logger.Info("intentclassifier: classified",
+		"surface", input.Surface,
+		"has_deterministic_target", input.DeterministicTarget != "",
+		"source", ports.IntentSourceClassifier,
+		"target", target,
+		"mode", parsed.Mode,
+		"confidence", confidence,
+	)
 
 	return ports.IntentDecision{
 		Source:     ports.IntentSourceClassifier,
@@ -183,4 +268,75 @@ func (s *Service) RecordDecision(ctx context.Context, sessionID pgtype.UUID, rec
 		return false, fmt.Errorf("intentclassifier: marshal decision record: %w", err)
 	}
 	return s.sessions.UpdateIntentDecisionIfNull(ctx, sessionID, payload)
+}
+
+// ClassifyAndRecord is the H9/L11 audit fix's shared classify+record step
+// (§8.3/§18): calls Classify, derives the Confidence/Reasoning pointers
+// RecordDecision needs (populated only for a genuine ports.
+// IntentSourceClassifier verdict, nil for a fallback -- exactly §18.4's
+// own nullability rule), and persists the resulting intentdomain.
+// IntentDecisionRecord write-once via RecordDecision -- replacing the
+// near-identical block previously copy-pasted, verbatim, across github/
+// coalesce.go, slack/handler.go, and linear/webhook.go.
+//
+// input.Surface doubles as both ports.IntentClassifierInput.Surface AND
+// intentdomain.IntentDecisionRecord.Surface (the same value every
+// existing call site already passed identically to both), and also as
+// this call's own log-line prefix on a RecordDecision failure ("github: "/
+// "slack: "/"linear: ", exactly matching each site's own pre-existing Warn
+// text) -- so no separate surface-prefix parameter is needed. stage is the
+// one genuine remaining per-caller difference (intentdomain.
+// DecidedAtStageCreate for GitHub/Linear, DecidedAtStageFirstPrompt for
+// Slack); input.DeterministicTarget (GitHub's own real, deterministic
+// signal; empty for Slack/Linear) is the other, and it is simply part of
+// input, exactly like every other IntentClassifierInput field -- callers
+// set it before calling, same as they already do for Classify directly.
+//
+// Fire-and-forget in production (no caller today does anything with the
+// returned ports.IntentDecision beyond what RecordDecision already
+// persisted -- confirmed by reading all 3 pre-existing call sites): the
+// decision is still returned rather than discarded, purely so this
+// method itself stays directly unit-testable without needing to poll a
+// session row back out of a store fake.
+//
+// Runs entirely OUTSIDE any Postgres transaction, exactly like every
+// pre-existing call site already did (a real outbound LLM call must never
+// hold one open) -- callers are unaffected by this consolidation.
+func (s *Service) ClassifyAndRecord(ctx context.Context, sessionID pgtype.UUID, input ports.IntentClassifierInput, stage string) ports.IntentDecision {
+	logger := platform.Logger(ctx)
+
+	decision := s.Classify(ctx, input)
+
+	var confidence, reasoning *string
+	if decision.Source == ports.IntentSourceClassifier {
+		confVal := decision.Confidence
+		confidence = &confVal
+		// decision.Reasoning already went through intentdomain.
+		// TruncateReasoning inside Classify itself -- truncating again
+		// here would be redundant (TruncateReasoning is idempotent on an
+		// already-bounded string, but there is no reason to call it
+		// twice).
+		reasonVal := decision.Reasoning
+		reasoning = &reasonVal
+	}
+
+	if _, err := s.RecordDecision(ctx, sessionID, intentdomain.IntentDecisionRecord{
+		Surface:        input.Surface,
+		Source:         decision.Source,
+		Target:         decision.Target,
+		Mode:           decision.Mode,
+		Confidence:     confidence,
+		Reasoning:      reasoning,
+		DecidedAt:      time.Now(),
+		DecidedAtStage: stage,
+	}); err != nil {
+		// Never fatal to the caller -- mirrors every pre-existing call
+		// site's own identical "log and otherwise ignore" handling: the
+		// session/turn/acknowledgment this decision rides along with is
+		// already fully created/dispatched by the time any caller reaches
+		// this method.
+		logger.Warn(input.Surface+": record intent decision failed", "error", err, "session_id", sessionID)
+	}
+
+	return decision
 }

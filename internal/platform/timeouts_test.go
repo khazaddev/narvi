@@ -640,6 +640,31 @@ func TestDefaultTimeouts_Step38StandaloneField(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step36StandaloneField proves Step 36's ("intent
+// classifier", §8.3/§18) own addition -- IntentClassifierLLMTimeout -- is
+// populated with a sensible default and does not disturb either invariant
+// chain, matching every other standalone addition's own test precedent
+// above. Retroactively added by the observability/consolidation audit-fix
+// batch's own L13 finding (classifier slice): this field previously had
+// NO TestDefaultTimeouts_* coverage of its own at all, unlike every other
+// Step/batch-introduced field in this file.
+func TestDefaultTimeouts_Step36StandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.IntentClassifierLLMTimeout <= 0 {
+		t.Errorf("IntentClassifierLLMTimeout = %v, want > 0", to.IntentClassifierLLMTimeout)
+	}
+	if to.IntentClassifierLLMTimeout != 10*time.Second {
+		t.Errorf("IntentClassifierLLMTimeout = %v, want %v", to.IntentClassifierLLMTimeout, 10*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestDefaultTimeouts_Step39StandaloneFields proves Step 39's ("identities
 // + full RBAC", §13.2) own additions -- the identity profile-email fetch
 // retry knobs and the identity-link-prompt TTL -- are populated with

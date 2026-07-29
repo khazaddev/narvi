@@ -18,8 +18,13 @@ import (
 // concurrent callers race for it -- proving the write-once contract at
 // the Service.RecordDecision level (the underlying SQL guarantee itself
 // is covered by migrations/000033_intent_classifier.up.sql's own guarded
-// UPDATE and the postgres integration-test suite, out of this Step's own
-// non-integration scope).
+// UPDATE and, since the M10 audit fix, a genuine real-Postgres, -race
+// integration test: internal/adapters/outbound/postgres/
+// session_store_integration_test.go's own
+// TestSessionStore_UpdateIntentDecisionIfNull_ConcurrentSameSession_ExactlyOneWinner,
+// which exercises SessionStore.UpdateIntentDecisionIfNull directly under
+// real concurrent transactions -- out of THIS Step's own non-integration
+// scope).
 type mutexSessionStore struct {
 	mu  sync.Mutex
 	set map[pgtype.UUID]bool

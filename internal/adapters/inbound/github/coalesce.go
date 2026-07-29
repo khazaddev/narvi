@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -358,7 +357,15 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// surface until explicitly configured active) means nothing downstream
 	// yet consumes the recorded Target/Mode for real behavior regardless.
 	if hasPrompt && c.IntentClassifier != nil && req.Prompt != nil {
-		decision := c.IntentClassifier.Classify(ctx, ports.IntentClassifierInput{
+		// classify+record is now the shared intentclassifier.Service.
+		// ClassifyAndRecord (H9/L11 audit fix) -- see that method's own
+		// doc comment for the full "why a single shared call" reasoning.
+		// This site's own two genuine differences from Slack/Linear are
+		// both still expressed here directly: DecidedAtStageCreate (this
+		// package's own IntentClassifierInput never has a "first prompt"
+		// stage; the full prompt is always in hand at session-create
+		// time), and DeterministicTarget below.
+		c.IntentClassifier.ClassifyAndRecord(ctx, created.ID, ports.IntentClassifierInput{
 			Text:    *req.Prompt,
 			Surface: intentClassifierSurface,
 			// DeterministicTarget IS a real, already-known signal here,
@@ -377,34 +384,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 			// existing-tracked-PR signal the REUSE path above has, which
 			// never re-classifies anyway.
 			DeterministicTarget: intentdomain.TargetReview,
-		})
-
-		var confidence, reasoning *string
-		if decision.Source == ports.IntentSourceClassifier {
-			confVal := decision.Confidence
-			confidence = &confVal
-			reasonVal := intentdomain.TruncateReasoning(decision.Reasoning)
-			reasoning = &reasonVal
-		}
-
-		if _, recErr := c.IntentClassifier.RecordDecision(ctx, created.ID, intentdomain.IntentDecisionRecord{
-			Surface:        intentClassifierSurface,
-			Source:         decision.Source,
-			Target:         decision.Target,
-			Mode:           decision.Mode,
-			Confidence:     confidence,
-			Reasoning:      reasoning,
-			DecidedAt:      time.Now(),
-			DecidedAtStage: intentdomain.DecidedAtStageCreate,
-		}); recErr != nil {
-			// Never fatal -- the session itself is already fully created
-			// and dispatched above; a failure to persist the (shadow-
-			// mode, log-only) decision record is logged and otherwise
-			// ignored, exactly mirroring how GetOrSpawn/Send failures are
-			// handled elsewhere in this same codebase (never let an
-			// observability-only side effect fail the real request).
-			logger.Warn("github: record intent decision failed", "error", recErr, "session_id", created.ID)
-		}
+		}, intentdomain.DecidedAtStageCreate)
 	}
 
 	logger.Info("github: created new review session for mention",
