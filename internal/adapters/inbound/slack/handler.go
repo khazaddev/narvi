@@ -310,8 +310,23 @@ func NewHandler(deps Deps) http.HandlerFunc {
 			// This exact underlying Slack message was already handled via
 			// its twin event type (app_mention <-> message, or a genuine
 			// redelivery of this same event type) -- skip entirely, never
-			// reaching resolveSlackActor/addTurn a second time and never
 			// posting a second, confusing ack.
+			//
+			// Residual, accepted tradeoff (re-review, mirrors this
+			// codebase's own established "narrow the race, don't
+			// eliminate every last window" precedent used throughout this
+			// audit series): in the ONE case handleEvent's own
+			// ReleaseMessageClaim signal below deliberately releases this
+			// claim (a plain "message" event skipping as "not ours" on a
+			// brand-new, not-yet-mapped thread), the differently-typed
+			// twin that later reclaims it (the app_mention that actually
+			// creates the session) DOES call resolveSlackActor a second
+			// time -- the "never a redundant second one" guarantee below
+			// holds for every OTHER outcome (the common already-mapped-
+			// thread coalescing case, and every Skip that keeps this claim
+			// held), just not this specific reclaim path, where a second
+			// call is the deliberate cost of not losing the mention
+			// entirely.
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -404,6 +419,25 @@ type sessionResolution struct {
 	// retry pointlessly. Those leave this field false (the default), and
 	// NewHandler's own release-path comment (above) still applies to them
 	// unchanged.
+	//
+	// Residual, ACCEPTED race (re-review; mirrors this codebase's own
+	// established "narrow the window, don't eliminate every last one"
+	// tradeoff already used throughout this audit series, e.g. the SCM-
+	// credentials disabled/role recheck, the outbox claim-lease CAS): this
+	// release still depends on ORDERING relative to the twin's own Claim
+	// attempt. If the two twin deliveries are handled by truly concurrent
+	// requests (not just arbitrarily ORDERED ones, which this fix fully
+	// closes) and the app_mention twin's own Claim call lands inside the
+	// narrow window between the message twin's INSERT and its later
+	// Release, the app_mention twin can still lose the race and be
+	// skipped-with-200, same failure mode as the bug this field exists to
+	// close, just requiring genuine concurrency rather than firing on
+	// every ordering. Closing this fully would need a held, cross-request
+	// lock spanning the whole message-twin attempt rather than a point-in-
+	// time claim -- a materially bigger, more invasive mechanism than this
+	// narrow finding warrants; the window this fix leaves is small (a
+	// handful of DB round trips) and, given Slack's own real-world twin-
+	// delivery timing, expected to be rare in practice.
 	ReleaseMessageClaim bool
 }
 
