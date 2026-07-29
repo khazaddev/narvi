@@ -3,6 +3,7 @@ package platform_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -75,6 +76,27 @@ func TestRetry_PermanentErrorStopsImmediately(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("calls = %d, want 1 (permanent error must not retry)", calls)
+	}
+}
+
+func TestIsPermanent(t *testing.T) {
+	t.Parallel()
+
+	if platform.IsPermanent(errBoom) {
+		t.Error("IsPermanent(errBoom) = true, want false (a plain error was never wrapped by Permanent)")
+	}
+	if !platform.IsPermanent(platform.Permanent(errBoom)) {
+		t.Error("IsPermanent(Permanent(errBoom)) = false, want true")
+	}
+	// Wrapped a further layer (fmt.Errorf %w over the Permanent value) --
+	// errors.As must still find it, mirroring how a caller's own fn might
+	// add its own context before returning to Retry.
+	wrapped := fmt.Errorf("outer: %w", platform.Permanent(errBoom))
+	if !platform.IsPermanent(wrapped) {
+		t.Error("IsPermanent(fmt.Errorf(\"%%w\", Permanent(errBoom))) = false, want true")
+	}
+	if platform.IsPermanent(nil) {
+		t.Error("IsPermanent(nil) = true, want false")
 	}
 }
 

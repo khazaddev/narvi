@@ -54,6 +54,24 @@ func Permanent(err error) error {
 	return &permanentError{err: err}
 }
 
+// IsPermanent reports whether err was wrapped by Permanent above (directly,
+// or reachable via errors.As-style unwrapping of it). Exported specifically
+// for a caller of Retry that needs to tell "fn positively identified this
+// failure as unrecoverable" apart from "every attempt failed transiently
+// and attempts were exhausted" -- Retry's own returned error cannot be used
+// for that check (see Retry's own doc comment: it deliberately returns the
+// WRAPPED error unchanged, never the marker type itself, so a plain caller
+// of Retry never needs to know this package's own internal retry
+// bookkeeping leaked into its error type). A caller that DOES need the
+// distinction (identitylink.FetchEmailWithRetry, retry.go) must therefore
+// check the error fn itself returned, inside its own closure passed to
+// Retry, BEFORE that error ever reaches Retry's own unwrapping -- not the
+// value Retry hands back to ITS caller.
+func IsPermanent(err error) bool {
+	var perm *permanentError
+	return errors.As(err, &perm)
+}
+
 // Retry calls fn up to attempts times (attempts < 1 is treated as 1 -- a
 // single, unretried call, never zero calls), sleeping between failed
 // attempts with a doubling delay starting at baseDelay and capped at
