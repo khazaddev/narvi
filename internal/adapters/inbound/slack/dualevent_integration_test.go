@@ -26,17 +26,20 @@ package slack_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -454,5 +457,333 @@ func TestHandler_DualDelivery_FailedFirstAttemptReleasesBothClaimsForRedelivery(
 	}
 	if len(turnsAfterRetry) != 1 {
 		t.Errorf("len(turns) after redelivery = %d, want exactly 1 (the released inner claim must let a genuine retry actually succeed)", len(turnsAfterRetry))
+	}
+}
+
+// TestHandler_DualDelivery_MessageFirstOnNewThread_AppMentionTwinStillCreatesSession
+// is the HIGH audit fix's own headline reproduction ("message-level claim
+// can permanently orphan its own app_mention twin on a brand-new thread"):
+// Slack's own two independent HTTP deliveries for a single logical mention
+// can arrive in EITHER order -- when the plain "message" twin (which can
+// NEVER create a new session/thread mapping on its own, see
+// resolveOrClaimSession's own "no mapping yet" branch) wins the
+// (channel, ts) message-level claim race FIRST on a brand-new,
+// not-yet-mapped thread, its own Skip must release that claim so the
+// app_mention twin -- the ONLY event type that can actually create the
+// session -- still succeeds when it arrives second.
+//
+// Before this fix, the message twin's Skip never released the claim (Skip
+// was unconditionally treated as "a deliberate business decision, nothing
+// to retry"), so the app_mention twin's own Claim call on the SAME
+// (channel, ts) key found it already taken and was silently discarded
+// before handleEvent ever ran: both deliveries answered 200 OK (so Slack
+// never retries), yet no session/turn/mapping was EVER created -- strictly
+// worse than the original double-ack bug this batch set out to fix (the
+// user now gets ZERO response instead of two). Reasoning through the
+// pre-fix code confirms this test would have failed against it: the
+// message twin's Skip returned ok=true with no release, so
+// TestHandler_DualDelivery_FailedFirstAttemptReleasesBothClaimsForRedelivery's
+// own "release-on-failure" path (the only pre-fix release path for the
+// message-level claim) never fires here at all.
+func TestHandler_DualDelivery_MessageFirstOnNewThread_AppMentionTwinStillCreatesSession(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	rig := newSlackAckTestRig(t, pool)
+
+	const dualUser = "U0DUALNEWTHREADMSGFIRST"
+	linkSlackIdentityForTest(ctx, t, pool, dualUser, sqlcgen.UserRoleMaintainer)
+
+	const channel = "C0DUALNEWTHREAD"
+	const ts = "1700000200.000100"
+	const text = "please start this task"
+
+	// The "message" twin arrives FIRST -- entirely plausible given Slack's
+	// two independent HTTP deliveries (separate requests, possibly
+	// different pods, independent latency for the outer claim/JSON-decode/
+	// inner claim/resolveSlackActor call chain).
+	messageTwin := messageEnvelopeWithUser("Ev0NEWTHREADMSG", channel, ts, "", text, dualUser)
+	req1 := signedSlackRequest(t, messageTwin)
+	rec1 := httptest.NewRecorder()
+	rig.handler(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("message twin (first): status = %d, want 200 (body=%s)", rec1.Code, rec1.Body.String())
+	}
+
+	// Nothing created yet -- a plain, unmapped message can never start a
+	// new thread on its own.
+	if _, err := rig.threads.Get(ctx, channel, ts); err == nil {
+		t.Fatal("expected NO thread mapping after the message-only delivery, got one")
+	}
+
+	// The app_mention twin -- the ONLY event type that can actually create
+	// the session -- arrives SECOND, for the IDENTICAL underlying message
+	// (same channel/ts, same text).
+	appMentionTwin := appMentionEnvelopeWithUser("Ev0NEWTHREADMENTION", channel, ts, "", text, dualUser)
+	req2 := signedSlackRequest(t, appMentionTwin)
+	rec2 := httptest.NewRecorder()
+	rig.handler(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("app_mention twin (second): status = %d, want 200 (body=%s)", rec2.Code, rec2.Body.String())
+	}
+
+	mapping, err := rig.threads.Get(ctx, channel, ts)
+	if err != nil {
+		t.Fatalf("expected a thread mapping row after the app_mention twin, Get: %v (THIS is the HIGH audit fix's own reproduction: without the fix, the app_mention twin is silently discarded and no session is ever created)", err)
+	}
+	turns, err := rig.turns.ListForSession(ctx, mapping.SessionID)
+	if err != nil {
+		t.Fatalf("ListForSession: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("len(turns) = %d, want exactly 1 (the app_mention twin must have created the session and its first turn)", len(turns))
+	}
+}
+
+// TestHandler_DualDelivery_AppMentionFirstOnNewThread_MessageTwinCoalesced
+// is TestHandler_DualDelivery_MessageFirstOnNewThread_AppMentionTwinStillCreatesSession's
+// own reverse-order counterpart: when the app_mention twin (which CAN
+// create a new session on its own) wins the message-level claim race
+// FIRST, it creates the session normally, and the later message twin for
+// the IDENTICAL (channel, ts) is coalesced away exactly as it already was
+// before this fix -- this ordering was never broken, and the HIGH audit
+// fix above must not regress it.
+func TestHandler_DualDelivery_AppMentionFirstOnNewThread_MessageTwinCoalesced(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	rig := newSlackAckTestRig(t, pool)
+
+	const dualUser = "U0DUALNEWTHREADMENTIONFIRST"
+	linkSlackIdentityForTest(ctx, t, pool, dualUser, sqlcgen.UserRoleMaintainer)
+
+	const channel = "C0DUALNEWTHREADREV"
+	const ts = "1700000210.000100"
+	const text = "please start this task"
+
+	appMentionTwin := appMentionEnvelopeWithUser("Ev0NEWTHREADREVMENTION", channel, ts, "", text, dualUser)
+	req1 := signedSlackRequest(t, appMentionTwin)
+	rec1 := httptest.NewRecorder()
+	rig.handler(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("app_mention twin (first): status = %d, want 200 (body=%s)", rec1.Code, rec1.Body.String())
+	}
+
+	mapping, err := rig.threads.Get(ctx, channel, ts)
+	if err != nil {
+		t.Fatalf("expected a thread mapping row after the app_mention twin, Get: %v", err)
+	}
+
+	messageTwin := messageEnvelopeWithUser("Ev0NEWTHREADREVMSG", channel, ts, "", text, dualUser)
+	req2 := signedSlackRequest(t, messageTwin)
+	rec2 := httptest.NewRecorder()
+	rig.handler(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("message twin (second): status = %d, want 200 (body=%s)", rec2.Code, rec2.Body.String())
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, mapping.SessionID)
+	if err != nil {
+		t.Fatalf("ListForSession: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("len(turns) = %d, want exactly 1 (the message twin must be coalesced away, never a second turn/session)", len(turns))
+	}
+
+	var mappingCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM slack_thread_sessions WHERE channel_id = $1 AND thread_ts = $2`,
+		channel, ts,
+	).Scan(&mappingCount); err != nil {
+		t.Fatalf("count mapping rows: %v", err)
+	}
+	if mappingCount != 1 {
+		t.Errorf("mapping row count = %d, want exactly 1 (the app_mention twin's own mapping, never a second one)", mappingCount)
+	}
+}
+
+// newSlackAckTestRigWithRepo mirrors newSlackAckTestRig (turn_integration_test.go)
+// exactly, except DefaultRepoName/DefaultRepoURL are parameters rather than
+// the fixed "narvi" values -- this file's own
+// TestHandler_DualDelivery_NoDefaultRepoSkip_ClaimNotReleased needs a rig
+// that can deliberately leave the default repo unconfigured.
+func newSlackAckTestRigWithRepo(t *testing.T, pool *pgxpool.Pool, defaultRepoName, defaultRepoURL string) *slackAckTestRig {
+	t.Helper()
+	ctx := context.Background()
+
+	linkSlackIdentityForTest(ctx, t, pool, "U0TESTUSER", sqlcgen.UserRoleMaintainer)
+	linkSlackIdentityForTest(ctx, t, pool, "U0OTHERUSER", sqlcgen.UserRoleMaintainer)
+
+	requests := make(chan recordedSlackRequestBody, 16)
+	ackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		requests <- recordedSlackRequestBody{path: r.URL.Path, body: body}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(ackServer.Close)
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	environments := narvipg.NewEnvironmentStore(pool)
+	deliveries := narvipg.NewWebhookDeliveryStore(pool)
+	threads := narvipg.NewSlackThreadSessionStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
+
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = registry.Shutdown() })
+
+	handler := slack.NewHandler(slack.Deps{
+		Pool:            pool,
+		Sessions:        sessions,
+		Turns:           turns,
+		Environments:    environments,
+		Registry:        registry,
+		Deliveries:      deliveries,
+		Threads:         threads,
+		AuditLog:        auditLog,
+		Participants:    narvipg.NewParticipantStore(pool),
+		SigningSecret:   testSigningSecret,
+		BotToken:        "test-bot-token",
+		DefaultRepoName: defaultRepoName,
+		DefaultRepoURL:  defaultRepoURL,
+		TimestampWindow: 5 * time.Minute,
+		SlackAPIBaseURL: ackServer.URL,
+		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
+		SlackClient:     slackapi.New(ackServer.Client(), ackServer.URL, "test-bot-token"),
+		Timeouts:        platform.DefaultTimeouts(),
+		IdentityLink: identitylink.Deps{
+			Pool:          pool,
+			Users:         narvipg.NewUserStore(pool),
+			Identities:    narvipg.NewIdentityStore(pool),
+			LinkPrompts:   narvipg.NewIdentityLinkPromptStore(pool),
+			AuditLog:      auditLog,
+			PublicBaseURL: "https://narvi.example.com",
+			PromptTTL:     time.Hour,
+		},
+	})
+
+	return &slackAckTestRig{
+		handler: handler, pool: pool, sessions: sessions, turns: turns, threads: threads, auditLog: auditLog,
+		requests: requests,
+	}
+}
+
+// TestHandler_DualDelivery_NoDefaultRepoSkip_ClaimNotReleased proves the
+// COUNTERPART to the two ordering tests above: the "no default repo
+// configured" Skip outcome (resolveOrClaimSession's own SECOND Skip
+// branch) is reached IDENTICALLY by either twin event type -- a business
+// misconfiguration that has nothing to do with which twin got there first
+// -- so it must NOT release the message-level claim the way the "not
+// app_mention on an unmapped thread" Skip now does. Releasing it here
+// would just let a twin "message" event get a pointless second chance to
+// retry against the exact same misconfiguration.
+func TestHandler_DualDelivery_NoDefaultRepoSkip_ClaimNotReleased(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	rig := newSlackAckTestRigWithRepo(t, pool, "", "")
+
+	const dualUser = "U0DUALNOREPO"
+	linkSlackIdentityForTest(ctx, t, pool, dualUser, sqlcgen.UserRoleMaintainer)
+
+	const channel = "C0DUALNOREPO"
+	const ts = "1700000220.000100"
+	const text = "please start this task"
+
+	// Only an app_mention can ever reach the "no default repo" branch (a
+	// plain message hits the asymmetric "not app_mention" Skip first) --
+	// this is itself proof this Skip outcome is order-independent between
+	// the twins: whichever twin type wins the message-level claim on a
+	// brand-new thread, a plain "message" NEVER reaches this branch at all.
+	appMentionTwin := appMentionEnvelopeWithUser("Ev0NOREPOMENTION", channel, ts, "", text, dualUser)
+	req1 := signedSlackRequest(t, appMentionTwin)
+	rec1 := httptest.NewRecorder()
+	rig.handler(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("app_mention twin (first): status = %d, want 200 (body=%s)", rec1.Code, rec1.Body.String())
+	}
+
+	var innerClaimCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'slack-message' AND delivery_id = $1`, channel+":"+ts,
+	).Scan(&innerClaimCount); err != nil {
+		t.Fatalf("count inner claim rows: %v", err)
+	}
+	if innerClaimCount != 1 {
+		t.Fatalf("inner (channel:ts) claim row count after the no-default-repo skip = %d, want 1 (must stay held -- this outcome renders identically for either twin)", innerClaimCount)
+	}
+
+	// A twin "message" event for the SAME underlying message must never get
+	// a chance to retry against this same misconfiguration.
+	messageTwin := messageEnvelopeWithUser("Ev0NOREPOMSG", channel, ts, "", text, dualUser)
+	req2 := signedSlackRequest(t, messageTwin)
+	rec2 := httptest.NewRecorder()
+	rig.handler(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("message twin (second): status = %d, want 200 (body=%s)", rec2.Code, rec2.Body.String())
+	}
+
+	if _, err := rig.threads.Get(ctx, channel, ts); err == nil {
+		t.Error("expected NO thread mapping (no default repo configured), got one")
+	}
+	var sessionCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 0 {
+		t.Errorf("session count = %d, want 0 (no default repo configured -- neither twin may ever create a session)", sessionCount)
+	}
+}
+
+// TestHandler_DualDelivery_AuthzDeniedSkip_ClaimNotReleased is
+// TestHandler_DualDelivery_NoDefaultRepoSkip_ClaimNotReleased's own authz
+// counterpart: a `viewer` role denial on ActionCreateSession
+// (resolveOrClaimSession's own THIRD Skip branch) is likewise reached
+// identically by either twin event type, so it must NOT release the
+// message-level claim either -- a twin "message" event must not get a
+// pointless second chance to retry against an authz denial that would
+// render identically for either twin.
+func TestHandler_DualDelivery_AuthzDeniedSkip_ClaimNotReleased(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	rig := newSlackAckTestRig(t, pool)
+
+	const dualUser = "U0DUALVIEWERDENY"
+	linkSlackIdentityForTest(ctx, t, pool, dualUser, sqlcgen.UserRoleViewer)
+
+	const channel = "C0DUALVIEWERDENY"
+	const ts = "1700000230.000100"
+	const text = "please start this task"
+
+	appMentionTwin := appMentionEnvelopeWithUser("Ev0VIEWERDENYMENTION", channel, ts, "", text, dualUser)
+	req1 := signedSlackRequest(t, appMentionTwin)
+	rec1 := httptest.NewRecorder()
+	rig.handler(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("app_mention twin (first): status = %d, want 200 (body=%s)", rec1.Code, rec1.Body.String())
+	}
+
+	var innerClaimCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'slack-message' AND delivery_id = $1`, channel+":"+ts,
+	).Scan(&innerClaimCount); err != nil {
+		t.Fatalf("count inner claim rows: %v", err)
+	}
+	if innerClaimCount != 1 {
+		t.Fatalf("inner (channel:ts) claim row count after the authz-denied skip = %d, want 1 (must stay held -- this outcome renders identically for either twin)", innerClaimCount)
+	}
+
+	messageTwin := messageEnvelopeWithUser("Ev0VIEWERDENYMSG", channel, ts, "", text, dualUser)
+	req2 := signedSlackRequest(t, messageTwin)
+	rec2 := httptest.NewRecorder()
+	rig.handler(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("message twin (second): status = %d, want 200 (body=%s)", rec2.Code, rec2.Body.String())
+	}
+
+	if _, err := rig.threads.Get(ctx, channel, ts); err == nil {
+		t.Error("expected NO thread mapping (denied by authz), got one")
 	}
 }
