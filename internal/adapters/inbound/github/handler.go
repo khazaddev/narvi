@@ -177,27 +177,35 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// cfg.BotHandle (m.CommenterLogin's own comparison target) is the
 		// best available signal for "is this the bot" today -- the SAME
 		// configured handle mention-detection itself already matches comment
-		// bodies against (Config.BotHandle's own doc comment) -- but this is
-		// a KNOWN, deliberately NOT fully general check, not a silently
-		// papered-over one: there is no single field anywhere in this
-		// codebase verified to be the bot's own real GitHub login.
-		// internal/platform/config.go's own GitHubBotToken doc comment
-		// describes that credential as "a real GitHub personal access token
-		// or a GitHub App installation token, whichever the deploying
-		// operator provisions" -- never pinned to one specific identity
-		// shape. A GitHub App installation typically posts its own comments
-		// under a "<slug>[bot]" login (e.g. "narvi-bot[bot]"), which would
-		// NOT equal a plain configured mention handle like "narvi-bot" -- so
-		// this filter correctly catches a PAT-style bot account whose own
-		// comment.user.login matches BotHandle exactly, but is knowingly
-		// incomplete for a GitHub App installation's own "[bot]"-suffixed
-		// login. Closing that gap fully would need this codebase to
+		// bodies against (Config.BotHandle's own doc comment). internal/
+		// platform/config.go's own GitHubBotToken doc comment describes that
+		// credential as "a real GitHub personal access token or a GitHub App
+		// installation token, whichever the deploying operator provisions"
+		// -- so this filter must recognize BOTH realistic shapes a
+		// comment.user.login can take for that SAME configured bot: a plain
+		// PAT-authenticated bot account, whose own login matches BotHandle
+		// exactly, and a GitHub App installation, which always posts its own
+		// comments under the fixed, well-known "<slug>[bot]" login form
+		// (e.g. "narvi-bot[bot]" for a configured handle of "narvi-bot" --
+		// this is a standard GitHub convention, not a vague edge case).
+		// Matching both closes the gap this comment used to document as an
+		// unresolved, known limitation: a GitHub App's own turn-outcome
+		// comment on its own PR is now correctly filtered, not
+		// mistaken for a fresh mention. The one genuine residual gap left
+		// for either shape: if the deploying operator ever reconfigures
+		// BotHandle to a value that no longer matches the ACTUAL identity
+		// posting comments (the PAT account renamed, or the GitHub App
+		// installed under a different slug than the newly configured
+		// handle), this filter -- keyed entirely off BotHandle -- would
+		// silently stop recognizing that identity's own comments as
+		// self-comments. Closing that fully would need this codebase to
 		// independently discover/verify the bot's own real login (e.g. a GET
 		// /user call against GitHubBotToken at startup), which is out of
-		// this batch's own minimal scope. Compared case-insensitively,
-		// mirroring compileMentionPattern's own case-insensitive ("(?i)")
-		// mention matching.
-		if m.CommenterLogin != "" && cfg.BotHandle != "" && strings.EqualFold(m.CommenterLogin, cfg.BotHandle) {
+		// this batch's own minimal-filter scope. Compared
+		// case-insensitively, mirroring compileMentionPattern's own
+		// case-insensitive ("(?i)") mention matching.
+		if m.CommenterLogin != "" && cfg.BotHandle != "" &&
+			(strings.EqualFold(m.CommenterLogin, cfg.BotHandle) || strings.EqualFold(m.CommenterLogin, cfg.BotHandle+"[bot]")) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
