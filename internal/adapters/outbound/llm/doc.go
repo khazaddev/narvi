@@ -30,4 +30,14 @@
 // errors.Is against context.DeadlineExceeded for the SDK's own configured
 // request-timeout abort, ...) — never by string-matching a human-readable
 // message, mirroring ports.ProviderError's own house rule.
+//
+// L18 audit fix ("IntentDecisionRecord.CostUSD is structurally dead"):
+// Complete now also reads the real usage block every Anthropic Messages
+// API response carries (resp.Usage.InputTokens/OutputTokens) and computes
+// a real dollar CostUSD from anthropic.go's own modelPricing table -- a
+// small, server-side, Anthropic-specific $/1M-token lookup that
+// deliberately lives HERE, never in internal/app/ports (that port's own
+// "nothing Anthropic-specific may leak into this file" rule). An
+// unrecognized model (in supportedModels but missing from modelPricing)
+// leaves CostUSD nil and logs a Warn, rather than guessing or panicking.
 package llm

@@ -49,4 +49,14 @@
 // package's own tests substitute in-memory fakes without a real Postgres
 // connection; postgres.PromptTemplateStore/SessionStore both already
 // satisfy them structurally (no import needed in either direction).
+//
+// L18 audit fix ("IntentDecisionRecord.CostUSD is structurally dead"):
+// Classify now reads ports.LLM.Complete's own CompletionResponse.CostUSD
+// (populated by the Anthropic adapter, when its own pricing table
+// recognizes the model) into ports.IntentDecision.CostUSD -- populated
+// only for a genuine IntentSourceClassifier verdict, left nil for every
+// fallback decision, exactly mirroring intentdomain.IntentDecisionRecord.
+// CostUSD's own "populated only when the real cost is known, omitted,
+// never guessed" contract. ClassifyAndRecord carries that value straight
+// across into the IntentDecisionRecord it persists.
 package intentclassifier

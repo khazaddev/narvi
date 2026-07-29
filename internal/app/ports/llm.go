@@ -24,8 +24,10 @@ import (
 // naming convention.
 type LLM interface {
 	// Complete asks the named provider/model to produce ONE structured-
-	// output completion matching ResponseSchema, and returns the raw,
-	// schema-validated JSON response body on success.
+	// output completion matching ResponseSchema, and returns a
+	// CompletionResponse on success (audit fix L18: additive over this
+	// port's original bare-json.RawMessage return -- see CompletionResponse
+	// below for what changed and why).
 	//
 	// Never returns a caller-fatal error the caller must guess how to
 	// handle: every failure is a *LLMError with one of the Code values
@@ -41,7 +43,66 @@ type LLM interface {
 	// never actually fire"). The timeout VALUE itself is configured once,
 	// at construction, from internal/platform/timeouts.go -- never a
 	// literal inside Complete's own implementation.
-	Complete(ctx context.Context, req CompletionRequest) (json.RawMessage, error)
+	Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error)
+}
+
+// CompletionResponse is Complete's own successful-call return shape (audit
+// fix L18, "IntentDecisionRecord.CostUSD is structurally dead"). Raw is the
+// SAME raw, schema-validated JSON response body this port returned bare
+// before this change -- every pre-existing caller needs only a one-line
+// update (read .Raw instead of the bare return value) to keep working
+// exactly as before; no existing information is lost or changed, which is
+// what makes this an ADDITIVE signature change despite touching every
+// implementation and caller.
+//
+// Usage/CostUSD are the new information this audit fix adds: Usage is
+// populated whenever the underlying provider's own response reports token
+// counts (every real provider does); CostUSD is the already-computed
+// dollar cost of this one call, or nil when it genuinely cannot be
+// computed (an unrecognized/newly-added model an implementation's own
+// pricing table doesn't yet know) -- omitted, never guessed, mirroring
+// intentdomain.IntentDecisionRecord.CostUSD's identical "populated only
+// when the real cost is known, omitted, never guessed" contract, which is
+// the whole reason this field exists: to finally give that column a real
+// value to hold.
+//
+// CostUSD is computed HERE, by the implementation, rather than left for
+// the caller to derive from Usage plus a model-to-price table of its own:
+// pricing is inherently vendor-specific business logic (each provider's
+// own $/token rates, which model IDs even exist, how a provider prices
+// cached tokens, ...), so computing it anywhere outside the implementation
+// that already owns "which provider, which model" would mean duplicating
+// (or worse, re-deriving) that vendor-specific knowledge at the call site
+// -- exactly the leak ports/doc.go's own import-direction rule and this
+// port's "nothing Anthropic- or OpenAI-specific may leak into this file"
+// rule both exist to prevent. Nothing vendor-specific reaches this struct
+// itself: by the time CostUSD lands here it is already just a dollar
+// figure.
+type CompletionResponse struct {
+	// Raw is the raw, schema-validated JSON response body -- identical to
+	// what this port's Complete returned bare before this audit fix.
+	Raw json.RawMessage
+	// Usage is this call's own token accounting, when the provider reports
+	// it. Zero-valued (both fields 0) on any error path -- callers only
+	// ever read Usage after checking Complete's own error return is nil.
+	Usage CompletionUsage
+	// CostUSD is this call's own already-computed dollar cost, or nil when
+	// no cost could be computed (see the struct-level doc comment above).
+	CostUSD *float64
+}
+
+// CompletionUsage is one Complete call's own token-usage accounting.
+// Provider-agnostic in shape (every major LLM API reports at least an
+// input/output token split) even though, as of this port's first real
+// implementation (internal/adapters/outbound/llm), only the Anthropic
+// adapter populates it.
+type CompletionUsage struct {
+	// InputTokens is the number of input (prompt) tokens the provider
+	// billed for this call.
+	InputTokens int64
+	// OutputTokens is the number of output (completion) tokens the
+	// provider billed for this call.
+	OutputTokens int64
 }
 
 // CompletionMessage is one turn of CompletionRequest.Messages. Role is
