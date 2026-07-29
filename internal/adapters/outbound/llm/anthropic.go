@@ -66,12 +66,14 @@ type modelPrice struct {
 // live page's "Legacy models" table (claude-opus-4-5-20251101 row) rather
 // than guessed.
 //
-// claude-sonnet-5 is priced here at its STANDARD $3/$15 rate, not the
-// $2/$10 rate the same page documents as introductory-only through
-// 2026-08-31 -- using the standing rate keeps this table correct once the
-// introductory window closes, at the cost of a deliberate, mild
-// overestimate of Sonnet 5 cost while that window is still open. Revisit
-// after 2026-08-31 only if Anthropic changes the standing rate itself.
+// claude-sonnet-5 is priced here at its CURRENT, LIVE $2/$10 introductory
+// rate -- Anthropic is actually billing $2/$10 (not the $3/$15 standard
+// rate) through 2026-08-31, and this table must reflect what is actually
+// being charged today, not the rate that resumes afterward. This entry
+// goes stale automatically on 2026-08-31: revert it to the standard
+// $3.00 input / $15.00 output per-million-token rate once that
+// introductory window ends (verify the standing rate is still $3/$15 at
+// that point rather than assuming it).
 //
 // Every key here mirrors a supportedModels key above (both the dated and
 // undated aliases for haiku-4-5/opus-4-5) -- but the two maps are
@@ -85,7 +87,7 @@ type modelPrice struct {
 var modelPricing = map[string]modelPrice{
 	"claude-haiku-4-5":          {inputPerMTok: 1.00, outputPerMTok: 5.00},
 	"claude-haiku-4-5-20251001": {inputPerMTok: 1.00, outputPerMTok: 5.00},
-	"claude-sonnet-5":           {inputPerMTok: 3.00, outputPerMTok: 15.00},
+	"claude-sonnet-5":           {inputPerMTok: 2.00, outputPerMTok: 10.00},
 	"claude-sonnet-4-6":         {inputPerMTok: 3.00, outputPerMTok: 15.00},
 	"claude-opus-4-8":           {inputPerMTok: 5.00, outputPerMTok: 25.00},
 	"claude-opus-4-7":           {inputPerMTok: 5.00, outputPerMTok: 25.00},
