@@ -222,6 +222,9 @@ func newTestRig(t *testing.T) testRig {
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.participants, rig.auditLog, rig.registry))
 		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry))
 		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog))
+		// Audit-fix batch (completeness/discoverability, M3) -- see
+		// httpapi/plans.go's own doc comment.
+		r.Get("/{sessionID}/plans", httpapi.ListPlans(rig.sessions, rig.plans))
 	})
 	// /api/members, /api/audit-log (Step 39, "identities + full RBAC",
 	// §13.2/§13.3) -- mounted exactly like cmd/control-plane/main.go's own
@@ -387,6 +390,7 @@ func TestRoutes_RequireAuth(t *testing.T) {
 		{name: "GetSession", method: http.MethodGet, path: "/api/sessions/" + session.ID.String()},
 		{name: "ListEvents", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/events"},
 		{name: "ListArtifacts", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/artifacts"},
+		{name: "ListPlans", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/plans"},
 		{name: "MintWSToken", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/ws-token"},
 		{name: "CreateTurn", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/turns"},
 	}
@@ -1388,6 +1392,122 @@ func TestListArtifacts_SessionNotFound(t *testing.T) {
 	_, token := rig.createAuthenticatedUser(ctx, t)
 
 	status := rig.doJSON(t, http.MethodGet, "/api/sessions/11111111-1111-1111-1111-111111111111/artifacts", nil, nil, token)
+	if status != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
+	}
+}
+
+// --- ListPlans (audit finding M3, completeness) ---
+
+// TestListPlans_HappyPath proves GET /api/sessions/:id/plans returns every
+// plan VERSION for the session, in version order, with the right shape --
+// a superseded v1 that was never decided, an approved v2 with decided_at/
+// decided_by set, and a still-awaiting_approval v3 (the version a client
+// would actually approve/reject) -- not just whichever version happens to
+// be current.
+func TestListPlans_HappyPath(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+
+	turn1, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("create turn1: %v", err)
+	}
+	turn2, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("create turn2: %v", err)
+	}
+	turn3, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("create turn3: %v", err)
+	}
+
+	const planModel = "claude-opus-4-8"
+	// v1: superseded by v2's own "request changes" turn, before anyone ever
+	// decided it.
+	if _, err := rig.pool.Exec(ctx,
+		`INSERT INTO plans (session_id, turn_id, version, status, plan_model_id) VALUES ($1, $2, 1, 'superseded', $3)`,
+		session.ID, turn1.ID, planModel,
+	); err != nil {
+		t.Fatalf("seed v1 (superseded): %v", err)
+	}
+	// v2: approved, decided by the owner.
+	if _, err := rig.pool.Exec(ctx,
+		`INSERT INTO plans (session_id, turn_id, version, status, plan_model_id, decided_at, decided_by) VALUES ($1, $2, 2, 'approved', $3, now(), $4)`,
+		session.ID, turn2.ID, planModel, owner.ID,
+	); err != nil {
+		t.Fatalf("seed v2 (approved): %v", err)
+	}
+	// v3: still awaiting_approval.
+	if _, err := rig.pool.Exec(ctx,
+		`INSERT INTO plans (session_id, turn_id, version, status, plan_model_id) VALUES ($1, $2, 3, 'awaiting_approval', $3)`,
+		session.ID, turn3.ID, planModel,
+	); err != nil {
+		t.Fatalf("seed v3 (awaiting_approval): %v", err)
+	}
+
+	var got restdtos.ListPlansResponse
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/plans", nil, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if len(got.Plans) != 3 {
+		t.Fatalf("len(Plans) = %d, want 3", len(got.Plans))
+	}
+
+	if got.Plans[0].Version != 1 || got.Plans[1].Version != 2 || got.Plans[2].Version != 3 {
+		t.Fatalf("versions = [%d, %d, %d], want [1, 2, 3] (ORDER BY version)",
+			got.Plans[0].Version, got.Plans[1].Version, got.Plans[2].Version)
+	}
+
+	v1 := got.Plans[0]
+	if v1.SessionId != session.ID.String() {
+		t.Errorf("v1 SessionId = %q, want %q", v1.SessionId, session.ID.String())
+	}
+	if v1.Status != restdtos.PlanStatusSuperseded {
+		t.Errorf("v1 Status = %q, want %q", v1.Status, restdtos.PlanStatusSuperseded)
+	}
+	if v1.DecidedAt != nil {
+		t.Errorf("v1 DecidedAt = %v, want nil (never decided before being superseded)", v1.DecidedAt)
+	}
+	if v1.DecidedBy != nil {
+		t.Errorf("v1 DecidedBy = %v, want nil", v1.DecidedBy)
+	}
+	if v1.PlanModelId == nil || *v1.PlanModelId != planModel {
+		t.Errorf("v1 PlanModelId = %v, want %q", v1.PlanModelId, planModel)
+	}
+
+	v2 := got.Plans[1]
+	if v2.Status != restdtos.PlanStatusApproved {
+		t.Errorf("v2 Status = %q, want %q", v2.Status, restdtos.PlanStatusApproved)
+	}
+	if v2.DecidedAt == nil {
+		t.Error("v2 DecidedAt = nil, want set")
+	}
+	if v2.DecidedBy == nil || *v2.DecidedBy != owner.ID.String() {
+		t.Errorf("v2 DecidedBy = %v, want %q", v2.DecidedBy, owner.ID.String())
+	}
+
+	v3 := got.Plans[2]
+	if v3.Status != restdtos.PlanStatusAwaitingApproval {
+		t.Errorf("v3 Status = %q, want %q", v3.Status, restdtos.PlanStatusAwaitingApproval)
+	}
+	if v3.DecidedAt != nil {
+		t.Errorf("v3 DecidedAt = %v, want nil (still awaiting approval)", v3.DecidedAt)
+	}
+}
+
+// TestListPlans_SessionNotFound mirrors ListEvents/ListArtifacts's own
+// identical precedent above -- every session-scoped GET endpoint 404s on a
+// nonexistent session.
+func TestListPlans_SessionNotFound(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/11111111-1111-1111-1111-111111111111/plans", nil, nil, token)
 	if status != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", status, http.StatusNotFound)
 	}

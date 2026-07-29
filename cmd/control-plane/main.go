@@ -588,6 +588,11 @@ func serve() error {
 		// DecidePlanOnTx's own cross-channel-notify step (decideplan.go).
 		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, registry))
 		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore))
+		// Audit-fix batch (completeness/discoverability, M3): the read half
+		// plans/{planId}/approve|reject above was always missing -- a web
+		// client had no way to ever discover a planId to approve. See
+		// httpapi/plans.go's own doc comment.
+		r.Get("/{sessionID}/plans", httpapi.ListPlans(sessionStore, planStore))
 	})
 
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see

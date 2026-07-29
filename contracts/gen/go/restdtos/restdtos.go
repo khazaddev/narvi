@@ -722,6 +722,37 @@ func (j *ListMembersResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// GET /api/sessions/:id/plans's own response body (audit finding M3, completeness)
+// -- every plan VERSION for the session, ordered by version, so a web client can
+// render v1->v2 history and find the currently awaiting_approval version's own id
+// to approve/reject. Deliberately minimal: no pagination (a session's own plan
+// history is expected to stay small, matching ArtifactsResponse's own identical
+// 'unbounded' precedent above) and no new WS/event notification on plan creation
+// -- later Steps (decision inbox, plan-mode UI) are already planned to build
+// richer surfaces; this endpoint only closes the discoverability gap.
+type ListPlansResponse struct {
+	// Plans corresponds to the JSON schema field "plans".
+	Plans []Plan `json:"plans" yaml:"plans" mapstructure:"plans"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListPlansResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["plans"]; raw != nil && !ok {
+		return fmt.Errorf("field plans in ListPlansResponse: required")
+	}
+	type Plain ListPlansResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListPlansResponse(plain)
+	return nil
+}
+
 // One member's own REST wire shape -- role + every identity currently linked to
 // them (§13.3: 'linked identity chips'). role matches the Postgres user_role enum
 // exactly. Every endpoint that returns a Member (ListMembers, UpdateMemberRole)
@@ -897,6 +928,230 @@ func (j *PendingLinkPrompt) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = PendingLinkPrompt(plain)
+	return nil
+}
+
+// One plan-mode VERSION's own REST wire shape
+// (migrations/000034_plan_mode.up.sql), returned by GET /api/sessions/:id/plans
+// (audit finding M3, completeness: Step 37 shipped approve/reject with no way for
+// a web client to ever discover a planId to approve). Deliberately omits turnId
+// and slack_channel_id/slack_message_ts, both present on the underlying plans row:
+// turnId is an internal linkage to the producing turn's own event stream (where
+// the plan's actual text/steps live, per that migration's own doc comment), not
+// needed for a client whose job here is discovering/approving a planId;
+// slack_channel_id/slack_message_ts
+// (migrations/000035_plan_mode_cross_channel.up.sql) are Slack
+// cross-channel-notify plumbing that should never leak into a REST response,
+// mirroring PlanActionResponse's own equally minimal shape below.
+type Plan struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Null while status is 'awaiting_approval'; set the moment a decision
+	// (approve/reject, from any entry point) is recorded. goJSONSchema forces the
+	// literal *time.Time type (rather than go-jsonschema's own default generated
+	// named-pointer-type wrapper, e.g. PlanModelId's own PlanPlanModelId *string
+	// above): a NAMED type whose underlying type is *time.Time (e.g. 'type
+	// PlanDecidedAt *time.Time') does NOT inherit time.Time's own
+	// UnmarshalJSON/MarshalJSON method set in Go (methods attach to the exact named
+	// type they're declared on, never promoted across a distinct named-pointer-type
+	// indirection), so encoding/json falls through to its generic struct decoder and
+	// fails on a date-time STRING value with 'cannot unmarshal string into Go struct
+	// field ... of type time.Time' -- this is the first nullable date-time field this
+	// schema has ever needed (no prior nullable-date-time property existed to surface
+	// this), caught by this batch's own new Plan round-trip test.
+	DecidedAt *time.Time `json:"decidedAt" yaml:"decidedAt" mapstructure:"decidedAt"`
+
+	// The user who decided this plan's verdict. Null while status is
+	// 'awaiting_approval', or for a decision attributed to no direct human user.
+	DecidedBy PlanDecidedBy `json:"decidedBy" yaml:"decidedBy" mapstructure:"decidedBy"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// The model that produced this plan version, copied from the producing turn's own
+	// model_id AT CREATION TIME (migrations/000034_plan_mode.up.sql's own doc comment
+	// on plan_model_id). Null means that turn had no explicit model id (the default
+	// model catalog entry).
+	PlanModelId PlanPlanModelId `json:"planModelId" yaml:"planModelId" mapstructure:"planModelId"`
+
+	// SessionId corresponds to the JSON schema field "sessionId".
+	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// Matches Postgres plan_status exactly (migrations/000034_plan_mode.up.sql).
+	Status PlanStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// 1-based, monotonically increasing per session
+	// (internal/domain/plan.NextVersion) -- v1 is the first plan proposed, v2 a
+	// 'request changes' revision, and so on.
+	Version int `json:"version" yaml:"version" mapstructure:"version"`
+}
+
+// 200 response body for POST /api/sessions/:id/plans/:planId/approve and its
+// reject twin (§12.2 item 3) -- promoted from a hand-written Go struct
+// (internal/adapters/inbound/httpapi/planapprove.go's own planActionResponse) now
+// that GET .../plans above gives this same area a real DTO-consuming sibling
+// endpoint, the exact condition that struct's own doc comment named as the trigger
+// to eventually promote it.
+type PlanActionResponse struct {
+	// PlanId corresponds to the JSON schema field "planId".
+	PlanId string `json:"planId" yaml:"planId" mapstructure:"planId"`
+
+	// The plan's own real, current status after this call -- always 'approved' on a
+	// winning approve and 'rejected' on a winning reject in practice (a
+	// losing/conflicting call never reaches this response body at all, see
+	// DecidePlanOnTx's own doc comment), but modeled as the full plan_status enum for
+	// forward-compatibility rather than a literal, matching
+	// CreateTurnResponse.status's own identical precedent above.
+	Status PlanActionResponseStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// The newly enqueued implementation turn's id, set iff this call was ApprovePlan
+	// and it won. Always null for RejectPlan (reject never dispatches a new turn).
+	TurnId PlanActionResponseTurnId `json:"turnId" yaml:"turnId" mapstructure:"turnId"`
+}
+
+type PlanActionResponseStatus string
+
+const PlanActionResponseStatusApproved PlanActionResponseStatus = "approved"
+const PlanActionResponseStatusAwaitingApproval PlanActionResponseStatus = "awaiting_approval"
+const PlanActionResponseStatusRejected PlanActionResponseStatus = "rejected"
+const PlanActionResponseStatusSuperseded PlanActionResponseStatus = "superseded"
+
+var enumValues_PlanActionResponseStatus = []interface{}{
+	"awaiting_approval",
+	"approved",
+	"rejected",
+	"superseded",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PlanActionResponseStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PlanActionResponseStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PlanActionResponseStatus, v)
+	}
+	*j = PlanActionResponseStatus(v)
+	return nil
+}
+
+// The newly enqueued implementation turn's id, set iff this call was ApprovePlan
+// and it won. Always null for RejectPlan (reject never dispatches a new turn).
+type PlanActionResponseTurnId *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PlanActionResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["planId"]; raw != nil && !ok {
+		return fmt.Errorf("field planId in PlanActionResponse: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in PlanActionResponse: required")
+	}
+	if _, ok := raw["turnId"]; raw != nil && !ok {
+		return fmt.Errorf("field turnId in PlanActionResponse: required")
+	}
+	type Plain PlanActionResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PlanActionResponse(plain)
+	return nil
+}
+
+// The user who decided this plan's verdict. Null while status is
+// 'awaiting_approval', or for a decision attributed to no direct human user.
+type PlanDecidedBy *string
+
+// The model that produced this plan version, copied from the producing turn's own
+// model_id AT CREATION TIME (migrations/000034_plan_mode.up.sql's own doc comment
+// on plan_model_id). Null means that turn had no explicit model id (the default
+// model catalog entry).
+type PlanPlanModelId *string
+
+type PlanStatus string
+
+const PlanStatusApproved PlanStatus = "approved"
+const PlanStatusAwaitingApproval PlanStatus = "awaiting_approval"
+const PlanStatusRejected PlanStatus = "rejected"
+const PlanStatusSuperseded PlanStatus = "superseded"
+
+var enumValues_PlanStatus = []interface{}{
+	"awaiting_approval",
+	"approved",
+	"rejected",
+	"superseded",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PlanStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PlanStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PlanStatus, v)
+	}
+	*j = PlanStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *Plan) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in Plan: required")
+	}
+	if _, ok := raw["decidedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field decidedAt in Plan: required")
+	}
+	if _, ok := raw["decidedBy"]; raw != nil && !ok {
+		return fmt.Errorf("field decidedBy in Plan: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in Plan: required")
+	}
+	if _, ok := raw["planModelId"]; raw != nil && !ok {
+		return fmt.Errorf("field planModelId in Plan: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in Plan: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in Plan: required")
+	}
+	if _, ok := raw["version"]; raw != nil && !ok {
+		return fmt.Errorf("field version in Plan: required")
+	}
+	type Plain Plan
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = Plan(plain)
 	return nil
 }
 

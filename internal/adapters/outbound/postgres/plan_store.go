@@ -56,6 +56,15 @@ func (s *PlanStore) ListSummariesForSession(ctx context.Context, sessionID pgtyp
 	return s.q.ListPlanSummariesForSession(ctx, sessionID)
 }
 
+// ListForSession fetches every FULL plan row for sessionID, ordered by
+// version -- audit-fix batch (completeness/discoverability, M3) addition
+// backing GET /api/sessions/:id/plans (internal/adapters/inbound/httpapi/
+// plans.go), unlike ListSummariesForSession's own internal, minimal shape
+// above.
+func (s *PlanStore) ListForSession(ctx context.Context, sessionID pgtype.UUID) ([]sqlcgen.Plan, error) {
+	return s.q.ListPlansForSession(ctx, sessionID)
+}
+
 // ApproveIfAwaitingApproval guardedly transitions planID to 'approved',
 // only if it belongs to sessionID and is still 'awaiting_approval'.
 // rowsAffected == 0 means it was already decided by someone else (or

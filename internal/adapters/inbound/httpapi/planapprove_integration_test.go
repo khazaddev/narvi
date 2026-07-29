@@ -707,14 +707,19 @@ func executionCompleteRawForTest(t *testing.T, sessionID string, gen int, outcom
 	return raw
 }
 
-// planActionResponseForTest mirrors planapprove.go's own unexported
-// planActionResponse wire shape -- duplicated here since this file lives
-// in package httpapi_test (a different package than the handler itself),
-// exactly matching restdtos-generated response types' own already-
-// established "decode into a local shape matching the real JSON tags"
-// test convention used throughout this package's other integration tests.
+// planActionResponseForTest mirrors restdtos.PlanActionResponse's own wire
+// shape (contracts/rest/v1/dtos.schema.json) -- an audit-fix batch (M3/L14/
+// L16) promoted planapprove.go's own former hand-written, unexported
+// planActionResponse struct into that generated /contracts type, but this
+// local mirror is kept anyway, purely as a test-side convenience: a plain
+// string Status field here (no restdtos.PlanActionResponseStatus's own
+// strict enum UnmarshalJSON to fight with when asserting on a response),
+// mirroring members_integration_test.go's own identical "keep a local
+// mirror even after the real DTO is promoted" precedent (see that file's
+// own "Local wire-shape mirrors" doc comment) rather than switching every
+// call site here to decode into restdtos.PlanActionResponse directly.
 type planActionResponseForTest struct {
 	PlanID string  `json:"planId"`
 	Status string  `json:"status"`
-	TurnID *string `json:"turnId,omitempty"`
+	TurnID *string `json:"turnId"`
 }
