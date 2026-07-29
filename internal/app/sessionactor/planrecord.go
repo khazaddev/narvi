@@ -113,6 +113,22 @@ func (a *Actor) recordPlanIfNeeded(ctx context.Context, tx pgx.Tx, processing sq
 			return nil, fmt.Errorf("sessionactor: parse plan id to supersede: %w", err)
 		}
 
+		// Defense-in-depth (audit-fix batch, L10): an explicit Go-level
+		// check, alongside the SQL guard SupersedePlan's own comment
+		// (queries/plans.sql) already describes ("belt-and-suspenders
+		// against ever superseding an already-decided row"), that
+		// AwaitingApproval -> Superseded is a legal edge in
+		// internal/domain/plan's own transitions table. ShouldSupersede
+		// above already filters to StatusAwaitingApproval rows only, so
+		// this can never actually fail given today's code -- it exists so
+		// the domain model itself, not just this package's own filtering
+		// logic, is the thing asserting the edge is legal, catching a
+		// future regression here (rather than only at the SQL layer) if
+		// that filtering ever changes.
+		if _, err := plandomain.Transition(plandomain.StatusAwaitingApproval, plandomain.TriggerSupersede); err != nil {
+			return nil, fmt.Errorf("sessionactor: domain transition check for plan supersede: %w", err)
+		}
+
 		// Fetch the row BEFORE superseding it -- its own stored Slack
 		// message ref (if any) must be read back before Supersede runs, so
 		// it is still available afterward to route the cross-channel
