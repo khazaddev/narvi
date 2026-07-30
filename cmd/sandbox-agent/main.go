@@ -1059,7 +1059,7 @@ func runBootSequence(
 		// boot.ComputeWorkspaceMoved's own documented safe default (every
 		// repo defaults to workspaceMoved: true) -- computed unconditionally
 		// here, regardless of cfg.BootMode, since sandboxboot.EvaluateHook
-		// only ever actually CONSULTES this value for the one cell that
+		// only ever actually CONSULTS this value for the one cell that
 		// matters (repo_image + HookSetup); every other mode's own hook
 		// policy ignores it entirely, so computing it uniformly costs
 		// nothing and keeps this call site simple.

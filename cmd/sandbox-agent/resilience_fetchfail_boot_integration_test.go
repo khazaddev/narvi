@@ -183,4 +183,3 @@ func TestResilienceScenario_FetchFailBoot_ExplicitBranchNeitherLocalNorFetchable
 		t.Errorf("branch %q was created locally despite a fatal fetch failure -- this is EXACTLY the silent-fork-at-stale-base bug §19.3 exists to prevent (branch --list output: %q)", explicitBranch, branches)
 	}
 }
-
