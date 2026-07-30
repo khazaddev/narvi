@@ -118,6 +118,7 @@ type fakeSourceControl struct {
 
 	shaCalls []ports.ResolveBranchSHASpec
 	shaFor   map[string]string // keyed by repo name; falls back to nextSHA if absent
+	errFor   map[string]error  // keyed by repo name; checked BEFORE shaFor/nextErr -- lets a test model a repo whose resolution PERSISTENTLY fails (a renamed/deleted repo, a token missing org access) alongside other repos that resolve normally, which the single global nextErr below cannot express (it fails EVERY call, not a chosen subset)
 	nextSHA  string
 	nextErr  error
 }
@@ -132,6 +133,9 @@ func (f *fakeSourceControl) ResolveBranchSHA(_ context.Context, spec ports.Resol
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shaCalls = append(f.shaCalls, spec)
+	if err, ok := f.errFor[spec.Repo]; ok {
+		return "", "", err
+	}
 	if f.nextErr != nil {
 		return "", "", f.nextErr
 	}
@@ -756,6 +760,151 @@ func TestRefreshOnce_BatchCap_BoundsRowsPerTickButPicksUpRemainderLater(t *testi
 	}
 	if got := countRefreshed(); got != totalRows {
 		t.Fatalf("refreshed row count after tick 2 = %d, want %d (every row picked up eventually, none dropped)", got, totalRows)
+	}
+}
+
+// TestRefreshOnce_StarvationFreedom_GenuinelyStaleRowNotStarvedByStaticFrontCohort
+// proves the correctness review finding on the batch-cap fix above (see
+// ListReadyImageBuilds' and attemptRefresh's own generated/doc comments
+// for the full mechanism): TestRefreshOnce_BatchCap_BoundsRowsPerTickButPicksUpRemainderLater
+// cannot catch this, because EVERY row it seeds is uniformly,
+// permanently stale against the SAME fake tip -- every row eventually
+// reaches ClaimForRefresh and gets its own updated_at bumped that way, so
+// that test's own population shape structurally cannot exercise the
+// starvation case: a mix where >= refreshBatchSize rows are genuinely NOT
+// stale (or persistently SHA-resolution-failing) alongside a newer,
+// genuinely-stale row.
+//
+// This test builds exactly that population:
+//   - A "front cohort" of EXACTLY refreshBatchSize rows, seeded FIRST (so
+//     their own updated_at is OLDER), split evenly between:
+//   - genuinely NOT stale (their built_repo_shas already match the
+//     fake SourceControl's current tip -- NeedsRefresh reports false
+//     every single tick), and
+//   - PERSISTENTLY SHA-resolution-failing (models a renamed/deleted
+//     repo, or a token missing org access -- resolveRepoSHAs errors
+//     every single tick).
+//     Neither sub-population EVER reaches ClaimForRefresh.
+//   - One additional row that IS genuinely stale, seeded AFTER the front
+//     cohort (so it starts with a NEWER updated_at) -- exactly the "went
+//     stale after the front cohort" shape the bug report describes.
+//
+// Before this Step's fix: the front cohort's own updated_at never
+// advances (neither early-return branch touched it), so it sorts first
+// FOREVER and permanently fills every tick's own LIMIT refreshBatchSize
+// window -- the genuinely-stale row, sorting behind it, is never even
+// returned by ListReadyImageBuilds, let alone refreshed, no matter how
+// many ticks run.
+//
+// After the fix: the front cohort's own updated_at is bumped every tick
+// via TouchImageBuildChecked, so by the SECOND tick the genuinely-stale
+// row (never touched, still older than anything the first tick touched)
+// becomes the oldest row in the table and is guaranteed to appear in that
+// tick's own batch. This test asserts it is refreshed within a small,
+// bounded number of ticks -- proving genuine, prompt rotation, not merely
+// "eventually, if you wait long enough."
+func TestRefreshOnce_StarvationFreedom_GenuinelyStaleRowNotStarvedByStaticFrontCohort(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const frontCohortSize = wantRefreshBatchSize // exactly refreshBatchSize -- fills one whole tick's own window by itself
+
+	sourceControl := &fakeSourceControl{
+		shaFor: map[string]string{},
+		errFor: map[string]error{},
+	}
+
+	frontFingerprints := make([]string, frontCohortSize)
+	frontOldRefs := make([]string, frontCohortSize)
+	for i := 0; i < frontCohortSize; i++ {
+		fingerprint := fmt.Sprintf("fp-starvation-front-%02d", i)
+		oldRef := fmt.Sprintf("narvi/built-image:front-%02d", i)
+		frontFingerprints[i] = fingerprint
+		frontOldRefs[i] = oldRef
+
+		if i%2 == 0 {
+			// Genuinely NOT stale: built_repo_shas already matches the
+			// current tip this test's sourceControl will resolve.
+			repoName := fmt.Sprintf("not-stale-repo-%02d", i)
+			sourceControl.shaFor[repoName] = "sha-not-stale"
+			seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+				map[string]string{repoName: fmt.Sprintf("https://github.com/acme/%s", repoName)},
+				map[string]string{repoName: "sha-not-stale"},
+				oldRef)
+		} else {
+			// Persistently SHA-resolution-failing: every resolveRepoSHAs
+			// call for this repo errors, every tick.
+			repoName := fmt.Sprintf("failing-repo-%02d", i)
+			sourceControl.errFor[repoName] = fmt.Errorf("fake: repo %q renamed/deleted, or token lacks org access", repoName)
+			seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+				map[string]string{repoName: fmt.Sprintf("https://github.com/acme/%s", repoName)},
+				map[string]string{repoName: "sha-irrelevant"},
+				oldRef)
+		}
+	}
+
+	// The genuinely-stale row: seeded AFTER the entire front cohort above,
+	// so it starts with a NEWER updated_at -- it "went stale after" the
+	// front cohort, exactly as the review's own failure scenario requires.
+	const staleFingerprint = "fp-starvation-genuinely-stale"
+	const staleRepoName = "genuinely-stale-repo"
+	const staleOldRef = "narvi/built-image:stale-old-ref"
+	const staleNewRef = "narvi/built-image:stale-refreshed"
+	sourceControl.shaFor[staleRepoName] = "sha-new-tip"
+	seedReadyImageBuildWithRepos(ctx, t, store, staleFingerprint,
+		map[string]string{staleRepoName: fmt.Sprintf("https://github.com/acme/%s", staleRepoName)},
+		map[string]string{staleRepoName: "sha-old-tip"},
+		staleOldRef)
+
+	provider := &fakeBuildProvider{nextRef: staleNewRef}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	// Bounded well under frontCohortSize: a starved implementation would
+	// need (in the worst case) every front-cohort row to coincidentally
+	// stop being inspected before the stale row could ever surface, which
+	// never happens here at all -- it should never even take 2 full
+	// ticks with the fix applied. 3 ticks leaves comfortable headroom
+	// without masking real starvation (which manifests as "never, no
+	// matter how many ticks run").
+	const maxTicks = 3
+	refreshedAtTick := 0
+	for tick := 1; tick <= maxTicks; tick++ {
+		if err := builder.RefreshOnce(ctx); err != nil {
+			t.Fatalf("RefreshOnce (tick %d): %v", tick, err)
+		}
+		row, err := store.Get(ctx, staleFingerprint)
+		if err != nil {
+			t.Fatalf("get stale row after tick %d: %v", tick, err)
+		}
+		if row.ImageRef != nil && *row.ImageRef == staleNewRef {
+			refreshedAtTick = tick
+			break
+		}
+	}
+	if refreshedAtTick == 0 {
+		t.Fatalf("genuinely-stale row %q was NOT refreshed within %d ticks -- starved behind a static front cohort of %d rows that never advance their own ordering key", staleFingerprint, maxTicks, frontCohortSize)
+	}
+
+	// The front cohort itself must never have been (wrongly) refreshed --
+	// the not-stale half because BuildImage must never be called for a
+	// row that isn't stale, the persistently-failing half because
+	// resolution never succeeds for it.
+	for i, fingerprint := range frontFingerprints {
+		row, err := store.Get(ctx, fingerprint)
+		if err != nil {
+			t.Fatalf("get front-cohort row %q: %v", fingerprint, err)
+		}
+		if row.ImageRef == nil || *row.ImageRef != frontOldRefs[i] {
+			t.Errorf("front-cohort row %q image_ref = %v, want unchanged %q (must never be refreshed)", fingerprint, row.ImageRef, frontOldRefs[i])
+		}
+		if row.Status != sqlcgen.ImageBuildStatusReady {
+			t.Errorf("front-cohort row %q status = %q, want %q", fingerprint, row.Status, sqlcgen.ImageBuildStatusReady)
+		}
 	}
 }
 

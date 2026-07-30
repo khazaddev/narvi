@@ -119,3 +119,18 @@ func (s *ImageBuildStore) RecordRefreshSuccess(ctx context.Context, arg sqlcgen.
 func (s *ImageBuildStore) RecordRefreshFailure(ctx context.Context, fingerprint string) (sqlcgen.ImageBuild, error) {
 	return s.q.RecordImageRefreshFailure(ctx, fingerprint)
 }
+
+// TouchChecked bumps ONLY fingerprint's own updated_at -- no other
+// column -- app/imagebuild's own genuine-round-robin fairness mechanism
+// (§19.2, a correctness review finding on the batch-cap fix): attemptRefresh
+// calls this from its own two early-return branches (a resolveRepoSHAs
+// error, or NeedsRefresh reporting still-fresh) that otherwise skip
+// ClaimForRefresh entirely, so that ListReady's own ORDER BY updated_at
+// reflects genuine "last looked at this tick", not merely "last mutated",
+// for the WHOLE 'ready' population -- see TouchImageBuildChecked's own
+// generated doc comment for the full starvation this rules out. A no-op,
+// never an error worth surfacing, if fingerprint is no longer 'ready' (or
+// gone entirely).
+func (s *ImageBuildStore) TouchChecked(ctx context.Context, fingerprint string) error {
+	return s.q.TouchImageBuildChecked(ctx, fingerprint)
+}

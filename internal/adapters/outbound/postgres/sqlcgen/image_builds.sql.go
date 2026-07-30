@@ -213,13 +213,28 @@ LIMIT $1
 // STARTING every other Environment's own tip-SHA check for the rest of
 // that tick, degrading the fleet's effective refresh cadence well past
 // this section's own documented 10-40 minute staleness window under
-// load). ORDER BY updated_at (same column ListDueImageBuilds orders by)
-// gives ACROSS-TICK fairness for free: a row currently mid-refresh had its
-// own updated_at just bumped by ClaimImageBuildForRefresh, so it
-// naturally sorts toward the back of the next tick's own batch, behind
-// rows this pump hasn't touched in longer -- no separate bookkeeping
-// needed to avoid one hot fingerprint monopolizing every tick's own
-// limited batch.
+// load).
+//
+// ORDER BY updated_at (same column ListDueImageBuilds orders by) gives
+// ACROSS-TICK fairness ONLY because attemptRefresh (app/imagebuild/
+// builder.go) advances THIS column on EVERY 'ready' row it inspects this
+// tick, not merely ones that reach ClaimImageBuildForRefresh below -- a
+// SECOND correctness review finding, this time on the batch-cap fix
+// itself: a row genuinely NOT stale (NeedsRefresh false) or whose SHA
+// resolution PERSISTENTLY fails (a renamed/deleted repo, a token missing
+// org access) never reaches ClaimImageBuildForRefresh at all, so if
+// nothing else touched its own updated_at, it would keep an arbitrarily
+// OLD timestamp forever and, being oldest, permanently occupy the ENTIRE
+// LIMIT $1 window of every single tick -- starving any row that goes
+// stale LATER (a newer updated_at always sorts behind that static front
+// cohort, so it is never even RETURNED here, let alone refreshed).
+// TouchImageBuildChecked (below) is the fix: attemptRefresh calls it from
+// its own two early-return branches (a resolveRepoSHAs error, or
+// NeedsRefresh reporting still-fresh) right before returning, so THOSE
+// rows rotate to the back of the queue exactly as if they had reached a
+// real claim. That is what makes ORDER BY updated_at a genuine, total
+// round-robin over the WHOLE 'ready' population rather than a partial one
+// that only rotates the subset that happens to need a rebuild.
 func (q *Queries) ListReadyImageBuilds(ctx context.Context, limit int32) ([]ImageBuild, error) {
 	rows, err := q.db.Query(ctx, listReadyImageBuilds, limit)
 	if err != nil {
@@ -435,6 +450,42 @@ func (q *Queries) RecordImageRefreshSuccess(ctx context.Context, arg RecordImage
 		&i.RefreshInProgress,
 	)
 	return i, err
+}
+
+const touchImageBuildChecked = `-- name: TouchImageBuildChecked :exec
+UPDATE image_builds
+SET updated_at = now()
+WHERE fingerprint = $1 AND status = 'ready'
+`
+
+// The freshness pump's own genuine-round-robin bookkeeping (§19.2, fixing
+// a correctness review finding on the batch-cap fix: see
+// ListReadyImageBuilds' own doc comment above for the full starvation
+// mechanism this closes). Bumps ONLY updated_at for fingerprint --
+// status/image_ref/built_repo_shas/built_at/attempt_count/next_retry_at/
+// refresh_in_progress are every one of them left completely untouched.
+// This is deliberately NOT a state transition of any kind -- it is purely
+// "attemptRefresh (app/imagebuild/builder.go) INSPECTED this row this
+// tick", called from attemptRefresh's own two early-return branches (a
+// resolveRepoSHAs error, or NeedsRefresh reporting still-fresh) that
+// otherwise skip ClaimImageBuildForRefresh -- and therefore, before this
+// fix, skipped ever touching updated_at -- entirely.
+//
+// "AND status = 'ready'" is a defensive guard, not a load-bearing one (by
+// construction, attemptRefresh only ever calls this for a row
+// ListReadyImageBuilds just returned, which is 'ready' by that query's own
+// WHERE clause) -- it exists purely so this fire-and-forget call can never
+// perturb ListDueImageBuilds' own, textually identical "ORDER BY
+// updated_at" fairness ordering for the SEPARATE pending/failed lifecycle,
+// even under a future bug that calls this for a non-'ready' fingerprint.
+//
+// :exec, not :one: this is fire-and-forget bookkeeping, never a CAS --
+// a fingerprint no longer 'ready' (or gone entirely, a should-be-rare
+// race) is a silent, harmless no-op, not an error condition worth a
+// caller check the way a real claim's lost-race outcome is.
+func (q *Queries) TouchImageBuildChecked(ctx context.Context, fingerprint string) error {
+	_, err := q.db.Exec(ctx, touchImageBuildChecked, fingerprint)
+	return err
 }
 
 const upsertPendingImageBuild = `-- name: UpsertPendingImageBuild :exec

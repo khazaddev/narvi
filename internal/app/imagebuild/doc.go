@@ -96,8 +96,14 @@
 // delay even STARTING every other Environment's own tip-SHA check for the
 // rest of that tick, degrading the fleet's effective refresh cadence well
 // past this section's own documented 10-40 minute staleness window under
-// load. A batch beyond the cap is simply picked up on a later tick
-// (ListReady's own ORDER BY updated_at gives across-tick fairness).
+// load. A batch beyond the cap is simply picked up on a later tick --
+// ListReady's own ORDER BY updated_at gives across-tick fairness only
+// because attemptRefresh advances that column on EVERY row it inspects
+// this tick (TouchImageBuildChecked), not merely ones that reach a real
+// claim; see ListReadyImageBuilds' and attemptRefresh's own doc comments
+// for the starvation this rules out (a genuinely-not-stale or
+// persistently-SHA-resolution-failing row can no longer permanently
+// occupy the front of the queue).
 //
 // Refresh NEVER degrades availability: the row's own `status` column
 // never leaves 'ready' for the whole duration a refresh build runs --

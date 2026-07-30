@@ -487,9 +487,16 @@ func parseOwnerRepo(rawURL string) (owner, repo string, err error) {
 // precedent) bounds how many rows a single tick can claim/attempt, so one
 // slow/blocked attemptRefresh call can delay starting at most
 // refreshBatchSize-1 others in THIS tick, never an unbounded fleet's worth;
-// any row beyond that cap is simply picked up on a later tick (ListReady's
-// own ORDER BY updated_at gives across-tick fairness -- see that query's
-// own generated doc comment).
+// any row beyond that cap is simply picked up on a later tick. ListReady's
+// own ORDER BY updated_at gives across-tick fairness ONLY because
+// attemptRefresh (below) advances that column on EVERY row it inspects
+// this tick, including its own two early-return paths that never reach a
+// real claim -- see ListReadyImageBuilds' own generated doc comment for
+// the full starvation this rules out (a correctness review finding on
+// this very batch-cap mechanism: a row genuinely not stale, or whose SHA
+// resolution persistently fails, would otherwise keep an arbitrarily old
+// updated_at and permanently occupy the front of every tick's own LIMIT
+// window).
 //
 // One row's own refresh failure (a resolution error, a lost claim race, a
 // BuildImage failure) is isolated -- logged, and does NOT abort the rest
@@ -524,6 +531,28 @@ func (b *Builder) RefreshOnce(ctx context.Context) error {
 // spawn-time lookup therefore always observes either the complete OLD
 // triple or the complete NEW one, never a mix, and never a moment with no
 // usable ready image_ref at all.
+//
+// # Every inspected row advances its own ordering key (fixing a starvation
+// # finding on the batch-cap fix)
+//
+// This function has TWO early-return paths that decide "nothing to
+// rebuild this tick" WITHOUT ever reaching ClaimForRefresh: a
+// resolveRepoSHAs error (§19.2's own "will retry next tick" degrade), and
+// NeedsRefresh reporting still-fresh. Neither path used to touch this
+// row's own updated_at at all -- so a row genuinely NOT stale (a repo
+// that simply hasn't pushed lately) or one whose SHA resolution
+// PERSISTENTLY fails (a renamed/deleted repo, a token missing org access)
+// kept an arbitrarily OLD updated_at forever and, being oldest, would
+// permanently occupy the ENTIRE LIMIT window of every tick's own
+// ListReadyImageBuilds call (ORDER BY updated_at ASC) -- starving any row
+// that went stale LATER (a newer updated_at always sorts behind that
+// static front cohort, so it would never even be RETURNED, let alone
+// refreshed). Both paths below now call touchChecked immediately before
+// returning, which bumps ONLY updated_at (TouchImageBuildChecked -- no
+// other column, never a state transition) -- exactly as if this row had
+// reached a real claim. That is what makes ListReadyImageBuilds' own
+// ORDER BY updated_at a genuine, total round-robin over the WHOLE 'ready'
+// population, not merely the subset that happens to need a rebuild.
 func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 	logger := platform.Logger(ctx).With("fingerprint", row.Fingerprint)
 
@@ -545,8 +574,13 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 	if err != nil {
 		// §19.2's own explicit invariant: a credential-dependent failure
 		// here degrades to "try again next tick", never a crash, never any
-		// effect on this fingerprint's own already-ready row.
+		// effect on this fingerprint's own already-ready row -- EXCEPT its
+		// own ordering key: a PERSISTENTLY failing resolution (see this
+		// function's own top doc comment) must still rotate this row to
+		// the back of ListReadyImageBuilds' own next window, or it would
+		// permanently occupy the front of every tick's batch.
 		logger.Warn("imagebuild: refresh: resolve current tip SHAs failed; will retry next tick", "error", err)
+		b.touchChecked(ctx, logger, row.Fingerprint)
 		return
 	}
 
@@ -559,6 +593,13 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 	}
 
 	if !domainimagebuild.NeedsRefresh(built, current) {
+		// Still fresh -- nothing to REBUILD this tick, but this row WAS
+		// genuinely inspected (its current tip was resolved and compared),
+		// so its own ordering key still advances -- see this function's
+		// own top doc comment for why a genuinely-not-stale row must never
+		// be allowed to sit at the front of the queue forever merely
+		// because it keeps not needing a rebuild.
+		b.touchChecked(ctx, logger, row.Fingerprint)
 		return // still fresh -- nothing to do this tick.
 	}
 
@@ -628,5 +669,22 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 func (b *Builder) releaseRefreshClaim(ctx context.Context, logger *slog.Logger, fingerprint string) {
 	if _, err := b.store.RecordRefreshFailure(ctx, fingerprint); err != nil {
 		logger.Error("imagebuild: refresh: release refresh claim failed", "error", err, "fingerprint", fingerprint)
+	}
+}
+
+// touchChecked bumps fingerprint's own ordering key (updated_at, via
+// TouchImageBuildChecked) with NO other side effect -- called by
+// attemptRefresh's own two early-return paths that skip ClaimForRefresh
+// entirely (a resolveRepoSHAs error, or NeedsRefresh reporting still
+// fresh) so ListReadyImageBuilds' own ORDER BY updated_at reflects
+// genuine "last looked at this tick", not merely "last mutated" -- see
+// attemptRefresh's own top doc comment and TouchImageBuildChecked's own
+// generated doc comment for the full starvation this rules out. A
+// failure here is logged, never fatal to this tick: at worst this one
+// row's own fairness rotation is delayed by a tick, which is a far
+// smaller problem than the one this call exists to fix.
+func (b *Builder) touchChecked(ctx context.Context, logger *slog.Logger, fingerprint string) {
+	if err := b.store.TouchChecked(ctx, fingerprint); err != nil {
+		logger.Warn("imagebuild: refresh: touch checked failed; this row's own fairness rotation may be delayed a tick", "error", err, "fingerprint", fingerprint)
 	}
 }
