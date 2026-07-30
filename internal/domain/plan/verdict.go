@@ -59,3 +59,46 @@ func MatchVerdict(text string) (verdict string, ok bool) {
 	}
 	return "", false
 }
+
+// RevisePrefix is the deterministic, case-insensitive PREFIX a chat reply
+// must start with (once trimmed) to be recognized as a "request changes"
+// reply while a plan is awaiting_approval -- this batch's own follow-up fix
+// (§8.1, closing the "reply matching no verdict keyword dispatches an
+// ordinary build turn anyway" hole discovered during design review of Steps
+// 37/38). Chosen alongside ApproveKeywords/RejectKeywords for the exact
+// same reason: a genuinely free-text reply might easily mention the word
+// "revise" in passing ("let's revise the approach before shipping") without
+// meaning to invoke this deterministic override, so MatchRevise below only
+// ever matches a PREFIX anchored at the very start of the (trimmed) reply,
+// never a substring/contains check anywhere in it -- mirroring
+// MatchVerdict's own "whole string, never a substring" discipline one level
+// down (a prefix here, instead of whole-string equality, only because the
+// text AFTER the prefix is itself meaningful content -- the feedback --
+// unlike a verdict reply, which carries no payload beyond the keyword
+// itself).
+//
+// This is deliberately the SIMPLEST possible deterministic override, not a
+// natural-language "did they mean to request changes" classifier: a future
+// Step is expected to replace prefix-detection with a real amend-vs-answer
+// LLM classifier for the common case, with RevisePrefix remaining available
+// afterward as a deterministic fallback a user can always reach for.
+const RevisePrefix = "revise:"
+
+// MatchRevise reports whether text (the reply's own raw body, exactly as
+// received -- like MatchVerdict, this function does its own trim/case-fold)
+// starts with RevisePrefix once trimmed and lower-cased. ok is true iff it
+// does; feedback is everything AFTER the prefix, with its own leading/
+// trailing whitespace trimmed (so "  Revise:   drop the retry  " yields
+// feedback "drop the retry"). An empty feedback after the prefix (just
+// "revise:", or "revise:   ", alone) still reports ok=true with feedback ==
+// "" -- exactly like MatchVerdict, this function only ever reports whether
+// its own deterministic pattern matched; deciding what to do with an empty
+// feedback prompt is entirely the caller's own job.
+func MatchRevise(text string) (feedback string, ok bool) {
+	trimmed := strings.TrimSpace(text)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, RevisePrefix) {
+		return "", false
+	}
+	return strings.TrimSpace(trimmed[len(RevisePrefix):]), true
+}

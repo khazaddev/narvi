@@ -43,12 +43,22 @@ import (
 // instructions shown here can never drift out of sync with what is
 // actually accepted (this file's own doc comment on plandomain.
 // ApproveKeywords explains why both live off that one shared list).
+//
+// Step 37/38 follow-up fix (§8.1) addition: also names
+// plandomain.RevisePrefix -- BEFORE this fix, Linear (a chat-only surface,
+// with no "Request changes" button the way Slack's Block Kit message has)
+// gave a user no way to request changes at all beyond an ordinary reply,
+// which used to dispatch as an unapproved build turn (the exact hole this
+// fix closes). Now that a revise:-prefixed reply is a real, deterministic
+// "request changes" path (webhook.go's own handlePrompted), this
+// instruction is what makes it actually discoverable.
 func planApprovalLinearText(version int32, content string) string {
 	return fmt.Sprintf(
-		"Plan v%d is ready for review:\n\n%s\n\nReply %s to approve and build it, or %s to reject it.",
+		"Plan v%d is ready for review:\n\n%s\n\nReply %s to approve and build it, %s to reject it, or start your reply with %q to request changes.",
 		version, content,
 		strings.Join(plandomain.ApproveKeywords, "/"),
 		strings.Join(plandomain.RejectKeywords, "/"),
+		plandomain.RevisePrefix,
 	)
 }
 

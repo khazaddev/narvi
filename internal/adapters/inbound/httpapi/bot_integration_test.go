@@ -184,6 +184,7 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
+	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
@@ -201,12 +202,12 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 		t.Fatalf("CreateSessionForBot (setup): %v", err)
 	}
 
-	first, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "first mention", nil, false, pgtype.UUID{})
+	first, err := CreateTurnForBot(ctx, pool, sessions, turns, plans, auditLog, registry, created.ID, "first mention", nil, false, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("CreateTurnForBot (first): %v", err)
 	}
 
-	second, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "second concurrent mention", nil, false, pgtype.UUID{})
+	second, err := CreateTurnForBot(ctx, pool, sessions, turns, plans, auditLog, registry, created.ID, "second concurrent mention", nil, false, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("CreateTurnForBot (second, while first still pending): %v", err)
 	}
@@ -238,6 +239,7 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
+	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 	users := narvipg.NewUserStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
@@ -263,7 +265,7 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 		t.Fatalf("CreateSessionForBot (setup): %v", err)
 	}
 
-	turnRow, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "please take a look", nil, false, actor.ID)
+	turnRow, err := CreateTurnForBot(ctx, pool, sessions, turns, plans, auditLog, registry, created.ID, "please take a look", nil, false, actor.ID)
 	if err != nil {
 		t.Fatalf("CreateTurnForBot: %v", err)
 	}

@@ -112,6 +112,7 @@ type slackTestRig struct {
 	sessions *narvipg.SessionStore
 	turns    *narvipg.TurnStore
 	threads  *narvipg.SlackThreadSessionStore
+	plans    *narvipg.PlanStore
 }
 
 // linkSlackIdentityForTest links slackUserID directly to a NEW fixture
@@ -184,6 +185,7 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	environments := narvipg.NewEnvironmentStore(pool)
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 	threads := narvipg.NewSlackThreadSessionStore(pool)
+	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
@@ -200,6 +202,7 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 		Registry:     registry,
 		Deliveries:   deliveries,
 		Threads:      threads,
+		Plans:        plans,
 		AuditLog:     auditLog,
 		// Participants (Step 39's own SECOND fix-pass addition, "identities
 		// + full RBAC", §13.2/§13.3): authorizeSessionAction (identity.go)
@@ -236,7 +239,7 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 		},
 	})
 
-	return &slackTestRig{handler: handler, pool: pool, sessions: sessions, turns: turns, threads: threads}
+	return &slackTestRig{handler: handler, pool: pool, sessions: sessions, turns: turns, threads: threads, plans: plans}
 }
 
 // signedSlackRequest builds a real, correctly-signed POST /webhooks/slack

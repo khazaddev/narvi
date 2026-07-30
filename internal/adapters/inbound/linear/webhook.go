@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -64,6 +65,25 @@ const busyReplyText = "Still working on the previous message in this thread — 
 // turn/session cancellation (that remains separate, later work) -- it
 // only tells the user the truth instead of nothing at all.
 const stopNotSupportedText = "Stopping an in-progress turn isn't supported yet — this request wasn't cancelled."
+
+// planAwaitingApprovalReplyText is this batch's own honest reply (Step
+// 37/38 follow-up fix, §8.1), posted back to the thread when
+// handlePrompted's own ordinary-reply path declines to create a build turn
+// because sessionID currently has a plan in StatusAwaitingApproval --
+// CLOSING the hole where a reply matching neither plandomain.MatchVerdict
+// nor plandomain.MatchRevise previously fell through into an ordinary,
+// plan_mode=false turn the human never approved. Built (like
+// planApprovalLinearText, internal/app/sessionactor/outboxenqueue.go) off
+// the SAME plandomain.ApproveKeywords/RejectKeywords/RevisePrefix exports
+// the parsing side (MatchVerdict/MatchRevise) itself checks against, so the
+// instructions here can never drift out of sync with what is actually
+// accepted.
+var planAwaitingApprovalReplyText = fmt.Sprintf(
+	"A plan is awaiting your approval for this session. Reply %s to approve it, %s to reject it, or start your reply with %q to request changes.",
+	strings.Join(plandomain.ApproveKeywords, "/"),
+	strings.Join(plandomain.RejectKeywords, "/"),
+	plandomain.RevisePrefix,
+)
 
 // Deps bundles every dependency NewWebhookHandler needs -- a plain struct
 // (rather than 10+ positional constructor parameters) since this handler
@@ -616,6 +636,16 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// real external id to look up here.
 	actorUserID, notice := deps.resolveActor(ctx, logger, payload.OrganizationID, payload.AgentActivity.UserID)
 
+	// prompt/planMode are overridden below (Step 37/38 follow-up fix, §8.1)
+	// when this reply is a deterministic revise:-prefixed "request changes"
+	// reply -- everything else about the ordinary-reply path below (the
+	// authorize check, the shared CreateTurnCore call, its busy/gated
+	// handling) stays identical for both an ordinary reply and a revise one,
+	// since a revise reply is exactly the SAME create-a-turn action, just
+	// with plan_mode=true and the stripped feedback as its prompt.
+	prompt := payload.AgentActivity.Content.Body
+	planMode := false
+
 	if deps.Plans != nil {
 		if planID, hasAwaiting := deps.findAwaitingApprovalPlanID(ctx, logger, sessionID); hasAwaiting {
 			if verdict, ok := plandomain.MatchVerdict(payload.AgentActivity.Content.Body); ok {
@@ -634,6 +664,16 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 				// this function's own ordinary-reply gate below, so it flows
 				// into the same release-the-claim-and-retry path.
 				return deps.handlePlanVerdict(ctx, logger, sessionID, planID, verdict, actorUserID, notice, payload.OrganizationID, payload.AgentSession.ID)
+			}
+			// Step 37/38 follow-up fix (§8.1): a reply matching neither a
+			// verdict keyword NOR this deterministic revise: prefix falls
+			// through unchanged below -- httpapi.CreateTurnCore's own
+			// awaiting-plan gate (turn.go) is what actually declines that
+			// case (planMode stays false), surfacing
+			// httpapi.ErrPlanAwaitingApproval, handled below.
+			if feedback, ok := plandomain.MatchRevise(payload.AgentActivity.Content.Body); ok {
+				prompt = feedback
+				planMode = true
 			}
 		}
 	}
@@ -698,9 +738,16 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// actorUserID attributed) and L12 (this package's own copy-pasted
 	// hasOpenTurn helper is gone entirely -- httpapi's own copy, already
 	// unexported there, is the only one left).
-	prompt := payload.AgentActivity.Content.Body
-	createdTurn, wasCreated, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, sessionID, prompt, nil, false, actorUserID, httpapi.DropIfOpen)
+	createdTurn, wasCreated, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, sessionID, prompt, nil, planMode, actorUserID, httpapi.DropIfOpen)
 	if cerr != nil {
+		if errors.Is(cerr, httpapi.ErrPlanAwaitingApproval) {
+			// Step 37/38 follow-up fix (§8.1): honest reply, never a hard
+			// failure -- mirrors the !wasCreated busy-reply branch just
+			// below for the analogous open-turn case (M6 audit fix).
+			logger.Info("linear: ordinary reply blocked by awaiting-approval plan", "session_id", sessionID.String())
+			deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(planAwaitingApprovalReplyText, notice))
+			return true
+		}
 		logger.Error("linear: create turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionID.String())
 		return false
 	}

@@ -44,3 +44,43 @@ func TestMatchVerdict(t *testing.T) {
 		})
 	}
 }
+
+// TestMatchRevise is table-driven (§11) over RevisePrefix: prefix match at
+// the start of the (trimmed) reply, case/whitespace insensitivity in the
+// prefix itself, whitespace trimmed off the extracted feedback, empty
+// feedback after a bare prefix, and confirms a reply that merely MENTIONS
+// "revise" without the reply STARTING with it does NOT match -- matching
+// this file's own doc comment on why this is a prefix check, never a
+// substring/contains one.
+func TestMatchRevise(t *testing.T) {
+	tests := []struct {
+		name         string
+		text         string
+		wantFeedback string
+		wantOK       bool
+	}{
+		{name: "prefix with feedback", text: "revise: drop the retry", wantFeedback: "drop the retry", wantOK: true},
+		{name: "uppercase prefix", text: "REVISE: drop the retry", wantFeedback: "drop the retry", wantOK: true},
+		{name: "mixed case prefix with surrounding whitespace", text: "  Revise:   drop the retry  ", wantFeedback: "drop the retry", wantOK: true},
+		{name: "no space after colon", text: "revise:drop the retry", wantFeedback: "drop the retry", wantOK: true},
+		{name: "bare prefix, empty feedback", text: "revise:", wantFeedback: "", wantOK: true},
+		{name: "bare prefix, whitespace-only feedback", text: "revise:   ", wantFeedback: "", wantOK: true},
+		{name: "empty text", text: "", wantOK: false},
+		{name: "whitespace only", text: "   ", wantOK: false},
+		{name: "ordinary text with no prefix at all", text: "keep the env fallback please", wantOK: false},
+		{name: "mentions revise mid-sentence, not a prefix", text: "let's revise: the approach later", wantOK: false},
+		{name: "approve keyword is not a revise match", text: "approve", wantOK: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotFeedback, gotOK := MatchRevise(tc.text)
+			if gotOK != tc.wantOK {
+				t.Fatalf("MatchRevise(%q) ok = %v, want %v", tc.text, gotOK, tc.wantOK)
+			}
+			if gotOK && gotFeedback != tc.wantFeedback {
+				t.Errorf("MatchRevise(%q) feedback = %q, want %q", tc.text, gotFeedback, tc.wantFeedback)
+			}
+		})
+	}
+}
