@@ -89,7 +89,19 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID) (sqlcgen.Turn, error) {
 	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, AlwaysQueue)
 	if cerr != nil {
-		return sqlcgen.Turn{}, fmt.Errorf("httpapi: create turn for bot: %s", cerr.Message)
+		// %w, NOT %s (Step 37/38 follow-up fix, Finding 1): cerr's own
+		// Error() method returns exactly cerr.Message, so this produces the
+		// IDENTICAL string as the old fmt.Errorf("...: %s", cerr.Message) --
+		// but %w additionally preserves the error CHAIN, so a caller
+		// (github/coalesce.go's own REUSE path, which wraps this error again
+		// with its own %w) can still recover *CreateTurnError/
+		// ErrPlanAwaitingApproval via errors.Is/errors.As through this
+		// wrapper. Before this fix, %s discarded cerr entirely, so
+		// errors.Is(err, httpapi.ErrPlanAwaitingApproval) could never
+		// succeed for any caller of this function -- see
+		// ErrPlanAwaitingApproval's own doc comment (turn.go) for the full
+		// GitHub-specific consequence this closes.
+		return sqlcgen.Turn{}, fmt.Errorf("httpapi: create turn for bot: %w", cerr)
 	}
 	return created, nil
 }

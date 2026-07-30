@@ -490,7 +490,15 @@ func serve() error {
 			// with, never a per-commenter credential.
 			BotToken:     cfg.GitHubBotToken,
 			PullRequests: sourceControl,
-			Timeouts:     cfg.Timeouts,
+			// Comments (Step 37/38 follow-up fix, Finding 1): posts the
+			// honest plan-awaiting-approval reply back to a PR thread when
+			// coalesce.go's REUSE path declines to enqueue a build turn
+			// because the session's plan is currently awaiting approval.
+			// The SAME *githubapi.Adapter instance as PullRequests/
+			// sourceControl above -- never a second, independently-
+			// constructed copy.
+			Comments: sourceControl,
+			Timeouts: cfg.Timeouts,
 		},
 	))
 

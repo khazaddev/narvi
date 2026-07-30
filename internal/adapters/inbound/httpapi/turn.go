@@ -207,7 +207,19 @@ func (e *CreateTurnError) Unwrap() error { return e.sentinel }
 // ANY cerr from this core as a hard failure -- now recognize this ONE
 // specific reason via errors.Is and post an honest, non-error reply
 // instead (mirroring DropIfOpen's own existing "still busy" honest-reply
-// precedent for the analogous open-turn case).
+// precedent for the analogous open-turn case). GitHub's own handler.go
+// error switch now does the same for its bot-ingress path (bot.go's
+// CreateTurnForBot, reused by github/coalesce.go's REUSE path) -- this
+// needed its own separate fix (Finding 1 of this batch's follow-up),
+// since CreateTurnForBot used to re-wrap cerr via fmt.Errorf's "%s" verb,
+// which discarded the error chain entirely and made this sentinel
+// unrecoverable via errors.Is for any caller of that function; it now
+// wraps with "%w" instead, so GitHub's handler.go can recognize this ONE
+// specific reason exactly like Slack/Linear do, acknowledge 200 without
+// releasing the webhook delivery claim (this is a deterministic,
+// expected business state, not a transient failure a redelivery could
+// ever fix), and post an honest reply on the PR thread instead of
+// producing a silent, self-inflicted redelivery retry storm.
 var ErrPlanAwaitingApproval = errors.New("httpapi: plan awaiting approval")
 
 // planAwaitingApprovalMessage is ErrPlanAwaitingApproval's own REST-facing

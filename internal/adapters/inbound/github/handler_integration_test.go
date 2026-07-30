@@ -26,6 +26,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/testcontainers/testcontainers-go"
@@ -35,6 +36,7 @@ import (
 	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
@@ -109,6 +111,7 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 type testRig struct {
 	pool   *pgxpool.Pool
 	turns  *narvipg.TurnStore
+	plans  *narvipg.PlanStore
 	server *httptest.Server
 }
 
@@ -138,6 +141,7 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 	rig := testRig{
 		pool:  pool,
 		turns: narvipg.NewTurnStore(pool),
+		plans: narvipg.NewPlanStore(pool),
 	}
 
 	coalescer := &githubingress.SessionCoalescer{
@@ -148,6 +152,14 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 		Environments: narvipg.NewEnvironmentStore(pool),
 		Registry:     registry,
 		AuditLog:     narvipg.NewAuditLogStore(pool),
+		// Plans (Step 37/38 follow-up fix, Finding 1): wired unconditionally
+		// for every test in this file, mirroring cmd/control-plane/main.go's
+		// own production wiring -- harmless for every EXISTING test here
+		// (none of them ever seed a plan row, so ListSummariesForSession
+		// always comes back empty and the awaiting-plan gate never
+		// triggers); required for this file's own new awaiting-plan
+		// coverage below.
+		Plans: rig.plans,
 		// Identities/Users/Participants (M14 audit-fix batch addition):
 		// every pre-existing test in this file drives resolveCommenterActor
 		// (identity.go) with commenterID == 0 (issueCommentBody never sets
@@ -198,6 +210,28 @@ type fakePullRequestResolver struct {
 
 func (f *fakePullRequestResolver) GetPullRequest(_ context.Context, _, _ string, _ int32, _ string) (githubapi.PullRequest, error) {
 	return f.pr, f.err
+}
+
+// postedComment records one fakeCommentPoster.PostIssueComment call --
+// Finding 1's own regression coverage below asserts against this shape.
+type postedComment struct {
+	owner, repo string
+	prNumber    int
+	token, body string
+}
+
+// fakeCommentPoster is a test-only githubingress.CommentPoster -- no real
+// HTTP round trip to GitHub, exactly the point of that interface being
+// narrow and locally defined in the github package (mirrors
+// fakePullRequestResolver's own identical precedent immediately above).
+type fakeCommentPoster struct {
+	calls []postedComment
+	err   error
+}
+
+func (f *fakeCommentPoster) PostIssueComment(_ context.Context, owner, repo string, prNumber int, token, body string) error {
+	f.calls = append(f.calls, postedComment{owner: owner, repo: repo, prNumber: prNumber, token: token, body: body})
+	return f.err
 }
 
 // sign mirrors GitHub's own "X-Hub-Signature-256: sha256=<hex>" scheme.
@@ -555,5 +589,113 @@ func TestGitHubIntegration_IssueCommentGetPullRequestFailureFallsBack(t *testing
 	}
 	if repoName != "fallback-repo" {
 		t.Errorf("stored repo name = %q, want %q (base repo, unchanged)", repoName, "fallback-repo")
+	}
+}
+
+// TestGitHubIntegration_AwaitingPlanBlocksReuseTurn_HonestReplyNoRelease is
+// Finding 1's own end-to-end regression test (Step 37/38 follow-up fix): a
+// second mention landing on a PR whose review session already has a plan
+// in StatusAwaitingApproval hits the SAME awaiting-plan gate Slack/Linear
+// ingress hit (httpapi/turn.go's createTurnLocked, reached here via
+// coalesce.go's REUSE path -> httpapi.CreateTurnForBot).
+//
+// BEFORE this fix, the sentinel (httpapi.ErrPlanAwaitingApproval) never
+// survived CreateTurnForBot's own re-wrap (a "%s" verb discarded the error
+// chain), so this fell into handler.go's generic-error branch: released
+// the webhook delivery claim (inviting a pointless GitHub redelivery
+// retry storm, since the awaiting-plan condition persists until a human
+// decides elsewhere) and left the PR thread with no reply at all, unlike
+// Slack/Linear. This proves all three symptoms are fixed at once: 200
+// (never 500), the delivery claim is NOT released (a redelivery would
+// only ever reproduce this exact outcome again), and an honest reply is
+// posted back to the PR thread.
+func TestGitHubIntegration_AwaitingPlanBlocksReuseTurn_HonestReplyNoRelease(t *testing.T) {
+	ctx := context.Background()
+
+	poster := &fakeCommentPoster{}
+	rig := newTestRig(t, func(cfg *githubingress.Config) {
+		cfg.Comments = poster
+		cfg.BotToken = "test-bot-token"
+	})
+
+	const repoFullName = "acme/awaiting-plan-repo"
+	const cloneURL = "https://github.com/acme/awaiting-plan-repo.git"
+	const prNumber = 707
+
+	// First mention: the WINNER path, creates the review session.
+	first := postWebhook(t, rig, issueCommentBody(repoFullName, "awaiting-plan-repo", cloneURL, prNumber, "first-mention"), "delivery-awaiting-plan-1")
+	if first != http.StatusOK {
+		t.Fatalf("first delivery status = %d, want %d", first, http.StatusOK)
+	}
+
+	var sessionID pgtype.UUID
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT session_id FROM github_pr_sessions WHERE repo_full_name = $1 AND pr_number = $2`,
+		repoFullName, prNumber,
+	).Scan(&sessionID); err != nil {
+		t.Fatalf("query claim row session id: %v", err)
+	}
+
+	// Seed a producing turn (Completed, plan_mode true) and an
+	// awaiting_approval plans row atop the session the first mention just
+	// created -- mirrors httpapi's own seedAwaitingApprovalPlan precedent
+	// (turncore_integration_test.go).
+	producingTurn, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: sessionID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	if _, err := rig.plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: sessionID, TurnID: producingTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval}); err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+
+	// Second mention on the SAME PR: takes the REUSE path (coalesce.go),
+	// which now hits the awaiting-plan gate instead of enqueuing an
+	// ordinary build turn.
+	const secondDeliveryID = "delivery-awaiting-plan-2"
+	second := postWebhook(t, rig, issueCommentBody(repoFullName, "awaiting-plan-repo", cloneURL, prNumber, "second-mention-during-awaiting-plan"), secondDeliveryID)
+	if second != http.StatusOK {
+		t.Fatalf("second (awaiting-plan) delivery status = %d, want %d (a deterministic, expected business state -- never a 500)", second, http.StatusOK)
+	}
+
+	// The claim must NOT have been released -- a GitHub redelivery of this
+	// SAME delivery id would only ever reproduce this exact outcome again.
+	var deliveryRowCount int
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT count(*) FROM webhook_deliveries WHERE provider = 'github' AND delivery_id = $1`, secondDeliveryID,
+	).Scan(&deliveryRowCount); err != nil {
+		t.Fatalf("count webhook_deliveries rows: %v", err)
+	}
+	if deliveryRowCount != 1 {
+		t.Errorf("webhook_deliveries row count = %d, want exactly 1 (claim must NOT be released for this deterministic business state)", deliveryRowCount)
+	}
+
+	// No new turn must have been enqueued by the second mention -- only the
+	// first mention's own turn (the WINNER path always creates one) plus
+	// the seeded producing turn.
+	var turnCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM turns WHERE session_id = $1`, sessionID).Scan(&turnCount); err != nil {
+		t.Fatalf("count turns: %v", err)
+	}
+	if turnCount != 2 {
+		t.Errorf("turn count = %d, want exactly 2 (the first mention's own turn + the seeded producing turn -- the gate must block the second mention's own ordinary turn)", turnCount)
+	}
+
+	// An honest reply must have been posted back to the PR thread -- the
+	// PRE-fix behavior posted nothing at all.
+	if len(poster.calls) != 1 {
+		t.Fatalf("len(poster.calls) = %d, want exactly 1", len(poster.calls))
+	}
+	got := poster.calls[0]
+	if got.owner != "acme" || got.repo != "awaiting-plan-repo" {
+		t.Errorf("posted comment repo = %s/%s, want acme/awaiting-plan-repo", got.owner, got.repo)
+	}
+	if got.prNumber != prNumber {
+		t.Errorf("posted comment prNumber = %d, want %d", got.prNumber, prNumber)
+	}
+	if got.token != "test-bot-token" {
+		t.Errorf("posted comment token = %q, want %q", got.token, "test-bot-token")
+	}
+	if !strings.Contains(got.body, "awaiting approval") {
+		t.Errorf("posted comment body = %q, want it to mention the plan is awaiting approval", got.body)
 	}
 }
