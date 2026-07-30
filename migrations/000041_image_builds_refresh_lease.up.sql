@@ -1,0 +1,62 @@
+-- Audit-remediation batch B2: gives the freshness pump's own
+-- refresh_in_progress claim (migrations/000040_image_builds_refresh_pump.
+-- up.sql) a LEASE, closing the crash window that migration's own doc
+-- comment -- and internal/app/imagebuild/doc.go -- used to call
+-- "self-healing by construction" while, in the very same breath,
+-- describing the manual DB surgery an operator would need: nothing ever
+-- healed it. A control-plane crash/SIGTERM/pod-eviction landing between
+-- ClaimImageBuildForRefresh and RecordImageRefreshSuccess/
+-- RecordImageRefreshFailure left refresh_in_progress=true forever, and
+-- because that row's own updated_at froze too, it permanently occupied
+-- the front of every ListReadyImageBuilds LIMIT window -- see builder.go's
+-- own attemptRefresh doc comment for the full starvation chain.
+--
+-- refresh_started_at records WHEN the CURRENT refresh_in_progress claim
+-- was taken -- NULL whenever refresh_in_progress is false (both
+-- ClaimImageBuildForRefresh, which sets it, and RecordImageRefreshSuccess/
+-- RecordImageRefreshFailure, which clear it back to NULL alongside
+-- refresh_in_progress, keep the two columns in lockstep; see
+-- queries/image_builds.sql). ClaimImageBuildForRefresh's own CAS now
+-- additionally matches a row whose refresh_in_progress is true but whose
+-- refresh_started_at is older than platform.Timeouts.
+-- ImageRefreshClaimStaleAfter -- i.e. it RECLAIMS a lease nobody is
+-- plausibly still holding, rather than only ever claiming a fresh
+-- refresh_in_progress=false row. ListReadyImageBuilds' own WHERE clause
+-- mirrors the identical predicate so a genuinely stuck row is still
+-- returned to a tick for reclaiming, while a row another pod is
+-- ACTIVELY (non-stale) refreshing is correctly excluded (a separate
+-- correctness finding this same batch closes: the poll query used to omit
+-- refresh_in_progress entirely).
+--
+-- Deliberately a LEASE (a staleness bound compared against a timestamp
+-- WRITTEN BY the very same atomic CAS that sets refresh_in_progress =
+-- true), not a startup reconciliation sweep keyed off this process's own
+-- boot time: a boot-time sweep cannot distinguish "this claim predates MY
+-- boot, so it must be abandoned" from "a DIFFERENT pod claimed this row
+-- after my boot and its own build is still legitimately, currently
+-- running" in a multi-pod deployment (this codebase's own
+-- ListDueImageBuilds doc comment already names multiple concurrent
+-- control-plane pods as a real, anticipated shape, not a hypothetical) --
+-- a sweep keyed to boot time would incorrectly stomp that live claim. A
+-- lease keyed to the claim's own timestamp avoids THAT specific failure
+-- mode: ANY pod's tick, evaluating the SAME staleness bound against the
+-- SAME claim-time timestamp, agrees on whether a claim is stale,
+-- regardless of which pod took it or when any given pod itself booted.
+--
+-- A lease alone does not, however, rule out every failure mode: it bounds
+-- how long an UNRELEASED claim survives before another tick may reclaim
+-- it, but nothing here alone stops a DELAYED WRITER -- a caller whose own
+-- RecordImageRefreshSuccess/RecordImageRefreshFailure call outlives that
+-- same bound (e.g. blocked on this row's own Postgres lock for reasons
+-- unrelated to the refresh itself) -- from unconditionally overwriting
+-- whatever a SECOND tick has since legitimately claimed, once that
+-- delayed write finally lands (status alone never distinguishes "my own
+-- still-current claim" from "someone else's newer one"). Audit-remediation
+-- batch B2 round 2 closes that separate gap with a FENCING TOKEN: both
+-- release queries (queries/image_builds.sql) additionally require
+-- refresh_started_at to still equal the exact value the caller's own claim
+-- read, so a write from a superseded claim instance matches zero rows
+-- instead of clobbering the current one. See queries/image_builds.sql's
+-- own RecordImageRefreshSuccess/RecordImageRefreshFailure doc comments and
+-- internal/app/imagebuild/doc.go for the full writeup.
+ALTER TABLE image_builds ADD COLUMN refresh_started_at TIMESTAMPTZ;

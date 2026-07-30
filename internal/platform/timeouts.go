@@ -1481,6 +1481,39 @@ type Timeouts struct {
 	// failure, not caching an access verdict, so it does not need -- and
 	// should not have -- that same long a window).
 	RepoAccessCheckBreakerWindow time.Duration
+	// --- Audit-remediation batch B2 addition: closes the imagebuild
+	// refresh-pump crash window (see internal/app/imagebuild/doc.go and
+	// migrations/000041_image_builds_refresh_lease.up.sql). No ordering
+	// relationship with any invariant chain above -- a standalone field,
+	// matching every other standalone addition's own precedent.
+
+	// ImageRefreshClaimStaleAfter bounds app/imagebuild.Builder's own
+	// refresh_in_progress claim LEASE: ClaimImageBuildForRefresh (and
+	// ListReadyImageBuilds' matching predicate) treat a claim whose
+	// refresh_started_at is older than this as abandoned and reclaimable,
+	// healing a control-plane crash/SIGTERM/pod-eviction that lands
+	// between ClaimImageBuildForRefresh and RecordImageRefreshSuccess/
+	// RecordImageRefreshFailure -- see migrations/
+	// 000041_image_builds_refresh_lease.up.sql's own doc comment for why
+	// this is a lease (a bound compared against the claim's OWN
+	// timestamp) rather than a startup sweep keyed to this process's own
+	// boot time, which cannot safely distinguish an abandoned claim from
+	// another pod's still-live one in a multi-pod deployment.
+	//
+	// Not specified by any plan section (this Step's own crash window was
+	// originally, incorrectly, documented as "self-healing by
+	// construction" -- audit-remediation batch B2 makes that true instead
+	// of removing the false claim); chosen as 30 minutes, matching
+	// ImageBuildBackoffMax's own exact value and its own reasoning: the
+	// outer bound a legitimately slow but genuinely still-running attempt
+	// should ever need (a refresh's own BuildImage call is the identical
+	// provider operation attempt's own claim-time build uses, per
+	// refreshBatchSize's own doc comment), comfortably above any plausible
+	// single real build's duration while still reclaiming a genuinely
+	// abandoned claim within a small, bounded number of
+	// ImageRefreshCheckInterval (10m) ticks rather than leaving it wedged
+	// for hours.
+	ImageRefreshClaimStaleAfter time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1610,6 +1643,7 @@ func DefaultTimeouts() Timeouts {
 		RepoAccessCheckTimeout:       10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout/ContractsFingerprintResolutionTimeout's own "lightweight call" reasoning
 		RepoAccessCacheTTL:           10 * time.Minute, // not specified; chosen, matches ImageRefreshCheckInterval's own "acceptable staleness" reasoning
 		RepoAccessCheckBreakerWindow: 2 * time.Minute,  // not specified (fix postdates the plan); chosen, short enough to retry a resolved outage promptly
+		ImageRefreshClaimStaleAfter:  30 * time.Minute, // audit-remediation batch B2; not specified, chosen -- matches ImageBuildBackoffMax's own exact value/reasoning (see field doc comment)
 	}
 }
 

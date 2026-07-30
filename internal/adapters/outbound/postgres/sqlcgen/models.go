@@ -631,6 +631,7 @@ type ImageBuild struct {
 	BuiltRepoShas     []byte             `json:"built_repo_shas"`
 	BuiltAt           pgtype.Timestamptz `json:"built_at"`
 	RefreshInProgress bool               `json:"refresh_in_progress"`
+	RefreshStartedAt  pgtype.Timestamptz `json:"refresh_started_at"`
 }
 
 type LinearAgentSession struct {

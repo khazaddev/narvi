@@ -67,13 +67,63 @@
 // could add a staleness sweep (a 'building' row whose own last_attempt_at
 // is older than some bound gets reset to 'failed' with a fresh backoff),
 // mirroring Step 24's own two-phase terminalization precedent -- not built
-// here. The analogous crash window on the REFRESH path (between
-// ClaimForRefresh and RecordRefreshSuccess/RecordRefreshFailure) is
-// self-healing by construction instead: refresh_in_progress has no
-// separate timeout/sweep of its own, but a stuck-true row simply never
-// gets refreshed again until an operator clears it -- named honestly
-// as a residual gap, not silently solved, since building one is not this
-// Step's own scope either.
+// here.
+//
+// The analogous crash window on the REFRESH path (between ClaimForRefresh
+// and RecordRefreshSuccess/RecordRefreshFailure) USED TO be documented
+// right here as "self-healing by construction" -- that claim was false:
+// refresh_in_progress had no timeout/lease/sweep of any kind, a stuck-true
+// row was never refreshed again, NOTHING ever told an operator clearing
+// was needed, and because that row's own updated_at froze at the same
+// moment, it also permanently occupied the front of every
+// ListReadyImageBuilds LIMIT window -- silently starving the entire
+// freshness pump one wedged claim at a time. Audit-remediation batch B2
+// closes this for real, with a genuine LEASE rather than removing the
+// false claim: ClaimImageBuildForRefresh (queries/image_builds.sql) treats
+// a refresh_in_progress claim whose refresh_started_at predates
+// platform.Timeouts.ImageRefreshClaimStaleAfter ago as abandoned and
+// reclaimable, and ListReadyImageBuilds' own WHERE clause mirrors the
+// identical predicate so a stuck row is still surfaced to a tick instead
+// of becoming permanently invisible. See migrations/
+// 000041_image_builds_refresh_lease.up.sql's own doc comment for why this
+// is a lease keyed to the claim's own timestamp rather than a startup
+// sweep keyed to a process's own boot time: a boot-time sweep cannot
+// safely distinguish an abandoned claim from a DIFFERENT pod's own
+// still-live one in this codebase's own explicitly anticipated
+// multi-control-plane-pod deployment shape (ListDueImageBuilds' own doc
+// comment), and would risk stomping a genuinely in-progress refresh.
+// Every stale-claim detection also logs a Warn and increments the
+// image_refresh_claim_reclaimed OTel counter (attemptRefresh, builder.go)
+// -- the operator-visible signal this package previously promised but
+// never delivered.
+//
+// A lease alone (a staleness bound compared against the claim's own
+// timestamp) is NOT, by itself, sufficient: it bounds how long a claim can
+// sit unreleased before another tick may reclaim it, but it does nothing
+// to stop a DIFFERENT failure mode -- a delayed writer whose own
+// outcome-recording call (RecordRefreshSuccess/RecordRefreshFailure)
+// outlives that same bound (e.g. blocked on a Postgres row lock for
+// longer than ImageRefreshClaimStaleAfter, for reasons entirely unrelated
+// to the refresh itself: an unrelated long-running transaction, a stalled
+// connection, a replica failover -- attemptRefresh runs on this package's
+// own long-lived background context, which carries no per-call deadline).
+// Once such a write finally lands, an UPDATE guarded only by "fingerprint
+// = $1 AND status = 'ready'" still matches (status never changes across a
+// reclaim), so it would unconditionally overwrite whatever a SECOND tick
+// has since legitimately claimed and possibly already completed --
+// clobbering a fresher build with a stale one, or worse, wiping out a
+// still in-flight claim, with no error, no log, and no counter anywhere.
+// Audit-remediation batch B2 round 2 closes this with a FENCING TOKEN,
+// not merely a lease: RecordImageRefreshSuccess and RecordImageRefreshFailure
+// (queries/image_builds.sql) both now additionally require
+// "refresh_started_at = <the exact value THIS call's own ClaimForRefresh
+// returned to it>", never a freshly computed now(). A write whose claim
+// has since been reclaimed therefore matches zero rows -- the exact same
+// harmless, expected "lost the race" outcome every OTHER superseded-claim
+// path in this package already treats as a no-op -- rather than
+// clobbering whichever tick currently, legitimately holds the lease. See
+// RecordImageRefreshSuccess/RecordImageRefreshFailure's own generated doc
+// comments and attemptRefresh's own top doc comment for the full mechanism.
 //
 // # Step 42 addition: the freshness pump (§19.2)
 //
