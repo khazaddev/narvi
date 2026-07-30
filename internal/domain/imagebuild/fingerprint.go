@@ -97,6 +97,17 @@ func Fingerprint(base string, repos map[string]string, runtimeVersion string) st
 // happen past validation, but this function must never panic on one) is
 // returned trimmed-but-otherwise-verbatim -- never causes an error, since
 // Fingerprint has no error return to give one through.
+//
+// Known, narrow, currently-unreachable edge case (review finding): the
+// fixed ".git"-suffix trim means ".../acme/foo.git" and ".../acme/foo"
+// normalize to the SAME string -- if a host ever permitted both to exist
+// as genuinely distinct repos, they would wrongly collide onto one
+// fingerprint and share a cached image. Not reachable through either
+// SourceControl provider this codebase targets (docs/TECHNICAL_PLAN.md
+// §4's own GitHub/GitLab pair): both reject creating a repo/project whose
+// name ends in ".git" server-side. Worth revisiting only if a
+// self-hosted bare-git-over-https provider is ever added as a third
+// SourceControl target.
 func NormalizeRepoURL(rawURL string) string {
 	s := strings.TrimSuffix(rawURL, "/")
 	s = strings.TrimSuffix(s, ".git")
