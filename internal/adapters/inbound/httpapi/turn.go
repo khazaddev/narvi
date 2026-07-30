@@ -85,7 +85,7 @@ func hasOpenTurn(turns []sqlcgen.Turn) bool {
 // Locking the session row first forces a second concurrent request to
 // block until the first's transaction commits (or rolls back), so it
 // re-reads the turns list only after that outcome is visible.
-func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry) http.HandlerFunc {
+func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -148,7 +148,7 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			return
 		}
 
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID, RejectIfOpen)
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID, RejectIfOpen)
 		if cerr != nil {
 			logger.Error("httpapi: create turn failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)
@@ -173,9 +173,60 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 type CreateTurnError struct {
 	Status  int
 	Message string
+
+	// sentinel is set ONLY for a small, well-known set of reasons a caller
+	// might need to recognize distinctly via errors.Is -- currently just
+	// ErrPlanAwaitingApproval below. Every OTHER CreateTurnError
+	// construction leaves this nil, so errors.Is against anything is
+	// simply false for those, exactly as before this field existed.
+	// Mirrors internal/domain/plan.IllegalTransitionError's own identical
+	// Unwrap-to-sentinel shape.
+	sentinel error
 }
 
 func (e *CreateTurnError) Error() string { return e.Message }
+
+// Unwrap lets a caller recognize a specific well-known CreateTurnError via
+// errors.Is (e.g. errors.Is(cerr, ErrPlanAwaitingApproval)) without needing
+// to string-match Message or duplicate the exact Status this core uses.
+func (e *CreateTurnError) Unwrap() error { return e.sentinel }
+
+// ErrPlanAwaitingApproval is createTurnLocked's own sentinel (this batch's
+// own follow-up fix to Steps 37/38, §8.1, closing the "reply matching no
+// verdict keyword dispatches an ordinary build turn anyway" hole found
+// during design review) for the one new reason a turn creation can be
+// declined that every other CreateTurnError construction never carries:
+// sessionID currently has a plan in plan.StatusAwaitingApproval AND the
+// turn being created is an ordinary (planMode == false) one. Recovered via
+// errors.Is against the *CreateTurnError this core returns.
+//
+// REST's own CreateTurn handler needs no special handling for this at all
+// -- it already forwards cerr.Status/cerr.Message verbatim, which IS this
+// gate's own required 409 shape. Slack's addTurn (turn.go) and Linear's
+// handlePrompted (webhook.go) -- both of which, before this fix, treated
+// ANY cerr from this core as a hard failure -- now recognize this ONE
+// specific reason via errors.Is and post an honest, non-error reply
+// instead (mirroring DropIfOpen's own existing "still busy" honest-reply
+// precedent for the analogous open-turn case). GitHub's own handler.go
+// error switch now does the same for its bot-ingress path (bot.go's
+// CreateTurnForBot, reused by github/coalesce.go's REUSE path) -- this
+// needed its own separate fix (Finding 1 of this batch's follow-up),
+// since CreateTurnForBot used to re-wrap cerr via fmt.Errorf's "%s" verb,
+// which discarded the error chain entirely and made this sentinel
+// unrecoverable via errors.Is for any caller of that function; it now
+// wraps with "%w" instead, so GitHub's handler.go can recognize this ONE
+// specific reason exactly like Slack/Linear do, acknowledge 200 without
+// releasing the webhook delivery claim (this is a deterministic,
+// expected business state, not a transient failure a redelivery could
+// ever fix), and post an honest reply on the PR thread instead of
+// producing a silent, self-inflicted redelivery retry storm.
+var ErrPlanAwaitingApproval = errors.New("httpapi: plan awaiting approval")
+
+// planAwaitingApprovalMessage is ErrPlanAwaitingApproval's own REST-facing
+// text -- REST's 409 body verbatim (CreateTurn's own doc comment above),
+// mirroring the existing open-turn 409's shape exactly (same CreateTurnError
+// type, just a different Message).
+const planAwaitingApprovalMessage = "a plan is awaiting approval for this session; approve or reject it, or submit a plan-revision turn"
 
 // CreateTurnPolicy selects CreateTurnCore's own behavior when sessionID
 // already has a non-terminal ("open") turn -- audit-fix batch addition
@@ -255,18 +306,18 @@ const (
 // still runs no Authorize check (that stays each caller's own job,
 // precisely so a still-unlinked actor's call can keep its existing,
 // documented bot-attribution behavior unchanged).
-func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy) (sqlcgen.Turn, bool, *CreateTurnError) {
+func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	if _, err := sessions.Get(ctx, sessionID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusNotFound, "session not found"}
+			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusNotFound, Message: "session not found"}
 		}
 		logger.Error("httpapi: get session failed", "error", err)
-		return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
-	return createTurnLocked(ctx, pool, sessions, turns, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, policy)
+	return createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, policy)
 }
 
 // createTurnLocked is the genuinely shared core every one of this batch's
@@ -282,17 +333,50 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // what closes L2 for Linear's own caller, which previously took no lock
 // at all before its own equivalent check), the policy-gated open-turn
 // check (skipped entirely for AlwaysQueue -- see CreateTurnPolicy's own
-// doc comment), insert, the SAME turn.create audit_log row every caller
-// now gets (H7 audit fix), commit, then the SAME fire-and-forget
-// GetOrSpawn+EnsureDispatched post-commit sequencing every turn-creation
-// call site in this codebase has always used.
-func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy) (sqlcgen.Turn, bool, *CreateTurnError) {
+// doc comment), the awaiting-plan gate (this batch's own addition -- see
+// ErrPlanAwaitingApproval's own doc comment; only reached when the
+// open-turn check above did NOT already return), insert, the SAME
+// turn.create audit_log row every caller now gets (H7 audit fix), commit,
+// then the SAME fire-and-forget GetOrSpawn+EnsureDispatched post-commit
+// sequencing every turn-creation call site in this codebase has always
+// used.
+//
+// Finding 3 of this batch's own follow-up fix reordered these two checks
+// (the awaiting-plan gate used to run FIRST, unconditionally, before the
+// policy-gated open-turn check): internal/app/sessionactor/planrecord.go's
+// own recordPlanIfNeeded only supersedes the OLD awaiting_approval plan
+// row at the END of a revise turn's (plan_mode=true) own processing, not
+// at that turn's own creation time -- so for the ENTIRE duration an
+// in-flight revise turn is open/dispatched/processing, BOTH "an open turn
+// exists" AND "the old plan is still awaiting_approval" are simultaneously
+// true. Running the awaiting-plan gate first used to mean an ordinary
+// message arriving during that exact overlap window got the "plan is
+// awaiting your approval" reply instead of the busy reply -- misleading,
+// since the user's own revision request is already being processed, not
+// idly waiting on a decision. Running the policy-gated open-turn/busy
+// check FIRST fixes this: whenever a turn is already open/in-flight, the
+// busy reply is always the more accurate message regardless of plan
+// state, and the awaiting-plan gate's own job (refusing a NEW, first,
+// unapproved build turn) is moot anyway when nothing new could be
+// dispatched right now regardless. The two checks were always independent
+// early-returns against the SAME already-locked session row, so swapping
+// their order changes nothing else -- only which message wins in this one
+// narrow overlap window.
+//
+// plans is Step 37/38's own follow-up fix (§8.1) addition, nil-safe like
+// this codebase's other optional collaborators (e.g. Deps.IntentClassifier
+// elsewhere) -- a nil plans skips the awaiting-plan gate entirely rather
+// than panicking, so a caller/test that genuinely has no use for plan mode
+// is never forced to wire one up. Every real production caller
+// (cmd/control-plane/main.go) always passes the SAME, real *postgres.
+// PlanStore, so this is never nil outside tests.
+func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		logger.Error("httpapi: begin create-turn tx failed", "error", err)
-		return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 	// Rollback is a safety net for every return path other than a
 	// successful Commit below -- mirrors CreateSession's own identical
@@ -309,23 +393,66 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// way).
 	if _, err := sessions.WithTx(tx).GetActorEpochForUpdate(ctx, sessionID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusNotFound, "session not found"}
+			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusNotFound, Message: "session not found"}
 		}
 		logger.Error("httpapi: lock session row failed", "error", err)
-		return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
+	// Policy-gated open-turn/busy check (skipped entirely for AlwaysQueue --
+	// see CreateTurnPolicy's own doc comment). Finding 3 of this batch's own
+	// follow-up fix moved this check ahead of the awaiting-plan gate below
+	// -- see createTurnLocked's own top doc comment for why: whenever a
+	// turn is already open/in-flight, the busy reply this produces is
+	// always the more accurate message, regardless of the session's plan
+	// state.
 	if policy != AlwaysQueue {
 		existingTurns, err := turns.WithTx(tx).ListForSession(ctx, sessionID)
 		if err != nil {
 			logger.Error("httpapi: list turns failed", "error", err)
-			return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 		}
 		if hasOpenTurn(existingTurns) {
 			if policy == DropIfOpen {
 				return sqlcgen.Turn{}, false, nil
 			}
-			return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusConflict, "a turn is already pending, dispatched, or processing for this session"}
+			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusConflict, Message: "a turn is already pending, dispatched, or processing for this session"}
+		}
+	}
+
+	// Awaiting-plan gate (this batch's own follow-up fix, §8.1): an
+	// ordinary (planMode == false) turn must never dispatch while sessionID
+	// has a plan sitting in StatusAwaitingApproval -- that plan is work a
+	// human has not yet approved, and BEFORE this fix, any reply matching
+	// neither plandomain.MatchVerdict nor plandomain.MatchRevise silently
+	// fell through into exactly this ordinary-turn path, starting
+	// unapproved work. Runs INSIDE this same locked transaction (the
+	// session row is already held above), reusing PlanStore.
+	// ListSummariesForSession -- the SAME minimal query internal/adapters/
+	// inbound/linear's own findAwaitingApprovalPlanID (webhook.go) already
+	// scans identically, so no new PlanStore method is needed. A
+	// planMode == true turn (the request-changes flow, whether reached via
+	// Slack's "Request changes" modal, Linear/Slack's revise: prefix, or a
+	// web client setting planMode directly) is NEVER gated here -- see
+	// CreateTurnPolicy's own doc comment for why plan_mode turns stay
+	// unconditionally allowed. Only reached when the open-turn check above
+	// did NOT already return (Finding 3): if a turn is already open/in
+	// flight, that is always the more accurate reply, regardless of
+	// whether sessionID also happens to have a plan awaiting approval right
+	// now (the common overlap case being an in-flight revise turn itself,
+	// which has not yet superseded the very plan row this gate would
+	// otherwise still see as awaiting_approval).
+	if !planMode && plans != nil {
+		summaries, err := plans.WithTx(tx).ListSummariesForSession(ctx, sessionID)
+		if err != nil {
+			logger.Error("httpapi: list plan summaries for awaiting-plan gate failed", "error", err)
+			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
+		}
+		for _, s := range summaries {
+			if s.Status == sqlcgen.PlanStatusAwaitingApproval {
+				logger.Info("httpapi: ordinary turn creation blocked by awaiting-approval plan", "session_id", sessionID.String(), "plan_id", s.ID.String())
+				return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusConflict, Message: planAwaitingApprovalMessage, sentinel: ErrPlanAwaitingApproval}
+			}
 		}
 	}
 
@@ -338,7 +465,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	})
 	if err != nil {
 		logger.Error("httpapi: create turn failed", "error", err)
-		return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
 	if err := recordAuditLog(ctx, auditLog.WithTx(tx), actorUserID, "turn.create", "turn", created.ID.String(), map[string]any{
@@ -346,12 +473,12 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		"plan_mode":  planMode,
 	}); err != nil {
 		logger.Error("httpapi: record turn.create audit log failed", "error", err)
-		return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		logger.Error("httpapi: commit create-turn tx failed", "error", err)
-		return sqlcgen.Turn{}, false, &CreateTurnError{http.StatusInternalServerError, "internal error"}
+		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
 	// Fire-and-forget, OUTSIDE the transaction above, exactly mirroring

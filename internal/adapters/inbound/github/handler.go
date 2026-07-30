@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -71,6 +72,17 @@ type Config struct {
 	BotToken     string
 	PullRequests PullRequestResolver
 	Timeouts     platform.Timeouts
+
+	// Comments (Step 37/38 follow-up fix, Finding 1) posts the honest
+	// planAwaitingApprovalReplyText reply (planawaitingreply.go) back to a
+	// PR thread when coalesce.go's CreateOrJoin declines to enqueue a build
+	// turn because the session's plan is currently awaiting approval.
+	// Nil-safe: nil (this package's own handler_test.go, or any other
+	// minimal wiring that doesn't care about this reply) simply skips
+	// posting it -- see postPlanAwaitingReply's own doc comment.
+	// githubapi.Adapter (the SAME instance production wiring already
+	// constructs for PullRequests above) satisfies this directly.
+	Comments CommentPoster
 }
 
 // NewHandler builds the POST /webhooks/github handler (cmd/control-plane/
@@ -270,6 +282,28 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				// redelivery of the SAME comment would render the exact
 				// same denial again, so there is nothing a GitHub retry
 				// could fix here.
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
+				// Step 37/38 follow-up fix (Finding 1): the session's plan
+				// is currently awaiting approval, so the REUSE path's own
+				// httpapi.CreateTurnForBot call (coalesce.go) declined to
+				// enqueue an ordinary build turn -- a deterministic,
+				// expected business state, not a transient failure. Mirrors
+				// ErrActorNotAuthorized's own "no release, retrying changes
+				// nothing" reasoning exactly: the awaiting-plan condition
+				// persists until a human decides (elsewhere -- see
+				// planAwaitingApprovalReplyText's own doc comment), so
+				// releasing the claim for a GitHub redelivery retry would
+				// only ever reproduce this SAME outcome, forever, as a
+				// self-inflicted retry storm. Unlike ErrActorNotAuthorized,
+				// this ALSO posts an honest reply on the PR thread --
+				// today's PRE-fix behavior left the thread with no reply at
+				// all, unlike Slack/Linear's own equivalent honest replies
+				// for this exact sentinel.
+				logger.Info("github: mention blocked by awaiting-approval plan", "repo", m.RepoFullName, "pr_number", m.PRNumber)
+				postPlanAwaitingReply(ctx, logger, cfg.Comments, cfg.BotToken, m.RepoFullName, m.PRNumber)
 				w.WriteHeader(http.StatusOK)
 				return
 			}

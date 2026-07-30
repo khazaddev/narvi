@@ -19,6 +19,7 @@ package slack
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,15 +42,50 @@ import (
 // that case distinctly ("still working on the previous message") rather
 // than silently queuing a second turn behind it.
 //
+// planMode (Step 37/38 follow-up fix, §8.1) lets handleEvent (handler.go)
+// route a revise:-prefixed reply through as a real plan_mode=true
+// "request changes" turn instead of always hardcoding false -- see that
+// function's own doc comment. err is a plain *httpapi.CreateTurnError
+// (never unwrapped/converted) specifically so a caller can recognize
+// httpapi.ErrPlanAwaitingApproval via errors.Is -- handleEvent does exactly
+// that to post an honest reply instead of treating this as a hard failure.
+//
 // actorUserID (audit-fix batch addition) is attributed onto the resulting
 // turn.create audit_log row only -- turns itself carries no per-row actor
 // column (migrations/000005_turns.up.sql), so this mirrors handleEvent's
 // own already-resolved actorUserID, which previously had nowhere at all to
 // flow into for a reply on an existing thread.
-func addTurn(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, actorUserID pgtype.UUID) (turn sqlcgen.Turn, created bool, err error) {
-	turnRow, wasCreated, cerr := httpapi.CreateTurnCore(ctx, pool, sessions, turns, auditLog, registry, sessionID, prompt, nil, false, actorUserID, httpapi.DropIfOpen)
+func addTurn(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, planMode bool, actorUserID pgtype.UUID) (turn sqlcgen.Turn, created bool, err error) {
+	turnRow, wasCreated, cerr := httpapi.CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, nil, planMode, actorUserID, httpapi.DropIfOpen)
 	if cerr != nil {
 		return sqlcgen.Turn{}, false, cerr
 	}
 	return turnRow, wasCreated, nil
+}
+
+// hasAwaitingApprovalPlan reports whether sessionID currently has a plan in
+// StatusAwaitingApproval -- mirrors internal/adapters/inbound/linear's own
+// identical findAwaitingApprovalPlanID (webhook.go): a package-private copy
+// rather than a shared helper, matching this codebase's own established
+// per-package convention for small, cheap-to-duplicate webhook-adjacent
+// helpers (see this package's own maxRequestBodyBytes doc comment,
+// handler.go, for the identical precedent). Used by handleEvent
+// (handler.go) to decide whether an incoming reply's own text should be
+// checked against plandomain.MatchRevise at all -- a lookup failure is
+// logged and treated as "no awaiting plan" (false), since a revise-prefix
+// parsing convenience must never turn into a hard failure of the
+// underlying event; createTurnLocked's own awaiting-plan gate (httpapi/
+// turn.go) is what actually enforces the invariant either way.
+func hasAwaitingApprovalPlan(ctx context.Context, logger *slog.Logger, plans *postgres.PlanStore, sessionID pgtype.UUID) bool {
+	summaries, err := plans.ListSummariesForSession(ctx, sessionID)
+	if err != nil {
+		logger.Warn("slack: list plan summaries for revise check failed", "error", err, "session_id", sessionID.String())
+		return false
+	}
+	for _, s := range summaries {
+		if s.Status == sqlcgen.PlanStatusAwaitingApproval {
+			return true
+		}
+	}
+	return false
 }

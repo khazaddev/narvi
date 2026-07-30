@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
+	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -125,6 +127,23 @@ const (
 	ackNotAuthorizedReplyText = "You're not authorized to prompt this session."
 )
 
+// ackPlanAwaitingText is this batch's own honest reply (Step 37/38
+// follow-up fix, §8.1), posted instead of enqueuing a build turn when a
+// plain-text thread reply matches neither an approve/reject button click
+// (Slack plan verdicts are rendered via Block Kit buttons, interactive.go,
+// never text) nor plandomain.MatchRevise, while the mapped session
+// currently has a plan in StatusAwaitingApproval -- CLOSING the hole where
+// such a reply previously fell straight through into an ordinary,
+// plan_mode=false turn the human never approved. Mirrors ackBusyText's own
+// wording/tone immediately above; built (like Linear's identical
+// planAwaitingApprovalReplyText, webhook.go) off plandomain.RevisePrefix
+// itself, so the instructions here can never drift out of sync with what
+// MatchRevise actually accepts.
+var ackPlanAwaitingText = fmt.Sprintf(
+	"A plan is awaiting approval for this session — use the Approve/Reject buttons above to decide it, or start your reply with %q to request changes.",
+	plandomain.RevisePrefix,
+)
+
 // Deps bundles every dependency NewHandler needs -- a small config
 // struct (rather than a long positional parameter list, given the
 // number of stores this adapter touches) mirroring this codebase's own
@@ -138,6 +157,16 @@ type Deps struct {
 	Registry     *sessionactor.Registry
 	Deliveries   *postgres.WebhookDeliveryStore
 	Threads      *postgres.SlackThreadSessionStore
+
+	// Plans (Step 37/38 follow-up fix, §8.1) -- handleEvent's own new
+	// awaiting-plan gate/revise-prefix check (below) needs this to find a
+	// mapped session's own awaiting_approval plan, if any, mirroring
+	// Linear's identical Deps.Plans (webhook.go). nil-safe: a nil Plans
+	// simply skips the revise-prefix check (createTurnLocked's own
+	// awaiting-plan gate, httpapi/turn.go, is likewise nil-safe), so
+	// existing tests/wiring that don't care about plan mode keep working
+	// unchanged.
+	Plans *postgres.PlanStore
 
 	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
 	// httpapi.CreateSessionCore below exactly like Environments already
@@ -534,10 +563,38 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		return handleEventResult{OK: true, ReleaseMessageClaim: res.ReleaseMessageClaim}
 	}
 
-	createdTurn, created, err := addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.AuditLog, deps.Registry, res.SessionID, prompt, actorUserID)
+	// Step 37/38 follow-up fix (§8.1): while res.SessionID has a plan in
+	// StatusAwaitingApproval, a plain-text reply matching
+	// plandomain.RevisePrefix is a deterministic "request changes" reply --
+	// route it through as a REAL plan_mode=true turn (the prompt becomes the
+	// stripped feedback) instead of an ordinary one. Every OTHER reply
+	// (matching neither an approve/reject button -- Slack verdicts are
+	// buttons, never text, see ackPlanAwaitingText's own doc comment -- nor
+	// this prefix) falls through unchanged into the ordinary addTurn call
+	// below; createTurnLocked's own awaiting-plan gate (httpapi/turn.go) is
+	// what actually declines it there, surfacing ErrPlanAwaitingApproval,
+	// handled just below. deps.Plans == nil (never true in production
+	// wiring) skips this check entirely, exactly like the gate itself does.
+	planMode := false
+	if deps.Plans != nil && hasAwaitingApprovalPlan(ctx, logger, deps.Plans, res.SessionID) {
+		if feedback, reviseOK := plandomain.MatchRevise(prompt); reviseOK {
+			prompt = feedback
+			planMode = true
+		}
+	}
+
+	createdTurn, created, err := addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, actorUserID)
+	gatedByAwaitingPlan := false
 	if err != nil {
-		logger.Error("slack: add turn failed", "error", err)
-		return handleEventResult{OK: false}
+		if !errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
+			logger.Error("slack: add turn failed", "error", err)
+			return handleEventResult{OK: false}
+		}
+		// Honest reply (this batch's own addition), never a hard failure --
+		// mirrors DropIfOpen's own existing "still busy" precedent for the
+		// analogous open-turn case (M6 audit fix) just below.
+		gatedByAwaitingPlan = true
+		logger.Info("slack: reply blocked by awaiting-approval plan", "session_id", res.SessionID)
 	}
 
 	// L20 audit fix: this package previously logged NOTHING on a
@@ -546,10 +603,12 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// correlate against in the logs. Mirrors github's own identical
 	// successful-mention log line shape (coalesce.go). The busy/dropped
 	// case (M6) gets its own, distinct log line instead of silence.
-	if created {
-		logger.Info("slack: added turn", "session_id", res.SessionID, "turn_id", createdTurn.ID)
-	} else {
-		logger.Warn("slack: session already has an open turn, dropping message", "session_id", res.SessionID)
+	if !gatedByAwaitingPlan {
+		if created {
+			logger.Info("slack: added turn", "session_id", res.SessionID, "turn_id", createdTurn.ID)
+		} else {
+			logger.Warn("slack: session already has an open turn, dropping message", "session_id", res.SessionID)
+		}
 	}
 
 	// Step 36 ("intent classifier", §8.3/§18): classify + record ONCE, on
@@ -578,6 +637,8 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 
 	ackText := ackReplyText
 	switch {
+	case gatedByAwaitingPlan:
+		ackText = ackPlanAwaitingText
 	case res.IsNewThread:
 		ackText = ackNewSessionText
 	case !created:

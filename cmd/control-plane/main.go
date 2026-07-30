@@ -385,6 +385,12 @@ func serve() error {
 		Deliveries:   webhookDeliveryStore,
 		Threads:      slackThreadSessionStore,
 		AuditLog:     auditLogStore,
+		// Plans (Step 37/38 follow-up fix, §8.1): the SAME planStore
+		// instance every other caller above already uses -- handleEvent's
+		// own new awaiting-plan gate/revise-prefix check (handler.go) needs
+		// this to find a mapped session's own awaiting_approval plan, if
+		// any, exactly like Linear's identical Deps.Plans wiring below.
+		Plans: planStore,
 		// Participants (this Step's own SECOND fix-pass addition,
 		// "identities + full RBAC", §13.2/§13.3): the SAME participantStore
 		// instance every other caller (the interactivity route immediately
@@ -463,6 +469,10 @@ func serve() error {
 			Identities:   identityStore,
 			Users:        userStore,
 			Participants: participantStore,
+			// Plans (Step 37/38 follow-up fix, §8.1): the SAME planStore
+			// instance every other caller above already uses -- threaded
+			// through to CreateTurnForBot's own awaiting-plan gate.
+			Plans: planStore,
 		},
 		webhookDeliveryStore,
 		githubingress.Config{
@@ -480,7 +490,15 @@ func serve() error {
 			// with, never a per-commenter credential.
 			BotToken:     cfg.GitHubBotToken,
 			PullRequests: sourceControl,
-			Timeouts:     cfg.Timeouts,
+			// Comments (Step 37/38 follow-up fix, Finding 1): posts the
+			// honest plan-awaiting-approval reply back to a PR thread when
+			// coalesce.go's REUSE path declines to enqueue a build turn
+			// because the session's plan is currently awaiting approval.
+			// The SAME *githubapi.Adapter instance as PullRequests/
+			// sourceControl above -- never a second, independently-
+			// constructed copy.
+			Comments: sourceControl,
+			Timeouts: cfg.Timeouts,
 		},
 	))
 
@@ -580,7 +598,7 @@ func serve() error {
 		// turns (Step 28, "turn recovery", §8.7): the relaunch-and-resume
 		// REST API -- enqueues a new turn on an existing session, 409 if
 		// one is already in flight. See httpapi/turn.go's own doc comment.
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, participantStore, auditLogStore, registry))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, planStore, participantStore, auditLogStore, registry))
 		// plans (Step 37, "plan mode, web", §8.1/§12.2 item 3): the
 		// approve/reject HITL actions -- see httpapi/planapprove.go's own
 		// doc comment for the full sequencing. outboxStore/

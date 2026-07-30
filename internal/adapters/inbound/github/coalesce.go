@@ -66,6 +66,13 @@ type SessionCoalescer struct {
 	Registry         *sessionactor.Registry
 	IntentClassifier *intentclassifier.Service
 
+	// Plans (Step 37/38 follow-up fix, §8.1) is threaded through to the
+	// REUSE path's own httpapi.CreateTurnForBot call below, exactly like
+	// every other createTurnLocked caller now gets -- see that function's
+	// own doc comment (httpapi/turn.go) for the nil-safe "skips the
+	// awaiting-plan gate" contract a nil value here keeps.
+	Plans *postgres.PlanStore
+
 	// AuditLog is Step 39's own addition (§13.3): threaded through to the
 	// WINNER path's own httpapi.CreateSessionOnTx call below, exactly like
 	// Environments already is, so a GitHub-originated session creation
@@ -260,7 +267,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// is the SAME already-resolved commenter identity passed to the
 		// authz checks above (Valid iff linked, invalid/bot-attributed
 		// otherwise), never a second, independently-resolved actor.
-		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, actor)
+		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, actor)
 		if err != nil {
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}

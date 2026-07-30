@@ -244,6 +244,64 @@ func TestCreateTurn_ConcurrentRequests_OnlyOneSucceeds(t *testing.T) {
 	}
 }
 
+// TestCreateTurn_AwaitingPlan_Returns409NothingCreated is this batch's own
+// REST-level regression test for the new awaiting-plan gate (Step 37/38
+// follow-up fix, §8.1): a plan_mode=false relaunch POST against a session
+// that currently has a plan in StatusAwaitingApproval gets a 409 -- the
+// SAME CreateTurnError shape TestCreateTurn_InFlightTurnExists_Returns409
+// above already proves, just a different Message -- and inserts NO new
+// turn row at all.
+func TestCreateTurn_AwaitingPlan_Returns409NothingCreated(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, user.ID, nil)
+	seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns",
+		[]byte(`{"prompt": "build it now", "modelId": null, "planMode": false}`), nil, token)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", status, http.StatusConflict)
+	}
+
+	// The only turn present must be the seeded producing turn -- the gate
+	// must never let an ordinary relaunch turn slip past it.
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("len(turns) = %d, want exactly 1 (the seeded producing turn only)", len(turns))
+	}
+}
+
+// TestCreateTurn_AwaitingPlan_PlanModeTrue_Allowed proves the gate's own
+// other half at the REST level: a web client submitting planMode=true
+// directly (the request-changes flow) is never blocked by an
+// awaiting-approval plan, exactly as before this fix.
+func TestCreateTurn_AwaitingPlan_PlanModeTrue_Allowed(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, user.ID, nil)
+	seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
+
+	body := []byte(`{"prompt": "please also cover the edge case", "modelId": null, "planMode": true}`)
+	var got restdtos.CreateTurnResponse
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("len(turns) = %d, want 2 (the seeded producing turn plus the new plan_mode=true one)", len(turns))
+	}
+}
+
 // TestCreateTurn_UnknownSession_Returns404 proves a well-formed but
 // nonexistent session id gets 404, matching GetSession's own precedent.
 func TestCreateTurn_UnknownSession_Returns404(t *testing.T) {
@@ -292,6 +350,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	identities := narvipg.NewIdentityStore(pool)
 	userSessions := narvipg.NewUserSessionStore(pool)
 	participants := narvipg.NewParticipantStore(pool)
+	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
 	commander := &fakeTurnCommander{}
@@ -304,7 +363,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessions, users))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, participants, auditLog, registry))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry))
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)

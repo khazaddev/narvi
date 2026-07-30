@@ -184,6 +184,7 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
+	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
@@ -201,12 +202,12 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 		t.Fatalf("CreateSessionForBot (setup): %v", err)
 	}
 
-	first, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "first mention", nil, false, pgtype.UUID{})
+	first, err := CreateTurnForBot(ctx, pool, sessions, turns, plans, auditLog, registry, created.ID, "first mention", nil, false, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("CreateTurnForBot (first): %v", err)
 	}
 
-	second, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "second concurrent mention", nil, false, pgtype.UUID{})
+	second, err := CreateTurnForBot(ctx, pool, sessions, turns, plans, auditLog, registry, created.ID, "second concurrent mention", nil, false, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("CreateTurnForBot (second, while first still pending): %v", err)
 	}
@@ -238,6 +239,7 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 	sessions := narvipg.NewSessionStore(pool)
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
+	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 	users := narvipg.NewUserStore(pool)
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
@@ -263,7 +265,7 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 		t.Fatalf("CreateSessionForBot (setup): %v", err)
 	}
 
-	turnRow, err := CreateTurnForBot(ctx, pool, sessions, turns, auditLog, registry, created.ID, "please take a look", nil, false, actor.ID)
+	turnRow, err := CreateTurnForBot(ctx, pool, sessions, turns, plans, auditLog, registry, created.ID, "please take a look", nil, false, actor.ID)
 	if err != nil {
 		t.Fatalf("CreateTurnForBot: %v", err)
 	}
@@ -292,5 +294,76 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 	}
 	if actorUserID != actor.ID {
 		t.Errorf("audit_log.actor_user_id = %v, want %v", actorUserID, actor.ID)
+	}
+}
+
+// TestCreateTurnForBot_PlanAwaitingApproval_PreservesSentinel is Finding
+// 1's own regression test (Step 37/38 follow-up fix): before this fix,
+// CreateTurnForBot re-wrapped createTurnLocked's own *CreateTurnError via
+// fmt.Errorf's "%s" verb, which discarded the error chain entirely --
+// errors.Is(err, ErrPlanAwaitingApproval) could never succeed for ANY
+// caller of this function (github/coalesce.go's REUSE path is that one
+// real caller, handler_integration_test.go's own
+// TestGitHubIntegration_AwaitingPlanBlocksReuseTurn_HonestReplyNoRelease
+// proves the full, further-wrapped chain through THAT caller). This test
+// proves the fix at the source: CreateTurnForBot's own plain returned
+// error now still satisfies errors.Is(err, ErrPlanAwaitingApproval) after
+// being wrapped with "%w" instead.
+func TestCreateTurnForBot_PlanAwaitingApproval_PreservesSentinel(t *testing.T) {
+	ctx := context.Background()
+	pool := newBotTestPool(t)
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	environments := narvipg.NewEnvironmentStore(pool)
+	plans := narvipg.NewPlanStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = registry.Shutdown() })
+
+	created, err := CreateSessionForBot(ctx, pool, sessions, turns, environments, auditLog, registry, restdtos.CreateSessionRequest{
+		SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
+		Repos: []restdtos.CreateSessionRequestReposElem{
+			{Name: "widgets", Url: "https://github.com/acme/widgets.git"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSessionForBot (setup): %v", err)
+	}
+
+	// Seed a producing turn (Completed, plan_mode true) and an
+	// awaiting_approval plans row atop it -- mirrors turncore_integration_
+	// test.go's own identical seedAwaitingApprovalPlan helper, duplicated
+	// here since this file cannot reach that unexported one either (both
+	// live in package httpapi but in different files of the SAME package,
+	// so this could reuse it directly -- kept as a short inline seed here
+	// instead, since this is this file's own only use of the pattern).
+	producingTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: created.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	if _, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: created.ID, TurnID: producingTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval}); err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+
+	_, err = CreateTurnForBot(ctx, pool, sessions, turns, plans, auditLog, registry, created.ID, "please build this now", nil, false, pgtype.UUID{})
+	if err == nil {
+		t.Fatal("CreateTurnForBot() error = nil, want a non-nil error wrapping ErrPlanAwaitingApproval")
+	}
+	if !errors.Is(err, ErrPlanAwaitingApproval) {
+		t.Errorf("errors.Is(err, ErrPlanAwaitingApproval) = false, want true (err = %v) -- the sentinel must survive CreateTurnForBot's own re-wrap", err)
+	}
+
+	// The gate must have actually declined the insert -- only the seeded
+	// producing turn is present.
+	turnRows, err := turns.ListForSession(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turnRows) != 1 {
+		t.Fatalf("len(turns) = %d, want exactly 1 (the seeded producing turn only)", len(turnRows))
 	}
 }
