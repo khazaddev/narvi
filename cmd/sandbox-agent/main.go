@@ -962,6 +962,12 @@ func runBootSequence(
 	onGitSync gitclone.OnGitSync,
 ) error {
 	var repos []boot.RepoInfo
+	// workspaceMoved (§19.4, Step 42) stays nil for a nil-SessionConfig boot
+	// (the dev/test no-op case, exactly like repos itself) -- boot.RunBoot's
+	// own runRepoHooks call treats a nil map as "every repo defaults to
+	// workspaceMoved: true" (workspaceMovedFor's own safe default), which is
+	// moot anyway since repos is empty in that case too.
+	var workspaceMoved map[string]bool
 	if cfg.SessionConfig != nil {
 		var manifestInput []gitclone.CloneResult
 
@@ -1040,9 +1046,32 @@ func runBootSequence(
 		slog.Info("sandbox-agent: boot fingerprint (post-clone)",
 			"repo_shas", postCloneFingerprint.RepoSHAs,
 		)
+
+		// §19.4 (Step 42)'s own workspaceMoved computation: read
+		// /narvi/image-manifest.json ONCE per boot (never per-repo -- one
+		// manifest covers every repo in the image, §19.1 point 4) and
+		// compare each repo's just-collected post-clone/-sync checked-out
+		// SHA (postCloneFingerprint.RepoSHAs, computed immediately above --
+		// reused rather than re-discovered a second time) against that
+		// manifest's own built_repo_shas[name]. A missing/unreadable
+		// manifest (every non-repo_image boot mode, or a repo_image image
+		// that predates this Step) is handled entirely inside
+		// boot.ComputeWorkspaceMoved's own documented safe default (every
+		// repo defaults to workspaceMoved: true) -- computed unconditionally
+		// here, regardless of cfg.BootMode, since sandboxboot.EvaluateHook
+		// only ever actually CONSULTES this value for the one cell that
+		// matters (repo_image + HookSetup); every other mode's own hook
+		// policy ignores it entirely, so computing it uniformly costs
+		// nothing and keeps this call site simple.
+		manifest, manifestFound, manifestErr := boot.LoadImageManifest(boot.ImageManifestPath)
+		if manifestErr != nil {
+			slog.Warn("sandbox-agent: read image manifest failed; treating every repo as workspace-moved (safe default, §19.4)",
+				"path", boot.ImageManifestPath, "error", manifestErr)
+		}
+		workspaceMoved = boot.ComputeWorkspaceMoved(manifest, manifestFound, postCloneFingerprint.RepoSHAs)
 	}
 
-	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, reportBootProgress,
+	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, reportBootProgress,
 		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
 		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval); err != nil {
 		return fmt.Errorf("boot: %w", err)

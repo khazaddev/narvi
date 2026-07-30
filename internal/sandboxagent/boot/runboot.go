@@ -31,12 +31,21 @@ import (
 // servicemanifest.Validate validation is likewise a real, propagated error:
 // a malformed services.yml is an authoring bug worth surfacing loudly, not
 // masking behind a silent fallback to the hook contract.
+//
+// workspaceMoved (§19.4, Step 42) is passed straight through to
+// runRepoHooks for the services.yml-absent (hook-contract) branch -- see
+// RunHooks's own doc comment. A repo supervised via services.yml never
+// consults it at all: that path never runs setup.sh/start.sh through
+// sandboxboot.EvaluateHook in the first place (§14.2's own "no new
+// supervision code path" design), so workspaceMoved has nothing to gate
+// there.
 func RunBoot(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	workspaceDir string,
 	repos []RepoInfo,
 	mode sandboxboot.BootMode,
+	workspaceMoved map[string]bool,
 	reporter services.ProgressReporter,
 	hookTimeout, stopGrace, readinessTimeout, readinessPollInterval time.Duration,
 ) error {
@@ -49,7 +58,7 @@ func RunBoot(
 		}
 
 		if !found {
-			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, hookTimeout, stopGrace); err != nil {
+			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, hookTimeout, stopGrace); err != nil {
 				return err
 			}
 			continue
