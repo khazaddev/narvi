@@ -8,8 +8,10 @@ not an afterthought:
 > stack.
 
 This is the definitive scenario-by-scenario index for that exit
-criterion: for each of the 12 scenarios below, exactly one of the
-following is true, and stated plainly rather than overstated —
+criterion: for each of the 12 original §9.3 scenarios plus the 4 new
+warm-boot-class scenarios Step 42 (§19.2/§19.4/§19.5/§19.7) adds below,
+exactly one of the following is true, and stated plainly rather than
+overstated —
 
 - **covered** — a real test proves it, cited by exact function name and
   file path (verified by grepping the repo while writing this doc, not
@@ -354,6 +356,116 @@ resumable, not merely "not yet marked failed".
 - `TestResilienceScenario12_GracefulRollingRestart_ZeroSessionsMarkedFailed`
   — `test/resilience/scenario12_rolling_restart_test.go`
 
+## The 4 new warm-boot scenarios (Step 42, §19.2/§19.4/§19.5/§19.7)
+
+Step 42 ("warm boot: refresh pump + hook policy") adds four new,
+genuinely new scenario NUMBERS (13-16, none of the original 12 slots were
+reserved for warm-boot work) to this same index — each a real,
+harness-driven test proving the property, not a unit test relabeled. Two
+of the four (stale-image boot, non-idempotent-setup boot) are proven
+through `internal/sandboxagent/boot.RunBoot` directly rather than a file
+physically inside this directory — the same precedent scenario #11 (Dirty
+working tree at relaunch, above) already established: the actual
+orchestration logic under test (hook policy, `workspaceMoved`, output-tail
+capture, telemetry, all wired together) lives in that package, and
+`cmd/sandbox-agent`'s own thin `runBootSequence` wiring around it is
+already covered by that package's own pre-existing
+`bootsequence_cleanbuild_integration_test.go` precedent — a second,
+duplicate proof through `main.go`'s own `os.Executable()`-sensitive
+subprocess machinery would add nothing.
+
+### #13 — fetch-fail boot
+
+> A full boot sequence with a failing fetch (Step 40's own degrade policy,
+> exercised at the resilience-suite level, not just gitclone's own unit
+> tests).
+
+**Status: covered.** A REAL, full boot sequence — `runBootSequence` ->
+`gitclone.SyncAll` -> `boot.RunBoot` -> hooks, exactly as `cmd/sandbox-
+agent`'s own `run()` drives it — against a `repo_image` workspace baked
+from a real git-http-backend test server, then pointed at a genuinely
+unreachable origin (a certainly-closed local port, never a hang). Two
+sub-cases, both of §19.3's own degrade policy: an invented session branch
+(`repos[].branch == nil`) degrades and the whole boot still succeeds,
+proceeding on stale (baked) image state; an EXPLICIT branch that is
+neither local nor fetchable fails the boot fatally for its primary repo,
+proving the non-negotiable "never silently fork a same-named branch at a
+stale base" rule holds at the full-boot level, not just in gitclone's own
+isolated unit tests (`internal/sandboxagent/gitclone/sync_test.go`'s own
+`TestSyncAll_FetchFails_*` table, still covering the same rule directly
+against `SyncAll` alone).
+
+- `TestResilienceScenario_FetchFailBoot_InventedBranch_DegradesAndBootSucceeds`
+  — `cmd/sandbox-agent/resilience_fetchfail_boot_integration_test.go`
+- `TestResilienceScenario_FetchFailBoot_ExplicitBranchNeitherLocalNorFetchable_FatalBoot`
+  — `cmd/sandbox-agent/resilience_fetchfail_boot_integration_test.go`
+
+### #14 — stale-image boot
+
+> A `repo_image` boot whose manifest SHA differs from the checked-out
+> tree — `workspaceMoved` fires, `setup.sh` reruns non-fatally.
+
+**Status: covered.** A real git repo (one real commit) plus a real
+`boot.ImageManifest` shaped exactly like the baked `/narvi/
+image-manifest.json` (§19.1), with a `built_repo_shas` entry deliberately
+different from the repo's own real, current `HEAD` SHA — `workspaceMoved`
+fires (`boot.ComputeWorkspaceMoved`), and a real `boot.RunBoot` call (the
+same real hook-policy/output-capture/telemetry machinery `cmd/sandbox-
+agent` wires in production) reruns `setup.sh`, non-fatally, confirmed by a
+real marker file the rerun writes. A companion test proves the unmoved
+case (manifest SHA matches exactly) stays a pure no-op — zero regression
+for a session that lands on a genuinely unmoved image.
+
+- `TestResilienceScenario_StaleImageBoot_WorkspaceMovedFiresSetupReruns`
+  — `internal/sandboxagent/boot/resilience_repoimage_test.go`
+- `TestResilienceScenario_StaleImageBoot_WorkspaceUnmoved_SetupSkipped`
+  — `internal/sandboxagent/boot/resilience_repoimage_test.go`
+
+### #15 — refresh-in-flight spawn
+
+> A NEW spawn targeting a fingerprint whose `image_ref` is mid-refresh —
+> confirm it still gets the OLD ready ref, never blocked, per §19.2's own
+> "never degrades availability" guarantee.
+
+**Status: covered.** A real `internal/app/imagebuild.Builder.RefreshOnce`
+call is held genuinely in flight (`BuildImage` blocked, not yet returned)
+against a real Postgres `image_builds` row, while a SEPARATE, brand-new
+session spawn — through the real dispatch path
+(`resolveAndSetImage`) — targets the identical fingerprint concurrently.
+The new spawn's own `CreateSpec.Image` is confirmed to be the OLD,
+still-ready `image_ref`, never the base image and never blocked waiting on
+the refresh. Releasing the block and letting the refresh complete then
+confirms the NEW ref is what a later spawn would see — proving the
+earlier read genuinely observed an in-flight, not-yet-committed refresh.
+A companion, store-level-only test in `internal/app/imagebuild` proves the
+identical property in isolation, one layer down.
+
+- `TestResilienceScenario_RefreshInFlightSpawn_StillGetsOldReadyImage`
+  — `internal/app/sessionactor/refresh_inflight_integration_test.go`
+- `TestRefreshOnce_OldRefStaysServableDuringRefresh` —
+  `internal/app/imagebuild/builder_integration_test.go` (the identical
+  property, proven at the store level in isolation)
+
+### #16 — non-idempotent-setup boot
+
+> A setup.sh that fails on rerun — confirm the non-fatal severity holds:
+> boot still succeeds, failure is visible in the captured output tail
+> from §19.5.
+
+**Status: covered.** A real `setup.sh` that fails outright (simulating a
+dependency install that is not safely re-runnable against an
+already-warm workspace) is rerun under a real `workspaceMoved: true`
+condition via `boot.RunBoot` — the boot still succeeds overall (§19.4's
+own non-fatal-severity guarantee: a moved workspace proves nothing about
+dependencies, so it can never justify failing the boot), and the
+failure's own diagnostic stderr output is confirmed genuinely present in
+the captured, bounded, ANSI-stripped hook-output tail (§19.5(a)) a real
+`slog.Handler` observes — proving this failure mode is no longer
+"undiagnosable by construction" the way it was before this Step.
+
+- `TestResilienceScenario_NonIdempotentSetupBoot_NonFatalFailure_VisibleInOutputTail`
+  — `internal/sandboxagent/boot/resilience_repoimage_test.go`
+
 ## Summary
 
 | # | Scenario | Status |
@@ -370,3 +482,7 @@ resumable, not merely "not yet marked failed".
 | 10 | Concurrent @mentions | Deferred — needs Step 45/46 (Phase 5, domain/review + review sessions); Step 32 (Phase 3, GitHub ingress) is done and no longer blocking |
 | 11 | Dirty working tree at relaunch | Covered |
 | 12 | Deploy rollout (rolling restart) | Covered — this PR |
+| 13 | Fetch-fail boot | Covered — Step 42 |
+| 14 | Stale-image boot (`workspaceMoved` fires) | Covered — Step 42 |
+| 15 | Refresh-in-flight spawn | Covered — Step 42 |
+| 16 | Non-idempotent-setup boot | Covered — Step 42 |
