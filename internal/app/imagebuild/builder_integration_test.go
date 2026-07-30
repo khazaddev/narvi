@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sync"
 	"testing"
@@ -638,6 +639,123 @@ func TestRefreshOnce_OldRefStaysServableDuringRefresh(t *testing.T) {
 	}
 	if rowAfter.ImageRef == nil || *rowAfter.ImageRef != "narvi/built-image:refreshed" {
 		t.Errorf("image_ref after refresh completed = %v, want the NEW ref %q", rowAfter.ImageRef, "narvi/built-image:refreshed")
+	}
+}
+
+// wantRefreshBatchSize mirrors imagebuild.refreshBatchSize's own value
+// (builder.go) -- kept as a plain literal, not an import, because that
+// constant is unexported and this file is package imagebuild_test (a
+// black-box test package, matching every other test in this file). If
+// builder.go's own refreshBatchSize ever changes, this must be updated to
+// match, or TestRefreshOnce_BatchCap_BoundsRowsPerTickButPicksUpRemainderLater
+// below will fail loudly rather than silently passing against the wrong
+// number.
+const wantRefreshBatchSize = 20
+
+// TestRefreshOnce_BatchCap_BoundsRowsPerTickButPicksUpRemainderLater proves
+// the batch-cap fix for this Step's own correctness/scalability review
+// finding: RefreshOnce used to run ListReadyImageBuilds with NO limit at
+// all, so an arbitrarily large fleet of simultaneously-stale Environments
+// would all be attempted, strictly sequentially, in a single tick -- one
+// slow/blocked BuildImage call could delay even STARTING every other
+// Environment's own tip-SHA check for the rest of that tick.
+//
+// Seeds MORE genuinely-stale 'ready' rows than refreshBatchSize, runs
+// exactly ONE RefreshOnce tick, and asserts EXACTLY refreshBatchSize of
+// them were actually claimed/attempted (BuildImage called, image_ref
+// swapped) -- not merely "the LIMIT clause exists somewhere in the SQL",
+// but a real, observable bound on THIS tick's own effect. The remainder is
+// then confirmed to be picked up on a SECOND, later tick -- proving the
+// cap defers work rather than dropping it.
+func TestRefreshOnce_BatchCap_BoundsRowsPerTickButPicksUpRemainderLater(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const totalRows = wantRefreshBatchSize + 5 // deliberately more than one tick's own cap
+	const staleSHA = "sha-old"
+	const currentSHA = "sha-new" // every repo's own "current" tip, per sourceControl.nextSHA below
+
+	fingerprints := make([]string, totalRows)
+	oldRefs := make([]string, totalRows)
+	for i := 0; i < totalRows; i++ {
+		fingerprint := fmt.Sprintf("fp-refresh-batch-cap-%02d", i)
+		repoName := fmt.Sprintf("repo%02d", i)
+		oldRef := fmt.Sprintf("narvi/built-image:old-ref-%02d", i)
+		fingerprints[i] = fingerprint
+		oldRefs[i] = oldRef
+
+		seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+			map[string]string{repoName: fmt.Sprintf("https://github.com/acme/%s", repoName)},
+			map[string]string{repoName: staleSHA},
+			oldRef)
+	}
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:refreshed"}
+	sourceControl := &fakeSourceControl{nextSHA: currentSHA} // every repo not explicitly listed falls back to this
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	// countRefreshed reports how many of the totalRows fingerprints have
+	// already been swapped to the NEW image_ref (i.e. genuinely refreshed
+	// so far, across however many ticks have run).
+	countRefreshed := func() int {
+		t.Helper()
+		refreshed := 0
+		for i := 0; i < totalRows; i++ {
+			row, err := store.Get(ctx, fingerprints[i])
+			if err != nil {
+				t.Fatalf("get row %q: %v", fingerprints[i], err)
+			}
+			if row.ImageRef == nil {
+				t.Fatalf("row %q has a nil image_ref", fingerprints[i])
+			}
+			switch *row.ImageRef {
+			case oldRefs[i]:
+				// still untouched this tick
+			case "narvi/built-image:refreshed":
+				refreshed++
+			default:
+				t.Fatalf("row %q has unexpected image_ref %q", fingerprints[i], *row.ImageRef)
+			}
+		}
+		return refreshed
+	}
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce (tick 1): %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != wantRefreshBatchSize {
+		t.Fatalf("BuildImage call count after ONE tick = %d, want exactly %d (the batch cap) -- an unbounded RefreshOnce would call BuildImage %d times in this one tick", got, wantRefreshBatchSize, totalRows)
+	}
+	if got := countRefreshed(); got != wantRefreshBatchSize {
+		t.Fatalf("refreshed row count after tick 1 = %d, want exactly %d", got, wantRefreshBatchSize)
+	}
+
+	// The remainder (totalRows - wantRefreshBatchSize rows) must NOT have
+	// been silently dropped -- a SECOND tick must pick them up. Every row
+	// refreshed in tick 1 just had its own updated_at bumped (by
+	// ClaimImageBuildForRefresh, then RecordImageRefreshSuccess), so
+	// ListReadyImageBuilds' own ORDER BY updated_at guarantees the
+	// still-untouched rows (whose updated_at dates back to seeding, before
+	// tick 1 ever ran) sort first in tick 2's own batch -- they are
+	// therefore ALL included this time, genuinely stale, and get refreshed
+	// for real (not a no-op: their own built_repo_shas still says staleSHA,
+	// so domainimagebuild.NeedsRefresh still reports true for them).
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce (tick 2): %v", err)
+	}
+
+	wantTotalBuildCalls := totalRows // every originally-stale row refreshed exactly once, across the two ticks combined
+	if got := provider.buildCallCount(); got != wantTotalBuildCalls {
+		t.Fatalf("BuildImage call count after tick 2 = %d, want %d (every originally-stale row refreshed exactly once, across both ticks combined)", got, wantTotalBuildCalls)
+	}
+	if got := countRefreshed(); got != totalRows {
+		t.Fatalf("refreshed row count after tick 2 = %d, want %d (every row picked up eventually, none dropped)", got, totalRows)
 	}
 }
 

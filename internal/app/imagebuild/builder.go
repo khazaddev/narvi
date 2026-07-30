@@ -39,6 +39,28 @@ const meterName = "narvi/imagebuild"
 // bounded.
 const pumpBatchSize = 20
 
+// refreshBatchSize bounds how many 'ready' image_builds rows a single
+// RefreshOnce tick's own ListReady query returns/processes -- the freshness
+// pump's own sibling to pumpBatchSize above (a correctness/scalability
+// review finding on this Step: RefreshOnce had NO batch cap at all, unlike
+// PumpOnce). RefreshOnce processes its own batch exactly as sequentially
+// and synchronously as PumpOnce does (attemptRefresh's own BuildImage call
+// is the SAME slow, network-bound provider operation attempt's is, just
+// aimed at an already-'ready' fingerprint instead of a pending/failed
+// one) -- so the identical "keep one tick's own worst-case wall-clock
+// bounded" reasoning applies with equal force here, and there is no basis
+// for a DIFFERENT number: a stale-but-still-'ready' row is lower-urgency
+// than a pending/failed one only in the sense that its OLD image_ref stays
+// servable the whole time (§19.2's own "never degrades availability"), but
+// that does not make its own refresh build any cheaper or faster, so a
+// larger batch would only let more Environments' worth of one-slow-build
+// delay stack up per tick -- working directly against §19.2's own already
+// explicit 10-40 minute staleness-window contract this finding cites.
+// Reusing pumpBatchSize's own exact value keeps that worst case identical
+// to PumpOnce's, rather than introducing a second, differently-justified
+// magic number for what is, per-item, the same expensive operation.
+const refreshBatchSize = 20
+
 // Builder is the process-wide background image-build loop (see doc.go for
 // the full writeup). Constructed once per process (NewBuilder), then run
 // via its own Run method -- exactly like app/reconciler.Reconciler and
@@ -451,19 +473,29 @@ func parseOwnerRepo(rawURL string) (owner, repo string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// RefreshOnce runs exactly one freshness-pump tick (§19.2): for every
-// SHARED (repo-bearing) 'ready' image_builds row, resolves each repo's
-// CURRENT default-branch tip SHA and compares it against that row's own
-// built_repo_shas; any row whose current tips diverge enqueues an
-// in-place refresh build. Exported (rather than only reachable through
-// Run's own runRefreshPump loop) so tests can drive exactly one tick
-// deterministically, mirroring PumpOnce's own precedent exactly.
+// RefreshOnce runs exactly one freshness-pump tick (§19.2): for up to
+// refreshBatchSize SHARED (repo-bearing) 'ready' image_builds rows,
+// resolves each repo's CURRENT default-branch tip SHA and compares it
+// against that row's own built_repo_shas; any row whose current tips
+// diverge enqueues an in-place refresh build. Exported (rather than only
+// reachable through Run's own runRefreshPump loop) so tests can drive
+// exactly one tick deterministically, mirroring PumpOnce's own precedent
+// exactly.
+//
+// Like PumpOnce, this processes its own batch strictly SEQUENTIALLY, in
+// this one goroutine -- refreshBatchSize (mirroring pumpBatchSize's own
+// precedent) bounds how many rows a single tick can claim/attempt, so one
+// slow/blocked attemptRefresh call can delay starting at most
+// refreshBatchSize-1 others in THIS tick, never an unbounded fleet's worth;
+// any row beyond that cap is simply picked up on a later tick (ListReady's
+// own ORDER BY updated_at gives across-tick fairness -- see that query's
+// own generated doc comment).
 //
 // One row's own refresh failure (a resolution error, a lost claim race, a
 // BuildImage failure) is isolated -- logged, and does NOT abort the rest
 // of this tick's own batch, exactly like PumpOnce's own per-row isolation.
 func (b *Builder) RefreshOnce(ctx context.Context) error {
-	rows, err := b.store.ListReady(ctx)
+	rows, err := b.store.ListReady(ctx, refreshBatchSize)
 	if err != nil {
 		return fmt.Errorf("imagebuild: list ready image builds: %w", err)
 	}

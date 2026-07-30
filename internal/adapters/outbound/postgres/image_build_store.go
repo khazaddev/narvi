@@ -80,12 +80,16 @@ func (s *ImageBuildStore) RecordFailure(ctx context.Context, arg sqlcgen.RecordI
 	return s.q.RecordImageBuildFailure(ctx, arg)
 }
 
-// ListReady returns every SHARED (repo-bearing) 'ready' row -- Step 42's
-// own freshness-pump poll query (§19.2). A base-only row is never stale
-// in the sense this design cares about, so it is excluded at the SQL
-// level (see ListReadyImageBuilds's own generated doc comment).
-func (s *ImageBuildStore) ListReady(ctx context.Context) ([]sqlcgen.ImageBuild, error) {
-	return s.q.ListReadyImageBuilds(ctx)
+// ListReady returns up to limit SHARED (repo-bearing) 'ready' rows -- Step
+// 42's own freshness-pump poll query (§19.2), bounded by a real LIMIT
+// (mirroring ListDue's own limit parameter shape exactly) so one tick's own
+// strictly-sequential per-row refresh attempts can never stack up an
+// unbounded number of slow, network-bound BuildImage calls. A base-only
+// row is never stale in the sense this design cares about, so it is
+// excluded at the SQL level (see ListReadyImageBuilds's own generated doc
+// comment for both exclusions).
+func (s *ImageBuildStore) ListReady(ctx context.Context, limit int32) ([]sqlcgen.ImageBuild, error) {
+	return s.q.ListReadyImageBuilds(ctx, limit)
 }
 
 // ClaimForRefresh implements the freshness pump's own single-flight claim

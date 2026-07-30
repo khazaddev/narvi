@@ -186,6 +186,8 @@ func (q *Queries) ListDueImageBuilds(ctx context.Context, limit int32) ([]ImageB
 const listReadyImageBuilds = `-- name: ListReadyImageBuilds :many
 SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress FROM image_builds
 WHERE status = 'ready' AND repo_urls != '{}'::jsonb
+ORDER BY updated_at
+LIMIT $1
 `
 
 // Step 42's own freshness-pump poll query (§19.2): every SHARED (repo-
@@ -193,7 +195,7 @@ WHERE status = 'ready' AND repo_urls != '{}'::jsonb
 // stale in the sense this design cares about (there is no repo tip to
 // drift from), so it is excluded here at the SQL level rather than making
 // every caller re-check len(repoUrls) == 0 itself. Plain SELECT, no
-// locking: the freshness pump's own single-flight protection is
+// row-level locking: the freshness pump's own single-flight protection is
 // ClaimImageBuildForRefresh's own per-row CAS below, not a batch-level
 // FOR UPDATE SKIP LOCKED claim -- resolving each repo's current
 // default-branch tip (a real GitHub API call per repo) happens OUTSIDE
@@ -202,8 +204,24 @@ WHERE status = 'ready' AND repo_urls != '{}'::jsonb
 // transaction open" mistake this codebase's own established discipline
 // (app/sessionactor/dispatch.go, app/imagebuild.Builder.claimBatch) exists
 // to avoid.
-func (q *Queries) ListReadyImageBuilds(ctx context.Context) ([]ImageBuild, error) {
-	rows, err := q.db.Query(ctx, listReadyImageBuilds)
+//
+// LIMIT $1 mirrors ListDueImageBuilds' own batch-cap shape exactly (a
+// correctness/scalability review finding on this Step: an unbounded
+// ListReady, followed by strictly-sequential per-row attemptRefresh calls
+// -- each a real, synchronous, network-bound BuildImage call that can take
+// minutes -- let one slow/blocked build in a large batch delay even
+// STARTING every other Environment's own tip-SHA check for the rest of
+// that tick, degrading the fleet's effective refresh cadence well past
+// this section's own documented 10-40 minute staleness window under
+// load). ORDER BY updated_at (same column ListDueImageBuilds orders by)
+// gives ACROSS-TICK fairness for free: a row currently mid-refresh had its
+// own updated_at just bumped by ClaimImageBuildForRefresh, so it
+// naturally sorts toward the back of the next tick's own batch, behind
+// rows this pump hasn't touched in longer -- no separate bookkeeping
+// needed to avoid one hot fingerprint monopolizing every tick's own
+// limited batch.
+func (q *Queries) ListReadyImageBuilds(ctx context.Context, limit int32) ([]ImageBuild, error) {
+	rows, err := q.db.Query(ctx, listReadyImageBuilds, limit)
 	if err != nil {
 		return nil, err
 	}

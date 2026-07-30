@@ -80,14 +80,24 @@
 // Builder.Run now fans out a SECOND, independent ticker loop
 // (runRefreshPump, on platform.Timeouts.ImageRefreshCheckInterval)
 // alongside the pre-existing build pump above, calling RefreshOnce each
-// tick: for every SHARED (repo-bearing) 'ready' row, resolve each named
-// repo's CURRENT default-branch tip SHA (via the SAME claim-time SHA
-// resolution machinery attempt itself now uses, resolveRepoSHAs -- a new
-// platform-level GitHub credential, platform.Config.GitHubImageBuildToken,
-// shared by both since neither has a session/creator context to borrow a
-// token from) and compare it against that row's own built_repo_shas
-// (domain/imagebuild.NeedsRefresh). Any row whose current tips diverge
-// gets a real in-place refresh build.
+// tick: for up to refreshBatchSize SHARED (repo-bearing) 'ready' rows,
+// resolve each named repo's CURRENT default-branch tip SHA (via the SAME
+// claim-time SHA resolution machinery attempt itself now uses,
+// resolveRepoSHAs -- a new platform-level GitHub credential,
+// platform.Config.GitHubImageBuildToken, shared by both since neither has
+// a session/creator context to borrow a token from) and compare it
+// against that row's own built_repo_shas (domain/imagebuild.NeedsRefresh).
+// Any row whose current tips diverge gets a real in-place refresh build.
+//
+// refreshBatchSize (builder.go, mirroring pumpBatchSize's own exact
+// precedent and value) bounds each tick's own ListReady query/batch --
+// RefreshOnce processes its own batch just as strictly sequentially as
+// PumpOnce does, so without a cap, one slow/blocked refresh build could
+// delay even STARTING every other Environment's own tip-SHA check for the
+// rest of that tick, degrading the fleet's effective refresh cadence well
+// past this section's own documented 10-40 minute staleness window under
+// load. A batch beyond the cap is simply picked up on a later tick
+// (ListReady's own ORDER BY updated_at gives across-tick fairness).
 //
 // Refresh NEVER degrades availability: the row's own `status` column
 // never leaves 'ready' for the whole duration a refresh build runs --
