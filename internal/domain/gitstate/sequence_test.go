@@ -111,13 +111,91 @@ func TestTriggerForPop(t *testing.T) {
 	}
 }
 
-// TestFullBootSequenceViaHelpers proves the four helpers above compose
-// correctly with Transition across all four realistic end-to-end
-// trajectories the real SyncAll (internal/sandboxagent/gitclone) drives --
-// clean-tree happy path, dirty-tree happy path, a stash failure, and a pop
-// failure -- entirely without any real git I/O.
+// TestTriggerForFetch is the exhaustive (all four bool x bool combinations)
+// truth table for §19.3's own new fetch-outcome -> Trigger mapping
+// function, including the one combination that never actually arises in
+// practice (fetchSucceeded=true, degradeAllowed=false) -- proving
+// fetchSucceeded alone still wins regardless of degradeAllowed's value,
+// exactly as TriggerForFetch's own doc comment states ("fetchSucceeded
+// true: TriggerFetchSucceeded, regardless of degradeAllowed").
+func TestTriggerForFetch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		fetchSucceeded bool
+		degradeAllowed bool
+		want           gitstate.Trigger
+	}{
+		{"fetch succeeded, degrade allowed", true, true, gitstate.TriggerFetchSucceeded},
+		{"fetch succeeded, degrade not allowed (succeeded wins regardless)", true, false, gitstate.TriggerFetchSucceeded},
+		{"fetch failed, degrade allowed", false, true, gitstate.TriggerFetchFailedDegraded},
+		{"fetch failed, degrade not allowed (§19.3's non-negotiable fatal case)", false, false, gitstate.TriggerFetchFailedFatal},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := gitstate.TriggerForFetch(tc.fetchSucceeded, tc.degradeAllowed); got != tc.want {
+				t.Errorf("TriggerForFetch(%v, %v) = %v, want %v", tc.fetchSucceeded, tc.degradeAllowed, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestFullBootSequenceViaHelpers proves the five helpers above compose
+// correctly with Transition across all realistic end-to-end trajectories
+// the real SyncAll (internal/sandboxagent/gitclone) drives -- clean-tree
+// happy path, dirty-tree happy path, a stash failure, a pop failure, and
+// (§19.3, Step 40) the boot-time fetch step's own three outcomes -- entirely
+// without any real git I/O.
 func TestFullBootSequenceViaHelpers(t *testing.T) {
 	t.Parallel()
+
+	t.Run("fetch succeeds, straight through to idle then clean tree to ready", func(t *testing.T) {
+		t.Parallel()
+		state := gitstate.StateFetching
+		state = mustTransition(t, state, gitstate.TriggerForFetch(true, false))
+		if state != gitstate.StateIdle {
+			t.Fatalf("state = %s, want idle", state)
+		}
+		state = mustTransition(t, state, gitstate.TriggerForDirtyCheck(false))
+		if state != gitstate.StateCheckingOutClean {
+			t.Fatalf("state = %s, want checking_out_clean", state)
+		}
+		state = mustTransition(t, state, gitstate.TriggerForCheckout(true))
+		if state != gitstate.StateReady {
+			t.Fatalf("state = %s, want ready", state)
+		}
+	})
+
+	t.Run("fetch fails but degrades (branch already local), proceeds to ready", func(t *testing.T) {
+		t.Parallel()
+		state := gitstate.StateFetching
+		state = mustTransition(t, state, gitstate.TriggerForFetch(false, true))
+		if state != gitstate.StateIdle {
+			t.Fatalf("state = %s, want idle (degraded fetch failure proceeds exactly like success)", state)
+		}
+		state = mustTransition(t, state, gitstate.TriggerForDirtyCheck(false))
+		state = mustTransition(t, state, gitstate.TriggerForCheckout(true))
+		if state != gitstate.StateReady {
+			t.Fatalf("state = %s, want ready", state)
+		}
+	})
+
+	t.Run("fetch fails, explicit branch neither local nor fetchable -- fatal", func(t *testing.T) {
+		t.Parallel()
+		state := gitstate.StateFetching
+		state = mustTransition(t, state, gitstate.TriggerForFetch(false, false))
+		if state != gitstate.StateFetchFailed {
+			t.Fatalf("state = %s, want fetch_failed", state)
+		}
+		if gitstate.RequiresStashRecovery(state) {
+			t.Error("RequiresStashRecovery(fetch_failed) = true, want false -- no stash was ever taken")
+		}
+		if !gitstate.IsTerminal(state) {
+			t.Error("IsTerminal(fetch_failed) = false, want true")
+		}
+	})
 
 	t.Run("clean tree straight through to ready", func(t *testing.T) {
 		t.Parallel()

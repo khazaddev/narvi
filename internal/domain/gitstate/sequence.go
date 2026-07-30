@@ -65,3 +65,45 @@ func TriggerForPop(succeeded bool) Trigger {
 	}
 	return TriggerPopFailed
 }
+
+// TriggerForFetch returns the Trigger a caller (a real, credentialed `git
+// fetch origin <resolved-branch> <default-branch>` attempt, made from
+// StateFetching -- the boot sequence's new real starting point, §19.3)
+// should feed to Transition. fetchSucceeded is whether that attempt
+// actually fetched the resolved target branch (gitstate.ResolveSessionBranch's
+// own return value) -- NOT merely whether some other ref (e.g. the
+// repo's default branch) was fetched successfully; see
+// internal/sandboxagent/gitclone's own fetch-step doc comment for why a
+// nonexistent-upstream branch (the common invented "narvi/<sessionID>"
+// case) is fetchSucceeded=false even when the remote itself is perfectly
+// reachable. degradeAllowed is §19.3's own non-negotiable policy input,
+// already decided by the caller from real, already-available information
+// BEFORE this function is ever called: true when the target branch either
+// already exists locally (branchExistsLocally) or is "acceptable from
+// HEAD" because repo.Branch was nil (an invented session branch, never
+// named explicitly by the session) -- false when the session explicitly
+// named a branch (repo.Branch != nil) that is neither local nor fetchable.
+//
+//   - fetchSucceeded true: TriggerFetchSucceeded, regardless of
+//     degradeAllowed -- a successful fetch never needs the degrade policy
+//     at all.
+//   - fetchSucceeded false, degradeAllowed true: TriggerFetchFailedDegraded
+//     -- "warm boot must never become network-dependent for liveness"
+//     (§19.3): proceed on stale image state, landing on the SAME
+//     destination (StateIdle) as a success, just under a different,
+//     distinctly-named trigger so the caller can log the appropriate
+//     warning.
+//   - fetchSucceeded false, degradeAllowed false: TriggerFetchFailedFatal
+//     -- §19.3's own non-negotiable rule: silently forking a same-named
+//     branch at a stale base must never happen, so this is the one
+//     outcome that fails the repo outright (StateFetchFailed) rather than
+//     degrading.
+func TriggerForFetch(fetchSucceeded, degradeAllowed bool) Trigger {
+	if fetchSucceeded {
+		return TriggerFetchSucceeded
+	}
+	if degradeAllowed {
+		return TriggerFetchFailedDegraded
+	}
+	return TriggerFetchFailedFatal
+}

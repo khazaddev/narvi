@@ -1,7 +1,9 @@
 package gitclone_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +26,16 @@ import (
 // package, same test binary).
 
 const testSyncStepTimeout = 10 * time.Second
+
+// testFetchStepTimeout bounds the new boot-time fetch step's own git
+// subprocesses (ls-remote/fetch) in these tests -- a real, but ALWAYS
+// LOCAL-transport (never actually crossing a network), git operation
+// against either a genuine local "origin" fixture (see initRepoWithOrigin,
+// below) or -- for every pre-existing test in this file that predates this
+// Step and configures no "origin" remote at all -- a fast, real git
+// failure ("origin" does not exist), never a hang. 10s (matching
+// testSyncStepTimeout) is generous for either real outcome.
+const testFetchStepTimeout = 10 * time.Second
 
 // gitSyncEvent records one onGitSync callback invocation for assertions.
 type gitSyncEvent struct {
@@ -56,7 +68,7 @@ func TestSyncAll_CleanTree_CreatesSessionBranchFromHead(t *testing.T) {
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
-		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -113,7 +125,7 @@ func TestSyncAll_DirtyTree_StashCheckoutPop_PreservesEditsByteForByte(t *testing
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
-		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -190,7 +202,7 @@ func TestResilienceScenario11_DirtyWorkingTree_RelaunchWithDifferentBranch_ZeroL
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "resilience-session-11",
-		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -269,7 +281,7 @@ func TestSyncAll_UntrackedFileOnly_StashCheckoutPop_PreservesEditsByteForByte(t 
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-untracked-only",
-		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (an untracked-only tree must not be a fatal failure)", err)
 	}
@@ -330,7 +342,7 @@ func TestSyncAll_StagedChange_StashCheckoutPop_PreservesStagedStatus(t *testing.
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-staged",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -381,7 +393,7 @@ func TestSyncAll_BranchAlreadyExists_PlainCheckout(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-x",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -431,7 +443,7 @@ func TestSyncAll_PopFailureDetectedNotFatal(t *testing.T) {
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-y",
-		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's pop failed)")
 	}
@@ -484,7 +496,7 @@ func TestSyncAll_PrimaryFailureStopsImmediately(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-z",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error for the failed primary repo")
 	}
@@ -511,7 +523,7 @@ func TestSyncAll_SecondaryFailureContinues(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-w",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (a secondary failure is a warning, not fatal)", err)
 	}
@@ -545,7 +557,7 @@ func TestSyncAll_MaliciousRepoNameRejectedBeforeAnySpawn(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-v",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal validation error for the malicious repo name")
 	}
@@ -584,7 +596,7 @@ func TestSyncAll_MaliciousBranchRejectedBeforeAnySpawn(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-u",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal validation error for the malicious branch")
 	}
@@ -796,7 +808,7 @@ func TestSyncAll_FullUnscopedCheckoutOnDisk_ReAppliesSparseCheckout(t *testing.T
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-scoped-image",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil", err)
 	}
@@ -832,7 +844,7 @@ func TestSyncAll_InvalidPathScopeRejectedBeforeAnySync(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-invalid-scope",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal validation error for the invalid path scope")
 	}
@@ -911,7 +923,7 @@ func TestSyncAll_DirtyOutOfScopeFile_SparseCheckoutDetectsAndFailsLoudly(t *test
 	var events []gitSyncEvent
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-dirty-out-of-scope",
-		testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, recordingOnGitSync(&events))
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error -- a dirty out-of-scope file must be detected, never silently accepted")
 	}
@@ -972,7 +984,7 @@ func TestSyncAll_SparseCheckoutFailure_PrimaryStopsImmediately(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-sparse-primary",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error for the primary repo's sparse-checkout failure")
 	}
@@ -1001,7 +1013,7 @@ func TestSyncAll_SparseCheckoutFailure_SecondaryContinues(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-sparse-secondary",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err != nil {
 		t.Fatalf("SyncAll() error = %v, want nil (a secondary sparse-checkout failure is a warning, not fatal)", err)
 	}
@@ -1086,7 +1098,7 @@ func TestSyncAll_StashPopFailure_StillReAppliesSparseCheckout(t *testing.T) {
 
 	sup := supervisor.New()
 	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, pathScope, "session-pop-fail-scope",
-		testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
 	if err == nil {
 		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's pop failed)")
 	}
@@ -1121,6 +1133,412 @@ func TestSyncAll_StashPopFailure_StillReAppliesSparseCheckout(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(repoDir, "apps/web/index.js")); statErr != nil {
 		t.Errorf("expected apps/web/index.js to remain on disk (in scope): %v", statErr)
+	}
+}
+
+// --- §19.3 (Step 40, "warm boot: fetch-aware git sync") tests below ---
+//
+// newLocalOrigin/addOriginBranch create a real, local, non-bare git
+// repository to act as this Step's new boot-time fetch step's own remote
+// target -- matching this package's own established "verify directly
+// against the real git binary, fully offline, deterministic" testing
+// philosophy (see checkoutBranch's/gitStashPop's own doc comments)
+// extended to SyncAll's new fetch step: a plain local filesystem path
+// works perfectly well as a git remote for `git fetch`/`git ls-remote`
+// (verified directly, not assumed), with no bare-repo ceremony needed and
+// no real network dependency anywhere in these tests.
+
+// newLocalOrigin creates a real git repository at a fresh directory with
+// default branch "main" and one commit (README.md = "hello\n", via
+// initRepo) -- the repo_image's own "shared, tip-tracking remote" for these
+// tests' own purposes. Returns its directory, ready to be wired as
+// `git remote add origin <this path>` in a separate workspace repo.
+func newLocalOrigin(t *testing.T) string {
+	t.Helper()
+	originDir := filepath.Join(t.TempDir(), "origin")
+	initRepo(t, originDir)
+	return originDir
+}
+
+// addOriginBranch creates a new branch on an already-initialized origin
+// repo (newLocalOrigin's own return value), with a MARKER.txt file unique
+// to that branch (content) -- so a later test can prove, by reading
+// MARKER.txt back out of the WORKSPACE repo after SyncAll runs, that a
+// checkout genuinely pulled this exact origin branch's own content, not
+// some other ref. Leaves origin checked out on its own default branch
+// afterward (never leaves it on the newly created branch), matching a real
+// remote repo's own steady state.
+func addOriginBranch(t *testing.T, originDir, branch, markerContent string) {
+	t.Helper()
+	runGit(t, originDir, "checkout", "-b", branch)
+	if err := os.WriteFile(filepath.Join(originDir, "MARKER.txt"), []byte(markerContent), 0o644); err != nil {
+		t.Fatalf("write MARKER.txt on origin branch %s: %v", branch, err)
+	}
+	runGit(t, originDir, "add", ".")
+	runGit(t, originDir, "commit", "-m", "content for "+branch)
+	runGit(t, originDir, "checkout", "main")
+}
+
+// updateOriginDefaultBranch commits a new README.md content on origin's own
+// default branch ("main") -- so a later test can prove a checkout used
+// origin's fetched TIP content, not the workspace repo's own pre-existing,
+// stale local content (both start from initRepo's identical "hello\n").
+func updateOriginDefaultBranch(t *testing.T, originDir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(originDir, "README.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("update origin default-branch README.md: %v", err)
+	}
+	runGit(t, originDir, "add", ".")
+	runGit(t, originDir, "commit", "-m", "origin default-branch tip update")
+}
+
+// branchExistsForTest reports whether branch exists as a local branch in
+// dir -- a read-only, test-side sibling of sync.go's own unexported
+// branchExistsLocally (unreachable from this external gitclone_test
+// package), used here specifically to prove the negative: that
+// TestSyncAll_FetchFails_ExplicitBranchNotLocalNotFetchable_PrimaryFatal's
+// own explicit target branch was NEVER created, not even a same-named
+// branch forked at a stale base (§19.3's own non-negotiable rule).
+func branchExistsForTest(t *testing.T, dir, branch string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch)
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	if exitCode(t, err) == 1 {
+		return false
+	}
+	t.Fatalf("git rev-parse --verify --quiet refs/heads/%s: unexpected error: %v", branch, err)
+	return false
+}
+
+// TestSyncAll_FetchSucceeds_BranchExistsOnOrigin_PrefersOriginTrackingBranch
+// covers §19.3 point 2's own primary preference: an explicit target branch
+// that does NOT exist locally, but DOES exist on origin -- the fetch
+// actually succeeds for it, so checkoutBranch must check it out FROM
+// origin/<branch> (`git checkout -b <branch> origin/<branch> --`), never
+// falling back to creating it fresh from the workspace's own (here,
+// deliberately stale) local HEAD.
+func TestSyncAll_FetchSucceeds_BranchExistsOnOrigin_PrefersOriginTrackingBranch(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // local "main" only, README.md = "hello\n" -- simulates a repo_image's own baked, stale tree; the target branch does not exist here at all
+
+	originDir := newLocalOrigin(t)
+	targetBranch := "feature-on-origin"
+	addOriginBranch(t, originDir, targetBranch, "origin's real tip content for feature-on-origin\n")
+
+	runGit(t, repoDir, "remote", "add", "origin", originDir)
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &targetBranch},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-fetch-branch-on-origin",
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+	if head := currentBranch(t, repoDir); head != targetBranch {
+		t.Errorf("checked-out branch = %q, want %q", head, targetBranch)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "MARKER.txt"))
+	if err != nil {
+		t.Fatalf("read MARKER.txt after sync (must exist -- it only exists on origin's own feature-on-origin branch): %v", err)
+	}
+	if string(data) != "origin's real tip content for feature-on-origin\n" {
+		t.Errorf("MARKER.txt content = %q, want origin's own tip content -- proves checkout preferred origin/%s over creating a fresh branch from local HEAD", data, targetBranch)
+	}
+}
+
+// TestSyncAll_FetchSucceeds_InventedBranchNotOnOrigin_FallsBackToOriginDefaultBranch
+// covers §19.3 point 2's own second preference: the common invented
+// "narvi/<sessionID>" branch case (repo.Branch nil) -- the fetch of the
+// repo's DEFAULT branch succeeds (the remote is perfectly reachable), but
+// this exact invented branch obviously does not exist upstream. checkoutBranch
+// must still prefer origin/<default-branch> over the workspace's own local,
+// stale HEAD -- proven here by giving origin's own default branch DIFFERENT
+// content than the local repo's stale one.
+func TestSyncAll_FetchSucceeds_InventedBranchNotOnOrigin_FallsBackToOriginDefaultBranch(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // local "main", README.md = "hello\n" -- stale relative to origin's own tip below
+
+	originDir := newLocalOrigin(t)
+	updateOriginDefaultBranch(t, originDir, "origin's real default-branch tip\n")
+
+	runGit(t, repoDir, "remote", "add", "origin", originDir)
+
+	sessionID := "session-fetch-invented-branch"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"}, // Branch nil -> invented narvi/<sessionID>
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+	wantBranch := "narvi/" + sessionID
+	if head := currentBranch(t, repoDir); head != wantBranch {
+		t.Errorf("checked-out branch = %q, want %q", head, wantBranch)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md after sync: %v", err)
+	}
+	if string(data) != "origin's real default-branch tip\n" {
+		t.Errorf("README.md content = %q, want origin's own default-branch tip content -- proves the invented branch was created from the fetched origin/main, not the local stale HEAD", data)
+	}
+}
+
+// TestSyncAll_FetchFails_InventedBranchNil_DegradesAndFallsBackToHead covers
+// §19.3's degrade policy for the invented-branch case (repo.Branch nil,
+// "acceptable from HEAD"): the fetch fails ENTIRELY (origin points at a
+// real but nonexistent path -- deterministic, offline), so checkoutBranch
+// has no remote-tracking ref of any kind available and falls all the way
+// back to today's original, unchanged HEAD-based creation.
+func TestSyncAll_FetchFails_InventedBranchNil_DegradesAndFallsBackToHead(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	runGit(t, repoDir, "remote", "add", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	sessionID := "session-fetch-degrade-invented"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"}, // Branch nil
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil (degrade-and-proceed, not fatal)", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready (degraded fetch failure reaches the SAME terminal state as success)", got.State)
+	}
+	wantBranch := "narvi/" + sessionID
+	if head := currentBranch(t, repoDir); head != wantBranch {
+		t.Errorf("checked-out branch = %q, want %q", head, wantBranch)
+	}
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "README.md"))
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	if string(data) != "hello\n" {
+		t.Errorf("README.md = %q, want %q -- the invented branch must be created from local HEAD, today's unchanged fallback, since the fetch failed entirely", data, "hello\n")
+	}
+}
+
+// TestSyncAll_FetchFails_BranchResolvableLocally_DegradesAndLogsWarning
+// covers §19.3's degrade policy for an explicit branch that already exists
+// locally: the fetch fails entirely, but nothing upstream was ever needed
+// to check this branch out, so SyncAll must degrade-and-proceed via
+// today's existing local checkout path AND log the boot-time warning §19.3
+// requires ("recorded in the boot log").
+//
+// Deliberately NOT t.Parallel(): this is the one test in this file that
+// temporarily swaps the process-wide slog default logger (platform.
+// Logger(ctx) always reads slog.Default()) to capture that exact warning.
+// Go's own test scheduler never interleaves a NON-parallel test's body with
+// any OTHER test's body in the same package -- every t.Parallel() test
+// above pauses immediately at that call and only resumes once every
+// sequential (non-parallel) test in this file has already finished
+// running -- so this global mutation cannot race with any other test here,
+// specifically because this test never calls t.Parallel() itself.
+func TestSyncAll_FetchFails_BranchResolvableLocally_DegradesAndLogsWarning(t *testing.T) {
+	originalLogger := slog.Default()
+	var logBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(originalLogger)
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	targetBranch := "already-local-branch"
+	runGit(t, repoDir, "branch", targetBranch) // exists locally -- degrade policy allows proceeding regardless of the fetch outcome
+
+	// origin points at a real but nonexistent path -- a real, deterministic,
+	// offline fetch failure every time, simulating "the remote is
+	// unreachable" with no actual network dependency.
+	runGit(t, repoDir, "remote", "add", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &targetBranch},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-fetch-degrade-warn",
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil (degrade-and-proceed, not fatal)", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+	if head := currentBranch(t, repoDir); head != targetBranch {
+		t.Errorf("checked-out branch = %q, want %q (existing local checkout path, unaffected by the fetch failure)", head, targetBranch)
+	}
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "boot-time fetch failed") {
+		t.Errorf("log output = %q, want it to contain the boot-time fetch failure warning (§19.3: \"recorded in the boot log\")", logged)
+	}
+	if !strings.Contains(logged, `"level":"WARN"`) {
+		t.Errorf("log output = %q, want a WARN-level log entry", logged)
+	}
+	if !strings.Contains(logged, targetBranch) {
+		t.Errorf("log output = %q, want it to name the affected branch %q", logged, targetBranch)
+	}
+}
+
+// TestSyncAll_FetchFails_ExplicitBranchNotLocalNotFetchable_PrimaryFatal is
+// the single most important test in this Step (§19.3's own non-negotiable
+// rule): a session explicitly named a branch that exists NEITHER locally
+// NOR on a reachable remote (the fetch fails entirely). This must be a hard
+// failure -- gitstate.StateFetchFailed -- NEVER a silent degrade into
+// checkoutBranch's own HEAD fallback, which would fork a new, same-named
+// branch at a stale base and hide a real divergence from the branch this
+// session actually asked for. Proven here both by the returned error/state
+// AND by the negative assertion that matters most: the branch was NEVER
+// created on disk at all.
+func TestSyncAll_FetchFails_ExplicitBranchNotLocalNotFetchable_PrimaryFatal(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // local "main" only -- targetBranch does not exist locally
+
+	// origin points at a real but nonexistent path -- deterministic,
+	// offline fetch failure every time.
+	runGit(t, repoDir, "remote", "add", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	targetBranch := "explicit-branch-nowhere"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &targetBranch},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-fetch-hard-fail-primary",
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err == nil {
+		t.Fatal("SyncAll() error = nil, want a fatal error (primary repo's fetch failed with no degrade allowed)")
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+
+	got := results[0]
+	if got.Err == nil {
+		t.Fatal("results[0].Err = nil, want a fetch error")
+	}
+	if got.State != gitstate.StateFetchFailed {
+		t.Errorf("results[0].State = %s, want fetch_failed", got.State)
+	}
+	if gitstate.RequiresStashRecovery(got.State) {
+		t.Error("RequiresStashRecovery(fetch_failed) = true, want false -- no stash was ever taken (the fetch step precedes the dirty-check entirely)")
+	}
+
+	// The critical negative assertion this whole Step exists to guarantee:
+	// no same-named branch was silently forked at a stale base.
+	if branchExistsForTest(t, repoDir, targetBranch) {
+		t.Error("target branch was created locally despite a fatal fetch failure -- this is EXACTLY the silent-fork-at-stale-base bug §19.3 exists to prevent")
+	}
+	if head := currentBranch(t, repoDir); head != "main" {
+		t.Errorf("checked-out branch = %q, want main (unchanged -- checkout must never even have been attempted)", head)
+	}
+}
+
+// TestSyncAll_FetchFails_ExplicitBranchNotLocalNotFetchable_SecondaryWarnContinues
+// mirrors TestSyncAll_SecondaryFailureContinues's own existing criticality
+// convention exactly (§3.4: "position 0 = primary"), proving the SAME
+// primary-fatal/secondary-warn split holds for this Step's new
+// StateFetchFailed failure: a secondary repo's fatal fetch failure is
+// logged as a warning and the loop continues past it, never stopping
+// SyncAll as a whole.
+func TestSyncAll_FetchFails_ExplicitBranchNotLocalNotFetchable_SecondaryWarnContinues(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	initRepo(t, filepath.Join(workspaceDir, "primary"))
+
+	badSecondaryDir := filepath.Join(workspaceDir, "bad-secondary")
+	initRepo(t, badSecondaryDir)
+	runGit(t, badSecondaryDir, "remote", "add", "origin", filepath.Join(t.TempDir(), "does-not-exist"))
+
+	initRepo(t, filepath.Join(workspaceDir, "later"))
+
+	targetBranch := "explicit-branch-nowhere"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "primary", Url: "https://example.invalid/primary.git"},
+		{Name: "bad-secondary", Url: "https://example.invalid/never.git", Branch: &targetBranch},
+		{Name: "later", Url: "https://example.invalid/later.git"},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-fetch-hard-fail-secondary",
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil (a secondary repo's fatal fetch failure is a warning, not fatal for the whole loop)", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("len(results) = %d, want 3 (every repo attempted)", len(results))
+	}
+	if results[0].Err != nil {
+		t.Errorf("results[0] (primary) Err = %v, want nil", results[0].Err)
+	}
+	if results[1].Err == nil {
+		t.Error("results[1] (bad secondary) Err = nil, want a fetch error")
+	}
+	if results[1].State != gitstate.StateFetchFailed {
+		t.Errorf("results[1].State = %s, want fetch_failed", results[1].State)
+	}
+	if branchExistsForTest(t, badSecondaryDir, targetBranch) {
+		t.Error("target branch was created locally on the secondary repo despite a fatal fetch failure -- this is EXACTLY the silent-fork-at-stale-base bug §19.3 exists to prevent")
+	}
+	if results[2].Err != nil {
+		t.Errorf("results[2] (later) Err = %v, want nil -- loop must continue past the secondary's fetch failure", results[2].Err)
 	}
 }
 

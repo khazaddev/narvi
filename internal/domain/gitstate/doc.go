@@ -8,7 +8,7 @@
 //     internal/domain/turn's house style: typed sentinel errors for
 //     illegal transitions, never a bare zero-value State silently
 //     accepted.
-//   - IsTerminal and RequiresStashRecovery (state.go): the ten states are
+//   - IsTerminal and RequiresStashRecovery (state.go): the twelve states are
 //     named so that whether a stash currently exists unpopped is legible
 //     from the state alone, without consulting which trigger produced it.
 //     RequiresStashRecovery is the package's central correctness property:
@@ -32,6 +32,15 @@
 //     each actual git command's result becomes known -- the missing
 //     "sequencing is explicit and testable in isolation from real git I/O"
 //     piece this package's own house style (§11) asks for.
+//   - StateFetching/StateFetchFailed and TriggerForFetch (state.go/
+//     sequence.go, Step 40, §19.3): the boot sequence's new real starting
+//     point -- a bounded, credentialed `git fetch` attempt, run BEFORE the
+//     original stash-if-dirty/checkout/pop sequence (which now begins from
+//     StateIdle exactly as before, unchanged) -- plus the non-negotiable
+//     degrade policy that decides whether a fetch failure warrants
+//     proceeding on stale image state (StateIdle, same as a genuine
+//     success) or failing the repo outright (StateFetchFailed): silently
+//     forking a same-named branch at a stale base must never happen.
 //
 // Every function here is pure per §11: no I/O, no time.Now(), no
 // randomness. There is no Clock/duration concept in this package at all --

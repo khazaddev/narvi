@@ -45,10 +45,16 @@ type SyncResult struct {
 	Branch string
 	// State is the boot machine's own final state for this repo
 	// (internal/domain/gitstate): gitstate.StateReady on success, one of
-	// the four terminal failure states otherwise, or the zero State
-	// (StateIdle) if this repo never even entered the machine (a
-	// validation failure, or a real `git status` failure that made it
-	// impossible to tell whether the tree was even dirty).
+	// the five terminal failure states otherwise (including
+	// gitstate.StateFetchFailed, Step 40, §19.3 -- the boot-time fetch
+	// failed and the degrade policy did not allow proceeding), or the zero
+	// State (the empty string, never actually assigned) if this repo never
+	// even entered the machine (a validation failure, a real `git status`
+	// failure that made it impossible to tell whether the tree was even
+	// dirty, or -- Step 40 -- a real `git rev-parse --verify` failure while
+	// determining whether the target branch already exists locally, needed
+	// BEFORE the fetch step itself to decide whether the degrade policy
+	// applies).
 	// gitstate.RequiresStashRecovery(State) is the P0 check: true means a
 	// stash exists in this repo's own stash list, unpopped, requiring
 	// manual recovery.
@@ -79,13 +85,14 @@ func (r SyncResult) ToCloneResult() CloneResult {
 
 // SyncAll reconciles every repo in repos, IN ORDER, against an
 // ALREADY-EXISTING workspace (§3.4's boot-time "stash-if-dirty -> checkout
-// session branch (create from base if absent) -> stash pop" sequence) --
-// the counterpart to CloneAll for a BootModeRepoImage/
-// BootModeSnapshotRestore boot, whose workspace already has a real git
-// repo on disk (baked into the image or restored from a snapshot) rather
-// than an empty directory waiting to be cloned into. SyncAll never runs
-// `git clone` -- cloning again into a non-empty directory would conflict
-// with what is already there.
+// session branch (create from base if absent) -> stash pop" sequence, now
+// preceded by §19.3's own bounded, credentialed boot-time fetch -- see
+// gitFetchStep's own doc comment) -- the counterpart to CloneAll for a
+// BootModeRepoImage/BootModeSnapshotRestore boot, whose workspace already
+// has a real git repo on disk (baked into the image or restored from a
+// snapshot) rather than an empty directory waiting to be cloned into.
+// SyncAll never runs `git clone` -- cloning again into a non-empty
+// directory would conflict with what is already there.
 //
 // Per repo, this is the piece internal/domain/gitstate's own doc.go names
 // as a later Step's job: actually running git and feeding each real
@@ -129,7 +136,7 @@ func SyncAll(
 	repos []sessionconfig.SessionConfigReposElem,
 	pathScope []string,
 	sessionID string,
-	stepTimeout, stopGrace time.Duration,
+	fetchStepTimeout, stepTimeout, stopGrace time.Duration,
 	onGitSync OnGitSync,
 ) ([]SyncResult, error) {
 	if len(repos) == 0 {
@@ -140,11 +147,23 @@ func SyncAll(
 		return nil, fmt.Errorf("gitclone: invalid path scope: %w", err)
 	}
 
+	// Computed ONCE, here, exactly like CloneAll's own identical call
+	// before ITS loop (clone.go) -- the same per-invocation credential
+	// helper CloneAll already wires for `git clone` now needs wiring for
+	// this Step's new `git fetch`/`git ls-remote` calls too (§19.3: "with
+	// the credential helper wired exactly as the clone path already does
+	// for its own remote operations").
+	credHelperArg, err := CredHelperGitArg()
+	if err != nil {
+		return nil, fmt.Errorf("gitclone: determine credential helper: %w", err)
+	}
+
 	results := make([]SyncResult, 0, len(repos))
 	for i, repo := range repos {
 		primary := i == 0
 
-		result := syncOne(ctx, sup, workspaceDir, repo, primary, pathScope, sessionID, stepTimeout, stopGrace, onGitSync)
+		result := syncOne(ctx, sup, workspaceDir, repo, primary, pathScope, sessionID, credHelperArg,
+			fetchStepTimeout, stepTimeout, stopGrace, onGitSync)
 		results = append(results, result)
 
 		if result.Err == nil {
@@ -174,7 +193,8 @@ func syncOne(
 	primary bool,
 	pathScope []string,
 	sessionID string,
-	stepTimeout, stopGrace time.Duration,
+	credHelperArg string,
+	fetchStepTimeout, stepTimeout, stopGrace time.Duration,
 	onGitSync OnGitSync,
 ) (result SyncResult) {
 	// Validate BEFORE any filepath.Join or sup.Spawn happens for this repo
@@ -238,7 +258,65 @@ func syncOne(
 		}()
 	}
 
-	state := gitstate.StateIdle
+	state := gitstate.StateFetching
+
+	// §19.3's own non-negotiable degrade policy needs to know, BEFORE the
+	// fetch even runs, whether this repo is allowed to degrade-and-proceed
+	// on a fetch failure: true when the target branch already exists
+	// locally (nothing upstream is even needed to check it out), or when
+	// repo.Branch was nil -- an invented "narvi/<sessionID>" branch,
+	// "acceptable from HEAD" per §19.3's own wording, since no session ever
+	// asked for that exact name to exist anywhere. False only when the
+	// session explicitly named a branch (repo.Branch != nil) that isn't
+	// already local -- exactly the one case §19.3 says must never silently
+	// degrade: forking a same-named branch at a stale base.
+	localBranchExists, err := branchExistsLocally(ctx, sup, dir, branch, stepTimeout, stopGrace)
+	if err != nil {
+		result.Err = fmt.Errorf("gitclone: determine whether branch %s exists locally (fetch degrade policy) for %s: %w", branch, repo.Name, err)
+		return result
+	}
+	degradeAllowed := localBranchExists || repo.Branch == nil
+
+	defaultBranch, fetchErr := gitFetchStep(ctx, sup, credHelperArg, dir, branch, fetchStepTimeout, stopGrace)
+	fetchSucceeded := fetchErr == nil
+
+	// Legal from StateFetching by construction: TriggerForFetch only ever
+	// returns one of the three fetch triggers, all of which StateFetching's
+	// own transitions table entry defines (state.go) -- an error here would
+	// mean this package and gitstate have drifted out of sync, not a real,
+	// reachable failure (mirrors TriggerForDirtyCheck's own identical
+	// reasoning below).
+	state, err = gitstate.Transition(state, gitstate.TriggerForFetch(fetchSucceeded, degradeAllowed))
+	if err != nil {
+		result.Err = fmt.Errorf("gitclone: %s: unexpected transition error: %w", repo.Name, err)
+		return result
+	}
+
+	if state == gitstate.StateFetchFailed {
+		// §19.3's own non-negotiable rule: the session explicitly named a
+		// branch that is neither local nor fetchable -- fail this repo
+		// outright rather than let checkoutBranch's own HEAD fallback
+		// silently fork a same-named branch at a stale base. Never reached
+		// with degradeAllowed true, by TriggerForFetch's own construction.
+		result.State = state
+		result.Err = fmt.Errorf("gitclone: fetch %s for %s (fatal: explicit branch neither local nor fetchable): %w", branch, repo.Name, fetchErr)
+		return result
+	}
+	if !fetchSucceeded {
+		// Degraded, not failed: the fetch itself did not error above
+		// (state == StateFetchFailed already returned) only because
+		// degradeAllowed was true here -- proceed on stale image state,
+		// exactly as §19.3 requires ("warm boot must never become
+		// network-dependent for liveness"), logged as a warning mirroring
+		// SyncAll's own existing secondary-repo-failure warning precedent.
+		platform.Logger(ctx).Warn("gitclone: boot-time fetch failed, proceeding on stale image state",
+			"repo", repo.Name, "branch", branch, "error", fetchErr)
+	}
+
+	// state is StateIdle here (a successful OR degraded fetch both land
+	// there, per StateFetching's own transitions table entry) -- the
+	// original stash-if-dirty/checkout/pop sequence below begins here,
+	// completely unchanged from before this Step.
 
 	dirty, err := gitStatusDirty(ctx, sup, dir, stepTimeout, stopGrace)
 	if err != nil {
@@ -269,11 +347,11 @@ func syncOne(
 	}
 
 	onGitSync(repo.Name, "checkout", branch)
-	checkoutErr := checkoutBranch(ctx, sup, dir, branch, stepTimeout, stopGrace)
+	checkoutErr := checkoutBranch(ctx, sup, dir, branch, defaultBranch, stepTimeout, stopGrace)
 	// Checked directly against checkoutErr, not gitstate.IsTerminal(state):
 	// a SUCCESSFUL checkout also lands in a state IsTerminal reports true
 	// for whenever the tree was clean (StateReady itself is one of the
-	// five terminal states, success included) -- checkoutErr == nil is the
+	// six terminal states, success included) -- checkoutErr == nil is the
 	// unambiguous "did this step itself fail" signal; state only decides
 	// WHICH terminal-failure state to report, via Transition above.
 	state, _ = gitstate.Transition(state, gitstate.TriggerForCheckout(checkoutErr == nil))
@@ -416,19 +494,129 @@ func gitStashPop(ctx context.Context, sup *supervisor.Supervisor, dir string, st
 	return err
 }
 
-// branchExistsLocally runs `git -C <dir> rev-parse --verify --quiet
-// refs/heads/<branch>`, exit-code based, never string-matching output:
-// verified directly against real git behavior (sync_test.go) that exit 0
-// means the local branch exists and exit 1 means it does not -- both
-// expected, valid outcomes, not error paths. Any OTHER exit code (a
-// genuinely broken repo, an unexpected git failure) is returned as a real
-// error. refs/heads/ is prefixed explicitly so this checks for a LOCAL
-// branch specifically, never a coincidentally-matching tag or
-// remote-tracking ref.
-func branchExistsLocally(ctx context.Context, sup *supervisor.Supervisor, dir, branch string, stepTimeout, stopGrace time.Duration) (bool, error) {
+// gitFetchStep implements §19.3's own new boot-time fetch step: it resolves
+// the repo's real default-branch name from the remote (resolveDefaultBranch)
+// and fetches it, then fetches the actual resolved target branch too --
+// returning that SECOND fetch's own outcome (nil = succeeded), the fact fed
+// to gitstate.TriggerForFetch as fetchSucceeded, and the resolved default
+// branch name (or "" if it could not even be determined) for
+// checkoutBranch's own remote-tracking preference chain (checkoutBase).
+//
+// The default-branch fetch and the target-branch fetch are two SEPARATE git
+// invocations, never combined into the single `git fetch origin
+// <resolved-branch> <default-branch>` call §19.3 point 1's own prose
+// describes -- verified directly against the real git binary (sync_test.go),
+// not assumed: a single `git fetch origin <ref1> <ref2>` call is atomic --
+// if EITHER named ref does not exist on the remote, the WHOLE invocation
+// fails with NEITHER ref actually fetched (git validates every requested ref
+// against the remote's own advertised refs before fetching anything at
+// all). Combined into one call, that would silently deny checkoutBranch's
+// own origin/<default-branch> fallback preference (§19.3 point 2) in
+// exactly the case where it matters most: an invented
+// "narvi/<sessionID>" branch (repo.Branch == nil), which by construction
+// almost never exists upstream, would make the WHOLE fetch fail and leave
+// origin/<default-branch> never updated even though the remote itself is
+// perfectly reachable and the default branch itself fetches fine on its
+// own. Two separate invocations is the verified fix: the default-branch
+// fetch always gets its own, independent chance to succeed.
+//
+// A failure of the default-branch fetch (or of resolveDefaultBranch itself)
+// does NOT by itself make the fetch step as a whole "failed" -- it only
+// costs checkoutBranch its own origin/<default-branch> fallback preference;
+// what gitstate.TriggerForFetch's fetchSucceeded actually needs to know is
+// whether the ACTUAL target branch was fetched, which is this function's own
+// return value.
+func gitFetchStep(ctx context.Context, sup *supervisor.Supervisor, credHelperArg, dir, branch string, stepTimeout, stopGrace time.Duration) (defaultBranch string, err error) {
+	defaultBranch, lsErr := resolveDefaultBranch(ctx, sup, credHelperArg, dir, stepTimeout, stopGrace)
+	if lsErr != nil {
+		// The remote is unreachable (or its advertised default branch name
+		// itself failed validation) -- the target-branch fetch below is
+		// doomed for the same underlying reason, but it is still attempted
+		// directly rather than short-circuited here, so the error actually
+		// returned/logged is the more specific, directly-relevant one for
+		// the branch this repo actually needed.
+		return "", gitFetchRef(ctx, sup, credHelperArg, dir, branch, stepTimeout, stopGrace)
+	}
+
+	defaultFetchErr := gitFetchRef(ctx, sup, credHelperArg, dir, defaultBranch, stepTimeout, stopGrace)
+	if branch == defaultBranch {
+		// Same ref -- the fetch above already covers it; a second,
+		// identical invocation would be pure waste.
+		return defaultBranch, defaultFetchErr
+	}
+
+	return defaultBranch, gitFetchRef(ctx, sup, credHelperArg, dir, branch, stepTimeout, stopGrace)
+}
+
+// resolveDefaultBranch runs `git -C <dir> -c credential.helper=<credHelperArg>
+// ls-remote --symref origin HEAD` and parses the remote's own advertised
+// default branch name from its output -- verified directly against real git
+// behavior (sync_test.go), not assumed: the first line of `--symref` output
+// is always exactly `ref: refs/heads/<default-branch>\tHEAD` (a second
+// line, `<sha>\tHEAD`, is the resolved commit and carries no branch-name
+// information of its own). The parsed name is re-validated
+// (reposource.ValidateBranch) before it is ever used as a git subprocess
+// argument anywhere else -- ls-remote's own output originates from the
+// remote itself, which this package treats as untrusted input exactly like
+// every other caller-supplied value (see validateRepoSpec's own reasoning,
+// clone.go): an invalid/malicious advertised name is reported as an error
+// here, never silently passed through to a later git invocation's argument
+// list.
+func resolveDefaultBranch(ctx context.Context, sup *supervisor.Supervisor, credHelperArg, dir string, stepTimeout, stopGrace time.Duration) (string, error) {
+	out, err := runGit(ctx, sup, []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "ls-remote", "--symref", "origin", "HEAD"}, stepTimeout, stopGrace)
+	if err != nil {
+		return "", fmt.Errorf("resolve default branch: %w", err)
+	}
+
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "ref:" {
+			continue
+		}
+		branch := strings.TrimPrefix(fields[1], "refs/heads/")
+		if branch == fields[1] {
+			// Not a refs/heads/ symref -- not a shape this function knows
+			// how to parse (HEAD pointed somewhere other than a branch).
+			continue
+		}
+		if err := reposource.ValidateBranch(branch); err != nil {
+			return "", fmt.Errorf("resolve default branch: invalid remote-advertised branch name %q: %w", branch, err)
+		}
+		return branch, nil
+	}
+	return "", fmt.Errorf("resolve default branch: no refs/heads/ symref found in ls-remote --symref output: %q", out)
+}
+
+// gitFetchRef runs `git -C <dir> -c credential.helper=<credHelperArg> fetch
+// origin -- <ref>` for exactly one ref, bounded by stepTimeout -- via runGit
+// itself, so it shares that helper's own timeout/stop/error-wrapping shape
+// exactly. The credential helper is wired exactly like cloneOne (clone.go)
+// already wires it for `git clone`'s own remote operation. The trailing
+// "--" before ref is the SAME defense-in-depth convention checkoutBranch/
+// cloneOne already use before every positional ref/path argument --
+// verified directly against real git (sync_test.go) that it does not change
+// fetch's own behavior for a bare ref name.
+func gitFetchRef(ctx context.Context, sup *supervisor.Supervisor, credHelperArg, dir, ref string, stepTimeout, stopGrace time.Duration) error {
+	_, err := runGit(ctx, sup, []string{"-C", dir, "-c", "credential.helper=" + credHelperArg, "fetch", "origin", "--", ref}, stepTimeout, stopGrace)
+	return err
+}
+
+// refExistsQuiet runs `git -C <dir> rev-parse --verify --quiet <fullRef>`,
+// exit-code based, never string-matching output: verified directly against
+// real git behavior (sync_test.go) that exit 0 means the ref exists and
+// exit 1 means it does not -- both expected, valid outcomes, not error
+// paths. Any OTHER exit code (a genuinely broken repo, an unexpected git
+// failure) is returned as a real error. fullRef is always a caller-supplied,
+// already-fully-qualified ref path (refs/heads/<branch> or
+// refs/remotes/origin/<branch>) -- shared by branchExistsLocally (a LOCAL
+// branch) and remoteBranchExists (Step 40, §19.3: a REMOTE-TRACKING branch,
+// checking whether this Step's own new boot-time fetch step actually
+// fetched it), each of which supplies its own prefix so this function itself
+// stays agnostic to which kind of ref it is checking.
+func refExistsQuiet(ctx context.Context, sup *supervisor.Supervisor, dir, fullRef string, stepTimeout, stopGrace time.Duration) (bool, error) {
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: "git",
-		Args: []string{"-C", dir, "rev-parse", "--verify", "--quiet", "refs/heads/" + branch},
+		Args: []string{"-C", dir, "rev-parse", "--verify", "--quiet", fullRef},
 	})
 	if err != nil {
 		return false, fmt.Errorf("spawn git rev-parse --verify: %w", err)
@@ -455,6 +643,26 @@ func branchExistsLocally(ctx context.Context, sup *supervisor.Supervisor, dir, b
 	}
 }
 
+// branchExistsLocally reports whether branch exists as a LOCAL branch
+// (refs/heads/<branch>) in dir -- never a coincidentally-matching tag or
+// remote-tracking ref. See refExistsQuiet's own doc comment for the
+// exit-code semantics this relies on.
+func branchExistsLocally(ctx context.Context, sup *supervisor.Supervisor, dir, branch string, stepTimeout, stopGrace time.Duration) (bool, error) {
+	return refExistsQuiet(ctx, sup, dir, "refs/heads/"+branch, stepTimeout, stopGrace)
+}
+
+// remoteBranchExists reports whether branch exists as a REMOTE-TRACKING
+// branch (refs/remotes/origin/<branch>) in dir -- i.e. whether this Step's
+// own new boot-time fetch step (gitFetchStep, §19.3) actually fetched it.
+// This alone cannot distinguish "the fetch failed entirely" from "the ref
+// never existed upstream in the first place" -- checkoutBranch's own
+// remote-tracking preference chain does not need to: it only cares whether
+// the ref is USABLE right now as a checkout base. See refExistsQuiet's own
+// doc comment for the exit-code semantics this relies on.
+func remoteBranchExists(ctx context.Context, sup *supervisor.Supervisor, dir, branch string, stepTimeout, stopGrace time.Duration) (bool, error) {
+	return refExistsQuiet(ctx, sup, dir, "refs/remotes/origin/"+branch, stepTimeout, stopGrace)
+}
+
 // checkoutBranch checks out branch in dir, creating it from HEAD (§3.4:
 // "create from base if absent") if it does not already exist as a local
 // branch. branch is placed as the LAST positional argument, followed by a
@@ -473,7 +681,22 @@ func branchExistsLocally(ctx context.Context, sup *supervisor.Supervisor, dir, b
 // additional defense in depth, mirroring cloneOne's own "-- before every
 // positional" convention as closely as checkout's own real semantics
 // allow.
-func checkoutBranch(ctx context.Context, sup *supervisor.Supervisor, dir, branch string, stepTimeout, stopGrace time.Duration) error {
+//
+// §19.3 point 2 (Step 40): when branch does NOT exist locally, the base to
+// create it FROM is no longer unconditionally HEAD -- checkoutBase (below)
+// implements the full remote-tracking preference chain the boot-time fetch
+// step (gitFetchStep) makes possible: prefer origin/<branch> (this Step's
+// own new fetch actually succeeded for this exact branch); else
+// origin/<defaultBranch> (the fetch succeeded for the repo's default
+// branch, even though this exact branch doesn't exist upstream -- the
+// common invented "narvi/<sessionID>" case); only when NEITHER
+// remote-tracking ref is available (the fetch failed entirely) does
+// today's original HEAD fallback remain the final resort. defaultBranch is
+// "" whenever gitFetchStep could not even resolve the repo's own default
+// branch name (e.g. the remote was completely unreachable) -- checkoutBase
+// treats that exactly like "no remote-tracking ref available", falling
+// through to HEAD.
+func checkoutBranch(ctx context.Context, sup *supervisor.Supervisor, dir, branch, defaultBranch string, stepTimeout, stopGrace time.Duration) error {
 	exists, err := branchExistsLocally(ctx, sup, dir, branch, stepTimeout, stopGrace)
 	if err != nil {
 		return fmt.Errorf("determine whether branch %s exists: %w", branch, err)
@@ -483,11 +706,47 @@ func checkoutBranch(ctx context.Context, sup *supervisor.Supervisor, dir, branch
 	if exists {
 		args = append(args, branch, "--")
 	} else {
-		args = append(args, "-b", branch, "HEAD", "--")
+		base, err := checkoutBase(ctx, sup, dir, branch, defaultBranch, stepTimeout, stopGrace)
+		if err != nil {
+			return fmt.Errorf("determine checkout base for %s: %w", branch, err)
+		}
+		args = append(args, "-b", branch, base, "--")
 	}
 
 	_, err = runGit(ctx, sup, args, stepTimeout, stopGrace)
 	return err
+}
+
+// checkoutBase implements §19.3 point 2's own remote-tracking preference
+// chain for a branch that does not exist locally -- see checkoutBranch's
+// own doc comment above for the full reasoning. Verified directly against
+// real git behavior (sync_test.go), not assumed, for every step of this
+// chain, matching this package's own house style.
+func checkoutBase(ctx context.Context, sup *supervisor.Supervisor, dir, branch, defaultBranch string, stepTimeout, stopGrace time.Duration) (string, error) {
+	branchFetched, err := remoteBranchExists(ctx, sup, dir, branch, stepTimeout, stopGrace)
+	if err != nil {
+		return "", err
+	}
+	if branchFetched {
+		return "origin/" + branch, nil
+	}
+
+	// defaultBranch != branch guards against a redundant, wasted second
+	// rev-parse for the exact same ref this function just checked above
+	// (already known false) -- correctness does not depend on this guard,
+	// only efficiency: were defaultBranch == branch, remoteBranchExists
+	// would simply re-confirm the same false result.
+	if defaultBranch != "" && defaultBranch != branch {
+		defaultFetched, err := remoteBranchExists(ctx, sup, dir, defaultBranch, stepTimeout, stopGrace)
+		if err != nil {
+			return "", err
+		}
+		if defaultFetched {
+			return "origin/" + defaultBranch, nil
+		}
+	}
+
+	return "HEAD", nil
 }
 
 // CleanForImageBuild runs, for each repo name IN ORDER, `git -C <dir>
