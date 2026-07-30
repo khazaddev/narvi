@@ -139,8 +139,17 @@ func runRepoHooks(
 
 		if runErr != nil {
 			if outcome.FatalOnFailure {
-				return fmt.Errorf("boot: %s in %s failed (fatal): %w (output tail: %v)",
-					hook, repo.Name, runErr, tail.Lines())
+				// Same "output_tail" structured attribute as the non-fatal
+				// path below, logged here (rather than interpolated into
+				// the error string with %v) so an operator can grep for
+				// output_tail uniformly regardless of which outcome a hook
+				// took -- the returned error itself stays a plain %w wrap,
+				// its own message never ballooning to a multi-megabyte
+				// tail's own size.
+				platform.Logger(ctx).Error("boot: hook failed, aborting",
+					"repo", repo.Name, "hook", string(hook), "error", runErr,
+					"output_tail", tail.Lines())
+				return fmt.Errorf("boot: %s in %s failed (fatal): %w", hook, repo.Name, runErr)
 			}
 			platform.Logger(ctx).Warn("boot: hook failed, continuing",
 				"repo", repo.Name, "hook", string(hook), "error", runErr,
