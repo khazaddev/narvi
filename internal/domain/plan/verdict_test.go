@@ -70,6 +70,24 @@ func TestMatchRevise(t *testing.T) {
 		{name: "ordinary text with no prefix at all", text: "keep the env fallback please", wantOK: false},
 		{name: "mentions revise mid-sentence, not a prefix", text: "let's revise: the approach later", wantOK: false},
 		{name: "approve keyword is not a revise match", text: "approve", wantOK: false},
+		// Regression case for the MEDIUM audit finding (Unicode byte-offset
+		// bug): İ (LATIN CAPITAL LETTER I WITH DOT ABOVE, U+0130) is 2 bytes
+		// in UTF-8 but strings.ToLower's simple case mapping folds it to
+		// plain ASCII "i" (1 byte) -- the OLD implementation lower-cased a
+		// COPY of the trimmed string to check the prefix, then sliced the
+		// ORIGINAL (un-folded, still-2-byte-İ) string at len(RevisePrefix)
+		// BYTES, landing one byte short of the real prefix boundary and
+		// leaking the trailing ":" into feedback (": drop the retry", not
+		// "drop the retry"). Proves the fix returns the ORIGINAL bytes
+		// after the prefix, byte-for-byte, with no leaked prefix bytes.
+		{name: "dotted capital I case-fold byte-length change (İ)", text: "revİse: drop the retry", wantFeedback: "drop the retry", wantOK: true},
+		// A second, harder variant of the same bug: EVERY ASCII letter in
+		// the prefix replaced by its Turkish-locale-style all-caps form
+		// (including the dotted capital I), proving the rune-by-rune match
+		// still consumes exactly len(RevisePrefix) runes -- never bytes --
+		// even when the byte-length-changing rune is not the only one being
+		// case-folded.
+		{name: "dotted capital I, whole prefix uppercased", text: "REVİSE: drop the retry", wantFeedback: "drop the retry", wantOK: true},
 	}
 
 	for _, tc := range tests {

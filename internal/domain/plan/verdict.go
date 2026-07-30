@@ -1,6 +1,10 @@
 package plan
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 // ApproveKeywords/RejectKeywords are Step 38's ("plan mode, cross-channel",
 // §8.1/§13.3) own deterministic, case-insensitive, trimmed keyword set for
@@ -94,11 +98,36 @@ const RevisePrefix = "revise:"
 // "" -- exactly like MatchVerdict, this function only ever reports whether
 // its own deterministic pattern matched; deciding what to do with an empty
 // feedback prompt is entirely the caller's own job.
+//
+// Bug-fix note (MEDIUM audit finding, Unicode byte-offset bug): this used
+// to lower-case a COPY of trimmed (via strings.ToLower) to check the
+// prefix, then slice the ORIGINAL, un-folded trimmed string at
+// len(RevisePrefix) BYTES -- correct only when every rune in the matched
+// prefix happens to case-fold to a rune of the IDENTICAL UTF-8 byte
+// length. That assumption breaks for a real character: İ (LATIN CAPITAL
+// LETTER I WITH DOT ABOVE, U+0130) is 2 bytes in UTF-8, but
+// strings.ToLower's simple case mapping folds it to plain ASCII "i" (1
+// byte) -- so "revİse: drop the retry" used to lower-case to exactly
+// "revise: drop the retry" (matching the len(RevisePrefix) == 7 byte
+// prefix check), but then slicing the ORIGINAL 8-byte-prefix string at 7
+// bytes landed one byte short, leaking the trailing ":" into feedback
+// (": drop the retry" -- see verdict_test.go's own regression case).
+// Fixed by matching RevisePrefix (pure ASCII) rune-by-rune directly
+// against the ORIGINAL, un-folded trimmed string, consuming exactly
+// len(RevisePrefix) RUNES (never bytes) and cutting at the resulting
+// (always-valid) rune boundary in trimmed itself -- so the returned
+// feedback is always the ORIGINAL bytes after the prefix, byte-for-byte,
+// regardless of any case-fold byte-length change within the prefix.
 func MatchRevise(text string) (feedback string, ok bool) {
 	trimmed := strings.TrimSpace(text)
-	lower := strings.ToLower(trimmed)
-	if !strings.HasPrefix(lower, RevisePrefix) {
-		return "", false
+
+	remaining := trimmed
+	for _, want := range RevisePrefix {
+		r, size := utf8.DecodeRuneInString(remaining)
+		if size == 0 || unicode.ToLower(r) != want {
+			return "", false
+		}
+		remaining = remaining[size:]
 	}
-	return strings.TrimSpace(trimmed[len(RevisePrefix):]), true
+	return strings.TrimSpace(remaining), true
 }
