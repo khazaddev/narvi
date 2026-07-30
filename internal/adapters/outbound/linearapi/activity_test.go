@@ -127,3 +127,86 @@ func TestCreateResponseActivity_GraphQLError(t *testing.T) {
 		t.Fatal("CreateResponseActivity() error = nil, want non-nil")
 	}
 }
+
+// TestCreateThoughtActivity_Success proves CreateThoughtActivity posts a
+// "thought"-typed AgentActivity via a real agentActivityCreate GraphQL
+// mutation, authenticated with the given access token -- the synchronous
+// 10-second acknowledgment Step 34's webhook handler sends on a `created`
+// AgentSessionEvent, and the outbox worker's async mid-turn progress
+// notification.
+func TestCreateThoughtActivity_Success(t *testing.T) {
+	t.Parallel()
+
+	var gotAuth string
+	var gotBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{
+				"agentActivityCreate": map[string]any{"success": true},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := linearapi.New(server.Client(), server.URL)
+
+	err := client.CreateThoughtActivity(context.Background(), "test-access-token", "agent-session-1", "Looking into this now.")
+	if err != nil {
+		t.Fatalf("CreateThoughtActivity() error = %v, want nil", err)
+	}
+
+	if gotAuth != "Bearer test-access-token" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer test-access-token")
+	}
+
+	variables, ok := gotBody["variables"].(map[string]any)
+	if !ok {
+		t.Fatalf("request body has no variables: %v", gotBody)
+	}
+	input, ok := variables["input"].(map[string]any)
+	if !ok {
+		t.Fatalf("variables has no input: %v", variables)
+	}
+	if input["agentSessionId"] != "agent-session-1" {
+		t.Errorf("agentSessionId = %v, want %q", input["agentSessionId"], "agent-session-1")
+	}
+	content, ok := input["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("input has no content: %v", input)
+	}
+	if content["type"] != "thought" {
+		t.Errorf("content.type = %v, want %q", content["type"], "thought")
+	}
+	if content["body"] != "Looking into this now." {
+		t.Errorf("content.body = %v, want %q", content["body"], "Looking into this now.")
+	}
+}
+
+// TestCreateThoughtActivity_GraphQLError mirrors
+// TestCreateResponseActivity_GraphQLError for the thought path: a top-level
+// GraphQL "errors" array on an HTTP 200 response is surfaced as a real
+// error, not silently swallowed.
+func TestCreateThoughtActivity_GraphQLError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"errors": []map[string]any{{"message": "not authorized"}},
+		})
+	}))
+	defer server.Close()
+
+	client := linearapi.New(server.Client(), server.URL)
+
+	err := client.CreateThoughtActivity(context.Background(), "bad-token", "agent-session-1", "hi")
+	if err == nil {
+		t.Fatal("CreateThoughtActivity() error = nil, want non-nil")
+	}
+}
