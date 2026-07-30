@@ -474,7 +474,10 @@ A pure decision function (same style as the domain decision functions, §3.2/§9
 
 When triggered, run one review pass over the full diff `baseRef..headRef` — not per constituent PR — with a prompt **distinct from the standard risk-map verdict**: explicitly framed around composition ("do these already-individually-correct changes conflict, duplicate, or invalidate each other's assumptions"), never re-litigating logic already approved per PR. Reuses the same LLM/review pipeline (§4.3, §8.2) with a separate, versioned prompt template (same mechanism as §8.3/§12.2 item 5).
 
-### 15.4 Phasing
+### 15.4 Premise/shippable enrichment: a later extension, not now
+Neither the manifest check (§15.2) nor the aggregate diff review (§15.3) computes or consumes the per-PR `Shippable`/`PremiseState` structured verdict (§8.2/Step 45, §21) — both stay exactly the mechanical/compositional passes specified above, with no release-level premise or shippable score. Enriching either pass with that structured type later — e.g., rolling the constituent PRs' `Shippable` states into an aggregate read on the release cut itself — is a possible later extension if experience with the manifest/aggregate-diff passes shows it's needed. It is explicitly not part of this design and not scheduled.
+
+### 15.5 Phasing
 Extends the code-review domain and review-session reuse (§8.2, Step 46) plus the intent classifier (§8.3, Step 36) — Phase 5, alongside the rest of the sentinel family (Step 45/46/48/49). No new domain package, no new state machine. UI: a dedicated release-review screen (§12.2 item 9, mocked in the design artifact) — manifest table + trigger banner + composition findings.
 
 ## 16. Decision inbox (home view — new capability)
@@ -705,11 +708,12 @@ The enable/disable flag follows exactly the same threading `plan_mode` already u
 ### 20.5 Hard-gate is explicitly out of scope
 A hard gate — blocking the turn outright on a STRONG outcome rather than just surfacing it — is not designed here and not scheduled. It becomes a candidate only if and when the structured signal's own telemetry (§20.2) shows STRONG firing on genuine misses at a rate that justifies the cost of interrupting a session outright; until that evidence exists, gating on an unvalidated signal would risk blocking correct work on a false alarm, which is a worse failure than the one this feature exists to catch.
 
-**Phasing:** Step 57, Phase 5. Independent of every other new Phase 5 Step — it extends only the turn prompt-assembly path and the turn row schema.
+### 20.6 Phasing
+Step 57, Phase 5. Independent of every other new Phase 5 Step — it extends only the turn prompt-assembly path and the turn row schema.
 
 ## 21. Review verdict persistence, analytics, digest & automated approval (new capability)
 
-Extends §8.2 (code review) and §16 (decision inbox). §21.1 covers the verdict history and analytics read model, §21.2 the automated-approval design that supersedes part of §8.2/§16.1's original label-driven mechanism, §21.3 the digest.
+Problem this solves: posted review verdicts (§8.2) leave no durable, queryable history — there is no data source an analytics view or a digest could read from, only whatever is currently visible on each PR. Worse, the auto-approval mechanism §8.2/§16.1 originally specified is label-driven (`review: low risk`, posted by a human before anything automated can happen) — still a per-PR human bottleneck, exactly the serial chokepoint the decision inbox (§16) exists to relieve everywhere else. This section fixes both: an append-only verdict history feeding analytics and a deterministic digest (§21.1, §21.3), and a fully automated, criteria-driven replacement for the label gate (§21.2) that supersedes part of §8.2/§16.1's original design.
 
 ### 21.1 Verdict persistence & analytics read model
 Every posted verdict (§8.2/Step 47's structured `domain/review` type, §8.2/Step 45) appends one row to `review_verdicts` — **append-only, one row per post**, never an update-in-place; the structured type means this is pure storage, never re-parsing anything out of posted comment text (the domain object already exists before it is posted). The latest verdict per PR is a `DISTINCT ON (repo, pr_number) ... ORDER BY created_at DESC` reduction (the same idiom already used for `sandbox_history`, §5.1) — no correlated subquery, no second "current verdict" table to keep in sync by convention.
@@ -741,7 +745,7 @@ Step 58, Phase 5, after Step 45 (verdict shape) and Step 47 (posting path) — d
 
 ## 22. Learned false-positive patterns & rebuttal identity (new capability)
 
-Extends §8.2 (code review) and §17 (sentinel auto-fix's own rebuttal-adjacent surface — this section's rebuttal-identity fix applies to every review finding, not just sentinel findings).
+Problem this solves: two independent frictions compound in code review (§8.2) today. A finding's rebuttal is tracked by file:line, so an unrelated edit that merely shifts a line number makes an already-rebutted finding look brand new on the very next review pass, forcing a maintainer to re-argue the same dismissal indefinitely. And a maintainer who teaches a reviewer "that's not actually a problem in this repo" has no way to make it stick — the same false positive fires again on the next PR, because nothing captures what was learned. This section fixes both: content-based rebuttal identity, which applies to every review finding and not just the sentinel-auto-fix surface (§17) it's adjacent to (§22.1), and a repo-scoped table of maintainer-taught false-positive patterns with its own capture/injection/retirement lifecycle (§22.2-§22.4).
 
 ### 22.1 Rebuttal identity by content, not position
 A finding's rebuttal (§12.2 item 2's Dismiss-with-rebuttal) is reconciled against the finding's own **persisted content** — a hash/text of the finding stored at the moment the verdict that raised it was posted (§8.2/Step 45's structured type already carries this data; storing it is not new capture, just retention) — **never by file:line alone**. A file:line-only identity breaks the moment a line shifts (an unrelated edit above it, a reformat) — the same finding then silently reads as a *new* one, and a human's already-given rebuttal is lost on the very next review pass. Content-based identity survives exactly the churn that makes file:line fragile.
@@ -764,22 +768,19 @@ Step 59, Phase 5, after Step 47 (needs the verdict-posting path new patterns get
 
 ## 23. Plan follow-up classification (amend vs answer) (new capability)
 
-Extends §8.1 (plan mode) and §18 (unified intent classifier).
+Problem this solves: once a plan is posted and its session is `awaiting_approval` (§8.1), a reply that doesn't match one of the known approve/reject keywords is dispatched today as an ordinary build turn (`planMode: false`) — with no server-side check blocking it. This is a pre-existing gap in the shipped plan-mode dispatch path (Steps 37-38), not a hypothetical: a user's clarifying question or a minor amendment to the plan, worded as anything other than a recognized keyword, silently starts a build against the *unapproved* plan's assumptions. This section closes it, extending §8.1 (plan mode) and §18 (unified intent classifier).
 
-### 23.1 The gap this closes
-Today, once a plan is posted and its session is `awaiting_approval` (§8.1), a reply that doesn't match one of the known approve/reject keywords is dispatched as an ordinary build turn (`planMode: false`) — with no server-side check blocking it. This is a pre-existing gap in the shipped plan-mode dispatch path (Steps 37-38), not a hypothetical: a user's clarifying question or a minor amendment to the plan, worded as anything other than a recognized keyword, silently starts a build against the *unapproved* plan's assumptions. This section closes it.
-
-### 23.2 A new classifier surface
+### 23.1 A new classifier surface
 `plan_followup` is a new surface on the existing unified intent classifier (§18) — amend-vs-answer, alongside the classifier's other categories (review-vs-request, plan-vs-build, release-vs-feature, §18.6). Same never-throw contract, same confidence rubric (§18.1/§18.2) — no parallel classification mechanism invented for this one case. There is a **single call site**, gated on "a plan exists and is `awaiting_approval`" — the classifier is never invoked for this purpose outside that state.
 
-### 23.3 Enforcement at the persisted-state layer
+### 23.2 Enforcement at the persisted-state layer
 The classification result is persisted as an `answer_only` flag on the turn/message row and **consulted by the plan-save path** before any dispatch decision is made — never by trusting the sandbox/runtime to self-enforce which mode a turn runs in. This is the same "Postgres single source of truth" discipline (§5.1, CLAUDE.md) applied to a new case: the state that governs dispatch lives in the database the plan-save path already checks, not in a runtime flag a client or sandbox could misreport.
 
-### 23.4 Fail-open direction: wait for clarification, never silent dispatch
-When the classifier fails or returns low confidence while a plan is `awaiting_approval`, the fallback is **wait-for-clarification** — nothing is dispatched, the plan stays `awaiting_approval`, and the reply is an honest prompt asking the user to approve, reject, or clarify. This is a deliberate choice, not the only option: reproducing today's existing behavior (§23.1 — dispatch as an ordinary build turn) would be a more literal "fail open to current behavior," but current behavior here is the gap this section exists to close, so failing open to it would just reintroduce the same gap under a new name. Wait-for-clarification is strictly safer — it never risks a build turn firing against an unapproved plan — at the cost of occasionally asking a user to repeat themselves when the classifier was merely unconfident, not wrong.
+### 23.3 Fail-open direction: wait for clarification, never silent dispatch
+When the classifier fails or returns low confidence while a plan is `awaiting_approval`, the fallback is **wait-for-clarification** — nothing is dispatched, the plan stays `awaiting_approval`, and the reply is an honest prompt asking the user to approve, reject, or clarify. This is a deliberate choice, not the only option: reproducing today's existing behavior (dispatch as an ordinary build turn, the gap described above) would be a more literal "fail open to current behavior," but current behavior here is the gap this section exists to close, so failing open to it would just reintroduce the same gap under a new name. Wait-for-clarification is strictly safer — it never risks a build turn firing against an unapproved plan — at the cost of occasionally asking a user to repeat themselves when the classifier was merely unconfident, not wrong.
 
-### 23.5 Never a public surface
+### 23.4 Never a public surface
 Like every internal classification surface, `plan_followup` is excluded from public routes **by construction** — private to `app/`, never registered on `httpapi`/`wshub` (§18.6, mirrored here as the second surface to follow this rule; it is not merely a convention to remember but a structural property of where the code lives).
 
-### 23.6 Phasing
+### 23.5 Phasing
 Step 60, Phase 5, after Step 36 (classifier) and Steps 37-38 (plan mode, the dispatch point this amends). No UI change — the effect is entirely in the dispatch/reply path.
