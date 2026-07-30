@@ -117,80 +117,155 @@ RETURNING *;
 -- this section's own documented 10-40 minute staleness window under
 -- load).
 --
+-- "refresh_in_progress = false OR refresh_started_at < @stale_claim_cutoff"
+-- (audit-remediation batch B2) excludes a row another pod is ACTIVELY,
+-- genuinely refreshing (matching ClaimImageBuildForRefresh's own identical
+-- precondition below -- a correctness finding: this poll used to return
+-- such rows too, burning a wasted resolveRepoSHAs/GitHub-API round trip
+-- per pod per tick only to lose the claim) while STILL returning a row
+-- whose claim has gone stale (older than
+-- platform.Timeouts.ImageRefreshClaimStaleAfter), so a wedged claim left
+-- by a crash between ClaimImageBuildForRefresh and RecordImageRefreshSuccess/
+-- RecordImageRefreshFailure is still surfaced here for reclaiming, rather
+-- than becoming permanently invisible to every future tick.
+--
 -- ORDER BY updated_at (same column ListDueImageBuilds orders by) gives
--- ACROSS-TICK fairness ONLY because attemptRefresh (app/imagebuild/
--- builder.go) advances THIS column on EVERY 'ready' row it inspects this
--- tick, not merely ones that reach ClaimImageBuildForRefresh below -- a
--- SECOND correctness review finding, this time on the batch-cap fix
--- itself: a row genuinely NOT stale (NeedsRefresh false) or whose SHA
--- resolution PERSISTENTLY fails (a renamed/deleted repo, a token missing
--- org access) never reaches ClaimImageBuildForRefresh at all, so if
--- nothing else touched its own updated_at, it would keep an arbitrarily
--- OLD timestamp forever and, being oldest, permanently occupy the ENTIRE
--- LIMIT $1 window of every single tick -- starving any row that goes
--- stale LATER (a newer updated_at always sorts behind that static front
--- cohort, so it is never even RETURNED here, let alone refreshed).
--- TouchImageBuildChecked (below) is the fix: attemptRefresh calls it from
--- its own two early-return branches (a resolveRepoSHAs error, or
--- NeedsRefresh reporting still-fresh) right before returning, so THOSE
--- rows rotate to the back of the queue exactly as if they had reached a
--- real claim. That is what makes ORDER BY updated_at a genuine, total
--- round-robin over the WHOLE 'ready' population rather than a partial one
--- that only rotates the subset that happens to need a rebuild.
+-- ACROSS-TICK fairness under one invariant this whole mechanism depends
+-- on: attemptRefresh (app/imagebuild/builder.go) advances THIS column on
+-- EVERY row it inspects this tick -- not merely ones that reach a real
+-- BuildImage call -- so that ORDER BY updated_at is a genuine round-robin
+-- over the WHOLE 'ready' population this query can return, never merely
+-- the subset that happens to need a rebuild this tick. See attemptRefresh's
+-- own top doc comment for the full starvation this rules out and why the
+-- invariant is stated this way (as an invariant, not as an enumerated
+-- branch count -- the exact branch count has already changed more than
+-- once and prose that names a number silently rots the moment it does).
 SELECT * FROM image_builds
 WHERE status = 'ready' AND repo_urls != '{}'::jsonb
+  AND (refresh_in_progress = false OR refresh_started_at < sqlc.arg('stale_claim_cutoff'))
 ORDER BY updated_at
 LIMIT $1;
 
 -- name: ClaimImageBuildForRefresh :one
 -- The freshness pump's own single-flight claim (§19.2): a CAS entirely
 -- independent of status/attempt_count/next_retry_at -- it flips
--- refresh_in_progress to true ONLY when the row is still 'ready' AND not
--- already being refreshed by a concurrent tick (this pod's or another
--- pod's own Builder). status stays 'ready' throughout -- see
--- migrations/000040_image_builds_refresh_pump.up.sql's own doc comment
--- for why this must never touch status the way ClaimImageBuild does for
--- a brand-new pending/failed row: a NEW spawn's own GetImageBuild lookup
--- must keep seeing status='ready' (and the OLD image_ref) for the entire
--- window a refresh build runs. :one on zero matched rows surfaces
--- pgx.ErrNoRows -- a normal, expected "someone else already claimed this
--- one" outcome, not an error condition.
+-- refresh_in_progress to true (and stamps refresh_started_at with the
+-- moment of THIS claim) when the row is still 'ready' AND EITHER not
+-- already being refreshed by a concurrent tick, OR its existing claim has
+-- gone stale (audit-remediation batch B2: refresh_started_at older than
+-- @stale_claim_cutoff, i.e. platform.Timeouts.ImageRefreshClaimStaleAfter
+-- ago) -- see migrations/000041_image_builds_refresh_lease.up.sql's own
+-- doc comment for why this is a LEASE, not a boot-time sweep, and why that
+-- distinction matters in a multi-pod deployment. status stays 'ready'
+-- throughout -- see migrations/000040_image_builds_refresh_pump.up.sql's
+-- own doc comment for why this must never touch status the way
+-- ClaimImageBuild does for a brand-new pending/failed row: a NEW spawn's
+-- own GetImageBuild lookup must keep seeing status='ready' (and the OLD
+-- image_ref) for the entire window a refresh build runs. :one on zero
+-- matched rows surfaces pgx.ErrNoRows -- a normal, expected "someone else
+-- already claimed this one, and their claim is still fresh" outcome, not
+-- an error condition.
 UPDATE image_builds
-SET refresh_in_progress = true, updated_at = now()
-WHERE fingerprint = $1 AND status = 'ready' AND refresh_in_progress = false
+SET refresh_in_progress = true, refresh_started_at = now(), updated_at = now()
+WHERE fingerprint = $1
+  AND status = 'ready'
+  AND (refresh_in_progress = false OR refresh_started_at < sqlc.arg('stale_claim_cutoff'))
 RETURNING *;
 
 -- name: RecordImageRefreshSuccess :one
 -- The freshness pump's own success half (§19.2): a SINGLE UPDATE
 -- atomically swaps image_ref + built_repo_shas + built_at (never a
--- delete-then-insert) and releases the refresh_in_progress claim --
--- status stays 'ready' the whole time, so a session mid-spawn never sees
--- a gap where this fingerprint has no usable ready image_ref: it reads
--- either the OLD ref (before this commits) or the NEW one (after), never
--- neither. Guarded by "AND status = 'ready'" (a refresh can never observe
--- anything else, by construction of ClaimImageBuildForRefresh above, but
--- guarded defensively here too, matching RecordImageBuildSuccess's own
--- guard-even-though-the-caller-already-checked convention) -- next_retry_at
--- is deliberately left untouched (unlike RecordImageBuildSuccess, which
--- clears it): a refresh never affects the ordinary pending/failed/backoff
--- lifecycle those columns track.
+-- delete-then-insert) and releases the refresh_in_progress claim
+-- (refresh_started_at cleared back to NULL alongside it, audit-remediation
+-- batch B2) -- status stays 'ready' the whole time, so a session mid-spawn
+-- never sees a gap where this fingerprint has no usable ready image_ref:
+-- it reads either the OLD ref (before this commits) or the NEW one
+-- (after), never neither. Guarded by "AND status = 'ready'" (a refresh can
+-- never observe anything else, by construction of
+-- ClaimImageBuildForRefresh above, but guarded defensively here too,
+-- matching RecordImageBuildSuccess's own guard-even-though-the-caller-
+-- already-checked convention) -- next_retry_at is deliberately left
+-- untouched (unlike RecordImageBuildSuccess, which clears it): a refresh
+-- never affects the ordinary pending/failed/backoff lifecycle those
+-- columns track. The caller MUST treat a pgx.ErrNoRows/other error from
+-- this query exactly like a BuildImage failure -- i.e. still release the
+-- claim (RecordImageRefreshFailure) -- rather than returning early and
+-- leaving refresh_in_progress wedged true (the root defect audit batch B2
+-- closes; see app/imagebuild/builder.go's own attemptRefresh doc comment).
+--
+-- "AND refresh_started_at = @claimed_refresh_started_at" (audit-remediation
+-- batch B2 round 2 -- a fencing token, closing a SECOND, separate defect
+-- the "AND status = 'ready'" guard alone does not: status never changes
+-- across a reclaim, so that guard alone cannot tell "I still hold the
+-- lease I originally took" from "someone else's tick has since reclaimed
+-- this row's lease and is now legitimately, actively refreshing it". The
+-- caller passes the EXACT refresh_started_at value ClaimImageBuildForRefresh
+-- returned to IT, at the moment IT took its own claim -- never a freshly
+-- computed now(). If this fingerprint's lease has since gone stale and been
+-- reclaimed by a concurrent tick (this pod's or another pod's), that
+-- reclaim stamped a NEW refresh_started_at, so this equality fails, zero
+-- rows match, and this call becomes the exact same harmless, expected
+-- no-op a lost-claim-race already is elsewhere in this file -- rather than
+-- unconditionally overwriting whatever the reclaiming tick has since
+-- written (a fresher build silently clobbered by a stale one) or, worse,
+-- wiping out that tick's own still-legitimately-held claim out from under
+-- it. See app/imagebuild/builder.go's own attemptRefresh doc comment and
+-- migrations/000041_image_builds_refresh_lease.up.sql's own doc comment for
+-- the full failure mode this closes (a lease alone bounds how long a stale
+-- claim survives; it does NOT, by itself, stop a delayed writer whose own
+-- outcome-recording call outlives that bound from clobbering whoever holds
+-- the lease by the time that write finally lands).
 UPDATE image_builds
-SET image_ref = $2, built_repo_shas = $3, built_at = $4, refresh_in_progress = false, updated_at = now()
-WHERE fingerprint = $1 AND status = 'ready'
+SET image_ref = $2, built_repo_shas = $3, built_at = $4, refresh_in_progress = false, refresh_started_at = NULL, updated_at = now()
+WHERE fingerprint = $1 AND status = 'ready' AND refresh_started_at = sqlc.arg('claimed_refresh_started_at')
 RETURNING *;
 
 -- name: RecordImageRefreshFailure :one
--- The freshness pump's own failure half (§19.2): simply releases the
--- refresh_in_progress claim, touching NOTHING else -- a failed refresh
+-- The freshness pump's own failure half (§19.2): releases the
+-- refresh_in_progress claim (and clears refresh_started_at back to NULL,
+-- audit-remediation batch B2), touching NOTHING else -- a failed refresh
 -- attempt leaves the row exactly as it was (still 'ready', still serving
 -- its own old, perfectly-good image_ref/built_repo_shas/built_at), picked
 -- up again at the next ImageRefreshCheckInterval tick. This is the
 -- refresh path's own natural retry cadence -- no separate backoff
 -- schedule is needed the way the pending/failed lifecycle's own
--- next_retry_at provides one.
+-- next_retry_at provides one. This is app/imagebuild.Builder's own SHARED
+-- release path -- releaseRefreshClaim calls this from EVERY one of
+-- attemptRefresh's own post-claim failure branches (BuildImage failure, a
+-- marshal failure, and a RecordImageRefreshSuccess failure), by
+-- INVARIANT, not merely the two branches this comment named on the day it
+-- was first written.
+--
+-- "AND refresh_started_at = @claimed_refresh_started_at" (audit-remediation
+-- batch B2 round 2) is a FENCING-TOKEN guard, for the identical reason
+-- RecordImageRefreshSuccess above now carries one -- this query used to
+-- have NO guard of any kind, meaning ANY caller holding ANY stale
+-- reference to this fingerprint (e.g. a delayed writer whose claim was
+-- reclaimed out from under it while this very release call was itself
+-- blocked, mid-flight, on this row's lock) would unconditionally release
+-- whatever claim is CURRENTLY held, including a different tick's own
+-- still-legitimate, still in-flight one. The caller passes the exact
+-- refresh_started_at value it read at claim time; a mismatch (the row's
+-- lease has since been reclaimed) makes this call the same harmless,
+-- expected no-op every other lost-claim-race in this file already is.
+--
+-- Deliberately NOT also guarded by "AND status = 'ready'" (unlike
+-- RecordImageRefreshSuccess above) -- that omission is LOAD-BEARING, not
+-- an oversight: this release path exists precisely so a claim still gets
+-- released even when status has drifted away from 'ready' through some
+-- OTHER, unrelated race (RecordImageRefreshSuccess's own doc comment's
+-- "should-be-rare, benign race" -- see
+-- TestAttemptRefresh_RecordRefreshSuccessNoOp_ReleasesClaim, which
+-- exercises exactly this: status flips to 'building' out from under an
+-- in-flight refresh, and the release must STILL happen). Adding a status
+-- guard here would silently reintroduce a wedged refresh_in_progress claim
+-- for every one of those cases -- the fencing token alone is the correct,
+-- narrower fix: it rejects a release only when THIS claim instance has
+-- specifically been superseded by a reclaim (refresh_started_at changed),
+-- which is orthogonal to whatever status happens to be.
 UPDATE image_builds
-SET refresh_in_progress = false, updated_at = now()
-WHERE fingerprint = $1
+SET refresh_in_progress = false, refresh_started_at = NULL, updated_at = now()
+WHERE fingerprint = $1 AND refresh_started_at = sqlc.arg('claimed_refresh_started_at')
 RETURNING *;
 
 -- name: TouchImageBuildChecked :exec
@@ -199,13 +274,18 @@ RETURNING *;
 -- ListReadyImageBuilds' own doc comment above for the full starvation
 -- mechanism this closes). Bumps ONLY updated_at for fingerprint --
 -- status/image_ref/built_repo_shas/built_at/attempt_count/next_retry_at/
--- refresh_in_progress are every one of them left completely untouched.
--- This is deliberately NOT a state transition of any kind -- it is purely
--- "attemptRefresh (app/imagebuild/builder.go) INSPECTED this row this
--- tick", called from attemptRefresh's own two early-return branches (a
--- resolveRepoSHAs error, or NeedsRefresh reporting still-fresh) that
--- otherwise skip ClaimImageBuildForRefresh -- and therefore, before this
--- fix, skipped ever touching updated_at -- entirely.
+-- refresh_in_progress/refresh_started_at are every one of them left
+-- completely untouched. This is deliberately NOT a state transition of any
+-- kind -- it is purely "attemptRefresh (app/imagebuild/builder.go)
+-- INSPECTED this row this tick". attemptRefresh calls this from EVERY one
+-- of its own early-return branches that does not otherwise advance
+-- updated_at some other way (a decode failure, the base-only guard, a
+-- resolveRepoSHAs error, NeedsRefresh reporting still-fresh, and a lost
+-- ClaimImageBuildForRefresh race/error) -- an INVARIANT ("every inspected
+-- row's ordering key advances, one way or another, before attemptRefresh
+-- returns"), not a fixed enumerated list: the exact set of branches has
+-- already grown more than once, and prose naming a branch count silently
+-- rots the next time it does.
 --
 -- "AND status = 'ready'" is a defensive guard, not a load-bearing one (by
 -- construction, attemptRefresh only ever calls this for a row

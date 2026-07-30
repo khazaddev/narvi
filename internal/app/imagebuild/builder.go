@@ -89,6 +89,19 @@ type Builder struct {
 	gitHubImageBuildToken string
 
 	failureStreak metric.Int64Counter
+
+	// refreshClaimReclaimed counts every time ListReady/ClaimForRefresh
+	// observe a refresh_in_progress row whose claim has gone stale
+	// (audit-remediation batch B2: closes the crash-window gap doc.go used
+	// to call "self-healing by construction") -- i.e. every time a stuck
+	// claim, left by a crash/SIGTERM/pod-eviction between a previous
+	// ClaimForRefresh and its own RecordRefreshSuccess/RecordRefreshFailure,
+	// is DETECTED, whether or not this tick's own attempt to reclaim it
+	// wins the race. Constructed exactly once, here, at construction time
+	// -- mirroring failureStreak's own precedent immediately above (and
+	// app/reconciler.NewReconciler's own orphans_reaped precedent it in
+	// turn mirrors).
+	refreshClaimReclaimed metric.Int64Counter
 }
 
 // NewBuilder builds a Builder backed by store/pool (pool is needed
@@ -117,6 +130,15 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		return nil, fmt.Errorf("imagebuild: construct image_build_failure_streak counter: %w", err)
 	}
 
+	refreshClaimReclaimed, err := meter.Int64Counter(
+		"image_refresh_claim_reclaimed",
+		metric.WithDescription("Number of times a stuck refresh_in_progress claim (a crash/SIGTERM/pod-eviction between ClaimForRefresh and its own RecordRefreshSuccess/RecordRefreshFailure) was detected as stale and reclaimed (audit-remediation batch B2)."),
+		metric.WithUnit("{claim}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("imagebuild: construct image_refresh_claim_reclaimed counter: %w", err)
+	}
+
 	return &Builder{
 		store:                 store,
 		pool:                  pool,
@@ -125,6 +147,7 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		sourceControl:         sourceControl,
 		gitHubImageBuildToken: gitHubImageBuildToken,
 		failureStreak:         failureStreak,
+		refreshClaimReclaimed: refreshClaimReclaimed,
 	}, nil
 }
 
@@ -488,27 +511,38 @@ func parseOwnerRepo(rawURL string) (owner, repo string, err error) {
 // slow/blocked attemptRefresh call can delay starting at most
 // refreshBatchSize-1 others in THIS tick, never an unbounded fleet's worth;
 // any row beyond that cap is simply picked up on a later tick. ListReady's
-// own ORDER BY updated_at gives across-tick fairness ONLY because
-// attemptRefresh (below) advances that column on EVERY row it inspects
-// this tick, including its own two early-return paths that never reach a
-// real claim -- see ListReadyImageBuilds' own generated doc comment for
-// the full starvation this rules out (a correctness review finding on
-// this very batch-cap mechanism: a row genuinely not stale, or whose SHA
-// resolution persistently fails, would otherwise keep an arbitrarily old
-// updated_at and permanently occupy the front of every tick's own LIMIT
-// window).
+// own ORDER BY updated_at gives across-tick fairness under an INVARIANT,
+// not merely a fixed set of branches: attemptRefresh (below) advances that
+// column on EVERY row it inspects this tick, including every early-return
+// path that never reaches a real claim -- see ListReadyImageBuilds' own
+// generated doc comment for the full starvation this rules out (a
+// correctness review finding on this very batch-cap mechanism: a row
+// genuinely not stale, or whose SHA resolution persistently fails, would
+// otherwise keep an arbitrarily old updated_at and permanently occupy the
+// front of every tick's own LIMIT window).
 //
 // One row's own refresh failure (a resolution error, a lost claim race, a
 // BuildImage failure) is isolated -- logged, and does NOT abort the rest
 // of this tick's own batch, exactly like PumpOnce's own per-row isolation.
+//
+// staleClaimCutoff (audit-remediation batch B2) is computed ONCE per tick
+// -- now() minus platform.Timeouts.ImageRefreshClaimStaleAfter -- and
+// threaded through to both ListReady and every attemptRefresh call this
+// tick makes: ListReady's own WHERE clause and ClaimForRefresh's own CAS
+// must agree on EXACTLY the same cutoff instant, or a row ListReady
+// decides is reclaimable could lose a since-moved-on ClaimForRefresh
+// comparison (or vice versa) purely from tick-internal clock drift between
+// two separate now() calls.
 func (b *Builder) RefreshOnce(ctx context.Context) error {
-	rows, err := b.store.ListReady(ctx, refreshBatchSize)
+	staleClaimCutoff := pgtype.Timestamptz{Time: time.Now().Add(-b.timeouts.ImageRefreshClaimStaleAfter), Valid: true}
+
+	rows, err := b.store.ListReady(ctx, refreshBatchSize, staleClaimCutoff)
 	if err != nil {
 		return fmt.Errorf("imagebuild: list ready image builds: %w", err)
 	}
 
 	for _, row := range rows {
-		b.attemptRefresh(ctx, row)
+		b.attemptRefresh(ctx, row, staleClaimCutoff)
 	}
 	return nil
 }
@@ -532,34 +566,73 @@ func (b *Builder) RefreshOnce(ctx context.Context) error {
 // triple or the complete NEW one, never a mix, and never a moment with no
 // usable ready image_ref at all.
 //
-// # Every inspected row advances its own ordering key (fixing a starvation
-// # finding on the batch-cap fix)
+// # INVARIANT: every inspected row advances its own ordering key, and
+// # every claim taken is released, on every early-return path
 //
-// This function has several early-return paths that decide "nothing to
-// rebuild this tick" WITHOUT ever reaching ClaimForRefresh: a
-// resolveRepoSHAs error (§19.2's own "will retry next tick" degrade),
-// NeedsRefresh reporting still-fresh, a repo_urls decode failure, and the
-// base-only defense-in-depth guard below. None of these used to touch this
-// row's own updated_at at all -- so a row genuinely NOT stale (a repo
-// that simply hasn't pushed lately) or one whose SHA resolution
-// PERSISTENTLY fails (a renamed/deleted repo, a token missing org access)
-// kept an arbitrarily OLD updated_at forever and, being oldest, would
-// permanently occupy the ENTIRE LIMIT window of every tick's own
-// ListReadyImageBuilds call (ORDER BY updated_at ASC) -- starving any row
-// that went stale LATER (a newer updated_at always sorts behind that
-// static front cohort, so it would never even be RETURNED, let alone
-// refreshed). Every path below now calls touchChecked immediately before
-// returning, which bumps ONLY updated_at (TouchImageBuildChecked -- no
-// other column, never a state transition) -- exactly as if this row had
-// reached a real claim. That is what makes ListReadyImageBuilds' own
-// ORDER BY updated_at a genuine round-robin over the WHOLE 'ready'
-// population reachable via RefreshOnce's own query, not merely the subset
-// that happens to need a rebuild -- the decode-failure and base-only
-// branches are additionally believed unreachable in practice today (the
-// only writer of repo_urls, imageresolve.go, never produces either shape),
-// so touching them costs nothing and closes the gap if that ever changes.
-func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
+// This function has several early-return paths, some of which decide
+// "nothing to rebuild this tick" WITHOUT ever reaching ClaimForRefresh (a
+// repo_urls decode failure, the base-only defense-in-depth guard, a
+// resolveRepoSHAs error, NeedsRefresh reporting still-fresh, or a lost/
+// failed ClaimForRefresh race) and some of which reach ClaimForRefresh and
+// then fail AFTER taking the claim (a BuildImage failure, a marshal
+// failure, or a RecordRefreshSuccess failure). Two invariants hold across
+// ALL of them, deliberately stated as invariants rather than an enumerated
+// branch count -- the exact set of branches has already grown more than
+// once since this function was first written, and prose naming a count
+// silently rots the next time it does:
+//
+//  1. Every branch that never took a claim (or lost the race for one)
+//     calls touchChecked before returning, bumping ONLY updated_at
+//     (TouchImageBuildChecked -- no other column, never a state
+//     transition) -- exactly as if this row had reached a real claim. A
+//     row genuinely NOT stale (a repo that simply hasn't pushed lately),
+//     or one whose SHA resolution PERSISTENTLY fails (a renamed/deleted
+//     repo, a token missing org access), would otherwise keep an
+//     arbitrarily OLD updated_at forever and, being oldest, permanently
+//     occupy the ENTIRE LIMIT window of every tick's own
+//     ListReadyImageBuilds call (ORDER BY updated_at ASC) -- starving any
+//     row that went stale LATER (a newer updated_at always sorts behind
+//     that static front cohort, so it would never even be RETURNED, let
+//     alone refreshed). This is what makes ListReadyImageBuilds' own
+//     ORDER BY updated_at a genuine round-robin over the WHOLE 'ready'
+//     population reachable via RefreshOnce's own query, not merely the
+//     subset that happens to need a rebuild this tick.
+//  2. Every branch that DID take a claim (successfully reached
+//     ClaimForRefresh) releases it on every path out -- either by
+//     RecordRefreshSuccess's own atomic swap-and-release, or by
+//     releaseRefreshClaim (RecordRefreshFailure) -- INCLUDING when
+//     RecordRefreshSuccess itself fails: the root defect audit-remediation
+//     batch B2 closes was exactly this last case leaking the claim
+//     (RecordRefreshSuccess failing used to return without ever releasing
+//     it, wedging refresh_in_progress=true forever for that fingerprint,
+//     which ALSO froze its own updated_at, recreating the same starvation
+//     invariant 1 above closes -- via a different door). A claim release
+//     that itself fails (e.g. the same crash/context-cancellation that
+//     caused the failure being released FOR) is the one case this
+//     function cannot locally repair -- that is exactly the crash window
+//     staleClaimCutoff/ClaimForRefresh's own lease (platform.Timeouts.
+//     ImageRefreshClaimStaleAfter) exists to heal on a LATER tick, see
+//     this package's own doc.go.
+func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild, staleClaimCutoff pgtype.Timestamptz) {
 	logger := platform.Logger(ctx).With("fingerprint", row.Fingerprint)
+
+	if row.RefreshInProgress {
+		// ListReady's own WHERE clause only ever returns an
+		// already-refresh_in_progress row when its claim has gone STALE
+		// (older than staleClaimCutoff) -- a healthy, actively-refreshing
+		// row is excluded there entirely. Reaching this branch therefore
+		// means this fingerprint's PREVIOUS claim was never released --
+		// almost certainly a crashed/killed process that never reached its
+		// own RecordRefreshSuccess/RecordRefreshFailure. Logged and
+		// counted here, at DETECTION time, regardless of whether this
+		// tick's own ClaimForRefresh below actually wins the reclaim race
+		// (a concurrent tick, this pod's or another pod's, may win it
+		// instead) -- the operator-visible signal this package's own
+		// doc.go used to promise ("until an operator clears it") but never
+		// actually delivered.
+		logger.Warn("imagebuild: refresh: stale refresh_in_progress claim detected; attempting to reclaim", "refresh_started_at", row.RefreshStartedAt.Time)
+		b.refreshClaimReclaimed.Add(ctx, 1)
+	}
 
 	var repoURLs map[string]string
 	if err := json.Unmarshal(row.RepoUrls, &repoURLs); err != nil {
@@ -620,17 +693,26 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 		return // still fresh -- nothing to do this tick.
 	}
 
-	claimed, err := b.store.ClaimForRefresh(ctx, row.Fingerprint)
+	claimed, err := b.store.ClaimForRefresh(ctx, row.Fingerprint, staleClaimCutoff)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// A normal, expected outcome: a concurrent tick (this pod's or
-			// another pod's own Builder) already claimed this fingerprint's
-			// refresh, or the row is no longer 'ready' at all (e.g. it was
-			// never built in the first place by the time this tick got
-			// here) -- never logged as an error.
+			// another pod's own Builder) already holds a still-fresh claim
+			// on this fingerprint's refresh, or the row is no longer
+			// 'ready' at all (e.g. it was never built in the first place by
+			// the time this tick got here) -- never logged as an error.
+			// Still touches the ordering key (invariant 1, this function's
+			// own top doc comment): a lost claim race is exactly as much
+			// "genuinely inspected this tick" as any other early return,
+			// and was previously the ONE branch that didn't -- letting a
+			// row stuck losing this race every tick permanently occupy the
+			// front of the queue exactly like every other invariant-1
+			// branch this function guards against.
+			b.touchChecked(ctx, logger, row.Fingerprint)
 			return
 		}
 		logger.Error("imagebuild: refresh: claim for refresh failed", "error", err)
+		b.touchChecked(ctx, logger, row.Fingerprint)
 		return
 	}
 
@@ -639,6 +721,20 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 		repos[name] = ports.RepoRef{URL: repoURL, SHA: current[name]}
 	}
 
+	// claimedRefreshStartedAt (audit-remediation batch B2 round 2) is the
+	// FENCING TOKEN for this specific claim instance -- the exact
+	// refresh_started_at ClaimForRefresh just stamped and returned to THIS
+	// call, never a freshly computed now(). Every write below that
+	// releases or supersedes this claim (RecordRefreshSuccess,
+	// releaseRefreshClaim) is scoped to it, so a write that outlives this
+	// claim's own staleness window (e.g. blocked on a Postgres row lock
+	// past ImageRefreshClaimStaleAfter, long enough for a concurrent tick
+	// to reclaim this fingerprint) becomes a harmless no-op instead of
+	// clobbering whatever the reclaiming tick has since written or is
+	// still legitimately holding. See RecordImageRefreshSuccess's own
+	// generated doc comment and this function's own top doc comment.
+	claimedRefreshStartedAt := claimed.RefreshStartedAt
+
 	ref, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
 		Base:           claimed.Base,
 		Repos:          repos,
@@ -646,7 +742,7 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 	})
 	if buildErr != nil {
 		logger.Warn("imagebuild: refresh: BuildImage failed; releasing claim, old image_ref stays servable", "error", buildErr)
-		b.releaseRefreshClaim(ctx, logger, row.Fingerprint)
+		b.releaseRefreshClaim(ctx, logger, row.Fingerprint, claimedRefreshStartedAt)
 		return
 	}
 
@@ -656,50 +752,90 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 		// own identical reasoning) -- logged, claim released, never
 		// propagated.
 		logger.Error("imagebuild: refresh: marshal built_repo_shas failed", "error", err)
-		b.releaseRefreshClaim(ctx, logger, row.Fingerprint)
+		b.releaseRefreshClaim(ctx, logger, row.Fingerprint, claimedRefreshStartedAt)
 		return
 	}
 
 	imageRef := string(ref)
 	if _, err := b.store.RecordRefreshSuccess(ctx, sqlcgen.RecordImageRefreshSuccessParams{
-		Fingerprint:   row.Fingerprint,
-		ImageRef:      &imageRef,
-		BuiltRepoShas: builtRepoSHAsJSON,
-		BuiltAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		Fingerprint:             row.Fingerprint,
+		ImageRef:                &imageRef,
+		BuiltRepoShas:           builtRepoSHAsJSON,
+		BuiltAt:                 pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		ClaimedRefreshStartedAt: claimedRefreshStartedAt,
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// The row is no longer 'ready' at all (a should-be-rare,
-			// benign race) -- logged, not fatal to this tick.
-			logger.Warn("imagebuild: refresh: record success no-op: row no longer ready")
+			// Either the row is no longer 'ready' at all (a should-be-rare,
+			// benign race), OR -- the failure mode audit-remediation batch
+			// B2 round 2 closes -- this claim has gone stale and been
+			// reclaimed by a concurrent tick since THIS call took it (this
+			// call was blocked, e.g. on a Postgres row lock, long enough
+			// for that to happen): claimedRefreshStartedAt's own fencing
+			// check no longer matches the row's CURRENT refresh_started_at.
+			// Either way, this tick's own claim is gone: releasing it below
+			// is scoped to claimedRefreshStartedAt too, so if a reclaim IS
+			// what happened, that release is ALSO a no-op against the new
+			// claim (rather than wiping it out) -- see releaseRefreshClaim's
+			// own doc comment.
+			logger.Warn("imagebuild: refresh: record success no-op: row no longer ready, or this claim was reclaimed; releasing (fenced)")
+			b.releaseRefreshClaim(ctx, logger, row.Fingerprint, claimedRefreshStartedAt)
 			return
 		}
-		logger.Error("imagebuild: refresh: record success failed", "error", err)
+		// A genuine error (not merely a superseded/no-op row) -- e.g. a
+		// connection reset between ClaimForRefresh and here. Still release
+		// the claim (invariant 2, this function's own top doc comment):
+		// returning here without releasing was exactly the root defect
+		// audit-remediation batch B2 closes (finding: attemptRefresh leaks
+		// the refresh_in_progress claim when RecordRefreshSuccess fails).
+		// If THIS release call also fails (e.g. the same failure that
+		// broke RecordRefreshSuccess, such as a canceled ctx, breaks it
+		// too), releaseRefreshClaim's own logging says so, and
+		// staleClaimCutoff's own lease is the backstop that heals it on a
+		// later tick regardless.
+		logger.Error("imagebuild: refresh: record success failed; releasing claim (fenced)", "error", err)
+		b.releaseRefreshClaim(ctx, logger, row.Fingerprint, claimedRefreshStartedAt)
 	}
 }
 
 // releaseRefreshClaim releases attemptRefresh's own refresh_in_progress
 // claim without touching anything else -- shared by every one of
-// attemptRefresh's own post-claim failure paths (BuildImage failure, a
-// marshal failure). The row is left exactly as it was: still 'ready',
-// still serving its own old image_ref, picked up again at the next
-// ImageRefreshCheckInterval tick.
-func (b *Builder) releaseRefreshClaim(ctx context.Context, logger *slog.Logger, fingerprint string) {
-	if _, err := b.store.RecordRefreshFailure(ctx, fingerprint); err != nil {
+// attemptRefresh's own post-claim failure paths (a BuildImage failure, a
+// marshal failure, and a RecordRefreshSuccess failure -- an INVARIANT,
+// every post-claim failure path calls this, not a fixed enumerated list;
+// see attemptRefresh's own top doc comment). The row is left exactly as it
+// was: still 'ready', still serving its own old image_ref, picked up
+// again at the next ImageRefreshCheckInterval tick.
+//
+// claimedRefreshStartedAt (audit-remediation batch B2 round 2) is the
+// SAME fencing token attemptRefresh threads through RecordRefreshSuccess
+// -- the exact refresh_started_at value THIS call's own ClaimForRefresh
+// returned, never a freshly computed now(). It scopes this release to the
+// SAME claim instance attemptRefresh originally took: if that claim has
+// since gone stale and been reclaimed by a concurrent tick, the row's
+// CURRENT refresh_started_at no longer matches, RecordRefreshFailure's own
+// WHERE clause matches zero rows, and this release becomes a harmless
+// no-op -- rather than unconditionally clearing refresh_in_progress out
+// from under whichever tick (this pod's or another pod's) currently,
+// legitimately holds it. See RecordImageRefreshFailure's own generated doc
+// comment for the full failure mode this closes.
+func (b *Builder) releaseRefreshClaim(ctx context.Context, logger *slog.Logger, fingerprint string, claimedRefreshStartedAt pgtype.Timestamptz) {
+	if _, err := b.store.RecordRefreshFailure(ctx, fingerprint, claimedRefreshStartedAt); err != nil {
 		logger.Error("imagebuild: refresh: release refresh claim failed", "error", err, "fingerprint", fingerprint)
 	}
 }
 
 // touchChecked bumps fingerprint's own ordering key (updated_at, via
-// TouchImageBuildChecked) with NO other side effect -- called by
-// attemptRefresh's own two early-return paths that skip ClaimForRefresh
-// entirely (a resolveRepoSHAs error, or NeedsRefresh reporting still
-// fresh) so ListReadyImageBuilds' own ORDER BY updated_at reflects
-// genuine "last looked at this tick", not merely "last mutated" -- see
-// attemptRefresh's own top doc comment and TouchImageBuildChecked's own
-// generated doc comment for the full starvation this rules out. A
-// failure here is logged, never fatal to this tick: at worst this one
-// row's own fairness rotation is delayed by a tick, which is a far
-// smaller problem than the one this call exists to fix.
+// TouchImageBuildChecked) with NO other side effect -- called by every one
+// of attemptRefresh's own early-return paths that skip ClaimForRefresh
+// entirely or lose/fail its own claim race (an INVARIANT, not a fixed
+// enumerated list -- see attemptRefresh's own top doc comment) so
+// ListReadyImageBuilds' own ORDER BY updated_at reflects genuine "last
+// looked at this tick", not merely "last mutated" -- see
+// TouchImageBuildChecked's own generated doc comment for the full
+// starvation this rules out. A failure here is logged, never fatal to
+// this tick: at worst this one row's own fairness rotation is delayed by
+// a tick, which is a far smaller problem than the one this call exists to
+// fix.
 func (b *Builder) touchChecked(ctx context.Context, logger *slog.Logger, fingerprint string) {
 	if err := b.store.TouchChecked(ctx, fingerprint); err != nil {
 		logger.Warn("imagebuild: refresh: touch checked failed; this row's own fairness rotation may be delayed a tick", "error", err, "fingerprint", fingerprint)

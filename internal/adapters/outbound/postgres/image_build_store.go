@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -87,19 +88,34 @@ func (s *ImageBuildStore) RecordFailure(ctx context.Context, arg sqlcgen.RecordI
 // unbounded number of slow, network-bound BuildImage calls. A base-only
 // row is never stale in the sense this design cares about, so it is
 // excluded at the SQL level (see ListReadyImageBuilds's own generated doc
-// comment for both exclusions).
-func (s *ImageBuildStore) ListReady(ctx context.Context, limit int32) ([]sqlcgen.ImageBuild, error) {
-	return s.q.ListReadyImageBuilds(ctx, limit)
+// comment for both exclusions). staleClaimCutoff (audit-remediation batch
+// B2, platform.Timeouts.ImageRefreshClaimStaleAfter ago) mirrors
+// ClaimForRefresh's own identical cutoff below: a row another pod is
+// ACTIVELY, non-stale-ly refreshing is excluded, but a row whose claim has
+// gone stale is still returned so it can be reclaimed.
+func (s *ImageBuildStore) ListReady(ctx context.Context, limit int32, staleClaimCutoff pgtype.Timestamptz) ([]sqlcgen.ImageBuild, error) {
+	return s.q.ListReadyImageBuilds(ctx, sqlcgen.ListReadyImageBuildsParams{
+		Limit:            limit,
+		StaleClaimCutoff: staleClaimCutoff,
+	})
 }
 
 // ClaimForRefresh implements the freshness pump's own single-flight claim
 // (§19.2): a CAS entirely independent of status/attempt_count/
-// next_retry_at, flipping refresh_in_progress to true only when the row
-// is still 'ready' and not already being refreshed elsewhere. Returns
-// pgx.ErrNoRows on a lost race (a normal, expected outcome, never logged
-// as an error by the caller).
-func (s *ImageBuildStore) ClaimForRefresh(ctx context.Context, fingerprint string) (sqlcgen.ImageBuild, error) {
-	return s.q.ClaimImageBuildForRefresh(ctx, fingerprint)
+// next_retry_at, flipping refresh_in_progress to true (and stamping
+// refresh_started_at with this claim's own moment) when the row is still
+// 'ready' and EITHER not already being refreshed elsewhere, OR its
+// existing claim has gone stale (audit-remediation batch B2: older than
+// staleClaimCutoff, i.e. platform.Timeouts.ImageRefreshClaimStaleAfter
+// ago) -- the lease that heals a crash between a previous claim and its
+// own RecordRefreshSuccess/RecordRefreshFailure. Returns pgx.ErrNoRows on
+// a lost race against a still-fresh concurrent claim (a normal, expected
+// outcome, never logged as an error by the caller).
+func (s *ImageBuildStore) ClaimForRefresh(ctx context.Context, fingerprint string, staleClaimCutoff pgtype.Timestamptz) (sqlcgen.ImageBuild, error) {
+	return s.q.ClaimImageBuildForRefresh(ctx, sqlcgen.ClaimImageBuildForRefreshParams{
+		Fingerprint:      fingerprint,
+		StaleClaimCutoff: staleClaimCutoff,
+	})
 }
 
 // RecordRefreshSuccess atomically swaps image_ref + built_repo_shas +
@@ -107,30 +123,60 @@ func (s *ImageBuildStore) ClaimForRefresh(ctx context.Context, fingerprint strin
 // 'ready' throughout (§19.2's own "never degrades availability"
 // guarantee): a session mid-spawn always reads either the OLD ref or the
 // NEW one, never a gap with neither.
+//
+// arg.ClaimedRefreshStartedAt (audit-remediation batch B2 round 2) is a
+// FENCING TOKEN -- the exact refresh_started_at value the caller's own
+// ClaimForRefresh call returned to IT, never a freshly computed now(). It
+// scopes this write to the SAME claim instance the caller took: if this
+// fingerprint's lease has since gone stale and been reclaimed by a
+// concurrent tick (this pod's or another pod's), that reclaim stamped a
+// NEW refresh_started_at, this call's own WHERE clause no longer matches,
+// and pgx.ErrNoRows is returned -- the same harmless "lost the race"
+// outcome a caller already treats a stale/superseded row as, rather than
+// silently overwriting whatever the reclaiming tick has since written. See
+// RecordImageRefreshSuccess's own generated doc comment and
+// app/imagebuild/builder.go's own attemptRefresh doc comment for the full
+// failure mode this closes.
 func (s *ImageBuildStore) RecordRefreshSuccess(ctx context.Context, arg sqlcgen.RecordImageRefreshSuccessParams) (sqlcgen.ImageBuild, error) {
 	return s.q.RecordImageRefreshSuccess(ctx, arg)
 }
 
-// RecordRefreshFailure releases the refresh_in_progress claim, touching
+// RecordRefreshFailure releases the refresh_in_progress claim (and clears
+// refresh_started_at back to NULL, audit-remediation batch B2), touching
 // nothing else -- the row is left exactly as it was (still 'ready', still
 // serving its own old image_ref), picked up again at the next
 // ImageRefreshCheckInterval tick (the refresh path's own natural retry
-// cadence).
-func (s *ImageBuildStore) RecordRefreshFailure(ctx context.Context, fingerprint string) (sqlcgen.ImageBuild, error) {
-	return s.q.RecordImageRefreshFailure(ctx, fingerprint)
+// cadence). This is app/imagebuild.Builder's own SHARED release path --
+// releaseRefreshClaim calls this from EVERY one of attemptRefresh's own
+// post-claim failure branches, by INVARIANT, not a fixed enumerated list.
+//
+// claimedRefreshStartedAt (audit-remediation batch B2 round 2) is the SAME
+// fencing token RecordRefreshSuccess above takes, for the identical
+// reason: this release must only ever touch the SAME claim instance the
+// caller originally took, never whatever claim (possibly a different
+// tick's own, since-reclaimed, still-legitimately-held one) happens to be
+// current by the time this call finally lands. A mismatch is a harmless
+// no-op (pgx.ErrNoRows) -- see RecordImageRefreshFailure's own generated
+// doc comment.
+func (s *ImageBuildStore) RecordRefreshFailure(ctx context.Context, fingerprint string, claimedRefreshStartedAt pgtype.Timestamptz) (sqlcgen.ImageBuild, error) {
+	return s.q.RecordImageRefreshFailure(ctx, sqlcgen.RecordImageRefreshFailureParams{
+		Fingerprint:             fingerprint,
+		ClaimedRefreshStartedAt: claimedRefreshStartedAt,
+	})
 }
 
 // TouchChecked bumps ONLY fingerprint's own updated_at -- no other
 // column -- app/imagebuild's own genuine-round-robin fairness mechanism
 // (§19.2, a correctness review finding on the batch-cap fix): attemptRefresh
-// calls this from its own two early-return branches (a resolveRepoSHAs
-// error, or NeedsRefresh reporting still-fresh) that otherwise skip
-// ClaimForRefresh entirely, so that ListReady's own ORDER BY updated_at
-// reflects genuine "last looked at this tick", not merely "last mutated",
-// for the WHOLE 'ready' population -- see TouchImageBuildChecked's own
-// generated doc comment for the full starvation this rules out. A no-op,
-// never an error worth surfacing, if fingerprint is no longer 'ready' (or
-// gone entirely).
+// calls this from EVERY one of its own early-return branches that does not
+// otherwise advance updated_at some other way (an INVARIANT -- "every
+// inspected row's ordering key advances, one way or another" -- not a
+// fixed enumerated list; the exact set of branches has already grown more
+// than once), so that ListReady's own ORDER BY updated_at reflects genuine
+// "last looked at this tick", not merely "last mutated", for the WHOLE
+// 'ready' population -- see TouchImageBuildChecked's own generated doc
+// comment for the full starvation this rules out. A no-op, never an error
+// worth surfacing, if fingerprint is no longer 'ready' (or gone entirely).
 func (s *ImageBuildStore) TouchChecked(ctx context.Context, fingerprint string) error {
 	return s.q.TouchImageBuildChecked(ctx, fingerprint)
 }

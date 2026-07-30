@@ -28,6 +28,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
@@ -276,6 +277,40 @@ func readFailureStreak(ctx context.Context, t *testing.T, reader *sdkmetric.Manu
 	return 0
 }
 
+// readRefreshClaimReclaimed is readFailureStreak's own sibling for the
+// image_refresh_claim_reclaimed OTel counter (audit-remediation batch B2)
+// -- CUMULATIVE across every test in this binary, same caveat as
+// readFailureStreak's own doc comment.
+func readRefreshClaimReclaimed(ctx context.Context, t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		if sm.Scope.Name != "narvi/imagebuild" {
+			continue
+		}
+		for _, m := range sm.Metrics {
+			if m.Name != "image_refresh_claim_reclaimed" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("image_refresh_claim_reclaimed metric data = %T, want metricdata.Sum[int64]", m.Data)
+			}
+			var total int64
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+			return total
+		}
+	}
+	return 0
+}
+
 // seedPendingImageBuild inserts a fresh 'pending' image_builds row directly
 // (bypassing app/sessionactor entirely -- this package's own tests exercise
 // Builder in isolation, matching its own doc.go's scope). repo_urls is
@@ -426,7 +461,17 @@ func TestRefreshOnce_StaleReadyRow_TipDiffers_RefreshesInPlace(t *testing.T) {
 // TestRefreshOnce_FreshReadyRow_TipUnchanged_NoRefreshAttempted proves the
 // other half of §19.2's own comparison: a 'ready' row whose recorded
 // built_repo_shas ALREADY matches every repo's current tip is left
-// completely untouched -- BuildImage is never even called.
+// completely untouched as far as its OWN build/status/image_ref go --
+// BuildImage is never even called -- but this row WAS genuinely inspected
+// this tick (its current tip was resolved and compared), so it must still
+// call touchChecked and advance its own updated_at ordering key exactly
+// like every other early-return branch (attemptRefresh's own top doc
+// comment, invariant 1) -- a single-row test isolating EXACTLY this branch
+// (unlike TestRefreshOnce_StarvationFreedom_GenuinelyStaleRowNotStarvedByStaticFrontCohort's
+// own population-level, mixed-branch proof of the SAME invariant): reverting
+// just this touchChecked call must fail ONLY this test, not merely the
+// starvation test (audit-remediation batch B2 round 2 -- a prior adversarial
+// review found this exact branch had no isolated coverage of its own).
 func TestRefreshOnce_FreshReadyRow_TipUnchanged_NoRefreshAttempted(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -438,6 +483,11 @@ func TestRefreshOnce_FreshReadyRow_TipUnchanged_NoRefreshAttempted(t *testing.T)
 		map[string]string{"repo1": "sha-same"},
 		"narvi/built-image:still-fresh")
 
+	rowBefore, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row before: %v", err)
+	}
+
 	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-same"}}
 
@@ -446,12 +496,27 @@ func TestRefreshOnce_FreshReadyRow_TipUnchanged_NoRefreshAttempted(t *testing.T)
 		t.Fatalf("NewBuilder: %v", err)
 	}
 
+	time.Sleep(5 * time.Millisecond) // ensure a real clock delta from seeding
 	if err := builder.RefreshOnce(ctx); err != nil {
 		t.Fatalf("RefreshOnce: %v", err)
 	}
 
 	if got := provider.buildCallCount(); got != 0 {
 		t.Errorf("BuildImage call count = %d, want 0 (tip unchanged -- still fresh)", got)
+	}
+
+	rowAfter, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after: %v", err)
+	}
+	if !rowAfter.UpdatedAt.Time.After(rowBefore.UpdatedAt.Time) {
+		t.Errorf("updated_at did not advance (before=%v after=%v) -- the NeedsRefresh-false branch must call touchChecked, or a genuinely-not-stale row would permanently occupy the front of ListReadyImageBuilds' own ORDER BY updated_at window (see ListReadyImageBuilds' own doc comment)", rowBefore.UpdatedAt.Time, rowAfter.UpdatedAt.Time)
+	}
+	if rowAfter.RefreshInProgress {
+		t.Error("refresh_in_progress = true, want false (this branch never takes a claim)")
+	}
+	if rowAfter.ImageRef == nil || *rowAfter.ImageRef != "narvi/built-image:still-fresh" {
+		t.Errorf("image_ref = %v, want unchanged %q", rowAfter.ImageRef, "narvi/built-image:still-fresh")
 	}
 }
 
@@ -809,9 +874,19 @@ func TestRefreshOnce_BatchCap_BoundsRowsPerTickButPicksUpRemainderLater(t *testi
 // via TouchImageBuildChecked, so by the SECOND tick the genuinely-stale
 // row (never touched, still older than anything the first tick touched)
 // becomes the oldest row in the table and is guaranteed to appear in that
-// tick's own batch. This test asserts it is refreshed within a small,
-// bounded number of ticks -- proving genuine, prompt rotation, not merely
-// "eventually, if you wait long enough."
+// tick's own batch. This test asserts the EXACT tick the refresh happens
+// on (tick 2, never tick 1, never "eventually") -- an audit finding on
+// this test itself: the original version only asserted "refreshed within
+// maxTicks=3", which cannot distinguish genuine, deterministic rotation
+// from merely "got lucky within the batch window", and (this exact
+// population's own arithmetic) also cannot by itself distinguish a full
+// fix from a PARTIAL regression that removes just one of attemptRefresh's
+// own touchChecked call sites -- with a 10/10 split front cohort, either
+// half alone rotating is already enough to open a slot for the stale row
+// by tick 2. Isolating a single call site's own regression is instead
+// what the dedicated per-branch tests below (TestAttemptRefresh_*) are
+// for -- each one seeds a population of exactly ONE, mutation-tested
+// completely independently of this test's own population shape.
 func TestRefreshOnce_StarvationFreedom_GenuinelyStaleRowNotStarvedByStaticFrontCohort(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -873,30 +948,42 @@ func TestRefreshOnce_StarvationFreedom_GenuinelyStaleRowNotStarvedByStaticFrontC
 		t.Fatalf("NewBuilder: %v", err)
 	}
 
-	// Bounded well under frontCohortSize: a starved implementation would
-	// need (in the worst case) every front-cohort row to coincidentally
-	// stop being inspected before the stale row could ever surface, which
-	// never happens here at all -- it should never even take 2 full
-	// ticks with the fix applied. 3 ticks leaves comfortable headroom
-	// without masking real starvation (which manifests as "never, no
-	// matter how many ticks run").
-	const maxTicks = 3
-	refreshedAtTick := 0
-	for tick := 1; tick <= maxTicks; tick++ {
-		if err := builder.RefreshOnce(ctx); err != nil {
-			t.Fatalf("RefreshOnce (tick %d): %v", tick, err)
-		}
-		row, err := store.Get(ctx, staleFingerprint)
-		if err != nil {
-			t.Fatalf("get stale row after tick %d: %v", tick, err)
-		}
-		if row.ImageRef != nil && *row.ImageRef == staleNewRef {
-			refreshedAtTick = tick
-			break
-		}
+	// This population's own arithmetic makes the refresh tick EXACTLY
+	// predictable, not merely "eventually within some headroom" (an audit
+	// finding on this test itself: asserting only "nonzero within maxTicks"
+	// cannot distinguish genuine fair rotation from a partial regression --
+	// see this test's own top doc comment for why a per-branch test, not
+	// this population-shape test, is what actually isolates a SINGLE
+	// touchChecked call going missing). With the fix applied: tick 1's own
+	// ListReady(20) ORDER BY updated_at returns exactly the front cohort
+	// (all 20 strictly older than the stale row, which was seeded last) --
+	// the stale row is not even RETURNED yet, so it must NOT be refreshed
+	// after tick 1. Every front-cohort row advances its own updated_at
+	// during tick 1 (touchChecked, both halves), landing all 20 at
+	// "tick 1's own now()" -- strictly after the stale row's own
+	// (untouched) updated_at -- so tick 2's own ListReady(20) is guaranteed
+	// to include the stale row (now the single oldest of all 21) and
+	// refresh it for real.
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce (tick 1): %v", err)
 	}
-	if refreshedAtTick == 0 {
-		t.Fatalf("genuinely-stale row %q was NOT refreshed within %d ticks -- starved behind a static front cohort of %d rows that never advance their own ordering key", staleFingerprint, maxTicks, frontCohortSize)
+	rowAfterTick1, err := store.Get(ctx, staleFingerprint)
+	if err != nil {
+		t.Fatalf("get stale row after tick 1: %v", err)
+	}
+	if rowAfterTick1.ImageRef == nil || *rowAfterTick1.ImageRef != staleOldRef {
+		t.Fatalf("stale row image_ref after tick 1 = %v, want unchanged %q -- it must not even be RETURNED by ListReady yet (the full front cohort of %d fills that tick's own LIMIT window)", rowAfterTick1.ImageRef, staleOldRef, frontCohortSize)
+	}
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce (tick 2): %v", err)
+	}
+	rowAfterTick2, err := store.Get(ctx, staleFingerprint)
+	if err != nil {
+		t.Fatalf("get stale row after tick 2: %v", err)
+	}
+	if rowAfterTick2.ImageRef == nil || *rowAfterTick2.ImageRef != staleNewRef {
+		t.Fatalf("genuinely-stale row %q was NOT refreshed at EXACTLY tick 2 (image_ref = %v) -- starved behind a static front cohort of %d rows that never advance their own ordering key", staleFingerprint, rowAfterTick2.ImageRef, frontCohortSize)
 	}
 
 	// The front cohort itself must never have been (wrongly) refreshed --
@@ -1320,5 +1407,707 @@ func TestPumpOnce_RepoBearingRow_CredentialConfigured_ResolvesSHAsAndBuilds(t *t
 	}
 	if !row.BuiltAt.Valid {
 		t.Error("built_at is not set, want a real timestamp")
+	}
+}
+
+// --- Audit-remediation batch B2: per-branch attemptRefresh coverage ---
+//
+// The tests below each isolate exactly ONE of attemptRefresh's own
+// early-return branches and prove BOTH halves of that function's own two
+// invariants (see builder.go's own top doc comment): a branch that never
+// took a claim advances the ordering key (touchChecked) and takes no
+// claim action; a branch that DID take a claim releases it on every path
+// out, including when RecordRefreshSuccess itself fails -- the root
+// defect this batch closes (attemptRefresh used to leak the claim on
+// exactly that failure, wedging refresh_in_progress=true forever and,
+// because that row's own updated_at froze too, recreating the very
+// starvation TouchImageBuildChecked was added to close via a different
+// door). See builder_whitebox_integration_test.go (package imagebuild) for
+// the two remaining branches (the base-only guard, and a genuinely lost
+// ClaimForRefresh race) that cannot be reached through RefreshOnce's own
+// public entry point at all.
+
+// TestAttemptRefresh_DecodeRepoURLsFailure_TouchesOrderingKeyOnly proves
+// the repo_urls-decode-failure branch: seeds a 'ready' row whose repo_urls
+// is VALID jsonb (so Postgres itself accepts it) but the WRONG shape for
+// map[string]string (a number where a string is expected) -- decodes
+// cleanly as jsonb, fails Go's own json.Unmarshal. Believed unreachable in
+// practice today (imageresolve.go, the only writer of repo_urls, never
+// produces this shape), but attemptRefresh's own invariant 1 must still
+// hold if it ever does (future schema drift, manual data repair).
+func TestAttemptRefresh_DecodeRepoURLsFailure_TouchesOrderingKeyOnly(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-decode-failure"
+	oldRef := "narvi/built-image:decode-failure-old-ref"
+	if err := store.UpsertPending(ctx, sqlcgen.UpsertPendingImageBuildParams{
+		Fingerprint:    fingerprint,
+		Base:           "narvi/base:test",
+		RepoUrls:       []byte(`{"repo1": 123}`), // valid jsonb, wrong shape for map[string]string
+		RuntimeVersion: "1.0.0-test",
+	}); err != nil {
+		t.Fatalf("seed pending image_builds row: %v", err)
+	}
+	if _, err := store.Claim(ctx, fingerprint); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if _, err := store.RecordSuccess(ctx, sqlcgen.RecordImageBuildSuccessParams{
+		Fingerprint:   fingerprint,
+		ImageRef:      &oldRef,
+		BuiltRepoShas: []byte(`{}`),
+		BuiltAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatalf("record success: %v", err)
+	}
+
+	rowBefore, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row before: %v", err)
+	}
+
+	// nil sourceControl: if this branch were ever (wrongly) skipped and
+	// resolveRepoSHAs reached instead, it would fail loudly there too --
+	// but the zero-BuildImage-calls assertion below pins the decode branch
+	// specifically, not merely "something failed before BuildImage".
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	time.Sleep(5 * time.Millisecond) // ensure a real clock delta from seeding
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 0 {
+		t.Errorf("BuildImage call count = %d, want 0 (a decode failure must never reach BuildImage)", got)
+	}
+
+	rowAfter, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after: %v", err)
+	}
+	if !rowAfter.UpdatedAt.Time.After(rowBefore.UpdatedAt.Time) {
+		t.Errorf("updated_at did not advance (before=%v after=%v) -- the decode-failure branch must call touchChecked", rowBefore.UpdatedAt.Time, rowAfter.UpdatedAt.Time)
+	}
+	if rowAfter.RefreshInProgress {
+		t.Error("refresh_in_progress = true, want false (this branch never takes a claim)")
+	}
+	if rowAfter.ImageRef == nil || *rowAfter.ImageRef != oldRef {
+		t.Errorf("image_ref = %v, want unchanged %q", rowAfter.ImageRef, oldRef)
+	}
+}
+
+// TestAttemptRefresh_ResolveRepoSHAsError_TouchesOrderingKeyOnly proves the
+// resolveRepoSHAs-error branch in isolation (a single row, distinct from
+// TestRefreshOnce_StarvationFreedom_GenuinelyStaleRowNotStarvedByStaticFrontCohort's
+// own population-level proof of the SAME branch): a repo whose resolution
+// PERSISTENTLY fails (a renamed/deleted repo, a token missing org access)
+// must still advance this row's own ordering key, taking no claim.
+func TestAttemptRefresh_ResolveRepoSHAsError_TouchesOrderingKeyOnly(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-resolve-error"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:resolve-error-old-ref")
+
+	rowBefore, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row before: %v", err)
+	}
+
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+	sourceControl := &fakeSourceControl{errFor: map[string]error{"repo1": errors.New("fake: repo renamed/deleted, or token lacks org access")}}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 0 {
+		t.Errorf("BuildImage call count = %d, want 0 (a resolution error must never reach BuildImage)", got)
+	}
+
+	rowAfter, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after: %v", err)
+	}
+	if !rowAfter.UpdatedAt.Time.After(rowBefore.UpdatedAt.Time) {
+		t.Errorf("updated_at did not advance (before=%v after=%v) -- a persistently-failing resolution must still call touchChecked", rowBefore.UpdatedAt.Time, rowAfter.UpdatedAt.Time)
+	}
+	if rowAfter.RefreshInProgress {
+		t.Error("refresh_in_progress = true, want false (this branch never takes a claim)")
+	}
+}
+
+// TestAttemptRefresh_ClaimForRefreshGenericError_TouchesOrderingKeyOnly
+// proves the GENERIC (non-pgx.ErrNoRows) ClaimForRefresh-error branch in
+// isolation (audit-remediation batch B2 round 2 -- a prior adversarial
+// review found this branch, unlike its RecordRefreshSuccess-generic-error
+// sibling, had no dedicated test at all): a row whose ClaimForRefresh call
+// fails with a genuine DB error (e.g. a connection reset) -- as opposed to
+// the normal, expected "lost the race" pgx.ErrNoRows outcome
+// TestAttemptRefresh_ClaimForRefreshLostRace_TouchesOrderingKeyNoRelease
+// covers -- must still call touchChecked and advance its own ordering key,
+// or it could occupy the front of ListReadyImageBuilds' own queue on every
+// tick indefinitely.
+//
+// Forces a genuine (non-ErrNoRows) Postgres error at EXACTLY the
+// ClaimImageBuildForRefresh call site via a test-only trigger that raises
+// on the one UPDATE transition that query's own CAS performs
+// (refresh_in_progress flipping false -> true) -- unlike
+// TestAttemptRefresh_RecordRefreshSuccessGenericError_ReleasesClaim's own
+// NUL-byte jsonb-poisoning trick, which cannot reach this query at all
+// (ClaimImageBuildForRefresh's own params are a fingerprint and a
+// timestamp, no jsonb) -- and deliberately does NOT cancel ctx to force
+// the failure, because that would ALSO break this test's own
+// touchChecked-advanced assertion (touchChecked runs on the SAME ctx
+// attemptRefresh was given, so a canceled ctx would make that call fail
+// too, for an unrelated reason, producing a false pass/fail unrelated to
+// the branch under test).
+func TestAttemptRefresh_ClaimForRefreshGenericError_TouchesOrderingKeyOnly(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-claim-generic-error"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:claim-error-old-ref")
+
+	if _, err := pool.Exec(ctx, `
+		CREATE OR REPLACE FUNCTION test_fail_claim_for_refresh() RETURNS TRIGGER AS $$
+		BEGIN
+			IF OLD.refresh_in_progress = false AND NEW.refresh_in_progress = true THEN
+				RAISE EXCEPTION 'simulated claim-for-refresh failure (test)';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER test_fail_claim_for_refresh_trigger
+		BEFORE UPDATE ON image_builds
+		FOR EACH ROW EXECUTE FUNCTION test_fail_claim_for_refresh();
+	`); err != nil {
+		t.Fatalf("install test trigger: %v", err)
+	}
+
+	rowBefore, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row before: %v", err)
+	}
+
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}} // genuinely stale -- NeedsRefresh must report true, reaching ClaimForRefresh
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	time.Sleep(5 * time.Millisecond) // ensure a real clock delta from seeding
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v (a per-row failure must never propagate)", err)
+	}
+
+	if got := provider.buildCallCount(); got != 0 {
+		t.Errorf("BuildImage call count = %d, want 0 (a ClaimForRefresh failure must never reach BuildImage)", got)
+	}
+
+	rowAfter, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after: %v", err)
+	}
+	if !rowAfter.UpdatedAt.Time.After(rowBefore.UpdatedAt.Time) {
+		t.Errorf("updated_at did not advance (before=%v after=%v) -- the generic ClaimForRefresh-error branch must call touchChecked, or a row whose claim call persistently errors could occupy the front of ListReadyImageBuilds' own queue indefinitely", rowBefore.UpdatedAt.Time, rowAfter.UpdatedAt.Time)
+	}
+	if rowAfter.RefreshInProgress {
+		t.Error("refresh_in_progress = true, want false (the failed claim attempt must never leave a claim taken)")
+	}
+}
+
+// TestAttemptRefresh_RecordRefreshSuccessNoOp_ReleasesClaim proves the
+// RecordRefreshSuccess pgx.ErrNoRows branch: while a refresh build is
+// genuinely in flight (the claim already taken), the row becomes
+// no-longer-'ready' through some unrelated path (a should-be-rare, benign
+// race per RecordImageRefreshSuccess's own doc comment) -- its own "AND
+// status = 'ready'" guard then fails to match. Before audit-remediation
+// batch B2, this branch returned without ever releasing the claim,
+// wedging refresh_in_progress=true forever; this test proves the claim IS
+// now released.
+func TestAttemptRefresh_RecordRefreshSuccessNoOp_ReleasesClaim(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-record-success-noop"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:noop-old-ref")
+
+	release := make(chan struct{})
+	provider := &blockingBuildProvider{nextRef: "narvi/built-image:should-not-persist", release: release}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- builder.RefreshOnce(ctx) }()
+
+	provider.waitUntilEntered(t, 5*time.Second)
+
+	// Simulate the row becoming no-longer-'ready' WHILE the refresh is in
+	// flight -- e.g. status flipping away from 'ready' through some other,
+	// unrelated path -- so RecordImageRefreshSuccess's own guard fails to
+	// match, surfacing pgx.ErrNoRows.
+	if _, err := pool.Exec(ctx, `UPDATE image_builds SET status = 'building' WHERE fingerprint = $1`, fingerprint); err != nil {
+		t.Fatalf("simulate status race: %v", err)
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.RefreshInProgress {
+		t.Error("refresh_in_progress = true after a RecordRefreshSuccess no-op, want false (claim released -- the root defect audit-remediation batch B2 closes)")
+	}
+	if row.RefreshStartedAt.Valid {
+		t.Errorf("refresh_started_at = %v, want NULL (cleared alongside the release)", row.RefreshStartedAt.Time)
+	}
+	if row.ImageRef == nil || *row.ImageRef != "narvi/built-image:noop-old-ref" {
+		t.Errorf("image_ref = %v, want unchanged (the swap never committed)", row.ImageRef)
+	}
+}
+
+// TestAttemptRefresh_RecordRefreshSuccessGenericError_ReleasesClaim proves
+// the RecordRefreshSuccess GENERIC (non-ErrNoRows) error branch -- the
+// root defect audit-remediation batch B2 closes (finding: attemptRefresh
+// leaks the refresh_in_progress claim when RecordRefreshSuccess fails).
+//
+// The resolved "current tip" SHA carries an embedded NUL byte -- a
+// perfectly valid Go string, and json.Marshal encodes it as the Unicode
+// escape sequence for codepoint zero, but Postgres's own jsonb input type
+// flatly rejects that escape sequence ("unsupported Unicode escape
+// sequence", SQLSTATE 22P05) -- a genuine, non-ErrNoRows database error
+// from RecordImageRefreshSuccess's
+// own UPDATE that has NOTHING to do with connectivity/context health, so
+// (unlike a context-cancellation fault, which would ALSO break the
+// subsequent release attempt on the very same ctx) the SAME ctx remains
+// perfectly usable for the very next query -- letting this test prove the
+// releaseRefreshClaim call this branch now makes actually succeeds, not
+// merely that it was attempted.
+func TestAttemptRefresh_RecordRefreshSuccessGenericError_ReleasesClaim(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-record-success-generic-error"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:generic-error-old-ref")
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:should-not-persist"}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new\x00-poison"}}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v (a per-row failure must never propagate)", err)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.RefreshInProgress {
+		t.Error("refresh_in_progress = true after a RecordRefreshSuccess error, want false (claim released -- the root defect audit-remediation batch B2 closes: this branch used to return without ever releasing)")
+	}
+	if row.RefreshStartedAt.Valid {
+		t.Errorf("refresh_started_at = %v, want NULL", row.RefreshStartedAt.Time)
+	}
+	if row.ImageRef == nil || *row.ImageRef != "narvi/built-image:generic-error-old-ref" {
+		t.Errorf("image_ref = %v, want unchanged (the swap never committed)", row.ImageRef)
+	}
+}
+
+// TestRecordRefreshSuccess_FencedAgainstReclaimedClaim_NeverClobbersNewerWrite
+// proves audit-remediation batch B2 round 2's own fencing-token fix
+// (queries/image_builds.sql's RecordImageRefreshSuccess, now guarded by
+// "AND refresh_started_at = @claimed_refresh_started_at" in addition to
+// "AND status = 'ready'"): a lease alone (ClaimImageBuildForRefresh's own
+// staleness bound) is not sufficient to stop a DELAYED WRITER -- a caller
+// whose own RecordRefreshSuccess call outlives that same staleness bound
+// (e.g. blocked on this row's own Postgres lock for reasons entirely
+// unrelated to the refresh itself: an unrelated long-running transaction,
+// a stalled connection, a replica failover) -- from unconditionally
+// overwriting whatever a SECOND, concurrent tick has since legitimately
+// reclaimed and already written, because "AND status = 'ready'" ALONE
+// still matches (status never changes across a reclaim).
+//
+// Reproduces, at the store level (mirroring TestListReady_
+// ExcludesActivelyRefreshingRow_ButIncludesStaleClaim's own "simulate a
+// concurrent pod by calling the store directly" technique), EXACTLY the
+// interleaving an adversarial review of this batch's own first attempt
+// found: "Pod A" takes a claim; that claim goes stale (a delayed write, not
+// a crash); "Pod B" reclaims it and completes its own genuinely NEWER
+// build; only THEN does Pod A's own originally-blocked write finally land.
+func TestRecordRefreshSuccess_FencedAgainstReclaimedClaim_NeverClobbersNewerWrite(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-fencing-clobber"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-original"},
+		"narvi/built-image:original-ref")
+
+	// "Pod A" takes the claim first.
+	farPastCutoff := pgtype.Timestamptz{Time: time.Now().Add(-1 * time.Hour), Valid: true}
+	podA, err := store.ClaimForRefresh(ctx, fingerprint, farPastCutoff)
+	if err != nil {
+		t.Fatalf("pod A claim: %v", err)
+	}
+	podAClaimedAt := podA.RefreshStartedAt
+
+	// Simulate Pod A's own delayed writer: its subsequent RecordRefreshSuccess
+	// call is (for this test) about to land long after its own claim should
+	// have gone stale -- backdate refresh_started_at directly (there is no
+	// in-app way to reach "a write outlives the staleness bound" on purpose)
+	// so a later reclaim, below, sees exactly what a real stale claim looks
+	// like.
+	staleBackdate := time.Now().Add(-1 * time.Hour)
+	if _, err := pool.Exec(ctx, `UPDATE image_builds SET refresh_started_at = $2 WHERE fingerprint = $1`, fingerprint, staleBackdate); err != nil {
+		t.Fatalf("backdate pod A's claim to simulate staleness: %v", err)
+	}
+
+	// "Pod B" reclaims the now-stale lease and completes its OWN successful
+	// refresh -- a genuinely NEWER build, using a genuinely newer resolved
+	// tip SHA.
+	thisTickCutoff := pgtype.Timestamptz{Time: time.Now().Add(-30 * time.Minute), Valid: true}
+	podB, err := store.ClaimForRefresh(ctx, fingerprint, thisTickCutoff)
+	if err != nil {
+		t.Fatalf("pod B reclaim: %v", err)
+	}
+	newRef := "narvi/built-image:pod-b-fresh-build"
+	if _, err := store.RecordRefreshSuccess(ctx, sqlcgen.RecordImageRefreshSuccessParams{
+		Fingerprint:             fingerprint,
+		ImageRef:                &newRef,
+		BuiltRepoShas:           []byte(`{"repo1":"sha-newer"}`),
+		BuiltAt:                 pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		ClaimedRefreshStartedAt: podB.RefreshStartedAt,
+	}); err != nil {
+		t.Fatalf("pod B record success: %v", err)
+	}
+
+	rowAfterPodB, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after pod B: %v", err)
+	}
+	if rowAfterPodB.ImageRef == nil || *rowAfterPodB.ImageRef != newRef {
+		t.Fatalf("test setup: pod B's write did not land, image_ref = %v", rowAfterPodB.ImageRef)
+	}
+
+	// NOW Pod A's own originally-blocked write finally lands -- using ITS
+	// OWN claimed_refresh_started_at, read at ITS OWN claim time, long
+	// before Pod B's reclaim. Without the fencing-token fix, this call's
+	// only guard was "AND status = 'ready'" -- which still matches (status
+	// never changed) -- so it would unconditionally overwrite Pod B's
+	// fresher write with Pod A's own stale one.
+	staleRef := "narvi/built-image:pod-a-stale-build"
+	_, err = store.RecordRefreshSuccess(ctx, sqlcgen.RecordImageRefreshSuccessParams{
+		Fingerprint:             fingerprint,
+		ImageRef:                &staleRef,
+		BuiltRepoShas:           []byte(`{"repo1":"sha-original"}`),
+		BuiltAt:                 pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		ClaimedRefreshStartedAt: podAClaimedAt,
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("pod A's delayed write err = %v, want pgx.ErrNoRows (its claim was superseded by pod B's reclaim -- the fencing token must reject this write)", err)
+	}
+
+	rowFinal, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get final row: %v", err)
+	}
+	if rowFinal.ImageRef == nil || *rowFinal.ImageRef != newRef {
+		t.Errorf("image_ref = %v, want pod B's fresh ref %q UNCHANGED by pod A's delayed, superseded write", rowFinal.ImageRef, newRef)
+	}
+	if rowFinal.RefreshInProgress {
+		t.Error("refresh_in_progress = true, want false (pod B's own successful RecordRefreshSuccess already released its own claim)")
+	}
+}
+
+// TestRecordRefreshFailure_FencedAgainstReclaimedClaim_NeverReleasesLiveClaim
+// proves the OTHER half of the SAME fencing-token fix, for the release path
+// (RecordImageRefreshFailure, releaseRefreshClaim's own store call) -- the
+// adversarial review's own WORSE variant of this finding: "If Pod B's own
+// new build were still in flight at that moment instead of already
+// complete, Pod A's stray RecordRefreshFailure/Success call would
+// additionally release/overwrite Pod B's live, legitimate claim mid-
+// refresh". Reproduces exactly that: Pod A's delayed release call (what
+// attemptRefresh's own releaseRefreshClaim makes after a BuildImage
+// failure, a marshal failure, or a RecordRefreshSuccess failure) lands
+// AFTER Pod B has reclaimed the lease and is STILL actively, legitimately
+// holding it (Pod B's own build has not yet completed) -- before this
+// batch's own fencing-token fix, RecordImageRefreshFailure had NO guard at
+// all beyond "fingerprint = $1", so it would have unconditionally released
+// Pod B's own live claim out from under it, mid-refresh.
+func TestRecordRefreshFailure_FencedAgainstReclaimedClaim_NeverReleasesLiveClaim(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-fencing-release"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-original"},
+		"narvi/built-image:original-ref")
+
+	farPastCutoff := pgtype.Timestamptz{Time: time.Now().Add(-1 * time.Hour), Valid: true}
+	podA, err := store.ClaimForRefresh(ctx, fingerprint, farPastCutoff)
+	if err != nil {
+		t.Fatalf("pod A claim: %v", err)
+	}
+	podAClaimedAt := podA.RefreshStartedAt
+
+	staleBackdate := time.Now().Add(-1 * time.Hour)
+	if _, err := pool.Exec(ctx, `UPDATE image_builds SET refresh_started_at = $2 WHERE fingerprint = $1`, fingerprint, staleBackdate); err != nil {
+		t.Fatalf("backdate pod A's claim to simulate staleness: %v", err)
+	}
+
+	thisTickCutoff := pgtype.Timestamptz{Time: time.Now().Add(-30 * time.Minute), Valid: true}
+	podB, err := store.ClaimForRefresh(ctx, fingerprint, thisTickCutoff)
+	if err != nil {
+		t.Fatalf("pod B reclaim: %v", err)
+	}
+	// Pod B's own build is STILL IN FLIGHT here -- no RecordRefreshSuccess/
+	// RecordRefreshFailure call has happened for it yet, exactly the
+	// "still legitimately holding it" scenario this test proves is safe.
+
+	// Pod A's own delayed release call finally lands, using ITS OWN
+	// claimed_refresh_started_at -- read long before Pod B's reclaim.
+	_, err = store.RecordRefreshFailure(ctx, fingerprint, podAClaimedAt)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("pod A's delayed release err = %v, want pgx.ErrNoRows (its claim was superseded by pod B's reclaim -- the fencing token must reject this release)", err)
+	}
+
+	rowFinal, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get final row: %v", err)
+	}
+	if !rowFinal.RefreshInProgress {
+		t.Error("refresh_in_progress = false, want true -- pod A's delayed, superseded release must NOT release pod B's own still-live, legitimate claim")
+	}
+	if !rowFinal.RefreshStartedAt.Time.Equal(podB.RefreshStartedAt.Time) {
+		t.Errorf("refresh_started_at = %v, want pod B's own claim timestamp %v UNCHANGED", rowFinal.RefreshStartedAt.Time, podB.RefreshStartedAt.Time)
+	}
+}
+
+// TestListReady_ExcludesActivelyRefreshingRow_ButIncludesStaleClaim proves
+// the OTHER half of audit-remediation batch B2's own ListReadyImageBuilds
+// fix (finding: the poll query used to omit refresh_in_progress from its
+// own WHERE clause entirely, so with more than one control-plane pod, a
+// SECOND pod's own tick would re-select a row a FIRST pod was already
+// genuinely, actively refreshing -- burning a wasted resolveRepoSHAs/
+// GitHub-API round trip only to lose ClaimForRefresh's own CAS): a row
+// whose refresh_in_progress claim is FRESH (well within
+// ImageRefreshClaimStaleAfter) must be excluded from ListReady entirely,
+// while a row whose claim has gone STALE (the crash-recovery case,
+// TestRefreshOnce_CrashRecovery_StaleClaimReclaimed's own scenario) must
+// still be returned so it can be reclaimed -- proving ListReady's own
+// predicate matches ClaimForRefresh's own identical precondition exactly,
+// in BOTH directions, directly at the store level (no Builder/provider
+// involved).
+func TestListReady_ExcludesActivelyRefreshingRow_ButIncludesStaleClaim(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const freshFingerprint = "fp-listready-fresh-claim-excluded"
+	const staleFingerprint = "fp-listready-stale-claim-included"
+	for _, fp := range []string{freshFingerprint, staleFingerprint} {
+		seedReadyImageBuildWithRepos(ctx, t, store, fp,
+			map[string]string{"repo1": "https://github.com/acme/repo1"},
+			map[string]string{"repo1": "sha-old"},
+			"narvi/built-image:"+fp)
+	}
+
+	// freshFingerprint: claimed "just now" by a simulated concurrent pod --
+	// well within the staleness bound, so it must read as actively,
+	// genuinely in flight.
+	farPastCutoffForClaiming := pgtype.Timestamptz{Time: time.Now().Add(-1 * time.Hour), Valid: true}
+	if _, err := store.ClaimForRefresh(ctx, freshFingerprint, farPastCutoffForClaiming); err != nil {
+		t.Fatalf("claim fresh row: %v", err)
+	}
+
+	// staleFingerprint: simulate the aftermath of a crash -- claimed a full
+	// hour ago, never released.
+	if _, err := pool.Exec(ctx, `UPDATE image_builds SET refresh_in_progress = true, refresh_started_at = $2 WHERE fingerprint = $1`,
+		staleFingerprint, time.Now().Add(-1*time.Hour)); err != nil {
+		t.Fatalf("simulate wedged claim: %v", err)
+	}
+
+	// This tick's own cutoff: 5 minutes -- the fresh claim (seconds old) is
+	// well inside it (excluded); the stale claim (1h old) is far outside it
+	// (included).
+	thisTickCutoff := pgtype.Timestamptz{Time: time.Now().Add(-5 * time.Minute), Valid: true}
+	rows, err := store.ListReady(ctx, wantRefreshBatchSize, thisTickCutoff)
+	if err != nil {
+		t.Fatalf("ListReady: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for _, row := range rows {
+		seen[row.Fingerprint] = true
+	}
+	if seen[freshFingerprint] {
+		t.Errorf("ListReady returned %q, want it EXCLUDED -- its refresh_in_progress claim is still fresh (another pod's own active refresh)", freshFingerprint)
+	}
+	if !seen[staleFingerprint] {
+		t.Errorf("ListReady did not return %q, want it INCLUDED -- its refresh_in_progress claim has gone stale and must be reclaimable", staleFingerprint)
+	}
+}
+
+// TestRefreshOnce_CrashRecovery_StaleClaimReclaimed is the crash-recovery
+// test for audit-remediation batch B2's own lease design: simulates the
+// AFTERMATH of a crash/SIGTERM/pod-eviction (refresh_in_progress=true,
+// refresh_started_at stamped, and nothing ever reached RecordRefreshSuccess/
+// RecordRefreshFailure to release it -- exactly the state a real crash
+// between ClaimForRefresh and either of those leaves behind, and exactly
+// what internal/app/imagebuild/doc.go used to falsely call "self-healing
+// by construction") by writing that state directly (there is no in-app way
+// to reach it on purpose), then proves ClaimForRefresh's own lease
+// genuinely reclaims it: the row IS refreshed, the claim IS released
+// afterward, and the stale-claim detection IS logged/counted.
+func TestRefreshOnce_CrashRecovery_StaleClaimReclaimed(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-crash-recovery"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:crash-old-ref")
+
+	staleStart := time.Now().Add(-1 * time.Hour)
+	if _, err := pool.Exec(ctx, `UPDATE image_builds SET refresh_in_progress = true, refresh_started_at = $2 WHERE fingerprint = $1`, fingerprint, staleStart); err != nil {
+		t.Fatalf("simulate wedged claim: %v", err)
+	}
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:crash-recovered"}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
+
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ImageRefreshClaimStaleAfter = 5 * time.Minute // shorter than the simulated 1h-old claim
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	before := readRefreshClaimReclaimed(ctx, t, otelReader)
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 1 {
+		t.Fatalf("BuildImage call count = %d, want 1 (the stale claim must be reclaimed and refreshed, not left wedged forever)", got)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.ImageRef == nil || *row.ImageRef != "narvi/built-image:crash-recovered" {
+		t.Errorf("image_ref = %v, want the NEW ref -- the wedged claim was never reclaimed", row.ImageRef)
+	}
+	if row.RefreshInProgress {
+		t.Error("refresh_in_progress = true after a successful reclaimed refresh, want false")
+	}
+	if row.RefreshStartedAt.Valid {
+		t.Errorf("refresh_started_at = %v, want NULL", row.RefreshStartedAt.Time)
+	}
+
+	if got := readRefreshClaimReclaimed(ctx, t, otelReader) - before; got != 1 {
+		t.Errorf("image_refresh_claim_reclaimed delta = %d, want 1 (the stale claim must be logged/counted as detected)", got)
+	}
+}
+
+// TestBuilderRun_RefreshPumpGoroutineStarts proves Builder.Run actually
+// fans out AND RUNS the refresh-pump goroutine (an audit finding: a
+// silently-dropped `g.Go(func() error { return b.runRefreshPump(ctx) })`
+// in Run would break ZERO other tests in this file, since every one of
+// them drives RefreshOnce/PumpOnce directly rather than through Run).
+// Only the freshness pump can ever touch a 'ready', repo-bearing row (the
+// build pump only ever claims 'pending'/'failed' rows) -- so a real
+// BuildImage call against a seeded 'ready' row, observed only through
+// Run, is proof positive the refresh-pump goroutine started and ticked.
+func TestBuilderRun_RefreshPumpGoroutineStarts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-run-refresh-pump-starts"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:run-smoke-old-ref")
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:run-smoke-refreshed"}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
+
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ImageBuildPumpInterval = 20 * time.Millisecond
+	timeouts.ImageRefreshCheckInterval = 20 * time.Millisecond
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- builder.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for provider.buildCallCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := provider.buildCallCount(); got == 0 {
+		t.Fatal("BuildImage was never called via Builder.Run -- the refresh pump goroutine did not start/tick")
+	}
+
+	cancel()
+	if err := <-runErr; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run: %v, want context.Canceled", err)
 	}
 }

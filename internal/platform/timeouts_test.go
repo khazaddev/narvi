@@ -908,6 +908,41 @@ func TestDefaultTimeouts_WarmBootAccessGateStandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step42StandaloneField proves Step 42's ("warm boot:
+// refresh pump + hook policy", §19.2) own addition -- ImageRefreshCheckInterval
+// -- ships with a sane, non-zero default matching its own documented value
+// (§19.2's own explicit "propose 10 min"), and that adding it did not
+// disturb either pre-existing invariant chain. This field shipped with the
+// original Step 42 diff but -- unlike GitFetchStepTimeout/
+// OpenCodeSummarizeTimeout above -- had no standalone-field test of its own
+// (an audit finding this batch closes): a NewBuilder/runRefreshPump caller
+// constructing a partial Timeouts (several tests already do) would panic
+// on time.NewTicker(non-positive duration) with nothing catching it.
+func TestDefaultTimeouts_Step42StandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ImageRefreshCheckInterval <= 0 {
+		t.Errorf("ImageRefreshCheckInterval = %v, want > 0 (runRefreshPump's own time.NewTicker panics on a non-positive duration)", to.ImageRefreshCheckInterval)
+	}
+	if to.ImageRefreshCheckInterval != 10*time.Minute {
+		t.Errorf("ImageRefreshCheckInterval = %v, want %v", to.ImageRefreshCheckInterval, 10*time.Minute)
+	}
+
+	// Deliberately much coarser than ImageBuildPumpInterval's own 60s --
+	// see the field's own doc comment for why (a staleness-only, not
+	// availability, concern).
+	if to.ImageRefreshCheckInterval <= to.ImageBuildPumpInterval {
+		t.Errorf("ImageRefreshCheckInterval = %v, want > ImageBuildPumpInterval = %v (refresh cadence is deliberately coarser than the build pump's own)",
+			to.ImageRefreshCheckInterval, to.ImageBuildPumpInterval)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (ImageRefreshCheckInterval must not disturb either invariant chain)", err)
+	}
+}
+
 // TestDefaultTimeouts_RepoAccessCheckBreakerWindowStandaloneField proves the
 // audit-remediation (correctness-availability, finding #5) standalone
 // addition -- RepoAccessCheckBreakerWindow -- ships with a sane, non-zero
@@ -935,6 +970,34 @@ func TestDefaultTimeouts_RepoAccessCheckBreakerWindowStandaloneField(t *testing.
 
 	if err := to.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
+// TestDefaultTimeouts_ImageRefreshClaimStaleAfter proves audit-remediation
+// batch B2's own new field (closing the imagebuild refresh-pump crash
+// window, see internal/app/imagebuild/doc.go) ships with a sane, non-zero
+// default, matching its own documented value, and that it is comfortably
+// larger than ImageRefreshCheckInterval -- a lease bound shorter than (or
+// too close to) the poll interval itself would reclaim a claim that is
+// merely between ticks, not genuinely abandoned.
+func TestDefaultTimeouts_ImageRefreshClaimStaleAfter(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ImageRefreshClaimStaleAfter <= 0 {
+		t.Errorf("ImageRefreshClaimStaleAfter = %v, want > 0 (ClaimImageBuildForRefresh's own staleness comparison must be meaningful)", to.ImageRefreshClaimStaleAfter)
+	}
+	if to.ImageRefreshClaimStaleAfter != 30*time.Minute {
+		t.Errorf("ImageRefreshClaimStaleAfter = %v, want %v", to.ImageRefreshClaimStaleAfter, 30*time.Minute)
+	}
+	if to.ImageRefreshClaimStaleAfter <= to.ImageRefreshCheckInterval {
+		t.Errorf("ImageRefreshClaimStaleAfter = %v, want > ImageRefreshCheckInterval = %v (must comfortably outlast a normal inter-tick gap, or a claim would be reclaimed while still genuinely in flight)",
+			to.ImageRefreshClaimStaleAfter, to.ImageRefreshCheckInterval)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (ImageRefreshClaimStaleAfter must not disturb either invariant chain)", err)
 	}
 }
 
