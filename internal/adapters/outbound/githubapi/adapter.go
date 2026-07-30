@@ -211,10 +211,63 @@ type commitResponse struct {
 type APIError struct {
 	Status  int
 	Message string
+
+	// RateLimited is set (only ever on a 403, see isRateLimitedResponse
+	// below) when this response's own headers/body indicate GitHub's real
+	// primary or secondary rate-limit/abuse-detection mechanism answered,
+	// rather than a genuine "this token cannot read this resource" denial
+	// -- GitHub returns HTTP 403 for BOTH conditions; the status code alone
+	// can never tell them apart. Audit fix (security-adversarial, findings
+	// #1/#4): CheckRepoAccess's own doc comment requires this distinction
+	// -- a rate-limited 403 must be treated as an INDETERMINATE failure
+	// (never a definitive, cacheable deny), exactly like a 5xx/timeout
+	// already is.
+	RateLimited bool
 }
 
 func (e *APIError) Error() string {
 	return fmt.Sprintf("githubapi: http %d: %s", e.Status, e.Message)
+}
+
+// isRateLimitedResponse reports whether a 403 response resp actually
+// signals GitHub's own real primary or secondary rate-limit/abuse-detection
+// mechanism, rather than a genuine "this token cannot read this resource"
+// denial -- GitHub's own real, documented behavior returns HTTP 403 for
+// BOTH conditions (see https://docs.github.com/rest/overview/rate-limits-for-the-rest-api
+// and https://docs.github.com/rest/guides/best-practices-for-integrators#dealing-with-secondary-rate-limits),
+// so resp.StatusCode alone can never distinguish them. Detected via, in
+// order:
+//
+//  1. X-RateLimit-Remaining: "0" -- GitHub's own primary rate-limit
+//     exhaustion signal, always present on a primary-limit 403;
+//  2. a Retry-After header -- GitHub's own documented secondary-rate-limit
+//     / abuse-detection signal (these responses carry Retry-After; a
+//     genuine permission-denial 403 normally does not);
+//  3. message (the parsed githubErrorBody.Message doGet already extracted)
+//     mentioning "rate limit" or "abuse detection" -- a fallback in case a
+//     header got stripped somewhere between GitHub and this adapter (a
+//     proxy, a test double), matching GitHub's own real error message
+//     text for both conditions ("API rate limit exceeded..." / "You have
+//     exceeded a secondary rate limit...").
+//
+// Audit fix (security-adversarial, findings #1/#4): without this,
+// CheckRepoAccess treated EVERY 403 as a definitive, cacheable deny --
+// including one caused by the REQUESTER'S OWN token hitting a transient
+// rate limit (plausible under concurrent multi-repo checks, since
+// RepoSHAResolutionTimeout/ContractsFingerprintResolutionTimeout/
+// CheckRepoAccess/CreatePR all share the same token's rate-limit budget) --
+// which would then wrongly deny, and CACHE that denial for
+// platform.Timeouts.RepoAccessCacheTTL, warm-boot for a user who genuinely
+// has access.
+func isRateLimitedResponse(resp *http.Response, message string) bool {
+	if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+		return true
+	}
+	if resp.Header.Get("Retry-After") != "" {
+		return true
+	}
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "rate limit") || strings.Contains(lower, "abuse detection")
 }
 
 // doGet performs one authenticated GET against a.apiBaseURL+path, returning
@@ -253,7 +306,15 @@ func (a *Adapter) doGet(ctx context.Context, path, token string) ([]byte, error)
 		} else if len(body) > 0 {
 			message = "error body did not match GitHub's expected error envelope"
 		}
-		return nil, &APIError{Status: resp.StatusCode, Message: message}
+		apiErr := &APIError{Status: resp.StatusCode, Message: message}
+		if resp.StatusCode == http.StatusForbidden {
+			// Audit fix (security-adversarial, findings #1/#4): only ever
+			// computed for a 403 -- see isRateLimitedResponse's own doc
+			// comment for why a 403 specifically (never a 404 or a 5xx)
+			// needs this extra classification.
+			apiErr.RateLimited = isRateLimitedResponse(resp, message)
+		}
+		return nil, apiErr
 	}
 
 	return body, nil
@@ -317,6 +378,53 @@ func (a *Adapter) ResolveBranchSHA(ctx context.Context, spec ports.ResolveBranch
 	}
 
 	return commit.SHA, branch, nil
+}
+
+// CheckRepoAccess implements ports.SourceControl (audit fix, "warm-boot
+// image access control"): answers "can spec.Token read this repo at all"
+// via the SAME GET https://api.github.com/repos/{owner}/{repo} call
+// ResolveBranchSHA's own empty-branch case already makes (adapter.go's own
+// ResolveBranchSHA, above) -- reusing that exact request shape rather than
+// inventing a second one, since GitHub's own repo-info endpoint already
+// 404s for a repo this token cannot see (private, or simply nonexistent)
+// and 403s for one it can see but not read (e.g. rate-limited or blocked),
+// which is precisely the "no access" signal this method exists to report.
+// The response body is discarded -- this method only ever needs the
+// status code, never repoInfoResponse's own DefaultBranch field.
+//
+// A 404 is reported as (false, nil): a legitimate, definitive "this token
+// cannot read this repo" answer, not an error (ports.SourceControl's own
+// doc comment on this method). A 403 is ALSO reported as (false, nil) --
+// but ONLY when isRateLimitedResponse (above) says this 403 does not, in
+// fact, signal GitHub's own rate-limit/abuse-detection mechanism; a 403
+// that DOES carry that signal is treated exactly like a 5xx below (audit
+// fix, security-adversarial, findings #1/#4: GitHub returns 403 for BOTH a
+// genuine permission denial AND a rate-limited/abuse-flagged request, and
+// this method must never conflate the two -- a token merely rate-limited
+// at check time is not a token that has lost access). Any OTHER non-2xx
+// status, or a transport/timeout failure, is passed through as (false,
+// err) -- the caller (app/sessionactor's resolveAndSetImage) is documented
+// to treat that as "could not determine access right now", never as a
+// definitive deny.
+func (a *Adapter) CheckRepoAccess(ctx context.Context, spec ports.CheckRepoAccessSpec) (bool, error) {
+	// Owner/Repo escaped via url.PathEscape -- single opaque path segments,
+	// mirroring ResolveBranchSHA's own identical discipline (see
+	// escapePathSegments' own doc comment above).
+	repoPath := fmt.Sprintf("%s/repos/%s/%s", a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo))
+	_, err := a.doGet(ctx, repoPath, spec.Token)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			if apiErr.Status == http.StatusNotFound {
+				return false, nil
+			}
+			if apiErr.Status == http.StatusForbidden && !apiErr.RateLimited {
+				return false, nil
+			}
+		}
+		return false, fmt.Errorf("githubapi: check repo access: %w", err)
+	}
+	return true, nil
 }
 
 // contentsEntry is the subset of GitHub's real GET

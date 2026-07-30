@@ -203,105 +203,18 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 }
 
 // TestResolveAndSetImage_CreatorContextIrrelevant_ZeroNetworkCallsRegardless
-// proves Step 41's own headline claim (§19.2: "removes the 'creator has no
-// GitHub token -> cold boot' fallback class entirely"): resolveAndSetImage
-// no longer reads the session creator's identity/token/role AT ALL, so its
-// outcome (base image + pending row created, zero ResolveBranchSHA calls)
-// is IDENTICAL regardless of whether the creator has no account at all, a
-// disabled account, or a viewer role -- despite two of those three cases
-// carrying an otherwise-real, usable, encrypted GitHub token that a
-// pre-Step-41 CheckCreatorGuard recheck would have inspected and denied on
-// (imagebuild_integration_test.go's own pre-Step-41 history, and pushpr.go/
-// contractdrift.go's still-current use of the identical guard for their
-// OWN, unrelated purposes). This single test replaces three separate
-// pre-Step-41 tests (NoUsableGitHubToken/DisabledCreator/
-// DemotedToViewerCreator) that each proved a now-removed guard's own
-// behavior for a DIFFERENT reason each time; here, all three scenarios
-// produce identical behavior for the SAME reason: there is no guard left
-// to trip.
-func TestResolveAndSetImage_CreatorContextIrrelevant_ZeroNetworkCallsRegardless(t *testing.T) {
-	tests := []struct {
-		name    string
-		setUser func(t *testing.T, pool *pgxpool.Pool) pgtype.UUID
-	}{
-		{
-			name: "no created_by user at all",
-			setUser: func(_ *testing.T, _ *pgxpool.Pool) pgtype.UUID {
-				return pgtype.UUID{}
-			},
-		},
-		{
-			name: "disabled creator with an otherwise-real, usable github token",
-			setUser: func(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
-				creator := createTestUserWithGitHubToken(context.Background(), t, pool, "gh-fake-token-disabled")
-				if _, err := pool.Exec(context.Background(), `UPDATE users SET disabled = true WHERE id = $1`, creator); err != nil {
-					t.Fatalf("disable fixture user: %v", err)
-				}
-				return creator
-			},
-		},
-		{
-			name: "viewer creator with an otherwise-real, usable github token",
-			setUser: func(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
-				creator := createTestUserWithGitHubToken(context.Background(), t, pool, "gh-fake-token-viewer")
-				if _, err := narvipg.NewUserStore(pool).UpdateRole(context.Background(), creator, sqlcgen.UserRoleViewer); err != nil {
-					t.Fatalf("demote fixture user to viewer: %v", err)
-				}
-				return creator
-			},
-		},
-	}
-
-	for i, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			pool := newTestPool(t)
-
-			creator := tc.setUser(t, pool)
-			repoName := fmt.Sprintf("repo-irrelevant-%d", i)
-			sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
-				repoName, "https://github.com/acme/"+repoName+".git", "main")
-
-			sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
-			provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-irrelevant"}}
-			r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
-			t.Cleanup(func() { _ = r.Shutdown() })
-
-			turnStore := narvipg.NewTurnStore(pool)
-			createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
-
-			a, err := r.GetOrSpawn(ctx, sessionID)
-			if err != nil {
-				t.Fatalf("GetOrSpawn: %v", err)
-			}
-			sendEnsureDispatched(ctx, t, a)
-
-			waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
-
-			spec := provider.lastSpec()
-			if spec.Image != defaultBaseImage {
-				t.Errorf("CreateSpec.Image = %q, want the base image %q", spec.Image, defaultBaseImage)
-			}
-			if got := sourceControl.shaCallCount(); got != 0 {
-				t.Errorf("ResolveBranchSHA call count = %d, want 0 (creator context is never read by resolveAndSetImage as of Step 41)", got)
-			}
-
-			wantFingerprint := domainimagebuild.Fingerprint(defaultBaseImage,
-				map[string]string{repoName: "https://github.com/acme/" + repoName + ".git"}, testRuntimeVersion)
-			imageBuildStore := narvipg.NewImageBuildStore(pool)
-			waitUntil(t, 5*time.Second, func() bool {
-				_, err := imageBuildStore.Get(ctx, wantFingerprint)
-				return err == nil
-			})
-
-			sandboxStore := narvipg.NewSandboxStore(pool)
-			waitUntil(t, 5*time.Second, func() bool {
-				row, err := sandboxStore.Get(ctx, sessionID)
-				return err == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
-			})
-		})
-	}
-}
+// (Step 41's own test proving creator context -- no account, disabled,
+// viewer -- never changed resolveAndSetImage's outcome) has been REMOVED
+// by the audit fix ("warm-boot image access control", HIGH): that was
+// exactly the vulnerability this batch closes -- see the finding this
+// batch's own PR description cites, and imageresolve.go's own new
+// "# Repo-access gate" top comment. Creator context is no longer
+// irrelevant; it is now the FIRST thing checked, and denies warm-boot
+// outright for every one of those three cases. The replacement coverage
+// lives in this package's own repoaccessgate_integration_test.go:
+// TestRepoAccessGate_NoCreatedByUser_DeniesWarmBoot (no created_by) and
+// TestRepoAccessGate_DisabledOrViewerCreator_DeniesWarmBootNoAccessCallEither
+// (disabled/viewer, table-driven, mirroring this test's own former shape).
 
 // TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls proves this
 // Step's own exit criterion: existing spawn-path behavior for the

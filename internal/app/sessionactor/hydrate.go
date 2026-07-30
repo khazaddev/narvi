@@ -109,6 +109,7 @@ func (r *Registry) hydrateAndAcquire(ctx context.Context, sessionID pgtype.UUID)
 		tokenEncryptionKey:     r.tokenEncryptionKey,
 		openCodeRuntimeVersion: r.openCodeRuntimeVersion,
 		contractDriftDetected:  r.contractDriftDetected,
+		repoAccessCache:        r.repoAccessCache,
 		registry:               r,
 		lockConn:               conn,
 		mailbox:                make(chan Command, mailboxBufferSize),

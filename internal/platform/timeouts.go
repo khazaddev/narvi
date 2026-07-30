@@ -1414,6 +1414,73 @@ type Timeouts struct {
 	// GitHub's API with a tip-SHA check per repo per shared image far more
 	// often than useful).
 	ImageRefreshCheckInterval time.Duration
+
+	// --- Audit fix standalone additions ("warm-boot image access
+	// control", HIGH): no ordering relationship with either invariant
+	// chain above (or with any prior Step's standalone additions), so --
+	// per those additions' own precedent -- plain fields with sensible
+	// defaults, not wired into a fake invariant link.
+
+	// RepoAccessCheckTimeout bounds a single internal/app/ports.
+	// SourceControl.CheckRepoAccess call (app/sessionactor's own
+	// resolveAndSetImage, imageresolve.go) -- one real outbound GitHub
+	// repo-info GET per repo, called once per repo IN A LOOP (unless
+	// already cache-hit, see RepoAccessCacheTTL below), each bounded
+	// individually so one slow/hanging repo can't stall the others
+	// indefinitely. Not specified in the plan; chosen as 10s, matching
+	// RepoSHAResolutionTimeout/ContractsFingerprintResolutionTimeout's own
+	// identical "lightweight call, not a large data transfer" reasoning --
+	// this is the exact same shape of call (one bounded outbound GitHub
+	// GET), just answering a different question.
+	RepoAccessCheckTimeout time.Duration
+
+	// RepoAccessCacheTTL is how long a CheckRepoAccess verdict (positive OR
+	// negative) is trusted before this gate re-checks it live, keyed per
+	// (session creator, repo) -- required to keep this new gate off the
+	// steady-state hot path Step 41/42 (§19.1/§19.2) deliberately built:
+	// unlike RepoSHAResolutionTimeout's own SHA resolution (drift-
+	// sensitive, never cacheable -- §19.2's whole rationale for removing
+	// it from the spawn path), repo ACCESS changes rarely, so it is safe
+	// to cache with an ordinary TTL. Not specified in the plan; chosen as
+	// 10 minutes, matching ImageRefreshCheckInterval's own identical
+	// "acceptable staleness for an infrequently-changing, non-correctness-
+	// critical-at-this-grain fact" reasoning (§19.2) -- a revoked user
+	// keeps working for at most this long before their next spawn/restore
+	// re-checks and denies, which is an acceptable staleness window for an
+	// access grant that the platform's own upstream SCM (GitHub) is the
+	// one enforcing in the first place.
+	RepoAccessCacheTTL time.Duration
+
+	// RepoAccessCheckBreakerWindow bounds the sliding window
+	// repoAccessCache's own small in-memory circuit breaker (app/
+	// sessionactor's repoaccesscache.go) counts consecutive INDETERMINATE
+	// CheckRepoAccess failures within, before it trips and short-circuits
+	// every further repo-access check straight to a deny -- WITHOUT
+	// calling CheckRepoAccess again -- for the rest of this window.
+	// Audit-remediation addition (correctness-availability, finding #5):
+	// an indeterminate SCM failure (network/timeout/5xx, or a rate-limited
+	// 403 -- see githubapi.isRateLimitedResponse) is deliberately never
+	// CACHED (RepoAccessCacheTTL above governs only genuine, definitive
+	// verdicts), which on its own means a SUSTAINED outage/rate-limit
+	// event would otherwise make EVERY subsequent spawn, for EVERY session
+	// with repos, pay the full per-repo RepoAccessCheckTimeout again and
+	// again for as long as the incident lasts -- reintroducing exactly the
+	// "up to len(repos) * timeout of sequential GitHub latency per spawn"
+	// cost class Step 41/42's own commit message states was removed. This
+	// breaker does not change the deny outcome (still fail-closed, exactly
+	// like an uncached indeterminate failure already was) -- it only stops
+	// paying for the network round trip once failures are clearly
+	// systemic, shedding load the same way domain/sandbox.
+	// EvaluateCircuitBreaker already does for sandbox-provider spawn
+	// failures (reused directly here rather than duplicated, since it is
+	// already a pure, generically-parameterized decision function). Not
+	// specified in the plan (this fix postdates it); chosen as 2 minutes
+	// -- short enough that a resolved outage is noticed and re-tried
+	// promptly, comfortably shorter than RepoAccessCacheTTL's own 10
+	// minutes (this is damping repeated NETWORK CALLS during a transient
+	// failure, not caching an access verdict, so it does not need -- and
+	// should not have -- that same long a window).
+	RepoAccessCheckBreakerWindow time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1539,6 +1606,10 @@ func DefaultTimeouts() Timeouts {
 		GitFetchStepTimeout: 90 * time.Second, // §19.3, explicit ("propose 90s, distinct from the existing local-only 30s GitSyncStepTimeout")
 
 		ImageRefreshCheckInterval: 10 * time.Minute, // §19.2, explicit ("propose 10 min")
+
+		RepoAccessCheckTimeout:       10 * time.Second, // not specified; chosen, matches RepoSHAResolutionTimeout/ContractsFingerprintResolutionTimeout's own "lightweight call" reasoning
+		RepoAccessCacheTTL:           10 * time.Minute, // not specified; chosen, matches ImageRefreshCheckInterval's own "acceptable staleness" reasoning
+		RepoAccessCheckBreakerWindow: 2 * time.Minute,  // not specified (fix postdates the plan); chosen, short enough to retry a resolved outage promptly
 	}
 }
 

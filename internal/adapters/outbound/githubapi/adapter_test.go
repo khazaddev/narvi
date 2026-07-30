@@ -765,3 +765,253 @@ func TestResolveContractsFingerprint_NestedSubdirectoryNotRecursedInto(t *testin
 		t.Errorf("ResolveContractsFingerprint() fingerprint = %q, want %q (the subdirectory's own sha used as-is)", fingerprint, want)
 	}
 }
+
+// TestCheckRepoAccess_200MeansAllowed proves a real 2xx GET
+// /repos/{owner}/{repo} response reports (true, nil) -- the token can read
+// this repo.
+func TestCheckRepoAccess_200MeansAllowed(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "main"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	allowed, err := adapter.CheckRepoAccess(context.Background(), ports.CheckRepoAccessSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Token: "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("CheckRepoAccess() error = %v, want nil on a 200", err)
+	}
+	if !allowed {
+		t.Error("CheckRepoAccess() allowed = false, want true on a 200")
+	}
+	if gotPath != "/repos/acme/widgets" {
+		t.Errorf("request path = %q, want %q", gotPath, "/repos/acme/widgets")
+	}
+	if gotAuth != "Bearer gho_realtoken" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer gho_realtoken")
+	}
+}
+
+// TestCheckRepoAccess_404And403MeanDeniedNoError proves both a 404 (no
+// access, or the repo doesn't exist) and a 403 (access blocked for some
+// other reason -- e.g. rate-limited or an org policy) report a definitive,
+// non-error (false, nil) -- exactly ports.SourceControl.CheckRepoAccess's
+// own documented "a legitimate, expected answer, not a failure" contract.
+func TestCheckRepoAccess_404And403MeanDeniedNoError(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusNotFound, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "denied"})
+			}))
+			defer server.Close()
+
+			adapter := githubapi.New(server.Client(), server.URL)
+
+			allowed, err := adapter.CheckRepoAccess(context.Background(), ports.CheckRepoAccessSpec{
+				Owner: "victim-org",
+				Repo:  "private-repo",
+				Token: "gho_noaccess",
+			})
+			if err != nil {
+				t.Fatalf("CheckRepoAccess() error = %v, want nil on a %d", err, status)
+			}
+			if allowed {
+				t.Errorf("CheckRepoAccess() allowed = true, want false on a %d", status)
+			}
+		})
+	}
+}
+
+// TestCheckRepoAccess_5xxIsARealErrorNeverADenial proves a real server
+// failure (never a 404/403) is reported as a genuine error -- allowed
+// MUST be false alongside it, but callers must distinguish this from a
+// definitive deny via the non-nil error (ports.SourceControl.
+// CheckRepoAccess's own doc comment: "err != nil means the check itself
+// could not be completed... callers MUST NOT treat that as a definitive
+// no").
+func TestCheckRepoAccess_5xxIsARealErrorNeverADenial(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Internal Server Error"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	allowed, err := adapter.CheckRepoAccess(context.Background(), ports.CheckRepoAccessSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Token: "gho_realtoken",
+	})
+	if err == nil {
+		t.Fatal("CheckRepoAccess() error = nil, want a real error on a 500")
+	}
+	if allowed {
+		t.Error("CheckRepoAccess() allowed = true, want false alongside a real error")
+	}
+
+	var apiErr *githubapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("CheckRepoAccess() error = %v (%T), want *githubapi.APIError", err, err)
+	}
+	if apiErr.Status != http.StatusInternalServerError {
+		t.Errorf("APIError.Status = %d, want %d", apiErr.Status, http.StatusInternalServerError)
+	}
+}
+
+// TestCheckRepoAccess_403RateLimited_IsErrorNeverADefinitiveDenial proves
+// the audit fix (security-adversarial, findings #1/#4): a 403 that carries
+// GitHub's own real rate-limit/abuse-detection signal (checked via
+// X-RateLimit-Remaining: "0", a Retry-After header, or -- as a fallback --
+// a message mentioning "rate limit"/"abuse detection") must be reported as
+// a genuine ERROR, exactly like a 5xx, NEVER as a definitive (false, nil)
+// deny -- so imageresolve.go's own repoAccessAllowedForSpawn treats it as
+// indeterminate (deny only THIS spawn, never cached), not a sticky,
+// cacheable "no access" verdict for a token that merely got rate-limited.
+func TestCheckRepoAccess_403RateLimited_IsErrorNeverADefinitiveDenial(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		headers map[string]string
+		body    map[string]any
+	}{
+		{
+			name:    "primary rate limit via X-RateLimit-Remaining header",
+			headers: map[string]string{"X-RateLimit-Remaining": "0"},
+			body:    map[string]any{"message": "API rate limit exceeded for xxx.xxx.xxx.xxx."},
+		},
+		{
+			name:    "secondary rate limit via Retry-After header",
+			headers: map[string]string{"Retry-After": "60"},
+			body:    map[string]any{"message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again."},
+		},
+		{
+			name:    "no rate-limit headers at all, message-only fallback",
+			headers: map[string]string{},
+			body:    map[string]any{"message": "You have exceeded a secondary rate limit and have been temporarily blocked from content creation."},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				for k, v := range tc.headers {
+					w.Header().Set(k, v)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(tc.body)
+			}))
+			defer server.Close()
+
+			adapter := githubapi.New(server.Client(), server.URL)
+
+			allowed, err := adapter.CheckRepoAccess(context.Background(), ports.CheckRepoAccessSpec{
+				Owner: "acme",
+				Repo:  "widgets",
+				Token: "gho_ratelimited",
+			})
+			if err == nil {
+				t.Fatal("CheckRepoAccess() error = nil, want a real error on a rate-limited 403 (never a definitive denial)")
+			}
+			if allowed {
+				t.Error("CheckRepoAccess() allowed = true, want false alongside the error")
+			}
+
+			var apiErr *githubapi.APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("CheckRepoAccess() error = %v (%T), want *githubapi.APIError", err, err)
+			}
+			if apiErr.Status != http.StatusForbidden {
+				t.Errorf("APIError.Status = %d, want %d", apiErr.Status, http.StatusForbidden)
+			}
+			if !apiErr.RateLimited {
+				t.Error("APIError.RateLimited = false, want true")
+			}
+		})
+	}
+}
+
+// TestCheckRepoAccess_403WithoutRateLimitSignal_StillDeniedNoError proves a
+// plain 403 carrying NEITHER a rate-limit header NOR a rate-limit-shaped
+// message (an ordinary "you cannot read this" denial) still reports the
+// pre-existing (false, nil) definitive-deny contract -- this fix narrows
+// which 403s are treated as errors; it must not turn every 403 into one.
+func TestCheckRepoAccess_403WithoutRateLimitSignal_StillDeniedNoError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Must have admin rights to Repository."})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	allowed, err := adapter.CheckRepoAccess(context.Background(), ports.CheckRepoAccessSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Token: "gho_noaccess",
+	})
+	if err != nil {
+		t.Fatalf("CheckRepoAccess() error = %v, want nil on a plain, non-rate-limited 403", err)
+	}
+	if allowed {
+		t.Error("CheckRepoAccess() allowed = true, want false")
+	}
+}
+
+// TestCheckRepoAccess_EscapesOwnerAndRepo proves Owner/Repo are each
+// url.PathEscape'd before being interpolated into the request path --
+// mirrors CreatePR/ResolveBranchSHA's own identical escaping tests.
+func TestCheckRepoAccess_EscapesOwnerAndRepo(t *testing.T) {
+	t.Parallel()
+
+	var gotEscapedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"default_branch": "main"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	if _, err := adapter.CheckRepoAccess(context.Background(), ports.CheckRepoAccessSpec{
+		Owner: "acme/evil",
+		Repo:  "widgets#v1",
+		Token: "gho_realtoken",
+	}); err != nil {
+		t.Fatalf("CheckRepoAccess() error = %v, want nil", err)
+	}
+
+	want := "/repos/acme%2Fevil/widgets%23v1"
+	if gotEscapedPath != want {
+		t.Errorf("request EscapedPath = %q, want %q (owner/repo must be escaped, not interpolated raw)", gotEscapedPath, want)
+	}
+}

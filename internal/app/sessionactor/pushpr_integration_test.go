@@ -76,6 +76,24 @@ type fakeSourceControl struct {
 	nextFingerprint       string
 	nextFingerprintExists bool
 	nextFingerprintErr    error
+
+	// accessCalls/accessAllowedFor/denyAllAccess/accessErr/accessErrFor are
+	// the audit fix's ("warm-boot image access control", HIGH) own
+	// extension of this same fake, for CheckRepoAccess -- the fourth
+	// SourceControl method imageresolve.go's own repoAccessAllowedForSpawn
+	// now calls. Defaults to ALLOWING every repo (accessAllowedFor/
+	// denyAllAccess both unset/false) so every EXISTING test in this
+	// package that configures a fakeSourceControl for an unrelated reason
+	// (CreatePR, ResolveContractsFingerprint) and happens to also exercise
+	// the spawn/dispatch path keeps passing unmodified -- only this file's
+	// own and imagebuild_integration_test.go's own repo-access-specific
+	// tests need to configure this explicitly.
+	accessCalls      []ports.CheckRepoAccessSpec
+	accessCtxs       []context.Context // parallel to accessCalls -- the ctx CheckRepoAccess actually received, each call
+	accessAllowedFor map[string]bool   // keyed by "owner/repo"; overrides denyAllAccess if present
+	denyAllAccess    bool
+	accessErr        error
+	accessErrFor     map[string]error // keyed by "owner/repo"; overrides accessErr if present
 }
 
 var _ ports.SourceControl = (*fakeSourceControl)(nil)
@@ -149,6 +167,49 @@ func (f *fakeSourceControl) fingerprintCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.fingerprintCalls)
+}
+
+func (f *fakeSourceControl) CheckRepoAccess(ctx context.Context, spec ports.CheckRepoAccessSpec) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accessCalls = append(f.accessCalls, spec)
+	f.accessCtxs = append(f.accessCtxs, ctx)
+
+	key := spec.Owner + "/" + spec.Repo
+	if err, ok := f.accessErrFor[key]; ok {
+		return false, err
+	}
+	if f.accessErr != nil {
+		return false, f.accessErr
+	}
+	if allowed, ok := f.accessAllowedFor[key]; ok {
+		return allowed, nil
+	}
+	return !f.denyAllAccess, nil
+}
+
+func (f *fakeSourceControl) accessCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.accessCalls)
+}
+
+// lastAccessCtxDeadline returns the ctx.Deadline() of the MOST RECENT
+// CheckRepoAccess call this fake received, plus ok=true -- used by the
+// audit-remediation regression test (test-adversarial, finding #11)
+// proving repoAccessAllowedForSpawn actually bounds its real
+// SourceControl.CheckRepoAccess call with platform.Timeouts.
+// RepoAccessCheckTimeout (checkCtx), rather than accidentally passing the
+// actor's own unbounded outer ctx through -- this fake, unlike the real
+// adapter, deliberately captures whatever ctx it was actually handed so a
+// test can inspect it directly.
+func (f *fakeSourceControl) lastAccessCtxDeadline() (time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.accessCtxs) == 0 {
+		return time.Time{}, false
+	}
+	return f.accessCtxs[len(f.accessCtxs)-1].Deadline()
 }
 
 // reposJSONForTest builds the sessions.repos JSONB shape (design decision

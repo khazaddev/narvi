@@ -112,6 +112,16 @@ type Actor struct {
 	// own checkContractDrift.
 	contractDriftDetected metric.Int64Counter
 
+	// repoAccessCache is the audit fix's ("warm-boot image access control",
+	// HIGH) own addition: the SAME *repoAccessCache instance every Actor
+	// this Registry hydrates shares (registry.go's own field doc comment)
+	// -- used only by imageresolve.go's own repo-access gate, immediately
+	// before resolveAndSetImage will otherwise mint a pending image_builds
+	// row or warm-hit an already-ready one. May be nil in a test that
+	// never exercises the image-resolution path; the gate treats a nil
+	// cache as "always miss, always check live" (see imageresolve.go).
+	repoAccessCache *repoAccessCache
+
 	// pendingBroadcast queues each event appended (via appendEvent/
 	// appendRawEvent) during the CURRENT transact attempt, in order. Safe
 	// unsynchronized: Actor.handle processes exactly one command at a time

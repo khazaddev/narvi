@@ -86,17 +86,134 @@
 // every code path is a plain in-memory hash plus at most one Postgres
 // round trip.
 
+// # Repo-access gate (audit fix, "warm-boot image access control", HIGH)
+//
+// Step 41's own rewrite above (deliberately) dropped every creator/token
+// dependency this function used to have -- which also, as an unintended
+// side effect, dropped the ONLY thing that had ever gated which repos a
+// given user's sandbox could contain: before Step 41, a warm hit required
+// resolving each repo's SHA under the CREATOR's own GitHub token, which
+// implicitly 404/403'd for a repo that creator could not read. Once the
+// fingerprint became URL-only and the background builder (Step 42) started
+// resolving/building under a platform-level credential with no notion of
+// which user asked, an authenticated member with ZERO read access to a
+// private repo could name it in a session's repo list, cause a platform-
+// credentialed build of it, and warm-boot into a sandbox containing its
+// complete clone -- see this Step's own PR description / the audit finding
+// this batch closes for the full repro.
+//
+// resolveAndSetImage now gets ONE new early-return check, right at its
+// top, before the image_builds lookup below even runs: repoAccessAllowedForSpawn
+// (below). If it doesn't pass, this function returns immediately, exactly
+// like every other failure branch already here -- plan.spec.Image simply
+// stays at defaultBaseImage. Because both the miss/upsert branch and the
+// ready/warm-hit branch sit strictly AFTER this gate, NEITHER is reachable
+// without a positive verdict here: the two decision points the audit found
+// separately vulnerable (minting a pending row for an unreadable repo, and
+// warm-hitting a row someone else's session caused to be built) are closed
+// by construction, with one check, not two.
+//
+// # Where this gate lives, and why not session-creation instead
+//
+// The gate lives here -- re-run on EVERY spawn/restore, not just once at
+// session creation -- because resolveAndSetImage itself runs on every
+// spawn AND restore of an already-existing sandbox (handleEnsureDispatched,
+// dispatch.go), which can happen long after creation (a respawn, a resume
+// after Stopped). A session-creation-only check would leave a user whose
+// repo access was revoked AFTER creating a session still served the baked
+// private clone on every later respawn -- the exact staleness class
+// CheckCreatorGuard (githubtoken.go) already exists to close for every
+// other creator-token consumer in this codebase. Session creation
+// (httpapi.CreateSession) is also a synchronous, Postgres-only path by
+// design (this file's own "why this runs where it runs" comment above, and
+// that handler's own doc comment) -- shared directly by Slack/Linear/
+// GitHub webhook ingress under their own ack-time budgets -- so a
+// synchronous outbound GitHub call has no safe home there; this hook point
+// is the one place in this actor a network-bound check can safely live.
+//
+// # Fail-closed vs. fail-open -- which way this gate fails, and why
+//
+// This is a security gate, not a convenience feature, so unlike
+// decryptCreatorGitHubToken's OTHER callers (pushpr.go's PR-attribution
+// best-effort, contractdrift.go's opportunistic drift check -- both of
+// which simply skip a nice-to-have on any absence), every absence or
+// failure here is a DENY, not a silent allow:
+//   - no created_by user at all (an automation/bot-created session):
+//     denied. A NULL creator has no token to check access with in the
+//     first place -- this is unavoidable, not a design choice: there is
+//     no per-user credential to run CheckRepoAccess under. Audit-fix
+//     correction (correctness-availability, finding #6): an EARLIER
+//     version of this comment characterized every NULL-creator session as
+//     targeting "a platform-configured default repo, never attacker-
+//     influenced" -- that is true for Slack/Linear ingress, but NOT for
+//     GitHub PR-mention-triggered review sessions with an unresolved/
+//     bot-attributed commenter, which internal/adapters/inbound/github/
+//     coalesce.go's own doc comment states is "by far the common case
+//     today": those sessions run against that PR's own actual repo, which
+//     is arbitrary (and often private), not a fixed platform default. This
+//     gate still denies that case -- correctly, since there genuinely is
+//     no creator token to check with -- but the REAL cost is a large,
+//     ongoing, latency-sensitive slice of automation traffic permanently
+//     never benefiting from warm-boot, not merely a rare, inert edge case.
+//     Accepted as-is for this batch (widening this gate to check access
+//     under a platform-level bot credential instead, the way PostIssueComment/
+//     GetPullRequest already do for THEIR OWN calls, is a real option for a
+//     follow-up but is its own design decision -- e.g. whether "the bot
+//     can read this PR's repo" is an acceptable proxy for "warm-boot is
+//     safe here" -- deliberately not made unilaterally inside this fix-up
+//     batch).
+//   - a real creator now Disabled or role==viewer (CheckCreatorGuard), or
+//     no linked GitHub identity/no stored token/a decrypt failure
+//     (decryptCreatorGitHubToken): denied, exactly like every other
+//     "nothing usable to check with" case.
+//   - a real, enabled, non-viewer creator whose token genuinely cannot
+//     read the repo (CheckRepoAccess returns false, nil): denied -- the
+//     actual attack case this batch exists to close. This degrades to
+//     exactly the pre-Step-41 property: cold boot on the base image, and
+//     that same user's own credentials still fail naturally at CloneAll
+//     (fatal boot for the primary repo) if they try anyway.
+//   - CheckRepoAccess itself fails to even answer the question (network
+//     timeout, GitHub 5xx, any transport error): ALSO denied for this one
+//     spawn -- but this is the one outcome ports.SourceControl.
+//     CheckRepoAccess's own doc comment is explicit callers must not treat
+//     as a definitive, cacheable "no" (see repoAccessAllowedForSpawn's own
+//     handling below): it is logged as an indeterminate SCM-check failure,
+//     distinct from an explicit denial (an operator must be able to tell
+//     "this user was denied access to this repo" apart from "the SCM API
+//     was down" -- they are different failures), and NEVER cached, so the
+//     very next spawn attempt re-checks live rather than freezing a
+//     transient outage into a stale deny for this cache entry's whole TTL.
+//     This still satisfies "never block a spawn" (§10 Phase 2): the spawn
+//     itself is never held up or failed by this -- it just falls back to
+//     the base image for this one attempt, identically to a genuine
+//     image_builds lookup error a few lines below.
+//
+// # Caching
+//
+// See repoaccesscache.go's own top comment for the full design: a genuine
+// (non-error) verdict, positive or negative, is cached per (session
+// creator, normalized repo URL) for platform.Timeouts.RepoAccessCacheTTL,
+// shared across every Actor via the Registry (like a.stores/a.sourceControl
+// already are) -- after the first check per (user, repo), this reduces to
+// zero network calls for the life of the TTL, preserving Step 41/42's own
+// "zero network calls on the steady-state hot path" property for the
+// common case of a user who DOES have access.
+
 package sessionactor
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/imagebuild"
 )
 
@@ -127,6 +244,15 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 	repoURLs := make(map[string]string, len(repos))
 	for _, r := range repos {
 		repoURLs[r.Name] = imagebuild.NormalizeRepoURL(r.Url)
+	}
+
+	// Audit fix ("warm-boot image access control", HIGH): gate BEFORE
+	// either branch below can run -- see this file's own top "# Repo-access
+	// gate" comment for the full design. Neither the miss/upsert branch
+	// nor the ready/warm-hit branch is reachable without a positive
+	// verdict here.
+	if !a.repoAccessAllowedForSpawn(ctx, plan, repoURLs) {
+		return
 	}
 
 	fingerprint := imagebuild.Fingerprint(defaultBaseImage, repoURLs, a.openCodeRuntimeVersion)
@@ -194,4 +320,224 @@ func (a *Actor) upsertPendingImageBuildBestEffort(ctx context.Context, fingerpri
 		a.logger.Error("sessionactor: resolve image: upsert pending image_builds row failed",
 			"fingerprint", fingerprint, "error", err)
 	}
+}
+
+// githubRepoHost is the ONLY source-control host this codebase's one real
+// SourceControl implementation (internal/adapters/outbound/githubapi)
+// ever actually queries -- production wiring always talks to GitHub's own
+// real API (api.github.com) regardless of what host a session's own repo
+// URL names. Audit hardening (security-adversarial, finding #2): without
+// an explicit check against this, repoURLHostAllowed (below) -- and
+// therefore this gate's entire fail-closed property for a non-GitHub repo
+// URL -- would be an ACCIDENT of today's adapter roster, not a designed
+// property: parseOwnerRepo (pushpr.go) is deliberately generic and
+// discards the URL's host entirely, and reposource.ValidateRepoURL
+// accepts ANY https host, so a session named e.g.
+// "https://example.org/acme/tools" would otherwise still have this gate
+// derive owner="acme"/repo="tools" and query GitHub's REAL API for that
+// path -- a completely unrelated resource -- and happen to fail closed
+// today only because no second SourceControl implementation exists yet.
+// Update this (or make it configurable per-adapter) the day a second
+// SourceControl implementation (e.g. GitLab) is actually wired -- see
+// ports.SourceControl's own doc comment on why this port intentionally
+// stays adapter-agnostic in its signatures; this one const is a
+// deliberate, narrow, explicitly-called-out exception, not a precedent
+// for leaking GitHub specifics into this port more broadly.
+const githubRepoHost = "github.com"
+
+// repoURLHostAllowed reports whether repoURL's own host is one this gate's
+// configured SourceControl implementation actually queries (see
+// githubRepoHost's own doc comment) -- checked BEFORE this gate ever
+// derives an owner/repo from repoURL or spends a cache lookup/network call
+// on it. A repoURL that fails to parse is also disallowed (fail-closed,
+// matching every other malformed-input branch in this gate).
+func repoURLHostAllowed(repoURL string) bool {
+	parsed, err := url.Parse(repoURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Host, githubRepoHost)
+}
+
+// repoAccessAllowedForSpawn implements this file's own "# Repo-access
+// gate" design (see this file's own top comment for the complete
+// rationale): true only when plan's own session creator can, RIGHT NOW,
+// read every repo in repoURLs. Every other outcome -- no creator, a
+// disabled/viewer creator, no usable token, an unsupported repo-URL host,
+// a definitive per-repo denial, or even an indeterminate SCM-check
+// failure -- returns false, per that same top comment's fail-closed
+// reasoning.
+//
+// repoURLs is resolveAndSetImage's own already-normalized map (repo name
+// -> imagebuild.NormalizeRepoURL(r.Url)) -- reused here rather than
+// re-deriving it, and also what this function's own cache keys off of, so
+// a differently-spelled-but-equivalent URL shares one cache entry (and one
+// CheckRepoAccess call) with whatever spelling was checked first, exactly
+// like Fingerprint already treats them as the same repo.
+func (a *Actor) repoAccessAllowedForSpawn(ctx context.Context, plan *spawnPlan, repoURLs map[string]string) bool {
+	// createdBy.Valid is checked HERE, before ever calling CheckCreatorGuard
+	// -- CheckCreatorGuard's own Allowed:true for an invalid createdBy means
+	// "nothing for THIS guard to check", not "access verified" (its own doc
+	// comment). Conflating the two would silently reopen this gate for
+	// every automation/bot-created session (sessions.created_by IS NULL) --
+	// see this file's own top comment for why that is an acceptable speed
+	// regression, not a compensating control to lean on.
+	if !plan.createdBy.Valid {
+		a.logger.Warn("sessionactor: resolve image: repo-access gate: session has no created_by user; automation-created sessions never warm-boot (denying, not a bug -- see imageresolve.go's own top comment)")
+		return false
+	}
+
+	// CheckCreatorGuard ALWAYS runs here, unconditionally, on EVERY spawn
+	// regardless of what repoAccessCache below already knows -- this is
+	// the one recheck (audit-remediation finding #7) that must never be
+	// skipped just because every repo happens to be cache-hit:
+	// repoAccessCache only ever remembers a REPO-read verdict, never the
+	// creator's own current enabled/role status, so a creator disabled or
+	// demoted to viewer AFTER their repo access was cached must still be
+	// caught here, on this very next spawn (§13.3 viewer-guard parity --
+	// this file's own top comment). Skipping this call on a cache hit
+	// would silently reopen exactly the staleness hole this whole gate
+	// exists to close.
+	if v := CheckCreatorGuard(ctx, a.stores.user, plan.createdBy); !v.Allowed {
+		switch {
+		case v.Err != nil:
+			a.logger.Error("sessionactor: resolve image: repo-access gate: get session creator failed; denying (fail-closed)",
+				"user_id", plan.createdBy.String(), "error", v.Err)
+		case v.Disabled:
+			a.logger.Warn("sessionactor: resolve image: repo-access gate: session creator is now disabled; denying warm-boot (§13.3 viewer guard parity)",
+				"user_id", plan.createdBy.String())
+		case v.Viewer:
+			a.logger.Warn("sessionactor: resolve image: repo-access gate: session creator is now a viewer; denying warm-boot (§13.3 viewer guard parity)",
+				"user_id", plan.createdBy.String())
+		}
+		return false
+	}
+
+	// Audit-remediation fix (correctness-availability, finding #7): unlike
+	// CheckCreatorGuard above, the creator's own GitHub token is decrypted
+	// LAZILY, on first actual need, NOT unconditionally here -- getToken
+	// (below) resolves it (one identity-store Postgres read plus one AES
+	// decrypt) at most once per call to this function, and only if at
+	// least one repo below turns out to be a genuine cache MISS. On a
+	// spawn/restore whose every repo already has a cached verdict, this
+	// means neither the identity lookup nor the decrypt ever happens at
+	// all -- the decrypted token would never have been used anyway (every
+	// repo already answered from repoAccessCache) -- restoring the "zero
+	// network calls, minimal Postgres reads" property of the all-cache-hit
+	// hot path Step 41/42 built this gate to sit in front of, without
+	// weakening CheckCreatorGuard's own always-fresh recheck above.
+	var (
+		token        string
+		tokenOK      bool
+		tokenChecked bool
+	)
+	getToken := func() (string, bool) {
+		if !tokenChecked {
+			token, tokenOK = a.decryptCreatorGitHubToken(ctx, plan.createdBy)
+			tokenChecked = true
+		}
+		return token, tokenOK
+	}
+
+	userID := plan.createdBy.String()
+	now := time.Now()
+
+	for name, repoURL := range repoURLs {
+		// Audit hardening (security-adversarial, finding #2): checked
+		// BEFORE this repo's owner/repo is even derived, or a cache lookup
+		// spent on it -- see repoURLHostAllowed's/githubRepoHost's own doc
+		// comments.
+		if !repoURLHostAllowed(repoURL) {
+			a.logger.Warn("sessionactor: resolve image: repo-access gate: repo url does not name a supported source-control host; denying warm-boot",
+				"repo", name, "url", repoURL)
+			return false
+		}
+
+		owner, repoName, err := parseOwnerRepo(repoURL)
+		if err != nil {
+			a.logger.Warn("sessionactor: resolve image: repo-access gate: parse owner/repo from clone url failed; denying warm-boot",
+				"repo", name, "error", err)
+			return false
+		}
+		repoLabel := owner + "/" + repoName
+
+		if a.repoAccessCache != nil {
+			if allowed, cached := a.repoAccessCache.get(userID, repoURL, now); cached {
+				if !allowed {
+					a.logger.Warn("sessionactor: resolve image: repo-access gate: cached verdict is deny; denying warm-boot",
+						"user_id", userID, "repo", repoLabel)
+					return false
+				}
+				continue
+			}
+
+			// Cache MISS, about to (maybe) make a real network call --
+			// audit-remediation addition (correctness-availability, finding
+			// #5): if CheckRepoAccess has failed indeterminately
+			// repeatedly enough, recently enough, skip the network call
+			// entirely and deny THIS repo (and therefore this spawn)
+			// straight away -- still fail-closed, identical outcome to an
+			// individual indeterminate failure below, just without paying
+			// for the round trip again during a sustained outage. See
+			// repoAccessCache's own breakerOpen/"# Circuit breaker" doc
+			// comment for the full design.
+			if a.repoAccessCache.breakerOpen(now, a.timeouts.RepoAccessCheckBreakerWindow) {
+				a.logger.Warn("sessionactor: resolve image: repo-access gate: CheckRepoAccess circuit breaker open (repeated indeterminate SCM failures); denying warm-boot without a network call this spawn",
+					"user_id", userID, "repo", repoLabel)
+				return false
+			}
+		}
+
+		tok, ok := getToken()
+		if !ok {
+			// Already logged (Warn or Error, as appropriate) by
+			// decryptCreatorGitHubToken itself.
+			return false
+		}
+
+		if a.sourceControl == nil {
+			// Defensive: mirrors resolveAndSetImage's/checkContractDrift's
+			// own nil-provider guard exactly -- some tests, and any future
+			// caller genuinely without one, must not panic here.
+			a.logger.Warn("sessionactor: resolve image: repo-access gate: no SourceControl configured; denying warm-boot")
+			return false
+		}
+
+		checkCtx, cancel := context.WithTimeout(ctx, a.timeouts.RepoAccessCheckTimeout)
+		allowed, err := a.sourceControl.CheckRepoAccess(checkCtx, ports.CheckRepoAccessSpec{
+			Owner: owner, Repo: repoName, Token: tok,
+		})
+		cancel()
+		if err != nil {
+			// Indeterminate: the SCM check itself failed (network/timeout/
+			// 5xx, or a rate-limited 403 -- see githubapi.
+			// isRateLimitedResponse), never a definitive "no" (ports.
+			// SourceControl.CheckRepoAccess's own doc comment). Logged
+			// distinctly from an explicit denial below -- an operator must
+			// be able to tell "this user was denied access to this repo"
+			// apart from "the SCM API was down" -- and deliberately NEVER
+			// cached (this file's own top comment): the next spawn attempt
+			// re-checks live rather than freezing this transient outage
+			// into a stale deny for RepoAccessCacheTTL.
+			if a.repoAccessCache != nil {
+				a.repoAccessCache.recordCheckFailure(now)
+			}
+			a.logger.Error("sessionactor: resolve image: repo-access gate: CheckRepoAccess call failed; SCM check indeterminate, denying only THIS spawn's warm-boot (not cached, not a permanent deny)",
+				"user_id", userID, "repo", repoLabel, "error", err)
+			return false
+		}
+
+		if a.repoAccessCache != nil {
+			a.repoAccessCache.recordCheckSuccess()
+			a.repoAccessCache.set(userID, repoURL, allowed, now, a.timeouts.RepoAccessCacheTTL)
+		}
+
+		if !allowed {
+			a.logger.Warn("sessionactor: resolve image: repo-access gate: session creator cannot read this repo; denying warm-boot (audit fix: warm-boot image access control)",
+				"user_id", userID, "repo", repoLabel)
+			return false
+		}
+	}
+
+	return true
 }

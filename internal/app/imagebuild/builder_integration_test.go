@@ -153,6 +153,15 @@ func (f *fakeSourceControl) ResolveContractsFingerprint(context.Context, ports.R
 	return "", false, errors.New("fakeSourceControl: ResolveContractsFingerprint not implemented")
 }
 
+// CheckRepoAccess is never called by this package's own Builder (the
+// audit fix's repo-access gate lives entirely in app/sessionactor,
+// upstream of this package -- see imageresolve.go's own "why this runs
+// where it runs" reasoning) -- mirrors CreatePR/ResolveContractsFingerprint
+// above's own "not implemented" precedent for the same reason.
+func (f *fakeSourceControl) CheckRepoAccess(context.Context, ports.CheckRepoAccessSpec) (bool, error) {
+	return false, errors.New("fakeSourceControl: CheckRepoAccess not implemented")
+}
+
 func (f *fakeSourceControl) shaCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
