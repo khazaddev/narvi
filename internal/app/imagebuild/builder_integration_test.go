@@ -27,6 +27,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/testcontainers/testcontainers-go"
@@ -103,6 +104,54 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 	t.Cleanup(pool.Close)
 
 	return pool
+}
+
+// fakeSourceControl is a minimal test-only ports.SourceControl, narrowed
+// to exactly the one method this package's own Builder ever calls
+// (ResolveBranchSHA) -- mirrors internal/app/sessionactor/
+// pushpr_integration_test.go's own fakeSourceControl precedent, duplicated
+// here rather than shared across package boundaries (this package's own
+// test package cannot import sessionactor's unexported test type anyway).
+type fakeSourceControl struct {
+	mu sync.Mutex
+
+	shaCalls []ports.ResolveBranchSHASpec
+	shaFor   map[string]string // keyed by repo name; falls back to nextSHA if absent
+	nextSHA  string
+	nextErr  error
+}
+
+var _ ports.SourceControl = (*fakeSourceControl)(nil)
+
+func (f *fakeSourceControl) CreatePR(context.Context, ports.CreatePRSpec) (ports.PRRef, error) {
+	return ports.PRRef{}, errors.New("fakeSourceControl: CreatePR not implemented")
+}
+
+func (f *fakeSourceControl) ResolveBranchSHA(_ context.Context, spec ports.ResolveBranchSHASpec) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shaCalls = append(f.shaCalls, spec)
+	if f.nextErr != nil {
+		return "", "", f.nextErr
+	}
+	resolvedBranch := spec.Branch
+	if resolvedBranch == "" {
+		resolvedBranch = "main"
+	}
+	if sha, ok := f.shaFor[spec.Repo]; ok {
+		return sha, resolvedBranch, nil
+	}
+	return f.nextSHA, resolvedBranch, nil
+}
+
+func (f *fakeSourceControl) ResolveContractsFingerprint(context.Context, ports.ResolveContractsFingerprintSpec) (string, bool, error) {
+	return "", false, errors.New("fakeSourceControl: ResolveContractsFingerprint not implemented")
+}
+
+func (f *fakeSourceControl) shaCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.shaCalls)
 }
 
 // fakeBuildProvider is a test-only ports.SandboxProvider recording every
@@ -264,6 +313,407 @@ func seedPendingImageBuildWithRepos(ctx context.Context, t *testing.T, store *na
 	}
 }
 
+// seedReadyImageBuildWithRepos drives a repo-bearing fingerprint's own row
+// from nonexistent through 'pending' -> 'building' -> 'ready' (UpsertPending,
+// Claim, RecordSuccess), landing exactly the shape a real successful
+// claim-time build leaves behind -- used by every freshness-pump test
+// below, which all need a real 'ready' row to refresh, not a pending one.
+func seedReadyImageBuildWithRepos(ctx context.Context, t *testing.T, store *narvipg.ImageBuildStore, fingerprint string, repoURLsIn, builtRepoSHAsIn map[string]string, imageRef string) {
+	t.Helper()
+
+	repoURLs, err := json.Marshal(repoURLsIn)
+	if err != nil {
+		t.Fatalf("marshal repo urls: %v", err)
+	}
+	if err := store.UpsertPending(ctx, sqlcgen.UpsertPendingImageBuildParams{
+		Fingerprint:    fingerprint,
+		Base:           "narvi/base:test",
+		RepoUrls:       repoURLs,
+		RuntimeVersion: "1.0.0-test",
+	}); err != nil {
+		t.Fatalf("seed pending image_builds row: %v", err)
+	}
+	if _, err := store.Claim(ctx, fingerprint); err != nil {
+		t.Fatalf("claim image_builds row: %v", err)
+	}
+	builtRepoSHAs, err := json.Marshal(builtRepoSHAsIn)
+	if err != nil {
+		t.Fatalf("marshal built repo shas: %v", err)
+	}
+	if _, err := store.RecordSuccess(ctx, sqlcgen.RecordImageBuildSuccessParams{
+		Fingerprint:   fingerprint,
+		ImageRef:      &imageRef,
+		BuiltRepoShas: builtRepoSHAs,
+		BuiltAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatalf("record image_builds success: %v", err)
+	}
+}
+
+// TestRefreshOnce_StaleReadyRow_TipDiffers_RefreshesInPlace proves §19.2's
+// own headline behavior: a 'ready' row whose recorded built_repo_shas no
+// longer matches a repo's CURRENT default-branch tip gets refreshed --
+// BuildImage is called with the NEW resolved SHA, and the row's own
+// image_ref/built_repo_shas/built_at are atomically swapped IN PLACE
+// (status stays 'ready' throughout, never touched).
+func TestRefreshOnce_StaleReadyRow_TipDiffers_RefreshesInPlace(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-stale"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:old-ref")
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:refreshed"}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 1 {
+		t.Fatalf("BuildImage call count = %d, want 1", got)
+	}
+	if got := provider.buildCalls[0].Repos["repo1"].SHA; got != "sha-new" {
+		t.Errorf("BuildImage called with Repos[repo1].SHA = %q, want the NEW resolved tip %q", got, "sha-new")
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusReady {
+		t.Errorf("status = %q, want %q (never leaves ready)", row.Status, sqlcgen.ImageBuildStatusReady)
+	}
+	if row.ImageRef == nil || *row.ImageRef != "narvi/built-image:refreshed" {
+		t.Errorf("image_ref = %v, want the NEW ref %q", row.ImageRef, "narvi/built-image:refreshed")
+	}
+	if row.RefreshInProgress {
+		t.Error("refresh_in_progress = true after a successful refresh, want false (claim released)")
+	}
+
+	var builtRepoSHAs map[string]string
+	if err := json.Unmarshal(row.BuiltRepoShas, &builtRepoSHAs); err != nil {
+		t.Fatalf("unmarshal built_repo_shas: %v", err)
+	}
+	if builtRepoSHAs["repo1"] != "sha-new" {
+		t.Errorf("built_repo_shas[repo1] = %q, want the NEW resolved tip %q", builtRepoSHAs["repo1"], "sha-new")
+	}
+}
+
+// TestRefreshOnce_FreshReadyRow_TipUnchanged_NoRefreshAttempted proves the
+// other half of §19.2's own comparison: a 'ready' row whose recorded
+// built_repo_shas ALREADY matches every repo's current tip is left
+// completely untouched -- BuildImage is never even called.
+func TestRefreshOnce_FreshReadyRow_TipUnchanged_NoRefreshAttempted(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-still-fresh"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-same"},
+		"narvi/built-image:still-fresh")
+
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-same"}}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 0 {
+		t.Errorf("BuildImage call count = %d, want 0 (tip unchanged -- still fresh)", got)
+	}
+}
+
+// TestRefreshOnce_BaseOnlyReadyRow_NeverConsidered proves ListReadyImageBuilds'
+// own SQL-level exclusion: a base-only (repo-less) ready row is never even
+// inspected by the freshness pump -- it is never stale in the sense this
+// design cares about (there is no repo tip to drift from).
+func TestRefreshOnce_BaseOnlyReadyRow_NeverConsidered(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-base-only"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint, map[string]string{}, map[string]string{}, "narvi/built-image:base-only")
+
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+	// nil sourceControl too -- if this row were ever (wrongly) inspected,
+	// resolveRepoSHAs would fail loudly on the missing SourceControl long
+	// before ever reaching BuildImage, so a zero build-call-count alone
+	// already proves the row was never even considered.
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 0 {
+		t.Errorf("BuildImage call count = %d, want 0 (base-only row is never stale)", got)
+	}
+}
+
+// TestRefreshOnce_NoCredentialConfigured_DegradesCleanly_OldRefStaysServable
+// proves §19.2's own "never a crash, never blocks a spawn" degrade
+// invariant for the FRESHNESS PUMP specifically (the companion claim-time
+// build case is covered by TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly
+// above): with no platform credential configured, a stale 'ready' row is
+// left completely untouched -- still 'ready', still serving its own OLD
+// image_ref -- rather than crashing or corrupting the row.
+func TestRefreshOnce_NoCredentialConfigured_DegradesCleanly_OldRefStaysServable(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-no-credential"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:old-ref")
+
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 0 {
+		t.Errorf("BuildImage call count = %d, want 0 (no platform credential configured)", got)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusReady {
+		t.Errorf("status = %q, want %q (untouched)", row.Status, sqlcgen.ImageBuildStatusReady)
+	}
+	if row.ImageRef == nil || *row.ImageRef != "narvi/built-image:old-ref" {
+		t.Errorf("image_ref = %v, want the OLD ref still intact %q", row.ImageRef, "narvi/built-image:old-ref")
+	}
+	if row.RefreshInProgress {
+		t.Error("refresh_in_progress = true, want false (never claimed at all)")
+	}
+}
+
+// TestRefreshOnce_BuildFails_ReleasesClaim_OldRefStaysServable proves the
+// refresh path's own failure handling: a BuildImage failure during a
+// refresh attempt releases the refresh_in_progress claim WITHOUT touching
+// anything else -- the row is left exactly as it was (status 'ready', OLD
+// image_ref/built_repo_shas intact), ready to be picked up again at the
+// next tick.
+func TestRefreshOnce_BuildFails_ReleasesClaim_OldRefStaysServable(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-build-fails"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:old-ref")
+
+	provider := &fakeBuildProvider{nextErr: errors.New("provider: refresh build failed")}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusReady {
+		t.Errorf("status = %q, want %q (a failed refresh never changes status)", row.Status, sqlcgen.ImageBuildStatusReady)
+	}
+	if row.ImageRef == nil || *row.ImageRef != "narvi/built-image:old-ref" {
+		t.Errorf("image_ref = %v, want the OLD ref still intact %q", row.ImageRef, "narvi/built-image:old-ref")
+	}
+	if row.RefreshInProgress {
+		t.Error("refresh_in_progress = true after a failed refresh, want false (claim released)")
+	}
+
+	// The claim must be genuinely released, not merely left readable as
+	// 'false' by coincidence: a SECOND RefreshOnce call must be able to
+	// re-claim and retry (the refresh path's own natural retry cadence, no
+	// separate backoff schedule needed).
+	provider.nextErr = nil
+	provider.nextRef = "narvi/built-image:retried-successfully"
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce (retry): %v", err)
+	}
+	row2, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after retry: %v", err)
+	}
+	if row2.ImageRef == nil || *row2.ImageRef != "narvi/built-image:retried-successfully" {
+		t.Errorf("image_ref after retry = %v, want %q (claim was genuinely re-claimable)", row2.ImageRef, "narvi/built-image:retried-successfully")
+	}
+}
+
+// TestRefreshOnce_OldRefStaysServableDuringRefresh is this Step's own
+// direct proof of the resilience property the new "refresh-in-flight
+// spawn" scenario (test/resilience) also exercises end to end: while a
+// refresh build is genuinely IN FLIGHT (BuildImage blocked, not yet
+// returned), a concurrent GetImageBuild-style read of the SAME row (the
+// exact query a live spawn's own resolveAndSetImage performs) sees
+// status='ready' and the OLD image_ref -- never 'building', never a gap.
+func TestRefreshOnce_OldRefStaysServableDuringRefresh(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-in-flight"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:old-ref")
+
+	release := make(chan struct{})
+	provider := &blockingBuildProvider{nextRef: "narvi/built-image:refreshed", release: release}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- builder.RefreshOnce(ctx) }()
+
+	// Wait for BuildImage to actually be entered (genuinely in flight),
+	// then confirm a spawn-style read STILL sees the OLD ready image --
+	// never blocked, never a gap, exactly as §19.2 requires.
+	provider.waitUntilEntered(t, 5*time.Second)
+
+	rowDuringRefresh, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row during in-flight refresh: %v", err)
+	}
+	if rowDuringRefresh.Status != sqlcgen.ImageBuildStatusReady {
+		t.Fatalf("status during in-flight refresh = %q, want %q (a new spawn must never be blocked or degraded)", rowDuringRefresh.Status, sqlcgen.ImageBuildStatusReady)
+	}
+	if rowDuringRefresh.ImageRef == nil || *rowDuringRefresh.ImageRef != "narvi/built-image:old-ref" {
+		t.Fatalf("image_ref during in-flight refresh = %v, want the OLD ref %q still servable", rowDuringRefresh.ImageRef, "narvi/built-image:old-ref")
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	rowAfter, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after refresh completed: %v", err)
+	}
+	if rowAfter.ImageRef == nil || *rowAfter.ImageRef != "narvi/built-image:refreshed" {
+		t.Errorf("image_ref after refresh completed = %v, want the NEW ref %q", rowAfter.ImageRef, "narvi/built-image:refreshed")
+	}
+}
+
+// blockingBuildProvider is a test-only ports.SandboxProvider whose
+// BuildImage signals entered (closed once) the INSTANT it is called, then
+// blocks until release is closed -- lets a test observe genuinely
+// in-flight behavior (as opposed to fakeBuildProvider's own
+// immediately-returning shape).
+type blockingBuildProvider struct {
+	mu      sync.Mutex
+	entered chan struct{}
+	once    sync.Once
+
+	nextRef ports.BuildRef
+	release <-chan struct{}
+}
+
+var _ ports.SandboxProvider = (*blockingBuildProvider)(nil)
+
+func (f *blockingBuildProvider) Capabilities() ports.Capabilities {
+	return ports.Capabilities{ImageBuilds: true}
+}
+func (f *blockingBuildProvider) CreateSandbox(context.Context, ports.CreateSpec) (ports.SandboxRef, error) {
+	return ports.SandboxRef{}, errors.New("blockingBuildProvider: CreateSandbox not implemented")
+}
+func (f *blockingBuildProvider) StopSandbox(context.Context, ports.SandboxRef) error {
+	return errors.New("blockingBuildProvider: StopSandbox not implemented")
+}
+func (f *blockingBuildProvider) ResumeSandbox(context.Context, ports.SandboxRef) error {
+	return errors.New("blockingBuildProvider: ResumeSandbox not implemented")
+}
+func (f *blockingBuildProvider) TakeSnapshot(context.Context, ports.SandboxRef) (ports.SnapshotID, error) {
+	return "", errors.New("blockingBuildProvider: TakeSnapshot not implemented")
+}
+func (f *blockingBuildProvider) RestoreFromSnapshot(context.Context, ports.SnapshotID, ports.CreateSpec) (ports.SandboxRef, error) {
+	return ports.SandboxRef{}, errors.New("blockingBuildProvider: RestoreFromSnapshot not implemented")
+}
+
+func (f *blockingBuildProvider) BuildImage(ctx context.Context, _ ports.ImageSpec) (ports.BuildRef, error) {
+	f.mu.Lock()
+	if f.entered == nil {
+		f.entered = make(chan struct{})
+	}
+	entered := f.entered
+	f.mu.Unlock()
+	f.once.Do(func() { close(entered) })
+
+	select {
+	case <-f.release:
+		return f.nextRef, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (f *blockingBuildProvider) DeleteImage(context.Context, ports.ImageRef) error {
+	return errors.New("blockingBuildProvider: DeleteImage not implemented")
+}
+func (f *blockingBuildProvider) List(context.Context) ([]ports.SandboxRef, error) { return nil, nil }
+
+func (f *blockingBuildProvider) waitUntilEntered(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	f.mu.Lock()
+	if f.entered == nil {
+		f.entered = make(chan struct{})
+	}
+	entered := f.entered
+	f.mu.Unlock()
+
+	select {
+	case <-entered:
+	case <-time.After(timeout):
+		t.Fatal("BuildImage was never entered within the timeout")
+	}
+}
+
 // TestPumpOnce_FailedBuild_BacksOffAndNotRetriedBeforeNextRetryAt proves
 // scenario (c): a failed build attempt is NOT retried before its own
 // next_retry_at, confirmed by DIRECT Postgres inspection (not log-reading)
@@ -284,7 +734,7 @@ func TestPumpOnce_FailedBuild_BacksOffAndNotRetriedBeforeNextRetryAt(t *testing.
 	timeouts.ImageBuildBackoffBase = 200 * time.Millisecond
 	timeouts.ImageBuildBackoffMax = 500 * time.Millisecond
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts)
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, nil, "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -382,7 +832,7 @@ func TestPumpOnce_FailureStreak_FiresAtThresholdNotBefore(t *testing.T) {
 	timeouts.ImageBuildBackoffBase = 1 * time.Millisecond
 	timeouts.ImageBuildBackoffMax = 5 * time.Millisecond
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts)
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, nil, "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -435,25 +885,30 @@ func TestPumpOnce_FailureStreak_FiresAtThresholdNotBefore(t *testing.T) {
 	}
 }
 
-// TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly
-// proves this Step's own resolved Step 41/42 boundary decision (attempt's
-// own doc comment, builder.go): a claimed row naming at least one repo
-// CANNOT be built for real in Step 41 (no claim-time SHA resolution
-// mechanism exists yet -- that's Step 42, §19.2/§19.9), and this is
-// handled as a clean, well-defined, tested behavior -- NEVER a crash and
-// NEVER a BuildImage call carrying an empty/zero SHA:
+// TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly proves
+// Step 42's own explicit degrade invariant (§19.2: "Any failure anywhere
+// in this credential-dependent path (missing/invalid platform
+// credential...) is logged and degrades to today's existing retry/backoff
+// behavior -- never a crash, never blocks a spawn"): a claimed row naming
+// at least one repo, with NO platform GitHub credential configured (the
+// Builder built with an empty token, mirroring platform.Config.
+// GitHubImageBuildToken's own documented "optional, empty means not
+// configured" contract), is handled as a clean, well-defined, tested
+// behavior -- NEVER a crash and NEVER a BuildImage call carrying an
+// empty/zero SHA:
 //   - BuildImage is never even called;
 //   - the row is recorded as a failed attempt (attempt_count/next_retry_at
 //     advance via the SAME domain/imagebuild.EvaluateBackoff schedule any
 //     other failure uses), so it keeps cycling through backoff rather than
-//     being stuck in 'building' forever, ready to actually build for real
-//     the moment Step 42 ships claim-time resolution.
-func TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly(t *testing.T) {
+//     being stuck in 'building' forever -- ready to actually build for real
+//     the moment an operator provisions the credential (see the companion
+//     success test immediately below).
+func TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 	store := narvipg.NewImageBuildStore(pool)
 
-	const fingerprint = "fp-repo-bearing-no-sha-yet"
+	const fingerprint = "fp-repo-bearing-no-credential"
 	seedPendingImageBuildWithRepos(ctx, t, store, fingerprint, map[string]string{
 		"repo1": "https://github.com/acme/repo1",
 	})
@@ -466,7 +921,12 @@ func TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly(t *te
 	timeouts.ImageBuildBackoffBase = 200 * time.Millisecond
 	timeouts.ImageBuildBackoffMax = 500 * time.Millisecond
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts)
+	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
+
+	// gitHubImageBuildToken is DELIBERATELY empty here -- the credential
+	// is not configured, mirroring a real deploy that has not yet
+	// provisioned it.
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -476,7 +936,10 @@ func TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly(t *te
 	}
 
 	if got := provider.buildCallCount(); got != 0 {
-		t.Fatalf("BuildImage call count = %d, want 0 (a repo-bearing row has no resolved SHA to build with in Step 41)", got)
+		t.Fatalf("BuildImage call count = %d, want 0 (no platform credential configured -- degrade cleanly)", got)
+	}
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (the missing-credential check must short-circuit before ANY resolution call)", got)
 	}
 
 	row, err := store.Get(ctx, fingerprint)
@@ -500,5 +963,86 @@ func TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly(t *te
 	}
 	if row.BuiltAt.Valid {
 		t.Errorf("built_at = %v, want unset (never built)", row.BuiltAt)
+	}
+}
+
+// TestPumpOnce_RepoBearingRow_CredentialConfigured_ResolvesSHAsAndBuilds
+// proves Step 42's own headline claim-time SHA resolution (§19.1/§19.2/
+// §19.9): with a real platform credential AND SourceControl configured, a
+// claimed row naming a repo now DOES build for real -- ResolveBranchSHA is
+// called once per named repo (with an empty Branch, resolving the repo's
+// own default-branch tip, never a session-specific branch), BuildImage
+// receives a REAL, concrete ports.RepoRef{URL, SHA} (never an empty/zero
+// SHA), and the recorded built_repo_shas carries exactly the resolved
+// SHA -- the shape §19.2's own later freshness pump needs to compare a
+// future tip against.
+func TestPumpOnce_RepoBearingRow_CredentialConfigured_ResolvesSHAsAndBuilds(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-repo-bearing-with-credential"
+	seedPendingImageBuildWithRepos(ctx, t, store, fingerprint, map[string]string{
+		"repo1": "https://github.com/acme/repo1",
+	})
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:claim-time-resolved"}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-resolved-repo1"}}
+
+	timeouts := platform.DefaultTimeouts()
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-platform-github-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if got := sourceControl.shaCallCount(); got != 1 {
+		t.Fatalf("ResolveBranchSHA call count = %d, want 1 (one repo named)", got)
+	}
+	gotSpec := sourceControl.shaCalls[0]
+	if gotSpec.Owner != "acme" || gotSpec.Repo != "repo1" {
+		t.Errorf("ResolveBranchSHA called with Owner=%q Repo=%q, want Owner=%q Repo=%q", gotSpec.Owner, gotSpec.Repo, "acme", "repo1")
+	}
+	if gotSpec.Branch != "" {
+		t.Errorf("ResolveBranchSHA called with Branch=%q, want empty (always the repo's own default branch tip)", gotSpec.Branch)
+	}
+	if gotSpec.Token != "test-platform-github-token" {
+		t.Errorf("ResolveBranchSHA called with Token=%q, want the platform credential %q", gotSpec.Token, "test-platform-github-token")
+	}
+
+	if got := provider.buildCallCount(); got != 1 {
+		t.Fatalf("BuildImage call count = %d, want 1", got)
+	}
+	gotBuildSpec := provider.buildCalls[0]
+	if gotBuildSpec.Repos["repo1"].SHA != "sha-resolved-repo1" {
+		t.Errorf("BuildImage called with Repos[repo1].SHA = %q, want the resolved %q", gotBuildSpec.Repos["repo1"].SHA, "sha-resolved-repo1")
+	}
+	if gotBuildSpec.Repos["repo1"].URL != "https://github.com/acme/repo1" {
+		t.Errorf("BuildImage called with Repos[repo1].URL = %q, want %q", gotBuildSpec.Repos["repo1"].URL, "https://github.com/acme/repo1")
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusReady {
+		t.Fatalf("status = %q, want %q", row.Status, sqlcgen.ImageBuildStatusReady)
+	}
+	if row.ImageRef == nil || *row.ImageRef != "narvi/built-image:claim-time-resolved" {
+		t.Errorf("image_ref = %v, want %q", row.ImageRef, "narvi/built-image:claim-time-resolved")
+	}
+
+	var builtRepoSHAs map[string]string
+	if err := json.Unmarshal(row.BuiltRepoShas, &builtRepoSHAs); err != nil {
+		t.Fatalf("unmarshal built_repo_shas: %v", err)
+	}
+	if builtRepoSHAs["repo1"] != "sha-resolved-repo1" {
+		t.Errorf("built_repo_shas[repo1] = %q, want %q", builtRepoSHAs["repo1"], "sha-resolved-repo1")
+	}
+	if !row.BuiltAt.Valid {
+		t.Error("built_at is not set, want a real timestamp")
 	}
 }

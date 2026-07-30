@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -13,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -45,6 +49,23 @@ type Builder struct {
 	provider ports.SandboxProvider
 	timeouts platform.Timeouts
 
+	// sourceControl and gitHubImageBuildToken back BOTH claim-time SHA
+	// resolution for a brand-new repo-bearing build (attempt, §19.1/§19.9's
+	// own Step 41/42 boundary) AND the freshness pump's own per-repo
+	// current-tip resolution (RefreshOnce, §19.2) -- the SAME platform-level
+	// credential, since neither call site has a session/creator context to
+	// borrow a token from (a shared image has no creator). sourceControl may
+	// be nil (mirrors every other optional-provider precedent in this
+	// codebase, e.g. app/sessionactor's own nil-sourceControl tests) and
+	// gitHubImageBuildToken may be empty (§19.2: deliberately optional,
+	// platform/config.go's own GitHubImageBuildToken doc comment) -- either
+	// missing piece degrades resolveRepoSHAs to a clean, logged error, never
+	// a crash, per §19.2's own "never blocks a spawn" invariant, which this
+	// package's own background loop must honor just as strictly as the
+	// spawn path itself.
+	sourceControl         ports.SourceControl
+	gitHubImageBuildToken string
+
 	failureStreak metric.Int64Counter
 }
 
@@ -53,13 +74,16 @@ type Builder struct {
 // mirrors app/sessionactor/timerpump.go's claimDueTimers, which likewise
 // acquires its own connection/transaction around a WithTx-scoped store),
 // provider (the real ports.SandboxProvider whose BuildImage this builder
-// drives), and timeouts (for ImageBuildPumpInterval/backoff config,
-// consulted by Run/PumpOnce).
+// drives), timeouts (for ImageBuildPumpInterval/ImageRefreshCheckInterval/
+// backoff config, consulted by Run/PumpOnce/RefreshOnce), sourceControl
+// (Step 42's own claim-time/freshness-pump SHA resolution, §19.2 -- may be
+// nil), and gitHubImageBuildToken (the new platform-level credential,
+// platform.Config.GitHubImageBuildToken -- may be empty).
 //
 // The image_build_failure_streak OTel counter is constructed exactly once,
 // here, at construction time -- not per-tick, not per-row -- mirroring
 // app/reconciler.NewReconciler's own orphans_reaped precedent exactly.
-func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider ports.SandboxProvider, timeouts platform.Timeouts) (*Builder, error) {
+func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider ports.SandboxProvider, timeouts platform.Timeouts, sourceControl ports.SourceControl, gitHubImageBuildToken string) (*Builder, error) {
 	meter := otel.Meter(meterName)
 
 	failureStreak, err := meter.Int64Counter(
@@ -72,21 +96,40 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 	}
 
 	return &Builder{
-		store:         store,
-		pool:          pool,
-		provider:      provider,
-		timeouts:      timeouts,
-		failureStreak: failureStreak,
+		store:                 store,
+		pool:                  pool,
+		provider:              provider,
+		timeouts:              timeouts,
+		sourceControl:         sourceControl,
+		gitHubImageBuildToken: gitHubImageBuildToken,
+		failureStreak:         failureStreak,
 	}, nil
 }
 
-// Run runs the process-wide image-build loop until ctx is done -- mirrors
-// app/reconciler.Reconciler.Run/app/sessionactor's own RunTimerPump
-// exactly: a ticker on platform.Timeouts.ImageBuildPumpInterval, calling
-// PumpOnce each tick, logging (never propagating) any per-tick error so
-// one bad tick never kills the whole loop. The caller starts this via its
-// own errgroup.Go exactly once per process.
+// Run runs the process-wide image-build loop until ctx is done: TWO
+// independent ticker loops, fanned out via a zero-value errgroup.Group
+// (never a bare `go` statement, §11; a zero-value Group, NOT
+// errgroup.WithContext, so one loop's own ctx.Err() return can never
+// cancel-race the other -- mirrors internal/sandboxagent/supervisor.
+// Supervisor's own StopAll fan-out precedent exactly for the identical
+// "independent, unrelated failures" reasoning) -- the pre-existing build
+// pump (ticks on ImageBuildPumpInterval, calling PumpOnce, UNCHANGED from
+// before this Step) and this Step's own NEW freshness pump (ticks on
+// ImageRefreshCheckInterval, calling RefreshOnce, §19.2). Each tick's own
+// error is logged, never propagated, so one bad tick never kills either
+// loop. The caller starts this via its own errgroup.Go exactly once per
+// process, exactly as before this Step.
 func (b *Builder) Run(ctx context.Context) error {
+	var g errgroup.Group
+	g.Go(func() error { return b.runBuildPump(ctx) })
+	g.Go(func() error { return b.runRefreshPump(ctx) })
+	return g.Wait()
+}
+
+// runBuildPump is Run's own pre-existing ticker loop, factored out
+// unchanged (a pure refactor, no behavior change) so Run can fan it out
+// alongside runRefreshPump below.
+func (b *Builder) runBuildPump(ctx context.Context) error {
 	ticker := time.NewTicker(b.timeouts.ImageBuildPumpInterval)
 	defer ticker.Stop()
 
@@ -97,6 +140,25 @@ func (b *Builder) Run(ctx context.Context) error {
 		case <-ticker.C:
 			if err := b.PumpOnce(ctx); err != nil {
 				platform.Logger(ctx).Error("imagebuild: tick failed", "error", err)
+			}
+		}
+	}
+}
+
+// runRefreshPump is this Step's own new freshness-pump ticker loop (§19.2),
+// mirroring runBuildPump's own exact shape -- a second, independent
+// ticker on ImageRefreshCheckInterval calling RefreshOnce each tick.
+func (b *Builder) runRefreshPump(ctx context.Context) error {
+	ticker := time.NewTicker(b.timeouts.ImageRefreshCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := b.RefreshOnce(ctx); err != nil {
+				platform.Logger(ctx).Error("imagebuild: refresh tick failed", "error", err)
 			}
 		}
 	}
@@ -173,38 +235,34 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.ImageBuild, error) 
 // are each already atomic as a single UPDATE ... WHERE status='building',
 // so no additional transaction wrapper is needed the way claimBatch's own
 // multi-statement claim sequence requires one). Every failure here
-// (decode error, no-SHA-resolution-yet, BuildImage error, a failed/no-op
+// (decode error, SHA-resolution error, BuildImage error, a failed/no-op
 // outcome-record call) is logged and returns -- it never propagates, so
 // one row's problem can never abort the rest of PumpOnce's own batch.
 //
-// # Step 41/42 boundary (§19.1 vs §19.9) -- documented design decision
+// # Step 42's own claim-time SHA resolution (§19.1/§19.2/§19.9)
 //
 // row.RepoUrls (§19.1's redefined image_builds column) carries the
 // fingerprint's own URL-keyed inputs (repo name -> normalized clone URL),
-// NEVER a resolved SHA -- deliberately: the whole point of the
-// redefinition is that computing a fingerprint (imageresolve.go's
-// resolveAndSetImage, spawn-side) never resolves a SHA at all, for ANY
-// spawn, warm-hit or miss alike. §19.1's own prose says the builder
-// resolves each repo's default-branch tip SHA "at claim time" -- but
-// §19.9's phasing note assigns that exact claim-time SHA resolution, and
-// the new platform-level GitHub credential it needs (a session-creator
-// token cannot be borrowed here: this pump has no session/creator context
-// at all, by construction), to Step 42, not this one. Concretely, that
-// means: this Step (41) has NO mechanism ANYWHERE to turn a repo's URL
-// into a concrete SHA outside of a live spawn's own resolved-image lookup
-// -- there is deliberately no claim-time resolution logic here yet.
+// NEVER a resolved SHA -- the fingerprint itself stays SHA-free by design
+// (imageresolve.go's resolveAndSetImage never resolves one, for ANY
+// spawn). §19.1's own prose says the builder resolves each repo's
+// default-branch tip SHA "at claim time" -- this is that resolution,
+// landing here per §19.9's own Step 41/42 boundary note: it needs a
+// platform-level GitHub credential no session/creator context can supply
+// (a shared image has no creator), which Step 42 is the one that adds
+// (platform.Config.GitHubImageBuildToken, threaded through NewBuilder).
 //
-// A row naming at least one repo therefore cannot be built for real in
-// Step 41 -- there is no way to construct a real ports.RepoRef{URL, SHA}
-// for it (never pass an empty/zero SHA to BuildImage silently). This is
-// handled explicitly and cleanly, the same way a decode failure already
-// is: logged, recorded as a failed attempt (so the row cycles through
-// EvaluateBackoff's own retry schedule rather than being stuck in
-// 'building' forever), and this tick moves on. Once Step 42 lands its own
-// claim-time resolution, this exact branch is where that resolution call
-// belongs. A row naming NO repos (base+runtime only) has nothing to
-// resolve and DOES build for real, even in Step 41 -- there is no reason
-// to block that case on Step 42's own work.
+// A row naming at least one repo resolves EVERY named repo's current
+// default-branch tip SHA (resolveRepoSHAs, below) before ever calling
+// BuildImage -- if ANY repo's resolution fails (missing/invalid
+// credential, a GitHub API failure), the WHOLE attempt is recorded as a
+// failed attempt (never a partial/zero-SHA BuildImage call) and cycles
+// through the SAME EvaluateBackoff retry schedule any other failure uses
+// -- §19.2's own explicit invariant: "Any failure anywhere in this
+// credential-dependent path... is logged and degrades to today's existing
+// retry/backoff behavior -- never a crash, never blocks a spawn." A row
+// naming NO repos (base+runtime only) has nothing to resolve and builds
+// immediately, exactly as before this Step.
 func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 	logger := platform.Logger(ctx).With("fingerprint", row.Fingerprint, "attempt_count", row.AttemptCount)
 
@@ -215,21 +273,24 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 		return
 	}
 
+	repos := map[string]ports.RepoRef{}
+	builtRepoSHAs := map[string]string{}
 	if len(repoURLs) > 0 {
-		// See this function's own "Step 41/42 boundary" doc comment above:
-		// no claim-time SHA resolution mechanism exists yet (Step 42,
-		// §19.2/§19.9) -- a repo-bearing row cannot yet become a real,
-		// reproducible BuildImage call.
-		logger.Warn("imagebuild: no claim-time SHA resolution available yet (Step 42, §19.2/§19.9); cannot build a repo-bearing fingerprint; recording as a failed attempt",
-			"repo_count", len(repoURLs))
-		b.recordFailure(ctx, logger, row)
-		return
+		resolved, err := b.resolveRepoSHAs(ctx, repoURLs)
+		if err != nil {
+			logger.Warn("imagebuild: claim-time SHA resolution failed; recording as a failed attempt", "error", err, "repo_count", len(repoURLs))
+			b.recordFailure(ctx, logger, row)
+			return
+		}
+		for name, repoURL := range repoURLs {
+			repos[name] = ports.RepoRef{URL: repoURL, SHA: resolved[name]}
+		}
+		builtRepoSHAs = resolved
 	}
 
-	builtRepoSHAs := map[string]string{}
 	ref, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
 		Base:           row.Base,
-		Repos:          map[string]ports.RepoRef{},
+		Repos:          repos,
 		RuntimeVersion: row.RuntimeVersion,
 	})
 	if buildErr != nil {
@@ -294,5 +355,246 @@ func (b *Builder) recordFailure(ctx context.Context, logger *slog.Logger, row sq
 			return
 		}
 		platform.Logger(ctx).Error("imagebuild: record failure failed", "error", err, "fingerprint", row.Fingerprint)
+	}
+}
+
+// errGitHubImageBuildTokenNotConfigured and errSourceControlNotConfigured
+// are resolveRepoSHAs' own typed degrade-cleanly reasons (§19.2: "missing/
+// invalid platform credential... is logged and degrades to today's
+// existing retry/backoff behavior") -- named sentinels rather than a bare
+// fmt.Errorf string so a caller/log line names EXACTLY which piece is
+// missing, mirroring this codebase's own "named error, never a bare
+// generic one" convention (internal/platform/config.go's own
+// InvalidHMACSecretError/MissingRequiredEnvError family).
+var (
+	errGitHubImageBuildTokenNotConfigured = errors.New("imagebuild: NARVI_GITHUB_IMAGE_BUILD_TOKEN is not configured")
+	errSourceControlNotConfigured         = errors.New("imagebuild: no SourceControl configured")
+)
+
+// resolveRepoSHAs resolves EVERY repo named in repoURLs' own current
+// default-branch tip SHA via b.sourceControl.ResolveBranchSHA, using
+// b.gitHubImageBuildToken -- the ONE platform-level credential shared by
+// claim-time build resolution (attempt) and the freshness pump's own
+// staleness check (attemptRefresh), since neither has a session/creator
+// context to borrow a token from (§19.2: "a shared image has no
+// creator"). Returns an error (never a partial map) the instant EITHER
+// prerequisite is missing (no credential configured, no SourceControl
+// wired) or ANY single repo's resolution fails -- callers therefore never
+// receive a map with some repos resolved and others silently zero-valued.
+//
+// Iterates repo names in SORTED order purely for deterministic,
+// reproducible logging/test behavior -- resolution outcome does not
+// depend on order (each repo's ResolveBranchSHA call is independent), so
+// this is not a correctness requirement, only a readability one.
+func (b *Builder) resolveRepoSHAs(ctx context.Context, repoURLs map[string]string) (map[string]string, error) {
+	if b.gitHubImageBuildToken == "" {
+		return nil, errGitHubImageBuildTokenNotConfigured
+	}
+	if b.sourceControl == nil {
+		return nil, errSourceControlNotConfigured
+	}
+
+	names := make([]string, 0, len(repoURLs))
+	for name := range repoURLs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	resolved := make(map[string]string, len(repoURLs))
+	for _, name := range names {
+		repoURL := repoURLs[name]
+		owner, repoName, err := parseOwnerRepo(repoURL)
+		if err != nil {
+			return nil, fmt.Errorf("parse owner/repo from %q: %w", repoURL, err)
+		}
+
+		shaCtx, cancel := context.WithTimeout(ctx, b.timeouts.RepoSHAResolutionTimeout)
+		sha, _, err := b.sourceControl.ResolveBranchSHA(shaCtx, ports.ResolveBranchSHASpec{
+			Owner: owner,
+			Repo:  repoName,
+			// Branch empty: §19.1/§19.2's own tip-tracking design always
+			// resolves the repo's own DEFAULT branch tip, never a
+			// session-specific branch -- a shared image has no single
+			// session's branch to track in the first place.
+			Branch: "",
+			Token:  b.gitHubImageBuildToken,
+		})
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("resolve branch sha for repo %q: %w", name, err)
+		}
+		resolved[name] = sha
+	}
+	return resolved, nil
+}
+
+// parseOwnerRepo extracts (owner, repo) from a repo clone URL's own path
+// -- mirrors internal/app/sessionactor/pushpr.go's own identical helper
+// exactly (a small, deliberately duplicated parse rather than an
+// exported, shared one: this package and sessionactor have no other
+// coupling, and contractdrift.go's own doc comment already establishes
+// the precedent of re-deriving this kind of thing independently rather
+// than threading a shared intermediate value across otherwise-unrelated
+// features).
+func parseOwnerRepo(rawURL string) (owner, repo string, err error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", "", fmt.Errorf("parse repo clone url %q: %w", rawURL, err)
+	}
+
+	trimmed := strings.Trim(parsed.Path, "/")
+	trimmed = strings.TrimSuffix(trimmed, ".git")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("repo clone url %q does not have an /owner/repo path", rawURL)
+	}
+	return parts[0], parts[1], nil
+}
+
+// RefreshOnce runs exactly one freshness-pump tick (§19.2): for every
+// SHARED (repo-bearing) 'ready' image_builds row, resolves each repo's
+// CURRENT default-branch tip SHA and compares it against that row's own
+// built_repo_shas; any row whose current tips diverge enqueues an
+// in-place refresh build. Exported (rather than only reachable through
+// Run's own runRefreshPump loop) so tests can drive exactly one tick
+// deterministically, mirroring PumpOnce's own precedent exactly.
+//
+// One row's own refresh failure (a resolution error, a lost claim race, a
+// BuildImage failure) is isolated -- logged, and does NOT abort the rest
+// of this tick's own batch, exactly like PumpOnce's own per-row isolation.
+func (b *Builder) RefreshOnce(ctx context.Context) error {
+	rows, err := b.store.ListReady(ctx)
+	if err != nil {
+		return fmt.Errorf("imagebuild: list ready image builds: %w", err)
+	}
+
+	for _, row := range rows {
+		b.attemptRefresh(ctx, row)
+	}
+	return nil
+}
+
+// attemptRefresh implements RefreshOnce's own per-row body (§19.2).
+//
+// # Never degrades availability
+//
+// The row's own `status` column is NEVER touched by this function at
+// any point -- it stays 'ready', continuously servable via the OLD
+// image_ref, for the entire duration a refresh build runs. Single-flight
+// protection is ClaimForRefresh's own INDEPENDENT refresh_in_progress CAS
+// (migrations/000040_image_builds_refresh_pump.up.sql), never the
+// status='building' transition attempt/claimBatch use for a brand-new
+// pending/failed row -- see that migration's own doc comment for exactly
+// why reusing status here would silently reopen the availability gap this
+// whole design exists to close. On success, RecordRefreshSuccess performs
+// a SINGLE atomic UPDATE swapping image_ref + built_repo_shas + built_at
+// (never a delete-then-insert) -- a session's own concurrent GetImageBuild
+// spawn-time lookup therefore always observes either the complete OLD
+// triple or the complete NEW one, never a mix, and never a moment with no
+// usable ready image_ref at all.
+func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
+	logger := platform.Logger(ctx).With("fingerprint", row.Fingerprint)
+
+	var repoURLs map[string]string
+	if err := json.Unmarshal(row.RepoUrls, &repoURLs); err != nil {
+		logger.Error("imagebuild: refresh: decode repo_urls failed; skipping this tick", "error", err)
+		return
+	}
+	if len(repoURLs) == 0 {
+		// A base-only row is never stale in the sense this design cares
+		// about -- ListReadyImageBuilds already excludes this case at the
+		// SQL level, but this guard stays as defense in depth against a
+		// future caller of attemptRefresh that doesn't go through
+		// RefreshOnce's own query.
+		return
+	}
+
+	current, err := b.resolveRepoSHAs(ctx, repoURLs)
+	if err != nil {
+		// §19.2's own explicit invariant: a credential-dependent failure
+		// here degrades to "try again next tick", never a crash, never any
+		// effect on this fingerprint's own already-ready row.
+		logger.Warn("imagebuild: refresh: resolve current tip SHAs failed; will retry next tick", "error", err)
+		return
+	}
+
+	var built map[string]string
+	if len(row.BuiltRepoShas) > 0 {
+		if err := json.Unmarshal(row.BuiltRepoShas, &built); err != nil {
+			logger.Error("imagebuild: refresh: decode built_repo_shas failed; treating as stale (safe default)", "error", err)
+			built = nil
+		}
+	}
+
+	if !domainimagebuild.NeedsRefresh(built, current) {
+		return // still fresh -- nothing to do this tick.
+	}
+
+	claimed, err := b.store.ClaimForRefresh(ctx, row.Fingerprint)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// A normal, expected outcome: a concurrent tick (this pod's or
+			// another pod's own Builder) already claimed this fingerprint's
+			// refresh, or the row is no longer 'ready' at all (e.g. it was
+			// never built in the first place by the time this tick got
+			// here) -- never logged as an error.
+			return
+		}
+		logger.Error("imagebuild: refresh: claim for refresh failed", "error", err)
+		return
+	}
+
+	repos := make(map[string]ports.RepoRef, len(repoURLs))
+	for name, repoURL := range repoURLs {
+		repos[name] = ports.RepoRef{URL: repoURL, SHA: current[name]}
+	}
+
+	ref, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
+		Base:           claimed.Base,
+		Repos:          repos,
+		RuntimeVersion: claimed.RuntimeVersion,
+	})
+	if buildErr != nil {
+		logger.Warn("imagebuild: refresh: BuildImage failed; releasing claim, old image_ref stays servable", "error", buildErr)
+		b.releaseRefreshClaim(ctx, logger, row.Fingerprint)
+		return
+	}
+
+	builtRepoSHAsJSON, err := json.Marshal(current)
+	if err != nil {
+		// Cannot happen for a plain map[string]string (mirrors attempt's
+		// own identical reasoning) -- logged, claim released, never
+		// propagated.
+		logger.Error("imagebuild: refresh: marshal built_repo_shas failed", "error", err)
+		b.releaseRefreshClaim(ctx, logger, row.Fingerprint)
+		return
+	}
+
+	imageRef := string(ref)
+	if _, err := b.store.RecordRefreshSuccess(ctx, sqlcgen.RecordImageRefreshSuccessParams{
+		Fingerprint:   row.Fingerprint,
+		ImageRef:      &imageRef,
+		BuiltRepoShas: builtRepoSHAsJSON,
+		BuiltAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The row is no longer 'ready' at all (a should-be-rare,
+			// benign race) -- logged, not fatal to this tick.
+			logger.Warn("imagebuild: refresh: record success no-op: row no longer ready")
+			return
+		}
+		logger.Error("imagebuild: refresh: record success failed", "error", err)
+	}
+}
+
+// releaseRefreshClaim releases attemptRefresh's own refresh_in_progress
+// claim without touching anything else -- shared by every one of
+// attemptRefresh's own post-claim failure paths (BuildImage failure, a
+// marshal failure). The row is left exactly as it was: still 'ready',
+// still serving its own old image_ref, picked up again at the next
+// ImageRefreshCheckInterval tick.
+func (b *Builder) releaseRefreshClaim(ctx context.Context, logger *slog.Logger, fingerprint string) {
+	if _, err := b.store.RecordRefreshFailure(ctx, fingerprint); err != nil {
+		logger.Error("imagebuild: refresh: release refresh claim failed", "error", err, "fingerprint", fingerprint)
 	}
 }

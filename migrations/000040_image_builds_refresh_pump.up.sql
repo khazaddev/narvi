@@ -1,0 +1,30 @@
+-- Step 42 ("warm boot: refresh pump + hook policy", §19.2): the freshness
+-- pump's own in-place refresh single-flight marker.
+--
+-- §19.2 requires the refreshed row to STAY 'ready', serving the OLD
+-- image_ref, for the entire duration a refresh build runs -- "Refresh
+-- never degrades availability: the row stays ready, serving the old
+-- image_ref, while the new build runs; on success the builder atomically
+-- swaps image_ref + built_repo_shas + built_at." The existing `status`
+-- column cannot be reused as the refresh's own in-flight marker the way
+-- it is for a brand-new pending/failed row's claim ('building'): flipping
+-- status to 'building' during a refresh would make dispatch.go's own
+-- spawn-time GetImageBuild lookup (queries/image_builds.sql) stop seeing
+-- status='ready' for the whole refresh window, silently reintroducing the
+-- exact availability gap this design exists to close (a NEW spawn
+-- targeting that fingerprint would fall back to the base image instead of
+-- the still-perfectly-good old ready image_ref -- see the new
+-- refresh-in-flight-spawn resilience scenario this Step also adds).
+--
+-- refresh_in_progress is therefore a SEPARATE, independent single-flight
+-- marker: the freshness pump's own claim CAS is `UPDATE ... SET
+-- refresh_in_progress = true WHERE fingerprint = $1 AND status = 'ready'
+-- AND refresh_in_progress = false`, never touching status/attempt_count/
+-- next_retry_at at all (queries/image_builds.sql's own
+-- ClaimImageBuildForRefresh) -- those columns keep meaning exactly what
+-- they meant before this Step for the pending/building/failed lifecycle;
+-- this is a genuinely new, orthogonal mechanism, exactly as §19.2 itself
+-- frames it ("this requires relaxing the current 'no rebuild-of-an-
+-- already-ready-fingerprint, ever' invariant... deliberately, and ONLY
+-- for this in-place refresh path").
+ALTER TABLE image_builds ADD COLUMN refresh_in_progress BOOLEAN NOT NULL DEFAULT false;

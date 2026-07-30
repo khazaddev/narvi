@@ -90,3 +90,72 @@ UPDATE image_builds
 SET status = 'failed', next_retry_at = $2, updated_at = now()
 WHERE fingerprint = $1 AND status = 'building'
 RETURNING *;
+
+-- name: ListReadyImageBuilds :many
+-- Step 42's own freshness-pump poll query (§19.2): every SHARED (repo-
+-- bearing) 'ready' row -- a base-only row (repo_urls = '{}') is never
+-- stale in the sense this design cares about (there is no repo tip to
+-- drift from), so it is excluded here at the SQL level rather than making
+-- every caller re-check len(repoUrls) == 0 itself. Plain SELECT, no
+-- locking: the freshness pump's own single-flight protection is
+-- ClaimImageBuildForRefresh's own per-row CAS below, not a batch-level
+-- FOR UPDATE SKIP LOCKED claim -- resolving each repo's current
+-- default-branch tip (a real GitHub API call per repo) happens OUTSIDE
+-- any transaction, so holding a batch-level lock across that network work
+-- would be exactly the "a real network call must never hold a Postgres
+-- transaction open" mistake this codebase's own established discipline
+-- (app/sessionactor/dispatch.go, app/imagebuild.Builder.claimBatch) exists
+-- to avoid.
+SELECT * FROM image_builds
+WHERE status = 'ready' AND repo_urls != '{}'::jsonb;
+
+-- name: ClaimImageBuildForRefresh :one
+-- The freshness pump's own single-flight claim (§19.2): a CAS entirely
+-- independent of status/attempt_count/next_retry_at -- it flips
+-- refresh_in_progress to true ONLY when the row is still 'ready' AND not
+-- already being refreshed by a concurrent tick (this pod's or another
+-- pod's own Builder). status stays 'ready' throughout -- see
+-- migrations/000040_image_builds_refresh_pump.up.sql's own doc comment
+-- for why this must never touch status the way ClaimImageBuild does for
+-- a brand-new pending/failed row: a NEW spawn's own GetImageBuild lookup
+-- must keep seeing status='ready' (and the OLD image_ref) for the entire
+-- window a refresh build runs. :one on zero matched rows surfaces
+-- pgx.ErrNoRows -- a normal, expected "someone else already claimed this
+-- one" outcome, not an error condition.
+UPDATE image_builds
+SET refresh_in_progress = true, updated_at = now()
+WHERE fingerprint = $1 AND status = 'ready' AND refresh_in_progress = false
+RETURNING *;
+
+-- name: RecordImageRefreshSuccess :one
+-- The freshness pump's own success half (§19.2): a SINGLE UPDATE
+-- atomically swaps image_ref + built_repo_shas + built_at (never a
+-- delete-then-insert) and releases the refresh_in_progress claim --
+-- status stays 'ready' the whole time, so a session mid-spawn never sees
+-- a gap where this fingerprint has no usable ready image_ref: it reads
+-- either the OLD ref (before this commits) or the NEW one (after), never
+-- neither. Guarded by "AND status = 'ready'" (a refresh can never observe
+-- anything else, by construction of ClaimImageBuildForRefresh above, but
+-- guarded defensively here too, matching RecordImageBuildSuccess's own
+-- guard-even-though-the-caller-already-checked convention) -- next_retry_at
+-- is deliberately left untouched (unlike RecordImageBuildSuccess, which
+-- clears it): a refresh never affects the ordinary pending/failed/backoff
+-- lifecycle those columns track.
+UPDATE image_builds
+SET image_ref = $2, built_repo_shas = $3, built_at = $4, refresh_in_progress = false, updated_at = now()
+WHERE fingerprint = $1 AND status = 'ready'
+RETURNING *;
+
+-- name: RecordImageRefreshFailure :one
+-- The freshness pump's own failure half (§19.2): simply releases the
+-- refresh_in_progress claim, touching NOTHING else -- a failed refresh
+-- attempt leaves the row exactly as it was (still 'ready', still serving
+-- its own old, perfectly-good image_ref/built_repo_shas/built_at), picked
+-- up again at the next ImageRefreshCheckInterval tick. This is the
+-- refresh path's own natural retry cadence -- no separate backoff
+-- schedule is needed the way the pending/failed lifecycle's own
+-- next_retry_at provides one.
+UPDATE image_builds
+SET refresh_in_progress = false, updated_at = now()
+WHERE fingerprint = $1
+RETURNING *;

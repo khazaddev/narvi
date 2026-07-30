@@ -49,14 +49,15 @@
 // deferred items explicitly).
 //
 // Deliberately, permanently out of scope for this package (do not revisit
-// without a new Step): it never calls DeleteImage, and it never garbage-
-// collects a 'ready' row whose fingerprint is no longer referenced by any
-// live session -- a fingerprint names an exact (base, repo SHAs, runtime
-// version) triple, so a 'ready' row simply stops being looked up once
-// nothing spawns against that exact combination again; no rebuild-of-an-
-// already-ready-fingerprint mechanism exists. Named explicitly as a
-// deferred gap (mirroring Step 25's own "orphan cloud objects, not DB
-// rows" scoping precedent), not silently half-solved.
+// without a new Step): it never calls DeleteImage. Step 42's own in-place
+// refresh (below) DOES now relax part of the earlier "no rebuild-of-an-
+// already-ready-fingerprint, ever" invariant -- deliberately, and ONLY for
+// that in-place refresh path -- but image GC itself remains unbuilt: a
+// superseded image_ref (the OLD ref, overwritten in place by a successful
+// refresh) is never deleted from the provider, and §19.2 itself names this
+// as "newly urgent" (a refresh now produces a superseded ref roughly every
+// ImageRefreshCheckInterval-to-build-duration window per Environment) but
+// still explicitly out of THIS Step's own scope.
 //
 // Also out of scope, named explicitly: a process crash between claiming a
 // row (status='building') and recording its outcome leaves that
@@ -66,5 +67,41 @@
 // could add a staleness sweep (a 'building' row whose own last_attempt_at
 // is older than some bound gets reset to 'failed' with a fresh backoff),
 // mirroring Step 24's own two-phase terminalization precedent -- not built
-// here.
+// here. The analogous crash window on the REFRESH path (between
+// ClaimForRefresh and RecordRefreshSuccess/RecordRefreshFailure) is
+// self-healing by construction instead: refresh_in_progress has no
+// separate timeout/sweep of its own, but a stuck-true row simply never
+// gets refreshed again until an operator clears it -- named honestly
+// as a residual gap, not silently solved, since building one is not this
+// Step's own scope either.
+//
+// # Step 42 addition: the freshness pump (§19.2)
+//
+// Builder.Run now fans out a SECOND, independent ticker loop
+// (runRefreshPump, on platform.Timeouts.ImageRefreshCheckInterval)
+// alongside the pre-existing build pump above, calling RefreshOnce each
+// tick: for every SHARED (repo-bearing) 'ready' row, resolve each named
+// repo's CURRENT default-branch tip SHA (via the SAME claim-time SHA
+// resolution machinery attempt itself now uses, resolveRepoSHAs -- a new
+// platform-level GitHub credential, platform.Config.GitHubImageBuildToken,
+// shared by both since neither has a session/creator context to borrow a
+// token from) and compare it against that row's own built_repo_shas
+// (domain/imagebuild.NeedsRefresh). Any row whose current tips diverge
+// gets a real in-place refresh build.
+//
+// Refresh NEVER degrades availability: the row's own `status` column
+// never leaves 'ready' for the whole duration a refresh build runs --
+// single-flight protection is an entirely SEPARATE, independent
+// refresh_in_progress column/CAS (migrations/
+// 000040_image_builds_refresh_pump.up.sql), never the status='building'
+// transition the pending/failed lifecycle uses. On success, a SINGLE
+// atomic UPDATE swaps image_ref + built_repo_shas + built_at (never a
+// delete-then-insert) -- a spawn's own concurrent GetImageBuild lookup
+// therefore always sees either the complete OLD triple or the complete
+// NEW one, never a gap with no usable ready image_ref at all. Any failure
+// anywhere in this credential-dependent path (missing/invalid platform
+// credential, a GitHub API failure resolving a tip SHA, a lost claim race,
+// a BuildImage failure) is logged and simply retried at the next
+// ImageRefreshCheckInterval tick -- never a crash, never any effect on
+// the still-perfectly-good existing ready row.
 package imagebuild

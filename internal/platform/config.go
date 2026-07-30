@@ -216,6 +216,51 @@ const (
 // per-commenter OAuth token either).
 const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 
+// gitHubImageBuildTokenEnvVarName configures Step 42's ("warm boot:
+// refresh pump + hook policy", §19.2) own platform-level GitHub
+// credential, read from NARVI_GITHUB_IMAGE_BUILD_TOKEN. §19.2's own
+// words: "the freshness pump needs GitHub credentials belonging to no
+// session creator... a shared image has no creator... the recommendation
+// is a platform-level credential (GitHub App installation token) shared
+// by the freshness pump and the build service."
+//
+// DELIBERATELY OPTIONAL -- unlike every other GitHub-flavored secret this
+// file reads (GitHubClientID/Secret, GitHubWebhookSecret, GitHubBotToken,
+// all required, never defaulted): this credential's own consumers (the
+// freshness pump's per-repo tip-SHA resolution, app/imagebuild.Builder's
+// claim-time SHA resolution for a repo-bearing row) are explicitly
+// designed to degrade cleanly on its absence rather than treat a missing
+// value as a boot-time configuration error. §19.2's own words: "Any
+// failure anywhere in this credential-dependent path (missing/invalid
+// platform credential, a GitHub API failure resolving a tip SHA) is
+// logged and degrades to today's existing retry/backoff behavior --
+// never a crash, never blocks a spawn." A deploy that has not yet
+// provisioned this credential simply never refreshes/builds a
+// repo-bearing shared image -- every spawn still falls back to the base
+// image exactly as it always has (§10 Phase 2's own "always fall back to
+// base image on any miss" invariant, unaffected).
+//
+// How this differs from GitHubBotToken (see that field's own doc comment
+// for its full reasoning): GitHubBotToken is a REQUIRED, already-used,
+// operator-provisioned-once credential backing a real GitHub identity
+// (posting PR comments as a bot, resolving a webhook mention's true PR)
+// -- its own doc comment describes it as "a real GitHub personal access
+// token or a GitHub App installation token, whichever the deploying
+// operator provisions," never auto-refreshed, with no App-ID/private-key/
+// installation-token-refresh plumbing anywhere in this codebase.
+// GitHubImageBuildToken is a DIFFERENT, NEW, distinct credential for a
+// completely different purpose (read-only tip-SHA resolution for a
+// session-creator-independent background pump, not comment-posting or
+// PR-lookup identity) -- reusing GitHubBotToken here would conflate two
+// unrelated rotation/scoping boundaries the whole point of "separate
+// secrets per direction" (§5.2) argues against, and would make this
+// pump's own failure mode (a missing/invalid credential) impossible to
+// diagnose independently of GitHubBotToken's own, unrelated consumers.
+// Plain string, same shape as every other token this file reads (a real
+// GitHub personal access token or a GitHub App installation token,
+// whichever the deploying operator provisions) -- never logged anywhere.
+const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
+
 // tokenEncryptionKeyEnvVarName is the env var Load reads for the AES-256-GCM
 // key protecting provider tokens at rest (§13.1: "Provider tokens encrypted
 // at rest (AES-GCM), per-user"). Required in every stage; the raw value
@@ -533,6 +578,14 @@ type Config struct {
 	// githubingress.Config.BotToken). Never logged.
 	GitHubBotToken string
 
+	// GitHubImageBuildToken is Step 42's ("warm boot: refresh pump + hook
+	// policy", §19.2) own platform-level GitHub credential, read from
+	// NARVI_GITHUB_IMAGE_BUILD_TOKEN. Empty string means "not configured" --
+	// see gitHubImageBuildTokenEnvVarName's own doc comment for why this,
+	// uniquely among this struct's GitHub-flavored fields, is deliberately
+	// OPTIONAL and how it differs from GitHubBotToken. Never logged.
+	GitHubImageBuildToken string
+
 	// PublicBaseURL is this control plane's own externally-reachable base
 	// URL (e.g. "http://localhost:8080" in development, a real https://
 	// URL in production), read from NARVI_PUBLIC_BASE_URL. Required — used
@@ -741,6 +794,12 @@ func Load() (*Config, error) {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubBotTokenEnvVarName})
 	}
 
+	// gitHubImageBuildToken is DELIBERATELY OPTIONAL -- see its own env-var
+	// doc comment above. No MissingRequiredEnvError is ever appended for
+	// it; an empty value here is a valid, expected, degraded-gracefully
+	// configuration, not a boot-time failure.
+	gitHubImageBuildToken := os.Getenv(gitHubImageBuildTokenEnvVarName)
+
 	var tokenEncryptionKey []byte
 	rawTokenEncryptionKey := os.Getenv(tokenEncryptionKeyEnvVarName)
 	if rawTokenEncryptionKey == "" {
@@ -876,6 +935,7 @@ func Load() (*Config, error) {
 		GitHubWebhookSecret:    gitHubWebhookSecret,
 		GitHubBotHandle:        gitHubBotHandle,
 		GitHubBotToken:         gitHubBotToken,
+		GitHubImageBuildToken:  gitHubImageBuildToken,
 		PublicBaseURL:          publicBaseURL,
 		TokenEncryptionKey:     tokenEncryptionKey,
 		AllowedEmailDomains:    allowedEmailDomains,

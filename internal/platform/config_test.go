@@ -882,3 +882,38 @@ func TestLoadIntentClassifierConfig(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadGitHubImageBuildToken covers Step 42's ("warm boot: refresh pump
+// + hook policy", §19.2) own platform-level GitHub credential --
+// DELIBERATELY OPTIONAL, unlike every other GitHub-flavored secret this
+// file reads: Load must succeed with an empty GitHubImageBuildToken when
+// the env var is unset (the freshness pump/claim-time SHA resolution
+// degrade gracefully on its own absence, §19.2), and must carry the real
+// value through when it is set.
+func TestLoadGitHubImageBuildToken(t *testing.T) {
+	t.Run("unset succeeds with an empty value", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_IMAGE_BUILD_TOKEN", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (this credential is optional)", err)
+		}
+		if cfg.GitHubImageBuildToken != "" {
+			t.Errorf("Load().GitHubImageBuildToken = %q, want empty when unset", cfg.GitHubImageBuildToken)
+		}
+	})
+
+	t.Run("set carries the real value through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_IMAGE_BUILD_TOKEN", "test-github-image-build-token")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.GitHubImageBuildToken != "test-github-image-build-token" {
+			t.Errorf("Load().GitHubImageBuildToken = %q, want %q", cfg.GitHubImageBuildToken, "test-github-image-build-token")
+		}
+	})
+}
