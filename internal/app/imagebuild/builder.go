@@ -535,10 +535,11 @@ func (b *Builder) RefreshOnce(ctx context.Context) error {
 // # Every inspected row advances its own ordering key (fixing a starvation
 // # finding on the batch-cap fix)
 //
-// This function has TWO early-return paths that decide "nothing to
+// This function has several early-return paths that decide "nothing to
 // rebuild this tick" WITHOUT ever reaching ClaimForRefresh: a
-// resolveRepoSHAs error (§19.2's own "will retry next tick" degrade), and
-// NeedsRefresh reporting still-fresh. Neither path used to touch this
+// resolveRepoSHAs error (§19.2's own "will retry next tick" degrade),
+// NeedsRefresh reporting still-fresh, a repo_urls decode failure, and the
+// base-only defense-in-depth guard below. None of these used to touch this
 // row's own updated_at at all -- so a row genuinely NOT stale (a repo
 // that simply hasn't pushed lately) or one whose SHA resolution
 // PERSISTENTLY fails (a renamed/deleted repo, a token missing org access)
@@ -547,18 +548,31 @@ func (b *Builder) RefreshOnce(ctx context.Context) error {
 // ListReadyImageBuilds call (ORDER BY updated_at ASC) -- starving any row
 // that went stale LATER (a newer updated_at always sorts behind that
 // static front cohort, so it would never even be RETURNED, let alone
-// refreshed). Both paths below now call touchChecked immediately before
+// refreshed). Every path below now calls touchChecked immediately before
 // returning, which bumps ONLY updated_at (TouchImageBuildChecked -- no
 // other column, never a state transition) -- exactly as if this row had
 // reached a real claim. That is what makes ListReadyImageBuilds' own
-// ORDER BY updated_at a genuine, total round-robin over the WHOLE 'ready'
-// population, not merely the subset that happens to need a rebuild.
+// ORDER BY updated_at a genuine round-robin over the WHOLE 'ready'
+// population reachable via RefreshOnce's own query, not merely the subset
+// that happens to need a rebuild -- the decode-failure and base-only
+// branches are additionally believed unreachable in practice today (the
+// only writer of repo_urls, imageresolve.go, never produces either shape),
+// so touching them costs nothing and closes the gap if that ever changes.
 func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 	logger := platform.Logger(ctx).With("fingerprint", row.Fingerprint)
 
 	var repoURLs map[string]string
 	if err := json.Unmarshal(row.RepoUrls, &repoURLs); err != nil {
+		// Same ordering-key reasoning as every other inspected-but-skipped
+		// branch below: row.RepoUrls is only ever written by this
+		// codebase's own json.Marshal (imageresolve.go), so a decode
+		// failure here should be unreachable in practice -- but "should be"
+		// is not "is", and touching the ordering key costs nothing, so this
+		// row still rotates to the back of ListReadyImageBuilds' own next
+		// window rather than risking a permanent front-of-queue occupant if
+		// this ever does fire (future schema drift, manual data repair).
 		logger.Error("imagebuild: refresh: decode repo_urls failed; skipping this tick", "error", err)
+		b.touchChecked(ctx, logger, row.Fingerprint)
 		return
 	}
 	if len(repoURLs) == 0 {
@@ -566,7 +580,10 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild) {
 		// about -- ListReadyImageBuilds already excludes this case at the
 		// SQL level, but this guard stays as defense in depth against a
 		// future caller of attemptRefresh that doesn't go through
-		// RefreshOnce's own query.
+		// RefreshOnce's own query. Touches the ordering key for the same
+		// reason as the decode-error branch above: unreachable via any
+		// path that exists today, but free to guard against regardless.
+		b.touchChecked(ctx, logger, row.Fingerprint)
 		return
 	}
 
