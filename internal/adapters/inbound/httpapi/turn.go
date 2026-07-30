@@ -331,16 +331,37 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // Sequencing: lock the session row (GetActorEpochForUpdate -- the SAME
 // race-closing lock CreateTurn's own top doc comment documents; this is
 // what closes L2 for Linear's own caller, which previously took no lock
-// at all before its own equivalent check), the awaiting-plan gate (this
-// batch's own addition -- see ErrPlanAwaitingApproval's own doc comment;
-// runs BEFORE the policy-gated open-turn check below and regardless of
-// policy, since it is a hard invariant, not a per-caller busy-handling
-// choice), the policy-gated open-turn check (skipped entirely for
-// AlwaysQueue -- see CreateTurnPolicy's own doc comment), insert, the SAME
+// at all before its own equivalent check), the policy-gated open-turn
+// check (skipped entirely for AlwaysQueue -- see CreateTurnPolicy's own
+// doc comment), the awaiting-plan gate (this batch's own addition -- see
+// ErrPlanAwaitingApproval's own doc comment; only reached when the
+// open-turn check above did NOT already return), insert, the SAME
 // turn.create audit_log row every caller now gets (H7 audit fix), commit,
 // then the SAME fire-and-forget GetOrSpawn+EnsureDispatched post-commit
 // sequencing every turn-creation call site in this codebase has always
 // used.
+//
+// Finding 3 of this batch's own follow-up fix reordered these two checks
+// (the awaiting-plan gate used to run FIRST, unconditionally, before the
+// policy-gated open-turn check): internal/app/sessionactor/planrecord.go's
+// own recordPlanIfNeeded only supersedes the OLD awaiting_approval plan
+// row at the END of a revise turn's (plan_mode=true) own processing, not
+// at that turn's own creation time -- so for the ENTIRE duration an
+// in-flight revise turn is open/dispatched/processing, BOTH "an open turn
+// exists" AND "the old plan is still awaiting_approval" are simultaneously
+// true. Running the awaiting-plan gate first used to mean an ordinary
+// message arriving during that exact overlap window got the "plan is
+// awaiting your approval" reply instead of the busy reply -- misleading,
+// since the user's own revision request is already being processed, not
+// idly waiting on a decision. Running the policy-gated open-turn/busy
+// check FIRST fixes this: whenever a turn is already open/in-flight, the
+// busy reply is always the more accurate message regardless of plan
+// state, and the awaiting-plan gate's own job (refusing a NEW, first,
+// unapproved build turn) is moot anyway when nothing new could be
+// dispatched right now regardless. The two checks were always independent
+// early-returns against the SAME already-locked session row, so swapping
+// their order changes nothing else -- only which message wins in this one
+// narrow overlap window.
 //
 // plans is Step 37/38's own follow-up fix (§8.1) addition, nil-safe like
 // this codebase's other optional collaborators (e.g. Deps.IntentClassifier
@@ -378,6 +399,27 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
+	// Policy-gated open-turn/busy check (skipped entirely for AlwaysQueue --
+	// see CreateTurnPolicy's own doc comment). Finding 3 of this batch's own
+	// follow-up fix moved this check ahead of the awaiting-plan gate below
+	// -- see createTurnLocked's own top doc comment for why: whenever a
+	// turn is already open/in-flight, the busy reply this produces is
+	// always the more accurate message, regardless of the session's plan
+	// state.
+	if policy != AlwaysQueue {
+		existingTurns, err := turns.WithTx(tx).ListForSession(ctx, sessionID)
+		if err != nil {
+			logger.Error("httpapi: list turns failed", "error", err)
+			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
+		}
+		if hasOpenTurn(existingTurns) {
+			if policy == DropIfOpen {
+				return sqlcgen.Turn{}, false, nil
+			}
+			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusConflict, Message: "a turn is already pending, dispatched, or processing for this session"}
+		}
+	}
+
 	// Awaiting-plan gate (this batch's own follow-up fix, §8.1): an
 	// ordinary (planMode == false) turn must never dispatch while sessionID
 	// has a plan sitting in StatusAwaitingApproval -- that plan is work a
@@ -393,7 +435,13 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// Slack's "Request changes" modal, Linear/Slack's revise: prefix, or a
 	// web client setting planMode directly) is NEVER gated here -- see
 	// CreateTurnPolicy's own doc comment for why plan_mode turns stay
-	// unconditionally allowed.
+	// unconditionally allowed. Only reached when the open-turn check above
+	// did NOT already return (Finding 3): if a turn is already open/in
+	// flight, that is always the more accurate reply, regardless of
+	// whether sessionID also happens to have a plan awaiting approval right
+	// now (the common overlap case being an in-flight revise turn itself,
+	// which has not yet superseded the very plan row this gate would
+	// otherwise still see as awaiting_approval).
 	if !planMode && plans != nil {
 		summaries, err := plans.WithTx(tx).ListSummariesForSession(ctx, sessionID)
 		if err != nil {
@@ -405,20 +453,6 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 				logger.Info("httpapi: ordinary turn creation blocked by awaiting-approval plan", "session_id", sessionID.String(), "plan_id", s.ID.String())
 				return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusConflict, Message: planAwaitingApprovalMessage, sentinel: ErrPlanAwaitingApproval}
 			}
-		}
-	}
-
-	if policy != AlwaysQueue {
-		existingTurns, err := turns.WithTx(tx).ListForSession(ctx, sessionID)
-		if err != nil {
-			logger.Error("httpapi: list turns failed", "error", err)
-			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
-		}
-		if hasOpenTurn(existingTurns) {
-			if policy == DropIfOpen {
-				return sqlcgen.Turn{}, false, nil
-			}
-			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusConflict, Message: "a turn is already pending, dispatched, or processing for this session"}
 		}
 	}
 

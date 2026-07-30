@@ -584,3 +584,80 @@ func TestCreateTurnCore_NoAwaitingPlan_OrdinaryTurn_Unaffected(t *testing.T) {
 		t.Errorf("created.Prompt = %v, want %q", created.Prompt, "do the thing")
 	}
 }
+
+// TestCreateTurnCore_OpenTurnDuringAwaitingApproval_BusyWins is Finding 3's
+// own regression test (Step 37/38 follow-up fix, gate-ordering audit
+// finding): internal/app/sessionactor/planrecord.go's own
+// recordPlanIfNeeded only supersedes the OLD awaiting_approval plan row at
+// the END of a revise turn's (plan_mode=true) own processing, not at that
+// turn's own creation time -- so for the ENTIRE duration an in-flight
+// revise turn is open (Dispatched here, simulating "already picked up and
+// being worked on"), BOTH "an open turn exists" AND "the old plan is
+// still awaiting_approval" are simultaneously true. BEFORE this fix, the
+// awaiting-plan gate ran FIRST and unconditionally, so an ordinary message
+// arriving during that exact overlap window got the "plan is awaiting
+// your approval" reply instead of the more accurate "still working on the
+// previous message" busy reply -- misleading, since the user's own
+// revision request is already being processed, not idly waiting on a
+// decision. Proves the busy check now wins this overlap window for both
+// RejectIfOpen (REST's own 409) and DropIfOpen (Slack's/Linear's own
+// silent-drop-then-honest-reply convention) alike.
+func TestCreateTurnCore_OpenTurnDuringAwaitingApproval_BusyWins(t *testing.T) {
+	for _, policy := range []CreateTurnPolicy{RejectIfOpen, DropIfOpen} {
+		t.Run(fmt.Sprintf("policy=%d", policy), func(t *testing.T) {
+			ctx := context.Background()
+			rig := newTurnCoreTestRig(t)
+			session := rig.newFixtureSession(t, ctx)
+			rig.seedAwaitingApprovalPlan(t, ctx, session.ID)
+
+			// Seed an in-flight "request changes" turn -- open
+			// (Dispatched), plan_mode=true -- simulating the exact overlap
+			// window this fix closes: the plan row seeded above is STILL
+			// awaiting_approval (recordPlanIfNeeded hasn't superseded it
+			// yet, since THIS turn hasn't completed), while a turn is
+			// simultaneously open/in-flight for this same session.
+			if _, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusDispatched, PlanMode: true}); err != nil {
+				t.Fatalf("seed in-flight revise turn: %v", err)
+			}
+
+			// An ordinary (plan_mode=false) message arrives during that
+			// exact overlap window.
+			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "any updates?", nil, false, pgtype.UUID{}, policy)
+
+			if wasCreated {
+				t.Error("wasCreated = true, want false (an open turn must still block a new one)")
+			}
+
+			switch policy {
+			case RejectIfOpen:
+				if cerr == nil {
+					t.Fatal("cerr = nil, want a 409 CreateTurnError for the busy open-turn case")
+				}
+				if cerr.Status != http.StatusConflict {
+					t.Errorf("cerr.Status = %d, want %d", cerr.Status, http.StatusConflict)
+				}
+				if cerr.Message != "a turn is already pending, dispatched, or processing for this session" {
+					t.Errorf("cerr.Message = %q, want the busy message, not the awaiting-plan one", cerr.Message)
+				}
+				if errors.Is(cerr, ErrPlanAwaitingApproval) {
+					t.Error("errors.Is(cerr, ErrPlanAwaitingApproval) = true, want false -- the busy reply must win this overlap window, not the awaiting-plan reply")
+				}
+			case DropIfOpen:
+				if cerr != nil {
+					t.Fatalf("cerr = %+v, want nil (DropIfOpen silently declines -- it must never surface the awaiting-plan 409 in this overlap window)", cerr)
+				}
+			}
+
+			// The gate must never let a second, ordinary turn slip past it
+			// -- only the seeded producing turn plus the seeded in-flight
+			// revise turn.
+			turnRows, err := rig.turns.ListForSession(ctx, session.ID)
+			if err != nil {
+				t.Fatalf("list turns: %v", err)
+			}
+			if len(turnRows) != 2 {
+				t.Fatalf("len(turns) = %d, want exactly 2 (the seeded producing turn + the seeded in-flight revise turn only)", len(turnRows))
+			}
+		})
+	}
+}
