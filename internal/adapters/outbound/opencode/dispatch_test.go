@@ -20,7 +20,7 @@ import (
 // real connection.
 func newDispatchTestAdapter(t *testing.T) *Adapter {
 	t.Helper()
-	a := New("http://127.0.0.1:1", testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout)
+	a := New("http://127.0.0.1:1", testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
 	t.Cleanup(a.Close)
 	return a
 }
