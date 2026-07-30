@@ -79,3 +79,58 @@ func (s *ImageBuildStore) RecordSuccess(ctx context.Context, arg sqlcgen.RecordI
 func (s *ImageBuildStore) RecordFailure(ctx context.Context, arg sqlcgen.RecordImageBuildFailureParams) (sqlcgen.ImageBuild, error) {
 	return s.q.RecordImageBuildFailure(ctx, arg)
 }
+
+// ListReady returns up to limit SHARED (repo-bearing) 'ready' rows -- Step
+// 42's own freshness-pump poll query (§19.2), bounded by a real LIMIT
+// (mirroring ListDue's own limit parameter shape exactly) so one tick's own
+// strictly-sequential per-row refresh attempts can never stack up an
+// unbounded number of slow, network-bound BuildImage calls. A base-only
+// row is never stale in the sense this design cares about, so it is
+// excluded at the SQL level (see ListReadyImageBuilds's own generated doc
+// comment for both exclusions).
+func (s *ImageBuildStore) ListReady(ctx context.Context, limit int32) ([]sqlcgen.ImageBuild, error) {
+	return s.q.ListReadyImageBuilds(ctx, limit)
+}
+
+// ClaimForRefresh implements the freshness pump's own single-flight claim
+// (§19.2): a CAS entirely independent of status/attempt_count/
+// next_retry_at, flipping refresh_in_progress to true only when the row
+// is still 'ready' and not already being refreshed elsewhere. Returns
+// pgx.ErrNoRows on a lost race (a normal, expected outcome, never logged
+// as an error by the caller).
+func (s *ImageBuildStore) ClaimForRefresh(ctx context.Context, fingerprint string) (sqlcgen.ImageBuild, error) {
+	return s.q.ClaimImageBuildForRefresh(ctx, fingerprint)
+}
+
+// RecordRefreshSuccess atomically swaps image_ref + built_repo_shas +
+// built_at and releases the refresh_in_progress claim -- status stays
+// 'ready' throughout (§19.2's own "never degrades availability"
+// guarantee): a session mid-spawn always reads either the OLD ref or the
+// NEW one, never a gap with neither.
+func (s *ImageBuildStore) RecordRefreshSuccess(ctx context.Context, arg sqlcgen.RecordImageRefreshSuccessParams) (sqlcgen.ImageBuild, error) {
+	return s.q.RecordImageRefreshSuccess(ctx, arg)
+}
+
+// RecordRefreshFailure releases the refresh_in_progress claim, touching
+// nothing else -- the row is left exactly as it was (still 'ready', still
+// serving its own old image_ref), picked up again at the next
+// ImageRefreshCheckInterval tick (the refresh path's own natural retry
+// cadence).
+func (s *ImageBuildStore) RecordRefreshFailure(ctx context.Context, fingerprint string) (sqlcgen.ImageBuild, error) {
+	return s.q.RecordImageRefreshFailure(ctx, fingerprint)
+}
+
+// TouchChecked bumps ONLY fingerprint's own updated_at -- no other
+// column -- app/imagebuild's own genuine-round-robin fairness mechanism
+// (§19.2, a correctness review finding on the batch-cap fix): attemptRefresh
+// calls this from its own two early-return branches (a resolveRepoSHAs
+// error, or NeedsRefresh reporting still-fresh) that otherwise skip
+// ClaimForRefresh entirely, so that ListReady's own ORDER BY updated_at
+// reflects genuine "last looked at this tick", not merely "last mutated",
+// for the WHOLE 'ready' population -- see TouchImageBuildChecked's own
+// generated doc comment for the full starvation this rules out. A no-op,
+// never an error worth surfacing, if fingerprint is no longer 'ready' (or
+// gone entirely).
+func (s *ImageBuildStore) TouchChecked(ctx context.Context, fingerprint string) error {
+	return s.q.TouchImageBuildChecked(ctx, fingerprint)
+}

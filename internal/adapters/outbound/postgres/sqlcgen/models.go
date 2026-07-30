@@ -617,19 +617,20 @@ type IdentityLinkPrompt struct {
 }
 
 type ImageBuild struct {
-	Fingerprint    string             `json:"fingerprint"`
-	Base           string             `json:"base"`
-	RepoUrls       []byte             `json:"repo_urls"`
-	RuntimeVersion string             `json:"runtime_version"`
-	ImageRef       *string            `json:"image_ref"`
-	Status         ImageBuildStatus   `json:"status"`
-	AttemptCount   int32              `json:"attempt_count"`
-	LastAttemptAt  pgtype.Timestamptz `json:"last_attempt_at"`
-	NextRetryAt    pgtype.Timestamptz `json:"next_retry_at"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
-	BuiltRepoShas  []byte             `json:"built_repo_shas"`
-	BuiltAt        pgtype.Timestamptz `json:"built_at"`
+	Fingerprint       string             `json:"fingerprint"`
+	Base              string             `json:"base"`
+	RepoUrls          []byte             `json:"repo_urls"`
+	RuntimeVersion    string             `json:"runtime_version"`
+	ImageRef          *string            `json:"image_ref"`
+	Status            ImageBuildStatus   `json:"status"`
+	AttemptCount      int32              `json:"attempt_count"`
+	LastAttemptAt     pgtype.Timestamptz `json:"last_attempt_at"`
+	NextRetryAt       pgtype.Timestamptz `json:"next_retry_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	BuiltRepoShas     []byte             `json:"built_repo_shas"`
+	BuiltAt           pgtype.Timestamptz `json:"built_at"`
+	RefreshInProgress bool               `json:"refresh_in_progress"`
 }
 
 type LinearAgentSession struct {

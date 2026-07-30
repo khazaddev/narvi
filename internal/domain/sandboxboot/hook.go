@@ -22,15 +22,45 @@ type HookOutcome struct {
 	FatalOnFailure bool
 }
 
-// EvaluateHook implements §6.4's hook policy verbatim: "Hook policy:
-// setup.sh runs only in fresh/build (fatal only in build); start.sh runs
-// in all non-build modes (primary repo fatal, secondaries warn)".
+// EvaluateHook implements §6.4's hook policy, AMENDED by §19.4 (Step 42,
+// warm-boot shared images) -- this amendment is a BREAKING CHANGE to the
+// §6.4 contract, carrying the Conventional-Commits `!` marker on the
+// commit that lands it: "setup.sh runs only in fresh/build (fatal only in
+// build), OR in repo_image when workspaceMoved; start.sh runs in all
+// non-build modes (primary repo fatal, secondaries warn)".
+//
+// workspaceMoved is only ever consulted for one cell of this policy table:
+// HookSetup under BootModeRepoImage. It is otherwise ignored -- in
+// particular start.sh's own policy is completely unaffected by it for
+// every mode, and every OTHER (mode, hook, primary) combination's outcome
+// is BYTE-IDENTICAL to the policy before this amendment (see hook_test.go's
+// own truth table, which pins every pre-existing cell unchanged and adds
+// only the new repo_image/HookSetup/workspaceMoved cases).
+//
+// Rationale (§19.4): under warm-from-tip shared images, `repo_image` no
+// longer implies "image content == session content" the way an exact-SHA
+// image fingerprint used to guarantee -- the boot-time workspace can have
+// moved arbitrarily far from the SHA setup.sh last ran against at build
+// time. Leaving repo_image's setup hook at an unconditional ShouldRun:
+// false would produce sessions with silently missing dependencies, the
+// worst failure class available (surfacing later as confusing agent/tool
+// errors, not a boot error). Redefined contract: "repo_image means setup.sh
+// ran at build time against a near-tip tree; if the boot-time workspace has
+// MOVED from the built SHA, setup.sh runs again, NON-FATALLY (warn,
+// continue) -- expected to be fast, because its outputs are already warm."
+// A workspace that has NOT moved (workspaceMoved: false) still skips
+// setup.sh exactly as before this amendment -- SHA-equality is a pure
+// optimization, zero regression for that case.
 //
 // setup.sh's FatalOnFailure never depends on primary -- only build-vs-not
 // matters for it (it fails the whole sequence only during an image build,
-// where there is no running session to fall back on). start.sh's
-// FatalOnFailure is exactly the primary flag whenever it runs at all (a
-// secondary repo's start.sh failing is only ever a warning).
+// where there is no running session to fall back on) -- and, as of this
+// amendment, a repo_image rerun is ALWAYS non-fatal regardless of
+// workspaceMoved, matching §19.4's "never block a spawn" framing: a moved
+// workspace proves nothing about dependencies, so it can never justify
+// failing the boot. start.sh's FatalOnFailure is exactly the primary flag
+// whenever it runs at all (a secondary repo's start.sh failing is only
+// ever a warning).
 //
 // An unrecognized Hook value (anything other than HookSetup or HookStart)
 // is treated as a programming error, not a data error: Hook is a closed
@@ -38,11 +68,13 @@ type HookOutcome struct {
 // zero HookOutcome (ShouldRun: false) rather than defining a third named
 // error type for a case that can only arise from a bug in this codebase,
 // never from external input.
-func EvaluateHook(mode BootMode, hook Hook, primary bool) HookOutcome {
+func EvaluateHook(mode BootMode, hook Hook, primary, workspaceMoved bool) HookOutcome {
 	switch hook {
 	case HookSetup:
+		shouldRun := mode == BootModeBuild || mode == BootModeFresh ||
+			(mode == BootModeRepoImage && workspaceMoved)
 		return HookOutcome{
-			ShouldRun:      mode == BootModeBuild || mode == BootModeFresh,
+			ShouldRun:      shouldRun,
 			FatalOnFailure: mode == BootModeBuild,
 		}
 	case HookStart:

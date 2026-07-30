@@ -42,7 +42,7 @@ func TestRunHooks_EmptyRepos(t *testing.T) {
 	t.Parallel()
 
 	sup := supervisor.New()
-	err := boot.RunHooks(context.Background(), sup, t.TempDir(), nil, sandboxboot.BootModeFresh, 5*time.Second, time.Second)
+	err := boot.RunHooks(context.Background(), sup, t.TempDir(), nil, sandboxboot.BootModeFresh, nil, 5*time.Second, time.Second)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil for an empty repos slice", err)
 	}
@@ -61,7 +61,7 @@ func TestRunHooks_AbsentHookSkipped(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, 5*time.Second, time.Second)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, 5*time.Second, time.Second)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (absent hooks are a routine no-op)", err)
 	}
@@ -86,7 +86,7 @@ func TestRunHooks_SuccessContinuesToLaterHooksAndRepos(t *testing.T) {
 	// fresh mode: repo-a's setup.sh runs (non-fatal); repo-b's start.sh
 	// runs (non-fatal, secondary). Both succeed, so RunHooks must run
 	// every hook across both repos.
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, 5*time.Second, time.Second)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, 5*time.Second, time.Second)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
@@ -114,7 +114,7 @@ func TestRunHooks_FatalFailureStopsImmediately(t *testing.T) {
 		{Name: "repo-b", Primary: false},
 	}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, 5*time.Second, time.Second)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, 5*time.Second, time.Second)
 	if err == nil {
 		t.Fatal("RunHooks() error = nil, want an error (build mode's setup.sh failure is fatal)")
 	}
@@ -139,7 +139,7 @@ func TestRunHooks_NonFatalFailureContinues(t *testing.T) {
 		{Name: "repo-b", Primary: false},
 	}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, 5*time.Second, time.Second)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, 5*time.Second, time.Second)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (a secondary repo's start.sh failure is only a warning)", err)
 	}
@@ -164,7 +164,7 @@ func TestRunHooks_EnvExcludesSessionConfig(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, 5*time.Second, time.Second)
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil, 5*time.Second, time.Second)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (the spawned setup.sh must not see NARVI_SESSION_CONFIG)", err)
 	}
@@ -179,7 +179,7 @@ func TestRunHooks_TimeoutIsFatalWhenPolicyFatal(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild,
+	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil,
 		200*time.Millisecond, 200*time.Millisecond)
 	if err == nil {
 		t.Fatal("RunHooks() error = nil, want an error (hook exceeded hookTimeout, fatal per build mode's setup.sh policy)")

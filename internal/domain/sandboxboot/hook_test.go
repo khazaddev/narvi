@@ -6,11 +6,18 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
 )
 
-// TestEvaluateHook_TruthTable enumerates every row of the Step's own
-// 16-row truth table (§6.4's hook policy applied to all 4 modes x 2 hooks
-// x 2 primary values), one sub-test per row, so a single wrong cell fails
-// with a readable name naming exactly which (mode, hook, primary) combo
-// broke.
+// TestEvaluateHook_TruthTable enumerates every row of the Step 13 truth
+// table (§6.4's hook policy applied to all 4 modes x 2 hooks x 2 primary
+// values -- 16 rows), EVERY ONE pinned with workspaceMoved: false so this
+// table alone proves the Step 42 (§19.4) amendment changed NOTHING for any
+// pre-existing cell: every wantShouldRun/wantFatal value below is
+// byte-identical to what EvaluateHook returned before that amendment
+// existed. The one cell the amendment actually changes (repo_image +
+// HookSetup, for BOTH primary values) gets its own dedicated
+// workspaceMoved-true row directly below this table, in
+// TestEvaluateHook_RepoImageSetup_WorkspaceMovedAmendment -- kept
+// separate rather than folded into this table so this table's own
+// "16 rows, all pinned false" invariant stays simple and self-checking.
 func TestEvaluateHook_TruthTable(t *testing.T) {
 	t.Parallel()
 
@@ -51,23 +58,90 @@ func TestEvaluateHook_TruthTable(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got := sandboxboot.EvaluateHook(tc.mode, tc.hook, tc.primary)
+			got := sandboxboot.EvaluateHook(tc.mode, tc.hook, tc.primary, false)
 			if got.ShouldRun != tc.wantShouldRun {
-				t.Errorf("EvaluateHook(%s, %s, primary=%v).ShouldRun = %v, want %v",
+				t.Errorf("EvaluateHook(%s, %s, primary=%v, workspaceMoved=false).ShouldRun = %v, want %v",
 					tc.mode, tc.hook, tc.primary, got.ShouldRun, tc.wantShouldRun)
 			}
 			if got.FatalOnFailure != tc.wantFatal {
-				t.Errorf("EvaluateHook(%s, %s, primary=%v).FatalOnFailure = %v, want %v",
+				t.Errorf("EvaluateHook(%s, %s, primary=%v, workspaceMoved=false).FatalOnFailure = %v, want %v",
 					tc.mode, tc.hook, tc.primary, got.FatalOnFailure, tc.wantFatal)
 			}
 		})
 	}
 }
 
+// TestEvaluateHook_RepoImageSetup_WorkspaceMovedAmendment proves the ONE
+// cell §19.4's amendment actually changes (Step 42, breaking change): for
+// BootModeRepoImage + HookSetup, workspaceMoved: true flips ShouldRun to
+// true while FatalOnFailure stays false regardless (a moved workspace
+// proves nothing about dependencies, so it can never justify failing the
+// boot) -- for BOTH primary values, since setup.sh's own policy never
+// depended on primary before this amendment either. Every OTHER (mode,
+// hook) combination is proven completely unaffected by workspaceMoved by
+// TestEvaluateHook_WorkspaceMovedIgnoredEverywhereElse below.
+func TestEvaluateHook_RepoImageSetup_WorkspaceMovedAmendment(t *testing.T) {
+	t.Parallel()
+
+	for _, primary := range []bool{true, false} {
+		primary := primary
+		t.Run("primary="+boolString(primary), func(t *testing.T) {
+			t.Parallel()
+
+			got := sandboxboot.EvaluateHook(sandboxboot.BootModeRepoImage, sandboxboot.HookSetup, primary, true)
+			want := sandboxboot.HookOutcome{ShouldRun: true, FatalOnFailure: false}
+			if got != want {
+				t.Errorf("EvaluateHook(repo_image, setup.sh, primary=%v, workspaceMoved=true) = %+v, want %+v",
+					primary, got, want)
+			}
+		})
+	}
+}
+
+// TestEvaluateHook_WorkspaceMovedIgnoredEverywhereElse proves workspaceMoved
+// has ZERO effect outside the one cell above: setup.sh in every mode other
+// than repo_image, and start.sh in every mode, produce the IDENTICAL
+// HookOutcome regardless of workspaceMoved's value -- this is the "every
+// OTHER existing (mode, hook, primary) combination's outcome must be
+// byte-identical" guarantee, proven directly by construction (not just by
+// pinning workspaceMoved: false in the main truth table above).
+func TestEvaluateHook_WorkspaceMovedIgnoredEverywhereElse(t *testing.T) {
+	t.Parallel()
+
+	modes := []sandboxboot.BootMode{
+		sandboxboot.BootModeBuild, sandboxboot.BootModeFresh,
+		sandboxboot.BootModeRepoImage, sandboxboot.BootModeSnapshotRestore,
+	}
+	hooks := []sandboxboot.Hook{sandboxboot.HookSetup, sandboxboot.HookStart}
+
+	for _, mode := range modes {
+		for _, hook := range hooks {
+			if mode == sandboxboot.BootModeRepoImage && hook == sandboxboot.HookSetup {
+				continue // the one cell workspaceMoved DOES affect -- covered above
+			}
+			mode, hook := mode, hook
+			for _, primary := range []bool{true, false} {
+				primary := primary
+				name := string(mode) + "/" + string(hook) + "/primary=" + boolString(primary)
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+
+					whenFalse := sandboxboot.EvaluateHook(mode, hook, primary, false)
+					whenTrue := sandboxboot.EvaluateHook(mode, hook, primary, true)
+					if whenFalse != whenTrue {
+						t.Errorf("EvaluateHook(%s, %s, primary=%v) depends on workspaceMoved (false=%+v, true=%+v), want identical",
+							mode, hook, primary, whenFalse, whenTrue)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestEvaluateHook_UnrecognizedHook(t *testing.T) {
 	t.Parallel()
 
-	got := sandboxboot.EvaluateHook(sandboxboot.BootModeFresh, sandboxboot.Hook("bogus.sh"), true)
+	got := sandboxboot.EvaluateHook(sandboxboot.BootModeFresh, sandboxboot.Hook("bogus.sh"), true, false)
 	want := sandboxboot.HookOutcome{}
 	if got != want {
 		t.Errorf("EvaluateHook with an unrecognized Hook = %+v, want zero value %+v", got, want)

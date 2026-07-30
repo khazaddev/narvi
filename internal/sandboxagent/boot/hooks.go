@@ -13,6 +13,23 @@ import (
 	"github.com/khazaddev/narvi/internal/sandboxagent/supervisor"
 )
 
+// workspaceMovedFor looks up repoName in moved (§19.4's per-repo
+// workspaceMoved map, boot.ComputeWorkspaceMoved) -- a repo genuinely
+// absent from the map (e.g. moved was nil, the common case for every mode
+// other than repo_image, which never computes one at all -- see
+// runBootSequence in cmd/sandbox-agent/main.go) defaults to true, the SAME
+// safe "assume moved" default ComputeWorkspaceMoved itself documents for a
+// missing/unreadable manifest -- never silently defaults to false (which
+// would silently reopen exactly the "missing dependency" gap §19.4 exists
+// to close).
+func workspaceMovedFor(moved map[string]bool, repoName string) bool {
+	v, ok := moved[repoName]
+	if !ok {
+		return true
+	}
+	return v
+}
+
 // RepoInfo is one repo's boot-hook-relevant identity: its directory name
 // under WorkspaceDir (i.e. /workspace/{Name}), and whether it's the
 // primary repo (§3.4: "position 0 = primary" in SESSION_CONFIG.repos). The
@@ -45,16 +62,24 @@ type RepoInfo struct {
 //     to the next hook/repo.
 //
 // An empty repos slice is a correct, immediate no-op (returns nil).
+//
+// workspaceMoved (§19.4, Step 42) is the per-repo predicate
+// boot.ComputeWorkspaceMoved computes once per boot from
+// /narvi/image-manifest.json -- consulted by sandboxboot.EvaluateHook for
+// exactly one cell (repo_image + HookSetup). nil is a correct, safe input
+// (every entry defaults to "moved", via workspaceMovedFor) -- the shape
+// every OTHER mode's own call already used before this parameter existed.
 func RunHooks(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	workspaceDir string,
 	repos []RepoInfo,
 	mode sandboxboot.BootMode,
+	workspaceMoved map[string]bool,
 	hookTimeout, stopGrace time.Duration,
 ) error {
 	for _, repo := range repos {
-		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, hookTimeout, stopGrace); err != nil {
+		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, hookTimeout, stopGrace); err != nil {
 			return err
 		}
 	}
@@ -67,16 +92,27 @@ func RunHooks(
 // out unchanged (a pure refactor, no behavior change) so
 // internal/sandboxagent/boot's new RunBoot (runboot.go) can reuse it for a
 // repo that falls back to the hook contract.
+//
+// Each hook run is timed (recordHookRerunDuration, §19.5(b)) and its own
+// combined stdout+stderr is captured into a bounded, ANSI-stripped tail
+// (runHook's own *outputTail, §19.5(a)) -- surfaced in the boot log
+// alongside EITHER outcome (fatal or non-fatal): a non-fatal failure is
+// otherwise "undiagnosable by construction" (§19.5's own framing, the
+// specific gap this closes), and attaching it to a fatal failure too costs
+// nothing further and is only ever additional diagnostic information.
 func runRepoHooks(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	workspaceDir string,
 	repo RepoInfo,
 	mode sandboxboot.BootMode,
+	workspaceMoved map[string]bool,
 	hookTimeout, stopGrace time.Duration,
 ) error {
+	moved := workspaceMovedFor(workspaceMoved, repo.Name)
+
 	for _, hook := range []sandboxboot.Hook{sandboxboot.HookSetup, sandboxboot.HookStart} {
-		outcome := sandboxboot.EvaluateHook(mode, hook, repo.Primary)
+		outcome := sandboxboot.EvaluateHook(mode, hook, repo.Primary, moved)
 		if !outcome.ShouldRun {
 			continue
 		}
@@ -97,12 +133,18 @@ func runRepoHooks(
 			continue
 		}
 
-		if runErr := runHook(ctx, sup, scriptPath, repoDir, hookTimeout, stopGrace); runErr != nil {
+		start := time.Now()
+		tail, runErr := runHook(ctx, sup, scriptPath, repoDir, hookTimeout, stopGrace)
+		recordHookRerunDuration(ctx, repo.Name, string(hook), time.Since(start).Seconds(), runErr != nil)
+
+		if runErr != nil {
 			if outcome.FatalOnFailure {
-				return fmt.Errorf("boot: %s in %s failed (fatal): %w", hook, repo.Name, runErr)
+				return fmt.Errorf("boot: %s in %s failed (fatal): %w (output tail: %v)",
+					hook, repo.Name, runErr, tail.Lines())
 			}
 			platform.Logger(ctx).Warn("boot: hook failed, continuing",
-				"repo", repo.Name, "hook", string(hook), "error", runErr)
+				"repo", repo.Name, "hook", string(hook), "error", runErr,
+				"output_tail", tail.Lines())
 		}
 	}
 	return nil
@@ -130,7 +172,21 @@ func hookScriptPresent(scriptPath string) (bool, error) {
 // timeout/cancellation is reported as the failure. If it's not executable,
 // Spawn's own error surfaces here directly -- a real error, never silently
 // swallowed.
-func runHook(ctx context.Context, sup *supervisor.Supervisor, scriptPath, dir string, hookTimeout, stopGrace time.Duration) error {
+//
+// Always returns a non-nil *outputTail, even on a spawn failure (an empty
+// one in that case -- the process never ran, so there is nothing to
+// capture) -- so every caller can unconditionally call tail.Lines()
+// without a nil check (§19.5(a)): a caller-held, bounded, ANSI-stripped
+// tail of the hook's own combined stdout+stderr, wired through
+// supervisor.Spec's existing Stdout/Stderr seam (mirroring gitclone's own
+// applySparseCheckout precedent for that exact seam) and held ENTIRELY by
+// this function's own local variable, independent of the bounded
+// proc.Wait call below -- a timeout-triggered proc.Stop can therefore
+// never lose a buffer that was never inside the cancelled operation to
+// begin with.
+func runHook(ctx context.Context, sup *supervisor.Supervisor, scriptPath, dir string, hookTimeout, stopGrace time.Duration) (*outputTail, error) {
+	tail := newOutputTail()
+
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: scriptPath,
 		Dir:  dir,
@@ -139,9 +195,16 @@ func runHook(ctx context.Context, sup *supervisor.Supervisor, scriptPath, dir st
 		// plaintext bearer token (NARVI_SESSION_CONFIG) either, so it is
 		// excluded here exactly like opencodeproc.Spawn's own call.
 		Env: supervisor.EnvWithout(SessionConfigEnvVar),
+		// tail captures BOTH streams into one combined, bounded,
+		// ANSI-stripped tail (§19.5(a)) -- a single io.Writer used for both
+		// fields is safe: outputTail.Write is mutex-guarded against
+		// concurrent calls, matching exec.Cmd's own documented behavior for
+		// sharing one Writer across Stdout/Stderr.
+		Stdout: tail,
+		Stderr: tail,
 	})
 	if err != nil {
-		return fmt.Errorf("spawn %s: %w", scriptPath, err)
+		return tail, fmt.Errorf("spawn %s: %w", scriptPath, err)
 	}
 
 	hookCtx, cancel := context.WithTimeout(ctx, hookTimeout)
@@ -150,14 +213,14 @@ func runHook(ctx context.Context, sup *supervisor.Supervisor, scriptPath, dir st
 	result, waitErr := proc.Wait(hookCtx)
 	if waitErr != nil {
 		_ = proc.Stop(ctx, stopGrace)
-		return fmt.Errorf("%s: did not complete within %s: %w", scriptPath, hookTimeout, waitErr)
+		return tail, fmt.Errorf("%s: did not complete within %s: %w", scriptPath, hookTimeout, waitErr)
 	}
 
 	if result.Err != nil {
-		return fmt.Errorf("%s: %w", scriptPath, result.Err)
+		return tail, fmt.Errorf("%s: %w", scriptPath, result.Err)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("%s: exited %d", scriptPath, result.ExitCode)
+		return tail, fmt.Errorf("%s: exited %d", scriptPath, result.ExitCode)
 	}
-	return nil
+	return tail, nil
 }

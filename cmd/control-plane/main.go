@@ -294,8 +294,19 @@ func serve() error {
 	// errgroup exactly once per process -- constructed from the SAME
 	// sandboxProvider/cfg.Timeouts already built above, mirroring recon's
 	// own construction immediately above exactly. See internal/app/
-	// imagebuild's own doc.go for what it does and why.
-	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, sandboxProvider, cfg.Timeouts)
+	// imagebuild's own doc.go for what it does and why. Step 42 ("warm
+	// boot: refresh pump + hook policy", §19.2) adds the trailing
+	// sourceControl/cfg.GitHubImageBuildToken pair: the SAME *githubapi.
+	// Adapter instance already constructed above (for CreatePR/
+	// ResolveBranchSHA/ResolveContractsFingerprint) plus the new
+	// platform-level credential (deliberately DISTINCT from
+	// cfg.GitHubBotToken -- see platform.Config.GitHubImageBuildToken's own
+	// doc comment), both consulted only by the freshness pump's own
+	// per-repo tip-SHA resolution and by claim-time SHA resolution for a
+	// repo-bearing build (attempt) -- never by anything on the spawn path
+	// itself.
+	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, sandboxProvider, cfg.Timeouts,
+		sourceControl, cfg.GitHubImageBuildToken)
 	if err != nil {
 		return fmt.Errorf("construct image builder: %w", err)
 	}

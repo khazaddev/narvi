@@ -394,19 +394,23 @@ func seedReadyImageBuild(ctx context.Context, t *testing.T, store *narvipg.Image
 	}
 }
 
-// TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_SpawnStillBaseImage
-// proves this Step's own resolved Step 41/42 boundary decision end to end,
-// from the spawn side: a cache MISS creates a pending row (scenario (a),
-// re-proved here as part of the full pipeline), the background builder
-// claims it but -- correctly, per this Step's own design (attempt's own
-// doc comment, builder.go) -- can NOT build it for real yet (no
-// claim-time SHA resolution mechanism exists until Step 42), and a LATER
-// spawn for the identical repo set therefore STILL falls back to the base
-// image, exactly as if no image_builds row existed. This is the honest
-// current-state reflection of "Step 41 lands the fingerprint/type/
-// migration/spawn-path plumbing; Step 42 is what makes new fingerprints
-// actually buildable end-to-end" -- see this file's own top comment.
-func TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_SpawnStillBaseImage(t *testing.T) {
+// TestImageBuildPipeline_MissCreatesPendingRow_NoCredentialConfigured_SpawnStillBaseImage
+// proves end to end, from the spawn side, Step 42's own degrade path when
+// the new platform-level GitHub credential (platform.Config.
+// GitHubImageBuildToken) is NOT configured: a cache MISS creates a pending
+// row (scenario (a), re-proved here as part of the full pipeline), the
+// background builder claims it but -- correctly, per §19.2's own explicit
+// "never blocks a spawn" degrade invariant -- cannot resolve any repo's
+// SHA without a configured credential, so it records a clean, retryable
+// failure rather than building with an empty/zero SHA, and a LATER spawn
+// for the identical repo set therefore STILL falls back to the base
+// image, exactly as if no image_builds row existed. See internal/app/
+// imagebuild/builder_integration_test.go's own
+// TestPumpOnce_RepoBearingRow_CredentialConfigured_ResolvesSHAsAndBuilds
+// for the companion, credential-CONFIGURED case (a real build actually
+// happens) -- this file's own scope (see its top comment) is the
+// spawn-side pipeline, not the builder's own internals in isolation.
+func TestImageBuildPipeline_MissCreatesPendingRow_NoCredentialConfigured_SpawnStillBaseImage(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 
@@ -445,11 +449,12 @@ func TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_SpawnS
 		return err == nil
 	})
 
-	// Step 2: the background builder claims it, but cannot build it for
-	// real (no claim-time SHA resolution mechanism yet) -- BuildImage must
-	// never even be called, and the row is recorded as a retryable
-	// failure rather than getting stuck in 'building'.
-	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, provider, platform.DefaultTimeouts())
+	// Step 2: the background builder claims it, but -- with NO platform
+	// GitHub credential configured (nil sourceControl, empty token) --
+	// cannot resolve any repo's SHA, so BuildImage must never even be
+	// called, and the row is recorded as a retryable failure rather than
+	// getting stuck in 'building'.
+	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, provider, platform.DefaultTimeouts(), nil, "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -458,7 +463,7 @@ func TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_SpawnS
 	}
 
 	if got := provider.buildCallCount(); got != 0 {
-		t.Fatalf("BuildImage call count = %d, want 0 (no claim-time SHA resolution mechanism yet, Step 42)", got)
+		t.Fatalf("BuildImage call count = %d, want 0 (no platform credential configured -- degrade cleanly, §19.2)", got)
 	}
 
 	row, err := imageBuildStore.Get(ctx, wantFingerprint)

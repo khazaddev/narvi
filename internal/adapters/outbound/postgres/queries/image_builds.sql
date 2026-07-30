@@ -90,3 +90,135 @@ UPDATE image_builds
 SET status = 'failed', next_retry_at = $2, updated_at = now()
 WHERE fingerprint = $1 AND status = 'building'
 RETURNING *;
+
+-- name: ListReadyImageBuilds :many
+-- Step 42's own freshness-pump poll query (§19.2): every SHARED (repo-
+-- bearing) 'ready' row -- a base-only row (repo_urls = '{}') is never
+-- stale in the sense this design cares about (there is no repo tip to
+-- drift from), so it is excluded here at the SQL level rather than making
+-- every caller re-check len(repoUrls) == 0 itself. Plain SELECT, no
+-- row-level locking: the freshness pump's own single-flight protection is
+-- ClaimImageBuildForRefresh's own per-row CAS below, not a batch-level
+-- FOR UPDATE SKIP LOCKED claim -- resolving each repo's current
+-- default-branch tip (a real GitHub API call per repo) happens OUTSIDE
+-- any transaction, so holding a batch-level lock across that network work
+-- would be exactly the "a real network call must never hold a Postgres
+-- transaction open" mistake this codebase's own established discipline
+-- (app/sessionactor/dispatch.go, app/imagebuild.Builder.claimBatch) exists
+-- to avoid.
+--
+-- LIMIT $1 mirrors ListDueImageBuilds' own batch-cap shape exactly (a
+-- correctness/scalability review finding on this Step: an unbounded
+-- ListReady, followed by strictly-sequential per-row attemptRefresh calls
+-- -- each a real, synchronous, network-bound BuildImage call that can take
+-- minutes -- let one slow/blocked build in a large batch delay even
+-- STARTING every other Environment's own tip-SHA check for the rest of
+-- that tick, degrading the fleet's effective refresh cadence well past
+-- this section's own documented 10-40 minute staleness window under
+-- load).
+--
+-- ORDER BY updated_at (same column ListDueImageBuilds orders by) gives
+-- ACROSS-TICK fairness ONLY because attemptRefresh (app/imagebuild/
+-- builder.go) advances THIS column on EVERY 'ready' row it inspects this
+-- tick, not merely ones that reach ClaimImageBuildForRefresh below -- a
+-- SECOND correctness review finding, this time on the batch-cap fix
+-- itself: a row genuinely NOT stale (NeedsRefresh false) or whose SHA
+-- resolution PERSISTENTLY fails (a renamed/deleted repo, a token missing
+-- org access) never reaches ClaimImageBuildForRefresh at all, so if
+-- nothing else touched its own updated_at, it would keep an arbitrarily
+-- OLD timestamp forever and, being oldest, permanently occupy the ENTIRE
+-- LIMIT $1 window of every single tick -- starving any row that goes
+-- stale LATER (a newer updated_at always sorts behind that static front
+-- cohort, so it is never even RETURNED here, let alone refreshed).
+-- TouchImageBuildChecked (below) is the fix: attemptRefresh calls it from
+-- its own two early-return branches (a resolveRepoSHAs error, or
+-- NeedsRefresh reporting still-fresh) right before returning, so THOSE
+-- rows rotate to the back of the queue exactly as if they had reached a
+-- real claim. That is what makes ORDER BY updated_at a genuine, total
+-- round-robin over the WHOLE 'ready' population rather than a partial one
+-- that only rotates the subset that happens to need a rebuild.
+SELECT * FROM image_builds
+WHERE status = 'ready' AND repo_urls != '{}'::jsonb
+ORDER BY updated_at
+LIMIT $1;
+
+-- name: ClaimImageBuildForRefresh :one
+-- The freshness pump's own single-flight claim (§19.2): a CAS entirely
+-- independent of status/attempt_count/next_retry_at -- it flips
+-- refresh_in_progress to true ONLY when the row is still 'ready' AND not
+-- already being refreshed by a concurrent tick (this pod's or another
+-- pod's own Builder). status stays 'ready' throughout -- see
+-- migrations/000040_image_builds_refresh_pump.up.sql's own doc comment
+-- for why this must never touch status the way ClaimImageBuild does for
+-- a brand-new pending/failed row: a NEW spawn's own GetImageBuild lookup
+-- must keep seeing status='ready' (and the OLD image_ref) for the entire
+-- window a refresh build runs. :one on zero matched rows surfaces
+-- pgx.ErrNoRows -- a normal, expected "someone else already claimed this
+-- one" outcome, not an error condition.
+UPDATE image_builds
+SET refresh_in_progress = true, updated_at = now()
+WHERE fingerprint = $1 AND status = 'ready' AND refresh_in_progress = false
+RETURNING *;
+
+-- name: RecordImageRefreshSuccess :one
+-- The freshness pump's own success half (§19.2): a SINGLE UPDATE
+-- atomically swaps image_ref + built_repo_shas + built_at (never a
+-- delete-then-insert) and releases the refresh_in_progress claim --
+-- status stays 'ready' the whole time, so a session mid-spawn never sees
+-- a gap where this fingerprint has no usable ready image_ref: it reads
+-- either the OLD ref (before this commits) or the NEW one (after), never
+-- neither. Guarded by "AND status = 'ready'" (a refresh can never observe
+-- anything else, by construction of ClaimImageBuildForRefresh above, but
+-- guarded defensively here too, matching RecordImageBuildSuccess's own
+-- guard-even-though-the-caller-already-checked convention) -- next_retry_at
+-- is deliberately left untouched (unlike RecordImageBuildSuccess, which
+-- clears it): a refresh never affects the ordinary pending/failed/backoff
+-- lifecycle those columns track.
+UPDATE image_builds
+SET image_ref = $2, built_repo_shas = $3, built_at = $4, refresh_in_progress = false, updated_at = now()
+WHERE fingerprint = $1 AND status = 'ready'
+RETURNING *;
+
+-- name: RecordImageRefreshFailure :one
+-- The freshness pump's own failure half (§19.2): simply releases the
+-- refresh_in_progress claim, touching NOTHING else -- a failed refresh
+-- attempt leaves the row exactly as it was (still 'ready', still serving
+-- its own old, perfectly-good image_ref/built_repo_shas/built_at), picked
+-- up again at the next ImageRefreshCheckInterval tick. This is the
+-- refresh path's own natural retry cadence -- no separate backoff
+-- schedule is needed the way the pending/failed lifecycle's own
+-- next_retry_at provides one.
+UPDATE image_builds
+SET refresh_in_progress = false, updated_at = now()
+WHERE fingerprint = $1
+RETURNING *;
+
+-- name: TouchImageBuildChecked :exec
+-- The freshness pump's own genuine-round-robin bookkeeping (§19.2, fixing
+-- a correctness review finding on the batch-cap fix: see
+-- ListReadyImageBuilds' own doc comment above for the full starvation
+-- mechanism this closes). Bumps ONLY updated_at for fingerprint --
+-- status/image_ref/built_repo_shas/built_at/attempt_count/next_retry_at/
+-- refresh_in_progress are every one of them left completely untouched.
+-- This is deliberately NOT a state transition of any kind -- it is purely
+-- "attemptRefresh (app/imagebuild/builder.go) INSPECTED this row this
+-- tick", called from attemptRefresh's own two early-return branches (a
+-- resolveRepoSHAs error, or NeedsRefresh reporting still-fresh) that
+-- otherwise skip ClaimImageBuildForRefresh -- and therefore, before this
+-- fix, skipped ever touching updated_at -- entirely.
+--
+-- "AND status = 'ready'" is a defensive guard, not a load-bearing one (by
+-- construction, attemptRefresh only ever calls this for a row
+-- ListReadyImageBuilds just returned, which is 'ready' by that query's own
+-- WHERE clause) -- it exists purely so this fire-and-forget call can never
+-- perturb ListDueImageBuilds' own, textually identical "ORDER BY
+-- updated_at" fairness ordering for the SEPARATE pending/failed lifecycle,
+-- even under a future bug that calls this for a non-'ready' fingerprint.
+--
+-- :exec, not :one: this is fire-and-forget bookkeeping, never a CAS --
+-- a fingerprint no longer 'ready' (or gone entirely, a should-be-rare
+-- race) is a silent, harmless no-op, not an error condition worth a
+-- caller check the way a real claim's lost-race outcome is.
+UPDATE image_builds
+SET updated_at = now()
+WHERE fingerprint = $1 AND status = 'ready';

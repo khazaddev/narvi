@@ -139,7 +139,7 @@ func TestRunBoot_MixedManifestAndHookFallback(t *testing.T) {
 		{Name: "repo-b", Primary: false},
 	}
 
-	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh,
+	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
 		reporter.report, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil", err)
@@ -165,7 +165,7 @@ func TestRunBoot_AbsentManifestFallsBackToHooks(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh,
+	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
 		noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil", err)
@@ -196,7 +196,7 @@ func TestRunBoot_MalformedManifestIsAFatalError(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh,
+	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
 		noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
 	if err == nil {
 		t.Fatal("RunBoot() error = nil, want an error for a malformed services.yml")
@@ -236,7 +236,7 @@ func TestRunBoot_FatalFailureInRepoAStopsBeforeRepoB(t *testing.T) {
 		{Name: "repo-b", Primary: false},
 	}
 
-	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh,
+	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
 		noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
 	if err == nil {
 		t.Fatal("RunBoot() error = nil, want a fatal error (repo-a's primary service crashed)")

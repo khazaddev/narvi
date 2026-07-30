@@ -1363,6 +1363,28 @@ type Timeouts struct {
 	// store is a much smaller delta than an initial full clone, so it
 	// does not need that same budget).
 	GitFetchStepTimeout time.Duration
+
+	// --- Step 42 standalone addition ("warm boot: refresh pump + hook
+	// policy", §19.2): no ordering relationship with either invariant chain
+	// above (or with any prior Step's standalone additions), so -- per
+	// those additions' own precedent -- a plain field with a sensible
+	// default, not wired into a fake invariant link.
+
+	// ImageRefreshCheckInterval is how often app/imagebuild.Builder's own
+	// second pump phase (the freshness pump) polls every 'ready' shared
+	// image_builds row, resolving each repo's CURRENT default-branch tip
+	// and comparing it against that row's own built_repo_shas (§19.2).
+	// §19.2 gives this explicitly: "propose 10 min" -- distinct from, and
+	// much coarser than, ImageBuildPumpInterval's own 60s (that ticker
+	// claims brand-new pending/failed builds, a comparatively urgent
+	// warm-hit-vs-cold-boot concern; this one only ever affects an
+	// ALREADY-ready row's own staleness window, which §19.2 itself frames
+	// as "10-40 minutes... acceptable because staleness is no longer a
+	// correctness boundary" -- ticking every 10 minutes is more than
+	// frequent enough for a latency-only concern, and avoids hammering
+	// GitHub's API with a tip-SHA check per repo per shared image far more
+	// often than useful).
+	ImageRefreshCheckInterval time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1484,6 +1506,8 @@ func DefaultTimeouts() Timeouts {
 		GitHubGetPRTimeout: 10 * time.Second, // not specified (fix postdates the plan); chosen, generous for a single GitHub REST GET, mirrors PRCreateTimeout/SlackAckTimeout's own reasoning
 
 		GitFetchStepTimeout: 90 * time.Second, // §19.3, explicit ("propose 90s, distinct from the existing local-only 30s GitSyncStepTimeout")
+
+		ImageRefreshCheckInterval: 10 * time.Minute, // §19.2, explicit ("propose 10 min")
 	}
 }
 
