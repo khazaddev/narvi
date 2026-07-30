@@ -102,6 +102,17 @@ type fakeSpawnProvider struct {
 	buildCalls   []ports.ImageSpec
 	nextBuildRef ports.BuildRef
 	nextBuildErr error
+	// buildBlock is Step 42's ("warm boot: refresh pump", §19.2) own
+	// extension, mirroring createBlock/resumeBlock's own identical
+	// "optional, test-supplied channel BuildImage blocks on after
+	// recording the call" shape exactly -- this is what lets the new
+	// refresh-in-flight-spawn resilience scenario hold a real
+	// imagebuild.Builder's own refresh BuildImage call "in flight" while a
+	// concurrent, brand-new session spawn proves it still observes the
+	// OLD, still-ready image_ref. nil (the zero value) for every OTHER
+	// test in this file, so BuildImage returns immediately for all of
+	// them, unchanged.
+	buildBlock chan struct{}
 }
 
 // fakeRestoreCall records one RestoreFromSnapshot invocation's own
@@ -176,11 +187,26 @@ func (f *fakeSpawnProvider) RestoreFromSnapshot(_ context.Context, id ports.Snap
 	f.restoreCalls = append(f.restoreCalls, fakeRestoreCall{snapshotID: id, spec: spec})
 	return f.nextRestoreRef, f.nextRestoreErr
 }
-func (f *fakeSpawnProvider) BuildImage(_ context.Context, spec ports.ImageSpec) (ports.BuildRef, error) {
+func (f *fakeSpawnProvider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.BuildRef, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.buildCalls = append(f.buildCalls, spec)
-	return f.nextBuildRef, f.nextBuildErr
+	block := f.buildBlock
+	ref := f.nextBuildRef
+	err := f.nextBuildErr
+	f.mu.Unlock()
+
+	// The call is already recorded (above) BEFORE any blocking -- see
+	// createBlock's own identical doc comment for why this ordering
+	// matters: a test polling buildCallCount() sees this call the instant
+	// it starts, not only once it returns.
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	return ref, err
 }
 
 func (f *fakeSpawnProvider) buildCallCount() int {
