@@ -368,6 +368,36 @@ func TestDefaultTimeouts_OpenCodeTurnCompletionStandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step44StandaloneField proves Step 44's ("OpenCode
+// adapter: context-overflow compaction retry", §7.2) own addition --
+// OpenCodeSummarizeTimeout -- ships with a sensible, non-zero default,
+// deliberately more generous than OpenCodeRequestTimeout (the field it
+// would otherwise silently inherit via doJSON's own per-request wrap, see
+// this field's own doc comment), and does not disturb either invariant
+// chain.
+func TestDefaultTimeouts_Step44StandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.OpenCodeSummarizeTimeout <= 0 {
+		t.Errorf("OpenCodeSummarizeTimeout = %v, want > 0", to.OpenCodeSummarizeTimeout)
+	}
+	if to.OpenCodeSummarizeTimeout != 120*time.Second {
+		t.Errorf("OpenCodeSummarizeTimeout = %v, want %v", to.OpenCodeSummarizeTimeout, 120*time.Second)
+	}
+	if to.OpenCodeSummarizeTimeout <= to.OpenCodeRequestTimeout {
+		t.Errorf("OpenCodeSummarizeTimeout = %v, want strictly greater than OpenCodeRequestTimeout = %v "+
+			"(a real /summarize call against a large context can plausibly run far longer than an ordinary "+
+			"session/catalog/message-list call)",
+			to.OpenCodeSummarizeTimeout, to.OpenCodeRequestTimeout)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestDefaultTimeouts_InboundHygieneStandaloneFields proves the
 // audit-remediation (inbound-hygiene lens, WS/REST hygiene batch)
 // standalone additions (ClientWSPingInterval, ClientFetchHistoryMinInterval)

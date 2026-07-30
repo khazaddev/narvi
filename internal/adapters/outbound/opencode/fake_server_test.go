@@ -34,11 +34,32 @@ import (
 type fakeOpenCodeServer struct {
 	srv *httptest.Server
 
-	mu          sync.Mutex
-	current     *fakeSSEConn
-	connSeq     int
-	rejectEvent bool
-	messages    []messageListEntry
+	mu             sync.Mutex
+	current        *fakeSSEConn
+	connSeq        int
+	rejectEvent    bool
+	messages       []messageListEntry
+	summarizeCalls []summarizeRequest
+	promptCalls    []string // cmd.Text of every POST .../prompt_async body, in order (§7.2 regression test)
+	summarizeOK    bool     // whether POST .../summarize succeeds -- false unless armed otherwise (Finding 5)
+
+	// summarizeGate, when non-nil, blocks the /summarize handler until
+	// closed -- lets a test deterministically control exactly when a
+	// gated forceCompaction call returns, rather than relying on wall-clock
+	// sleeps (§7.2 Finding 1's own regression test: proving the
+	// SSE-inactivity fallback never fires while a compaction is genuinely
+	// still in flight).
+	summarizeGate chan struct{}
+
+	// promptAsyncGateFrom/promptAsyncGate let a test block a SPECIFIC,
+	// numbered (1-based) POST .../prompt_async call -- e.g. only the
+	// RETRY's own re-dispatch, not the turn's original one -- until
+	// released, deterministically (§7.2 Finding 3's own regression test:
+	// proving a late compaction-tail SSE event arriving while that retry
+	// dispatch is still in flight is correctly suppressed). 0 means "gate
+	// nothing" (the default).
+	promptAsyncGateFrom int
+	promptAsyncGate     chan struct{}
 
 	// connected fires once per newly-accepted GET /event connection,
 	// carrying that connection's own 1-based sequence number — tests
@@ -143,6 +164,21 @@ func (f *fakeOpenCodeServer) handleCreateSession(w http.ResponseWriter, r *http.
 func (f *fakeOpenCodeServer) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/prompt_async"):
+		var body promptAsyncRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		text := ""
+		if len(body.Parts) > 0 {
+			text = body.Parts[0].Text
+		}
+		f.mu.Lock()
+		f.promptCalls = append(f.promptCalls, text)
+		callIndex := len(f.promptCalls) // 1-based
+		gateFrom := f.promptAsyncGateFrom
+		gate := f.promptAsyncGate
+		f.mu.Unlock()
+		if gateFrom != 0 && callIndex >= gateFrom {
+			<-gate
+		}
 		w.WriteHeader(http.StatusOK)
 	case strings.HasSuffix(r.URL.Path, "/abort"):
 		w.Header().Set("Content-Type", "application/json")
@@ -156,6 +192,50 @@ func (f *fakeOpenCodeServer) handleSessionSubroutes(w http.ResponseWriter, r *ht
 			entries = []messageListEntry{}
 		}
 		_ = json.NewEncoder(w).Encode(entries)
+	case strings.HasSuffix(r.URL.Path, "/summarize"):
+		// §7.2's own VERIFIED live request/response shape: a JSON body of
+		// {"providerID","modelID"} (both required -- see summarizeRequest,
+		// types.go), a bare JSON boolean response on success.
+		var body summarizeRequest
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.summarizeCalls = append(f.summarizeCalls, body)
+		ok := f.summarizeOK
+		gate := f.summarizeGate
+		f.mu.Unlock()
+		if gate != nil {
+			<-gate // Finding 1's own regression test: block until released
+		}
+
+		sessionID := summarizeSessionIDFromPath(r.URL.Path)
+
+		// §7.2 Finding 6: broadcast the REAL, empirically-observed
+		// compaction-internal SSE wave (compact.go's own forceCompaction doc
+		// comment) for the SAME sessionID BEFORE responding -- a genuine
+		// POST /summarize call streams its own internal message.updated/
+		// message.part.updated/session.idle traffic on success, or still
+		// surfaces a session.error for the compaction's own internal agent
+		// on failure. This is the ONLY thing that actually exercises every
+		// one of dispatchEvent's four isCompacting guards (sse.go) in a
+		// fake-server-backed test: before this, the handler never broadcast
+		// anything here at all, so those guards were completely unexercised
+		// (confirmed empirically -- short-circuiting all four to dead code
+		// left every existing test in this package passing unchanged).
+		if ok {
+			f.broadcastCompactionSuccessWave(sessionID)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(true)
+			return
+		}
+		f.broadcastCompactionErrorEvent(sessionID)
+		// Finding 5: a real failed /summarize call returns a non-2xx status
+		// (VERIFIED against a real, deliberately-invalid providerID/modelID
+		// pair -- OpenCode 1.17.15 replies with an "UnknownError"-tagged
+		// JSON body and HTTP 500) -- unlike the OLD fake handler, which
+		// always replied HTTP 200 regardless of f.summarizeOK, making
+		// setSummarizeOK(false) unable to ever actually exercise
+		// forceCompaction's own error branch.
+		http.Error(w, `{"name":"UnknownError","data":{"message":"simulated summarize failure"}}`, http.StatusInternalServerError)
 	default:
 		http.NotFound(w, r)
 	}
@@ -167,6 +247,171 @@ func (f *fakeOpenCodeServer) setMessages(entries []messageListEntry) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.messages = entries
+}
+
+// setSummarizeOK arms whether POST .../summarize succeeds: true replies with
+// a bare JSON boolean `true` (matching OpenCode's real success response --
+// VERIFIED live, compact.go's own forceCompaction doc comment); false
+// (Finding 5) replies with a real non-2xx error status instead, so
+// forceCompaction (compact.go) genuinely observes a failure -- the OLD
+// version of this handler always replied HTTP 200 regardless of this flag's
+// value, silently making the false branch inert (setSummarizeOK(false)
+// could never actually make forceCompaction return an error). Defaults to
+// false (the zero value) until called -- tests exercising the success path
+// call this with true before triggering the overflow.
+func (f *fakeOpenCodeServer) setSummarizeOK(ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.summarizeOK = ok
+}
+
+// armSummarizeGate arms the fake server to block the /summarize handler
+// (after it has already recorded the call and broadcast whatever
+// compaction-internal wave applies) until the returned channel is closed --
+// §7.2 Finding 1's own regression test uses this to deterministically hold a
+// compaction retry "in flight" for as long as it likes, rather than relying
+// on a real, slow model response or a wall-clock sleep racing the SSE-
+// inactivity fallback's own ticker.
+func (f *fakeOpenCodeServer) armSummarizeGate() chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch := make(chan struct{})
+	f.summarizeGate = ch
+	return ch
+}
+
+// armPromptAsyncGateForCall arms the fake server to block the Nth (1-based)
+// POST .../prompt_async call until the returned channel is closed -- lets a
+// test deterministically control exactly when a SPECIFIC prompt_async call
+// (e.g. n=2, the compaction retry's own re-dispatch, leaving the turn's
+// ORIGINAL dispatch at n=1 unaffected) returns to its caller, rather than
+// relying on wall-clock sleeps (§7.2 Finding 3's own regression test).
+func (f *fakeOpenCodeServer) armPromptAsyncGateForCall(n int) chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.promptAsyncGateFrom = n
+	ch := make(chan struct{})
+	f.promptAsyncGate = ch
+	return ch
+}
+
+// summarizeSessionIDFromPath extracts "{id}" out of a
+// "/session/{id}/summarize" request path -- used by the /summarize handler
+// to know which session's own SSE stream to broadcast the compaction-
+// internal wave onto (Finding 6).
+func summarizeSessionIDFromPath(path string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(path, "/session/"), "/summarize")
+}
+
+// buildSSELine is sseLine's own non-test-fixture core (see sseLine below for
+// the test-goroutine-facing wrapper): building one raw "data: <json>\n\n"
+// line does not itself need *testing.T, only sseLine's own t.Fatalf-on-
+// failure convenience does. fakeOpenCodeServer's own /summarize handler
+// (broadcastCompactionSuccessWave/broadcastCompactionErrorEvent below) runs
+// on an httptest.Server-managed goroutine, NOT the test's own goroutine --
+// calling t.Fatalf there would be unsafe (t.Fatalf calls runtime.Goexit,
+// which only unwinds the CALLING goroutine, not the test's own; a
+// mis-marshaled SSE line here would silently hang the test instead of
+// failing it cleanly) -- so those callers use this error-returning core
+// directly and simply skip broadcasting on the (practically impossible, for
+// these fixed-shape values) marshal-error case instead.
+func buildSSELine(eventType string, props any) (string, error) {
+	encodedProps, err := json.Marshal(props)
+	if err != nil {
+		return "", err
+	}
+	env := struct {
+		Type       string          `json:"type"`
+		Properties json.RawMessage `json:"properties"`
+	}{Type: eventType, Properties: encodedProps}
+	body, err := json.Marshal(env)
+	if err != nil {
+		return "", err
+	}
+	return sseDataPrefix + string(body) + "\n\n", nil
+}
+
+// broadcastCompactionSuccessWave scripts the real, empirically-observed
+// message.updated (a new assistant message, compaction's own internal
+// summary)/message.part.updated (its own "text" part)/session.idle wave a
+// genuine successful POST /summarize call streams on the SAME global
+// /event stream for sessionID WHILE it is still in flight (compact.go's own
+// forceCompaction doc comment) -- called from the /summarize handler itself
+// (Finding 6), BEFORE it responds, exactly mirroring the real ordering.
+// Every event broadcast here is dispatched while the caller (adapter.go's
+// Adapter.attemptCompactionRetry, via finalizeOrRecoverFromOverflow) has
+// already set ts.compacting=true and keeps it true for the whole span this
+// handler runs within -- so a correctly-guarded dispatchEvent (sse.go)
+// silently drops every one of these, and a test can assert that (e.g. the
+// compaction message's own id never becomes a KNOWN assistant message id)
+// to prove the guard actually fired.
+func (f *fakeOpenCodeServer) broadcastCompactionSuccessWave(sessionID string) {
+	msgID := "msg_compaction_" + sessionID
+	if line, err := buildSSELine("message.updated", messageUpdatedProps{
+		SessionID: sessionID,
+		Info:      openCodeMessageInfo{ID: msgID, Role: "assistant"},
+	}); err == nil {
+		f.broadcast(line)
+	}
+
+	part := struct {
+		ID        string `json:"id"`
+		MessageID string `json:"messageID"`
+		Type      string `json:"type"`
+		Text      string `json:"text"`
+	}{ID: "prt_compaction_" + sessionID, MessageID: msgID, Type: "text", Text: "compaction summary"}
+	raw, err := json.Marshal(part)
+	if err == nil {
+		if line, err := buildSSELine("message.part.updated", messagePartUpdatedProps{SessionID: sessionID, Part: raw}); err == nil {
+			f.broadcast(line)
+		}
+	}
+
+	if line, err := buildSSELine("session.idle", sessionIdleProps{SessionID: sessionID}); err == nil {
+		f.broadcast(line)
+	}
+}
+
+// broadcastCompactionErrorEvent scripts a compaction-internal session.error
+// for sessionID -- the failure-path counterpart to
+// broadcastCompactionSuccessWave above (Finding 6), exercising
+// dispatchEvent's own fourth isCompacting-guarded case (session.error,
+// sse.go) that the success-only wave never reaches. Called from the
+// /summarize handler's own failure branch, BEFORE it replies with the
+// simulated non-2xx status (Finding 5).
+func (f *fakeOpenCodeServer) broadcastCompactionErrorEvent(sessionID string) {
+	if line, err := buildSSELine("session.error", sessionErrorProps{
+		SessionID: sessionID,
+		Error:     openCodeTaggedError{Name: "UnknownError"},
+	}); err == nil {
+		f.broadcast(line)
+	}
+}
+
+// summarizeCallCount/promptCallCount/lastPromptText let a test assert how
+// many times each endpoint was actually called (§7.2's own primary
+// regression test: exactly one /summarize call, exactly one retried
+// prompt_async call, both scripted assertions this fake server's own
+// counters exist for).
+func (f *fakeOpenCodeServer) summarizeCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.summarizeCalls)
+}
+
+func (f *fakeOpenCodeServer) promptCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.promptCalls)
+}
+
+func (f *fakeOpenCodeServer) lastPromptText() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.promptCalls) == 0 {
+		return ""
+	}
+	return f.promptCalls[len(f.promptCalls)-1]
 }
 
 // broadcast sends one raw SSE line (already "data: ...\n\n"-shaped, see
@@ -210,22 +455,15 @@ func (f *fakeOpenCodeServer) rejectAllFutureEventConnections() {
 
 // sseLine builds one raw "data: <json>\n\n" line matching sseEnvelope's own
 // wire shape (types.go), for a given event type and JSON-marshalable
-// properties value.
+// properties value -- the test-goroutine-facing wrapper around buildSSELine
+// above, which does the actual encoding work.
 func sseLine(t *testing.T, eventType string, props any) string {
 	t.Helper()
-	encodedProps, err := json.Marshal(props)
+	line, err := buildSSELine(eventType, props)
 	if err != nil {
-		t.Fatalf("sseLine: marshal properties: %v", err)
+		t.Fatalf("sseLine: %v", err)
 	}
-	env := struct {
-		Type       string          `json:"type"`
-		Properties json.RawMessage `json:"properties"`
-	}{Type: eventType, Properties: encodedProps}
-	body, err := json.Marshal(env)
-	if err != nil {
-		t.Fatalf("sseLine: marshal envelope: %v", err)
-	}
-	return sseDataPrefix + string(body) + "\n\n"
+	return line
 }
 
 // waitForConnNumber blocks until f.connected has delivered a value >= n, or

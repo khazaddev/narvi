@@ -58,6 +58,13 @@ const (
 	// OpenCodeSSEReconnectInterval/OpenCodeRequestTimeout).
 	testReconnectInterval = 2 * time.Second
 	testRequestTimeout    = 30 * time.Second
+
+	// testSummarizeTimeout (§7.2) is the New() param backing
+	// a.summarizeTimeout -- generous enough for a real, if small,
+	// live-scripted /summarize call (this Step's own research pass
+	// observed ~2s for one; testWait's own 15s budget below already
+	// covers ordinary test polling, this bounds the HTTP call itself).
+	testSummarizeTimeout = 60 * time.Second
 )
 
 // startServer spawns a REAL `opencode serve` process — via
@@ -97,7 +104,7 @@ func startServer(t *testing.T) string {
 // stopping its persistent SSE loop via t.Cleanup.
 func newAdapter(t *testing.T) *Adapter {
 	t.Helper()
-	a := New(startServer(t), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout)
+	a := New(startServer(t), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
 	t.Cleanup(a.Close)
 	return a
 }

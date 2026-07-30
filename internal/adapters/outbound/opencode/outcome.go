@@ -52,6 +52,59 @@ func deriveOutcome(err *openCodeTaggedError, hasText, hasToolCall bool) turnOutc
 	return turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeFailed, Reason: &reason}
 }
 
+// isContextOverflowError implements §7.2's own "classify on the typed
+// discriminator already decoded" design point — err.Name ==
+// "ContextOverflowError" is a genuine typed signal (openCodeTaggedError,
+// types.go), not string-matching a provider error body, the same
+// discipline §4.1 requires of ProviderError and §18.1 requires of
+// FallbackReason. Used by Adapter.finalizeOrRecoverFromOverflow
+// (adapter.go) to decide whether a failed outcome is even eligible for a
+// compaction retry at all; nil (no error at all, or a nil tagged error) is
+// never a ContextOverflowError.
+func isContextOverflowError(err *openCodeTaggedError) bool {
+	return err != nil && err.Name == "ContextOverflowError"
+}
+
+// enrichReasonForFailedRecovery builds the finalize reason used when a
+// §7.2 compaction-retry recovery attempt itself failed -- either
+// forceCompaction (the POST /session/{id}/summarize call) errored, or the
+// retried postPromptAsync dispatch itself failed at the transport level
+// (Adapter.attemptCompactionRetry, adapter.go). Deliberately references the
+// ORIGINAL overflow outcome's own reason (originalReason) alongside detail
+// (a short description of what failed, e.g. "forceCompaction: <err>"), so
+// the final reason string an operator sees names BOTH facts: the original
+// failure that triggered the recovery attempt, AND that a recovery was
+// attempted and also failed -- never a bare "opencode: ContextOverflowError"
+// indistinguishable from a turn where no recovery was ever attempted at
+// all.
+func enrichReasonForFailedRecovery(originalReason *string, detail string) string {
+	original := "opencode: ContextOverflowError"
+	if originalReason != nil {
+		original = *originalReason
+	}
+	return fmt.Sprintf("%s (compaction retry attempted and failed: %s)", original, detail)
+}
+
+// enrichReasonForRepeatedOverflow builds the finalize reason used when the
+// RETRIED prompt also overflowed (Adapter.finalizeOrRecoverFromOverflow,
+// adapter.go, ts.compactionAlreadyAttempted() already true) -- §7.2 point
+// 3's own "the original deferred error is what reaches deriveOutcome...
+// never a silent double failure" requirement: without this, the final
+// reason string would read identically to a first-time, never-retried
+// overflow, giving an operator no way to tell a recovery WAS attempted.
+// retryReason is the retried turn's OWN outcome.Reason (not the original
+// turn's) -- by the time this is called, that IS the current failure worth
+// naming, with the added context that a compaction retry already happened
+// once this turn and is not going to happen again (§7.2's own at-most-once
+// guard).
+func enrichReasonForRepeatedOverflow(retryReason *string) string {
+	reason := "opencode: ContextOverflowError"
+	if retryReason != nil {
+		reason = *retryReason
+	}
+	return fmt.Sprintf("%s (a compaction retry was already attempted this turn; the retried prompt also overflowed)", reason)
+}
+
 // subTaskOutcome maps an already-derived turn-level outcome onto
 // SubTaskFinish's own (separately generated, but value-identical) outcome
 // enum — see turn.go's own doc comment on why this adapter closes a

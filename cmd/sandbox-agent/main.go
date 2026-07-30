@@ -734,7 +734,8 @@ func run() error {
 		}
 
 		agentRuntime = opencode.New(result.BaseURL, timeouts.SSEInactivityTimeout,
-			timeouts.OpenCodeSSEReconnectInterval, timeouts.OpenCodeRequestTimeout)
+			timeouts.OpenCodeSSEReconnectInterval, timeouts.OpenCodeRequestTimeout,
+			timeouts.OpenCodeSummarizeTimeout)
 		defer agentRuntime.Close()
 
 		// §7: "Pin the OpenCode version in the image; record it in the

@@ -46,20 +46,52 @@ func (a *Adapter) resolveSession(ctx context.Context, cmd sandboxws.Prompt) (str
 // raw is cmd.Model (sandboxws.PromptModel, a *string) as a plain *string —
 // nil means "omit model entirely, let OpenCode use its own configured
 // default" (never resolved against the catalog or fallback, since there is
-// nothing to validate). A non-nil value that does not parse as
-// "provider/model", or a best-effort GET /api/model catalog call that
-// fails or returns empty, falls back to fallbackModel — deliberately
-// minimal: this does NOT check whether the requested model is actually
-// present in the catalog, only that a live catalog exists at all (§7's own
-// framing: a version bump silently dropping the catalog entirely is what
-// this guards against, not per-request model validation — a "fallback of
-// last resort", not a rich model-selection feature).
+// nothing to validate). A non-nil value is resolved via resolveProviderModel
+// below (shared with resolveModelForced, §7.2).
 func (a *Adapter) resolveModel(ctx context.Context, raw *string) *promptModelRef {
 	if raw == nil {
 		return nil
 	}
+	return a.resolveProviderModel(ctx, *raw)
+}
 
-	providerID, modelID, ok := strings.Cut(*raw, "/")
+// resolveModelForced implements §7.2's own "forced" model-resolution
+// variant, needed because POST /session/{id}/summarize has NO "omit and
+// let OpenCode pick" option the way prompt_async's own optional "model"
+// field does — VERIFIED live via GET /doc (the real OpenAPI schema):
+// /summarize's requestBody schema is {"providerID","modelID","auto"?},
+// with BOTH providerID and modelID listed under "required", and an empty
+// {} body independently reproduced live to return HTTP 400
+// {"name":"BadRequest","data":{"message":"Missing key\n  at
+// [\"providerID\"]"}} against the pinned OpenCode 1.17.15 binary. So
+// unlike resolveModel above, raw == nil here does NOT mean "omit" — there
+// is nothing to omit onto — it is treated exactly the same as resolveModel
+// treats a non-nil-but-unparseable raw: fall back to fallbackModelRef()
+// directly, no catalog call needed (matching resolveProviderModel's own
+// "unparseable raw skips the catalog entirely" branch, reused here rather
+// than duplicated). A non-nil raw goes through the SAME
+// resolveProviderModel resolution resolveModel itself uses. The return
+// value is NEVER nil — every caller (forceCompaction, and the retried
+// postPromptAsync that reuses the SAME resolved model, adapter.go's
+// finalizeOrRecoverFromOverflow/attemptCompactionRetry) can rely on that.
+func (a *Adapter) resolveModelForced(ctx context.Context, raw *string) *promptModelRef {
+	if raw == nil {
+		return fallbackModelRef()
+	}
+	return a.resolveProviderModel(ctx, *raw)
+}
+
+// resolveProviderModel is the actual catalog-lookup logic resolveModel and
+// resolveModelForced above BOTH share for a non-nil raw value: a raw string
+// that does not parse as "provider/model", or a best-effort GET /api/model
+// catalog call that fails or returns empty, falls back to fallbackModel —
+// deliberately minimal: this does NOT check whether the requested model is
+// actually present in the catalog, only that a live catalog exists at all
+// (§7's own framing: a version bump silently dropping the catalog entirely
+// is what this guards against, not per-request model validation — a
+// "fallback of last resort", not a rich model-selection feature).
+func (a *Adapter) resolveProviderModel(ctx context.Context, raw string) *promptModelRef {
+	providerID, modelID, ok := strings.Cut(raw, "/")
 	if !ok || providerID == "" || modelID == "" {
 		return fallbackModelRef()
 	}

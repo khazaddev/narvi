@@ -499,6 +499,35 @@ type Timeouts struct {
 	// able to hang forever. Not specified in the plan; chosen as 30s.
 	OpenCodeRequestTimeout time.Duration
 
+	// --- Step 44 standalone addition ("OpenCode adapter: context-overflow
+	// compaction retry", §7.2): no ordering relationship with either
+	// invariant chain above (or with any prior Step's standalone
+	// additions), so -- per those additions' own precedent -- a plain
+	// field with a sensible default, not wired into a fake invariant link.
+
+	// OpenCodeSummarizeTimeout bounds internal/adapters/outbound/
+	// opencode.Adapter.forceCompaction's own POST /session/{id}/summarize
+	// call specifically -- via doJSONTimeout (client.go), NOT the shared
+	// a.requestTimeout/OpenCodeRequestTimeout above, which this Step's own
+	// live investigation found would otherwise silently cap it: doJSON's
+	// context.WithTimeout(ctx, a.requestTimeout) wrap always takes the
+	// SHORTER of the caller's own ctx deadline and a.requestTimeout,
+	// regardless of what the call actually needs. Not specified in the
+	// plan; chosen generously as 120s -- mirroring HookTimeout's own "not
+	// specified in the plan; chosen generously" convention above, since
+	// the concrete cost of a real /summarize call against a large,
+	// genuinely-overflowed context is unknown: this Step's own real,
+	// live-verified /summarize call (a small conversation, §7.2's own
+	// research pass) completed in ~2s, but a large real-world context
+	// that actually triggered a ContextOverflowError in the first place
+	// could plausibly take far longer (40-90s), and OpenCodeRequestTimeout's
+	// own 30s default is sized for ordinary session/catalog/message-list
+	// calls, not a single non-streaming AI summarization pass. A dedicated
+	// field (rather than reusing OpenCodeRequestTimeout) is what actually
+	// makes it possible to give this ONE call site a different, more
+	// generous bound at all.
+	OpenCodeSummarizeTimeout time.Duration
+
 	// --- Audit-remediation (inbound-hygiene lens, WS/REST hygiene batch)
 	// standalone additions: no ordering relationship with either
 	// invariant chain above (or with any prior Step's standalone
@@ -1452,6 +1481,8 @@ func DefaultTimeouts() Timeouts {
 
 		OpenCodeSSEReconnectInterval: 2 * time.Second,  // not specified; chosen, deliberately short relative to SSEInactivityTimeout
 		OpenCodeRequestTimeout:       30 * time.Second, // not specified; chosen, bounds every doJSON call except the persistent SSE connection
+
+		OpenCodeSummarizeTimeout: 120 * time.Second, // not specified; chosen generously (§7.2, a single non-streaming summarization call)
 
 		ClientWSPingInterval:          30 * time.Second,       // not specified; chosen, matches SandboxWSHeartbeatInterval's own 30s cadence (§6.1)
 		ClientFetchHistoryMinInterval: 250 * time.Millisecond, // not specified; chosen, generous for real pagination while blocking a tight-loop hammer

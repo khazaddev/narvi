@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
@@ -83,6 +84,126 @@ func TestDeriveOutcome(t *testing.T) {
 				}
 				// Never leak the tagged error's own raw data verbatim --
 				// only the short, fixed Name-derived string.
+			}
+		})
+	}
+}
+
+// TestIsContextOverflowError mirrors TestDeriveOutcome's own table-driven
+// style: isContextOverflowError is §7.2's own "classify on the typed
+// discriminator already decoded" logic, hard-and-non-deterministic to
+// elicit reliably from a real model (a real ContextOverflowError requires
+// an actually-overflowed real context window), so tested directly against
+// constructed values instead.
+func TestIsContextOverflowError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  *openCodeTaggedError
+		want bool
+	}{
+		{name: "nil error is never a context overflow", err: nil, want: false},
+		{name: "ContextOverflowError is a context overflow", err: &openCodeTaggedError{Name: "ContextOverflowError"}, want: true},
+		{name: "MessageAbortedError is not a context overflow", err: &openCodeTaggedError{Name: "MessageAbortedError"}, want: false},
+		{name: "ProviderAuthError is not a context overflow", err: &openCodeTaggedError{Name: "ProviderAuthError"}, want: false},
+		{name: "empty name is not a context overflow", err: &openCodeTaggedError{Name: ""}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isContextOverflowError(tt.err); got != tt.want {
+				t.Errorf("isContextOverflowError(%+v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestEnrichReasonForFailedRecovery proves the reason-enrichment logic
+// used when a compaction/retry recovery attempt itself failed
+// (Adapter.attemptCompactionRetry, adapter.go): the result must reference
+// BOTH the original overflow reason AND the new failure detail, so an
+// operator can distinguish this from a first-time, never-retried overflow.
+func TestEnrichReasonForFailedRecovery(t *testing.T) {
+	t.Parallel()
+
+	original := "opencode: ContextOverflowError"
+	tests := []struct {
+		name           string
+		originalReason *string
+		detail         string
+		wantContains   []string
+	}{
+		{
+			name:           "nil original reason falls back to a fixed default",
+			originalReason: nil,
+			detail:         "forceCompaction: boom",
+			wantContains:   []string{"ContextOverflowError", "forceCompaction: boom"},
+		},
+		{
+			name:           "non-nil original reason is preserved verbatim",
+			originalReason: &original,
+			detail:         "retry postPromptAsync: boom",
+			wantContains:   []string{original, "retry postPromptAsync: boom"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := enrichReasonForFailedRecovery(tt.originalReason, tt.detail)
+			if got == "" {
+				t.Fatal("enrichReasonForFailedRecovery() returned an empty string")
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("enrichReasonForFailedRecovery() = %q, want it to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestEnrichReasonForRepeatedOverflow proves the reason-enrichment logic
+// used when a RETRIED prompt also overflowed
+// (Adapter.finalizeOrRecoverFromOverflow, adapter.go, compactionAttempted
+// already true): the result must mention that a retry was already
+// attempted, so the final reason string visibly differs from a first-time
+// overflow (§7.2 point 3's own "never a silent double failure"
+// requirement).
+func TestEnrichReasonForRepeatedOverflow(t *testing.T) {
+	t.Parallel()
+
+	retryReason := "opencode: ContextOverflowError"
+	tests := []struct {
+		name         string
+		retryReason  *string
+		wantContains []string
+	}{
+		{
+			name:         "nil retry reason falls back to a fixed default",
+			retryReason:  nil,
+			wantContains: []string{"ContextOverflowError", "already attempted"},
+		},
+		{
+			name:         "non-nil retry reason is preserved verbatim",
+			retryReason:  &retryReason,
+			wantContains: []string{retryReason, "already attempted"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := enrichReasonForRepeatedOverflow(tt.retryReason)
+			if got == "" {
+				t.Fatal("enrichReasonForRepeatedOverflow() returned an empty string")
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("enrichReasonForRepeatedOverflow() = %q, want it to contain %q", got, want)
+				}
 			}
 		})
 	}

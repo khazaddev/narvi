@@ -72,6 +72,33 @@ type turnState struct {
 	sawText            bool
 	sawToolCall        bool
 
+	// compacting/compactionAttempted implement §7.2's own compaction-retry
+	// guard. compacting is true for the whole window between
+	// Adapter.finalizeOrRecoverFromOverflow deciding to attempt a recovery
+	// (adapter.go) and either giving up or successfully re-dispatching the
+	// prompt — every dispatchEvent case that would otherwise corrupt this
+	// turnState's own tracked fields (markAssistantMessageID/
+	// setLastAssistantError/dispatchPart/finalize/setSessionError) with
+	// compaction-INTERNAL SSE traffic checks isCompacting first and no-ops
+	// instead (see dispatchEvent's own doc comment, sse.go, and this
+	// Step's own VERIFIED LIVE finding: a synchronous POST /summarize call
+	// still produces a full extra wave of message.updated/message.part.
+	// updated/session.idle/session.error events for the SAME sessionID on
+	// the SAME global SSE stream while it's in flight — see forceCompaction's
+	// own doc comment, compact.go, for the full captured event sequence).
+	// A single shared boolean guards all four dispatchEvent cases
+	// (message.updated, message.part.updated, session.idle, session.error)
+	// rather than one per case: simplicity wins here, since every one of
+	// them needs to be suppressed for the exact SAME reason and the exact
+	// SAME window.
+	//
+	// compactionAttempted is a SEPARATE, one-way flag (set once, never
+	// reset) guarding against a SECOND compaction attempt if the retried
+	// prompt ALSO overflows — at most one retry per turn (§7.2 point 3's
+	// own infinite-loop guard).
+	compacting          bool
+	compactionAttempted bool
+
 	lastActivity time.Time
 
 	// finalized is set exactly once, under mu, by tryFinalize below — and
@@ -223,6 +250,81 @@ func (ts *turnState) setSessionError(err openCodeTaggedError) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.sessionError = &err
+}
+
+// isCompacting/setCompacting implement the compacting guard described on
+// this type's own field comment above — read by dispatchEvent's four
+// guarded cases (sse.go), set by Adapter.finalizeOrRecoverFromOverflow/
+// attemptCompactionRetry (adapter.go).
+func (ts *turnState) isCompacting() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.compacting
+}
+
+func (ts *turnState) setCompacting(v bool) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.compacting = v
+}
+
+// compactionAlreadyAttempted reports the one-shot retry guard described on
+// this type's own field comment above — read-only; see tryBeginCompactionRetry
+// below for the ONLY path allowed to actually set it.
+func (ts *turnState) compactionAlreadyAttempted() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.compactionAttempted
+}
+
+// tryBeginCompactionRetry atomically implements finalizeOrRecoverFromOverflow's
+// own "first-time ContextOverflowError, not yet attempted" branch (adapter.go)
+// as a single locked critical section: check compactionAttempted, and if
+// false, mark it true and set compacting true, all under the SAME ts.mu
+// acquisition. Returns whether THIS call is the one that gets to launch the
+// retry.
+//
+// §7.2 Finding 2's own fix: the OLD call site did this as two SEPARATE
+// method calls (ts.compactionAlreadyAttempted() then, later, ts.
+// markCompactionAttempted()+ts.setCompacting(true)) — a classic
+// check-then-act race with no lock spanning both steps. The live SSE
+// session.idle dispatch (sse.go, on the persistent SSE-reader goroutine) and
+// the independent SSE-inactivity fallback (finalizeByFallback, adapter.go,
+// on StartTurn's own calling goroutine) can both observe the very first
+// ContextOverflowError for the same turn at nearly the same wall-clock
+// moment (a plausible near-tie: both are wall-clock-driven, independent
+// goroutines racing on the exact same a.sseInactivityTimeout threshold) —
+// under the old two-call sequence, both could read compactionAttempted==false
+// before either had set it, and both would go on to launch their own
+// attemptCompactionRetry goroutine: two concurrent POST /summarize calls and,
+// if both succeed, two concurrent retried prompt_async re-dispatches against
+// the SAME OpenCode session, violating §3.3's "exactly one processing per
+// session" invariant. Folding the check and the two writes into one
+// ts.mu-guarded method closes that race exactly the same way tryFinalize
+// above already closes the equivalent race for finalization.
+func (ts *turnState) tryBeginCompactionRetry() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.compactionAttempted {
+		return false
+	}
+	ts.compactionAttempted = true
+	ts.compacting = true
+	return true
+}
+
+// clearErrorsForRetry resets this turn's own tracked assistant/session
+// errors — called ONLY by Adapter.attemptCompactionRetry (adapter.go),
+// immediately after a successful forceCompaction and immediately before
+// re-dispatching the same prompt. CRITICAL: without this, a SUCCESSFUL
+// retry's own eventual session.idle would still see the STALE original
+// ContextOverflowError via errorForOutcome below and incorrectly finalize
+// the turn as failed even though the retry itself actually succeeded.
+func (ts *turnState) clearErrorsForRetry() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.lastAssistantError = nil
+	ts.sessionError = nil
 }
 
 func (ts *turnState) markSawText() {

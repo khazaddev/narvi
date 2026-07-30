@@ -52,7 +52,7 @@ func TestDoJSON_PerRequestTimeoutFires(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(srv.URL, testSSEInactivityTimeout, testReconnectInterval, clientRequestTimeout)
+	a := New(srv.URL, testSSEInactivityTimeout, testReconnectInterval, clientRequestTimeout, testSummarizeTimeout)
 	t.Cleanup(a.Close)
 
 	start := time.Now()
@@ -104,7 +104,7 @@ func TestConnectAndConsume_UnaffectedByRequestTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := New(srv.URL, testSSEInactivityTimeout, testReconnectInterval, clientRequestTimeout)
+	a := New(srv.URL, testSSEInactivityTimeout, testReconnectInterval, clientRequestTimeout, testSummarizeTimeout)
 	t.Cleanup(a.Close)
 
 	ctx, cancel := context.WithTimeout(context.Background(), streamDuration+testWait)

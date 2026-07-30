@@ -82,6 +82,25 @@ type promptPartInput struct {
 	Text string `json:"text"`
 }
 
+// --- summarize request/response (POST /session/{id}/summarize, §7.2) -------
+
+// summarizeRequest is POST /session/{id}/summarize's request body —
+// VERIFIED live via GET /doc (the real OpenAPI schema): {"providerID",
+// "modelID", "auto"?}, with BOTH providerID and modelID listed under
+// "required" (an empty {} body independently reproduced live to return
+// HTTP 400 {"name":"BadRequest","data":{"message":"Missing key\n  at
+// [\"providerID\"]"}} against the pinned OpenCode 1.17.15 binary) — UNLIKE
+// promptAsyncRequest's own optional "model" field above, /summarize has no
+// "omit and let OpenCode pick" option at all. Auto is never set by this
+// adapter (omitted, not false — its own real-world meaning, per §7.2's
+// research and dispatchPart's own "compaction" case, is "did the ENGINE
+// decide to compact on its own", which is never true for a call this
+// adapter itself explicitly issued) and so is not modeled as a field here.
+type summarizeRequest struct {
+	ProviderID string `json:"providerID"`
+	ModelID    string `json:"modelID"`
+}
+
 // --- model catalog (GET /api/model) -----------------------------------------
 
 // modelCatalogResponse is GET /api/model's response body — VERIFIED live:

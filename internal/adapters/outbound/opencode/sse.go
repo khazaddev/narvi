@@ -158,6 +158,19 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			return
 		}
 		ts.touch()
+		if ts.isCompacting() {
+			// §7.2's own VERIFIED LIVE finding: a synchronous POST
+			// /summarize call still produces its own message.updated
+			// events (a NEW assistant message with info.mode=="compaction")
+			// for the SAME sessionID while it's in flight -- every message
+			// arriving during this window is guaranteed compaction-
+			// internal, so it must not pollute assistantMessageIDs/
+			// lastAssistantError for the turn's own real outcome (see
+			// turnState's own compacting field comment, turn.go, and
+			// forceCompaction's own doc comment, compact.go, for the full
+			// captured event sequence this guards against).
+			return
+		}
 		if props.Info.Role == "assistant" {
 			// markAssistantMessageID is shared across the main lane and
 			// every sub-task lane alike -- dispatchPart's own
@@ -187,6 +200,16 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			return
 		}
 		ts.touch()
+		if ts.isCompacting() {
+			// Mirrors message.updated's own guard above -- a compaction's
+			// own message.part.updated wave (step-start, then "text"
+			// carrying the real cumulative summary text, then step-finish)
+			// must not be translated/counted toward this turn's own real
+			// output (dispatchPart's own "text" case would otherwise call
+			// ts.markSawText, polluting hasText for whatever outcome
+			// eventually gets computed).
+			return
+		}
 		a.dispatchPart(ts, subTaskID, props.Part)
 
 	case "session.idle":
@@ -210,8 +233,25 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			// as still alive.
 			return
 		}
+		if ts.isCompacting() {
+			// §7.2's own VERIFIED LIVE finding, the load-bearing guard: a
+			// synchronous POST /summarize call's OWN internal agentic
+			// sub-turn genuinely fires session.idle for this SAME
+			// sessionID while the /summarize HTTP call is still in
+			// flight (confirmed by capturing real GET /event traffic
+			// during a live /summarize call). Without this guard, THAT
+			// session.idle would reach the exact same finalize call
+			// below and finalize using whatever ts.errorForOutcome()
+			// still holds at that moment -- the ORIGINAL
+			// ContextOverflowError, since nothing has cleared it yet --
+			// finalizing the whole turn as failed BEFORE the retry
+			// prompt is even sent. touch() above already recorded this
+			// turn as still alive.
+			return
+		}
+		err := ts.errorForOutcome()
 		hasText, hasToolCall := ts.outcomeInputs()
-		a.finalize(ts, deriveOutcome(ts.errorForOutcome(), hasText, hasToolCall))
+		a.finalizeOrRecoverFromOverflow(props.SessionID, ts, deriveOutcome(err, hasText, hasToolCall), err)
 
 	case "session.error":
 		var props sessionErrorProps
@@ -229,6 +269,14 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			// error must not set the ENCLOSING turn's own sessionError;
 			// the task tool call's own "error" status is the real signal
 			// (maybeFinishTaskSubtask).
+			return
+		}
+		if ts.isCompacting() {
+			// Mirrors message.updated/session.idle above -- a
+			// compaction-internal error must not corrupt ts.sessionError
+			// for the turn's own real outcome (§7.2's own VERIFIED LIVE
+			// finding: see turnState's own compacting field comment,
+			// turn.go).
 			return
 		}
 		ts.setSessionError(props.Error)
