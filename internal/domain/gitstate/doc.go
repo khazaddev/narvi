@@ -8,7 +8,7 @@
 //     internal/domain/turn's house style: typed sentinel errors for
 //     illegal transitions, never a bare zero-value State silently
 //     accepted.
-//   - IsTerminal and RequiresStashRecovery (state.go): the ten states are
+//   - IsTerminal and RequiresStashRecovery (state.go): the twelve states are
 //     named so that whether a stash currently exists unpopped is legible
 //     from the state alone, without consulting which trigger produced it.
 //     RequiresStashRecovery is the package's central correctness property:
