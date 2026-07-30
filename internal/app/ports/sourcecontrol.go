@@ -94,6 +94,23 @@ type ResolveContractsFingerprintSpec struct {
 	Token string
 }
 
+// CheckRepoAccessSpec is what SourceControl.CheckRepoAccess (audit fix,
+// "warm-boot image access control") needs to answer a single question:
+// can spec.Token read spec.Owner/spec.Repo AT ALL, independent of any
+// branch or commit. Owner/Repo/Token are the same generic source-control
+// concepts CreatePRSpec/ResolveBranchSHASpec already use, not GitHub-
+// specific field names.
+type CheckRepoAccessSpec struct {
+	// Owner is the repo owner/organization.
+	Owner string
+	// Repo is the repo name (without owner prefix).
+	Repo string
+	// Token is the same plaintext, decrypted OAuth access token shape
+	// CreatePRSpec.Token/ResolveBranchSHASpec.Token already use. Never
+	// logged by any caller or implementation of this port.
+	Token string
+}
+
 // SourceControl is the port that creates a pull request against a source-
 // control host (§4.3). internal/adapters/outbound/githubapi (Step 21) is
 // the first real implementation; internal/adapters/outbound/gitlabapi
@@ -148,4 +165,31 @@ type SourceControl interface {
 	// contractdrift.Fingerprint's own real, non-guessed output over the
 	// directory's actual current contents.
 	ResolveContractsFingerprint(ctx context.Context, spec ResolveContractsFingerprintSpec) (fingerprint string, exists bool, err error)
+
+	// CheckRepoAccess reports whether spec.Token can read spec.Owner/
+	// spec.Repo at all, independent of any branch/commit -- the audit fix
+	// ("warm-boot image access control") that gates
+	// app/sessionactor.resolveAndSetImage (imageresolve.go) before it will
+	// either mint a pending image_builds row or warm-hit an already-ready
+	// one for a given repo set: neither may happen unless the SPAWNING
+	// session's own creator can currently read every one of its repos.
+	//
+	// (true, nil) means definitively yes. (false, nil) means definitively
+	// no (e.g. a real GitHub 404, or a 403 that is NOT itself a rate-limit/
+	// abuse-detection response, for this token against this repo) -- a
+	// legitimate, expected answer, not a failure; callers use this to deny
+	// warm-boot for exactly this spawn, exactly like ResolveContracts
+	// Fingerprint's own exists=false, err=nil is a legitimate "no
+	// directory" answer, not an error. err != nil means the check itself
+	// could not be completed (network/timeout/5xx, OR a 403 that GitHub's
+	// own real rate-limit/abuse-detection mechanism produced -- see
+	// internal/adapters/outbound/githubapi.isRateLimitedResponse: GitHub
+	// returns 403 for both a genuine denial and a rate-limited request, so
+	// an implementation MUST distinguish them rather than reporting every
+	// 403 as a definitive deny) -- callers MUST NOT treat err != nil as a
+	// definitive "no": see resolveAndSetImage's own doc comment for why a
+	// genuine "cannot read this repo" and "could not determine access
+	// right now" must never collapse into the same on-disk consequence
+	// for every session in the fleet.
+	CheckRepoAccess(ctx context.Context, spec CheckRepoAccessSpec) (bool, error)
 }

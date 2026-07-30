@@ -196,6 +196,17 @@ type Registry struct {
 	// a mock-configured Environment's repo.
 	contractDriftDetected metric.Int64Counter
 
+	// repoAccessCache is the audit fix's ("warm-boot image access control",
+	// HIGH) own addition: the process-wide, in-memory TTL cache backing
+	// resolveAndSetImage's own repo-access gate (imageresolve.go),
+	// constructed exactly once here and threaded through to every Actor
+	// this Registry hydrates -- mirroring how contractDriftDetected above
+	// is already threaded through. See repoaccesscache.go's own top
+	// comment for why this is keyed by (user, repo), not per-session, and
+	// therefore must be shared across every Actor rather than owned by
+	// any one of them.
+	repoAccessCache *repoAccessCache
+
 	// group tracks every actor's mailbox-loop goroutine, so evicted/
 	// crashed actors are cleanly reaped and Shutdown can wait on all of
 	// them. Deliberately the zero value, NOT errgroup.WithContext(...) --
@@ -289,6 +300,7 @@ func NewRegistry(
 		tokenEncryptionKey:     tokenEncryptionKey,
 		openCodeRuntimeVersion: openCodeRuntimeVersion,
 		contractDriftDetected:  contractDriftDetected,
+		repoAccessCache:        newRepoAccessCache(),
 		lifecycleCtx:           lifecycleCtx,
 		cancel:                 cancel,
 	}, nil

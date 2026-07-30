@@ -878,6 +878,66 @@ func TestDefaultTimeouts_Step40StandaloneField(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_WarmBootAccessGateStandaloneFields proves the audit
+// fix ("warm-boot image access control", HIGH) standalone additions
+// (RepoAccessCheckTimeout, RepoAccessCacheTTL) ship with sane, non-zero
+// defaults matching their own documented values. These fields have no
+// ordering relationship with either invariant chain, so this only checks
+// their own values -- not Validate, which never touches them.
+func TestDefaultTimeouts_WarmBootAccessGateStandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.RepoAccessCheckTimeout <= 0 {
+		t.Errorf("RepoAccessCheckTimeout = %v, want > 0", to.RepoAccessCheckTimeout)
+	}
+	if to.RepoAccessCheckTimeout != 10*time.Second {
+		t.Errorf("RepoAccessCheckTimeout = %v, want %v", to.RepoAccessCheckTimeout, 10*time.Second)
+	}
+
+	if to.RepoAccessCacheTTL <= 0 {
+		t.Errorf("RepoAccessCacheTTL = %v, want > 0", to.RepoAccessCacheTTL)
+	}
+	if to.RepoAccessCacheTTL != 10*time.Minute {
+		t.Errorf("RepoAccessCacheTTL = %v, want %v", to.RepoAccessCacheTTL, 10*time.Minute)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (these fields must not disturb either invariant chain)", err)
+	}
+}
+
+// TestDefaultTimeouts_RepoAccessCheckBreakerWindowStandaloneField proves the
+// audit-remediation (correctness-availability, finding #5) standalone
+// addition -- RepoAccessCheckBreakerWindow -- ships with a sane, non-zero
+// default, strictly shorter than RepoAccessCacheTTL (this field damps
+// repeated NETWORK CALLS during a transient SCM outage; it must never be
+// mistaken for -- or accidentally sized like -- the much longer window a
+// genuine access VERDICT is cached for), and does not disturb either
+// invariant chain.
+func TestDefaultTimeouts_RepoAccessCheckBreakerWindowStandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.RepoAccessCheckBreakerWindow <= 0 {
+		t.Errorf("RepoAccessCheckBreakerWindow = %v, want > 0", to.RepoAccessCheckBreakerWindow)
+	}
+	if to.RepoAccessCheckBreakerWindow != 2*time.Minute {
+		t.Errorf("RepoAccessCheckBreakerWindow = %v, want %v", to.RepoAccessCheckBreakerWindow, 2*time.Minute)
+	}
+	if to.RepoAccessCheckBreakerWindow >= to.RepoAccessCacheTTL {
+		t.Errorf("RepoAccessCheckBreakerWindow = %v, want strictly less than RepoAccessCacheTTL = %v "+
+			"(damping repeated network calls during an outage is a much shorter-lived concern than caching a genuine access verdict)",
+			to.RepoAccessCheckBreakerWindow, to.RepoAccessCacheTTL)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
