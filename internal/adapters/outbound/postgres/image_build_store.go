@@ -10,11 +10,12 @@ import (
 )
 
 // ImageBuildStore is a thin, pass-through wrapper around the sqlc-generated
-// image_builds queries (Step 26, "image builds", §8.5-note/§10-P2). No
-// caching, no retries, no business rules -- fingerprinting lives in
-// domain/imagebuild, the spawn-time lookup/best-effort-upsert lives in
-// app/sessionactor/dispatch.go, and the claim/attempt/record loop lives in
-// app/imagebuild.
+// image_builds queries (Step 26, "image builds", §8.5-note/§10-P2; Step
+// 41, "warm boot: shared fingerprint", §19.1). No caching, no retries, no
+// business rules -- fingerprinting lives in domain/imagebuild, the
+// spawn-time lookup/best-effort-upsert lives in
+// app/sessionactor/imageresolve.go, and the claim/attempt/record loop
+// lives in app/imagebuild.
 type ImageBuildStore struct {
 	q *sqlcgen.Queries
 }

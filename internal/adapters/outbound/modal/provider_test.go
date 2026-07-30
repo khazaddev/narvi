@@ -672,7 +672,11 @@ func TestProvider_RestoreFromSnapshot_Error(t *testing.T) {
 }
 
 func TestProvider_BuildImage(t *testing.T) {
-	spec := ports.ImageSpec{Base: "base:v1", RepoSHAs: map[string]string{"narvi": "abc123"}, RuntimeVersion: "go1.26"}
+	spec := ports.ImageSpec{
+		Base:           "base:v1",
+		Repos:          map[string]ports.RepoRef{"narvi": {URL: "https://github.com/acme/narvi.git", SHA: "abc123"}},
+		RuntimeVersion: "go1.26",
+	}
 	var got imageBuildRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/images" {
@@ -698,7 +702,8 @@ func TestProvider_BuildImage(t *testing.T) {
 	if ref != "build-1" {
 		t.Errorf("BuildImage() = %q, want %q", ref, "build-1")
 	}
-	if !reflect.DeepEqual(got, imageBuildRequest{Base: spec.Base, RepoSHAs: spec.RepoSHAs, RuntimeVersion: spec.RuntimeVersion}) {
+	wantRepos := map[string]imageBuildRequestRepo{"narvi": {URL: "https://github.com/acme/narvi.git", SHA: "abc123"}}
+	if !reflect.DeepEqual(got, imageBuildRequest{Base: spec.Base, Repos: wantRepos, RuntimeVersion: spec.RuntimeVersion}) {
 		t.Errorf("request body = %+v, want fields matching spec %+v", got, spec)
 	}
 }

@@ -173,22 +173,63 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.ImageBuild, error) 
 // are each already atomic as a single UPDATE ... WHERE status='building',
 // so no additional transaction wrapper is needed the way claimBatch's own
 // multi-statement claim sequence requires one). Every failure here
-// (decode error, BuildImage error, a failed/no-op outcome-record call) is
-// logged and returns -- it never propagates, so one row's problem can
-// never abort the rest of PumpOnce's own batch.
+// (decode error, no-SHA-resolution-yet, BuildImage error, a failed/no-op
+// outcome-record call) is logged and returns -- it never propagates, so
+// one row's problem can never abort the rest of PumpOnce's own batch.
+//
+// # Step 41/42 boundary (§19.1 vs §19.9) -- documented design decision
+//
+// row.RepoUrls (§19.1's redefined image_builds column) carries the
+// fingerprint's own URL-keyed inputs (repo name -> normalized clone URL),
+// NEVER a resolved SHA -- deliberately: the whole point of the
+// redefinition is that computing a fingerprint (imageresolve.go's
+// resolveAndSetImage, spawn-side) never resolves a SHA at all, for ANY
+// spawn, warm-hit or miss alike. §19.1's own prose says the builder
+// resolves each repo's default-branch tip SHA "at claim time" -- but
+// §19.9's phasing note assigns that exact claim-time SHA resolution, and
+// the new platform-level GitHub credential it needs (a session-creator
+// token cannot be borrowed here: this pump has no session/creator context
+// at all, by construction), to Step 42, not this one. Concretely, that
+// means: this Step (41) has NO mechanism ANYWHERE to turn a repo's URL
+// into a concrete SHA outside of a live spawn's own resolved-image lookup
+// -- there is deliberately no claim-time resolution logic here yet.
+//
+// A row naming at least one repo therefore cannot be built for real in
+// Step 41 -- there is no way to construct a real ports.RepoRef{URL, SHA}
+// for it (never pass an empty/zero SHA to BuildImage silently). This is
+// handled explicitly and cleanly, the same way a decode failure already
+// is: logged, recorded as a failed attempt (so the row cycles through
+// EvaluateBackoff's own retry schedule rather than being stuck in
+// 'building' forever), and this tick moves on. Once Step 42 lands its own
+// claim-time resolution, this exact branch is where that resolution call
+// belongs. A row naming NO repos (base+runtime only) has nothing to
+// resolve and DOES build for real, even in Step 41 -- there is no reason
+// to block that case on Step 42's own work.
 func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 	logger := platform.Logger(ctx).With("fingerprint", row.Fingerprint, "attempt_count", row.AttemptCount)
 
-	var repoSHAs map[string]string
-	if err := json.Unmarshal(row.RepoShas, &repoSHAs); err != nil {
-		logger.Error("imagebuild: decode repo_shas failed; recording as a failed attempt", "error", err)
+	var repoURLs map[string]string
+	if err := json.Unmarshal(row.RepoUrls, &repoURLs); err != nil {
+		logger.Error("imagebuild: decode repo_urls failed; recording as a failed attempt", "error", err)
 		b.recordFailure(ctx, logger, row)
 		return
 	}
 
+	if len(repoURLs) > 0 {
+		// See this function's own "Step 41/42 boundary" doc comment above:
+		// no claim-time SHA resolution mechanism exists yet (Step 42,
+		// §19.2/§19.9) -- a repo-bearing row cannot yet become a real,
+		// reproducible BuildImage call.
+		logger.Warn("imagebuild: no claim-time SHA resolution available yet (Step 42, §19.2/§19.9); cannot build a repo-bearing fingerprint; recording as a failed attempt",
+			"repo_count", len(repoURLs))
+		b.recordFailure(ctx, logger, row)
+		return
+	}
+
+	builtRepoSHAs := map[string]string{}
 	ref, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
 		Base:           row.Base,
-		RepoSHAs:       repoSHAs,
+		Repos:          map[string]ports.RepoRef{},
 		RuntimeVersion: row.RuntimeVersion,
 	})
 	if buildErr != nil {
@@ -197,10 +238,23 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 		return
 	}
 
+	builtAt := time.Now()
+	builtRepoSHAsJSON, err := json.Marshal(builtRepoSHAs)
+	if err != nil {
+		// Cannot happen for a plain map[string]string, but this function
+		// never lets a marshal failure propagate -- see this function's
+		// own top doc comment.
+		logger.Error("imagebuild: marshal built_repo_shas failed; recording as a failed attempt", "error", err)
+		b.recordFailure(ctx, logger, row)
+		return
+	}
+
 	imageRef := string(ref)
 	if _, err := b.store.RecordSuccess(ctx, sqlcgen.RecordImageBuildSuccessParams{
-		Fingerprint: row.Fingerprint,
-		ImageRef:    &imageRef,
+		Fingerprint:   row.Fingerprint,
+		ImageRef:      &imageRef,
+		BuiltRepoShas: builtRepoSHAsJSON,
+		BuiltAt:       pgtype.Timestamptz{Time: builtAt, Valid: true},
 	}); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// The row is no longer 'building' -- a should-be-rare, benign

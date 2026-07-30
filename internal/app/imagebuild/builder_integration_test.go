@@ -215,18 +215,49 @@ func readFailureStreak(ctx context.Context, t *testing.T, reader *sdkmetric.Manu
 
 // seedPendingImageBuild inserts a fresh 'pending' image_builds row directly
 // (bypassing app/sessionactor entirely -- this package's own tests exercise
-// Builder in isolation, matching its own doc.go's scope).
+// Builder in isolation, matching its own doc.go's scope). repo_urls is
+// seeded EMPTY (a base+runtime-only fingerprint) deliberately: Step 41
+// ("warm boot: shared fingerprint", §19.1) has no claim-time SHA
+// resolution mechanism yet (that's Step 42, §19.2/§19.9 -- see attempt's
+// own doc comment), so a row naming any repo can never actually reach a
+// real BuildImage call in this package's own tests -- only a repo-less row
+// can, which is exactly what these backoff/streak tests need to exercise
+// (they're testing the retry/streak MECHANISM, orthogonal to which
+// fingerprints Step 41 can build). See
+// TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly
+// below for the repo-bearing case's own dedicated coverage.
 func seedPendingImageBuild(ctx context.Context, t *testing.T, store *narvipg.ImageBuildStore, fingerprint string) {
 	t.Helper()
 
-	repoSHAs, err := json.Marshal(map[string]string{"repo1": "sha-fixed"})
+	repoURLs, err := json.Marshal(map[string]string{})
 	if err != nil {
-		t.Fatalf("marshal repo shas: %v", err)
+		t.Fatalf("marshal repo urls: %v", err)
 	}
 	if err := store.UpsertPending(ctx, sqlcgen.UpsertPendingImageBuildParams{
 		Fingerprint:    fingerprint,
 		Base:           "narvi/base:test",
-		RepoShas:       repoSHAs,
+		RepoUrls:       repoURLs,
+		RuntimeVersion: "1.0.0-test",
+	}); err != nil {
+		t.Fatalf("seed pending image_builds row: %v", err)
+	}
+}
+
+// seedPendingImageBuildWithRepos is seedPendingImageBuild's own sibling for
+// tests that specifically need a REPO-BEARING pending row (i.e. exercising
+// the "no claim-time SHA resolution yet" skip path, not the backoff/streak
+// mechanism above).
+func seedPendingImageBuildWithRepos(ctx context.Context, t *testing.T, store *narvipg.ImageBuildStore, fingerprint string, repoURLsIn map[string]string) {
+	t.Helper()
+
+	repoURLs, err := json.Marshal(repoURLsIn)
+	if err != nil {
+		t.Fatalf("marshal repo urls: %v", err)
+	}
+	if err := store.UpsertPending(ctx, sqlcgen.UpsertPendingImageBuildParams{
+		Fingerprint:    fingerprint,
+		Base:           "narvi/base:test",
+		RepoUrls:       repoURLs,
 		RuntimeVersion: "1.0.0-test",
 	}); err != nil {
 		t.Fatalf("seed pending image_builds row: %v", err)
@@ -401,5 +432,73 @@ func TestPumpOnce_FailureStreak_FiresAtThresholdNotBefore(t *testing.T) {
 	tickUntilDue(4)
 	if got := readFailureStreak(ctx, t, otelReader) - before; got != 2 {
 		t.Fatalf("failure streak delta after attempt 4 (beyond threshold) = %d, want 2", got)
+	}
+}
+
+// TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly
+// proves this Step's own resolved Step 41/42 boundary decision (attempt's
+// own doc comment, builder.go): a claimed row naming at least one repo
+// CANNOT be built for real in Step 41 (no claim-time SHA resolution
+// mechanism exists yet -- that's Step 42, §19.2/§19.9), and this is
+// handled as a clean, well-defined, tested behavior -- NEVER a crash and
+// NEVER a BuildImage call carrying an empty/zero SHA:
+//   - BuildImage is never even called;
+//   - the row is recorded as a failed attempt (attempt_count/next_retry_at
+//     advance via the SAME domain/imagebuild.EvaluateBackoff schedule any
+//     other failure uses), so it keeps cycling through backoff rather than
+//     being stuck in 'building' forever, ready to actually build for real
+//     the moment Step 42 ships claim-time resolution.
+func TestPumpOnce_RepoBearingRow_NoSHAResolutionYet_SkipsBuildImageCleanly(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-repo-bearing-no-sha-yet"
+	seedPendingImageBuildWithRepos(ctx, t, store, fingerprint, map[string]string{
+		"repo1": "https://github.com/acme/repo1",
+	})
+
+	// A provider that would fail the test outright if BuildImage were ever
+	// actually invoked -- this test's whole point is that it must NOT be.
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ImageBuildBackoffBase = 200 * time.Millisecond
+	timeouts.ImageBuildBackoffMax = 500 * time.Millisecond
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 0 {
+		t.Fatalf("BuildImage call count = %d, want 0 (a repo-bearing row has no resolved SHA to build with in Step 41)", got)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusFailed {
+		t.Errorf("status = %q, want %q (recorded as a retryable failure, not stuck in 'building')", row.Status, sqlcgen.ImageBuildStatusFailed)
+	}
+	if row.AttemptCount != 1 {
+		t.Errorf("attempt_count = %d, want 1", row.AttemptCount)
+	}
+	if !row.NextRetryAt.Valid || !row.NextRetryAt.Time.After(time.Now()) {
+		t.Errorf("next_retry_at = %v, want set and strictly in the future", row.NextRetryAt)
+	}
+	if row.ImageRef != nil {
+		t.Errorf("image_ref = %v, want nil (never built)", row.ImageRef)
+	}
+	if row.BuiltRepoShas != nil {
+		t.Errorf("built_repo_shas = %v, want nil (never built)", row.BuiltRepoShas)
+	}
+	if row.BuiltAt.Valid {
+		t.Errorf("built_at = %v, want unset (never built)", row.BuiltAt)
 	}
 }

@@ -15,7 +15,7 @@ const claimImageBuild = `-- name: ClaimImageBuild :one
 UPDATE image_builds
 SET status = 'building', attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now()
 WHERE fingerprint = $1
-RETURNING fingerprint, base, repo_shas, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at
 `
 
 // The claim half of the pump's own two-step (claim-then-attempt-outside-
@@ -34,7 +34,7 @@ func (q *Queries) ClaimImageBuild(ctx context.Context, fingerprint string) (Imag
 	err := row.Scan(
 		&i.Fingerprint,
 		&i.Base,
-		&i.RepoShas,
+		&i.RepoUrls,
 		&i.RuntimeVersion,
 		&i.ImageRef,
 		&i.Status,
@@ -43,20 +43,26 @@ func (q *Queries) ClaimImageBuild(ctx context.Context, fingerprint string) (Imag
 		&i.NextRetryAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BuiltRepoShas,
+		&i.BuiltAt,
 	)
 	return i, err
 }
 
 const getImageBuild = `-- name: GetImageBuild :one
 
-SELECT fingerprint, base, repo_shas, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at FROM image_builds
+SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at FROM image_builds
 WHERE fingerprint = $1
 `
 
 // Queries backing ImageBuildStore (Step 26, "image builds", §8.5-note/
-// §10-P2). See migrations/000024_image_builds.up.sql for the table's own
-// doc comment (why base/repo_shas/runtime_version are persisted alongside
-// the fingerprint, not just the hash).
+// §10-P2; Step 41, "warm boot: shared fingerprint", §19.1). See
+// migrations/000024_image_builds.up.sql and
+// migrations/000039_image_builds_shared_fingerprint.up.sql for the
+// table's own doc comments (why base/repo_urls/runtime_version are
+// persisted alongside the fingerprint, not just the hash; why repo_urls
+// carries each repo's normalized clone URL rather than a resolved SHA;
+// why built_repo_shas/built_at exist).
 // dispatch.go's own spawn-time lookup: status='ready' -> use image_ref;
 // anything else (or pgx.ErrNoRows) -> the caller falls back to the base
 // image for THIS spawn, never blocking on a build (§10 Phase 2).
@@ -66,7 +72,7 @@ func (q *Queries) GetImageBuild(ctx context.Context, fingerprint string) (ImageB
 	err := row.Scan(
 		&i.Fingerprint,
 		&i.Base,
-		&i.RepoShas,
+		&i.RepoUrls,
 		&i.RuntimeVersion,
 		&i.ImageRef,
 		&i.Status,
@@ -75,12 +81,14 @@ func (q *Queries) GetImageBuild(ctx context.Context, fingerprint string) (ImageB
 		&i.NextRetryAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BuiltRepoShas,
+		&i.BuiltAt,
 	)
 	return i, err
 }
 
 const listDueImageBuilds = `-- name: ListDueImageBuilds :many
-SELECT fingerprint, base, repo_shas, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at FROM image_builds
+SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at FROM image_builds
 WHERE status = 'pending' OR (status = 'failed' AND next_retry_at <= now())
 ORDER BY updated_at
 LIMIT $1
@@ -109,7 +117,7 @@ func (q *Queries) ListDueImageBuilds(ctx context.Context, limit int32) ([]ImageB
 		if err := rows.Scan(
 			&i.Fingerprint,
 			&i.Base,
-			&i.RepoShas,
+			&i.RepoUrls,
 			&i.RuntimeVersion,
 			&i.ImageRef,
 			&i.Status,
@@ -118,6 +126,8 @@ func (q *Queries) ListDueImageBuilds(ctx context.Context, limit int32) ([]ImageB
 			&i.NextRetryAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.BuiltRepoShas,
+			&i.BuiltAt,
 		); err != nil {
 			return nil, err
 		}
@@ -133,7 +143,7 @@ const recordImageBuildFailure = `-- name: RecordImageBuildFailure :one
 UPDATE image_builds
 SET status = 'failed', next_retry_at = $2, updated_at = now()
 WHERE fingerprint = $1 AND status = 'building'
-RETURNING fingerprint, base, repo_shas, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at
 `
 
 type RecordImageBuildFailureParams struct {
@@ -151,7 +161,7 @@ func (q *Queries) RecordImageBuildFailure(ctx context.Context, arg RecordImageBu
 	err := row.Scan(
 		&i.Fingerprint,
 		&i.Base,
-		&i.RepoShas,
+		&i.RepoUrls,
 		&i.RuntimeVersion,
 		&i.ImageRef,
 		&i.Status,
@@ -160,20 +170,24 @@ func (q *Queries) RecordImageBuildFailure(ctx context.Context, arg RecordImageBu
 		&i.NextRetryAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BuiltRepoShas,
+		&i.BuiltAt,
 	)
 	return i, err
 }
 
 const recordImageBuildSuccess = `-- name: RecordImageBuildSuccess :one
 UPDATE image_builds
-SET status = 'ready', image_ref = $2, next_retry_at = NULL, updated_at = now()
+SET status = 'ready', image_ref = $2, built_repo_shas = $3, built_at = $4, next_retry_at = NULL, updated_at = now()
 WHERE fingerprint = $1 AND status = 'building'
-RETURNING fingerprint, base, repo_shas, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at
 `
 
 type RecordImageBuildSuccessParams struct {
-	Fingerprint string  `json:"fingerprint"`
-	ImageRef    *string `json:"image_ref"`
+	Fingerprint   string             `json:"fingerprint"`
+	ImageRef      *string            `json:"image_ref"`
+	BuiltRepoShas []byte             `json:"built_repo_shas"`
+	BuiltAt       pgtype.Timestamptz `json:"built_at"`
 }
 
 // The success half of the outcome-recording step, run in a SECOND, fresh
@@ -183,13 +197,23 @@ type RecordImageBuildSuccessParams struct {
 // so a stale/already-superseded row is a harmless no-op (:one on zero
 // matched rows surfaces pgx.ErrNoRows, which the caller logs and moves on
 // from -- exactly like recordProviderOutcome's own superseded-gen guard).
+// built_repo_shas/built_at (§19.1) record the CONCRETE per-repo SHAs this
+// specific successful build actually used (and when) -- the caller's own
+// ports.ImageSpec.Repos, not repo_urls' own URL-keyed fingerprint input --
+// so §19.2's later freshness pump has something to compare a repo's
+// current default-branch tip against.
 func (q *Queries) RecordImageBuildSuccess(ctx context.Context, arg RecordImageBuildSuccessParams) (ImageBuild, error) {
-	row := q.db.QueryRow(ctx, recordImageBuildSuccess, arg.Fingerprint, arg.ImageRef)
+	row := q.db.QueryRow(ctx, recordImageBuildSuccess,
+		arg.Fingerprint,
+		arg.ImageRef,
+		arg.BuiltRepoShas,
+		arg.BuiltAt,
+	)
 	var i ImageBuild
 	err := row.Scan(
 		&i.Fingerprint,
 		&i.Base,
-		&i.RepoShas,
+		&i.RepoUrls,
 		&i.RuntimeVersion,
 		&i.ImageRef,
 		&i.Status,
@@ -198,12 +222,14 @@ func (q *Queries) RecordImageBuildSuccess(ctx context.Context, arg RecordImageBu
 		&i.NextRetryAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.BuiltRepoShas,
+		&i.BuiltAt,
 	)
 	return i, err
 }
 
 const upsertPendingImageBuild = `-- name: UpsertPendingImageBuild :exec
-INSERT INTO image_builds (fingerprint, base, repo_shas, runtime_version)
+INSERT INTO image_builds (fingerprint, base, repo_urls, runtime_version)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (fingerprint) DO NOTHING
 `
@@ -211,14 +237,14 @@ ON CONFLICT (fingerprint) DO NOTHING
 type UpsertPendingImageBuildParams struct {
 	Fingerprint    string `json:"fingerprint"`
 	Base           string `json:"base"`
-	RepoShas       []byte `json:"repo_shas"`
+	RepoUrls       []byte `json:"repo_urls"`
 	RuntimeVersion string `json:"runtime_version"`
 }
 
-// Best-effort tracking-row creation, called from dispatch.go on ANY miss
-// (no row yet) -- ON CONFLICT DO NOTHING is correct, not merely
+// Best-effort tracking-row creation, called from imageresolve.go on ANY
+// miss (no row yet) -- ON CONFLICT DO NOTHING is correct, not merely
 // convenient: a fingerprint deterministically encodes
-// (base, repo_shas, runtime_version), so a row already existing under the
+// (base, repo_urls, runtime_version), so a row already existing under the
 // SAME fingerprint already carries identical values for those columns
 // (barring an astronomically unlikely hash collision) -- there is nothing
 // to update, and this must never clobber an existing row's own
@@ -230,7 +256,7 @@ func (q *Queries) UpsertPendingImageBuild(ctx context.Context, arg UpsertPending
 	_, err := q.db.Exec(ctx, upsertPendingImageBuild,
 		arg.Fingerprint,
 		arg.Base,
-		arg.RepoShas,
+		arg.RepoUrls,
 		arg.RuntimeVersion,
 	)
 	return err

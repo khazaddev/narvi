@@ -29,11 +29,24 @@ type restoreSandboxRequest struct {
 	SessionConfig sessionconfig.SessionConfig `json:"sessionConfig"`
 }
 
-// imageBuildRequest is the body POSTed to /v1/images.
+// imageBuildRequest is the body POSTed to /v1/images. §19.1 ("warm boot:
+// shared fingerprint", Step 41): repos now carries BOTH the clone url and
+// the concrete sha per repo (imageBuildRequestRepo below), not a bare
+// name->sha map — this is what lets the (external, opaque-to-this-repo)
+// build service do a real, full clone from the real origin (§19.1: "build
+// service bakes /narvi/image-manifest.json and full clones") instead of a
+// SHA with no origin to fetch it from.
 type imageBuildRequest struct {
-	Base           string            `json:"base"`
-	RepoSHAs       map[string]string `json:"repoShas,omitempty"`
-	RuntimeVersion string            `json:"runtimeVersion,omitempty"`
+	Base           string                           `json:"base"`
+	Repos          map[string]imageBuildRequestRepo `json:"repos,omitempty"`
+	RuntimeVersion string                           `json:"runtimeVersion,omitempty"`
+}
+
+// imageBuildRequestRepo is imageBuildRequest.Repos' own value shape,
+// mirroring ports.RepoRef{URL, SHA} field-for-field.
+type imageBuildRequestRepo struct {
+	URL string `json:"url"`
+	SHA string `json:"sha"`
 }
 
 // sandboxResponse is returned by CreateSandbox and RestoreFromSnapshot on

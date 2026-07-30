@@ -1,7 +1,11 @@
 -- Queries backing ImageBuildStore (Step 26, "image builds", §8.5-note/
--- §10-P2). See migrations/000024_image_builds.up.sql for the table's own
--- doc comment (why base/repo_shas/runtime_version are persisted alongside
--- the fingerprint, not just the hash).
+-- §10-P2; Step 41, "warm boot: shared fingerprint", §19.1). See
+-- migrations/000024_image_builds.up.sql and
+-- migrations/000039_image_builds_shared_fingerprint.up.sql for the
+-- table's own doc comments (why base/repo_urls/runtime_version are
+-- persisted alongside the fingerprint, not just the hash; why repo_urls
+-- carries each repo's normalized clone URL rather than a resolved SHA;
+-- why built_repo_shas/built_at exist).
 
 -- name: GetImageBuild :one
 -- dispatch.go's own spawn-time lookup: status='ready' -> use image_ref;
@@ -11,10 +15,10 @@ SELECT * FROM image_builds
 WHERE fingerprint = $1;
 
 -- name: UpsertPendingImageBuild :exec
--- Best-effort tracking-row creation, called from dispatch.go on ANY miss
--- (no row yet) -- ON CONFLICT DO NOTHING is correct, not merely
+-- Best-effort tracking-row creation, called from imageresolve.go on ANY
+-- miss (no row yet) -- ON CONFLICT DO NOTHING is correct, not merely
 -- convenient: a fingerprint deterministically encodes
--- (base, repo_shas, runtime_version), so a row already existing under the
+-- (base, repo_urls, runtime_version), so a row already existing under the
 -- SAME fingerprint already carries identical values for those columns
 -- (barring an astronomically unlikely hash collision) -- there is nothing
 -- to update, and this must never clobber an existing row's own
@@ -22,7 +26,7 @@ WHERE fingerprint = $1;
 -- (internal/app/imagebuild) owns exclusively. :exec (not :one) because a
 -- conflict correctly returns zero rows, which a :one query would
 -- surface as pgx.ErrNoRows -- the caller has no use for the row anyway.
-INSERT INTO image_builds (fingerprint, base, repo_shas, runtime_version)
+INSERT INTO image_builds (fingerprint, base, repo_urls, runtime_version)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (fingerprint) DO NOTHING;
 
@@ -67,8 +71,13 @@ RETURNING *;
 -- so a stale/already-superseded row is a harmless no-op (:one on zero
 -- matched rows surfaces pgx.ErrNoRows, which the caller logs and moves on
 -- from -- exactly like recordProviderOutcome's own superseded-gen guard).
+-- built_repo_shas/built_at (§19.1) record the CONCRETE per-repo SHAs this
+-- specific successful build actually used (and when) -- the caller's own
+-- ports.ImageSpec.Repos, not repo_urls' own URL-keyed fingerprint input --
+-- so §19.2's later freshness pump has something to compare a repo's
+-- current default-branch tip against.
 UPDATE image_builds
-SET status = 'ready', image_ref = $2, next_retry_at = NULL, updated_at = now()
+SET status = 'ready', image_ref = $2, built_repo_shas = $3, built_at = $4, next_retry_at = NULL, updated_at = now()
 WHERE fingerprint = $1 AND status = 'building'
 RETURNING *;
 

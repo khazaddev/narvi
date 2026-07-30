@@ -150,9 +150,16 @@ func (p *Provider) RestoreFromSnapshot(ctx context.Context, id ports.SnapshotID,
 
 // BuildImage POSTs to /v1/images.
 func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.BuildRef, error) {
+	var repos map[string]imageBuildRequestRepo
+	if len(spec.Repos) > 0 {
+		repos = make(map[string]imageBuildRequestRepo, len(spec.Repos))
+		for name, ref := range spec.Repos {
+			repos[name] = imageBuildRequestRepo{URL: ref.URL, SHA: ref.SHA}
+		}
+	}
 	req := imageBuildRequest{
 		Base:           spec.Base,
-		RepoSHAs:       spec.RepoSHAs,
+		Repos:          repos,
 		RuntimeVersion: spec.RuntimeVersion,
 	}
 	var resp buildResponse
