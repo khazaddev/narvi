@@ -4,6 +4,7 @@ package sessionactor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -21,11 +22,38 @@ import (
 )
 
 // This file proves Step 26's ("image builds", §8.5-note/§10-P2) own
-// end-to-end wiring: dispatch.go/imageresolve.go's resolveAndSetImage on
-// the spawn side, and internal/app/imagebuild.Builder on the background
-// side, against a REAL Postgres instance -- see that package's own doc.go
-// and this file's own top comment on dispatch_integration_test.go's
-// fakeSpawnProvider for how BuildImage is faked.
+// end-to-end wiring, as rewritten by Step 41 ("warm boot: shared
+// fingerprint + spawn-path simplification", §19.1): dispatch.go/
+// imageresolve.go's resolveAndSetImage on the spawn side, and internal/
+// app/imagebuild.Builder on the background side, against a REAL Postgres
+// instance -- see that package's own doc.go and this file's own top
+// comment on dispatch_integration_test.go's fakeSpawnProvider for how
+// BuildImage is faked.
+//
+// # Step 41/42 boundary this file's own tests are written against
+//
+// resolveAndSetImage no longer calls ResolveBranchSHA, CheckCreatorGuard,
+// or decryptCreatorGitHubToken at all (imageresolve.go's own top comment)
+// -- the fingerprint is computed purely from plan.spec.SessionConfig.
+// Repos' own (name, url) pairs, zero network calls, on every spawn. Every
+// test below that exercises a cache MISS or a cache HIT asserts
+// sourceControl.shaCallCount() == 0 for exactly this reason: there is no
+// code path left in this Step that could ever make that count anything
+// else. Separately, app/imagebuild.Builder's own attempt has no
+// claim-time SHA resolution mechanism yet (that's Step 42, §19.2/§19.9),
+// so a background builder can only ever turn a REPO-LESS pending row into
+// a real 'ready' one in Step 41 -- a repo-bearing pending row this file's
+// own MISS tests create stays unresolved (see
+// TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_
+// SpawnStillBaseImage below, and internal/app/imagebuild/
+// builder_integration_test.go's own dedicated coverage of that skip path
+// in isolation). The WARM-HIT test below therefore seeds a 'ready' row
+// directly (via ImageBuildStore, bypassing the background builder
+// entirely) rather than relying on the builder to produce one for a
+// repo-bearing fingerprint -- simulating what Step 42's own claim-time
+// resolution will eventually produce for real, so this Step's own exit
+// criterion ("existing spawn-path behavior, the warm-hit case, must work
+// end-to-end") has real, direct coverage today.
 
 // testRuntimeVersion is a fixed, obviously-fake runtime version used only
 // by this file's own tests -- never platform.DefaultTimeouts()'s real
@@ -35,7 +63,9 @@ const testRuntimeVersion = "1.0.0-test"
 
 // newImageBuildTestRegistry builds a Registry wired with everything Step
 // 26's own image-resolution path reads: provider (for CreateSandbox/
-// BuildImage), sourceControl (for ResolveBranchSHA), testTokenEncryptionKey
+// BuildImage), sourceControl (kept for signature parity / other Actor
+// functionality -- imageresolve.go itself never calls it as of Step 41,
+// see this file's own top comment), testTokenEncryptionKey
 // (pushpr_integration_test.go's own fixed test key), and testRuntimeVersion.
 func newImageBuildTestRegistry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, sourceControl ports.SourceControl) *Registry {
 	t.Helper()
@@ -92,8 +122,11 @@ func createTestUserWithGitHubToken(ctx context.Context, t *testing.T, pool *pgxp
 // proves scenario (a): a session with real repos and no cached image yet
 // gets the base image for its own current spawn (§10 Phase 2's own
 // "always fall back to base image on any miss"), AND a pending
-// image_builds row is created for its fingerprint so
-// internal/app/imagebuild's own background loop can pick it up later.
+// image_builds row is created for its fingerprint -- carrying the
+// NORMALIZED repo url, never a resolved sha (§19.1) -- so
+// internal/app/imagebuild's own background loop has a record of this repo
+// set. ResolveBranchSHA is never called at all -- the fingerprint is
+// computed purely from the session's own configured repo URL.
 func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -102,7 +135,7 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 	sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
 		"repo1", "https://github.com/acme/repo1.git", "main")
 
-	sourceControl := &fakeSourceControl{nextSHA: "sha-scenario-a"}
+	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
 	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-a"}}
 	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
 	t.Cleanup(func() { _ = r.Shutdown() })
@@ -123,11 +156,15 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 		t.Errorf("CreateSpec.Image = %q, want the base image %q (no cached image exists yet)", spec.Image, defaultBaseImage)
 	}
 
-	if sourceControl.shaCallCount() != 1 {
-		t.Fatalf("ResolveBranchSHA call count = %d, want 1", sourceControl.shaCallCount())
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (Step 41: the fingerprint is url-keyed and network-free)", got)
 	}
 
-	wantFingerprint := domainimagebuild.Fingerprint(defaultBaseImage, map[string]string{"repo1": "sha-scenario-a"}, testRuntimeVersion)
+	// The fingerprint is computed from the repo's clone URL directly --
+	// Fingerprint itself normalizes (NormalizeRepoURL), so passing the
+	// raw configured (".git"-suffixed) URL here matches what
+	// imageresolve.go computed from the identical raw config.
+	wantFingerprint := domainimagebuild.Fingerprint(defaultBaseImage, map[string]string{"repo1": "https://github.com/acme/repo1.git"}, testRuntimeVersion)
 
 	imageBuildStore := narvipg.NewImageBuildStore(pool)
 	var row sqlcgen.ImageBuild
@@ -151,23 +188,146 @@ func TestResolveAndSetImage_NoCachedImage_FallsBackToBaseAndCreatesPendingRow(t 
 	if row.AttemptCount != 0 {
 		t.Errorf("image_builds.attempt_count = %d, want 0 (never claimed/attempted yet)", row.AttemptCount)
 	}
+	if row.BuiltRepoShas != nil {
+		t.Errorf("image_builds.built_repo_shas = %v, want nil (never built)", row.BuiltRepoShas)
+	}
+
+	var gotRepoURLs map[string]string
+	if err := json.Unmarshal(row.RepoUrls, &gotRepoURLs); err != nil {
+		t.Fatalf("unmarshal repo_urls: %v", err)
+	}
+	wantRepoURLs := map[string]string{"repo1": "https://github.com/acme/repo1"} // .git suffix normalized away
+	if gotRepoURLs["repo1"] != wantRepoURLs["repo1"] {
+		t.Errorf("image_builds.repo_urls[repo1] = %q, want %q (normalized, .git suffix stripped)", gotRepoURLs["repo1"], wantRepoURLs["repo1"])
+	}
 }
 
-// TestResolveAndSetImage_NoUsableGitHubToken_StillSpawnsOnBaseImage proves
-// scenario (d): a session whose creator has no usable GitHub token (here:
-// no created_by user at all, the simplest of the several ways
-// decryptCreatorGitHubToken reports "no usable credential") still spawns
-// successfully on the base image -- never blocked or failed by this
-// mechanism. ResolveBranchSHA is never even attempted.
-func TestResolveAndSetImage_NoUsableGitHubToken_StillSpawnsOnBaseImage(t *testing.T) {
+// TestResolveAndSetImage_CreatorContextIrrelevant_ZeroNetworkCallsRegardless
+// proves Step 41's own headline claim (§19.2: "removes the 'creator has no
+// GitHub token -> cold boot' fallback class entirely"): resolveAndSetImage
+// no longer reads the session creator's identity/token/role AT ALL, so its
+// outcome (base image + pending row created, zero ResolveBranchSHA calls)
+// is IDENTICAL regardless of whether the creator has no account at all, a
+// disabled account, or a viewer role -- despite two of those three cases
+// carrying an otherwise-real, usable, encrypted GitHub token that a
+// pre-Step-41 CheckCreatorGuard recheck would have inspected and denied on
+// (imagebuild_integration_test.go's own pre-Step-41 history, and pushpr.go/
+// contractdrift.go's still-current use of the identical guard for their
+// OWN, unrelated purposes). This single test replaces three separate
+// pre-Step-41 tests (NoUsableGitHubToken/DisabledCreator/
+// DemotedToViewerCreator) that each proved a now-removed guard's own
+// behavior for a DIFFERENT reason each time; here, all three scenarios
+// produce identical behavior for the SAME reason: there is no guard left
+// to trip.
+func TestResolveAndSetImage_CreatorContextIrrelevant_ZeroNetworkCallsRegardless(t *testing.T) {
+	tests := []struct {
+		name    string
+		setUser func(t *testing.T, pool *pgxpool.Pool) pgtype.UUID
+	}{
+		{
+			name: "no created_by user at all",
+			setUser: func(_ *testing.T, _ *pgxpool.Pool) pgtype.UUID {
+				return pgtype.UUID{}
+			},
+		},
+		{
+			name: "disabled creator with an otherwise-real, usable github token",
+			setUser: func(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
+				creator := createTestUserWithGitHubToken(context.Background(), t, pool, "gh-fake-token-disabled")
+				if _, err := pool.Exec(context.Background(), `UPDATE users SET disabled = true WHERE id = $1`, creator); err != nil {
+					t.Fatalf("disable fixture user: %v", err)
+				}
+				return creator
+			},
+		},
+		{
+			name: "viewer creator with an otherwise-real, usable github token",
+			setUser: func(t *testing.T, pool *pgxpool.Pool) pgtype.UUID {
+				creator := createTestUserWithGitHubToken(context.Background(), t, pool, "gh-fake-token-viewer")
+				if _, err := narvipg.NewUserStore(pool).UpdateRole(context.Background(), creator, sqlcgen.UserRoleViewer); err != nil {
+					t.Fatalf("demote fixture user to viewer: %v", err)
+				}
+				return creator
+			},
+		},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTestPool(t)
+
+			creator := tc.setUser(t, pool)
+			repoName := fmt.Sprintf("repo-irrelevant-%d", i)
+			sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
+				repoName, "https://github.com/acme/"+repoName+".git", "main")
+
+			sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
+			provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-irrelevant"}}
+			r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+			t.Cleanup(func() { _ = r.Shutdown() })
+
+			turnStore := narvipg.NewTurnStore(pool)
+			createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+			a, err := r.GetOrSpawn(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("GetOrSpawn: %v", err)
+			}
+			sendEnsureDispatched(ctx, t, a)
+
+			waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+			spec := provider.lastSpec()
+			if spec.Image != defaultBaseImage {
+				t.Errorf("CreateSpec.Image = %q, want the base image %q", spec.Image, defaultBaseImage)
+			}
+			if got := sourceControl.shaCallCount(); got != 0 {
+				t.Errorf("ResolveBranchSHA call count = %d, want 0 (creator context is never read by resolveAndSetImage as of Step 41)", got)
+			}
+
+			wantFingerprint := domainimagebuild.Fingerprint(defaultBaseImage,
+				map[string]string{repoName: "https://github.com/acme/" + repoName + ".git"}, testRuntimeVersion)
+			imageBuildStore := narvipg.NewImageBuildStore(pool)
+			waitUntil(t, 5*time.Second, func() bool {
+				_, err := imageBuildStore.Get(ctx, wantFingerprint)
+				return err == nil
+			})
+
+			sandboxStore := narvipg.NewSandboxStore(pool)
+			waitUntil(t, 5*time.Second, func() bool {
+				row, err := sandboxStore.Get(ctx, sessionID)
+				return err == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
+			})
+		})
+	}
+}
+
+// TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls proves this
+// Step's own exit criterion: existing spawn-path behavior for the
+// warm-HIT case (a fingerprint that already has a 'ready' image_builds
+// row) works end to end, with ZERO network calls, exactly like before
+// Step 41 -- only how the fingerprint itself got computed changed. The
+// 'ready' row is seeded directly here (Claim + RecordSuccess against a
+// pending row this test creates), simulating what Step 42's own
+// claim-time resolution will eventually produce for a repo-bearing
+// fingerprint for real -- Step 41's own background builder cannot produce
+// one for a repo-bearing row itself yet (see this file's own top comment).
+func TestResolveAndSetImage_WarmHit_UsesReadyImageZeroNetworkCalls(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 
-	sessionID := createTestSessionWithRepos(ctx, t, pool, pgtype.UUID{}, // no created_by
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-warmhit")
+	sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
 		"repo1", "https://github.com/acme/repo1.git", "main")
 
+	fingerprint := domainimagebuild.Fingerprint(defaultBaseImage, map[string]string{"repo1": "https://github.com/acme/repo1.git"}, testRuntimeVersion)
+
+	imageBuildStore := narvipg.NewImageBuildStore(pool)
+	seedReadyImageBuild(ctx, t, imageBuildStore, fingerprint, "narvi/built-image:warm-hit")
+
 	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
-	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-d"}}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-warm-hit"}}
 	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
@@ -183,159 +343,77 @@ func TestResolveAndSetImage_NoUsableGitHubToken_StillSpawnsOnBaseImage(t *testin
 	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
 
 	spec := provider.lastSpec()
-	if spec.Image != defaultBaseImage {
-		t.Errorf("CreateSpec.Image = %q, want the base image %q (no usable token -> never blocked, falls back)", spec.Image, defaultBaseImage)
+	if spec.Image != "narvi/built-image:warm-hit" {
+		t.Errorf("CreateSpec.Image = %q, want the real ready image %q", spec.Image, "narvi/built-image:warm-hit")
 	}
-
-	if sourceControl.shaCallCount() != 0 {
-		t.Errorf("ResolveBranchSHA call count = %d, want 0 (should never be attempted with no usable token)", sourceControl.shaCallCount())
-	}
-
-	sandboxStore := narvipg.NewSandboxStore(pool)
-	waitUntil(t, 5*time.Second, func() bool {
-		row, err := sandboxStore.Get(ctx, sessionID)
-		return err == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
-	})
-}
-
-// --- Creator disabled/role recheck (audit finding, cross-step: this
-// package's own CheckCreatorGuard, githubtoken.go) ---
-
-// TestResolveAndSetImage_DisabledCreator_FallsBackToBaseImage proves a
-// session whose creator was disabled AFTER session creation -- mid-
-// session, e.g. an admin's own offboarding or incident-response disable --
-// still spawns successfully, on the base image, WITHOUT ever attempting
-// ResolveBranchSHA, even though the creator has an otherwise-real, usable,
-// encrypted GitHub identity/token (proving this is SPECIFICALLY the new
-// CheckCreatorGuard recheck, not an incidental no-usable-token skip like
-// TestResolveAndSetImage_NoUsableGitHubToken_StillSpawnsOnBaseImage
-// above). Mirrors internal/adapters/inbound/httpapi's own
-// TestScmCredentials_DisabledCreator_Denied and this package's own
-// TestHandleSandboxEvent_PushComplete_DisabledCreator_SkipsPRCreation
-// (pushpr_integration_test.go): same staleness scenario, same session
-// creator, just exercised at THIS call site -- the gap this batch's own
-// audit sweep found left open here.
-func TestResolveAndSetImage_DisabledCreator_FallsBackToBaseImage(t *testing.T) {
-	ctx := context.Background()
-	pool := newTestPool(t)
-
-	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-disabled-image")
-	sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
-		"repo-disabled", "https://github.com/acme/repo-disabled.git", "main")
-
-	// Disable the session creator AFTER the session already exists --
-	// mirrors pushpr_integration_test.go's own established precedent (no
-	// UserStore mutation exists for Disabled today, only ListMembers' own
-	// read exposure, httpapi/members.go).
-	if _, err := pool.Exec(ctx, `UPDATE users SET disabled = true WHERE id = $1`, creator); err != nil {
-		t.Fatalf("disable fixture user: %v", err)
-	}
-
-	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
-	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-disabled-image"}}
-	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
-	t.Cleanup(func() { _ = r.Shutdown() })
-
-	turnStore := narvipg.NewTurnStore(pool)
-	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
-
-	a, err := r.GetOrSpawn(ctx, sessionID)
-	if err != nil {
-		t.Fatalf("GetOrSpawn: %v", err)
-	}
-	sendEnsureDispatched(ctx, t, a)
-
-	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
-
-	spec := provider.lastSpec()
-	if spec.Image != defaultBaseImage {
-		t.Errorf("CreateSpec.Image = %q, want the base image %q (session creator is disabled)", spec.Image, defaultBaseImage)
+	if spec.SessionConfig.BootMode != sessionconfig.SessionConfigBootModeRepoImage {
+		t.Errorf("CreateSpec.SessionConfig.BootMode = %q, want %q (a real ready image was found)",
+			spec.SessionConfig.BootMode, sessionconfig.SessionConfigBootModeRepoImage)
 	}
 	if got := sourceControl.shaCallCount(); got != 0 {
-		t.Errorf("ResolveBranchSHA call count = %d, want 0 (session creator is disabled)", got)
+		t.Errorf("ResolveBranchSHA call count = %d, want 0 (the warm-hit path is network-free)", got)
 	}
-
-	sandboxStore := narvipg.NewSandboxStore(pool)
-	waitUntil(t, 5*time.Second, func() bool {
-		row, getErr := sandboxStore.Get(ctx, sessionID)
-		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
-	})
 }
 
-// TestResolveAndSetImage_DemotedToViewerCreator_FallsBackToBaseImage is the
-// same proof as TestResolveAndSetImage_DisabledCreator_FallsBackToBaseImage
-// above, for the OTHER half of CheckCreatorGuard's own §13.3 viewer-guard
-// threshold: a creator demoted to viewer (rather than disabled) AFTER
-// session creation. Uses a real UserStore.UpdateRole call (the same
-// mutation an admin's own real role-change endpoint performs), not raw
-// SQL, since that store method already exists -- mirrors
-// scmcredentials_integration_test.go's own
-// TestScmCredentials_DemotedToViewerCreator_Denied precedent exactly.
-func TestResolveAndSetImage_DemotedToViewerCreator_FallsBackToBaseImage(t *testing.T) {
+// seedReadyImageBuild drives a fingerprint's own image_builds row from
+// nonexistent through 'pending' -> 'building' -> 'ready' (UpsertPending,
+// Claim, RecordSuccess), landing exactly the shape a real successful
+// build leaves behind -- used by tests that need a warm-HIT row to
+// already exist without depending on app/imagebuild.Builder actually
+// being able to produce one for a repo-bearing fingerprint (which it
+// cannot yet, in Step 41 -- see this file's own top comment).
+func seedReadyImageBuild(ctx context.Context, t *testing.T, store *narvipg.ImageBuildStore, fingerprint, imageRef string) {
+	t.Helper()
+
+	repoURLs, err := json.Marshal(map[string]string{"repo1": "https://github.com/acme/repo1"})
+	if err != nil {
+		t.Fatalf("marshal repo urls: %v", err)
+	}
+	if err := store.UpsertPending(ctx, sqlcgen.UpsertPendingImageBuildParams{
+		Fingerprint:    fingerprint,
+		Base:           defaultBaseImage,
+		RepoUrls:       repoURLs,
+		RuntimeVersion: testRuntimeVersion,
+	}); err != nil {
+		t.Fatalf("seed pending image_builds row: %v", err)
+	}
+	if _, err := store.Claim(ctx, fingerprint); err != nil {
+		t.Fatalf("claim image_builds row: %v", err)
+	}
+	builtRepoSHAs, err := json.Marshal(map[string]string{"repo1": "sha-warm-hit"})
+	if err != nil {
+		t.Fatalf("marshal built repo shas: %v", err)
+	}
+	if _, err := store.RecordSuccess(ctx, sqlcgen.RecordImageBuildSuccessParams{
+		Fingerprint:   fingerprint,
+		ImageRef:      &imageRef,
+		BuiltRepoShas: builtRepoSHAs,
+		BuiltAt:       pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatalf("record image_builds success: %v", err)
+	}
+}
+
+// TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_SpawnStillBaseImage
+// proves this Step's own resolved Step 41/42 boundary decision end to end,
+// from the spawn side: a cache MISS creates a pending row (scenario (a),
+// re-proved here as part of the full pipeline), the background builder
+// claims it but -- correctly, per this Step's own design (attempt's own
+// doc comment, builder.go) -- can NOT build it for real yet (no
+// claim-time SHA resolution mechanism exists until Step 42), and a LATER
+// spawn for the identical repo set therefore STILL falls back to the base
+// image, exactly as if no image_builds row existed. This is the honest
+// current-state reflection of "Step 41 lands the fingerprint/type/
+// migration/spawn-path plumbing; Step 42 is what makes new fingerprints
+// actually buildable end-to-end" -- see this file's own top comment.
+func TestImageBuildPipeline_MissCreatesPendingRow_BuilderCannotYetBuildIt_SpawnStillBaseImage(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 
-	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-viewer-image")
-	sessionID := createTestSessionWithRepos(ctx, t, pool, creator,
-		"repo-viewer", "https://github.com/acme/repo-viewer.git", "main")
-
-	if _, err := narvipg.NewUserStore(pool).UpdateRole(ctx, creator, sqlcgen.UserRoleViewer); err != nil {
-		t.Fatalf("demote fixture user to viewer: %v", err)
-	}
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-pipeline")
 
 	sourceControl := &fakeSourceControl{nextSHA: "sha-should-never-be-used"}
-	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-viewer-image"}}
-	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
-	t.Cleanup(func() { _ = r.Shutdown() })
-
-	turnStore := narvipg.NewTurnStore(pool)
-	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
-
-	a, err := r.GetOrSpawn(ctx, sessionID)
-	if err != nil {
-		t.Fatalf("GetOrSpawn: %v", err)
-	}
-	sendEnsureDispatched(ctx, t, a)
-
-	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
-
-	spec := provider.lastSpec()
-	if spec.Image != defaultBaseImage {
-		t.Errorf("CreateSpec.Image = %q, want the base image %q (session creator is now a viewer)", spec.Image, defaultBaseImage)
-	}
-	if got := sourceControl.shaCallCount(); got != 0 {
-		t.Errorf("ResolveBranchSHA call count = %d, want 0 (session creator is now a viewer)", got)
-	}
-
-	sandboxStore := narvipg.NewSandboxStore(pool)
-	waitUntil(t, 5*time.Second, func() bool {
-		row, getErr := sandboxStore.Get(ctx, sessionID)
-		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
-	})
-}
-
-// TestImageBuildPipeline_BackgroundBuilderPicksUpPendingRow_LaterSpawnGetsRealImage
-// proves scenario (b): the FULL pipeline, spanning both dispatch.go's own
-// spawn-time resolution and internal/app/imagebuild.Builder's own
-// background loop, against the SAME real Postgres pool and the SAME fake
-// provider instance:
-//
-//  1. session1's own first spawn has no cached image yet -> base image,
-//     pending row created (exactly scenario (a) above).
-//  2. Builder.PumpOnce claims that pending row, calls the fake provider's
-//     own (now configurable) BuildImage, and records success.
-//  3. session2 -- a DIFFERENT session naming the SAME repo/branch (so
-//     ResolveBranchSHA resolves to the identical sha, and therefore the
-//     identical fingerprint) -- spawns and gets the REAL built image_ref,
-//     not the base image, with BootMode upgraded to RepoImage.
-func TestImageBuildPipeline_BackgroundBuilderPicksUpPendingRow_LaterSpawnGetsRealImage(t *testing.T) {
-	ctx := context.Background()
-	pool := newTestPool(t)
-
-	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-b")
-
-	sourceControl := &fakeSourceControl{nextSHA: "sha-scenario-b"}
-	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-b1"}}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-pipeline-1"}}
 	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
 	t.Cleanup(func() { _ = r.Shutdown() })
 
@@ -356,18 +434,21 @@ func TestImageBuildPipeline_BackgroundBuilderPicksUpPendingRow_LaterSpawnGetsRea
 	if got := provider.lastSpec().Image; got != defaultBaseImage {
 		t.Fatalf("session1 CreateSpec.Image = %q, want base image %q", got, defaultBaseImage)
 	}
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Fatalf("ResolveBranchSHA call count = %d, want 0", got)
+	}
 
-	wantFingerprint := domainimagebuild.Fingerprint(defaultBaseImage, map[string]string{"repo1": "sha-scenario-b"}, testRuntimeVersion)
+	wantFingerprint := domainimagebuild.Fingerprint(defaultBaseImage, map[string]string{"repo1": "https://github.com/acme/repo1.git"}, testRuntimeVersion)
 	imageBuildStore := narvipg.NewImageBuildStore(pool)
 	waitUntil(t, 5*time.Second, func() bool {
 		_, err := imageBuildStore.Get(ctx, wantFingerprint)
 		return err == nil
 	})
 
-	// Step 2: the background builder claims and builds it.
-	const wantImageRef = "narvi/built-image:scenario-b"
-	provider.nextBuildRef = ports.BuildRef(wantImageRef)
-
+	// Step 2: the background builder claims it, but cannot build it for
+	// real (no claim-time SHA resolution mechanism yet) -- BuildImage must
+	// never even be called, and the row is recorded as a retryable
+	// failure rather than getting stuck in 'building'.
 	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, provider, platform.DefaultTimeouts())
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
@@ -376,38 +457,28 @@ func TestImageBuildPipeline_BackgroundBuilderPicksUpPendingRow_LaterSpawnGetsRea
 		t.Fatalf("PumpOnce: %v", err)
 	}
 
-	if provider.buildCallCount() != 1 {
-		t.Fatalf("BuildImage call count = %d, want 1", provider.buildCallCount())
-	}
-	buildSpec := provider.buildCalls[0]
-	if buildSpec.Base != defaultBaseImage {
-		t.Errorf("BuildImage ImageSpec.Base = %q, want %q", buildSpec.Base, defaultBaseImage)
-	}
-	if buildSpec.RepoSHAs["repo1"] != "sha-scenario-b" {
-		t.Errorf("BuildImage ImageSpec.RepoSHAs[repo1] = %q, want %q", buildSpec.RepoSHAs["repo1"], "sha-scenario-b")
-	}
-	if buildSpec.RuntimeVersion != testRuntimeVersion {
-		t.Errorf("BuildImage ImageSpec.RuntimeVersion = %q, want %q", buildSpec.RuntimeVersion, testRuntimeVersion)
+	if got := provider.buildCallCount(); got != 0 {
+		t.Fatalf("BuildImage call count = %d, want 0 (no claim-time SHA resolution mechanism yet, Step 42)", got)
 	}
 
 	row, err := imageBuildStore.Get(ctx, wantFingerprint)
 	if err != nil {
-		t.Fatalf("get image_builds row after build: %v", err)
+		t.Fatalf("get image_builds row after PumpOnce: %v", err)
 	}
-	if row.Status != sqlcgen.ImageBuildStatusReady {
-		t.Fatalf("image_builds.status = %q, want %q", row.Status, sqlcgen.ImageBuildStatusReady)
+	if row.Status != sqlcgen.ImageBuildStatusFailed {
+		t.Fatalf("image_builds.status = %q, want %q (retryable, not stuck 'building')", row.Status, sqlcgen.ImageBuildStatusFailed)
 	}
-	if row.ImageRef == nil || *row.ImageRef != wantImageRef {
-		t.Fatalf("image_builds.image_ref = %v, want %q", row.ImageRef, wantImageRef)
+	if row.ImageRef != nil {
+		t.Fatalf("image_builds.image_ref = %v, want nil (never built)", row.ImageRef)
 	}
 
 	// Step 3: session2, same repo/branch (same fingerprint), spawns and
-	// gets the REAL built image, not the base image.
+	// STILL gets the base image -- nothing was ever actually built.
 	session2 := createTestSessionWithRepos(ctx, t, pool, creator,
 		"repo1", "https://github.com/acme/repo1.git", "main")
 	createPendingTurn(ctx, t, turnStore, session2, "prompt 2")
 
-	provider2 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-b2"}}
+	provider2 := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-pipeline-2"}}
 	r2 := newImageBuildTestRegistry(t, ctx, pool, provider2, sourceControl)
 	t.Cleanup(func() { _ = r2.Shutdown() })
 
@@ -419,11 +490,11 @@ func TestImageBuildPipeline_BackgroundBuilderPicksUpPendingRow_LaterSpawnGetsRea
 	waitUntil(t, 5*time.Second, func() bool { return provider2.callCount() == 1 })
 
 	spec2 := provider2.lastSpec()
-	if spec2.Image != wantImageRef {
-		t.Errorf("session2 CreateSpec.Image = %q, want the real built image %q, not the base image", spec2.Image, wantImageRef)
+	if spec2.Image != defaultBaseImage {
+		t.Errorf("session2 CreateSpec.Image = %q, want the base image %q (nothing was ever built)", spec2.Image, defaultBaseImage)
 	}
-	if spec2.SessionConfig.BootMode != sessionconfig.SessionConfigBootModeRepoImage {
-		t.Errorf("session2 SessionConfig.BootMode = %q, want %q (a real prebuilt image was found)",
+	if spec2.SessionConfig.BootMode == sessionconfig.SessionConfigBootModeRepoImage {
+		t.Errorf("session2 SessionConfig.BootMode = %q, want anything but %q (no real image was found)",
 			spec2.SessionConfig.BootMode, sessionconfig.SessionConfigBootModeRepoImage)
 	}
 }

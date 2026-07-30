@@ -8,6 +8,52 @@
 // fingerprint -- immediately before executeSpawn/executeRestore ever calls
 // the real provider.
 //
+// # Step 41 ("warm boot: shared fingerprint + spawn-path simplification",
+// §19.1) rewrite -- what changed and why
+//
+// Before Step 41, computing a fingerprint here required a per-repo
+// `ResolveBranchSHA` GitHub API call (up to
+// len(repos)*platform.Timeouts.RepoSHAResolutionTimeout of sequential
+// network latency per spawn), which in turn required a usable creator
+// GitHub token and a fresh CheckCreatorGuard recheck before ever touching
+// it. §19.1 redefines domain/imagebuild.Fingerprint to hash each repo's
+// normalized clone URL instead of a resolved SHA (one shared image per
+// repo SET, not per exact SHA combination) -- so the fingerprint is now
+// computable directly from plan.spec.SessionConfig.Repos alone, with ZERO
+// network calls, for EVERY spawn, not just a lucky warm-hit one. This is
+// §19.2's own explicit promise: "removes up to len(repos) *
+// RepoSHAResolutionTimeout ... of sequential GitHub latency from every
+// spawn attempt ... removes the 'creator has no GitHub token -> cold
+// boot' fallback class entirely."
+//
+// This function therefore no longer calls ResolveBranchSHA, CheckCreatorGuard,
+// or decryptCreatorGitHubToken AT ALL -- there is no creator/token
+// dependency left in this file (confirmed via grep before removal: no
+// other function in this file used them for any other reason). Those
+// three remain exactly as they were for pushpr.go/contractdrift.go/
+// scmcredentials.go's own, unrelated call sites (githubtoken.go).
+//
+// # Step 41/42 boundary (§19.1 vs §19.9) -- documented design decision
+//
+// §19.1's own prose describes the builder resolving each repo's
+// default-branch tip SHA "at claim time" -- but §19.9's phasing note
+// assigns that exact claim-time SHA resolution, and the new
+// platform-level GitHub credential it needs (the freshness pump/background
+// builder has no session/creator context to borrow a token from, unlike
+// this spawn-time call site), to Step 42, not this one. This Step's own
+// resolved design decision, applied consistently across this file and
+// app/imagebuild.Builder.attempt: a cache MISS here creates a
+// best-effort, URL-only pending row (repo_urls, no built_repo_shas yet)
+// and does NOTHING further -- no per-repo SHA resolution of any kind
+// happens anywhere in Step 41, on the spawn path or the background pump.
+// This spawn still uses the base image regardless, exactly as before.
+// Step 41 lands the fingerprint/type/migration/spawn-path plumbing; Step
+// 42's own claim-time resolution is what makes a brand-new fingerprint
+// actually buildable end-to-end. The warm-HIT path below (a fingerprint
+// that already has a 'ready' row -- e.g. seeded by whatever produces one
+// once Step 42 ships) is unaffected by this boundary and works today,
+// zero network calls either way.
+//
 // # Why this runs where it runs (not "before assembling CreateSpec")
 //
 // dispatch.go's own top "# Sequencing" comment establishes, and an
@@ -15,13 +61,10 @@
 // must NEVER hold a Postgres transaction open (planDispatch's own transact
 // commits the interim Spawning claim; the real provider call always
 // happens strictly AFTER that commit, in executeSpawn/executeRestore).
-// Resolving a fingerprint is ALSO real, network-bound work (a GitHub API
-// call per repo, plus a Postgres read/best-effort upsert) -- so it must
-// obey the exact same rule. planFreshSpawn/planRestore build their
-// CreateSpec INSIDE that same transact (their own doc comments), which
-// means image resolution cannot happen there either.
-//
-// The fix: resolveAndSetImage runs in the SAME already-established
+// Resolving a fingerprint no longer needs network access (see above), but
+// it does still do a Postgres read/best-effort upsert -- so, to keep this
+// function's own placement rule simple and uniform regardless of what any
+// future revision of it might need, it stays in the exact same
 // "outside any transaction" zone executeSpawn/executeRestore's own
 // provider call already occupies -- immediately before it, not inside
 // planDispatch. plan.spec.Image is an ordinary Go struct field at this
@@ -34,25 +77,14 @@
 //
 // # "Never block a spawn" (§10 Phase 2, the one hard invariant)
 //
-// Every failure branch below -- no repos, a creator now disabled/demoted
-// to viewer (githubtoken.go's own CheckCreatorGuard -- audit finding,
-// cross-step: this check did not exist here at all until this fix), no
-// usable creator GitHub token, a parse/API/timeout failure for ANY one
-// repo, an image_builds lookup error -- is a plain, logged, early return:
-// plan.spec.Image is simply LEFT at defaultBaseImage (planFreshSpawn/
-// planRestore's own already-committed choice), exactly as if this
-// function had never been called.
-// Nothing here can fail or delay executeSpawn/executeRestore's own
-// subsequent call. The one deliberate, bounded exception is LATENCY, not
-// blocking: when a session names real repos, this DOES add real,
-// sequential wall-clock time to a spawn attempt (at most
-// len(repos)*platform.Timeouts.RepoSHAResolutionTimeout for the GitHub
-// calls, plus one Postgres round trip) -- a deliberate, explicitly bounded
-// trade-off for real per-session image selection, not the unbounded/
-// indefinite "block" §10 Phase 2 prohibits (which is about never WAITING
-// on a slow BuildImage call itself -- that always happens later,
-// asynchronously, in internal/app/imagebuild's own background loop, never
-// synchronously during a spawn).
+// Every failure branch below -- no repos, an image_builds lookup error --
+// is a plain, logged, early return: plan.spec.Image is simply LEFT at
+// defaultBaseImage (planFreshSpawn/planRestore's own already-committed
+// choice), exactly as if this function had never been called. Nothing
+// here can fail or delay executeSpawn/executeRestore's own subsequent
+// call, and -- as of this Step -- nothing here can add latency either:
+// every code path is a plain in-memory hash plus at most one Postgres
+// round trip.
 
 package sessionactor
 
@@ -65,7 +97,6 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
-	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/imagebuild"
 )
 
@@ -93,86 +124,12 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 		return // nothing to fingerprint; stays on defaultBaseImage
 	}
 
-	if a.sourceControl == nil {
-		// Defensive: mirrors tryPlanSpawn's own nil-provider guard and
-		// tryPlanDispatch's own nil-commander guard exactly (dispatch.go)
-		// -- some tests, and any future caller genuinely without one, must
-		// not panic here. Falls back to the base image, exactly like every
-		// other early-return in this function.
-		a.logger.Warn("sessionactor: resolve image: no SourceControl configured; falling back to base image")
-		return
-	}
-
-	// Creator disabled/role recheck (audit finding, cross-step: this
-	// function minted and used the session creator's real GitHub token
-	// against the live GitHub API below with NO recheck at all -- the
-	// exact gap githubtoken.go's own CheckCreatorGuard exists to close,
-	// already fixed for pushpr.go's createPRBestEffort and
-	// scmcredentials.go's ScmCredentials). Checked fresh, right here,
-	// before ever decrypting/using the creator's token below -- see
-	// CheckCreatorGuard's own doc comment for the complete staleness
-	// rationale. Falls back to the base image on any outcome here,
-	// exactly like every other early return in this function -- a genuine
-	// GetByID failure logs at Error (mirroring this function's own
-	// imageBuild.Get handling just below: Error for an unexpected DB
-	// failure, distinct from an expected miss), Disabled/Viewer log at
-	// Warn (an expected, security-relevant skip, not a malfunction).
-	if v := CheckCreatorGuard(ctx, a.stores.user, plan.createdBy); !v.Allowed {
-		switch {
-		case v.Err != nil && !v.ErrNotFound:
-			a.logger.Error("sessionactor: resolve image: get session creator for disabled/role recheck failed; falling back to base image",
-				"error", v.Err)
-		case v.Err != nil:
-			a.logger.Warn("sessionactor: resolve image: session creator row not found for disabled/role recheck; falling back to base image",
-				"user_id", plan.createdBy.String())
-		case v.Disabled:
-			a.logger.Warn("sessionactor: resolve image: session creator is now disabled; falling back to base image (§13.3 viewer guard parity)",
-				"user_id", plan.createdBy.String())
-		case v.Viewer:
-			a.logger.Warn("sessionactor: resolve image: session creator is now a viewer; falling back to base image (§13.3 viewer guard parity)",
-				"user_id", plan.createdBy.String())
-		}
-		return
-	}
-
-	token, ok := a.decryptCreatorGitHubToken(ctx, plan.createdBy)
-	if !ok {
-		// Already logged by decryptCreatorGitHubToken. This is also the
-		// documented reason a session whose creator has no usable GitHub
-		// token (never linked GitHub, no stored token, or a decrypt
-		// failure) still spawns successfully on the base image -- never
-		// blocked or failed by this mechanism.
-		return
-	}
-
-	repoSHAs := make(map[string]string, len(repos))
+	repoURLs := make(map[string]string, len(repos))
 	for _, r := range repos {
-		owner, repoName, err := parseOwnerRepo(r.Url)
-		if err != nil {
-			a.logger.Warn("sessionactor: resolve image: parse owner/repo from clone url failed; falling back to base image",
-				"repo", r.Name, "error", err)
-			return
-		}
-
-		var branch string
-		if r.Branch != nil {
-			branch = *r.Branch
-		}
-
-		shaCtx, cancel := context.WithTimeout(ctx, a.timeouts.RepoSHAResolutionTimeout)
-		sha, _, err := a.sourceControl.ResolveBranchSHA(shaCtx, ports.ResolveBranchSHASpec{
-			Owner: owner, Repo: repoName, Branch: branch, Token: token,
-		})
-		cancel()
-		if err != nil {
-			a.logger.Warn("sessionactor: resolve image: resolve branch sha failed; falling back to base image",
-				"repo", r.Name, "error", err)
-			return
-		}
-		repoSHAs[r.Name] = sha
+		repoURLs[r.Name] = imagebuild.NormalizeRepoURL(r.Url)
 	}
 
-	fingerprint := imagebuild.Fingerprint(defaultBaseImage, repoSHAs, a.openCodeRuntimeVersion)
+	fingerprint := imagebuild.Fingerprint(defaultBaseImage, repoURLs, a.openCodeRuntimeVersion)
 
 	row, err := a.stores.imageBuild.Get(ctx, fingerprint)
 	if err != nil {
@@ -182,10 +139,14 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 			return
 		}
 		// No row yet for this fingerprint: best-effort create a pending
-		// tracking row so internal/app/imagebuild's own background loop
-		// picks it up on a later tick. This spawn still uses the base
-		// image regardless of whether the upsert itself succeeds.
-		a.upsertPendingImageBuildBestEffort(ctx, fingerprint, repoSHAs)
+		// tracking row carrying the URL-keyed fingerprint inputs, so
+		// internal/app/imagebuild's own background loop has a record of
+		// this repo set (see this file's own top comment for the Step
+		// 41/42 boundary this best-effort row sits on: no SHA resolution
+		// happens here or in that background loop yet, in Step 41). This
+		// spawn still uses the base image regardless of whether the
+		// upsert itself succeeds.
+		a.upsertPendingImageBuildBestEffort(ctx, fingerprint, repoURLs)
 		return
 	}
 
@@ -209,16 +170,17 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 }
 
 // upsertPendingImageBuildBestEffort best-effort inserts a fresh 'pending'
-// image_builds row for fingerprint, carrying the raw (base, repoSHAs,
-// runtimeVersion) inputs the background builder needs to actually attempt
-// a build later (migrations/000024_image_builds.up.sql's own doc comment
-// explains why those raw inputs are persisted, not just the fingerprint
-// hash). Any failure (marshal, DB error/timeout) is logged only -- this is
-// explicitly best-effort, never allowed to affect the calling spawn.
-func (a *Actor) upsertPendingImageBuildBestEffort(ctx context.Context, fingerprint string, repoSHAs map[string]string) {
-	raw, err := json.Marshal(repoSHAs)
+// image_builds row for fingerprint, carrying the raw (base, repoURLs,
+// runtimeVersion) inputs -- the fingerprint's own URL-keyed inputs
+// (migrations/000039_image_builds_shared_fingerprint.up.sql's own doc
+// comment explains why those raw inputs are persisted, not just the
+// fingerprint hash). Any failure (marshal, DB error/timeout) is logged
+// only -- this is explicitly best-effort, never allowed to affect the
+// calling spawn.
+func (a *Actor) upsertPendingImageBuildBestEffort(ctx context.Context, fingerprint string, repoURLs map[string]string) {
+	raw, err := json.Marshal(repoURLs)
 	if err != nil {
-		a.logger.Error("sessionactor: resolve image: marshal repo shas for image_builds upsert failed",
+		a.logger.Error("sessionactor: resolve image: marshal repo urls for image_builds upsert failed",
 			"fingerprint", fingerprint, "error", err)
 		return
 	}
@@ -226,7 +188,7 @@ func (a *Actor) upsertPendingImageBuildBestEffort(ctx context.Context, fingerpri
 	if err := a.stores.imageBuild.UpsertPending(ctx, sqlcgen.UpsertPendingImageBuildParams{
 		Fingerprint:    fingerprint,
 		Base:           defaultBaseImage,
-		RepoShas:       raw,
+		RepoUrls:       raw,
 		RuntimeVersion: a.openCodeRuntimeVersion,
 	}); err != nil {
 		a.logger.Error("sessionactor: resolve image: upsert pending image_builds row failed",

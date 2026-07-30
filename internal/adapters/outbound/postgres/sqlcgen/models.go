@@ -619,7 +619,7 @@ type IdentityLinkPrompt struct {
 type ImageBuild struct {
 	Fingerprint    string             `json:"fingerprint"`
 	Base           string             `json:"base"`
-	RepoShas       []byte             `json:"repo_shas"`
+	RepoUrls       []byte             `json:"repo_urls"`
 	RuntimeVersion string             `json:"runtime_version"`
 	ImageRef       *string            `json:"image_ref"`
 	Status         ImageBuildStatus   `json:"status"`
@@ -628,6 +628,8 @@ type ImageBuild struct {
 	NextRetryAt    pgtype.Timestamptz `json:"next_retry_at"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	BuiltRepoShas  []byte             `json:"built_repo_shas"`
+	BuiltAt        pgtype.Timestamptz `json:"built_at"`
 }
 
 type LinearAgentSession struct {

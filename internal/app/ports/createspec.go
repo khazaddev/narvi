@@ -79,22 +79,52 @@ func (s CreateSpec) Validate() error {
 
 // ImageSpec is what BuildImage needs to build (or have the provider reuse
 // a cached build of) a sandbox image (§4.1: "image prebuilds are IN the
-// interface"). §10 Phase 2 gives the intended fingerprinting policy
+// interface"). §10 Phase 2 gave the original fingerprinting policy
 // ("fingerprint = repo SHAs + runtime version; always fall back to base
-// image on any miss — never block a session") — that full scheduling
-// workflow is a later Step; this Step only needs the fingerprint-able
-// inputs a BuildImage call carries.
+// image on any miss — never block a session"); §19.1 ("warm boot: shared
+// fingerprint", Step 41) redefines the KEY (domain/imagebuild.Fingerprint
+// now hashes each repo's normalized clone URL, not a resolved SHA — one
+// shared image per repo set) while keeping BuildImage itself pinned to
+// concrete SHAs: Repos below carries BOTH the URL (what the build service
+// clones) and the concrete SHA it clones at (what makes the build
+// reproducible) per repo — the fingerprint/cache KEY and the ACTUAL build
+// inputs are deliberately different shapes now, where before Step 41 they
+// were the same map.
 type ImageSpec struct {
 	// Base is the base image reference to build from (a registry
 	// tag/digest).
 	Base string
 
-	// RepoSHAs fingerprints the repo content baked into the image,
-	// keyed by repo name, so a multi-repo session's image build is
-	// reproducible from the same inputs the fingerprint hashes.
-	RepoSHAs map[string]string
+	// Repos carries, per repo name, the clone URL and the concrete SHA
+	// to build from — everything the build service needs to do a real,
+	// full (non-shallow) clone (§19.1: "build service bakes
+	// /narvi/image-manifest.json and full clones"), keyed by repo name
+	// so a multi-repo session's image build is reproducible from
+	// exactly these inputs. NOT the same shape as the fingerprint's own
+	// key input (domain/imagebuild.Fingerprint's repos map, name->URL
+	// only, no SHA) — the fingerprint intentionally excludes the SHA so
+	// a push to any repo doesn't mint a new image key; BuildImage still
+	// needs a concrete SHA per repo to actually build something
+	// reproducible.
+	Repos map[string]RepoRef
 
 	// RuntimeVersion is the pinned toolchain/runtime version baked into
 	// the image (part of the same fingerprint).
 	RuntimeVersion string
+}
+
+// RepoRef names one repo's clone URL and the concrete SHA to build the
+// image from — ImageSpec.Repos' own value type (§19.1).
+type RepoRef struct {
+	// URL is the repo's clone URL (sessionconfig.SessionConfig.Repos[].Url,
+	// or the fingerprint-input's own normalized form — either way, what
+	// the build service actually clones from).
+	URL string
+
+	// SHA is the concrete commit the build service clones/checks out to
+	// — always a real SHA by the time BuildImage is called, never a
+	// branch name (§19.1: "The builder resolves each default-branch tip
+	// SHA at claim time and passes concrete SHAs to BuildImage — builds
+	// stay pinned and reproducible; only the key is SHA-free").
+	SHA string
 }

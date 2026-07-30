@@ -1,11 +1,18 @@
 // Package imagebuild implements the pure decision functions Step 26
-// ("image builds") needs (§8.5-note, §10-P2, §3.5):
+// ("image builds") needs (§8.5-note, §10-P2, §3.5), redefined by Step 41
+// ("warm boot: shared fingerprint + spawn-path simplification", §19.1):
 //
 //   - Fingerprint (fingerprint.go): a deterministic hash of
-//     (base, repoSHAs, runtimeVersion) -- §10 Phase 2's own "fingerprint =
-//     repo SHAs + runtime version" -- naming exactly one image-build
+//     (base, repos, runtimeVersion), where repos maps repo name to its
+//     NORMALIZED clone URL (NormalizeRepoURL), not a resolved SHA -- §19.1's
+//     redefinition of §10 Phase 2's original "fingerprint = repo SHAs +
+//     runtime version". This re-keys an image on scope/SHA-independent
+//     inputs (one shared image per distinct repo set, continuously
+//     refreshed from each repo's default-branch tip, §19.2) rather than one
+//     image per exact SHA combination -- naming exactly one image-build
 //     target, regardless of Go's own randomized map iteration order (map
-//     keys are sorted before hashing).
+//     keys are sorted before hashing) or of harmless URL spelling variance
+//     (host case, a trailing slash, a trailing ".git" suffix).
 //   - EvaluateBackoff (backoff.go): the exponential-backoff + failure-streak
 //     decision for a failed build attempt (§3.5: "Failed image builds retry
 //     with exponential backoff (not fixed 30 min) and alert on streaks"),
