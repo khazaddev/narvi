@@ -988,7 +988,7 @@ func runBootSequence(
 		switch cfg.BootMode {
 		case sandboxboot.BootModeRepoImage, sandboxboot.BootModeSnapshotRestore:
 			results, syncErr := gitclone.SyncAll(ctx, sup, cfg.WorkspaceDir, cfg.SessionConfig.Repos, pathScope,
-				cfg.SessionConfig.SessionId, timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod, onGitSync)
+				cfg.SessionConfig.SessionId, timeouts.GitFetchStepTimeout, timeouts.GitSyncStepTimeout, timeouts.ProcessStopGracePeriod, onGitSync)
 			if syncErr != nil {
 				return fmt.Errorf("sync repos: %w", syncErr)
 			}

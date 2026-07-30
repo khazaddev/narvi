@@ -1313,6 +1313,56 @@ type Timeouts struct {
 	// single lightweight GitHub REST GET while still keeping the whole
 	// webhook response prompt.
 	GitHubGetPRTimeout time.Duration
+
+	// --- Step 40 standalone addition ("warm boot: fetch-aware git sync",
+	// §19.3): no ordering relationship with either invariant chain above
+	// (or with any prior Step's standalone additions), so -- per those
+	// additions' own precedent -- a plain field with a sensible default,
+	// not wired into a fake invariant link.
+
+	// GitFetchStepTimeout bounds each individual network-bound git
+	// subprocess internal/sandboxagent/gitclone.SyncAll now spawns as its
+	// own new FIRST step, before the dirty-check/checkout/pop sequence
+	// GitSyncStepTimeout already bounds (§19.3: "New step in syncOne,
+	// before the dirty-check/checkout: `git fetch origin <resolved-branch>
+	// <default-branch>`"): a `git ls-remote --symref origin HEAD` to
+	// resolve the repo's real default-branch name, then one or two
+	// `git fetch origin <ref>` calls (the default branch always; the
+	// resolved session/explicit branch too, as a SEPARATE invocation when
+	// it differs -- verified directly against real git, not assumed, that
+	// a single `git fetch origin <branch> <default>` call is atomic: if
+	// EITHER named ref does not exist on the remote, the whole invocation
+	// fails with nothing fetched at all, which would silently deny
+	// checkoutBranch's own origin/<default-branch> fallback preference
+	// (§19.3 point 2) exactly in the common case -- an invented
+	// "narvi/<sessionID>" branch that (by construction) almost never
+	// exists upstream -- where that fallback matters most).
+	//
+	// A DISTINCT field from GitSyncStepTimeout is required, not a reuse of
+	// it, because this is the ONE call this package makes that is
+	// genuinely network-bound: every other git subprocess SyncAll spawns
+	// (`git status`, `git stash push`/`pop`, `git rev-parse --verify`,
+	// `git checkout`/`git checkout -b`) operates purely on the already-
+	// on-disk repository (GitSyncStepTimeout's own doc comment: "every one
+	// of these is local-only (no network)"). A local-only operation and a
+	// real outbound git-over-HTTPS/SSH round trip to a remote host do not
+	// share a realistic latency budget, exactly the same reasoning
+	// RepoCloneTimeout already uses to stay a separate field from
+	// GitSyncStepTimeout rather than collapsing the two.
+	//
+	// Not specified in the plan beyond "propose 90s, distinct from the
+	// existing local-only 30s GitSyncStepTimeout" (§19.3 point 1); chosen
+	// as exactly that proposed 90s -- generous enough that a real remote
+	// under ordinary load, or a large default-branch delta on a first
+	// warm-boot fetch against a genuinely stale image (§19.2's own
+	// predicted 10-40 minute staleness window, kept small in practice only
+	// because §19.1 bakes a FULL, non-shallow clone at build time), does
+	// not spuriously trip the degrade policy (§19.3 point 3) merely for
+	// running a bit long -- while still bounded well below
+	// RepoCloneTimeout's own 5m (a fetch against an already-warm object
+	// store is a much smaller delta than an initial full clone, so it
+	// does not need that same budget).
+	GitFetchStepTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1432,6 +1482,8 @@ func DefaultTimeouts() Timeouts {
 		IdentityLinkPromptTTL:                  24 * time.Hour,         // not specified beyond "short-lived"; chosen
 
 		GitHubGetPRTimeout: 10 * time.Second, // not specified (fix postdates the plan); chosen, generous for a single GitHub REST GET, mirrors PRCreateTimeout/SlackAckTimeout's own reasoning
+
+		GitFetchStepTimeout: 90 * time.Second, // §19.3, explicit ("propose 90s, distinct from the existing local-only 30s GitSyncStepTimeout")
 	}
 }
 

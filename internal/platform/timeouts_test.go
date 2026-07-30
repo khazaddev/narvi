@@ -812,6 +812,42 @@ func TestDefaultTimeouts_GitHubPRPayloadCorrectnessStandaloneField(t *testing.T)
 	}
 }
 
+// TestDefaultTimeouts_Step40StandaloneField proves Step 40's ("warm boot:
+// fetch-aware git sync", §19.3) own addition -- GitFetchStepTimeout -- ships
+// with a sane, non-zero default matching its own documented value (§19.3's
+// own explicit "propose 90s"), and that adding it did not disturb either
+// pre-existing invariant chain (it is a standalone field, wired into
+// neither), matching every other standalone addition's own test precedent
+// above.
+func TestDefaultTimeouts_Step40StandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.GitFetchStepTimeout <= 0 {
+		t.Errorf("GitFetchStepTimeout = %v, want > 0", to.GitFetchStepTimeout)
+	}
+	if to.GitFetchStepTimeout != 90*time.Second {
+		t.Errorf("GitFetchStepTimeout = %v, want %v", to.GitFetchStepTimeout, 90*time.Second)
+	}
+
+	// GitFetchStepTimeout is deliberately DISTINCT from, and larger than,
+	// GitSyncStepTimeout -- the new network-bound fetch step needs more
+	// headroom than every other (local-only) git subprocess this package
+	// spawns. This is not an enforced Validate() invariant (no ordering
+	// relationship is wired for this standalone field, matching every
+	// other standalone addition's own precedent), but is a genuine
+	// property of the two chosen values worth pinning directly.
+	if to.GitFetchStepTimeout <= to.GitSyncStepTimeout {
+		t.Errorf("GitFetchStepTimeout = %v, want > GitSyncStepTimeout = %v (network-bound fetch needs more headroom than a local-only git subprocess)",
+			to.GitFetchStepTimeout, to.GitSyncStepTimeout)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (GitFetchStepTimeout must not disturb either invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {
