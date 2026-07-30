@@ -215,6 +215,111 @@ func applySparseCheckout(ctx context.Context, sup *supervisor.Supervisor, dir st
 	return nil
 }
 
+// isSparseCheckoutEnabled runs `git -C <dir> config --type=bool
+// core.sparseCheckout` and reports whether sparse-checkout is CURRENTLY
+// active for dir -- verified directly against real git behavior (see
+// TestDisableSparseCheckoutIfEnabled_* in sync_test.go), not assumed:
+// core.sparseCheckout is unset entirely (a non-zero, exit-1 `git config`
+// failure -- "the key does not exist") on a working tree that has never
+// had sparse-checkout enabled at all, exits 0 printing "true" once `git
+// sparse-checkout set` has ever run, and exits 0 printing "false" once
+// `git sparse-checkout disable` has explicitly run afterward (git sets the
+// key to false rather than removing it again). A genuinely unexpected
+// command failure (any exit code other than the well-understood "unset"
+// case) is returned as a real error rather than silently treated as
+// "not enabled" -- callers must not blindly run `sparse-checkout disable`
+// without first confirming it is actually needed (§19.7: "never blindly
+// running disable when it was never enabled, to avoid a wasted subprocess
+// on the overwhelming common case"), but an ambiguous/broken check is not
+// safe to treat as "definitely not enabled" either.
+func isSparseCheckoutEnabled(ctx context.Context, sup *supervisor.Supervisor, dir string, timeout, stopGrace time.Duration) (bool, error) {
+	var stdout bytes.Buffer
+	proc, err := sup.Spawn(supervisor.Spec{
+		Path:   "git",
+		Args:   []string{"-C", dir, "config", "--type=bool", "core.sparseCheckout"},
+		Stdout: &stdout,
+	})
+	if err != nil {
+		return false, fmt.Errorf("spawn git config core.sparseCheckout: %w", err)
+	}
+
+	stepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	result, waitErr := proc.Wait(stepCtx)
+	if waitErr != nil {
+		_ = proc.Stop(ctx, stopGrace)
+		return false, fmt.Errorf("git config core.sparseCheckout: did not complete within %s: %w", timeout, waitErr)
+	}
+	if result.Err != nil {
+		return false, fmt.Errorf("git config core.sparseCheckout: %w", result.Err)
+	}
+	switch result.ExitCode {
+	case 0:
+		return strings.TrimSpace(stdout.String()) == "true", nil
+	case 1:
+		// The key is simply unset -- sparse-checkout has never been enabled
+		// for this working tree. Not an error.
+		return false, nil
+	default:
+		return false, fmt.Errorf("git config core.sparseCheckout: exited %d", result.ExitCode)
+	}
+}
+
+// disableSparseCheckoutIfEnabled implements §19.7's own sparse-checkout-
+// disable hardening: when a session's own pathScope is EMPTY (the
+// unscoped case -- SyncAll's own caller, syncOne, only invokes this
+// branch when len(pathScope) == 0) but the on-disk workspace at dir is
+// CURRENTLY sparse-checked-out (from whatever baked/restored state it
+// came from -- §19.1: shared images are always built unscoped, but a
+// snapshot_restore boot can restore a SCOPED session's own snapshot into
+// an unscoped session's config, and a repo_image boot's own workspace may
+// simply have been left sparse by an earlier scoped session that shared
+// the same on-disk state), this disables sparse-checkout so the full tree
+// actually materializes -- the reverse direction of applySparseCheckout
+// above, which this codebase had no branch for at all before this Step.
+//
+// Cheap and unconditional to CALL for every unscoped session (§19.7: "it
+// must run for EVERY unscoped session, unconditionally checking whether
+// disabling is even needed") -- but never blindly runs `sparse-checkout
+// disable` itself: isSparseCheckoutEnabled is checked FIRST, so the
+// overwhelming common case (a workspace that was never sparse to begin
+// with) costs exactly one cheap `git config` subprocess, never a second,
+// wasted `sparse-checkout disable` invocation.
+func disableSparseCheckoutIfEnabled(ctx context.Context, sup *supervisor.Supervisor, dir string, timeout, stopGrace time.Duration) error {
+	enabled, err := isSparseCheckoutEnabled(ctx, sup, dir, timeout, stopGrace)
+	if err != nil {
+		return fmt.Errorf("determine whether sparse-checkout is enabled: %w", err)
+	}
+	if !enabled {
+		return nil
+	}
+
+	proc, err := sup.Spawn(supervisor.Spec{
+		Path: "git",
+		Args: []string{"-C", dir, "sparse-checkout", "disable"},
+	})
+	if err != nil {
+		return fmt.Errorf("spawn git sparse-checkout disable: %w", err)
+	}
+
+	stepCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	result, waitErr := proc.Wait(stepCtx)
+	if waitErr != nil {
+		_ = proc.Stop(ctx, stopGrace)
+		return fmt.Errorf("git sparse-checkout disable: did not complete within %s: %w", timeout, waitErr)
+	}
+	if result.Err != nil {
+		return fmt.Errorf("git sparse-checkout disable: %w", result.Err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("git sparse-checkout disable: exited %d", result.ExitCode)
+	}
+	return nil
+}
+
 // validateRepoSpec runs every internal/domain/reposource validator this
 // repo's fields need, in order, stopping at the first failure -- Branch
 // is validated only when non-nil (§3.4: nil means "the repo's own

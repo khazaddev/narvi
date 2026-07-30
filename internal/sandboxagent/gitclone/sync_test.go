@@ -1556,3 +1556,126 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	}
 	return string(out)
 }
+
+// TestSyncAll_ScopedBakedThenUnscopedSession_DisablesSparseCheckout proves
+// §19.7's own new hardening: the on-disk workspace was left sparse-checked-
+// out by whatever produced it (simulating a snapshot_restore boot
+// restoring a SCOPED session's own snapshot into an UNSCOPED session's
+// config, or a repo_image workspace shared from a scoped session) -- a
+// SyncAll call with an EMPTY pathScope must disable sparse-checkout so the
+// full tree actually materializes, the reverse direction
+// applySparseCheckout's own forward direction does not cover.
+func TestSyncAll_ScopedBakedThenUnscopedSession_DisablesSparseCheckout(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	for _, dir := range []string{"apps/web", "apps/api"} {
+		if err := os.MkdirAll(filepath.Join(repoDir, dir), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "apps/web/index.js"), []byte("web\n"), 0o644); err != nil {
+		t.Fatalf("write apps/web/index.js: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, "apps/api/index.js"), []byte("api\n"), 0o644); err != nil {
+		t.Fatalf("write apps/api/index.js: %v", err)
+	}
+	runGit(t, repoDir, "add", ".")
+	runGit(t, repoDir, "commit", "-m", "add apps/web and apps/api")
+
+	// Simulate a PRIOR scoped bake/restore: sparse-checkout is enabled
+	// directly against the real on-disk repo, narrowed to apps/web only --
+	// exactly the state a snapshot_restore boot would find on disk before
+	// this session's own (unscoped) SyncAll call ever runs.
+	runGit(t, repoDir, "sparse-checkout", "set", "--no-cone", "--", "/apps/web/*")
+
+	// Precondition sanity check: the out-of-scope file is genuinely absent
+	// BEFORE this session's own SyncAll call.
+	if _, statErr := os.Stat(filepath.Join(repoDir, "apps/api/index.js")); !os.IsNotExist(statErr) {
+		t.Fatalf("precondition failed: apps/api/index.js unexpectedly present before SyncAll, stat = %v", statErr)
+	}
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+
+	sup := supervisor.New()
+	// pathScope is nil: THIS session is unscoped.
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-unscoped-after-scoped-bake",
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+	if results[0].Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", results[0].Err)
+	}
+
+	for _, wantPresent := range []string{"apps/web/index.js", "apps/api/index.js", "README.md"} {
+		if _, statErr := os.Stat(filepath.Join(repoDir, wantPresent)); statErr != nil {
+			t.Errorf("expected %s to materialize (sparse-checkout must be disabled for an unscoped session): %v", wantPresent, statErr)
+		}
+	}
+
+	if enabled := strings.TrimSpace(gitOutputAllowFailure(t, repoDir, "config", "--type=bool", "core.sparseCheckout")); enabled != "false" {
+		t.Errorf("core.sparseCheckout = %q after SyncAll, want %q (disabled)", enabled, "false")
+	}
+}
+
+// TestSyncAll_NeverSparse_UnscopedSession_NoDisableAttempted proves the
+// overwhelming common case (a workspace that was never sparse-checked-out
+// at all) costs nothing extra: SyncAll succeeds unchanged, and (since
+// there is nothing to disable) `git sparse-checkout disable` is never even
+// attempted -- confirmed indirectly by the fact that core.sparseCheckout
+// stays entirely UNSET (not merely "false") after SyncAll, exactly as it
+// was before.
+func TestSyncAll_NeverSparse_UnscopedSession_NoDisableAttempted(t *testing.T) {
+	t.Parallel()
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-never-sparse",
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+	if results[0].Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", results[0].Err)
+	}
+
+	if _, statErr := os.Stat(filepath.Join(repoDir, "README.md")); statErr != nil {
+		t.Errorf("README.md missing, want present (never scoped): %v", statErr)
+	}
+
+	// core.sparseCheckout was never set at all -- `git config` itself
+	// exits 1 (key unset), which gitOutputAllowFailure surfaces as "".
+	if got := gitOutputAllowFailure(t, repoDir, "config", "--type=bool", "core.sparseCheckout"); got != "" {
+		t.Errorf("core.sparseCheckout = %q, want unset entirely (disable was never even attempted)", got)
+	}
+}
+
+// gitOutputAllowFailure runs git with args in dir and returns its trimmed
+// stdout, tolerating a non-zero exit (returning "" in that case) -- unlike
+// gitOutput above, which fails the test on any error. Used for `git config
+// --type=bool core.sparseCheckout`, whose own "key unset" case is a
+// normal, expected exit 1.
+func gitOutputAllowFailure(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}

@@ -256,6 +256,33 @@ func syncOne(
 				result.Err = wrapped
 			}
 		}()
+	} else {
+		// §19.7's own sparse-checkout-disable hardening: the REVERSE
+		// direction of the branch above. An unscoped session (pathScope
+		// empty) may still find dir CURRENTLY sparse-checked-out on disk
+		// (a snapshot_restore boot restoring a SCOPED session's own
+		// snapshot into this unscoped config, or a repo_image workspace
+		// left sparse by whatever scoped session shared the same
+		// on-disk/baked state) -- disableSparseCheckoutIfEnabled itself
+		// checks first and is a cheap no-op for the overwhelming common
+		// case (never sparse to begin with), so this is safe and cheap to
+		// run for EVERY unscoped session unconditionally. Same
+		// best-effort-additive-to-result.Err deferred shape as the scoped
+		// branch above: never clears an earlier, more specific failure,
+		// only appends on top of one if any, and never touches
+		// result.State.
+		defer func() {
+			disableErr := disableSparseCheckoutIfEnabled(ctx, sup, dir, stepTimeout, stopGrace)
+			if disableErr == nil {
+				return
+			}
+			wrapped := fmt.Errorf("gitclone: disable sparse-checkout %s: %w", repo.Name, disableErr)
+			if result.Err != nil {
+				result.Err = fmt.Errorf("%w (repo also failed to sync earlier: %v)", wrapped, result.Err)
+			} else {
+				result.Err = wrapped
+			}
+		}()
 	}
 
 	state := gitstate.StateFetching
