@@ -140,7 +140,7 @@ func TestResilienceScenario_NonIdempotentSetupBoot_NonFatalFailure_VisibleInOutp
 		t.Fatalf("RunBoot() error = %v, want nil (a non-idempotent setup.sh's rerun failure must be non-fatal -- boot still succeeds)", err)
 	}
 
-	rawTail, ok := handler.lastAttr("output_tail")
+	rawTail, ok := handler.findAttr("output_tail")
 	if !ok {
 		t.Fatal("no Warn log line carried an output_tail attribute -- the failure is undiagnosable, exactly the gap §19.5(a) exists to close")
 	}
