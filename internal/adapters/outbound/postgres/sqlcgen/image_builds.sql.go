@@ -15,7 +15,7 @@ const claimImageBuild = `-- name: ClaimImageBuild :one
 UPDATE image_builds
 SET status = 'building', attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now()
 WHERE fingerprint = $1
-RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed
 `
 
 // The claim half of the pump's own two-step (claim-then-attempt-outside-
@@ -47,6 +47,7 @@ func (q *Queries) ClaimImageBuild(ctx context.Context, fingerprint string) (Imag
 		&i.BuiltAt,
 		&i.RefreshInProgress,
 		&i.RefreshStartedAt,
+		&i.PermanentlyFailed,
 	)
 	return i, err
 }
@@ -57,7 +58,7 @@ SET refresh_in_progress = true, refresh_started_at = now(), updated_at = now()
 WHERE fingerprint = $1
   AND status = 'ready'
   AND (refresh_in_progress = false OR refresh_started_at < $2)
-RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed
 `
 
 type ClaimImageBuildForRefreshParams struct {
@@ -102,13 +103,14 @@ func (q *Queries) ClaimImageBuildForRefresh(ctx context.Context, arg ClaimImageB
 		&i.BuiltAt,
 		&i.RefreshInProgress,
 		&i.RefreshStartedAt,
+		&i.PermanentlyFailed,
 	)
 	return i, err
 }
 
 const getImageBuild = `-- name: GetImageBuild :one
 
-SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at FROM image_builds
+SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed FROM image_builds
 WHERE fingerprint = $1
 `
 
@@ -142,13 +144,15 @@ func (q *Queries) GetImageBuild(ctx context.Context, fingerprint string) (ImageB
 		&i.BuiltAt,
 		&i.RefreshInProgress,
 		&i.RefreshStartedAt,
+		&i.PermanentlyFailed,
 	)
 	return i, err
 }
 
 const listDueImageBuilds = `-- name: ListDueImageBuilds :many
-SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at FROM image_builds
-WHERE status = 'pending' OR (status = 'failed' AND next_retry_at <= now())
+SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed FROM image_builds
+WHERE permanently_failed = false
+  AND (status = 'pending' OR (status = 'failed' AND next_retry_at <= now()))
 ORDER BY updated_at
 LIMIT $1
 FOR UPDATE SKIP LOCKED
@@ -164,6 +168,17 @@ FOR UPDATE SKIP LOCKED
 // this same background loop independently; SKIP LOCKED is what lets two
 // concurrent pods each claim a DISJOINT batch instead of blocking on each
 // other or double-claiming the same fingerprint.
+//
+// "AND permanently_failed = false" (audit-remediation batch B3 round 2,
+// migrations/000042_image_builds_permanent_failure.up.sql) excludes a row
+// whose own repo url names a source-control host this deployment's
+// SourceControl adapter can never resolve against, no matter how many
+// times it is retried -- see that migration's own doc comment for the
+// full "why a boolean, not a new status" rationale, and RecordImageBuildPermanentFailure
+// below for how a row gets marked this way. A 'pending' row is never
+// permanently_failed by construction (UpsertPendingImageBuild never sets
+// it), but the guard is applied to both arms uniformly rather than
+// special-casing which one can never be true today.
 func (q *Queries) ListDueImageBuilds(ctx context.Context, limit int32) ([]ImageBuild, error) {
 	rows, err := q.db.Query(ctx, listDueImageBuilds, limit)
 	if err != nil {
@@ -189,6 +204,7 @@ func (q *Queries) ListDueImageBuilds(ctx context.Context, limit int32) ([]ImageB
 			&i.BuiltAt,
 			&i.RefreshInProgress,
 			&i.RefreshStartedAt,
+			&i.PermanentlyFailed,
 		); err != nil {
 			return nil, err
 		}
@@ -201,7 +217,7 @@ func (q *Queries) ListDueImageBuilds(ctx context.Context, limit int32) ([]ImageB
 }
 
 const listReadyImageBuilds = `-- name: ListReadyImageBuilds :many
-SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at FROM image_builds
+SELECT fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed FROM image_builds
 WHERE status = 'ready' AND repo_urls != '{}'::jsonb
   AND (refresh_in_progress = false OR refresh_started_at < $2)
 ORDER BY updated_at
@@ -286,6 +302,7 @@ func (q *Queries) ListReadyImageBuilds(ctx context.Context, arg ListReadyImageBu
 			&i.BuiltAt,
 			&i.RefreshInProgress,
 			&i.RefreshStartedAt,
+			&i.PermanentlyFailed,
 		); err != nil {
 			return nil, err
 		}
@@ -301,7 +318,7 @@ const recordImageBuildFailure = `-- name: RecordImageBuildFailure :one
 UPDATE image_builds
 SET status = 'failed', next_retry_at = $2, updated_at = now()
 WHERE fingerprint = $1 AND status = 'building'
-RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed
 `
 
 type RecordImageBuildFailureParams struct {
@@ -332,6 +349,53 @@ func (q *Queries) RecordImageBuildFailure(ctx context.Context, arg RecordImageBu
 		&i.BuiltAt,
 		&i.RefreshInProgress,
 		&i.RefreshStartedAt,
+		&i.PermanentlyFailed,
+	)
+	return i, err
+}
+
+const recordImageBuildPermanentFailure = `-- name: RecordImageBuildPermanentFailure :one
+UPDATE image_builds
+SET status = 'failed', permanently_failed = true, next_retry_at = NULL, updated_at = now()
+WHERE fingerprint = $1 AND status = 'building'
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed
+`
+
+// Audit-remediation batch B3 round 2 (finding #3): the TERMINAL sibling of
+// RecordImageBuildFailure above, for the one class of failure no backoff
+// schedule can ever clear -- a repo url naming a source-control host this
+// deployment's SourceControl adapter can never resolve against
+// (reposource.UnsupportedRepoHostError, surfaced via
+// imagebuild.Builder.resolveRepoSHAs). status stays 'failed' (see
+// migrations/000042_image_builds_permanent_failure.up.sql's own doc
+// comment for why this is a boolean, not a new enum value) but
+// permanently_failed flips to true and next_retry_at is cleared to NULL --
+// ListDueImageBuilds' own "AND permanently_failed = false" guard then
+// excludes this row from every future tick, on every pod, until an
+// operator fixes the session's own repo config and manually clears this
+// column (there is deliberately no automated path back). Same
+// "AND status = 'building'" guard as RecordImageBuildFailure, for the
+// identical reason (a stale/already-superseded row is a harmless no-op).
+func (q *Queries) RecordImageBuildPermanentFailure(ctx context.Context, fingerprint string) (ImageBuild, error) {
+	row := q.db.QueryRow(ctx, recordImageBuildPermanentFailure, fingerprint)
+	var i ImageBuild
+	err := row.Scan(
+		&i.Fingerprint,
+		&i.Base,
+		&i.RepoUrls,
+		&i.RuntimeVersion,
+		&i.ImageRef,
+		&i.Status,
+		&i.AttemptCount,
+		&i.LastAttemptAt,
+		&i.NextRetryAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.BuiltRepoShas,
+		&i.BuiltAt,
+		&i.RefreshInProgress,
+		&i.RefreshStartedAt,
+		&i.PermanentlyFailed,
 	)
 	return i, err
 }
@@ -340,7 +404,7 @@ const recordImageBuildSuccess = `-- name: RecordImageBuildSuccess :one
 UPDATE image_builds
 SET status = 'ready', image_ref = $2, built_repo_shas = $3, built_at = $4, next_retry_at = NULL, updated_at = now()
 WHERE fingerprint = $1 AND status = 'building'
-RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed
 `
 
 type RecordImageBuildSuccessParams struct {
@@ -386,6 +450,7 @@ func (q *Queries) RecordImageBuildSuccess(ctx context.Context, arg RecordImageBu
 		&i.BuiltAt,
 		&i.RefreshInProgress,
 		&i.RefreshStartedAt,
+		&i.PermanentlyFailed,
 	)
 	return i, err
 }
@@ -394,7 +459,7 @@ const recordImageRefreshFailure = `-- name: RecordImageRefreshFailure :one
 UPDATE image_builds
 SET refresh_in_progress = false, refresh_started_at = NULL, updated_at = now()
 WHERE fingerprint = $1 AND refresh_started_at = $2
-RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed
 `
 
 type RecordImageRefreshFailureParams struct {
@@ -463,6 +528,7 @@ func (q *Queries) RecordImageRefreshFailure(ctx context.Context, arg RecordImage
 		&i.BuiltAt,
 		&i.RefreshInProgress,
 		&i.RefreshStartedAt,
+		&i.PermanentlyFailed,
 	)
 	return i, err
 }
@@ -471,7 +537,7 @@ const recordImageRefreshSuccess = `-- name: RecordImageRefreshSuccess :one
 UPDATE image_builds
 SET image_ref = $2, built_repo_shas = $3, built_at = $4, refresh_in_progress = false, refresh_started_at = NULL, updated_at = now()
 WHERE fingerprint = $1 AND status = 'ready' AND refresh_started_at = $5
-RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at
+RETURNING fingerprint, base, repo_urls, runtime_version, image_ref, status, attempt_count, last_attempt_at, next_retry_at, created_at, updated_at, built_repo_shas, built_at, refresh_in_progress, refresh_started_at, permanently_failed
 `
 
 type RecordImageRefreshSuccessParams struct {
@@ -549,6 +615,7 @@ func (q *Queries) RecordImageRefreshSuccess(ctx context.Context, arg RecordImage
 		&i.BuiltAt,
 		&i.RefreshInProgress,
 		&i.RefreshStartedAt,
+		&i.PermanentlyFailed,
 	)
 	return i, err
 }

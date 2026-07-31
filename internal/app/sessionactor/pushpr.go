@@ -57,8 +57,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,6 +67,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 )
 
@@ -382,7 +381,26 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			continue
 		}
 
-		owner, repoName, err := parseOwnerRepo(repoCfg.Url)
+		// Audit fix (HIGH, cross-batch parity with imageresolve.go's
+		// repoAccessAllowedForSpawn and contractdrift.go's
+		// checkContractDriftForRepo): checked BEFORE ParseOwnerRepo/CreatePR
+		// -- a.sourceControl.CreatePR is a WRITE operation, so silently
+		// deriving owner/repo from a non-GitHub repo URL (e.g. a GitLab
+		// host, which reposource.ValidateRepoURL accepts -- any https host)
+		// and calling the real GitHub-only adapter (production's
+		// a.sourceControl, ports.GitHubSourceControlHost's own doc comment)
+		// regardless would risk opening a REAL pull request against a
+		// coincidentally-matching, completely unrelated GitHub repo using
+		// the session creator's real OAuth token. See
+		// ports.GitHubSourceControlHost's own doc comment for the full
+		// rationale this gate closes everywhere it's applied.
+		if err := reposource.CheckRepoHost(repoCfg.Url, ports.SupportedSourceControlHosts()...); err != nil {
+			a.logger.Error("sessionactor: create PR: repo url does not name a supported source-control host; skipping this repo",
+				"repo", pushed.Name, "url", repoCfg.Url, "error", err)
+			continue
+		}
+
+		owner, repoName, err := reposource.ParseOwnerRepo(repoCfg.Url)
 		if err != nil {
 			a.logger.Error("sessionactor: parse owner/repo from clone url for PR creation failed",
 				"repo", pushed.Name, "error", err)
@@ -457,24 +475,11 @@ func prBody(pushed sandboxws.PushCompleteReposElem) string {
 	return fmt.Sprintf("Automated changes from a Narvi session (branch %q, commit %s).", pushed.Branch, pushed.Sha)
 }
 
-// parseOwnerRepo extracts (owner, repo) from a git clone URL of the
-// generic https://<host>/<owner>/<repo>[.git] shape. Deliberately generic,
-// not GitHub-specific: ports.CreatePRSpec.Owner/Repo are generic
-// source-control concepts (that port's own doc comment), and this exact
-// path shape is common to GitHub/GitLab/Bitbucket alike -- even though
-// internal/adapters/outbound/githubapi is the only real SourceControl
-// implementation this Step builds.
-func parseOwnerRepo(rawURL string) (owner, repo string, err error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", "", fmt.Errorf("parse repo clone url %q: %w", rawURL, err)
-	}
-
-	trimmed := strings.Trim(parsed.Path, "/")
-	trimmed = strings.TrimSuffix(trimmed, ".git")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("repo clone url %q does not have an /owner/repo path", rawURL)
-	}
-	return parts[0], parts[1], nil
-}
+// parseOwnerRepo used to live here as a byte-for-byte fork of
+// internal/app/imagebuild/builder.go's own identical helper -- audit-
+// remediation batch B3 moved both into
+// internal/domain/reposource.ParseOwnerRepo (which already owns
+// ValidateRepoURL/ValidateBranch, i.e. this codebase's one home for
+// repo-URL parsing knowledge) and deleted both forks. See that function's
+// own doc comment for the full rationale; this call site now uses it
+// directly, above.

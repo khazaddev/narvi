@@ -205,8 +205,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -215,6 +213,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/imagebuild"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 )
 
 // resolveAndSetImage implements this file's own design (see top comment).
@@ -322,42 +321,21 @@ func (a *Actor) upsertPendingImageBuildBestEffort(ctx context.Context, fingerpri
 	}
 }
 
-// githubRepoHost is the ONLY source-control host this codebase's one real
-// SourceControl implementation (internal/adapters/outbound/githubapi)
-// ever actually queries -- production wiring always talks to GitHub's own
-// real API (api.github.com) regardless of what host a session's own repo
-// URL names. Audit hardening (security-adversarial, finding #2): without
-// an explicit check against this, repoURLHostAllowed (below) -- and
-// therefore this gate's entire fail-closed property for a non-GitHub repo
-// URL -- would be an ACCIDENT of today's adapter roster, not a designed
-// property: parseOwnerRepo (pushpr.go) is deliberately generic and
-// discards the URL's host entirely, and reposource.ValidateRepoURL
-// accepts ANY https host, so a session named e.g.
-// "https://example.org/acme/tools" would otherwise still have this gate
-// derive owner="acme"/repo="tools" and query GitHub's REAL API for that
-// path -- a completely unrelated resource -- and happen to fail closed
-// today only because no second SourceControl implementation exists yet.
-// Update this (or make it configurable per-adapter) the day a second
-// SourceControl implementation (e.g. GitLab) is actually wired -- see
-// ports.SourceControl's own doc comment on why this port intentionally
-// stays adapter-agnostic in its signatures; this one const is a
-// deliberate, narrow, explicitly-called-out exception, not a precedent
-// for leaking GitHub specifics into this port more broadly.
-const githubRepoHost = "github.com"
-
-// repoURLHostAllowed reports whether repoURL's own host is one this gate's
-// configured SourceControl implementation actually queries (see
-// githubRepoHost's own doc comment) -- checked BEFORE this gate ever
-// derives an owner/repo from repoURL or spends a cache lookup/network call
-// on it. A repoURL that fails to parse is also disallowed (fail-closed,
-// matching every other malformed-input branch in this gate).
-func repoURLHostAllowed(repoURL string) bool {
-	parsed, err := url.Parse(repoURL)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(parsed.Host, githubRepoHost)
-}
+// githubRepoHost/repoURLHostAllowed used to live here -- audit-remediation
+// batch B3 moved the const to ports.GitHubSourceControlHost and the check
+// itself to reposource.CheckRepoHost (a THIRD independent host-checking
+// implementation, added for imagebuild.Builder.resolveRepoSHAs, would
+// have been its own version of the exact finding this const/check
+// originally closed -- see ports.GitHubSourceControlHost's own doc
+// comment for the full rationale). This gate now calls
+// reposource.CheckRepoHost(repoURL, ports.SupportedSourceControlHosts()...)
+// directly, below, in the exact same "before this gate ever derives an
+// owner/repo or spends a cache lookup/network call" position --
+// audit-remediation batch B3 round 2 (finding #7) further routes both this
+// call and imagebuild.Builder.resolveRepoSHAs' own identical call through
+// ports.SupportedSourceControlHosts() rather than each naming
+// ports.GitHubSourceControlHost directly, so the two allowlists can no
+// longer drift apart independently -- see that function's own doc comment.
 
 // repoAccessAllowedForSpawn implements this file's own "# Repo-access
 // gate" design (see this file's own top comment for the complete
@@ -445,15 +423,15 @@ func (a *Actor) repoAccessAllowedForSpawn(ctx context.Context, plan *spawnPlan, 
 	for name, repoURL := range repoURLs {
 		// Audit hardening (security-adversarial, finding #2): checked
 		// BEFORE this repo's owner/repo is even derived, or a cache lookup
-		// spent on it -- see repoURLHostAllowed's/githubRepoHost's own doc
-		// comments.
-		if !repoURLHostAllowed(repoURL) {
+		// spent on it -- see ports.GitHubSourceControlHost's own doc
+		// comment.
+		if err := reposource.CheckRepoHost(repoURL, ports.SupportedSourceControlHosts()...); err != nil {
 			a.logger.Warn("sessionactor: resolve image: repo-access gate: repo url does not name a supported source-control host; denying warm-boot",
-				"repo", name, "url", repoURL)
+				"repo", name, "url", repoURL, "error", err)
 			return false
 		}
 
-		owner, repoName, err := parseOwnerRepo(repoURL)
+		owner, repoName, err := reposource.ParseOwnerRepo(repoURL)
 		if err != nil {
 			a.logger.Warn("sessionactor: resolve image: repo-access gate: parse owner/repo from clone url failed; denying warm-boot",
 				"repo", name, "error", err)

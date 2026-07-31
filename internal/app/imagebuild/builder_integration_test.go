@@ -311,6 +311,40 @@ func readRefreshClaimReclaimed(ctx context.Context, t *testing.T, reader *sdkmet
 	return 0
 }
 
+// readPermanentlyFailed is readFailureStreak's own sibling for the
+// image_build_permanently_failed OTel counter (audit-remediation batch B3
+// round 2, finding #3) -- CUMULATIVE across every test in this binary,
+// same caveat as readFailureStreak's own doc comment.
+func readPermanentlyFailed(ctx context.Context, t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		if sm.Scope.Name != "narvi/imagebuild" {
+			continue
+		}
+		for _, m := range sm.Metrics {
+			if m.Name != "image_build_permanently_failed" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("image_build_permanently_failed metric data = %T, want metricdata.Sum[int64]", m.Data)
+			}
+			var total int64
+			for _, dp := range sum.DataPoints {
+				total += dp.Value
+			}
+			return total
+		}
+	}
+	return 0
+}
+
 // seedPendingImageBuild inserts a fresh 'pending' image_builds row directly
 // (bypassing app/sessionactor entirely -- this package's own tests exercise
 // Builder in isolation, matching its own doc.go's scope). repo_urls is
@@ -1407,6 +1441,233 @@ func TestPumpOnce_RepoBearingRow_CredentialConfigured_ResolvesSHAsAndBuilds(t *t
 	}
 	if !row.BuiltAt.Valid {
 		t.Error("built_at is not set, want a real timestamp")
+	}
+}
+
+// TestPumpOnce_RepoBearingRow_UnsupportedHost_FailsCleanlyNeverCallsSourceControl
+// is audit-remediation batch B3's own regression test for the finding
+// this batch closes: a repo_urls entry naming a NON-GitHub host (a
+// GitLab URL passes reposource.ValidateRepoURL -- it accepts any https
+// host -- and used to reach parseOwnerRepo/ResolveBranchSHA completely
+// unchecked) must never reach b.sourceControl.ResolveBranchSHA at all --
+// doing so would silently query GitHub's real API for a coincidentally-
+// matching owner/repo path, either failing confusingly or, worse,
+// resolving a SHA against a completely unrelated repo. Proves the fix
+// fails LOUDLY (recorded as a failed attempt, same as any other
+// resolveRepoSHAs failure) rather than silently succeeding against the
+// wrong host.
+//
+// Audit-remediation batch B3 round 2 (finding #3) extends this test: this
+// is a PERMANENT condition (no retry ever makes an unsupported host become
+// supported), so the row is now recorded via recordPermanentFailure
+// (permanently_failed=true, next_retry_at cleared) rather than cycling
+// through the ordinary EvaluateBackoff schedule forever -- and a SECOND
+// PumpOnce tick, run after this row's own attempt_count and updated_at
+// would otherwise make it look "due" again under the OLD behavior, proves
+// it is never reclaimed a second time (ListDueImageBuilds' own
+// "AND permanently_failed = false" guard).
+func TestPumpOnce_RepoBearingRow_UnsupportedHost_FailsCleanlyNeverCallsSourceControl(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-repo-bearing-unsupported-host"
+	seedPendingImageBuildWithRepos(ctx, t, store, fingerprint, map[string]string{
+		"repo1": "https://gitlab.example.com/acme/widgets",
+	})
+
+	// A SourceControl that would fail the test outright if ResolveBranchSHA
+	// were ever actually invoked -- this test's whole point is that it must
+	// NOT be, for a repo url naming a host other than github.com.
+	sourceControl := &fakeSourceControl{nextErr: errors.New("fakeSourceControl: ResolveBranchSHA must never be called for a non-GitHub host")}
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+
+	timeouts := platform.DefaultTimeouts()
+	timeouts.ImageBuildBackoffBase = 200 * time.Millisecond
+	timeouts.ImageBuildBackoffMax = 500 * time.Millisecond
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	beforePermanentlyFailed := readPermanentlyFailed(ctx, t, otelReader)
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (an unsupported host must be rejected BEFORE any resolution call, never silently resolved against the wrong host)", got)
+	}
+	if got := provider.buildCallCount(); got != 0 {
+		t.Fatalf("BuildImage call count = %d, want 0", got)
+	}
+	if after := readPermanentlyFailed(ctx, t, otelReader); after-beforePermanentlyFailed != 1 {
+		t.Errorf("image_build_permanently_failed counter delta = %d, want 1", after-beforePermanentlyFailed)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusFailed {
+		t.Errorf("status = %q, want %q (recorded as a real, loud failure -- never a silent success against the wrong host)", row.Status, sqlcgen.ImageBuildStatusFailed)
+	}
+	if !row.PermanentlyFailed {
+		t.Errorf("permanently_failed = false, want true (an unsupported host is a PERMANENT condition -- no retry will ever clear it)")
+	}
+	if row.AttemptCount != 1 {
+		t.Errorf("attempt_count = %d, want 1", row.AttemptCount)
+	}
+	if row.NextRetryAt.Valid {
+		t.Errorf("next_retry_at = %v, want unset/NULL (a permanently-failed row is never scheduled for another retry)", row.NextRetryAt)
+	}
+	if row.ImageRef != nil {
+		t.Errorf("image_ref = %v, want nil (never built)", row.ImageRef)
+	}
+	if row.BuiltRepoShas != nil {
+		t.Errorf("built_repo_shas = %v, want nil (never built)", row.BuiltRepoShas)
+	}
+
+	// A second tick must never reclaim this fingerprint again -- this is
+	// the core of finding #3's own fix: before it, a 'failed' row with a
+	// past-due next_retry_at would be picked right back up by
+	// ListDueImageBuilds, re-attempted, and fail again, forever.
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce (second tick): %v", err)
+	}
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Errorf("ResolveBranchSHA call count after second tick = %d, want 0 (a permanently-failed fingerprint must never be reclaimed again)", got)
+	}
+
+	rowAfterSecondTick, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after second tick: %v", err)
+	}
+	if rowAfterSecondTick.AttemptCount != 1 {
+		t.Errorf("attempt_count after second tick = %d, want 1 (unchanged -- never reclaimed)", rowAfterSecondTick.AttemptCount)
+	}
+	if after := readPermanentlyFailed(ctx, t, otelReader); after-beforePermanentlyFailed != 1 {
+		t.Errorf("image_build_permanently_failed counter delta after second tick = %d, want 1 (still one-shot -- never reclaimed, so never re-fires)", after-beforePermanentlyFailed)
+	}
+}
+
+// TestPumpOnce_RepoBearingRow_UnsupportedHost_ExampleOrg_FailsCleanly is
+// audit-remediation batch B3 round 2's own regression test for finding #7
+// (allowlist drift between this package's own resolveRepoSHAs gate and
+// app/sessionactor's identical imageresolve.go gate): deliberately uses
+// "example.org" -- the EXACT unsupported-host fixture
+// internal/app/sessionactor/repoaccessgate_integration_test.go's own
+// TestRepoAccessGate_UnsupportedRepoHost_DeniesWarmBootNoAccessCall uses --
+// rather than this file's own pre-existing "gitlab.example.com" fixture
+// (TestPumpOnce_RepoBearingRow_UnsupportedHost_FailsCleanlyNeverCallsSourceControl,
+// above). Before this batch, an adversarial NARROWING or divergence of
+// ONLY this package's own gate could have passed unnoticed since no test
+// here ever exercised "example.org" specifically -- this test, together
+// with imageresolve's own "gitlab.example.com" sibling test, proves both
+// gates agree on the SAME extra host in both directions, now that both
+// route through the shared ports.SupportedSourceControlHosts().
+func TestPumpOnce_RepoBearingRow_UnsupportedHost_ExampleOrg_FailsCleanly(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-repo-bearing-unsupported-host-example-org"
+	seedPendingImageBuildWithRepos(ctx, t, store, fingerprint, map[string]string{
+		"repo1": "https://example.org/acme/tools.git",
+	})
+
+	sourceControl := &fakeSourceControl{nextErr: errors.New("fakeSourceControl: ResolveBranchSHA must never be called for a non-GitHub host")}
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (an unsupported host must be rejected BEFORE any resolution call)", got)
+	}
+	if got := provider.buildCallCount(); got != 0 {
+		t.Fatalf("BuildImage call count = %d, want 0", got)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusFailed {
+		t.Errorf("status = %q, want %q", row.Status, sqlcgen.ImageBuildStatusFailed)
+	}
+	if !row.PermanentlyFailed {
+		t.Errorf("permanently_failed = false, want true")
+	}
+}
+
+// TestRefreshOnce_UnsupportedHost_FailsCleanlyNeverCallsSourceControl is
+// TestPumpOnce_RepoBearingRow_UnsupportedHost_FailsCleanlyNeverCallsSourceControl's
+// own freshness-pump-side sibling: an already-'ready' row whose repo_urls
+// names a non-GitHub host must never reach ResolveBranchSHA during a
+// refresh check either -- the OLD image_ref stays servable (§19.2's own
+// "never degrades availability"), and the row still advances its own
+// ordering key (touchChecked), exactly like every other resolveRepoSHAs
+// failure attemptRefresh's own top doc comment already documents.
+func TestRefreshOnce_UnsupportedHost_FailsCleanlyNeverCallsSourceControl(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-refresh-unsupported-host"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://gitlab.example.com/acme/widgets"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:old-ref")
+
+	rowBefore, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row before: %v", err)
+	}
+
+	sourceControl := &fakeSourceControl{nextErr: errors.New("fakeSourceControl: ResolveBranchSHA must never be called for a non-GitHub host")}
+	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	time.Sleep(5 * time.Millisecond) // ensure a real clock delta from seeding
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Fatalf("ResolveBranchSHA call count = %d, want 0 (an unsupported host must be rejected before any resolution call)", got)
+	}
+	if got := provider.buildCallCount(); got != 0 {
+		t.Errorf("BuildImage call count = %d, want 0", got)
+	}
+
+	rowAfter, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row after: %v", err)
+	}
+	if rowAfter.Status != sqlcgen.ImageBuildStatusReady {
+		t.Errorf("status = %q, want %q (untouched)", rowAfter.Status, sqlcgen.ImageBuildStatusReady)
+	}
+	if rowAfter.ImageRef == nil || *rowAfter.ImageRef != "narvi/built-image:old-ref" {
+		t.Errorf("image_ref = %v, want the OLD ref still intact %q", rowAfter.ImageRef, "narvi/built-image:old-ref")
+	}
+	if rowAfter.RefreshInProgress {
+		t.Error("refresh_in_progress = true, want false (this branch never takes a claim)")
+	}
+	if !rowAfter.UpdatedAt.Time.After(rowBefore.UpdatedAt.Time) {
+		t.Errorf("updated_at did not advance (before=%v after=%v) -- a PERSISTENTLY failing resolution (an unsupported host will never resolve) must still rotate this row to the back of ListReadyImageBuilds' own next window, or it would permanently occupy the front of every tick's batch", rowBefore.UpdatedAt.Time, rowAfter.UpdatedAt.Time)
 	}
 }
 

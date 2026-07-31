@@ -67,6 +67,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/contractdrift"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 )
 
 // checkContractDrift implements this file's own design (see top comment).
@@ -161,7 +162,25 @@ func (a *Actor) checkContractDrift(ctx context.Context, plan *spawnPlan) {
 // repo) -- see this file's own top comment for why this differs from
 // resolveAndSetImage's own all-or-nothing failure handling.
 func (a *Actor) checkContractDriftForRepo(ctx context.Context, r sessionconfig.SessionConfigReposElem, contractsPath, token string) {
-	owner, repoName, err := parseOwnerRepo(r.Url)
+	// Audit fix (HIGH, cross-batch parity with imageresolve.go's
+	// repoAccessAllowedForSpawn and pushpr.go's createPRBestEffort): checked
+	// BEFORE ParseOwnerRepo/any network call, exactly like this codebase's
+	// other two ResolveBranchSHA/CreatePR-calling call sites -- without
+	// this, a non-GitHub repo URL (e.g. a GitLab host, which
+	// reposource.ValidateRepoURL accepts -- any https host) would have its
+	// owner/repo path derived and handed straight to a.sourceControl (the
+	// real GitHub-only adapter in production, ports.GitHubSourceControlHost's
+	// own doc comment), silently querying github.com for a coincidentally-
+	// matching, completely unrelated repo instead of failing loudly. See
+	// ports.GitHubSourceControlHost's own doc comment for the full
+	// rationale this gate closes everywhere it's applied.
+	if err := reposource.CheckRepoHost(r.Url, ports.SupportedSourceControlHosts()...); err != nil {
+		a.logger.Warn("sessionactor: check contract drift: repo url does not name a supported source-control host; skipping this repo",
+			"repo", r.Name, "url", r.Url, "error", err)
+		return
+	}
+
+	owner, repoName, err := reposource.ParseOwnerRepo(r.Url)
 	if err != nil {
 		a.logger.Warn("sessionactor: check contract drift: parse owner/repo from clone url failed; skipping this repo",
 			"repo", r.Name, "error", err)

@@ -81,6 +81,18 @@ func (s *ImageBuildStore) RecordFailure(ctx context.Context, arg sqlcgen.RecordI
 	return s.q.RecordImageBuildFailure(ctx, arg)
 }
 
+// RecordPermanentFailure records a TERMINALLY failed attempt (audit-
+// remediation batch B3 round 2, finding #3): status stays 'failed', but
+// permanently_failed flips to true and next_retry_at is cleared -- this
+// fingerprint is excluded from every future ListDue poll until an operator
+// fixes the underlying repo config and manually clears the column. See
+// RecordImageBuildPermanentFailure's own generated doc comment. Returns
+// pgx.ErrNoRows if fingerprint's row is no longer 'building', mirroring
+// RecordFailure's own identical guard.
+func (s *ImageBuildStore) RecordPermanentFailure(ctx context.Context, fingerprint string) (sqlcgen.ImageBuild, error) {
+	return s.q.RecordImageBuildPermanentFailure(ctx, fingerprint)
+}
+
 // ListReady returns up to limit SHARED (repo-bearing) 'ready' rows -- Step
 // 42's own freshness-pump poll query (§19.2), bounded by a real LIMIT
 // (mirroring ListDue's own limit parameter shape exactly) so one tick's own

@@ -632,6 +632,7 @@ type ImageBuild struct {
 	BuiltAt           pgtype.Timestamptz `json:"built_at"`
 	RefreshInProgress bool               `json:"refresh_in_progress"`
 	RefreshStartedAt  pgtype.Timestamptz `json:"refresh_started_at"`
+	PermanentlyFailed bool               `json:"permanently_failed"`
 }
 
 type LinearAgentSession struct {

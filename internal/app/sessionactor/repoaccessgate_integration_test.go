@@ -1076,3 +1076,56 @@ func TestRepoAccessGate_UnsupportedRepoHost_DeniesWarmBootNoAccessCall(t *testin
 		t.Errorf("CheckRepoAccess call count = %d, want 0 (an unsupported host must deny before ever deriving owner/repo or calling SourceControl)", got)
 	}
 }
+
+// TestRepoAccessGate_UnsupportedRepoHost_GitlabExampleCom_DeniesWarmBoot is
+// audit-remediation batch B3 round 2's own regression test for finding #7
+// (allowlist drift between this gate and imagebuild.Builder.
+// resolveRepoSHAs' own identical gate): deliberately uses
+// "gitlab.example.com" -- the EXACT unsupported-host fixture
+// internal/app/imagebuild/builder_integration_test.go's own
+// TestPumpOnce_RepoBearingRow_UnsupportedHost_FailsCleanlyNeverCallsSourceControl
+// uses -- rather than this file's own pre-existing "example.org" fixture
+// (TestRepoAccessGate_UnsupportedRepoHost_DeniesWarmBootNoAccessCall,
+// above). Before this batch, an adversarial widening of ONLY this gate's
+// own reposource.CheckRepoHost call (to also accept "gitlab.example.com")
+// would have passed the ENTIRE existing suite, since no test here ever
+// exercised that specific host -- this test exists specifically to close
+// that gap, and now that both gates route through the shared
+// ports.SupportedSourceControlHosts() (see that function's own doc
+// comment), the two can no longer drift apart structurally either.
+func TestRepoAccessGate_UnsupportedRepoHost_GitlabExampleCom_DeniesWarmBoot(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-gitlab-host")
+	repoURL := "https://gitlab.example.com/acme/widgets.git" // same fixture imagebuild's own equivalent gate test uses
+
+	sourceControl := &fakeSourceControl{} // defaults to allow -- irrelevant, must never be asked
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-gitlab-host"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	sessionID := createTestSessionWithRepos(ctx, t, pool, creator, "widgets", repoURL, "main")
+	createPendingTurn(ctx, t, turnStore, sessionID, "prompt")
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	spec := provider.lastSpec()
+	if spec.Image != defaultBaseImage {
+		t.Errorf("CreateSpec.Image = %q, want base image %q (unsupported repo-url host must deny outright)", spec.Image, defaultBaseImage)
+	}
+
+	fingerprint := domainimagebuild.Fingerprint(defaultBaseImage, map[string]string{"widgets": repoURL}, testRuntimeVersion)
+	imageBuildStore := narvipg.NewImageBuildStore(pool)
+	assertNoImageBuildRowAppears(ctx, t, imageBuildStore, fingerprint)
+
+	if got := sourceControl.accessCallCount(); got != 0 {
+		t.Errorf("CheckRepoAccess call count = %d, want 0 (an unsupported host must deny before ever deriving owner/repo or calling SourceControl)", got)
+	}
+}

@@ -41,8 +41,20 @@ ON CONFLICT (fingerprint) DO NOTHING;
 -- this same background loop independently; SKIP LOCKED is what lets two
 -- concurrent pods each claim a DISJOINT batch instead of blocking on each
 -- other or double-claiming the same fingerprint.
+--
+-- "AND permanently_failed = false" (audit-remediation batch B3 round 2,
+-- migrations/000042_image_builds_permanent_failure.up.sql) excludes a row
+-- whose own repo url names a source-control host this deployment's
+-- SourceControl adapter can never resolve against, no matter how many
+-- times it is retried -- see that migration's own doc comment for the
+-- full "why a boolean, not a new status" rationale, and RecordImageBuildPermanentFailure
+-- below for how a row gets marked this way. A 'pending' row is never
+-- permanently_failed by construction (UpsertPendingImageBuild never sets
+-- it), but the guard is applied to both arms uniformly rather than
+-- special-casing which one can never be true today.
 SELECT * FROM image_builds
-WHERE status = 'pending' OR (status = 'failed' AND next_retry_at <= now())
+WHERE permanently_failed = false
+  AND (status = 'pending' OR (status = 'failed' AND next_retry_at <= now()))
 ORDER BY updated_at
 LIMIT $1
 FOR UPDATE SKIP LOCKED;
@@ -88,6 +100,27 @@ RETURNING *;
 -- guard as RecordImageBuildSuccess above, for the identical reason.
 UPDATE image_builds
 SET status = 'failed', next_retry_at = $2, updated_at = now()
+WHERE fingerprint = $1 AND status = 'building'
+RETURNING *;
+
+-- name: RecordImageBuildPermanentFailure :one
+-- Audit-remediation batch B3 round 2 (finding #3): the TERMINAL sibling of
+-- RecordImageBuildFailure above, for the one class of failure no backoff
+-- schedule can ever clear -- a repo url naming a source-control host this
+-- deployment's SourceControl adapter can never resolve against
+-- (reposource.UnsupportedRepoHostError, surfaced via
+-- imagebuild.Builder.resolveRepoSHAs). status stays 'failed' (see
+-- migrations/000042_image_builds_permanent_failure.up.sql's own doc
+-- comment for why this is a boolean, not a new enum value) but
+-- permanently_failed flips to true and next_retry_at is cleared to NULL --
+-- ListDueImageBuilds' own "AND permanently_failed = false" guard then
+-- excludes this row from every future tick, on every pod, until an
+-- operator fixes the session's own repo config and manually clears this
+-- column (there is deliberately no automated path back). Same
+-- "AND status = 'building'" guard as RecordImageBuildFailure, for the
+-- identical reason (a stale/already-superseded row is a harmless no-op).
+UPDATE image_builds
+SET status = 'failed', permanently_failed = true, next_retry_at = NULL, updated_at = now()
 WHERE fingerprint = $1 AND status = 'building'
 RETURNING *;
 
