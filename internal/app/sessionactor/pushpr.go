@@ -71,19 +71,37 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/turn"
 )
 
-// placeholderPRBaseBranch is the CreatePRSpec.Base value this Step uses
-// for every PR it opens -- mirroring dispatch.go's own placeholderBaseImage
-// precedent exactly: neither the sessions.repos JSONB column (design
-// decision 1) nor SessionConfigReposElem carries a "base"/default-branch
-// field distinct from the branch actually checked out, and resolving the
-// SCM's real default branch would mean either persisting it at
-// session-creation time (a schema change this Step's own brief does not
-// ask for) or an extra GitHub API round trip this Step's own scope does
-// not otherwise need -- neither is built here. "main" is used instead as
-// an honest, clearly-named placeholder; a real per-repo default-branch
-// resolution is a natural follow-up for whichever later Step first needs
-// PRs against a non-"main" default branch.
-const placeholderPRBaseBranch = "main"
+// resolvePRBaseBranch resolves owner/repoName's REAL current default branch
+// via a real GitHub API call -- ports.SourceControl.ResolveBranchSHA, called
+// with Branch: "" (the same "repo's own default branch" resolution
+// imagebuild/builder.go's own refreshOne and sessionactor's own
+// checkContractDrift already rely on for their own empty-branch case; see
+// that method's own doc comment). Fix (independent of, and narrower than,
+// any drift-detection concern this same investigation also looked at):
+// every PR this file used to open targeted a hardcoded "main" regardless of
+// a repo's actual configured default branch (e.g. "master", "develop") --
+// this resolves it for real, per repo, instead of guessing.
+//
+// Bounded by a.timeouts.RepoSHAResolutionTimeout, mirroring
+// checkContractDrift's (contractdrift.go) and refreshOne's
+// (imagebuild/builder.go) own identical per-call bound for this exact port
+// method. The resolved SHA itself is discarded -- this call only ever
+// needs ResolveBranchSHA's SECOND return value (resolvedBranch), never the
+// first.
+func (a *Actor) resolvePRBaseBranch(ctx context.Context, owner, repoName, token string) (string, error) {
+	baseCtx, cancel := context.WithTimeout(ctx, a.timeouts.RepoSHAResolutionTimeout)
+	defer cancel()
+	_, resolvedBranch, err := a.sourceControl.ResolveBranchSHA(baseCtx, ports.ResolveBranchSHASpec{
+		Owner:  owner,
+		Repo:   repoName,
+		Branch: "",
+		Token:  token,
+	})
+	if err != nil {
+		return "", fmt.Errorf("sessionactor: resolve repo default branch: %w", err)
+	}
+	return resolvedBranch, nil
+}
 
 // executionOutcomeTrigger maps a real, wire-level sandboxws.
 // ExecutionComplete.Outcome to the domain/turn.Trigger that reports it --
@@ -407,12 +425,19 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			continue
 		}
 
+		base, err := a.resolvePRBaseBranch(ctx, owner, repoName, token)
+		if err != nil {
+			a.logger.Error("sessionactor: resolve PR base branch failed; skipping this repo",
+				"repo", pushed.Name, "error", err)
+			continue
+		}
+
 		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
 		ref, createErr := a.sourceControl.CreatePR(prCtx, ports.CreatePRSpec{
 			Owner: owner,
 			Repo:  repoName,
 			Head:  pushed.Branch,
-			Base:  placeholderPRBaseBranch,
+			Base:  base,
 			Title: title,
 			Body:  prBody(pushed),
 			Token: token,
