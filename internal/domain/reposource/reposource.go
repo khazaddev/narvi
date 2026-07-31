@@ -333,6 +333,36 @@ func ParseOwnerRepo(rawURL string) (owner, repo string, err error) {
 	return parts[0], parts[1], nil
 }
 
+// SplitFullName splits a GitHub-style "full_name" (owner/repo, e.g. a
+// webhook's own top-level repository.full_name, or github_pr_sessions.
+// repo_full_name, migrations/000028_github_pr_sessions.up.sql) into its
+// owner/repo halves. Deliberately distinct from ParseOwnerRepo above:
+// ParseOwnerRepo extracts (owner, repo) from a full git CLONE URL's own
+// path component (https://<host>/<owner>/<repo>[.git]); this function's
+// input is already exactly the bare "<owner>/<repo>" identity string GitHub
+// itself calls "full_name" -- no URL to parse, no host, no ".git" suffix to
+// trim, just one split on "/".
+//
+// Moved here (Step 46, "review sessions", §8.2) from what used to be
+// internal/adapters/inbound/github/headresolve.go's own unexported
+// splitOwnerRepo -- that package's own resolveIssueCommentHead was this
+// logic's only caller until this Step's own manual re-trigger REST endpoint
+// (internal/adapters/inbound/httpapi's RetriggerReview) needed the
+// identical split over a github_pr_sessions.repo_full_name value read back
+// from Postgres, in a DIFFERENT package. Shared here rather than
+// re-forking the same five-line function a second time, mirroring
+// ParseOwnerRepo's own doc comment above ("audit-remediation batch B3
+// moved this here from what used to be two byte-for-byte-identical
+// forks") -- the same lesson applied proactively this time, before a
+// second fork could accumulate its own independent bugs.
+func SplitFullName(fullName string) (owner, repo string, ok bool) {
+	parts := strings.SplitN(fullName, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
 // ErrRepoHostNotSupported means a candidate repo URL's host is not one of
 // the hosts CheckRepoHost was called with -- distinct from
 // ErrURLNotParseable/ErrURLSchemeNotHTTPS/ErrURLNoHost above (all of

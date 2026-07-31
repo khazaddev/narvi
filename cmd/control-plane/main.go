@@ -504,6 +504,14 @@ func serve() error {
 		githubingress.Config{
 			WebhookSecret: cfg.GitHubWebhookSecret,
 			BotHandle:     cfg.GitHubBotHandle,
+			// ReReviewLabel/DiffFetcher (Step 46, "review sessions", §8.2):
+			// the manual re-trigger-via-label lane's own configured label
+			// name, and the SAME *githubapi.Adapter instance already
+			// constructed above (sourceControl) as PullRequests/Comments --
+			// never a second, independently-constructed copy -- now ALSO
+			// wired as this Step's own diff/stack pre-fetch source.
+			ReReviewLabel: cfg.GitHubReReviewLabel,
+			DiffFetcher:   sourceControl,
 			// BotToken/PullRequests (batch fix/audit-github-pr-payload-
 			// correctness, H5 audit fix): resolve an issue_comment
 			// mention's TRUE head branch/repo via one authenticated
@@ -644,6 +652,13 @@ func serve() error {
 		// client had no way to ever discover a planId to approve. See
 		// httpapi/plans.go's own doc comment.
 		r.Get("/{sessionID}/plans", httpapi.ListPlans(sessionStore, planStore))
+		// review/retrigger (Step 46, "review sessions", §8.2's own manual
+		// re-trigger-via-BUTTON surface, §12.2 item 2's "re-run action") --
+		// see httpapi/reviewretrigger.go's own doc comment. githubPRSessionStore/
+		// sourceControl/cfg.GitHubBotToken are the SAME instances the
+		// GitHub webhook ingress wiring above already constructs, never a
+		// second, independently-constructed copy.
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, participantStore, auditLogStore, registry, githubPRSessionStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts))
 	})
 
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
@@ -436,6 +437,241 @@ func TestGetPullRequest_EscapesOwnerAndRepo(t *testing.T) {
 	_, err := adapter.GetPullRequest(context.Background(), "acme/evil", "widgets#v1", 7, "gho_bottoken")
 	if err != nil {
 		t.Fatalf("GetPullRequest() error = %v, want nil", err)
+	}
+
+	want := "/repos/acme%2Fevil/widgets%23v1/pulls/7"
+	if gotEscapedPath != want {
+		t.Errorf("request EscapedPath = %q, want %q (owner/repo must be escaped, not interpolated raw)", gotEscapedPath, want)
+	}
+}
+
+// TestGetPullRequest_StackPresent proves a real GitHub "stack" object
+// riding on the pull-request resource (§17.6's amendment, Step 46, "review
+// sessions") is parsed into PullRequest.Stack.
+func TestGetPullRequest_StackPresent(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number": 42,
+			"head":   map[string]any{"ref": "feature-x", "repo": nil},
+			"stack": map[string]any{
+				"size":     2,
+				"position": 2,
+				"base": map[string]any{
+					"ref": "main",
+					"sha": "deadbeefcafe",
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	pr, err := adapter.GetPullRequest(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequest() error = %v, want nil", err)
+	}
+
+	if pr.Stack == nil {
+		t.Fatal("PullRequest.Stack = nil, want non-nil when GitHub reports a stack object")
+	}
+	if pr.Stack.Size != 2 {
+		t.Errorf("Stack.Size = %d, want 2", pr.Stack.Size)
+	}
+	if pr.Stack.Position != 2 {
+		t.Errorf("Stack.Position = %d, want 2", pr.Stack.Position)
+	}
+	if pr.Stack.BaseRef != "main" {
+		t.Errorf("Stack.BaseRef = %q, want %q", pr.Stack.BaseRef, "main")
+	}
+	if pr.Stack.BaseSHA != "deadbeefcafe" {
+		t.Errorf("Stack.BaseSHA = %q, want %q", pr.Stack.BaseSHA, "deadbeefcafe")
+	}
+}
+
+// TestGetPullRequest_NoStackIsNil proves the ordinary, non-stacked case
+// (GitHub's own response carries no "stack" key at all -- confirmed the
+// common case, §17.6) leaves PullRequest.Stack nil, never a zero-valued,
+// misleadingly-present struct.
+func TestGetPullRequest_NoStackIsNil(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"number": 42,
+			"head":   map[string]any{"ref": "feature-x", "repo": nil},
+		})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	pr, err := adapter.GetPullRequest(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequest() error = %v, want nil", err)
+	}
+	if pr.Stack != nil {
+		t.Errorf("PullRequest.Stack = %+v, want nil when GitHub reports no stack object", pr.Stack)
+	}
+}
+
+// TestGetPullRequestDiff_Success proves GetPullRequestDiff (Step 46,
+// "review sessions", §8.2) requests GitHub's own raw diff media type
+// against the SAME pulls/{number} endpoint GetPullRequest uses, and
+// returns the response body verbatim, un-truncated, when it fits within
+// the cap.
+func TestGetPullRequestDiff_Success(t *testing.T) {
+	t.Parallel()
+
+	const wantDiff = "diff --git a/x b/x\nindex 111..222 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n"
+
+	var gotPath, gotAuth, gotAccept string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotAccept = r.Header.Get("Accept")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(wantDiff))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	diff, truncated, err := adapter.GetPullRequestDiff(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff() error = %v, want nil", err)
+	}
+	if gotPath != "/repos/acme/widgets/pulls/42" {
+		t.Errorf("request path = %q, want %q (the SAME endpoint GetPullRequest uses)", gotPath, "/repos/acme/widgets/pulls/42")
+	}
+	if gotAuth != "Bearer gho_bottoken" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer gho_bottoken")
+	}
+	if gotAccept != "application/vnd.github.diff" {
+		t.Errorf("Accept header = %q, want the raw-diff media type", gotAccept)
+	}
+	if diff != wantDiff {
+		t.Errorf("diff = %q, want %q", diff, wantDiff)
+	}
+	if truncated {
+		t.Error("truncated = true, want false (the diff fit well within the cap)")
+	}
+}
+
+// TestGetPullRequestDiff_Truncated proves a diff exceeding
+// maxPRDiffResponseBytes is cut at the cap and reported as truncated,
+// rather than silently handed back partial with no signal.
+func TestGetPullRequestDiff_Truncated(t *testing.T) {
+	t.Parallel()
+
+	// 5 MiB of 'x' -- comfortably past the package's own 4 MiB cap.
+	oversized := strings.Repeat("x", 5<<20)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(oversized))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	diff, truncated, err := adapter.GetPullRequestDiff(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff() error = %v, want nil", err)
+	}
+	if !truncated {
+		t.Error("truncated = false, want true (the diff exceeded the cap)")
+	}
+	const wantLen = 4 << 20
+	if len(diff) != wantLen {
+		t.Errorf("len(diff) = %d, want exactly %d (cut at the cap)", len(diff), wantLen)
+	}
+}
+
+// TestGetPullRequestDiff_ExactlyAtCapIsNotTruncated proves a diff whose
+// length is EXACTLY maxPRDiffResponseBytes is not misreported as
+// truncated -- the "read one byte past the cap" discipline this method's
+// own doc comment describes.
+func TestGetPullRequestDiff_ExactlyAtCapIsNotTruncated(t *testing.T) {
+	t.Parallel()
+
+	exact := strings.Repeat("y", 4<<20)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(exact))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	diff, truncated, err := adapter.GetPullRequestDiff(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff() error = %v, want nil", err)
+	}
+	if truncated {
+		t.Error("truncated = true, want false (the diff ends exactly at the cap, nothing was actually cut)")
+	}
+	if diff != exact {
+		t.Error("diff does not match the exact-cap-length input")
+	}
+}
+
+// TestGetPullRequestDiff_4xxMapsToRealError proves a realistic GitHub 4xx
+// failure still maps to a real, structured *githubapi.APIError even though
+// a SUCCESS response on this same call would have been a raw diff, not
+// JSON -- GitHub's own error envelope is always plain JSON regardless of
+// the Accept header sent.
+func TestGetPullRequestDiff_4xxMapsToRealError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, _, err := adapter.GetPullRequestDiff(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err == nil {
+		t.Fatal("GetPullRequestDiff() error = nil, want a *githubapi.APIError")
+	}
+	var apiErr *githubapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("GetPullRequestDiff() error = %v (%T), want *githubapi.APIError", err, err)
+	}
+	if apiErr.Status != http.StatusNotFound {
+		t.Errorf("APIError.Status = %d, want %d", apiErr.Status, http.StatusNotFound)
+	}
+}
+
+// TestGetPullRequestDiff_EscapesOwnerAndRepo mirrors
+// TestGetPullRequest_EscapesOwnerAndRepo's own identical discipline for
+// this method's own request-path construction.
+func TestGetPullRequestDiff_EscapesOwnerAndRepo(t *testing.T) {
+	t.Parallel()
+
+	var gotEscapedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("diff"))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, _, err := adapter.GetPullRequestDiff(context.Background(), "acme/evil", "widgets#v1", 7, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequestDiff() error = %v, want nil", err)
 	}
 
 	want := "/repos/acme%2Fevil/widgets%23v1/pulls/7"

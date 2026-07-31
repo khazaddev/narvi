@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 )
 
 // actorNotAuthorizedReplyText renders the honest, actionable reply posted
@@ -174,7 +175,7 @@ func postActorNotAuthorizedReply(ctx context.Context, logger *slog.Logger, poste
 	if poster == nil {
 		return
 	}
-	owner, repo, ok := splitOwnerRepo(repoFullName)
+	owner, repo, ok := reposource.SplitFullName(repoFullName)
 	if !ok {
 		logger.Warn("github: could not split repo_full_name into owner/repo, skipping actor-not-authorized reply",
 			"repo_full_name", repoFullName, "pr_number", prNumber)

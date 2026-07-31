@@ -493,6 +493,44 @@ func TestParseOwnerRepo(t *testing.T) {
 	}
 }
 
+// TestSplitFullName proves SplitFullName's own simple "<owner>/<repo>"
+// split (Step 46, "review sessions", §8.2) -- moved here from what used to
+// be internal/adapters/inbound/github/headresolve_test.go's own
+// TestSplitOwnerRepo (identical cases, carried over verbatim) when the
+// function itself moved to become this package's SplitFullName (that
+// file's own doc comment names the second caller this move was for).
+func TestSplitFullName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		fullName  string
+		wantOwner string
+		wantRepo  string
+		wantOK    bool
+	}{
+		{name: "well-formed", fullName: "acme/widgets", wantOwner: "acme", wantRepo: "widgets", wantOK: true},
+		{name: "no slash", fullName: "widgets", wantOK: false},
+		{name: "empty owner", fullName: "/widgets", wantOK: false},
+		{name: "empty repo", fullName: "acme/", wantOK: false},
+		{name: "empty string", fullName: "", wantOK: false},
+		{name: "extra path segment (repo half keeps the trailing slash content)", fullName: "acme/widgets/extra", wantOwner: "acme", wantRepo: "widgets/extra", wantOK: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			owner, repo, ok := reposource.SplitFullName(tc.fullName)
+			if ok != tc.wantOK {
+				t.Fatalf("SplitFullName(%q) ok = %v, want %v", tc.fullName, ok, tc.wantOK)
+			}
+			if ok && (owner != tc.wantOwner || repo != tc.wantRepo) {
+				t.Errorf("SplitFullName(%q) = (%q, %q), want (%q, %q)", tc.fullName, owner, repo, tc.wantOwner, tc.wantRepo)
+			}
+		})
+	}
+}
+
 // TestCheckRepoHost proves the shared host-allowlist check audit-
 // remediation batch B3 adds: a repo URL naming an allowed host passes; a
 // well-formed repo URL naming a host NOT in the allowlist is rejected via

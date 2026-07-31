@@ -316,12 +316,23 @@ func createLinkedGitHubUser(ctx context.Context, t *testing.T, users *narvipg.Us
 
 func postWebhook(t *testing.T, rig testRig, body []byte, deliveryID string) int {
 	t.Helper()
+	return postWebhookEventType(t, rig, body, deliveryID, "issue_comment")
+}
+
+// postWebhookEventType is postWebhook's own generalization (Step 46,
+// "review sessions", §8.2): every pre-Step-46 test in this file only ever
+// posts an "issue_comment" event, so postWebhook itself stays a thin,
+// unchanged wrapper around this -- this Step's own new tests below need to
+// post a "pull_request" event instead (the label-retrigger lane), which
+// postWebhook's own hardcoded header never allowed.
+func postWebhookEventType(t *testing.T, rig testRig, body []byte, deliveryID, eventType string) int {
+	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, rig.server.URL+"/webhooks/github", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
 	req.Header.Set("X-Hub-Signature-256", sign([]byte(testWebhookSecret), body))
-	req.Header.Set("X-GitHub-Event", "issue_comment")
+	req.Header.Set("X-GitHub-Event", eventType)
 	req.Header.Set("X-GitHub-Delivery", deliveryID)
 
 	resp, err := http.DefaultClient.Do(req)
@@ -330,6 +341,235 @@ func postWebhook(t *testing.T, rig testRig, body []byte, deliveryID string) int 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode
+}
+
+// pullRequestLabeledBody builds a synthetic, real-shaped "pull_request"
+// webhook payload with action="labeled" and the given label name -- Step
+// 46's ("review sessions", §8.2) own manual re-trigger-via-label lane.
+func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumber int, labelName string, senderID int64, senderLogin string) []byte {
+	body, err := json.Marshal(map[string]any{
+		"action": "labeled",
+		"label":  map[string]any{"name": labelName},
+		"sender": map[string]any{"id": senderID, "login": senderLogin},
+		"pull_request": map[string]any{
+			"number": prNumber,
+			"head": map[string]any{
+				"ref":  "feature-x",
+				"repo": map[string]any{"name": cloneRepoName, "clone_url": cloneURL},
+			},
+		},
+		"repository": map[string]any{"full_name": repoFullName},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+// fakeReviewContextFetcher is a test-only reviewcontext.Fetcher (Step 46,
+// "review sessions", §8.2) -- no real HTTP round trip, satisfying BOTH
+// GetPullRequest (also PullRequestResolver, headresolve.go) and
+// GetPullRequestDiff so one fake can back cfg.PullRequests AND
+// cfg.DiffFetcher identically in a test that wires both to the same
+// instance.
+type fakeReviewContextFetcher struct {
+	pr    githubapi.PullRequest
+	prErr error
+
+	diff          string
+	diffTruncated bool
+	diffErr       error
+}
+
+func (f *fakeReviewContextFetcher) GetPullRequest(_ context.Context, _, _ string, _ int32, _ string) (githubapi.PullRequest, error) {
+	return f.pr, f.prErr
+}
+
+func (f *fakeReviewContextFetcher) GetPullRequestDiff(_ context.Context, _, _ string, _ int32, _ string) (string, bool, error) {
+	return f.diff, f.diffTruncated, f.diffErr
+}
+
+// TestGitHubIntegration_ConcurrentMentionAndLabelRetriggerCoalesceToOneSession
+// is Step 46's ("review sessions", §8.2) own headline concurrency proof for
+// the NEW label-retrigger lane: N concurrent triggers on the SAME brand-new
+// PR, split evenly between the EXISTING @mention (comment) trigger and the
+// NEW label-retrigger trigger, must still coalesce onto exactly ONE
+// session -- proving the label lane genuinely reuses Step 32's own atomic
+// claim (github_pr_sessions' EnsureRow+LockForUpdate, coalesce.go) rather
+// than a second, independent mechanism that could race it. Mirrors
+// TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns'
+// own real-concurrency style exactly, generalized to a MIX of trigger
+// types racing the SAME claim row.
+func TestGitHubIntegration_ConcurrentMentionAndLabelRetriggerCoalesceToOneSession(t *testing.T) {
+	ctx := context.Background()
+	rig := newTestRig(t, func(cfg *githubingress.Config) {
+		cfg.ReReviewLabel = "run-review"
+	})
+
+	const n = 8
+	const repoFullName = "acme/mixed-trigger-repo"
+	const prNumber = 404
+	const commenterID = 80000404
+
+	// A single already-linked maintainer triggers via BOTH surfaces --
+	// batch fix/deny-unlinked-github-actors means an unlinked actor would
+	// be denied on both the WINNER and REUSE gates for EITHER trigger type,
+	// which would collapse this test's own "N turns" assertion below.
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+
+	start := make(chan struct{})
+	statuses := make([]int, n)
+
+	var g errgroup.Group
+	for i := 0; i < n; i++ {
+		idx := i
+		g.Go(func() error {
+			<-start
+			if idx%2 == 0 {
+				body := issueCommentBodyWithCommenter(repoFullName, "mixed-trigger-repo", "https://github.com/acme/mixed-trigger-repo.git", prNumber, fmt.Sprintf("mention-%d", idx), commenterID, "mixed-trigger-user")
+				statuses[idx] = postWebhookEventType(t, rig, body, fmt.Sprintf("delivery-mixed-mention-%d", idx), "issue_comment")
+			} else {
+				body := pullRequestLabeledBody(repoFullName, "mixed-trigger-repo", "https://github.com/acme/mixed-trigger-repo.git", prNumber, "run-review", commenterID, "mixed-trigger-user")
+				statuses[idx] = postWebhookEventType(t, rig, body, fmt.Sprintf("delivery-mixed-label-%d", idx), "pull_request")
+			}
+			return nil
+		})
+	}
+	close(start)
+	if err := g.Wait(); err != nil {
+		t.Fatalf("concurrent mixed-trigger webhook posts: %v", err)
+	}
+
+	for i, status := range statuses {
+		if status != http.StatusOK {
+			t.Errorf("statuses[%d] = %d, want %d", i, status, http.StatusOK)
+		}
+	}
+
+	var sessionCount int
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT count(*) FROM sessions WHERE spawn_source = 'github'`,
+	).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("session count = %d, want exactly 1 (all %d concurrent triggers -- mention AND label alike -- on the SAME PR must coalesce)", sessionCount, n)
+	}
+
+	var claimSessionID string
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT session_id::text FROM github_pr_sessions WHERE repo_full_name = $1 AND pr_number = $2`,
+		repoFullName, prNumber,
+	).Scan(&claimSessionID); err != nil {
+		t.Fatalf("query claim row: %v", err)
+	}
+
+	var turnCount int
+	if err := rig.pool.QueryRow(ctx,
+		`SELECT count(*) FROM turns WHERE session_id = $1`, claimSessionID,
+	).Scan(&turnCount); err != nil {
+		t.Fatalf("count turns: %v", err)
+	}
+	if turnCount != n {
+		t.Errorf("turn count = %d, want exactly %d (one turn per concurrent trigger, all on the SAME session)", turnCount, n)
+	}
+}
+
+// TestGitHubIntegration_LabelRetrigger_ReusesExistingSession proves the
+// REUSE half of the label lane end to end: a PR that already has a review
+// session (created by an ordinary @mention) gets a NEW turn -- never a
+// second session -- when later re-triggered via the configured label.
+func TestGitHubIntegration_LabelRetrigger_ReusesExistingSession(t *testing.T) {
+	ctx := context.Background()
+	rig := newTestRig(t, func(cfg *githubingress.Config) {
+		cfg.ReReviewLabel = "run-review"
+	})
+
+	const repoFullName = "acme/label-reuse-repo"
+	const cloneURL = "https://github.com/acme/label-reuse-repo.git"
+	const prNumber = 606
+	const commenterID = 80000606
+
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+
+	first := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "label-reuse-repo", cloneURL, prNumber, "first-mention", commenterID, "label-reuse-user"), "delivery-label-reuse-1")
+	if first != http.StatusOK {
+		t.Fatalf("first (mention) delivery status = %d, want %d", first, http.StatusOK)
+	}
+
+	labelBody := pullRequestLabeledBody(repoFullName, "label-reuse-repo", cloneURL, prNumber, "run-review", commenterID, "label-reuse-user")
+	second := postWebhookEventType(t, rig, labelBody, "delivery-label-reuse-2", "pull_request")
+	if second != http.StatusOK {
+		t.Fatalf("second (label retrigger) delivery status = %d, want %d", second, http.StatusOK)
+	}
+
+	var sessionCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE spawn_source = 'github'`).Scan(&sessionCount); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if sessionCount != 1 {
+		t.Fatalf("session count = %d, want exactly 1 (the label retrigger must REUSE the existing session, never create a second one)", sessionCount)
+	}
+
+	var sessionID string
+	if err := rig.pool.QueryRow(ctx, `SELECT id::text FROM sessions WHERE spawn_source = 'github'`).Scan(&sessionID); err != nil {
+		t.Fatalf("query session id: %v", err)
+	}
+	var turnCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM turns WHERE session_id = $1`, sessionID).Scan(&turnCount); err != nil {
+		t.Fatalf("count turns: %v", err)
+	}
+	if turnCount != 2 {
+		t.Errorf("turn count = %d, want exactly 2 (the mention's own turn + the label retrigger's own turn)", turnCount)
+	}
+}
+
+// TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt
+// is Step 46's ("review sessions", §8.2/§17.6) own end-to-end proof that
+// the pre-fetched diff AND GitHub-native stack context are actually folded
+// into the resulting turn's own persisted prompt -- via the real handler
+// and real Postgres, not just internal/domain/review's own unit-tested
+// RenderTurnPrompt or internal/app/reviewcontext's own unit-tested Fetch in
+// isolation.
+func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *testing.T) {
+	ctx := context.Background()
+
+	fetcher := &fakeReviewContextFetcher{
+		pr: githubapi.PullRequest{
+			HeadRef: "feature-x",
+			Stack:   &githubapi.StackInfo{Position: 1, Size: 2, BaseRef: "main", BaseSHA: "cafebabe"},
+		},
+		diff: "diff --git a/x b/x\n+hello\n",
+	}
+	rig := newTestRig(t, func(cfg *githubingress.Config) {
+		cfg.PullRequests = fetcher
+		cfg.DiffFetcher = fetcher
+		cfg.BotToken = "test-bot-token"
+	})
+
+	const commenterID = 80000909
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+
+	body := issueCommentBodyWithCommenter("acme/prefetch-repo", "prefetch-repo", "https://github.com/acme/prefetch-repo.git", 909, "prefetch-check", commenterID, "prefetch-user")
+	status := postWebhook(t, rig, body, "delivery-prefetch-1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	var prompt string
+	if err := rig.pool.QueryRow(ctx, `SELECT prompt FROM turns WHERE session_id = (SELECT id FROM sessions WHERE spawn_source = 'github' ORDER BY created_at DESC LIMIT 1)`).Scan(&prompt); err != nil {
+		t.Fatalf("query turn prompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, "prefetch-check") {
+		t.Errorf("prompt = %q, want it to still contain the original mention comment body", prompt)
+	}
+	if !strings.Contains(prompt, "<pr_diff>") || !strings.Contains(prompt, "diff --git a/x b/x") {
+		t.Errorf("prompt = %q, want it to contain the pre-fetched diff block", prompt)
+	}
+	if !strings.Contains(prompt, "<pr_stack_context>") || !strings.Contains(prompt, "position: 1 of 2") || !strings.Contains(prompt, "main") || !strings.Contains(prompt, "cafebabe") {
+		t.Errorf("prompt = %q, want it to contain the pre-fetched stack context block", prompt)
+	}
 }
 
 // TestGitHubIntegration_FullHTTPFlow_CreatesSessionAndTurn proves the

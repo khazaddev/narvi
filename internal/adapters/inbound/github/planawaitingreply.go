@@ -25,6 +25,8 @@ package github
 import (
 	"context"
 	"log/slog"
+
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 )
 
 // CommentPoster is the narrow slice of githubapi.Adapter's own real,
@@ -75,7 +77,7 @@ func postPlanAwaitingReply(ctx context.Context, logger *slog.Logger, poster Comm
 	if poster == nil {
 		return
 	}
-	owner, repo, ok := splitOwnerRepo(repoFullName)
+	owner, repo, ok := reposource.SplitFullName(repoFullName)
 	if !ok {
 		logger.Warn("github: could not split repo_full_name into owner/repo, skipping plan-awaiting-approval reply",
 			"repo_full_name", repoFullName, "pr_number", prNumber)

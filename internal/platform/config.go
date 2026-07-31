@@ -262,6 +262,41 @@ const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 // whichever the deploying operator provisions) -- never logged anywhere.
 const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 
+// gitHubReReviewLabelEnvVarName configures Step 46's ("review sessions",
+// §8.2) own manual re-trigger-via-label lane (internal/adapters/inbound/
+// github's new pull_request/"labeled" handling): the exact label NAME a
+// maintainer applies to a PR to manually re-trigger its review session,
+// reusing the SAME atomic per-PR claim/coalescing (github_pr_sessions,
+// Step 32) an @mention already goes through -- never a NEW mechanism.
+// DELIBERATELY OPTIONAL, unlike gitHubBotHandleEnvVarName/
+// gitHubWebhookSecretEnvVarName above: this is a product/UX naming choice
+// with a genuinely safe out-of-the-box default (defaultGitHubReReviewLabel
+// below), not a secret or an identity a misconfiguration could silently
+// corrupt -- an operator who never sets this still gets a working,
+// sensibly-named re-trigger label, matching httpAddrEnvVarName's own
+// "optional: an unset/empty value defaults" precedent rather than the
+// three GitHub secrets/identity fields' own "never defaulted" one.
+//
+// Deliberately NOT reusing the `review:*` label PREFIX Step 47's own
+// verdict-posting tool will later write (`review: needs-human`, §21.2) --
+// this is a HUMAN-issued COMMAND label (§5.1's own distinction: "a human
+// applying a label ... is a legitimate, deliberate command"), never a
+// bot-written STATUS label the system reads back as its own memory (the
+// SAME section's own warning against that). Sharing one prefix across both
+// kinds would blur a distinction this codebase's own house style (§5.1)
+// treats as load-bearing.
+const gitHubReReviewLabelEnvVarName = "NARVI_GITHUB_REREVIEW_LABEL"
+
+// defaultGitHubReReviewLabel is the gitHubReReviewLabelEnvVarName value
+// Load assumes when the variable is unset -- a genuinely safe fallback,
+// mirroring defaultHTTPAddr's own precedent (httpAddrEnvVarName's doc
+// comment above). "run-review" is a verb phrase, deliberately distinct in
+// SHAPE (not just prefix) from the noun-phrase `review: <state>` labels
+// Step 47 introduces later (gitHubReReviewLabelEnvVarName's own doc comment
+// above) -- a human applying it reads unambiguously as "please run a
+// review", never confusable with a bot-posted status.
+const defaultGitHubReReviewLabel = "run-review"
+
 // tokenEncryptionKeyEnvVarName is the env var Load reads for the AES-256-GCM
 // key protecting provider tokens at rest (§13.1: "Provider tokens encrypted
 // at rest (AES-GCM), per-user"). Required in every stage; the raw value
@@ -569,6 +604,14 @@ type Config struct {
 	GitHubWebhookSecret string
 	GitHubBotHandle     string
 
+	// GitHubReReviewLabel is Step 46's ("review sessions", §8.2) own manual
+	// re-trigger-via-label lane's configured label NAME, read from
+	// NARVI_GITHUB_REREVIEW_LABEL. Deliberately OPTIONAL, unlike
+	// GitHubWebhookSecret/GitHubBotHandle immediately above -- see
+	// gitHubReReviewLabelEnvVarName's own doc comment for why a safe
+	// default (defaultGitHubReReviewLabel) exists here at all.
+	GitHubReReviewLabel string
+
 	// GitHubBotToken configures Step 35's ("outbox delivery", §5.1) own
 	// GitHub Notifier adapter, read from NARVI_GITHUB_BOT_TOKEN. Required
 	// in every stage -- never defaulted. See gitHubBotTokenEnvVarName's own
@@ -790,6 +833,15 @@ func Load() (*Config, error) {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubBotHandleEnvVarName})
 	}
 
+	// gitHubReReviewLabel is DELIBERATELY OPTIONAL -- see its own env-var
+	// doc comment above. No MissingRequiredEnvError is ever appended for
+	// it; an unset value defaults to defaultGitHubReReviewLabel, mirroring
+	// httpAddr's own defaulting immediately above.
+	gitHubReReviewLabel := os.Getenv(gitHubReReviewLabelEnvVarName)
+	if gitHubReReviewLabel == "" {
+		gitHubReReviewLabel = defaultGitHubReReviewLabel
+	}
+
 	gitHubBotToken := os.Getenv(gitHubBotTokenEnvVarName)
 	if gitHubBotToken == "" {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubBotTokenEnvVarName})
@@ -935,6 +987,7 @@ func Load() (*Config, error) {
 		GitHubClientSecret:     gitHubClientSecret,
 		GitHubWebhookSecret:    gitHubWebhookSecret,
 		GitHubBotHandle:        gitHubBotHandle,
+		GitHubReReviewLabel:    gitHubReReviewLabel,
 		GitHubBotToken:         gitHubBotToken,
 		GitHubImageBuildToken:  gitHubImageBuildToken,
 		PublicBaseURL:          publicBaseURL,
