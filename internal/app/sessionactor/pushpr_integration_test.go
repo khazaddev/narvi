@@ -146,6 +146,19 @@ func (f *fakeSourceControl) shaCallCount() int {
 	return len(f.shaCalls)
 }
 
+// lastSHASpec returns the ResolveBranchSHASpec of the MOST RECENT
+// ResolveBranchSHA call this fake received -- mirrors lastSpec's own
+// identical "most recent call" precedent for CreatePR, used by
+// TestHandleSandboxEvent_PushComplete_CreatesPRArtifact (fix/setup-drift-
+// and-pr-base) to prove createPRBestEffort's own resolvePRBaseBranch calls
+// ResolveBranchSHA with Branch: "" (the repo's own default branch, never a
+// guess) BEFORE ever calling CreatePR.
+func (f *fakeSourceControl) lastSHASpec() ports.ResolveBranchSHASpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.shaCalls[len(f.shaCalls)-1]
+}
+
 func (f *fakeSourceControl) ResolveContractsFingerprint(_ context.Context, spec ports.ResolveContractsFingerprintSpec) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -487,6 +500,16 @@ func TestHandleSandboxEvent_ExecutionCompleteFailed_NoPush(t *testing.T) {
 // GitHub identity, calls SourceControl.CreatePR with the correct
 // owner/repo (parsed from the session's own repo clone URL)/head/base/
 // token, and records the result as a "pr"-typed artifact row.
+//
+// The fake's own defaultBranchName is deliberately set to something OTHER
+// than "main" ("trunk") -- fix/setup-drift-and-pr-base: this proves
+// CreatePRSpec.Base is the repo's REAL resolved default branch (via a real
+// ResolveBranchSHA call, asserted below), not the hardcoded "main"
+// placeholder this Step used to open every PR against regardless of a
+// repo's actual configured default branch. A test that left
+// defaultBranchName at its own "main" fallback could never catch a
+// regression back to the old hardcoded literal -- the two values would
+// coincidentally agree.
 func TestHandleSandboxEvent_PushComplete_CreatesPRArtifact(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -529,7 +552,11 @@ func TestHandleSandboxEvent_PushComplete_CreatesPRArtifact(t *testing.T) {
 		t.Fatalf("create sandbox: %v", err)
 	}
 
-	sourceControl := &fakeSourceControl{nextRef: ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"}}
+	const wantDefaultBranch = "trunk"
+	sourceControl := &fakeSourceControl{
+		nextRef:           ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"},
+		defaultBranchName: wantDefaultBranch,
+	}
 	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
@@ -551,6 +578,25 @@ func TestHandleSandboxEvent_PushComplete_CreatesPRArtifact(t *testing.T) {
 		return sourceControl.callCount() == 1
 	})
 
+	// fix/setup-drift-and-pr-base: createPRBestEffort must resolve the
+	// repo's real default branch (via ResolveBranchSHA, Branch: "") BEFORE
+	// ever calling CreatePR -- proven here by asserting the ResolveBranchSHA
+	// call itself, not just its downstream effect on CreatePRSpec.Base
+	// below.
+	if got := sourceControl.shaCallCount(); got != 1 {
+		t.Fatalf("ResolveBranchSHA called %d times, want 1 (resolve the repo's real default branch before creating the PR)", got)
+	}
+	shaSpec := sourceControl.lastSHASpec()
+	if shaSpec.Owner != "acme" || shaSpec.Repo != "repo1" {
+		t.Errorf("ResolveBranchSHASpec.Owner/Repo = %q/%q, want acme/repo1", shaSpec.Owner, shaSpec.Repo)
+	}
+	if shaSpec.Branch != "" {
+		t.Errorf("ResolveBranchSHASpec.Branch = %q, want empty (resolve the repo's OWN default branch, never a guess)", shaSpec.Branch)
+	}
+	if shaSpec.Token != plaintextToken {
+		t.Errorf("ResolveBranchSHASpec.Token = %q, want the real decrypted token %q", shaSpec.Token, plaintextToken)
+	}
+
 	spec := sourceControl.lastSpec()
 	if spec.Owner != "acme" || spec.Repo != "repo1" {
 		t.Errorf("CreatePRSpec.Owner/Repo = %q/%q, want acme/repo1", spec.Owner, spec.Repo)
@@ -558,8 +604,8 @@ func TestHandleSandboxEvent_PushComplete_CreatesPRArtifact(t *testing.T) {
 	if spec.Head != "feature-x" {
 		t.Errorf("CreatePRSpec.Head = %q, want %q", spec.Head, "feature-x")
 	}
-	if spec.Base != placeholderPRBaseBranch {
-		t.Errorf("CreatePRSpec.Base = %q, want %q", spec.Base, placeholderPRBaseBranch)
+	if spec.Base != wantDefaultBranch {
+		t.Errorf("CreatePRSpec.Base = %q, want %q (the repo's real resolved default branch, not a hardcoded placeholder)", spec.Base, wantDefaultBranch)
 	}
 	if spec.Token != plaintextToken {
 		t.Errorf("CreatePRSpec.Token = %q, want the real decrypted token %q", spec.Token, plaintextToken)
@@ -583,6 +629,108 @@ func TestHandleSandboxEvent_PushComplete_CreatesPRArtifact(t *testing.T) {
 	}
 	if rows[0].Url != "https://github.com/acme/repo1/pull/42" {
 		t.Errorf("artifact url = %q, want %q", rows[0].Url, "https://github.com/acme/repo1/pull/42")
+	}
+}
+
+// TestHandleSandboxEvent_PushComplete_ResolveDefaultBranchFails_SkipsPRCreation
+// is fix/setup-drift-and-pr-base's own regression test for
+// resolvePRBaseBranch's error path: when the real GitHub API call that
+// resolves a repo's default branch fails (rate limit, timeout, transient
+// 5xx, ...), createPRBestEffort must skip THAT repo honestly (logged, no
+// PR artifact) rather than falling back to guessing a base branch -- an
+// otherwise-identical setup to
+// TestHandleSandboxEvent_PushComplete_CreatesPRArtifact's own happy path,
+// except the fake's nextSHAErr is set, proving CreatePR itself is NEVER
+// reached when the base-branch resolution it now depends on fails first.
+func TestHandleSandboxEvent_PushComplete_ResolveDefaultBranchFails_SkipsPRCreation(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	userStore := narvipg.NewUserStore(pool)
+	identityStore := narvipg.NewIdentityStore(pool)
+
+	user, err := userStore.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: fmt.Sprintf("pr-resolve-base-fails-test-%d@example.com", time.Now().UnixNano()),
+		DisplayName:  "PR Resolve Base Fails Test User",
+		Role:         sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	const plaintextToken = "gh-fake-oauth-token-resolve-base-fails"
+	encrypted, err := platform.EncryptToken(testTokenEncryptionKey, []byte(plaintextToken))
+	if err != nil {
+		t.Fatalf("EncryptToken: %v", err)
+	}
+	email := user.PrimaryEmail
+	if _, err := identityStore.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:               user.ID,
+		Provider:             sqlcgen.IdentityProviderGithub,
+		ExternalID:           fmt.Sprintf("pr-resolve-base-fails-test-external-%d", time.Now().UnixNano()),
+		Email:                &email,
+		EmailVerified:        true,
+		LinkedVia:            sqlcgen.IdentityLinkedViaAdmin,
+		AccessTokenEncrypted: encrypted,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	sessionID := createTestSessionWithRepos(ctx, t, pool, user.ID,
+		"repo1", "https://github.com/acme/repo1.git", "feature-x")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	// nextErr deliberately left unset: if createPRBestEffort wrongly called
+	// CreatePR despite the ResolveBranchSHA failure below, it would
+	// SUCCEED and record an artifact -- a silent false negative. Only
+	// nextSHAErr is set, so CreatePR being reached at all is what this test
+	// must catch, not merely CreatePR failing.
+	sourceControl := &fakeSourceControl{
+		nextRef:    ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"},
+		nextSHAErr: errors.New("fakeSourceControl: simulated GitHub API failure resolving default branch"),
+	}
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "push_complete",
+		Gen:  1,
+		Raw:  pushCompleteRaw(t, sessionID.String(), 1, "repo1", "feature-x", "abc123"),
+	})
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return sourceControl.shaCallCount() == 1
+	})
+
+	// Prove a negative (mirrors TestHandleSandboxEvent_PushComplete_
+	// UnsupportedRepoHost_SkipsPRCreation's own identical precedent): give
+	// createPRBestEffort's own post-commit-triggered goroutine every
+	// reasonable chance to have already reached CreatePR before asserting
+	// it did not.
+	time.Sleep(300 * time.Millisecond)
+	if got := sourceControl.callCount(); got != 0 {
+		t.Errorf("CreatePR called %d times, want 0 (default-branch resolution failed; must skip this repo, never guess a base branch)", got)
+	}
+
+	artifactStore := narvipg.NewArtifactStore(pool)
+	rows, err := artifactStore.ListForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("artifact count = %d, want 0 (no PR ever created when its base branch could not be resolved)", len(rows))
 	}
 }
 
