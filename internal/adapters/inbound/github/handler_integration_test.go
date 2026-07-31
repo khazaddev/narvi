@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -109,10 +110,13 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 // mounting the real POST /webhooks/github handler exactly as cmd/
 // control-plane/main.go does.
 type testRig struct {
-	pool   *pgxpool.Pool
-	turns  *narvipg.TurnStore
-	plans  *narvipg.PlanStore
-	server *httptest.Server
+	pool        *pgxpool.Pool
+	turns       *narvipg.TurnStore
+	plans       *narvipg.PlanStore
+	users       *narvipg.UserStore
+	identities  *narvipg.IdentityStore
+	linkNotices *narvipg.GitHubActorLinkNoticeStore
+	server      *httptest.Server
 }
 
 // newTestRig builds the default rig (no PullRequestResolver wired -- every
@@ -139,9 +143,12 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
 	rig := testRig{
-		pool:  pool,
-		turns: narvipg.NewTurnStore(pool),
-		plans: narvipg.NewPlanStore(pool),
+		pool:        pool,
+		turns:       narvipg.NewTurnStore(pool),
+		plans:       narvipg.NewPlanStore(pool),
+		users:       narvipg.NewUserStore(pool),
+		identities:  narvipg.NewIdentityStore(pool),
+		linkNotices: narvipg.NewGitHubActorLinkNoticeStore(pool),
 	}
 
 	coalescer := &githubingress.SessionCoalescer{
@@ -160,24 +167,17 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 		// triggers); required for this file's own new awaiting-plan
 		// coverage below.
 		Plans: rig.plans,
-		// Identities/Users/Participants (M14 audit-fix batch addition):
-		// every pre-existing test in this file drives resolveCommenterActor
-		// (identity.go) with commenterID == 0 (issueCommentBody never sets
-		// comment.user), which short-circuits before ever touching
-		// Identities at all -- so this rig never needed a REAL store here
-		// before. selfcomment_integration_test.go's own new coverage is the
-		// first in this file to supply a genuine, non-zero CommenterID,
-		// which surfaced this as a real gap (a nil *postgres.IdentityStore
-		// panics on the first real lookup) -- wired here for real, exactly
-		// like cmd/control-plane/main.go's own production wiring (the SAME
-		// three stores, never a second, independently-constructed copy).
-		// Users/Participants were never actually exercised by any existing
-		// test either (actorauthz.AuthorizeResolvedActor/OwnedOrJoined both
-		// short-circuit on an invalid actor before touching either), but are
-		// wired for the same reason -- so a future test resolving a REAL
-		// commenter identity doesn't hit the identical latent nil-store trap.
-		Identities:   narvipg.NewIdentityStore(pool),
-		Users:        narvipg.NewUserStore(pool),
+		// Identities/Users/Participants (M14 audit-fix batch addition;
+		// EVERY test in this file now needs a genuinely LINKED commenter --
+		// batch fix/deny-unlinked-github-actors denies an unresolved one
+		// outright, so the pre-existing "bot attribution, commenterID == 0"
+		// shortcut this comment used to describe no longer produces a
+		// created session/turn at all). rig.users/rig.identities are the
+		// SAME instances threaded through here, never a second,
+		// independently-constructed copy -- see createLinkedGitHubUser
+		// below, this file's own shared fixture helper.
+		Identities:   rig.identities,
+		Users:        rig.users,
 		Participants: narvipg.NewParticipantStore(pool),
 	}
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
@@ -185,6 +185,15 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 	cfg := githubingress.Config{
 		WebhookSecret: testWebhookSecret,
 		BotHandle:     testBotHandleIntegration,
+		// LinkNotices (batch fix/deny-unlinked-github-actors): wired by
+		// DEFAULT for every test in this file, mirroring cmd/control-
+		// plane/main.go's own unconditional production wiring -- harmless
+		// for every pre-existing test (none of them ever exercise the
+		// unlinked-actor deny path, so this store is simply never
+		// touched); a mutate func below can still override it (e.g. to
+		// nil) for a test that specifically wants to prove the nil-safe
+		// "dedupe unavailable" fallback.
+		LinkNotices: rig.linkNotices,
 	}
 	for _, m := range mutate {
 		m(&cfg)
@@ -267,6 +276,44 @@ func issueCommentBody(repoFullName, repoName, cloneURL string, prNumber int, lab
 	return body
 }
 
+// createLinkedGitHubUser creates a Narvi user with role, and a matching
+// "github" identities row for commenterID -- the direct (provider,
+// external_id) link a real GitHub OAuth sign-in would have already
+// produced (Step 20), which is exactly what resolveCommenterActor
+// (identity.go) looks up. Batch fix/deny-unlinked-github-actors means
+// EVERY test in this package now needs one of these for its own mention
+// to be processed at all (an unresolved commenter's mention is now
+// denied outright, not bot-attributed) -- a free function over the
+// stores directly (rather than a method on this file's own testRig)
+// so identity_integration_test.go's own distinct identityTestRig type can
+// share it too, instead of hand-duplicating the identical insert twice.
+func createLinkedGitHubUser(ctx context.Context, t *testing.T, users *narvipg.UserStore, identities *narvipg.IdentityStore, commenterID int64, role sqlcgen.UserRole) sqlcgen.User {
+	t.Helper()
+
+	user, err := users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: fmt.Sprintf("github-commenter-%d@example.com", commenterID),
+		DisplayName:  "GitHub Commenter",
+		Role:         role,
+	})
+	if err != nil {
+		t.Fatalf("create fixture user: %v", err)
+	}
+
+	email := user.PrimaryEmail
+	if _, err := identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:        user.ID,
+		Provider:      sqlcgen.IdentityProviderGithub,
+		ExternalID:    strconv.FormatInt(commenterID, 10),
+		Email:         &email,
+		EmailVerified: true,
+		LinkedVia:     sqlcgen.IdentityLinkedViaAutoEmail,
+	}); err != nil {
+		t.Fatalf("create fixture github identity: %v", err)
+	}
+
+	return user
+}
+
 func postWebhook(t *testing.T, rig testRig, body []byte, deliveryID string) int {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, rig.server.URL+"/webhooks/github", strings.NewReader(string(body)))
@@ -287,13 +334,20 @@ func postWebhook(t *testing.T, rig testRig, body []byte, deliveryID string) int 
 
 // TestGitHubIntegration_FullHTTPFlow_CreatesSessionAndTurn proves the
 // full stack end to end: a synthetic, correctly-signed GitHub
-// "issue_comment" payload mentioning the bot, POSTed to the real handler,
-// results in a real session + turn in Postgres.
+// "issue_comment" payload mentioning the bot, from an already-LINKED
+// commenter, POSTed to the real handler, results in a real session + turn
+// in Postgres, attributed to that commenter (batch fix/deny-unlinked-
+// github-actors: an UNLINKED commenter's mention is now denied outright --
+// see TestGitHubIntegration_UnlinkedCommenter_DeniedOnUntrackedPR below
+// for that path's own coverage instead).
 func TestGitHubIntegration_FullHTTPFlow_CreatesSessionAndTurn(t *testing.T) {
 	ctx := context.Background()
 	rig := newTestRig(t)
 
-	body := issueCommentBody("acme/widgets", "widgets", "https://github.com/acme/widgets.git", 101, "full-flow")
+	const commenterID = 80000101
+	user := createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+
+	body := issueCommentBodyWithCommenter("acme/widgets", "widgets", "https://github.com/acme/widgets.git", 101, "full-flow", commenterID, "full-flow-user")
 
 	status := postWebhook(t, rig, body, "delivery-full-flow-1")
 	if status != http.StatusOK {
@@ -328,12 +382,12 @@ func TestGitHubIntegration_FullHTTPFlow_CreatesSessionAndTurn(t *testing.T) {
 		t.Errorf("turn prompt = %q, want it to contain the mention comment's own body", prompt)
 	}
 
-	var createdByNull bool
-	if err := rig.pool.QueryRow(ctx, `SELECT created_by IS NULL FROM sessions WHERE id = $1`, sessionID).Scan(&createdByNull); err != nil {
+	var createdByText string
+	if err := rig.pool.QueryRow(ctx, `SELECT coalesce(created_by::text, '') FROM sessions WHERE id = $1`, sessionID).Scan(&createdByText); err != nil {
 		t.Fatalf("query created_by: %v", err)
 	}
-	if !createdByNull {
-		t.Error("sessions.created_by is NOT NULL, want NULL for a bot-created session")
+	if createdByText != user.ID.String() {
+		t.Errorf("created_by = %q, want %q (the linked commenter's own user id -- batch fix/deny-unlinked-github-actors means this path is never bot-attributed/NULL anymore)", createdByText, user.ID.String())
 	}
 }
 
@@ -346,7 +400,10 @@ func TestGitHubIntegration_DedupeSameDeliveryNotDoubleProcessed(t *testing.T) {
 	ctx := context.Background()
 	rig := newTestRig(t)
 
-	body := issueCommentBody("acme/dedupe-repo", "dedupe-repo", "https://github.com/acme/dedupe-repo.git", 202, "dedupe")
+	const commenterID = 80000202
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+
+	body := issueCommentBodyWithCommenter("acme/dedupe-repo", "dedupe-repo", "https://github.com/acme/dedupe-repo.git", 202, "dedupe", commenterID, "dedupe-user")
 	const deliveryID = "delivery-dedupe-1"
 
 	first := postWebhook(t, rig, body, deliveryID)
@@ -414,9 +471,14 @@ func TestGitHubIntegration_FailedFirstAttemptReleasesClaimForRedelivery(t *testi
 	}
 
 	// Redelivery: GitHub's real retry behavior on a non-2xx response --
-	// SAME delivery id, this time a genuine, well-formed mention payload.
-	// It must be processed, not skipped as an already-claimed duplicate.
-	validBody := issueCommentBody("acme/retry-repo", "retry-repo", "https://github.com/acme/retry-repo.git", 404, "retry-after-failure")
+	// SAME delivery id, this time a genuine, well-formed mention payload
+	// from an already-linked commenter (batch fix/deny-unlinked-github-
+	// actors: an unlinked one would now be denied, which is a DIFFERENT
+	// outcome this test isn't about). It must be processed, not skipped as
+	// an already-claimed duplicate.
+	const commenterID = 80000404
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+	validBody := issueCommentBodyWithCommenter("acme/retry-repo", "retry-repo", "https://github.com/acme/retry-repo.git", 404, "retry-after-failure", commenterID, "retry-user")
 	second := postWebhook(t, rig, validBody, deliveryID)
 	if second != http.StatusOK {
 		t.Fatalf("redelivered (valid) status = %d, want %d", second, http.StatusOK)
@@ -447,6 +509,20 @@ func TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns(t *te
 	const n = 8
 	const repoFullName = "acme/concurrent-repo"
 	const prNumber = 303
+	const commenterID = 80000303
+
+	// A single already-linked maintainer mentions the bot N times
+	// concurrently -- batch fix/deny-unlinked-github-actors means an
+	// unlinked commenter would be denied on both the WINNER and REUSE
+	// gates, which would collapse this test's own "N turns" assertion
+	// below into "at most 1" (every loser after the first denied WINNER
+	// gets its own fresh, independent, and ALSO-denied verdict, per
+	// coalesce.go's own claim-row-safety doc comment) -- a different
+	// property than the one this test exists to prove. Created BEFORE the
+	// concurrent goroutines start, never inside one of them, so there is
+	// no fixture-creation race alongside the real concurrency this test
+	// means to exercise.
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
 
 	start := make(chan struct{})
 	statuses := make([]int, n)
@@ -456,7 +532,7 @@ func TestGitHubIntegration_ConcurrentMentionsCoalesceToOneSessionManyTurns(t *te
 		idx := i
 		g.Go(func() error {
 			<-start
-			body := issueCommentBody(repoFullName, "concurrent-repo", "https://github.com/acme/concurrent-repo.git", prNumber, fmt.Sprintf("mention-%d", idx))
+			body := issueCommentBodyWithCommenter(repoFullName, "concurrent-repo", "https://github.com/acme/concurrent-repo.git", prNumber, fmt.Sprintf("mention-%d", idx), commenterID, "concurrent-user")
 			statuses[idx] = postWebhook(t, rig, body, fmt.Sprintf("delivery-concurrent-%d", idx))
 			return nil
 		})
@@ -524,7 +600,10 @@ func TestGitHubIntegration_IssueCommentResolvesRealHeadBranch(t *testing.T) {
 		cfg.Timeouts = platform.DefaultTimeouts()
 	})
 
-	body := issueCommentBody("acme/widgets", "widgets", "https://github.com/acme/widgets.git", 555, "real-head-branch")
+	const commenterID = 80000555
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+
+	body := issueCommentBodyWithCommenter("acme/widgets", "widgets", "https://github.com/acme/widgets.git", 555, "real-head-branch", commenterID, "head-branch-user")
 	status := postWebhook(t, rig, body, "delivery-real-head-branch-1")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
@@ -563,7 +642,10 @@ func TestGitHubIntegration_IssueCommentGetPullRequestFailureFallsBack(t *testing
 		cfg.Timeouts = platform.DefaultTimeouts()
 	})
 
-	body := issueCommentBody("acme/fallback-repo", "fallback-repo", "https://github.com/acme/fallback-repo.git", 556, "api-failure-fallback")
+	const commenterID = 80000556
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+
+	body := issueCommentBodyWithCommenter("acme/fallback-repo", "fallback-repo", "https://github.com/acme/fallback-repo.git", 556, "api-failure-fallback", commenterID, "fallback-user")
 	status := postWebhook(t, rig, body, "delivery-api-failure-fallback-1")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d (a failed GetPullRequest must never fail the whole webhook delivery)", status, http.StatusOK)
@@ -621,9 +703,17 @@ func TestGitHubIntegration_AwaitingPlanBlocksReuseTurn_HonestReplyNoRelease(t *t
 	const repoFullName = "acme/awaiting-plan-repo"
 	const cloneURL = "https://github.com/acme/awaiting-plan-repo.git"
 	const prNumber = 707
+	const commenterID = 80000707
+
+	// Both mentions come from the SAME already-linked maintainer -- batch
+	// fix/deny-unlinked-github-actors means an unlinked commenter would now
+	// be denied on both the WINNER and REUSE gates before ever reaching the
+	// awaiting-plan gate this test exists to cover, which is a different
+	// property than the one under test here.
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
 
 	// First mention: the WINNER path, creates the review session.
-	first := postWebhook(t, rig, issueCommentBody(repoFullName, "awaiting-plan-repo", cloneURL, prNumber, "first-mention"), "delivery-awaiting-plan-1")
+	first := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "awaiting-plan-repo", cloneURL, prNumber, "first-mention", commenterID, "awaiting-plan-user"), "delivery-awaiting-plan-1")
 	if first != http.StatusOK {
 		t.Fatalf("first delivery status = %d, want %d", first, http.StatusOK)
 	}
@@ -652,7 +742,7 @@ func TestGitHubIntegration_AwaitingPlanBlocksReuseTurn_HonestReplyNoRelease(t *t
 	// which now hits the awaiting-plan gate instead of enqueuing an
 	// ordinary build turn.
 	const secondDeliveryID = "delivery-awaiting-plan-2"
-	second := postWebhook(t, rig, issueCommentBody(repoFullName, "awaiting-plan-repo", cloneURL, prNumber, "second-mention-during-awaiting-plan"), secondDeliveryID)
+	second := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "awaiting-plan-repo", cloneURL, prNumber, "second-mention-during-awaiting-plan", commenterID, "awaiting-plan-user"), secondDeliveryID)
 	if second != http.StatusOK {
 		t.Fatalf("second (awaiting-plan) delivery status = %d, want %d (a deterministic, expected business state -- never a 500)", second, http.StatusOK)
 	}

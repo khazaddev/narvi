@@ -90,7 +90,8 @@ type SessionCoalescer struct {
 	// handler.go's own resolveCommenterActor (identity.go) -- a direct
 	// (provider, external_id) lookup, no auto-linking algorithm needed (see
 	// that file's own doc comment for why). Users/Participants are exactly
-	// the SAME two collaborators actorauthz.AuthorizeResolvedActor/
+	// the SAME two collaborators actorauthz.AuthorizeLinkedActor (batch
+	// fix/deny-unlinked-github-actors; formerly AuthorizeResolvedActor)/
 	// actorauthz.OwnedOrJoined need, mirroring Slack's/Linear's own
 	// Deps.IdentityLink.Users / Deps.Participants precedent -- production
 	// wiring (cmd/control-plane/main.go) passes the SAME userStore/
@@ -151,21 +152,31 @@ type SessionCoalescer struct {
 // calling httpapi.CreateTurnForBot, so only ever one connection is open
 // at a time there too.
 //
-// # actor / domain/authz.Authorize gating (batch fix/audit-github-actor-rbac)
+// # actor / domain/authz.Authorize gating (batch fix/audit-github-actor-rbac;
+// # hardened to a DENY by batch fix/deny-unlinked-github-actors)
 //
 // actor is handler.go's own already-resolved commenter (identity.go's
 // resolveCommenterActor) -- Valid iff this exact GitHub commenter already
-// has a linked Narvi account, invalid (bot attribution) otherwise, exactly
-// mirroring Slack's/Linear's own resolved-actor precedent (§13.2). An
-// invalid actor short-circuits BOTH authorization checks below to
-// allowed=true with no DB read at all (actorauthz.AuthorizeResolvedActor's
-// own documented behavior) -- this batch's own explicit scope keeps
-// today's existing bot-attributed behavior for an unresolved commenter
-// completely unchanged.
+// has a linked Narvi account, invalid otherwise, exactly mirroring Slack's/
+// Linear's own resolved-actor precedent (§13.2).
+//
+// An invalid actor is now DENIED outright by BOTH authorization checks
+// below (actorauthz.AuthorizeLinkedActor's own `!actorUserID.Valid ->
+// false` short-circuit) -- a deliberate, repo-owner-decided reversal of
+// this package's own PRIOR behavior (bot attribution: an unresolved
+// commenter's action proceeded, gated by nothing). See
+// AuthorizeLinkedActor's own doc comment (internal/app/actorauthz/
+// authorize.go) for the full "why GitHub can now use this function, unlike
+// when it was first written" reasoning, and handler.go's own
+// ErrActorNotAuthorized branch for the actionable "please sign in" reply
+// this denial now comes with (GitHub has no magic-link/pending-link
+// mechanism to send in parallel the way Slack/Linear do, so a plain deny
+// with no explanation would leave the commenter with nothing -- see
+// actornotauthorizedreply.go's own doc comment).
 //
 // The WINNER path's own domain/authz.Authorize(ActionCreateSession) check
 // (createAuthorized below) is deliberately resolved BEFORE tx.Begin, never
-// inside the open claim transaction: actorauthz.AuthorizeResolvedActor
+// inside the open claim transaction: actorauthz.AuthorizeLinkedActor
 // performs its own Postgres read (users.GetByID) when actor IS resolved,
 // and acquiring a SECOND pool connection while already holding tx open is
 // exactly the connection-pool exhaustion risk this function's own
@@ -176,7 +187,10 @@ type SessionCoalescer struct {
 // query, no risk). The REUSE path's own domain/authz.
 // Authorize(ActionPromptSession) check (below, ownership-aware) runs
 // AFTER that path's own tx.Commit -- by then no transaction is open at
-// all, so there is nothing to protect there either.
+// all, so there is nothing to protect there either. Denying here (either
+// path) leaves the claim row exactly as safe as an authorized denial
+// always was -- see this function's own "claim row on the deny path"
+// note further down, at each denial site, for why.
 func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
 	logger := platform.Logger(ctx)
 
@@ -188,7 +202,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// who may always create a session might still lack the "own/joined"
 	// carve-out ActionPromptSession requires for the SAME actor against a
 	// DIFFERENT, already-existing session.
-	createAuthorized := actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, c.Users, actor, authz.ActionCreateSession, authz.Resource{})
+	createAuthorized := actorauthz.AuthorizeLinkedActor(ctx, logger, authzSurface, c.Users, actor, authz.ActionCreateSession, authz.Resource{})
 
 	tx, err := c.Pool.Begin(ctx)
 	if err != nil {
@@ -241,20 +255,37 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: get existing session: %w", err)
 		}
 
-		// actor.Valid == false (still bot-attributed, by far the common
-		// case today) short-circuits with NO Participants/Users read at
-		// all -- mirrors Slack's/Linear's own identical authorizeSessionAction
-		// short-circuit exactly (§13.2's own "unlinked actors get bot
-		// attribution ... the action proceeds" precedent).
+		// actorauthz.AuthorizeLinkedActor is now called UNCONDITIONALLY --
+		// batch fix/deny-unlinked-github-actors removed the previous
+		// "if actor.Valid" guard that used to skip this whole block for an
+		// unresolved commenter (bot attribution, the pre-batch behavior).
+		// AuthorizeLinkedActor's own `!actorUserID.Valid -> false`
+		// short-circuit now does the denying for that case, exactly
+		// mirroring Slack's/Linear's own authorizeSessionAction call
+		// (§13.2's hardened "a not-yet-linked identity's state-changing
+		// action is denied" precedent) -- see this function's own top doc
+		// comment for the full "why" and handler.go's own
+		// ErrActorNotAuthorized branch for the reply this now triggers.
+		//
+		// OwnedOrJoined's own Participants read is still only performed
+		// when actor IS valid: an invalid actor is denied by
+		// AuthorizeLinkedActor regardless of what Resource.OwnedOrJoined
+		// holds, so computing it for an unresolved commenter would just be
+		// a wasted Postgres read on what is, today, still the common case
+		// -- the SAME "no query, no risk" discipline this function's own
+		// top doc comment already applies to createAuthorized above,
+		// simply preserved here rather than lost when the guard came out.
+		var joined bool
 		if actor.Valid {
-			joined, err := actorauthz.OwnedOrJoined(ctx, c.Participants, existingSession, actor)
+			var err error
+			joined, err = actorauthz.OwnedOrJoined(ctx, c.Participants, existingSession, actor)
 			if err != nil {
 				return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: check participant for authorization: %w", err)
 			}
-			if !actorauthz.AuthorizeResolvedActor(ctx, logger, authzSurface, c.Users, actor, authz.ActionPromptSession, authz.Resource{OwnedOrJoined: joined}) {
-				logger.Warn("github: prompt on existing session denied by authz", "session_id", existingSession.ID, "repo", repoFullName, "pr_number", prNumber, "user_id", actor.String())
-				return sqlcgen.Session{}, sqlcgen.Turn{}, false, ErrActorNotAuthorized
-			}
+		}
+		if !actorauthz.AuthorizeLinkedActor(ctx, logger, authzSurface, c.Users, actor, authz.ActionPromptSession, authz.Resource{OwnedOrJoined: joined}) {
+			logger.Warn("github: prompt on existing session denied by authz", "session_id", existingSession.ID, "repo", repoFullName, "pr_number", prNumber, "user_id", actor.String())
+			return sqlcgen.Session{}, sqlcgen.Turn{}, false, ErrActorNotAuthorized
 		}
 
 		var prompt string
@@ -283,6 +314,19 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// function's own top doc comment for why -- so denying here needs no
 	// further query at all: just roll back (the deferred Rollback above
 	// handles it, since committed is still false) and report the denial.
+	//
+	// Claim row on the deny path (batch fix/deny-unlinked-github-actors,
+	// traced explicitly, not assumed, since this path now denies far more
+	// often than before): EnsureRow's own INSERT (above) ran INSIDE this
+	// same uncommitted tx, so the Rollback this !createAuthorized branch
+	// triggers undoes it too -- if this was the very first claim attempt
+	// for this (repoFullName, prNumber), a denied WINNER leaves NO claim
+	// row behind at all, not an orphaned one. A concurrently blocked
+	// second caller parked on this SAME PR's own LockForUpdate (a
+	// different commenter's mention, say) proceeds exactly as if the
+	// denied attempt never happened, and gets its own independent,
+	// fair authorization verdict -- no fix needed here, the existing
+	// transaction boundary already makes this safe.
 	if !createAuthorized {
 		logger.Warn("github: create-session denied by authz", "repo", repoFullName, "pr_number", prNumber, "user_id", actor.String())
 		return sqlcgen.Session{}, sqlcgen.Turn{}, false, ErrActorNotAuthorized

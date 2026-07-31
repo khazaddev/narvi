@@ -76,37 +76,58 @@ func AuthorizeResolvedActor(ctx context.Context, logger *slog.Logger, surface st
 }
 
 // AuthorizeLinkedActor is the audit-hardening counterpart to
-// AuthorizeResolvedActor above, for exactly ONE call shape: an inbound
-// Slack/Linear actor that has NOT (yet) resolved to a real Narvi user_id at
-// all (actorUserID.Valid == false) is DENIED outright, rather than allowed
-// to proceed under bot attribution -- the audit finding this function
-// exists to close (docs/TECHNICAL_PLAN.md §13.2's own previous "the action
-// proceeds, a magic-link prompt is sent in parallel" behavior was a
-// user-decided hardening target, not a "keep as-is": letting a
-// not-yet-linked identity's state-changing action through at all, even
-// under bot attribution, is no longer acceptable). The magic-link prompt
-// itself is UNCHANGED and still sent by the caller exactly as before -- only
-// whether the state-changing action proceeds while that prompt is pending
-// changes. Once actorUserID IS Valid, this delegates to
-// AuthorizeResolvedActor unchanged, so an already-linked actor's role/
-// disabled/ownership verdict is identical either way.
+// AuthorizeResolvedActor above, for an inbound actor that has NOT (yet)
+// resolved to a real Narvi user_id at all (actorUserID.Valid == false):
+// DENIED outright, rather than allowed to proceed under bot attribution --
+// the audit finding this function exists to close (docs/TECHNICAL_PLAN.md
+// §13.2's own previous "the action proceeds, a magic-link prompt is sent
+// in parallel" behavior was a user-decided hardening target, not a
+// "keep as-is": letting a not-yet-linked identity's state-changing action
+// through at all, even under bot attribution, is no longer acceptable).
+// Once actorUserID IS Valid, this delegates to AuthorizeResolvedActor
+// unchanged, so an already-linked actor's role/disabled/ownership verdict
+// is identical either way.
 //
-// Do NOT collapse this back into AuthorizeResolvedActor, and do NOT change
-// AuthorizeResolvedActor's own actorUserID.Valid == false short-circuit to
-// match this one -- the two functions exist specifically BECAUSE Slack and
-// Linear have a mechanism GitHub does not. Slack/Linear's own auto-link
-// algorithm (internal/app/identitylink) treats an unresolved identity as
-// "not yet linked, but a magic link is on its way" -- a transient,
-// self-resolving state the actor can clear themselves by clicking the link
-// and retrying the identical action. GitHub's own commenter-identity
-// resolution (github/identity.go) is structurally different: it resolves
-// directly from an existing GitHub-OAuth-login identity with no deferred
-// "auto-link pending" mechanism at all -- an unresolved GitHub commenter has
-// simply never logged into Narvi via GitHub OAuth, a different and more
-// permanent case with no pending link to wait for. GitHub's own callers
-// (github/coalesce.go) must keep calling AuthorizeResolvedActor exactly as
-// today; only Slack/Linear's own direct session-creation gates and their
-// authorizeSessionAction helpers call this function instead.
+// Originally (batch fix/audit-github-actor-rbac) this was Slack/Linear-
+// only: GitHub's own callers (github/coalesce.go) kept calling
+// AuthorizeResolvedActor, because -- unlike Slack/Linear's own auto-link
+// algorithm (internal/app/identitylink), which treats an unresolved
+// identity as "not yet linked, but a magic link is on its way", a
+// transient, self-resolving state the actor can clear themselves by
+// clicking the link and retrying -- GitHub's own commenter-identity
+// resolution (github/identity.go) resolves directly from an existing
+// GitHub-OAuth-login identity with no deferred "auto-link pending"
+// mechanism at all: an unresolved GitHub commenter has simply never
+// logged into Narvi via GitHub OAuth, a different and more permanent case
+// with no pending link to wait for. That was read, at the time, as a
+// reason GitHub could not be denied the SAME way -- there being nothing
+// for the actor to do to self-resolve the pending state.
+//
+// Batch fix/deny-unlinked-github-actors reverses that call: the repo
+// owner decided the asymmetry itself (unlinked-by-default beats
+// linked-but-restricted, GitHub-only -- a confirmed, MEDIUM-severity
+// authorization gap) outweighs the UX cost of "no self-resolving pending
+// state to retry", and denies GitHub's unlinked actors here too, exactly
+// like Slack/Linear. github/coalesce.go now calls THIS function
+// (AuthorizeLinkedActor), not AuthorizeResolvedActor, on both its own
+// gates (WINNER-path create-session, REUSE-path prompt-session) --
+// GitHub's structural difference from Slack/Linear (no magic-link/pending-
+// link mechanism) still holds exactly as described above, it just no
+// longer justifies a different ALLOW/DENY verdict; instead, GitHub's own
+// ingress (internal/adapters/inbound/github/actornotauthorizedreply.go)
+// compensates for the missing "retry once linked" affordance with a
+// one-time, honest reply pointing the commenter at the ordinary GitHub
+// OAuth sign-in flow -- see that file's own doc comment.
+//
+// Do NOT change AuthorizeResolvedActor's own actorUserID.Valid == false
+// short-circuit to match this one: it is shared with Slack's/Linear's own
+// legitimate callers (via authorizeSessionAction, which already calls
+// AuthorizeLinkedActor -- not AuthorizeResolvedActor -- for their own
+// state-changing gates) and other, unrelated call sites that still rely
+// on today's ALLOW default for a genuinely different reason. Changing
+// AuthorizeResolvedActor's own general contract to fix THIS GitHub-
+// specific gap would risk regressing behavior this batch never touched or
+// re-verified.
 func AuthorizeLinkedActor(ctx context.Context, logger *slog.Logger, surface string, users *postgres.UserStore, actorUserID pgtype.UUID, action authz.Action, resource authz.Resource) bool {
 	if !actorUserID.Valid {
 		return false

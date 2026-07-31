@@ -23,8 +23,10 @@
 //
 // Every ingress package (slack, linear, github) still keeps its own thin
 // authorizeSessionAction-shaped wrapper (resolving a session row + calling
-// OwnedOrJoined + AuthorizeResolvedActor in sequence) rather than importing
-// a fourth, fully-generic "do everything" function from here -- each
+// OwnedOrJoined + one of AuthorizeResolvedActor/AuthorizeLinkedActor in
+// sequence -- github, like slack/linear, calls AuthorizeLinkedActor since
+// batch fix/deny-unlinked-github-actors) rather than importing a fourth,
+// fully-generic "do everything" function from here -- each
 // caller's own Deps/SessionCoalescer shape (which stores it already has
 // threaded through, how it fetches a session row) differs enough that
 // forcing one single shared function over that too would cost more than it

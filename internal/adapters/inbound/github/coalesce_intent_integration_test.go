@@ -24,12 +24,23 @@ import (
 
 	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// intentTestCommenterID is the single already-linked commenter every test
+// in this file mentions the bot as -- batch fix/deny-unlinked-github-
+// actors means an unresolved commenter's mention is now denied outright
+// (never bot-attributed), so this file's own coalescer (below) must wire
+// real Identities/Users/Participants stores and every mention body must
+// carry a genuinely linked comment.user, exactly like every other test in
+// this package now does (handler_integration_test.go's own
+// createLinkedGitHubUser).
+const intentTestCommenterID = 80009000
 
 // fakeIntentLLM implements ports.LLM with a fixed, canned structured-
 // output response -- this test's only stub, standing in for a real
@@ -85,8 +96,10 @@ func newTestRigWithIntentClassifier(t *testing.T, classifierTarget string) testR
 	intentSvc := intentclassifier.New(fakeIntentLLM{target: classifierTarget}, "anthropic", "claude-haiku-4-5", templates, sessions, nil)
 
 	rig := testRig{
-		pool:  pool,
-		turns: narvipg.NewTurnStore(pool),
+		pool:       pool,
+		turns:      narvipg.NewTurnStore(pool),
+		users:      narvipg.NewUserStore(pool),
+		identities: narvipg.NewIdentityStore(pool),
 	}
 
 	coalescer := &githubingress.SessionCoalescer{
@@ -98,6 +111,15 @@ func newTestRigWithIntentClassifier(t *testing.T, classifierTarget string) testR
 		Registry:         registry,
 		IntentClassifier: intentSvc,
 		AuditLog:         narvipg.NewAuditLogStore(pool),
+		// Identities/Users/Participants (batch fix/deny-unlinked-github-
+		// actors): required now that every mention body in this file
+		// carries a genuinely linked comment.user (intentTestCommenterID) --
+		// an unresolved commenter's mention would otherwise be denied
+		// outright before ever reaching the intent classifier this file
+		// exists to test.
+		Identities:   rig.identities,
+		Users:        rig.users,
+		Participants: narvipg.NewParticipantStore(pool),
 	}
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 
@@ -160,8 +182,9 @@ func pollIntentDecision(t *testing.T, ctx context.Context, rig testRig) intentdo
 func TestCreateOrJoin_RecordsIntentDecision(t *testing.T) {
 	ctx := context.Background()
 	rig := newTestRigWithIntentClassifier(t, intentdomain.TargetReview)
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, intentTestCommenterID, sqlcgen.UserRoleMaintainer)
 
-	body := issueCommentBody("owner/repo", "repo", "https://github.com/owner/repo.git", 42, "intent-decision-test")
+	body := issueCommentBodyWithCommenter("owner/repo", "repo", "https://github.com/owner/repo.git", 42, "intent-decision-test", intentTestCommenterID, "intent-test-user")
 
 	status := postWebhook(t, rig, body, "delivery-intent-decision-1")
 	if status != http.StatusOK {
@@ -203,8 +226,9 @@ func TestCreateOrJoin_RecordsIntentDecision(t *testing.T) {
 func TestCreateOrJoin_RecordsIntentDecision_DisagreesWithDeterministicSignal(t *testing.T) {
 	ctx := context.Background()
 	rig := newTestRigWithIntentClassifier(t, intentdomain.TargetRequest)
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, intentTestCommenterID, sqlcgen.UserRoleMaintainer)
 
-	body := issueCommentBody("owner/repo", "repo", "https://github.com/owner/repo.git", 43, "intent-decision-disagree-test")
+	body := issueCommentBodyWithCommenter("owner/repo", "repo", "https://github.com/owner/repo.git", 43, "intent-decision-disagree-test", intentTestCommenterID, "intent-test-user")
 
 	status := postWebhook(t, rig, body, "delivery-intent-decision-2")
 	if status != http.StatusOK {

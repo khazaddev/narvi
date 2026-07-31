@@ -76,13 +76,45 @@ type Config struct {
 	// Comments (Step 37/38 follow-up fix, Finding 1) posts the honest
 	// planAwaitingApprovalReplyText reply (planawaitingreply.go) back to a
 	// PR thread when coalesce.go's CreateOrJoin declines to enqueue a build
-	// turn because the session's plan is currently awaiting approval.
-	// Nil-safe: nil (this package's own handler_test.go, or any other
-	// minimal wiring that doesn't care about this reply) simply skips
-	// posting it -- see postPlanAwaitingReply's own doc comment.
-	// githubapi.Adapter (the SAME instance production wiring already
-	// constructs for PullRequests above) satisfies this directly.
+	// turn because the session's plan is currently awaiting approval. ALSO
+	// posts actorNotAuthorizedReplyText (batch fix/deny-unlinked-github-
+	// actors) for an UNLINKED commenter's denied mention -- the SAME
+	// interface, never a second one, since both are just "post an honest
+	// reply back to this PR thread". Nil-safe: nil (this package's own
+	// handler_test.go, or any other minimal wiring that doesn't care about
+	// either reply) simply skips posting -- see postPlanAwaitingReply's/
+	// postActorNotAuthorizedReply's own doc comments. githubapi.Adapter
+	// (the SAME instance production wiring already constructs for
+	// PullRequests above) satisfies this directly.
 	Comments CommentPoster
+
+	// PublicBaseURL (batch fix/deny-unlinked-github-actors) is this
+	// control plane's own externally-reachable base URL
+	// (platform.Config.PublicBaseURL -- the SAME base identitylink.
+	// BuildMagicLinkURL already uses, internal/app/identitylink/
+	// service.go), used to build the sign-in URL
+	// (PublicBaseURL+signInPath) actorNotAuthorizedReplyText points an
+	// unlinked commenter at. Empty (this package's own handler_test.go, or
+	// any other minimal wiring) simply renders a base-less/relative-looking
+	// URL in that reply -- harmless for tests that never post a real
+	// comment, but production wiring (cmd/control-plane/main.go) always
+	// sets this from cfg.PublicBaseURL.
+	PublicBaseURL string
+
+	// LinkNotices (batch fix/deny-unlinked-github-actors) backs
+	// claimActorNotAuthorizedNotice's own anti-spam dedupe check
+	// (actornotauthorizedreply.go): one row per (repo, PR, commenter)
+	// already told to sign in, atomically claimed against
+	// Timeouts.GitHubActorNoticeTTL. Nil-safe: nil (this package's own
+	// handler_test.go, or any other minimal wiring that doesn't care about
+	// this dedupe) always allows the reply -- see that function's own doc
+	// comment for why. Typed as the narrow ActorLinkNoticeClaimer
+	// interface (not the concrete store type) so a test can inject a fake
+	// that forces a genuine claim failure -- postgres.
+	// NewGitHubActorLinkNoticeStore(pool) (the SAME pool every other store
+	// in this Config/SessionCoalescer already shares) satisfies this
+	// directly in production.
+	LinkNotices ActorLinkNoticeClaimer
 }
 
 // NewHandler builds the POST /webhooks/github handler (cmd/control-plane/
@@ -267,21 +299,82 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// user_id, ONCE, regardless of which CreateOrJoin branch this
 		// mention ends up taking -- a direct identities lookup, never an
 		// auto-linking algorithm (unlike Slack/Linear). actor stays invalid
-		// (bot attribution) for a commenter who has never signed into
-		// Narvi, exactly this batch's own explicit "do NOT block them"
-		// scope.
-		actor := resolveCommenterActor(ctx, logger, coalescer.Identities, m.CommenterID)
+		// for a commenter who has genuinely never signed into Narvi --
+		// batch fix/deny-unlinked-github-actors means that invalid actor
+		// is now DENIED by coalesce.go's own AuthorizeLinkedActor gates,
+		// not bot-attributed allow-and-proceed (see this branch's own
+		// ErrActorNotAuthorized handling below).
+		//
+		// err here is DISTINCT from "genuinely never linked" (a confirmed
+		// audit finding on an earlier version of this batch: the two used
+		// to be conflated into the same invalid pgtype.UUID{}, so a
+		// transient identities-lookup error on an ALREADY-linked, fully-
+		// authorized commenter -- e.g. a DB connection reset -- silently
+		// became a permanent, wrongly-worded "I don't recognize your
+		// GitHub account" denial for that real user). A non-nil err here
+		// means resolveCommenterActor's own lookup itself failed for a
+		// reason that says NOTHING about whether this commenter is
+		// linked -- treated exactly like every other genuine backend
+		// failure in this handler (parseMention's own error path above,
+		// the generic CreateOrJoin failure path below): release the claim
+		// so a real GitHub redelivery can retry once the backend recovers,
+		// and never post the (potentially false) "please sign in" reply.
+		actor, err := resolveCommenterActor(ctx, coalescer.Identities, m.CommenterID)
+		if err != nil {
+			logger.Error("github: resolve commenter identity failed", "error", err, "repo", m.RepoFullName, "pr_number", m.PRNumber)
+			if releaseErr := deliveries.Release(ctx, githubDeliveryProvider, deliveryID); releaseErr != nil {
+				logger.Error("github: release webhook delivery claim failed", "error", releaseErr, "delivery_id", deliveryID)
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 
 		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor)
 		if err != nil {
 			if errors.Is(err, ErrActorNotAuthorized) {
-				// The resolved, linked commenter's own role failed
-				// domain/authz.Authorize (coalesce.go already logged the
-				// specific denial) -- acknowledge without releasing the
-				// claim: unlike a transient failure, retrying a genuine
+				// ErrActorNotAuthorized fires for TWO distinct reasons
+				// (coalesce.go already logged which, specifically) --
+				// batch fix/deny-unlinked-github-actors' own addition
+				// distinguishes them here using the SAME already-resolved
+				// actor value passed into CreateOrJoin above, never a
+				// second lookup:
+				//
+				//  - !actor.Valid: an UNLINKED commenter -- this batch's
+				//    own repo-owner-decided hardening (aligning GitHub
+				//    with Slack/Linear, see coalesce.go's own updated doc
+				//    comment) now denies this instead of the pre-batch
+				//    bot-attributed allow. Unlike a linked-but-denied
+				//    actor below, this commenter has had NOTHING happen
+				//    for them at all and no other channel to learn why --
+				//    GitHub has no magic-link/pending-link mechanism to
+				//    fall back on (identity.go's own top doc comment) --
+				//    so this is the one case that gets an actionable
+				//    reply, gated by claimActorNotAuthorizedNotice's own
+				//    atomic anti-spam dedupe so a repeat mention within
+				//    GitHubActorNoticeTTL doesn't spam the thread again
+				//    (and so concurrent deliveries of the SAME still-
+				//    unlinked commenter's mention can't both slip past the
+				//    dedupe check and both post -- see that function's own
+				//    doc comment, actornotauthorizedreply.go).
+				//  - actor.Valid: a LINKED commenter whose role failed
+				//    domain/authz.Authorize (e.g. a viewer denied
+				//    ActionCreateSession, or a non-owning member denied
+				//    ActionPromptSession) -- pre-existing, out of this
+				//    batch's own scope, so this keeps today's silent-200
+				//    behavior completely unchanged: that commenter already
+				//    knows they're signed in, and "sign in via GitHub
+				//    OAuth" would be confusing and wrong to tell them.
+				//
+				// Either way, acknowledge without releasing the claim:
+				// unlike a transient failure, retrying a genuine
 				// redelivery of the SAME comment would render the exact
 				// same denial again, so there is nothing a GitHub retry
 				// could fix here.
+				if !actor.Valid {
+					if claimActorNotAuthorizedNotice(ctx, logger, cfg.LinkNotices, cfg.Timeouts.GitHubActorNoticeTTL, m.RepoFullName, m.PRNumber, m.CommenterID) {
+						postActorNotAuthorizedReply(ctx, logger, cfg.Comments, cfg.PublicBaseURL, cfg.BotToken, m.RepoFullName, m.PRNumber, m.CommenterID)
+					}
+				}
 				w.WriteHeader(http.StatusOK)
 				return
 			}
