@@ -190,6 +190,17 @@ type testRig struct {
 
 	diffFetcher reviewcontext.Fetcher
 	botToken    string
+
+	// repoSettings/botHandle (Step 47, "server-side verdict", §8.2/§21.2)
+	// back this rig's own verdict-posting-tool route (review/verdict,
+	// reviewverdict_integration_test.go) and the admin repo-settings routes
+	// (reposettings_integration_test.go). botHandle defaults to a fixed,
+	// non-empty test value -- unlike diffFetcher/botToken above (which
+	// default nil/"" because their OWN absence is meaningful/tested
+	// elsewhere), review-verdict's rendered comment always needs a real
+	// handle to build RerunGuidance from.
+	repoSettings *narvipg.RepoSettingsStore
+	botHandle    string
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -236,6 +247,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		linkPrompts:         narvipg.NewIdentityLinkPromptStore(pool),
 		promptTemplates:     narvipg.NewPromptTemplateStore(pool),
 		prSessions:          narvipg.NewGitHubPRSessionStore(pool),
+		repoSettings:        narvipg.NewRepoSettingsStore(pool),
+		botHandle:           "narvi-test-bot",
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -292,11 +305,23 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc
 	// comment.
 	router.Post("/sessions/{sessionID}/scm-credentials",
-		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.users, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
+		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.users, rig.prSessions, rig.botToken, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
 	// snapshot-mint (Step 22, "snapshots & restore") is mounted the SAME
 	// way -- see snapshotmint.go's own doc comment.
 	router.Post("/sessions/{sessionID}/snapshot",
 		httpapi.SnapshotMint(rig.sandboxes, rig.provider))
+	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2) is mounted
+	// the SAME way -- see reviewverdict.go's own doc comment.
+	router.Post("/sessions/{sessionID}/review/verdict",
+		httpapi.PostReviewVerdict(rig.sandboxes, rig.prSessions, rig.repoSettings, rig.outbox, rig.botHandle))
+	// /api/repos/{owner}/{repo}/settings (Step 47) -- mounted behind
+	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
+	// (see reposettings.go's own doc comment).
+	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings))
+		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings))
+	})
 
 	rig.server = httptest.NewServer(router)
 	t.Cleanup(rig.server.Close)

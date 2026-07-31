@@ -349,3 +349,87 @@ export interface PlanActionResponse {
    */
   turnId: string | null;
 }
+/**
+ * Request body for POST /sessions/:id/review/verdict (Step 47, 'server-side verdict', §8.2/§5.2) -- the verdict-posting tool's own typed-fields call, validated server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself, which this endpoint always recomputes server-side (review.ComputeShippable) and NEVER accepts from a caller -- see that package's own Verdict.Shippable doc comment (verdict.go) for why.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PostReviewVerdictRequest".
+ */
+export interface PostReviewVerdictRequest {
+  /**
+   * Matches internal/domain/review.RiskLevel's own three values exactly.
+   */
+  riskLevel: 'low' | 'medium' | 'high';
+  /**
+   * Matches internal/domain/review.PremiseState's own three values exactly.
+   */
+  premise: 'ok' | 'questionable' | 'not_a_pr';
+  /**
+   * Matches internal/domain/review.Tag's own fixed, closed vocabulary exactly -- an empty array is legal (the reviewer found no tagged area touched).
+   */
+  blastRadius: (
+    'auth' | 'migrations' | 'contracts' | 'secrets' | 'infra' | 'public_api' | 'data_layer' | 'dependencies'
+  )[];
+  filesChanged: number;
+  /**
+   * Matches internal/domain/review.TestsCoverageState's own three values exactly.
+   */
+  testsCoverage: 'adequate' | 'insufficient' | 'skipped';
+  /**
+   * Matches internal/domain/review.DocsDriftState's own three values exactly.
+   */
+  docsDrift: 'none' | 'found' | 'skipped';
+  /**
+   * The MODEL's own self-report (internal/domain/review.ProposedShippable) -- advisory only, carried for audit/transparency, and structurally incapable of influencing the server-computed Shippable this endpoint returns (review.ComputeShippable's own signature does not accept it).
+   */
+  proposedShippable: 'auto' | 'needs_human' | 'block';
+  /**
+   * The agent's own free-text narrative explaining the verdict -- required, never re-parsed back out as structured data once posted (review/doc.go's own 'nothing here even imports a markdown parser, on principle' stance).
+   */
+  summary: string;
+}
+/**
+ * 201 response body for POST /sessions/:id/review/verdict -- the server-computed authoritative results the caller cannot itself derive, so a review agent can log/confirm what actually happened.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PostReviewVerdictResponse".
+ */
+export interface PostReviewVerdictResponse {
+  /**
+   * The AUTHORITATIVE, server-computed classification (review.ComputeShippable's own result) -- never the request's own proposedShippable, converted or otherwise.
+   */
+  shippable: 'auto' | 'needs_human' | 'block';
+  /**
+   * Which GitHub pull-request-review event this call submitted (internal/domain/reviewpost.ComputeFormalReviewEvent's own result) -- APPROVE is never a legal value here, see that function's own doc comment for why.
+   */
+  formalReviewEvent: 'COMMENT' | 'REQUEST_CHANGES';
+  /**
+   * The review:*-risk label (internal/domain/reviewpost.RiskLabel) now reflecting this verdict's own RiskLevel on the pull request.
+   */
+  syncedLabel: string;
+}
+/**
+ * GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: future Steps (48's sentinel auto-fix toggle, 58's auto-merge toggle, 61's automatic-re-review opt-in) are each expected to add a further boolean property here, never a bespoke DTO of their own.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "RepoSettings".
+ */
+export interface RepoSettings {
+  /**
+   * The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own shape.
+   */
+  repoFullName: string;
+  /**
+   * §21.2: an admin, per-repo, strict-boolean setting that reuses the verdict-posting tool's SAME formal-review submission path and carries no independent permission of its own -- see internal/domain/reviewpost.ComputeFormalReviewEvent's own doc comment for its exact effect.
+   */
+  blockOnHighRisk: boolean;
+}
+/**
+ * Request body for PUT /api/repos/{owner}/{repo}/settings.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateRepoSettingsRequest".
+ */
+export interface UpdateRepoSettingsRequest {
+  blockOnHighRisk: boolean;
+}

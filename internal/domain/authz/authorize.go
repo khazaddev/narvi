@@ -127,12 +127,13 @@ var matrix = map[Action]actionRule{
 	ActionConfigureAutoApprove: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 6: integrations/global secrets/template activation/members &
-	// roles/sentinel toggle -- admin only.
-	ActionManageIntegrations:     {allow: roles(RoleAdmin)},
-	ActionManageGlobalSecrets:    {allow: roles(RoleAdmin)},
-	ActionActivatePromptTemplate: {allow: roles(RoleAdmin)},
-	ActionManageMembers:          {allow: roles(RoleAdmin)},
-	ActionToggleSentinelAutoFix:  {allow: roles(RoleAdmin)},
+	// roles/sentinel toggle/blockOnHighRisk -- admin only.
+	ActionManageIntegrations:       {allow: roles(RoleAdmin)},
+	ActionManageGlobalSecrets:      {allow: roles(RoleAdmin)},
+	ActionActivatePromptTemplate:   {allow: roles(RoleAdmin)},
+	ActionManageMembers:            {allow: roles(RoleAdmin)},
+	ActionToggleSentinelAutoFix:    {allow: roles(RoleAdmin)},
+	ActionConfigureBlockOnHighRisk: {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against

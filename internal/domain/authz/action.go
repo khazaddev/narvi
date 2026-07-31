@@ -115,6 +115,19 @@ const (
 	// ActionToggleSentinelAutoFix covers §17's own sentinel auto-fix
 	// on/off toggle.
 	ActionToggleSentinelAutoFix Action = "toggle_sentinel_auto_fix"
+	// ActionConfigureBlockOnHighRisk covers §8.2/Step 47's own
+	// blockOnHighRisk admin, per-repo, strict-boolean setting
+	// (repo_settings, migrations/000044_repo_settings.up.sql) --
+	// internal/adapters/inbound/httpapi/reposettings.go's own GET/PUT
+	// routes both gate on this. Placed in this SAME admin-only row as
+	// ActionToggleSentinelAutoFix above, not row 5's maintainer-level
+	// ActionConfigureAutoApprove: blockOnHighRisk changes what runs
+	// UNATTENDED on a repo's own PRs (which formal-review event a
+	// verdict submits, up to and including a hard REQUEST_CHANGES block)
+	// exactly like the sentinel toggle's own row-6 placement is justified
+	// (§13.3's own parenthetical on that row), never a per-PR human
+	// judgment call the way row 5's actions are.
+	ActionConfigureBlockOnHighRisk Action = "configure_block_on_high_risk"
 )
 
 // AllActions is every recognized Action, in this file's own declaration
@@ -140,4 +153,5 @@ var AllActions = []Action{
 	ActionActivatePromptTemplate,
 	ActionManageMembers,
 	ActionToggleSentinelAutoFix,
+	ActionConfigureBlockOnHighRisk,
 }

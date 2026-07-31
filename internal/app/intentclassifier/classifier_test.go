@@ -199,6 +199,86 @@ func TestService_Classify_NeverThrows(t *testing.T) {
 	}
 }
 
+// TestService_Classify_FallbackHonorsDeterministicTarget is Step 47's own
+// audit fix (§5.2/§18.2): a fallback decision must still carry
+// input.DeterministicTarget when the caller supplied one, across EVERY
+// fallback branch (template fetch, template assemble, LLM error, invalid
+// output) -- not only the happy-path corroboration step, which never runs
+// at all once the model-based path has already failed. Before this fix,
+// fallbackDecision unconditionally discarded DeterministicTarget, so a
+// caller like GitHub's own ingress (which always supplies
+// intentdomain.TargetReview, a purely structural signal never derived
+// from the model) would have silently lost that signal the moment the
+// classifier's own LLM call degraded -- exactly the moment §5.2 says this
+// matters most.
+func TestService_Classify_FallbackHonorsDeterministicTarget(t *testing.T) {
+	tests := []struct {
+		name      string
+		llm       *fakeLLM
+		templates *fakeTemplates
+	}{
+		{
+			name:      "template fetch error",
+			llm:       &fakeLLM{},
+			templates: &fakeTemplates{err: errors.New("db unreachable")},
+		},
+		{
+			name:      "template assemble error",
+			llm:       &fakeLLM{},
+			templates: brokenTemplates(),
+		},
+		{
+			name:      "llm error",
+			llm:       &fakeLLM{err: &ports.LLMError{Code: ports.CodeTimeout, Provider: "anthropic"}},
+			templates: validTemplates(),
+		},
+		{
+			name:      "llm returns a non-typed error",
+			llm:       &fakeLLM{err: errors.New("some untyped failure")},
+			templates: validTemplates(),
+		},
+		{
+			name:      "llm returns invalid output",
+			llm:       &fakeLLM{response: json.RawMessage(`not valid json`)},
+			templates: validTemplates(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := New(tt.llm, "anthropic", "claude-haiku-4-5", tt.templates, nil, nil)
+
+			decision := svc.Classify(context.Background(), ports.IntentClassifierInput{
+				Text:                "hello",
+				Surface:             "github",
+				DeterministicTarget: intentdomain.TargetReview,
+			})
+
+			if decision.Source != ports.IntentSourceFallback {
+				t.Fatalf("Source = %q, want %q", decision.Source, ports.IntentSourceFallback)
+			}
+			if decision.Target != intentdomain.TargetReview {
+				t.Errorf("Target = %q, want %q (the deterministic signal must survive a fallback)", decision.Target, intentdomain.TargetReview)
+			}
+		})
+	}
+}
+
+// TestService_Classify_FallbackNoDeterministicTarget proves the converse:
+// a caller that supplies NO deterministic signal at all (Slack/Linear's
+// own current callers) still gets an empty Target on fallback, exactly
+// like before this fix -- the fix only ever surfaces a signal that was
+// genuinely supplied, never fabricates one.
+func TestService_Classify_FallbackNoDeterministicTarget(t *testing.T) {
+	svc := New(&fakeLLM{err: &ports.LLMError{Code: ports.CodeTimeout, Provider: "anthropic"}}, "anthropic", "claude-haiku-4-5", validTemplates(), nil, nil)
+
+	decision := svc.Classify(context.Background(), ports.IntentClassifierInput{Text: "hello", Surface: "slack"})
+
+	if decision.Target != "" {
+		t.Errorf("Target = %q, want empty (no DeterministicTarget was supplied)", decision.Target)
+	}
+}
+
 // --- Classify: deterministic Target corroboration ---
 
 func TestService_Classify_Corroboration(t *testing.T) {

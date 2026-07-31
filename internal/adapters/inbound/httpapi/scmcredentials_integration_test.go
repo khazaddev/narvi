@@ -725,3 +725,144 @@ func TestScmCredentials_StillMemberCreator_Succeeds(t *testing.T) {
 		t.Errorf("Password = %q, want the real decrypted token", got.Password)
 	}
 }
+
+// createOwnedGitHubReviewSessionWithRepos is
+// createOwnedGitHubReviewSession's (reviewretrigger_integration_test.go)
+// own general-purpose form: also sets sessions.repos to reposJSON, so a
+// review session fixture used here can pass THIS file's own host-scoping
+// check (step 6) before ever reaching the review-session branch (step
+// 6.5) this file's own new tests exercise -- createOwnedGitHubReviewSession
+// itself sets no repos at all (its own callers never needed to clear
+// step 6 first).
+func (r testRig) createOwnedGitHubReviewSessionWithRepos(ctx context.Context, t *testing.T, ownerID pgtype.UUID, repoFullName string, prNumber int32, reposJSON string) sqlcgen.Session {
+	t.Helper()
+
+	session, err := r.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceGithub,
+		CreatedBy:   ownerID,
+		Repos:       []byte(reposJSON),
+	})
+	if err != nil {
+		t.Fatalf("create test github review session: %v", err)
+	}
+	if err := r.prSessions.EnsureRow(ctx, repoFullName, prNumber); err != nil {
+		t.Fatalf("ensure github_pr_sessions row: %v", err)
+	}
+	if err := r.prSessions.SetSessionID(ctx, repoFullName, prNumber, session.ID); err != nil {
+		t.Fatalf("set github_pr_sessions session id: %v", err)
+	}
+	return session
+}
+
+// reviewSessionRepos is the SAME repos JSON shape createSessionWithGitHubIdentity's
+// own default names ("github.com" host, matching postScmCredentials' own
+// default request body) -- kept as its own named constant here (rather
+// than inlined at each call site) purely for readability.
+const reviewSessionRepos = `[{"name":"narvi","url":"https://github.com/khazaddev/narvi","branch":null}]`
+
+// TestScmCredentials_ReviewSession_UsesBotToken proves the audit
+// remediation this Step's own confirmed finding required: a review
+// session (a github_pr_sessions row exists for it) mints rig.botToken --
+// never the session creator's own personal GitHub OAuth token, even
+// though that creator DOES have one, real and encrypted, on file. This is
+// the positive proof that a review sandbox's own credential-helper flow
+// can no longer walk away with an arbitrary human commenter's broad,
+// cross-repo personal credential.
+func TestScmCredentials_ReviewSession_UsesBotToken(t *testing.T) {
+	const realBotToken = "bot-token-for-review-sessions"
+	rig := newTestRig(t, func(r *testRig) { r.botToken = realBotToken })
+	ctx := context.Background()
+
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	// The creator's OWN personal GitHub identity/token -- proving this
+	// branch does not merely happen to succeed because no personal
+	// credential exists; a real one exists and is deliberately never used.
+	encrypted, err := platform.EncryptToken(rig.tokenEncryptionKey, []byte("gho_creatorsOwnPersonalToken"))
+	if err != nil {
+		t.Fatalf("EncryptToken: %v", err)
+	}
+	email := "review-session-owner@example.com"
+	if _, err := rig.identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:               owner.ID,
+		Provider:             sqlcgen.IdentityProviderGithub,
+		ExternalID:           "review-session-owner-external-id",
+		Email:                &email,
+		EmailVerified:        true,
+		LinkedVia:            sqlcgen.IdentityLinkedViaAdmin,
+		AccessTokenEncrypted: encrypted,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	session := rig.createOwnedGitHubReviewSessionWithRepos(ctx, t, owner.ID, "acme/scm-creds-review", 11, reviewSessionRepos)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.Username != "x-access-token" {
+		t.Errorf("Username = %q, want %q", got.Username, "x-access-token")
+	}
+	if got.Password != realBotToken {
+		t.Errorf("Password = %q, want the bot token %q -- never the creator's own personal token", got.Password, realBotToken)
+	}
+	if got.Password == "gho_creatorsOwnPersonalToken" {
+		t.Fatalf("Password equals the creator's own personal GitHub token -- the exact credential-exposure gap this Step's audit remediation closes")
+	}
+}
+
+// TestScmCredentials_ReviewSession_NoCreatorGuard_StillSucceeds proves the
+// review-session branch (step 6.5) is reached and succeeds via botToken
+// even when the session has no created_by user at all (CreatedBy invalid)
+// -- steps 7-9 (created_by/disabled/viewer/identity checks) exist only to
+// gate a PER-USER credential this branch never looks up, so none of them
+// can block it.
+func TestScmCredentials_ReviewSession_NoCreatorGuard_StillSucceeds(t *testing.T) {
+	const realBotToken = "bot-token-no-creator"
+	rig := newTestRig(t, func(r *testRig) { r.botToken = realBotToken })
+	ctx := context.Background()
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceGithub,
+		Repos:       []byte(reviewSessionRepos),
+	})
+	if err != nil {
+		t.Fatalf("create test github review session with no creator: %v", err)
+	}
+	if err := rig.prSessions.EnsureRow(ctx, "acme/scm-creds-review-nocreator", 12); err != nil {
+		t.Fatalf("ensure github_pr_sessions row: %v", err)
+	}
+	if err := rig.prSessions.SetSessionID(ctx, "acme/scm-creds-review-nocreator", 12, session.ID); err != nil {
+		t.Fatalf("set github_pr_sessions session id: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, got := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a review session needs no created_by user at all)", status, http.StatusOK)
+	}
+	if got.Password != realBotToken {
+		t.Errorf("Password = %q, want the bot token %q", got.Password, realBotToken)
+	}
+}
+
+// TestScmCredentials_NonReviewSession_HostScopingStillEnforced proves the
+// new review-session branch is checked AFTER host-scoping (step 6), never
+// before it: an ordinary (non-review) session whose repos name a
+// DIFFERENT host than the request is still rejected exactly like
+// TestScmCredentials_HostMismatch_Rejected, unaffected by this Step's own
+// addition.
+func TestScmCredentials_NonReviewSession_HostScopingStillEnforced(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := createSessionWithGitHubIdentityAndRepos(ctx, t, rig, "gho_realGitHubAccessToken",
+		`[{"name":"narvi","url":"https://gitlab.com/khazaddev/narvi","branch":null}]`)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	status, _ := postScmCredentials(t, rig, session.ID.String(), "sandbox-bearer-token")
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (host mismatch must still be enforced ahead of the review-session check)", status, http.StatusForbidden)
+	}
+}

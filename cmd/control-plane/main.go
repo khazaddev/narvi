@@ -249,6 +249,11 @@ func serve() error {
 	webhookDeliveryStore := postgres.NewWebhookDeliveryStore(pool)
 	slackThreadSessionStore := postgres.NewSlackThreadSessionStore(pool)
 	githubPRSessionStore := postgres.NewGitHubPRSessionStore(pool)
+	// repoSettingsStore (Step 47, "server-side verdict", §8.2/§21.2) backs
+	// the admin repo-settings REST routes below AND the verdict-posting
+	// tool's own blockOnHighRisk read (reviewverdict.go) -- one store,
+	// shared, never a second independently-constructed copy.
+	repoSettingsStore := postgres.NewRepoSettingsStore(pool)
 	// githubActorLinkNoticeStore (batch fix/deny-unlinked-github-actors)
 	// backs the GitHub webhook ingress's own anti-spam dedupe for the
 	// "please sign in" reply posted to an unlinked commenter's denied
@@ -375,8 +380,12 @@ func serve() error {
 	// Middleware entirely -- a sandbox-bearer-token-authenticated
 	// endpoint, not a browser-facing one (see that handler's own doc
 	// comment in internal/adapters/inbound/httpapi/scmcredentials.go).
+	// githubPRSessionStore/cfg.GitHubBotToken (Step 47 audit remediation)
+	// are the SAME instances review/verdict below already uses, so a
+	// review session mints the SAME bot credential either way, never the
+	// creator's own personal OAuth token.
 	router.Post("/sessions/{sessionID}/scm-credentials",
-		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, cfg.TokenEncryptionKey, cfg.Timeouts))
+		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, githubPRSessionStore, cfg.GitHubBotToken, cfg.TokenEncryptionKey, cfg.Timeouts))
 
 	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.
@@ -386,6 +395,21 @@ func serve() error {
 	// authenticated route, not a browser-facing one.
 	router.Post("/sessions/{sessionID}/snapshot",
 		httpapi.SnapshotMint(sandboxStore, sandboxProvider))
+
+	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2): the
+	// verdict-posting TOOL -- deliberately mounted OUTSIDE /api/sessions
+	// and outside auth.Middleware entirely, mirroring scm-credentials/
+	// snapshot-mint immediately above exactly (see httpapi/reviewverdict.go's
+	// own doc comment for the full "why an HTTP endpoint, sandbox-bearer
+	// authenticated, not a browser route" reasoning). repoSettingsStore/
+	// outboxStore are the SAME instances every other caller above already
+	// uses; cfg.GitHubBotHandle is the SAME handle GitHub ingress's own
+	// mention detector already matches against (githubingress.Config.
+	// BotHandle above) -- the rendered re-run guidance (internal/domain/
+	// reviewpost.RerunGuidance) is built to be recognized by that SAME
+	// regex (§5.2).
+	router.Post("/sessions/{sessionID}/review/verdict",
+		httpapi.PostReviewVerdict(sandboxStore, githubPRSessionStore, repoSettingsStore, outboxStore, cfg.GitHubBotHandle))
 
 	// Slack ingress (Step 33, §8.10): deliberately mounted OUTSIDE
 	// /api/sessions and outside auth.Middleware entirely -- Slack itself
@@ -661,6 +685,18 @@ func serve() error {
 		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts))
 	})
 
+	// /api/repos/{owner}/{repo}/settings (Step 47, "server-side verdict",
+	// §8.2/§21.2): admin-only read/write of a repo's own blockOnHighRisk
+	// policy flag -- see httpapi/reposettings.go's own doc comment. Mounted
+	// behind auth.Middleware like every other browser-facing REST route in
+	// this package (unlike review/verdict below, this is an admin
+	// configuring a setting, not the sandbox agent calling a tool).
+	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore))
+		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore))
+	})
+
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see
 	// internal/adapters/inbound/linear's own doc.go for the full design.
 	// Kept as one self-contained block, separate from the auth/REST
@@ -749,6 +785,14 @@ func serve() error {
 	// doc comment for why.
 	githubNotifier := githubapi.NewBotNotifier(sourceControl, cfg.GitHubBotToken)
 	linearNotifier := outboxworker.NewLinearNotifier(linearClient, linearInstallationStore, cfg.TokenEncryptionKey)
+	// githubVerdictNotifier (Step 47, "server-side verdict", §8.2) wraps
+	// the SAME sourceControl *githubapi.Adapter instance every other
+	// GitHub-flavored notifier/caller above already uses, authenticated
+	// with the SAME cfg.GitHubBotToken githubNotifier itself uses --
+	// posting a verdict is a bot-attributed action exactly like posting
+	// the (now-blocked-for-review-sessions) generic outcome comment used
+	// to be, never a per-commenter credential.
+	githubVerdictNotifier := githubapi.NewVerdictNotifier(sourceControl, cfg.GitHubBotToken)
 
 	// outboxStore is constructed earlier, alongside linearAgentSessionStore
 	// -- see that construction site's own doc comment for why.
@@ -759,6 +803,7 @@ func serve() error {
 		ports.NotificationKindLinearProgress:    linearNotifier,
 		ports.NotificationKindSlackPlanApproval: planSlackNotifier,
 		ports.NotificationKindSlackPlanDecided:  planSlackNotifier,
+		ports.NotificationKindGitHubVerdict:     githubVerdictNotifier,
 	}, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)

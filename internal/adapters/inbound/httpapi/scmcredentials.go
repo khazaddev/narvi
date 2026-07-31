@@ -84,6 +84,38 @@
 // same audit sweep also raised: this handler's own first version of this
 // check logged Warn and returned 403 unconditionally on ANY GetByID
 // failure, never distinguishing the two).
+//
+// Audit remediation (Step 47, "server-side verdict", §8.2/§5.2 confirmed
+// finding): a REVIEW session (one with a github_pr_sessions row,
+// reviewverdict.go's own identical reverse-lookup precedent) never pushes
+// or opens a PR -- it only clones a PR's head branch read-only, for inline
+// code-review context (§8.2/Step 46), and its own output reaches GitHub
+// exclusively through the verdict-posting tool (reviewverdict.go, Step
+// 47), which authenticates with cfg.GitHubBotToken, never a per-commenter
+// OAuth token. Handing such a session's SANDBOX the session CREATOR's own
+// broadly `repo`-scoped personal GitHub OAuth token (steps 7-9 below) for
+// this exact purpose was itself a confirmed credential-exposure gap: an
+// arbitrary human whose ONLY interaction with Narvi was commenting on a PR
+// had their own full, cross-repo, cross-org personal credential cached to
+// the reviewing sandbox's local disk (internal/sandboxagent/credentials.
+// Cache) merely because a review session happened to need SOME credential
+// to clone with -- a far broader blast radius than this endpoint's own
+// host-scoping (step 6) or per-session repo list ever intended to expose.
+// Fixed below (the NEW step 7, checked immediately after host-scoping,
+// before the creator/identity lookups steps 8-10 exist to serve): a review
+// session mints botToken instead, skipping the creator-guard/identity
+// path entirely -- the SAME single, statically-configured bot credential
+// already trusted to read (internal/app/reviewcontext.Fetch) and post
+// (githubapi.VerdictNotifier) on this exact repo/PR, never the creator's
+// own identity. This does not claim to make a bash-capable review agent
+// structurally incapable of ever calling GitHub's API directly with
+// SOME credential (that would require OS-level process isolation between
+// sandbox-agent and the agent runtime it supervises, or GitHub App
+// fine-grained/read-only installation tokens -- neither of which this
+// codebase has today, see this Step's own PR description) -- it closes
+// the STRICTLY WORSE half of that gap: an arbitrary commenter's own
+// broad, personal, cross-repo credential never reaches a review sandbox
+// at all.
 
 package httpapi
 
@@ -159,8 +191,9 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 // this audit remediation's own additions, deliberately placed at the SAME
 // points internal/adapters/inbound/wshub/sandbox.go's own sandbox-WS
 // handshake places its equivalent checks -- see that file's own doc
-// comment steps 7/8; step 8 below is the M8 audit finding's own addition,
-// calling internal/app/sessionactor's own CheckCreatorGuard):
+// comment steps 7/8; step 9 below is the M8 audit finding's own addition,
+// calling internal/app/sessionactor's own CheckCreatorGuard; step 7 below
+// is the Step 47 audit remediation's own addition):
 //
 //  1. sessionID does not parse as a UUID, or no sandbox row exists for it
 //     -> 404 (mirrors wshub/sandbox.go's own "malformed and nonexistent
@@ -193,17 +226,28 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //  5. Malformed request body -> 400.
 //  6. req.Host does not case-insensitively match ANY host among the
 //     session's own repos (sessions.repos, via sessionRepoHosts) -> 403,
-//     the SAME generic body as steps 7-9 below (§5.2: "scoped https+host
+//     the SAME generic body as steps 8-10 below (§5.2: "scoped https+host
 //     only" -- the decrypted token must never be handed back for a host
 //     the session's own repos don't actually use, e.g. a compromised
 //     in-sandbox dependency probing an arbitrary host via the
 //     credential-helper protocol).
-//  7. The session's own created_by is NULL -> 403, the SAME generic body
-//     as steps 6/8/9 -- no bot/service-account fallback exists (§8.11),
+//  7. This session has a github_pr_sessions row (prSessions.
+//     GetBySessionID succeeds) -> 200 with botToken, never the creator's
+//     own identity -- see this file's own top comment ("Audit remediation
+//     (Step 47...)") for the full rationale. Steps 8-10 below (the
+//     creator-guard/identity/decrypt path) are skipped entirely for a
+//     review session: they exist to find and gate a PER-USER OAuth
+//     credential, which a review session has no legitimate use for at
+//     all. A genuine, unexpected error from GetBySessionID OTHER than
+//     "no such row" (pgx.ErrNoRows) is a 500, matching this handler's own
+//     established "row absent vs genuine failure" discipline (step 9's
+//     identical distinction, and sessions.Get/sandboxes.Get above).
+//  8. The session's own created_by is NULL -> 403, the SAME generic body
+//     as steps 6/9/10 -- no bot/service-account fallback exists (§8.11),
 //     nothing further to even check once a session has no creator at all.
-//  8. OR the session's own created_by user is now Disabled, OR their Role
-//     is now viewer -> 403, the SAME generic body as steps 6/7/9 (M8 audit
-//     finding: re-checked FRESH here, right before step 9's identity/token
+//  9. OR the session's own created_by user is now Disabled, OR their Role
+//     is now viewer -> 403, the SAME generic body as steps 6/8/10 (M8 audit
+//     finding: re-checked FRESH here, right before step 10's identity/token
 //     lookup even begins -- not the role/disabled state as of session
 //     creation). Calls internal/app/sessionactor's own CheckCreatorGuard
 //     (githubtoken.go) -- the SAME §13.3 viewer-guard threshold
@@ -219,11 +263,11 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //     matching how sessions.Get/sandboxes.Get above already treat a real
 //     DB failure (only the row's clean absence is folded into this 403
 //     class, not any other lookup failure).
-//  9. OR (regardless of step 8 passing): that user has no linked
+//  10. OR (regardless of step 9 passing): that user has no linked
 //     identities row for provider=github, OR that identity's
 //     access_token_encrypted is NULL, OR platform.DecryptToken fails on
-//     it -> 403. These, plus step 6's host-scoping failure, step 7's
-//     no-creator failure, and step 8's disabled/demoted failure above, are
+//     it -> 403. These, plus step 6's host-scoping failure, step 8's
+//     no-creator failure, and step 9's disabled/demoted failure above, are
 //     deliberately grouped as ONE outcome class ("no usable OAuth
 //     credential is available for this session/host") -- the honest "no
 //     bot/service-account fallback exists" gap named in this Step's own
@@ -237,7 +281,7 @@ func verifySandboxBearerToken(presented string, storedHash *string) bool {
 //     gen-mismatch reuses the SAME 403 status code but is logged
 //     separately server-side (see the handler body) so it stays
 //     observable without adding a caller-visible distinction.
-//  10. Otherwise -> 200 with scmCredentialsResponse{Username:
+//  11. Otherwise -> 200 with scmCredentialsResponse{Username:
 //     "x-access-token", Password: <decrypted token>, ExpiresAt: now +
 //     timeouts.ScmCredentialTTL}.
 //
@@ -249,6 +293,8 @@ func ScmCredentials(
 	sandboxes *postgres.SandboxStore,
 	identities *postgres.IdentityStore,
 	users *postgres.UserStore,
+	prSessions *postgres.GitHubPRSessionStore,
+	botToken string,
 	tokenEncryptionKey []byte,
 	timeouts platform.Timeouts,
 ) http.HandlerFunc {
@@ -339,6 +385,28 @@ func ScmCredentials(
 			logger.Warn("httpapi: scm-credentials: rejecting: requested host not among session's own repo hosts",
 				"requested_host", req.Host)
 			writeError(w, http.StatusForbidden, "no usable git credential for this session")
+			return
+		}
+
+		// Review-session check (this func's own doc comment step 7,
+		// audit remediation): a session with a github_pr_sessions row
+		// never pushes/opens a PR -- see this file's own top comment for
+		// the full "why the creator's own personal OAuth token has no
+		// legitimate use here" rationale. Mints botToken directly,
+		// skipping steps 8-10's creator-guard/identity/decrypt path
+		// entirely -- that path exists to find a PER-USER credential,
+		// which is exactly what this branch avoids handing to a review
+		// sandbox at all.
+		if _, err := prSessions.GetBySessionID(ctx, sessionID); err == nil {
+			writeJSON(w, http.StatusOK, scmCredentialsResponse{
+				Username:  "x-access-token",
+				Password:  botToken,
+				ExpiresAt: time.Now().Add(timeouts.ScmCredentialTTL),
+			})
+			return
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			logger.Error("httpapi: scm-credentials: get github pr session failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 

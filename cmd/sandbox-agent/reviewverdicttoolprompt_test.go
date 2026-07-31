@@ -1,0 +1,260 @@
+// This file (deliberately NOT behind the "integration" build tag, unlike
+// most of this package's own sandbox-boot tests) proves
+// renderVerdictToolPromptText/reviewVerdictToolURL/isLoopbackHost
+// (reviewverdicttoolprompt.go) directly, in-process -- fast enough to run
+// under the default `go test ./...`/`go test -race` suite.
+package main
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
+	"github.com/khazaddev/narvi/internal/domain/review"
+)
+
+// TestRenderVerdictToolPromptText is table-driven over every branch
+// renderVerdictToolPromptText can take: no placeholders present (every
+// non-review turn -- must be a byte-for-byte no-op), a real review turn's
+// placeholders resolved against a production-shaped (wss://) config, the
+// loopback-only ws:// carve-out, a non-loopback ws:// config (refused,
+// placeholders left unresolved rather than embedding a secret in a
+// plaintext URL), and a nil cfg (defensively a no-op, mirroring this
+// package's own "no live session, nothing to do" precedent elsewhere).
+func TestRenderVerdictToolPromptText(t *testing.T) {
+	t.Parallel()
+
+	reviewPromptText := "please review this PR.\n\n" +
+		"POST " + review.VerdictToolURLPlaceholder + "\n" +
+		"Authorization: Bearer " + review.VerdictToolBearerPlaceholder + "\n" +
+		"X-Sandbox-Gen: " + review.VerdictToolGenPlaceholder + "\n"
+
+	tests := []struct {
+		name            string
+		text            string
+		cfg             *sessionconfig.SessionConfig
+		wantExact       string // when non-empty, exact expected output
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name:      "no placeholders present: byte-for-byte no-op regardless of cfg",
+			text:      "an ordinary build turn's own prompt, nothing review-shaped here",
+			cfg:       &sessionconfig.SessionConfig{ControlPlaneWsUrl: "wss://cp.example.com/sessions/abc/ws?type=sandbox", SessionId: "abc", SandboxToken: "tok", Gen: 3},
+			wantExact: "an ordinary build turn's own prompt, nothing review-shaped here",
+		},
+		{
+			name:      "nil cfg: no-op even with placeholders present",
+			text:      reviewPromptText,
+			cfg:       nil,
+			wantExact: reviewPromptText,
+		},
+		{
+			name: "review turn, production wss:// control plane: all three placeholders resolved",
+			text: reviewPromptText,
+			cfg: &sessionconfig.SessionConfig{
+				ControlPlaneWsUrl: "wss://cp.example.com/sessions/session-123/ws?type=sandbox",
+				SessionId:         "session-123",
+				SandboxToken:      "s3cr3t-token",
+				Gen:               7,
+			},
+			wantContains: []string{
+				"POST https://cp.example.com/sessions/session-123/review/verdict",
+				"Authorization: Bearer s3cr3t-token",
+				"X-Sandbox-Gen: 7",
+			},
+			wantNotContains: []string{
+				review.VerdictToolURLPlaceholder, review.VerdictToolBearerPlaceholder, review.VerdictToolGenPlaceholder,
+			},
+		},
+		{
+			name: "review turn, loopback ws:// control plane (dev/test): resolved via http",
+			text: reviewPromptText,
+			cfg: &sessionconfig.SessionConfig{
+				ControlPlaneWsUrl: "ws://127.0.0.1:8080/sessions/session-9/ws?type=sandbox",
+				SessionId:         "session-9",
+				SandboxToken:      "dev-token",
+				Gen:               1,
+			},
+			wantContains: []string{
+				"POST http://127.0.0.1:8080/sessions/session-9/review/verdict",
+				"Authorization: Bearer dev-token",
+				"X-Sandbox-Gen: 1",
+			},
+		},
+		{
+			name: "review turn, non-loopback ws:// control plane: refused, placeholders left unresolved",
+			text: reviewPromptText,
+			cfg: &sessionconfig.SessionConfig{
+				ControlPlaneWsUrl: "ws://cp.example.com/sessions/session-5/ws?type=sandbox",
+				SessionId:         "session-5",
+				SandboxToken:      "should-never-appear",
+				Gen:               2,
+			},
+			wantExact: reviewPromptText,
+		},
+		{
+			name: "review turn, malformed control plane url: refused, placeholders left unresolved",
+			text: reviewPromptText,
+			cfg: &sessionconfig.SessionConfig{
+				ControlPlaneWsUrl: "://not a url",
+				SessionId:         "session-1",
+				SandboxToken:      "should-never-appear",
+				Gen:               1,
+			},
+			wantExact: reviewPromptText,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := renderVerdictToolPromptText(tc.text, tc.cfg)
+
+			if tc.wantExact != "" && got != tc.wantExact {
+				t.Fatalf("renderVerdictToolPromptText() = %q, want exactly %q", got, tc.wantExact)
+			}
+			for _, want := range tc.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("renderVerdictToolPromptText() = %q, want it to contain %q", got, want)
+				}
+			}
+			for _, notWant := range tc.wantNotContains {
+				if strings.Contains(got, notWant) {
+					t.Errorf("renderVerdictToolPromptText() = %q, want it to NOT contain %q", got, notWant)
+				}
+			}
+		})
+	}
+}
+
+// TestRenderVerdictToolPromptText_NeverLeaksTokenWhenNothingToSubstitute
+// proves a build-session's own ordinary prompt -- carrying no placeholder
+// at all -- never has the live SandboxToken spliced in anywhere, even
+// though cfg carries a very real, live one: renderVerdictToolPromptText
+// must never append or otherwise introduce the token into text it wasn't
+// explicitly asked (via a placeholder) to substitute into.
+func TestRenderVerdictToolPromptText_NeverLeaksTokenWhenNothingToSubstitute(t *testing.T) {
+	t.Parallel()
+
+	const liveToken = "super-secret-live-sandbox-token"
+	got := renderVerdictToolPromptText("build this feature please", &sessionconfig.SessionConfig{
+		ControlPlaneWsUrl: "wss://cp.example.com/sessions/abc/ws?type=sandbox",
+		SessionId:         "abc",
+		SandboxToken:      liveToken,
+		Gen:               1,
+	})
+
+	if strings.Contains(got, liveToken) {
+		t.Errorf("renderVerdictToolPromptText() = %q, want it to NEVER contain the live sandbox token for a prompt with no placeholders", got)
+	}
+	if got != "build this feature please" {
+		t.Errorf("renderVerdictToolPromptText() = %q, want the ordinary build prompt returned byte-for-byte unchanged", got)
+	}
+}
+
+// TestReviewVerdictToolURL is table-driven over every scheme/host branch
+// reviewVerdictToolURL can take.
+func TestReviewVerdictToolURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		controlPlaneWsURL string
+		sessionID         string
+		want              string
+		wantErr           bool
+	}{
+		{
+			name:              "wss -> https",
+			controlPlaneWsURL: "wss://cp.example.com/sessions/abc/ws?type=sandbox",
+			sessionID:         "abc",
+			want:              "https://cp.example.com/sessions/abc/review/verdict",
+		},
+		{
+			name:              "ws + loopback ip -> http",
+			controlPlaneWsURL: "ws://127.0.0.1:9090/sessions/abc/ws?type=sandbox",
+			sessionID:         "abc",
+			want:              "http://127.0.0.1:9090/sessions/abc/review/verdict",
+		},
+		{
+			name:              "ws + localhost -> http",
+			controlPlaneWsURL: "ws://localhost:9090/sessions/abc/ws?type=sandbox",
+			sessionID:         "abc",
+			want:              "http://localhost:9090/sessions/abc/review/verdict",
+		},
+		{
+			name:              "ws + non-loopback host -> error",
+			controlPlaneWsURL: "ws://cp.example.com/sessions/abc/ws?type=sandbox",
+			sessionID:         "abc",
+			wantErr:           true,
+		},
+		{
+			name:              "unrecognized scheme -> error",
+			controlPlaneWsURL: "https://cp.example.com/sessions/abc/ws?type=sandbox",
+			sessionID:         "abc",
+			wantErr:           true,
+		},
+		{
+			name:              "malformed url -> error",
+			controlPlaneWsURL: "://not a url",
+			sessionID:         "abc",
+			wantErr:           true,
+		},
+		{
+			name:              "sessionID is path-escaped",
+			controlPlaneWsURL: "wss://cp.example.com/sessions/abc/ws?type=sandbox",
+			sessionID:         "a/b c",
+			want:              "https://cp.example.com/sessions/a%2Fb%20c/review/verdict",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := reviewVerdictToolURL(tc.controlPlaneWsURL, tc.sessionID)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("reviewVerdictToolURL() = %q, nil error, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("reviewVerdictToolURL() unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("reviewVerdictToolURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsLoopbackHost is table-driven over every host-shape isLoopbackHost
+// must classify correctly.
+func TestIsLoopbackHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		hostport string
+		want     bool
+	}{
+		{name: "bare loopback ip", hostport: "127.0.0.1", want: true},
+		{name: "loopback ip with port", hostport: "127.0.0.1:8080", want: true},
+		{name: "ipv6 loopback with port", hostport: "[::1]:8080", want: true},
+		{name: "localhost", hostport: "localhost", want: true},
+		{name: "localhost with port", hostport: "localhost:8080", want: true},
+		{name: "real hostname", hostport: "cp.example.com", want: false},
+		{name: "real hostname with port", hostport: "cp.example.com:443", want: false},
+		{name: "non-loopback ip", hostport: "10.0.0.5", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isLoopbackHost(tc.hostport); got != tc.want {
+				t.Errorf("isLoopbackHost(%q) = %v, want %v", tc.hostport, got, tc.want)
+			}
+		})
+	}
+}
