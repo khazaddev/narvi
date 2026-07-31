@@ -160,6 +160,75 @@ func TestResilienceScenario_NonIdempotentSetupBoot_NonFatalFailure_VisibleInOutp
 	}
 }
 
+// TestResilienceScenario_RepoAbsentFromWorkspaceMoved_SetupStillReruns proves
+// workspaceMovedFor's own load-bearing "assume moved" default (hooks.go) for
+// a repo genuinely ABSENT from the workspaceMoved map -- not a hand-built map
+// with a key deleted, but the real production mechanism the doc comment
+// names: ComputeWorkspaceMoved only ever emits an entry for a repo present
+// in currentSHAs (boot.DiscoverRepoSHAs's own return shape), and
+// DiscoverRepoSHAs omits a repo entirely when `git rev-parse HEAD` fails for
+// it (the OTHER of the doc comment's two named causes is the repo's
+// directory never existing at all under workspaceDir -- not usable here,
+// since with no directory there would be no setup.sh on disk to prove
+// reran).
+//
+// repo-no-sha's directory here is a real `git init` with zero commits: .git
+// exists (so DiscoverRepoSHAs's own os.Stat(".git") gate passes and it
+// actually shells out to git), but `git rev-parse HEAD` on a repo with no
+// commits yet fails ("ambiguous argument 'HEAD'") -- a realistic
+// production shape (e.g. a session repo cloned/initialized but not yet
+// committed to) that DiscoverRepoSHAs documents itself as silently omitting.
+// The resulting currentSHAs therefore has no "repo-no-sha" key at all, so
+// ComputeWorkspaceMoved (which only ranges over currentSHAs) never emits a
+// workspaceMoved["repo-no-sha"] entry either -- proving the omission
+// genuinely propagates end to end, not merely asserted by construction.
+//
+// Under BootModeRepoImage, EvaluateHook's HookSetup ShouldRun IS
+// workspaceMoved for that repo (hook.go) -- so if workspaceMovedFor's
+// missing-key default were ever flipped from true to false, this repo's
+// setup.sh would be silently skipped instead of rerun. This test is the one
+// place in the suite that actually takes that missing-key branch under
+// repo_image; every other repo_image test (both above in this file, and
+// TestRunHooks_LogsSetupRerunDecision in hooks_test.go) passes a map that
+// already contains an explicit entry for the repo under test.
+func TestResilienceScenario_RepoAbsentFromWorkspaceMoved_SetupStillReruns(t *testing.T) {
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo-no-sha")
+	mkdirAll(t, repoDir)
+	runGit(t, repoDir, "init") // .git exists, but zero commits: rev-parse HEAD fails
+
+	rerunMarker := filepath.Join(workspaceDir, "setup-rerun-marker-no-sha")
+	writeScript(t, filepath.Join(repoDir, "setup.sh"), "touch "+rerunMarker)
+
+	// The real production path (cmd/sandbox-agent/main.go's own
+	// runBootSequence): discover current SHAs over the whole workspace, then
+	// compute workspaceMoved from that set -- never a hand-constructed map.
+	currentSHAs := boot.DiscoverRepoSHAs(workspaceDir, 5*time.Second)
+	if _, ok := currentSHAs["repo-no-sha"]; ok {
+		t.Fatalf("precondition failed: DiscoverRepoSHAs()[repo-no-sha] present, want absent (rev-parse HEAD should fail on a zero-commit repo); got %v", currentSHAs)
+	}
+
+	manifest := boot.ImageManifest{
+		Fingerprint:   "fp-repo-absent-from-sha-set",
+		BuiltRepoShas: map[string]string{"repo-no-sha": "some-built-sha"},
+	}
+	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, currentSHAs)
+	if _, ok := workspaceMoved["repo-no-sha"]; ok {
+		t.Fatalf("precondition failed: ComputeWorkspaceMoved()[repo-no-sha] present, want absent (no current SHA to compare against); got %v", workspaceMoved)
+	}
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo-no-sha", Primary: true}}
+
+	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
+		noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+	if err != nil {
+		t.Fatalf("RunBoot() error = %v, want nil (a repo absent from workspaceMoved must still rerun setup.sh non-fatally, per the safe default)", err)
+	}
+
+	assertFileExists(t, rerunMarker)
+}
+
 // gitRevParseHEAD returns dir's own checked-out HEAD SHA via a real `git
 // rev-parse HEAD` call.
 func gitRevParseHEAD(t *testing.T, dir string) string {
