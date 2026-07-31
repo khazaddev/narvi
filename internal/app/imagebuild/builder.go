@@ -80,10 +80,11 @@ type Builder struct {
 	// codebase, e.g. app/sessionactor's own nil-sourceControl tests) and
 	// gitHubImageBuildToken may be empty (§19.2: deliberately optional,
 	// platform/config.go's own GitHubImageBuildToken doc comment) -- either
-	// missing piece degrades resolveRepoSHAs to a clean, logged error, never
-	// a crash, per §19.2's own "never blocks a spawn" invariant, which this
+	// missing piece degrades resolveRepoSHAs to a clean, logged error,
+	// never a crash, recorded as a failed attempt via the same
+	// retry/backoff path any other resolution failure uses, which this
 	// package's own background loop must honor just as strictly as the
-	// spawn path itself.
+	// claim-time build path itself.
 	sourceControl         ports.SourceControl
 	gitHubImageBuildToken string
 
@@ -324,11 +325,11 @@ func (b *Builder) claimBatch(ctx context.Context) ([]sqlcgen.ImageBuild, error) 
 // credential, a GitHub API failure), the WHOLE attempt is recorded as a
 // failed attempt (never a partial/zero-SHA BuildImage call) and cycles
 // through the SAME EvaluateBackoff retry schedule any other failure uses
-// -- §19.2's own explicit invariant: "Any failure anywhere in this
-// credential-dependent path... is logged and degrades to today's existing
-// retry/backoff behavior -- never a crash, never blocks a spawn." A row
-// naming NO repos (base+runtime only) has nothing to resolve and builds
-// immediately, exactly as before this Step.
+// -- never a crash, and never something that blocks a spawn, since a
+// miss here just leaves the fingerprint's row un-ready and every spawn
+// keeps falling back to the base image exactly as before this Step. A
+// row naming NO repos (base+runtime only) has nothing to resolve and
+// builds immediately, exactly as before this Step.
 func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 	logger := platform.Logger(ctx).With("fingerprint", row.Fingerprint, "attempt_count", row.AttemptCount)
 
@@ -478,13 +479,14 @@ func (b *Builder) recordPermanentFailure(ctx context.Context, logger *slog.Logge
 }
 
 // errGitHubImageBuildTokenNotConfigured and errSourceControlNotConfigured
-// are resolveRepoSHAs' own typed degrade-cleanly reasons (§19.2: "missing/
-// invalid platform credential... is logged and degrades to today's
-// existing retry/backoff behavior") -- named sentinels rather than a bare
-// fmt.Errorf string so a caller/log line names EXACTLY which piece is
-// missing, mirroring this codebase's own "named error, never a bare
-// generic one" convention (internal/platform/config.go's own
-// InvalidHMACSecretError/MissingRequiredEnvError family).
+// are resolveRepoSHAs' own typed degrade-cleanly reasons -- a missing or
+// invalid platform credential is logged and degrades to the same
+// retry/backoff behavior any other resolution failure gets (§19.2) --
+// named sentinels rather than a bare fmt.Errorf string so a caller/log
+// line names EXACTLY which piece is missing, mirroring this codebase's
+// own "named error, never a bare generic one" convention (internal/
+// platform/config.go's own InvalidHMACSecretError/MissingRequiredEnvError
+// family).
 var (
 	errGitHubImageBuildTokenNotConfigured = errors.New("imagebuild: NARVI_GITHUB_IMAGE_BUILD_TOKEN is not configured")
 	errSourceControlNotConfigured         = errors.New("imagebuild: no SourceControl configured")
@@ -750,8 +752,9 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild, st
 
 	current, err := b.resolveRepoSHAs(ctx, repoURLs)
 	if err != nil {
-		// §19.2's own explicit invariant: a credential-dependent failure
-		// here degrades to "try again next tick", never a crash, never any
+		// Same degrade-cleanly contract as attempt's own credential
+		// failure above (§19.2): a credential-dependent failure here just
+		// means try again next tick, never a crash, never any
 		// effect on this fingerprint's own already-ready row -- EXCEPT its
 		// own ordering key: a PERSISTENTLY failing resolution (see this
 		// function's own top doc comment) must still rotate this row to

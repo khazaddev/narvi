@@ -230,15 +230,16 @@ const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 // freshness pump's per-repo tip-SHA resolution, app/imagebuild.Builder's
 // claim-time SHA resolution for a repo-bearing row) are explicitly
 // designed to degrade cleanly on its absence rather than treat a missing
-// value as a boot-time configuration error. §19.2's own words: "Any
-// failure anywhere in this credential-dependent path (missing/invalid
-// platform credential, a GitHub API failure resolving a tip SHA) is
-// logged and degrades to today's existing retry/backoff behavior --
-// never a crash, never blocks a spawn." A deploy that has not yet
-// provisioned this credential simply never refreshes/builds a
-// repo-bearing shared image -- every spawn still falls back to the base
-// image exactly as it always has (§10 Phase 2's own "always fall back to
-// base image on any miss" invariant, unaffected).
+// value as a boot-time configuration error: a missing/invalid credential
+// or a GitHub API failure resolving a tip SHA is logged and recorded as a
+// failed attempt via the SAME retry/backoff path any other resolution
+// failure uses (imagebuild.Builder's resolveRepoSHAs/attempt) -- never a
+// crash, and never something Load itself rejects at startup. A deploy
+// that has not yet provisioned this credential simply never
+// refreshes/builds a repo-bearing shared image -- every spawn still
+// falls back to the base image exactly as it always has (§10 Phase 2's
+// own "always fall back to base image on any miss" invariant,
+// unaffected).
 //
 // How this differs from GitHubBotToken (see that field's own doc comment
 // for its full reasoning): GitHubBotToken is a REQUIRED, already-used,

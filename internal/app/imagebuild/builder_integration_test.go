@@ -586,8 +586,8 @@ func TestRefreshOnce_BaseOnlyReadyRow_NeverConsidered(t *testing.T) {
 }
 
 // TestRefreshOnce_NoCredentialConfigured_DegradesCleanly_OldRefStaysServable
-// proves §19.2's own "never a crash, never blocks a spawn" degrade
-// invariant for the FRESHNESS PUMP specifically (the companion claim-time
+// proves the deliberately-optional credential's degrade-cleanly behavior
+// (§19.2) for the FRESHNESS PUMP specifically (the companion claim-time
 // build case is covered by TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly
 // above): with no platform credential configured, a stale 'ready' row is
 // left completely untouched -- still 'ready', still serving its own OLD
@@ -1283,11 +1283,12 @@ func TestPumpOnce_FailureStreak_FiresAtThresholdNotBefore(t *testing.T) {
 }
 
 // TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly proves
-// Step 42's own explicit degrade invariant (§19.2: "Any failure anywhere
-// in this credential-dependent path (missing/invalid platform
-// credential...) is logged and degrades to today's existing retry/backoff
-// behavior -- never a crash, never blocks a spawn"): a claimed row naming
-// at least one repo, with NO platform GitHub credential configured (the
+// Step 42's own degrade-cleanly design for the deliberately-optional
+// platform credential (§19.2): a missing/invalid credential is logged and
+// recorded as a failed attempt via the same retry/backoff path any other
+// resolution failure uses -- never a crash, never something that blocks
+// a spawn. A claimed row naming at least one repo, with NO platform
+// GitHub credential configured (the
 // Builder built with an empty token, mirroring platform.Config.
 // GitHubImageBuildToken's own documented "optional, empty means not
 // configured" contract), is handled as a clean, well-defined, tested

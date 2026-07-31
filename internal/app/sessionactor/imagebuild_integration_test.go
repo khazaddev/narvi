@@ -312,8 +312,8 @@ func seedReadyImageBuild(ctx context.Context, t *testing.T, store *narvipg.Image
 // the new platform-level GitHub credential (platform.Config.
 // GitHubImageBuildToken) is NOT configured: a cache MISS creates a pending
 // row (scenario (a), re-proved here as part of the full pipeline), the
-// background builder claims it but -- correctly, per §19.2's own explicit
-// "never blocks a spawn" degrade invariant -- cannot resolve any repo's
+// background builder claims it but -- correctly, per §19.2's own
+// deliberately-optional credential design -- cannot resolve any repo's
 // SHA without a configured credential, so it records a clean, retryable
 // failure rather than building with an empty/zero SHA, and a LATER spawn
 // for the identical repo set therefore STILL falls back to the base

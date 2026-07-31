@@ -485,11 +485,18 @@ func TestCreateTurnCore_AlwaysQueue_ConcurrentRequests_AllSucceed(t *testing.T) 
 // StatusAwaitingApproval must be declined -- via httpapi.
 // ErrPlanAwaitingApproval, recognizable through errors.Is -- with ZERO side
 // effects (no turn row, no turn.create audit row), regardless of which
-// CreateTurnPolicy the caller uses. The core's own gate runs BEFORE the
-// policy-gated open-turn check and is not itself policy-dependent; each
-// caller (REST/Slack/Linear/GitHub-bot) maps this one shared outcome onto
-// its own transport-appropriate response (REST's own 409 body, Slack's/
-// Linear's honest reply) -- proved separately at each of those call sites.
+// CreateTurnPolicy the caller uses. Since Finding 3's own follow-up fix
+// (see TestCreateTurnCore_OpenTurnDuringAwaitingApproval_BusyWins below),
+// the core's own gate runs AFTER the policy-gated open-turn check, not
+// before -- this test still passes because none of its subtests seed an
+// open turn, so the open-turn check never short-circuits before the
+// awaiting-plan gate runs; for AlwaysQueue specifically, the open-turn
+// check is skipped entirely (it never runs regardless of an open turn),
+// so this gate is reached and enforced exactly the same way for every
+// policy either way. Each caller (REST/Slack/Linear/GitHub-bot) maps this
+// one shared outcome onto its own transport-appropriate response (REST's
+// own 409 body, Slack's/Linear's honest reply) -- proved separately at
+// each of those call sites.
 func TestCreateTurnCore_AwaitingPlan_OrdinaryTurn_Gated(t *testing.T) {
 	for _, policy := range []CreateTurnPolicy{RejectIfOpen, DropIfOpen, AlwaysQueue} {
 		t.Run(fmt.Sprintf("policy=%d", policy), func(t *testing.T) {

@@ -22,6 +22,7 @@ This project was started after running [OpenInspect](https://github.com/ColeMurr
 | [`docs/TECHNICAL_PLAN.md`](docs/TECHNICAL_PLAN.md) | The full technical specification: architecture, domain model, ports, cross-cutting invariants, wire contracts, feature set, identity/RBAC, the product-prototyping workflow, release review, and the decision inbox. Self-contained. |
 | [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | The work broken into ~65 ordered Steps across 7 phases (0–6), each shippable as one pull request and referencing the technical-plan section that specifies it. |
 | [`docs/design/mockups.html`](docs/design/mockups.html) | Visual specification — nine UI views with numbered design decisions. Open in a browser. |
+| [`docs/environments.md`](docs/environments.md) | Requirements for an Environment's own `setup.sh`/`start.sh` — notably the `setup.sh` idempotency contract every repo must satisfy under warm-boot shared images. |
 
 ## Building it
 
