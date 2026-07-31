@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,6 +20,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	domainimagebuild "github.com/khazaddev/narvi/internal/domain/imagebuild"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -90,6 +89,18 @@ type Builder struct {
 
 	failureStreak metric.Int64Counter
 
+	// permanentlyFailed counts every time a fingerprint is marked
+	// permanently_failed (audit-remediation batch B3 round 2, finding #3) --
+	// a distinct, one-shot signal from failureStreak above: failureStreak
+	// fires repeatedly, forever, for a condition that will never clear on
+	// its own, which is exactly the alert-fatigue problem this counter's
+	// own introduction fixes. permanentlyFailed fires exactly ONCE per
+	// fingerprint (the row is never reclaimed again after this), so an
+	// operator dashboard can alert on it without the "why does this keep
+	// paging me" confusion a repeating failureStreak trip for the same,
+	// un-clearable fingerprint would cause.
+	permanentlyFailed metric.Int64Counter
+
 	// refreshClaimReclaimed counts every time ListReady/ClaimForRefresh
 	// observe a refresh_in_progress row whose claim has gone stale
 	// (audit-remediation batch B2: closes the crash-window gap doc.go used
@@ -139,6 +150,15 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		return nil, fmt.Errorf("imagebuild: construct image_refresh_claim_reclaimed counter: %w", err)
 	}
 
+	permanentlyFailed, err := meter.Int64Counter(
+		"image_build_permanently_failed",
+		metric.WithDescription("Number of image-build fingerprints marked permanently failed (a repo url naming an unsupported source-control host) and excluded from any further retry (audit-remediation batch B3 round 2)."),
+		metric.WithUnit("{fingerprint}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("imagebuild: construct image_build_permanently_failed counter: %w", err)
+	}
+
 	return &Builder{
 		store:                 store,
 		pool:                  pool,
@@ -148,6 +168,7 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		gitHubImageBuildToken: gitHubImageBuildToken,
 		failureStreak:         failureStreak,
 		refreshClaimReclaimed: refreshClaimReclaimed,
+		permanentlyFailed:     permanentlyFailed,
 	}, nil
 }
 
@@ -323,6 +344,35 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 	if len(repoURLs) > 0 {
 		resolved, err := b.resolveRepoSHAs(ctx, repoURLs)
 		if err != nil {
+			// Audit-remediation batch B3: an unsupported-host error is a
+			// PERMANENT condition (this fingerprint's own repo url will
+			// never resolve, no matter how many times it is retried) --
+			// escalated to Error, with a message that says so explicitly,
+			// rather than folding it into the same Warn-level "might just
+			// be a transient blip" message every other resolution failure
+			// (missing credential, GitHub API error) gets. Still recorded
+			// as a failed attempt via the SAME recordFailure/backoff path
+			// as every other resolveRepoSHAs failure -- see
+			// resolveRepoSHAs' own doc comment for why this codebase does
+			// not (yet) have a distinct terminal "permanently failed, stop
+			// retrying" status to route this to instead.
+			var hostErr *reposource.UnsupportedRepoHostError
+			if errors.As(err, &hostErr) {
+				// Audit-remediation batch B3 round 2 (finding #3): this is a
+				// PERMANENT condition -- no amount of retrying ever makes an
+				// unsupported host become supported -- so it is recorded via
+				// recordPermanentFailure (status stays 'failed', but
+				// permanently_failed=true, next_retry_at cleared), NOT the
+				// same recordFailure/EvaluateBackoff exponential-backoff path
+				// a transient failure below uses. This is what stops the
+				// fingerprint cycling failed -> next_retry_at -> claimed ->
+				// failed forever, and stops re-tripping the
+				// image_build_failure_streak alert on every subsequent tick
+				// for a condition no retry will ever clear.
+				logger.Error("imagebuild: claim-time SHA resolution failed: repo url names an unsupported source-control host -- PERMANENT, will not resolve on any retry until the session's repo url is fixed; recording as a permanently failed attempt, excluded from any further retry", "error", err, "repo_count", len(repoURLs))
+				b.recordPermanentFailure(ctx, logger, row)
+				return
+			}
 			logger.Warn("imagebuild: claim-time SHA resolution failed; recording as a failed attempt", "error", err, "repo_count", len(repoURLs))
 			b.recordFailure(ctx, logger, row)
 			return
@@ -403,6 +453,30 @@ func (b *Builder) recordFailure(ctx context.Context, logger *slog.Logger, row sq
 	}
 }
 
+// recordPermanentFailure implements this file's own terminal "give up"
+// path (audit-remediation batch B3 round 2, finding #3): unlike
+// recordFailure above, no domain/imagebuild.EvaluateBackoff decision is
+// ever computed here -- there is no retry schedule to compute, since this
+// fingerprint's own repo url names a source-control host this deployment's
+// SourceControl adapter can never resolve against, no matter how long a
+// backoff waits. Fires the image_build_permanently_failed counter exactly
+// ONCE for this call (never repeatedly -- see that metric's own doc
+// comment on Builder), then records permanently_failed=true via
+// b.store.RecordPermanentFailure, which ListDueImageBuilds' own
+// "AND permanently_failed = false" guard then excludes from every future
+// tick until an operator fixes the underlying repo config.
+func (b *Builder) recordPermanentFailure(ctx context.Context, logger *slog.Logger, row sqlcgen.ImageBuild) {
+	b.permanentlyFailed.Add(ctx, 1)
+
+	if _, err := b.store.RecordPermanentFailure(ctx, row.Fingerprint); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			logger.Warn("imagebuild: record permanent failure no-op: row no longer building")
+			return
+		}
+		platform.Logger(ctx).Error("imagebuild: record permanent failure failed", "error", err, "fingerprint", row.Fingerprint)
+	}
+}
+
 // errGitHubImageBuildTokenNotConfigured and errSourceControlNotConfigured
 // are resolveRepoSHAs' own typed degrade-cleanly reasons (§19.2: "missing/
 // invalid platform credential... is logged and degrades to today's
@@ -431,6 +505,31 @@ var (
 // reproducible logging/test behavior -- resolution outcome does not
 // depend on order (each repo's ResolveBranchSHA call is independent), so
 // this is not a correctness requirement, only a readability one.
+//
+// # Host check (audit-remediation batch B3)
+//
+// b.sourceControl is always internal/adapters/outbound/githubapi's real
+// adapter in production (ports.GitHubSourceControlHost's own doc
+// comment) -- but nothing about a repo_urls entry's own shape guarantees
+// its URL actually names github.com: reposource.ValidateRepoURL (already
+// run upstream, at session-config-ingestion time) accepts any https host,
+// and this codebase's own fixtures already exercise non-GitHub URLs
+// (e.g. httpapi/scmcredentials_integration_test.go's gitlab.example.com).
+// Before this batch, a GitLab (or any other) repo URL's owner/repo path
+// was extracted and handed straight to ResolveBranchSHA regardless --
+// either failing confusingly against GitHub's real API, or worse,
+// SUCCEEDING against an unrelated public GitHub repo that happens to
+// share that owner/repo path, whose SHA would then be persisted as this
+// fingerprint's own built_repo_shas and passed to BuildImage as the
+// commit to check the GitLab (or other) URL out AT. reposource.
+// CheckRepoHost below closes this per-repo, BEFORE ParseOwnerRepo ever
+// derives an owner/repo or a single ResolveBranchSHA call is made for
+// it -- returning a *reposource.UnsupportedRepoHostError a caller can
+// distinguish from every other failure this function can return (see
+// attempt's/attemptRefresh's own call sites: both escalate logging for
+// this exact error, since -- unlike a missing credential or a transient
+// GitHub API error -- an unsupported host is a PERMANENT condition no
+// retry will ever clear).
 func (b *Builder) resolveRepoSHAs(ctx context.Context, repoURLs map[string]string) (map[string]string, error) {
 	if b.gitHubImageBuildToken == "" {
 		return nil, errGitHubImageBuildTokenNotConfigured
@@ -448,7 +547,12 @@ func (b *Builder) resolveRepoSHAs(ctx context.Context, repoURLs map[string]strin
 	resolved := make(map[string]string, len(repoURLs))
 	for _, name := range names {
 		repoURL := repoURLs[name]
-		owner, repoName, err := parseOwnerRepo(repoURL)
+
+		if err := reposource.CheckRepoHost(repoURL, ports.SupportedSourceControlHosts()...); err != nil {
+			return nil, fmt.Errorf("repo %q: %w", name, err)
+		}
+
+		owner, repoName, err := reposource.ParseOwnerRepo(repoURL)
 		if err != nil {
 			return nil, fmt.Errorf("parse owner/repo from %q: %w", repoURL, err)
 		}
@@ -473,28 +577,12 @@ func (b *Builder) resolveRepoSHAs(ctx context.Context, repoURLs map[string]strin
 	return resolved, nil
 }
 
-// parseOwnerRepo extracts (owner, repo) from a repo clone URL's own path
-// -- mirrors internal/app/sessionactor/pushpr.go's own identical helper
-// exactly (a small, deliberately duplicated parse rather than an
-// exported, shared one: this package and sessionactor have no other
-// coupling, and contractdrift.go's own doc comment already establishes
-// the precedent of re-deriving this kind of thing independently rather
-// than threading a shared intermediate value across otherwise-unrelated
-// features).
-func parseOwnerRepo(rawURL string) (owner, repo string, err error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", "", fmt.Errorf("parse repo clone url %q: %w", rawURL, err)
-	}
-
-	trimmed := strings.Trim(parsed.Path, "/")
-	trimmed = strings.TrimSuffix(trimmed, ".git")
-	parts := strings.Split(trimmed, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("repo clone url %q does not have an /owner/repo path", rawURL)
-	}
-	return parts[0], parts[1], nil
-}
+// parseOwnerRepo used to live here as a byte-for-byte fork of
+// internal/app/sessionactor/pushpr.go's own identical helper -- audit-
+// remediation batch B3 moved both into
+// internal/domain/reposource.ParseOwnerRepo and deleted both forks. See
+// that function's own doc comment for the full rationale; resolveRepoSHAs
+// above now calls it directly.
 
 // RefreshOnce runs exactly one freshness-pump tick (§19.2): for up to
 // refreshBatchSize SHARED (repo-bearing) 'ready' image_builds rows,
@@ -669,7 +757,20 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild, st
 		// function's own top doc comment) must still rotate this row to
 		// the back of ListReadyImageBuilds' own next window, or it would
 		// permanently occupy the front of every tick's batch.
-		logger.Warn("imagebuild: refresh: resolve current tip SHAs failed; will retry next tick", "error", err)
+		//
+		// Audit-remediation batch B3: an unsupported-host error is escalated
+		// to Error (not Warn) with an explicit "permanent" callout, exactly
+		// mirroring attempt's own equivalent branch -- see that branch's own
+		// comment and resolveRepoSHAs' own doc comment for why this still
+		// follows the SAME "touch and retry next tick" path regardless
+		// (no distinct terminal failure status exists to route it to
+		// instead), rather than treating it any differently mechanically.
+		var hostErr *reposource.UnsupportedRepoHostError
+		if errors.As(err, &hostErr) {
+			logger.Error("imagebuild: refresh: resolve current tip SHAs failed: repo url names an unsupported source-control host -- PERMANENT, will not resolve on any retry until the session's repo url is fixed; will keep retrying next tick regardless", "error", err)
+		} else {
+			logger.Warn("imagebuild: refresh: resolve current tip SHAs failed; will retry next tick", "error", err)
+		}
 		b.touchChecked(ctx, logger, row.Fingerprint)
 		return
 	}

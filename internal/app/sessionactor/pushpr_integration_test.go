@@ -5,6 +5,7 @@ package sessionactor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -838,5 +839,102 @@ func TestHandleSandboxEvent_PushComplete_DisabledCreator_SkipsPRCreation(t *test
 	}
 	if len(rows) != 0 {
 		t.Errorf("artifact count = %d, want 0 (no PR ever created for a disabled creator's session)", len(rows))
+	}
+}
+
+// TestHandleSandboxEvent_PushComplete_UnsupportedRepoHost_SkipsPRCreation is
+// audit-remediation batch B3 round 2's own regression test for findings
+// #2/#5 (MEDIUM/HIGH): createPRBestEffort used to derive owner/repo via
+// reposource.ParseOwnerRepo and call a.sourceControl.CreatePR (a WRITE
+// operation, the real GitHub-only adapter in production) with NO
+// reposource.CheckRepoHost gate at all -- the third of what should have
+// been a uniformly-guarded set of call sites. A session whose repo names a
+// non-GitHub host (a GitLab URL passes reposource.ValidateRepoURL -- it
+// accepts any https host) must now be rejected BEFORE ever deriving an
+// owner/repo or calling CreatePR, exactly mirroring imageresolve.go's/
+// imagebuild.Builder's own already-tested behavior -- otherwise, in
+// production, this would open a REAL pull request against a
+// coincidentally-matching, unrelated GitHub owner/repo using the session
+// creator's real OAuth token.
+func TestHandleSandboxEvent_PushComplete_UnsupportedRepoHost_SkipsPRCreation(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	userStore := narvipg.NewUserStore(pool)
+	identityStore := narvipg.NewIdentityStore(pool)
+
+	user, err := userStore.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: fmt.Sprintf("pr-unsupported-host-test-%d@example.com", time.Now().UnixNano()),
+		DisplayName:  "PR Unsupported Host Test User",
+		Role:         sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	const plaintextToken = "gh-fake-oauth-token-unsupported-host"
+	encrypted, err := platform.EncryptToken(testTokenEncryptionKey, []byte(plaintextToken))
+	if err != nil {
+		t.Fatalf("EncryptToken: %v", err)
+	}
+	email := user.PrimaryEmail
+	if _, err := identityStore.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID:               user.ID,
+		Provider:             sqlcgen.IdentityProviderGithub,
+		ExternalID:           fmt.Sprintf("pr-unsupported-host-test-external-%d", time.Now().UnixNano()),
+		Email:                &email,
+		EmailVerified:        true,
+		LinkedVia:            sqlcgen.IdentityLinkedViaAdmin,
+		AccessTokenEncrypted: encrypted,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	sessionID := createTestSessionWithRepos(ctx, t, pool, user.ID,
+		"repo1", "https://gitlab.example.com/acme/repo1.git", "feature-x")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	// A SourceControl that would fail the test outright if CreatePR were
+	// ever actually invoked -- this test's whole point is that it must
+	// NOT be, for a repo url naming a host other than github.com.
+	sourceControl := &fakeSourceControl{nextErr: errors.New("fakeSourceControl: CreatePR must never be called for a non-GitHub host")}
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "")
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "push_complete",
+		Gen:  1,
+		Raw:  pushCompleteRaw(t, sessionID.String(), 1, "repo1", "feature-x", "abc123"),
+	})
+
+	// Prove a negative (mirrors TestHandleSandboxEvent_PushComplete_
+	// DisabledCreator_SkipsPRCreation's own identical precedent): give
+	// createPRBestEffort's own post-commit-triggered goroutine every
+	// reasonable chance to have already run (and wrongly called CreatePR)
+	// before asserting it did not.
+	time.Sleep(300 * time.Millisecond)
+	if got := sourceControl.callCount(); got != 0 {
+		t.Errorf("CreatePR called %d times, want 0 (unsupported repo-url host must deny before ever deriving owner/repo or calling CreatePR)", got)
+	}
+
+	artifactStore := narvipg.NewArtifactStore(pool)
+	rows, err := artifactStore.ListForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("list artifacts: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Errorf("artifact count = %d, want 0 (no PR ever created for an unsupported repo-url host)", len(rows))
 	}
 }

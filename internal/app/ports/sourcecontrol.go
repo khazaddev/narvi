@@ -2,6 +2,53 @@ package ports
 
 import "context"
 
+// GitHubSourceControlHost is the ONLY source-control host this codebase's
+// one real SourceControl implementation (internal/adapters/outbound/
+// githubapi) ever actually queries -- production wiring always talks to
+// GitHub's own real API (api.github.com) regardless of what host a
+// session's own repo URL names. Shared (audit-remediation batch B3) by
+// every caller that must reject a repo URL naming a host this
+// deployment's configured adapter cannot serve: app/imagebuild.Builder.
+// resolveRepoSHAs (before ever calling ResolveBranchSHA -- otherwise a
+// GitLab/other repo URL's owner/repo path silently resolves against
+// GitHub's real API for a coincidentally-matching path) and app/
+// sessionactor's own warm-boot repo-access gate (imageresolve.go's
+// repoAccessAllowedForSpawn, before ever deriving an owner/repo or
+// spending a CheckRepoAccess call on it). Both used to hand-roll this
+// same check independently (one had it, the other didn't) -- unified here
+// since both are, structurally, asking the exact same question: "does
+// this URL name the host our one wired SourceControl adapter actually
+// talks to?" via reposource.CheckRepoHost.
+//
+// Update this (or make it configurable per-adapter) the day a second
+// SourceControl implementation (e.g. GitLab) is actually wired -- see the
+// SourceControl interface's own doc comment on why this port
+// intentionally stays adapter-agnostic in its signatures; this one const
+// is a deliberate, narrow, explicitly-called-out exception, not a
+// precedent for leaking GitHub specifics into this port more broadly.
+const GitHubSourceControlHost = "github.com"
+
+// SupportedSourceControlHosts returns the full allowlist every
+// reposource.CheckRepoHost call site in this codebase must use -- audit-
+// remediation batch B3 round 2 (finding #7: two independently-maintained
+// call sites -- app/imagebuild.Builder.resolveRepoSHAs and app/
+// sessionactor's own warm-boot repo-access gate, imageresolve.go's
+// repoAccessAllowedForSpawn -- happened to reference the SAME
+// GitHubSourceControlHost constant today, but nothing structurally
+// prevented one of them from being edited to accept an extra host (e.g. a
+// future GitLab rollout, or a careless copy-paste) without the other
+// following along, silently reopening exactly the drift this whole
+// constant exists to close. Both call sites now call THIS function --
+// never GitHubSourceControlHost directly -- so there is exactly one place
+// in the codebase where "which hosts can this deployment's wired
+// SourceControl actually serve" is decided; a future second adapter (e.g.
+// GitLab) is wired by changing this one function's own return value, and
+// every caller picks it up identically, by construction, not by
+// convention.
+func SupportedSourceControlHosts() []string {
+	return []string{GitHubSourceControlHost}
+}
+
 // CreatePRSpec is what SourceControl.CreatePR needs to open a pull
 // request. Owner/Repo/Head/Base are generic source-control concepts, not
 // GitHub API field names -- nothing GitHub-specific leaks into this

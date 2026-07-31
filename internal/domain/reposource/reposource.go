@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strings"
 )
 
 // Sentinel errors the validators below can return, each naming a distinct
@@ -297,3 +298,118 @@ func (e *InvalidRemoteNameError) Error() string {
 }
 
 func (e *InvalidRemoteNameError) Unwrap() error { return e.Reason }
+
+// ParseOwnerRepo extracts (owner, repo) from a repo clone URL's own path,
+// generic across the https://<host>/<owner>/<repo>[.git] shape common to
+// GitHub/GitLab/Bitbucket alike -- deliberately host-agnostic: it never
+// inspects rawURL's host at all, so a caller that also needs to reject an
+// unsupported host calls CheckRepoHost separately (below) rather than
+// relying on this function to do it implicitly. ports.CreatePRSpec.Owner/
+// Repo (internal/app/sessionactor/pushpr.go's own call site) are generic
+// source-control concepts for exactly this reason -- this Step invents no
+// GitHub-specific parsing.
+//
+// Audit-remediation batch B3 moved this here from what used to be two
+// byte-for-byte-identical forks -- internal/app/imagebuild/builder.go's
+// own parseOwnerRepo and internal/app/sessionactor/pushpr.go's own
+// parseOwnerRepo -- both now deleted, both call sites updated to call
+// this one instead. The fork was the bug: a future correctness fix to
+// owner/repo extraction (nested GitLab groups, a self-hosted host with a
+// path prefix, aligning the ".git" trim with imagebuild.NormalizeRepoURL's
+// own documented ".git"-collision caveat) had to be found and applied in
+// two unrelated packages, with nothing linking them, before this move.
+func ParseOwnerRepo(rawURL string) (owner, repo string, err error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", "", fmt.Errorf("reposource: parse repo clone url %q: %w", rawURL, err)
+	}
+
+	trimmed := strings.Trim(parsed.Path, "/")
+	trimmed = strings.TrimSuffix(trimmed, ".git")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("reposource: repo clone url %q does not have an /owner/repo path", rawURL)
+	}
+	return parts[0], parts[1], nil
+}
+
+// ErrRepoHostNotSupported means a candidate repo URL's host is not one of
+// the hosts CheckRepoHost was called with -- distinct from
+// ErrURLNotParseable/ErrURLSchemeNotHTTPS/ErrURLNoHost above (all of
+// which mean the URL itself is malformed): a URL rejected via
+// ErrRepoHostNotSupported is a perfectly well-formed https URL that
+// simply names a source-control host the caller's configured adapter
+// roster does not serve (e.g. a GitLab URL reaching a deployment that
+// only ever wires the GitHub adapter). See UnsupportedRepoHostError's own
+// doc comment for why callers must be able to tell the two apart.
+var ErrRepoHostNotSupported = errors.New("reposource: repo url names a source-control host that is not supported here")
+
+// UnsupportedRepoHostError reports a single repo URL CheckRepoHost
+// rejected because its host was not in the caller-supplied allowlist --
+// always wraps ErrRepoHostNotSupported. Deliberately a DIFFERENT type
+// from InvalidRepoURLError (which CheckRepoHost itself still returns,
+// unchanged, for a URL that fails to parse at all -- see CheckRepoHost's
+// own doc comment): a caller (e.g. imagebuild.Builder.resolveRepoSHAs)
+// must be able to tell "this URL is malformed" (ValidateRepoURL's own
+// concern -- typically a validation bug or injection attempt this
+// deployment already guards against upstream) apart from "this URL is
+// well-formed but names a host this deployment has no adapter for" (a
+// config/data mismatch -- e.g. a GitLab repo URL reaching a GitHub-only
+// build/resolution path), because the right response differs: the
+// former should never reach this far in a correctly-validated system;
+// the latter is an expected, PERMANENT condition for a repo this
+// deployment was never going to be able to resolve against in the first
+// place, no matter how many times it is retried.
+type UnsupportedRepoHostError struct {
+	// URL is the offending URL, verbatim.
+	URL string
+	// Host is the URL's own parsed host (net/url.URL.Host), verbatim --
+	// guaranteed not to case-insensitively match any entry in
+	// AllowedHosts.
+	Host string
+	// AllowedHosts is the allowlist CheckRepoHost was called with, kept
+	// here so a caller/log line can report exactly what WAS acceptable.
+	AllowedHosts []string
+}
+
+func (e *UnsupportedRepoHostError) Error() string {
+	return fmt.Sprintf("reposource: repo url %q names host %q, which is not a supported source-control host (supported: %v)", e.URL, e.Host, e.AllowedHosts)
+}
+
+func (e *UnsupportedRepoHostError) Unwrap() error { return ErrRepoHostNotSupported }
+
+// CheckRepoHost reports whether rawURL's own host (net/url.URL.Host,
+// compared case-insensitively, matching git host-name conventions) is
+// exactly one of allowedHosts. This is the shared implementation behind
+// both app/imagebuild.Builder.resolveRepoSHAs' pre-resolution host gate
+// and app/sessionactor's own warm-boot repo-access gate
+// (imageresolve.go's repoAccessAllowedForSpawn) -- audit-remediation
+// batch B3 unifying what used to be either a hand-rolled `url.Parse` +
+// `strings.EqualFold` check (imageresolve.go's own repoURLHostAllowed) or
+// no check at all (resolveRepoSHAs, before this batch -- exactly the
+// silent-wrong-host-resolution class an audit found live: a GitLab repo
+// URL's owner/repo path silently queried against GitHub's real API for a
+// coincidentally-matching path).
+//
+// A rawURL that fails to parse at all returns *InvalidRepoURLError
+// wrapping ErrURLNotParseable -- the SAME malformed-URL error
+// ValidateRepoURL itself returns for this case, deliberately: a caller
+// that already ran ValidateRepoURL upstream, or that wants to report a
+// parse failure identically regardless of which reposource function
+// caught it, can errors.Is/errors.As for the one sentinel either function
+// might return. A rawURL that parses but names a host outside
+// allowedHosts returns *UnsupportedRepoHostError instead -- a distinct
+// type, not a third case folded into InvalidRepoURLError (see that
+// type's own doc comment for why).
+func CheckRepoHost(rawURL string, allowedHosts ...string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return &InvalidRepoURLError{URL: rawURL, Reason: ErrURLNotParseable}
+	}
+	for _, allowed := range allowedHosts {
+		if strings.EqualFold(parsed.Host, allowed) {
+			return nil
+		}
+	}
+	return &UnsupportedRepoHostError{URL: rawURL, Host: parsed.Host, AllowedHosts: allowedHosts}
+}

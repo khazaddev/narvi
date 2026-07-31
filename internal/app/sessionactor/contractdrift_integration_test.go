@@ -592,6 +592,72 @@ func TestCheckContractDrift_NoUsableGitHubToken_StillSpawnsSuccessfully(t *testi
 	}
 }
 
+// TestCheckContractDrift_UnsupportedRepoHost_SkipsDriftCheck is audit-
+// remediation batch B3 round 2's own regression test for findings #1/#6
+// (HIGH): checkContractDriftForRepo used to derive owner/repo via
+// reposource.ParseOwnerRepo and call a.sourceControl.ResolveBranchSHA/
+// ResolveContractsFingerprint (the real GitHub-only adapter in production)
+// with NO reposource.CheckRepoHost gate at all -- unlike
+// imageresolve.go's repoAccessAllowedForSpawn and imagebuild.Builder.
+// resolveRepoSHAs, which this same batch already gated. A mock-configured
+// Environment naming a repo url on a non-GitHub host (a GitLab URL passes
+// reposource.ValidateRepoURL -- it accepts any https host) must now be
+// rejected BEFORE ever deriving an owner/repo or spending a
+// ResolveBranchSHA/ResolveContractsFingerprint call on it, exactly
+// mirroring the other two gates' own already-tested behavior.
+func TestCheckContractDrift_UnsupportedRepoHost_SkipsDriftCheck(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	environmentID := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-unsupported-host-drift")
+	sessionID := createTestSessionWithRepoAndEnvironment(ctx, t, pool, creator, environmentID,
+		"repo-unsupported-host", "https://gitlab.example.com/acme/repo-unsupported-host.git", "main")
+
+	// A SourceControl that would fail the test outright if either method
+	// were ever actually invoked -- this test's whole point is that
+	// neither must be, for a repo url naming a host other than github.com.
+	sourceControl := &fakeSourceControl{
+		nextSHAErr:         errors.New("fakeSourceControl: ResolveBranchSHA must never be called for a non-GitHub host"),
+		nextFingerprintErr: errors.New("fakeSourceControl: ResolveContractsFingerprint must never be called for a non-GitHub host"),
+	}
+	provider := &fakeSpawnProvider{nextRef: ports.SandboxRef{ProviderID: "provider-unsupported-host-drift"}}
+	r := newImageBuildTestRegistry(t, ctx, pool, provider, sourceControl)
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	turnStore := narvipg.NewTurnStore(pool)
+	createPendingTurn(ctx, t, turnStore, sessionID, "do the thing")
+
+	before := readContractDriftDetected(ctx, t, otelReader)
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	sendEnsureDispatched(ctx, t, a)
+
+	waitUntil(t, 5*time.Second, func() bool { return provider.callCount() == 1 })
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	waitUntil(t, 5*time.Second, func() bool {
+		row, getErr := sandboxStore.Get(ctx, sessionID)
+		return getErr == nil && sqlcgen.SandboxStatus(row.Status) == sqlcgen.SandboxStatusConnecting
+	})
+
+	if got := sourceControl.shaCallCount(); got != 0 {
+		t.Errorf("ResolveBranchSHA call count = %d, want 0 (unsupported repo-url host must deny before ever deriving owner/repo or resolving)", got)
+	}
+	if got := sourceControl.fingerprintCallCount(); got != 0 {
+		t.Errorf("ResolveContractsFingerprint call count = %d, want 0 (unsupported repo-url host must deny before ever deriving owner/repo or resolving)", got)
+	}
+	if _, err := narvipg.NewContractDriftStore(pool).Get(ctx, "acme/repo-unsupported-host@main"); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("contract_drift_snapshots row: err = %v, want pgx.ErrNoRows (never written for an unsupported repo-url host)", err)
+	}
+	if after := readContractDriftDetected(ctx, t, otelReader); after != before {
+		t.Errorf("contract_drift_detected counter delta = %d, want 0 (nothing to check for an unsupported repo-url host)", after-before)
+	}
+}
+
 // --- Creator disabled/role recheck (audit finding, cross-step: this
 // package's own CheckCreatorGuard, githubtoken.go) ---
 

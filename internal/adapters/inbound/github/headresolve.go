@@ -114,9 +114,13 @@ func resolveIssueCommentHead(ctx context.Context, logger *slog.Logger, resolver 
 
 // splitOwnerRepo splits a GitHub "full_name" (mention.RepoFullName, always
 // GitHub's own top-level repository.full_name, "<owner>/<repo>") into its
-// owner/repo halves. Deliberately simpler than internal/app/sessionactor's
-// own parseOwnerRepo (which parses a full git clone URL instead): GitHub's
-// full_name is already exactly this shape, nothing else to strip.
+// owner/repo halves. Deliberately simpler than
+// internal/domain/reposource.ParseOwnerRepo (which parses a full git clone
+// URL instead -- audit-remediation batch B3 moved that function here from
+// what used to be two forks in internal/app/sessionactor and
+// internal/app/imagebuild, so this doc comment now names its real, current
+// home): GitHub's full_name is already exactly this shape, nothing else to
+// strip.
 func splitOwnerRepo(fullName string) (owner, repo string, ok bool) {
 	parts := strings.SplitN(fullName, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {

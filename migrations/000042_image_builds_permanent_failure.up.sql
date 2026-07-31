@@ -1,0 +1,39 @@
+-- Audit-remediation batch B3 round 2 (finding #3, MEDIUM): before this
+-- migration, EVERY recorded failure for a row -- including one whose own
+-- repo_urls entry names a host reposource.UnsupportedRepoHostError reports
+-- (a PERMANENT condition: this fingerprint's repo url will never resolve,
+-- no matter how many times it is retried, since nothing about retrying
+-- makes an unsupported host become supported) -- went through the exact
+-- same RecordImageBuildFailure / domain/imagebuild.EvaluateBackoff
+-- exponential-backoff path a transient network blip uses. builder.go's own
+-- attempt/attemptRefresh already logged this exact case as "PERMANENT,
+-- will not resolve on any retry" at Error level, but nothing ever stopped
+-- scheduling the next retry anyway: the fingerprint cycled
+-- failed -> next_retry_at (capped at ImageBuildBackoffMax) -> claimed ->
+-- failed again, forever, and once attempt_count crossed
+-- ImageBuildStreakThreshold, every subsequent tick re-tripped the
+-- image_build_failure_streak alert for a condition no retry could ever
+-- clear -- needless permanent churn/paging until a human noticed and fixed
+-- the session's own repo config.
+--
+-- permanently_failed gives PumpOnce's own ListDueImageBuilds poll query a
+-- genuine terminal "give up" signal, orthogonal to status (which stays
+-- 'failed' -- this is not a new enum value: see this migration's own
+-- rejected-alternative note below): a row marked permanently_failed is
+-- simply excluded from ever being reclaimed again, by any tick, on any pod,
+-- until an operator fixes the underlying repo url and manually clears this
+-- flag (there is deliberately no automated path back from true to false --
+-- exactly like a repo url typo needs a human to notice and fix, no retry
+-- schedule can do that for them).
+--
+-- Deliberately a boolean column, not a new image_build_status enum value
+-- (e.g. 'permanently_failed'): PostgreSQL forbids using a value added via
+-- ALTER TYPE ... ADD VALUE inside the SAME transaction/statement batch
+-- that added it, which would force a second migration (or careful
+-- multi-transaction handling) for no real benefit here -- status='failed'
+-- remains entirely accurate (a permanently-failed row genuinely IS
+-- failed, in every sense the rest of this codebase already checks
+-- status='failed' for), and this one additional boolean is both simpler
+-- and immediately usable in the very same migration/query set that
+-- introduces it.
+ALTER TABLE image_builds ADD COLUMN permanently_failed BOOLEAN NOT NULL DEFAULT false;

@@ -428,3 +428,167 @@ func TestValidateRemoteName(t *testing.T) {
 		})
 	}
 }
+
+// TestParseOwnerRepo is table-driven over the shapes this codebase's two
+// original, byte-for-byte-identical forks (internal/app/imagebuild/
+// builder.go's own parseOwnerRepo and internal/app/sessionactor/
+// pushpr.go's own parseOwnerRepo, both deleted by audit-remediation batch
+// B3 in favor of this one shared reposource.ParseOwnerRepo) each already
+// had their own pre-existing test coverage for: a plain https URL,
+// with/without a trailing ".git" suffix, with/without a trailing slash, a
+// non-GitHub host parsed generically (ParseOwnerRepo itself is
+// deliberately host-agnostic -- see its own doc comment; a caller that
+// also needs to reject an unsupported host calls CheckRepoHost
+// separately, proven below), and the malformed-input shapes (too few/too
+// many path segments, an empty path, an unparseable URL) that must error
+// rather than silently return a garbage owner/repo.
+func TestParseOwnerRepo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		url       string
+		wantOwner string
+		wantRepo  string
+		wantErr   bool
+	}{
+		{"plain https", "https://github.com/khazaddev/narvi", "khazaddev", "narvi", false},
+		{"dot-git suffix", "https://github.com/khazaddev/narvi.git", "khazaddev", "narvi", false},
+		{"trailing slash", "https://github.com/khazaddev/narvi/", "khazaddev", "narvi", false},
+		{"gitlab host (generic parsing)", "https://gitlab.com/some-group/some-repo.git", "some-group", "some-repo", false},
+		{"too few path segments", "https://github.com/khazaddev", "", "", true},
+		{"too many path segments", "https://github.com/khazaddev/narvi/extra", "", "", true},
+		{"empty path", "https://github.com/", "", "", true},
+		{"malformed url", "://not a url", "", "", true},
+		// Audit-remediation batch B3 round 2 (finding #8): ParseOwnerRepo's
+		// own doc comment explicitly flags a future ".git"-trim correctness
+		// fix (aligning with NormalizeRepoURL's own documented ".git"
+		// collision caveat) as an anticipated edit to this exact function --
+		// these two cases exercise the guard clause (parts[0] == "" ||
+		// parts[1] == "") that fix must not regress: a future edit that
+		// trims ".git" PER-SEGMENT (rather than on the whole trimmed path,
+		// as today) could plausibly start returning owner="khazaddev",
+		// repo="" for the first case instead of erroring.
+		{"trailing .git with no repo segment (empty repo after trim)", "https://github.com/khazaddev/.git", "", "", true},
+		{"embedded double slash (empty owner segment)", "https://github.com//narvi", "", "", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			owner, repo, err := reposource.ParseOwnerRepo(tc.url)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ParseOwnerRepo(%q) = (%q, %q, nil), want an error", tc.url, owner, repo)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseOwnerRepo(%q) unexpected error: %v", tc.url, err)
+			}
+			if owner != tc.wantOwner || repo != tc.wantRepo {
+				t.Errorf("ParseOwnerRepo(%q) = (%q, %q), want (%q, %q)", tc.url, owner, repo, tc.wantOwner, tc.wantRepo)
+			}
+		})
+	}
+}
+
+// TestCheckRepoHost proves the shared host-allowlist check audit-
+// remediation batch B3 adds: a repo URL naming an allowed host passes; a
+// well-formed repo URL naming a host NOT in the allowlist is rejected via
+// the DISTINCT *UnsupportedRepoHostError type (never confused with a
+// malformed-URL rejection); and a URL that fails to parse at all is
+// rejected via the SAME *InvalidRepoURLError/ErrURLNotParseable
+// ValidateRepoURL itself already returns for that case -- proving a
+// caller really can tell "malformed URL" and "unsupported host" apart via
+// errors.As on two different concrete types.
+func TestCheckRepoHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		url          string
+		allowedHosts []string
+		wantErr      bool
+		wantHostErr  bool // wantErr && this: expect *UnsupportedRepoHostError specifically
+	}{
+		{
+			name:         "github.com is allowed",
+			url:          "https://github.com/acme/widgets",
+			allowedHosts: []string{"github.com"},
+		},
+		{
+			name:         "host match is case-insensitive",
+			url:          "https://GitHub.COM/acme/widgets",
+			allowedHosts: []string{"github.com"},
+		},
+		{
+			name:         "one of several allowed hosts matches",
+			url:          "https://gitlab.example.com/acme/widgets",
+			allowedHosts: []string{"github.com", "gitlab.example.com"},
+		},
+		{
+			name:         "gitlab host is rejected when only github.com is allowed",
+			url:          "https://gitlab.example.com/acme/widgets",
+			allowedHosts: []string{"github.com"},
+			wantErr:      true,
+			wantHostErr:  true,
+		},
+		{
+			name:         "no allowed hosts at all rejects everything",
+			url:          "https://github.com/acme/widgets",
+			allowedHosts: nil,
+			wantErr:      true,
+			wantHostErr:  true,
+		},
+		{
+			name:         "unparseable url is rejected as malformed, not as an unsupported host",
+			url:          "https://%zz",
+			allowedHosts: []string{"github.com"},
+			wantErr:      true,
+			wantHostErr:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := reposource.CheckRepoHost(tc.url, tc.allowedHosts...)
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("CheckRepoHost(%q, %v) = %v, want nil", tc.url, tc.allowedHosts, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("CheckRepoHost(%q, %v) = nil, want an error", tc.url, tc.allowedHosts)
+			}
+
+			var hostErr *reposource.UnsupportedRepoHostError
+			var urlErr *reposource.InvalidRepoURLError
+			gotHostErr := errors.As(err, &hostErr)
+			gotURLErr := errors.As(err, &urlErr)
+			if gotHostErr == gotURLErr {
+				t.Fatalf("CheckRepoHost(%q, %v) = %v, want exactly one of *UnsupportedRepoHostError/*InvalidRepoURLError, got hostErr=%v urlErr=%v", tc.url, tc.allowedHosts, err, gotHostErr, gotURLErr)
+			}
+			if tc.wantHostErr {
+				if !gotHostErr {
+					t.Fatalf("CheckRepoHost(%q, %v) = %v, want *UnsupportedRepoHostError", tc.url, tc.allowedHosts, err)
+				}
+				if !errors.Is(err, reposource.ErrRepoHostNotSupported) {
+					t.Errorf("CheckRepoHost(%q, %v) = %v, want it to wrap ErrRepoHostNotSupported", tc.url, tc.allowedHosts, err)
+				}
+				if hostErr.Error() == "" {
+					t.Error("UnsupportedRepoHostError.Error() is empty")
+				}
+			} else {
+				if !gotURLErr {
+					t.Fatalf("CheckRepoHost(%q, %v) = %v, want *InvalidRepoURLError", tc.url, tc.allowedHosts, err)
+				}
+				if !errors.Is(err, reposource.ErrURLNotParseable) {
+					t.Errorf("CheckRepoHost(%q, %v) = %v, want it to wrap ErrURLNotParseable", tc.url, tc.allowedHosts, err)
+				}
+			}
+		})
+	}
+}
