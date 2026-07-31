@@ -1,3 +1,164 @@
-// Package review will hold code-review domain logic: risk-map verdicts,
-// sentinels, and the verdict floor — implemented in PR-40 (§8.2).
+// Package review implements the code-review domain's structured verdict
+// (§8.2/Step 45): a first-class, typed outcome of an automated code review,
+// and the two independent, raise-only "floors" (coverage, premise) that
+// compose into Shippable — the field the automated-approval engine (§21.2,
+// a later Step) will gate on. Every function here is pure per §11: no I/O,
+// no time.Now(), no randomness, zero external imports.
+//
+// # Why a structured type at all
+//
+// §21.1/§22.1 both depend on the verdict being data from the moment it is
+// produced, never markdown to be re-parsed after the fact: persistence
+// (§21.1) appends a Verdict row as-is, and rebuttal identity (§22.1) hashes
+// a finding's own persisted content rather than tracking it by file:line.
+// Nothing in this package (or any consumer of it) may parse a posted
+// comment back into a Verdict — nothing here even imports a markdown
+// parser, on principle, not merely by omission.
+//
+// # Server-computed Shippable — the central security property
+//
+// §21.2 states plainly: "the LLM's verdict only ever *proposes* Shippable;
+// the server recomputes it ... independently." Verdict therefore carries
+// TWO different fields that must never be confused with each other:
+//
+//   - ProposedShippable — the model's own self-report, of a DISTINCT Go
+//     type (ProposedShippable, not Shippable). This is not merely a
+//     naming convention: a value of this type cannot be assigned into a
+//     Shippable-typed field (Verdict.Shippable, or any parameter of
+//     ComputeShippable) without an explicit, visible type conversion.
+//     Grepping for that conversion is how a reviewer of THIS package's own
+//     future changes would notice if anyone ever tried to launder a
+//     model's opinion into the authoritative field.
+//   - Shippable — the authoritative field. The ONLY way to obtain a
+//     legitimate value for it is ComputeShippable's return value.
+//     ComputeShippable's signature does not accept a ProposedShippable
+//     parameter at all — the model's guess is not merely "not trusted", it
+//     is structurally incapable of influencing the computation, because
+//     there is no parameter for it to influence. A caller (a later Step's
+//     verdict-posting tool, §8.2/Step 47) is expected to populate
+//     Verdict.Shippable with exactly ComputeShippable's result and never
+//     with a converted ProposedShippable — see verdict.go's own doc
+//     comment.
+//
+// # Exactly three exported functions
+// This package exports exactly three functions that compute anything:
+// CoverageFloor (the coverage floor), PremiseFloor (the premise floor), and
+// ComputeShippable (the one composition seam a later Step calls). Every
+// other identifier besides these three functions and the types/constants a
+// caller needs to construct a Verdict is unexported — there is no second
+// path to any of these three results, and no method set duplicating them.
+//
+// # Ranking is an explicit table, never iota order
+// Shippable's total order (auto < needs_human < block, most to least
+// permissive) is asserted the same way this codebase's state machines
+// assert their transition tables (internal/domain/gitstate.transitions,
+// internal/domain/turn's own transitions map): as an explicit
+// map[Shippable]int in shippable.go, never inferred from the declaration
+// order of the ShippableAuto/ShippableNeedsHuman/ShippableBlock consts
+// themselves. An accidental reorder of those consts (e.g. an
+// alphabetizing pass) changes nothing about the policy this package
+// enforces, because nothing here ever compares the consts' underlying
+// iota/declaration positions — only the explicit table. TestShippableRank
+// in shippable_test.go pins this table down exhaustively.
+//
+// # Fail-conservative policy for every closed enum (uniform, not ad hoc)
+// Every enum in this package (RiskLevel, PremiseState, TestsCoverageState,
+// DocsDriftState) is a string type whose Go zero value ("") is NOT one of
+// its named legal values — an unset or garbled field is therefore always
+// detectable as neither "the best case" nor "the worst case" but a THIRD,
+// unrecognized thing. The uniform rule this package applies everywhere an
+// enum feeds a floor or baseline: an unrecognized value is treated
+// EXACTLY as conservatively as that enum's own worst-known legitimate
+// value — never more conservative (there is no principled way to invent an
+// "even worse than the worst defined case" outcome) and never less
+// (§21.2's whole automated-approval design rests on Shippable never
+// silently reading as "auto" for a value nobody actually assessed — "an
+// unrecognized/unknown state defaulting to the permissive end would be a
+// real defect"). Concretely:
+//
+//   - RiskLevel: unrecognized ranks with RiskLevelHigh (baselineFromRisk,
+//     shippable.go).
+//   - TestsCoverageState: unrecognized ranks with
+//     TestsCoverageStateInsufficient (CoverageFloor, coverage.go).
+//   - PremiseState: unrecognized ranks with PremiseStateNotAPR
+//     (PremiseFloor, premise.go).
+//   - DocsDriftState: unrecognized ranks with DocsDriftStateFound
+//     (documented on the type itself, docsdrift.go) — inert in THIS
+//     package today; see the design call below.
+//
+// # Design calls made in this Step, flagged rather than papered over
+//
+//  1. RiskLevel has exactly three values — low/medium/high — not four.
+//     The plan's own Step 45 row names the RiskLevel type but never
+//     enumerates its values. A fourth "critical" tier was considered and
+//     rejected: nothing in docs/TECHNICAL_PLAN.md or docs/design/
+//     mockups.html ever shows a verdict-level risk beyond "medium" (the
+//     mockup's own risk-map table shows individual FINDING severities up
+//     to "high", via the same three-tier low/medium/high vocabulary —
+//     see mockups.html's "chip crit" finding severity). Three tiers,
+//     matching the vocabulary the UI already commits to, was chosen over
+//     inventing a fourth with no textual support anywhere in the spec.
+//     A consequence: RiskLevel alone (with both floors clean) never
+//     reaches ShippableBlock — Block is reachable only through the
+//     premise floor's PremiseStateNotAPR (or an unrecognized enum value
+//     anywhere, per the fail-conservative policy above). This reads
+//     Block as "this is not reviewable code / not a legitimate PR",
+//     categorically worse than "a human needs to look", which the
+//     three-tier RiskLevel scale alone never claims to detect.
+//
+//  2. RiskLevel's baseline is not one of this Step's two named "floors".
+//     §8.2/Step 45 is explicit that there are exactly two independent
+//     raise-only floors: coverage and premise. RiskLevel plainly has to
+//     feed Shippable somehow — a risk-map verdict whose own overall risk
+//     assessment had zero effect on auto-approval eligibility would
+//     defeat the point of assessing risk at all — so this package treats
+//     RiskLevel as the BASELINE the two floors can only ever raise, never
+//     lower (see baselineFromRisk, shippable.go). This keeps "raise-only"
+//     uniform across all three inputs to ComputeShippable, without
+//     inventing a THIRD exported floor function the plan never asked for.
+//
+//  3. BlastRadius's fixed Tag vocabulary is this package's own invention,
+//     grounded in the one concrete source the plan gives: §21.2's
+//     sensitive-path criterion names "migrations, auth code, /contracts
+//     by default" as the auto-approval eligibility engine's own
+//     configurable examples. Tag includes those three plus five siblings
+//     of comparably broad blast radius (secrets, infra, public API, data
+//     layer, dependencies) — see tag.go. Nothing elsewhere in the plan or
+//     mockups enumerates this vocabulary; extending it is expected as
+//     later Steps (47, 58) find real gaps, but any addition belongs here,
+//     as a deliberate, reviewed change to this one fixed list — never
+//     inferred ad hoc by a consumer.
+//
+//  4. No Finding type ships in this Step, despite two later sections of
+//     the SAME technical plan appearing to assume one already exists.
+//     §21.1 ("the structured type means this is pure storage, never
+//     re-parsing anything out of posted comment text") and §22.1 ("a
+//     hash/text of the finding stored at the moment the verdict that
+//     raised it was posted — §8.2/Step 45's structured type already
+//     carries this data; storing it is not new capture, just retention")
+//     both describe Step 45's verdict type as already carrying
+//     per-finding content. But IMPLEMENTATION_PLAN.md's own Step 45 row
+//     — the authoritative, dedicated description of this Step's scope —
+//     enumerates exactly seven fields (RiskLevel, PremiseState,
+//     BlastRadius, FilesChanged, TestsCoverageState, DocsDriftState,
+//     Shippable) and names no Finding/rebuttal-identity shape at all.
+//     This is a genuine tension inside the plan itself, not a disagreement
+//     between this Step's brief and the plan (both independently read the
+//     same seven fields) — named here rather than resolved by guessing at
+//     a hash algorithm, a Finding struct shape, or rebuttal-identity
+//     machinery that §22 (a much later Step) is explicitly tasked with
+//     designing against real posting/reconciliation logic this package has
+//     no visibility into yet. Building that shape now, disconnected from
+//     the code that will actually construct and reconcile it, risks
+//     committing to the wrong one. Verdict below carries exactly the seven
+//     named fields (plus ProposedShippable, required by the server-
+//     computed-Shippable property above) and nothing else; a Finding type
+//     is left for whichever Step actually needs it.
+//
+//  5. DocsDriftState is defined with a documented fail-conservative zero
+//     value (see docsdrift.go) but is not wired into ComputeShippable at
+//     all in this Step — consistent with "exactly two floors" above. A
+//     future doc-drift floor, should one ever be added, has a policy to
+//     match (unrecognized ranks with DocsDriftStateFound) already on
+//     record rather than invented ad hoc when that Step arrives.
 package review
