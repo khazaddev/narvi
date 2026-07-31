@@ -99,6 +99,23 @@ type turnState struct {
 	compacting          bool
 	compactionAttempted bool
 
+	// stopRequested is set by Adapter.Stop (adapter.go) the moment a user
+	// Stop is observed for this exact turn's own OpenCode session — a
+	// LATER audit's own Finding 1: Stop itself only posts an OpenCode-side
+	// abort (Adapter.postAbort) and otherwise touches no turnState at all,
+	// but that abort's own resulting session.idle/session.error is exactly
+	// the kind of event dispatchEvent's own isCompacting guards (sse.go)
+	// silently swallow while a compaction retry is in flight — so without
+	// a DEDICATED signal recorded here, attemptCompactionRetry below would
+	// have no way to ever learn a Stop happened during that window at all,
+	// and would re-dispatch the very prompt the user just cancelled. A
+	// one-way latch (never reset to false): once a turn has been asked to
+	// stop, it stays asked-to-stop for its own remaining lifetime, mirroring
+	// compactionAttempted's own one-way-latch precedent just above. Read via
+	// stillLive below, never on its own -- see that method's own doc
+	// comment for why both flags are checked together under one lock.
+	stopRequested bool
+
 	lastActivity time.Time
 
 	// finalized is set exactly once, under mu, by tryFinalize below — and
@@ -313,6 +330,101 @@ func (ts *turnState) tryBeginCompactionRetry() bool {
 	return true
 }
 
+// overflowAction is the result of resolveOverflowAction below — the single
+// decision Adapter.finalizeOrRecoverFromOverflow (adapter.go) acts on,
+// whichever of its two callers (the live SSE dispatch path, or
+// finalizeByFallback) produced it.
+type overflowAction int
+
+const (
+	// overflowActionStale means the caller's own already-derived outcome
+	// can no longer be trusted: EITHER a compaction retry is live right
+	// now, or SOME activity was recorded for this turn after snapshotTime
+	// — in both cases some OTHER goroutine already owns (or is about to
+	// own) this turn's outcome, and the caller must abandon: no finalize,
+	// no retry launch, nothing.
+	overflowActionStale overflowAction = iota
+	// overflowActionFinalizeDirect means the caller's own outcome is not a
+	// first-time ContextOverflowError eligible for a retry — finalize with
+	// it exactly as derived, unchanged behavior.
+	overflowActionFinalizeDirect
+	// overflowActionAlreadyAttempted means the derived outcome IS again a
+	// ContextOverflowError, but a compaction retry was already fully
+	// attempted for this turn (and, per the checks above, is not live
+	// right now and nothing happened since snapshotTime) — finalize with
+	// an enriched reason instead of launching a second attempt.
+	overflowActionAlreadyAttempted
+	// overflowActionBeginRetry means THIS call atomically won the retry:
+	// ts.compactionAttempted/ts.compacting are now both true, and the
+	// caller must launch attemptCompactionRetry on its own tracked
+	// goroutine.
+	overflowActionBeginRetry
+)
+
+// resolveOverflowAction is the SINGLE ts.mu-guarded critical section
+// Adapter.finalizeOrRecoverFromOverflow (adapter.go) routes both of its own
+// callers through, replacing what used to be TWO SEPARATE critical
+// sections: finalizeByFallback's own isCompacting()/lastActivityTime()
+// staleness re-checks (evaluated, unlocked relative to each other, via two
+// independent ts.mu acquisitions) followed — after more unlocked work
+// (partsHaveOutput, deriveOutcome) — by a THIRD, independent ts.mu
+// acquisition inside tryBeginCompactionRetry above.
+//
+// A LATER audit's own finding: that gap between the staleness re-checks and
+// the eventual tryBeginCompactionRetry call was itself a TOCTOU window — a
+// live SSE session.idle for the exact SAME first-time overflow could win
+// tryBeginCompactionRetry strictly AFTER finalizeByFallback's own checks
+// read clean but BEFORE finalizeByFallback's own call reached
+// tryBeginCompactionRetry, causing finalizeByFallback to fall into the
+// "already attempted" branch and finalize with a stale pre-retry snapshot
+// while the just-launched real retry was still working — exactly the "two
+// goroutines both believe they own the outcome" hazard this whole
+// isCompacting/lastActivityTime/tryBeginCompactionRetry machinery exists to
+// close, reopened by composing three separately-locked critical sections
+// where the whole decision needed to be one. Narrowing the window further
+// (e.g. re-checking staleness YET AGAIN immediately before this call)
+// would only shrink it, not close it — the fix here instead folds
+// "is my snapshot still fresh" and "atomically claim the retry" into the
+// exact same lock acquisition, so nothing can ever observe a state change
+// between the two.
+//
+// snapshotTime is the point in time as of which the caller's own outcome
+// was derived: the live SSE dispatch path (dispatchEvent's session.idle/
+// session.error cases, sse.go) passes essentially "now" — nothing
+// intervenes between its own ts.touch()/errorForOutcome reads and this
+// call, so the freshness check below is trivially satisfied there, exactly
+// preserving that path's own prior behavior while now also closing the
+// symmetric (vanishingly small, but real) gap it used to leave between its
+// own isCompacting() guard and this call. finalizeByFallback (adapter.go)
+// passes preFetchActivity, snapshotted BEFORE its own unlocked
+// fetchFinalMessages HTTP round trip — the caller whose own snapshot can
+// genuinely go stale for however long that fetch takes, and however long
+// the CPU-bound partsHaveOutput/deriveOutcome work after it takes, since
+// NEITHER matters any more: only the state AT THE INSTANT of this single
+// locked check governs the outcome now.
+//
+// isOverflow is whether the caller's own already-derived outcome is a
+// ContextOverflowError — a pure computation over already-fetched data
+// (isContextOverflowError, outcome.go), safe to perform before this call
+// since it never touches ts.
+func (ts *turnState) resolveOverflowAction(snapshotTime time.Time, isOverflow bool) overflowAction {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.compacting || ts.lastActivity.After(snapshotTime) {
+		return overflowActionStale
+	}
+	if !isOverflow {
+		return overflowActionFinalizeDirect
+	}
+	if ts.compactionAttempted {
+		return overflowActionAlreadyAttempted
+	}
+	ts.compactionAttempted = true
+	ts.compacting = true
+	return overflowActionBeginRetry
+}
+
 // clearErrorsForRetry resets this turn's own tracked assistant/session
 // errors — called ONLY by Adapter.attemptCompactionRetry (adapter.go),
 // immediately after a successful forceCompaction and immediately before
@@ -434,6 +546,43 @@ func (ts *turnState) drainOpenSubtasks() []string {
 	}
 	ts.subtasksOpen = make(map[string]bool)
 	return ids
+}
+
+// markStopRequested records that Adapter.Stop (adapter.go) observed a Stop
+// for this exact turn's own OpenCode session — see stopRequested's own
+// field comment for why this dedicated flag exists at all.
+func (ts *turnState) markStopRequested() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.stopRequested = true
+}
+
+// stillLive reports whether attemptCompactionRetry (adapter.go) is still
+// entitled to re-dispatch ts.cmd after a successful forceCompaction — a
+// LATER audit's own Finding 1's fix. false means either:
+//
+//   - stopRequested: a user Stop landed for this exact turn at some point
+//     during the compaction window (markStopRequested above) — re-dispatching
+//     now would silently override that cancellation, exactly the "Stop
+//     ignored" hazard this method exists to close.
+//   - finalized: this turn was ALREADY finalized by some other path while
+//     compaction was in flight — concretely, StartTurn's own ctx being
+//     canceled (e.g. a process shutdown) races waitForTurn's own
+//     ctx.Done() branch straight to finalizeCanceled, entirely independent
+//     of a.bgCtx (attemptCompactionRetry's own base context, which that ctx
+//     cancellation never touches) — re-dispatching here would restart work
+//     for a turn the control plane has already been told is Cancelled.
+//
+// Both flags are read together under ONE ts.mu acquisition — not because
+// either individually needs cross-field atomicity (each is its own
+// one-way latch, never reset), but to mirror this package's existing
+// "single ts.mu-guarded read/check" idiom (tryBeginCompactionRetry,
+// tryFinalize) rather than introducing a bespoke two-call convention just
+// for this one caller.
+func (ts *turnState) stillLive() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return !ts.stopRequested && !ts.finalized
 }
 
 // tryFinalize marks this turn finalized exactly once, reporting whether

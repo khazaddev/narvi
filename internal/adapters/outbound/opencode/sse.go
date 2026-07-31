@@ -251,7 +251,12 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 		}
 		err := ts.errorForOutcome()
 		hasText, hasToolCall := ts.outcomeInputs()
-		a.finalizeOrRecoverFromOverflow(props.SessionID, ts, deriveOutcome(err, hasText, hasToolCall), err)
+		// "now": nothing intervenes between ts.touch()/the isCompacting
+		// guard above and the reads that produced err/hasText/hasToolCall
+		// (all synchronous, no I/O, same goroutine) -- see
+		// finalizeOrRecoverFromOverflow's own doc comment (adapter.go) for
+		// what this snapshotTime means to turnState.resolveOverflowAction.
+		a.finalizeOrRecoverFromOverflow(props.SessionID, ts, deriveOutcome(err, hasText, hasToolCall), err, time.Now())
 
 	case "session.error":
 		var props sessionErrorProps
