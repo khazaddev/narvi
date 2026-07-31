@@ -85,6 +85,22 @@ var planAwaitingApprovalReplyText = fmt.Sprintf(
 	plandomain.RevisePrefix,
 )
 
+// emptyReviseFeedbackReplyText is the audit-remediation batch's own SECOND
+// fix-pass addition (LOW audit finding, "the honest reply reused for the
+// new empty-feedback case is generic boilerplate ... gives the user no
+// indication that their revise: reply WAS recognized ... but was rejected
+// specifically because the feedback was empty"): posted instead of
+// planAwaitingApprovalReplyText specifically for the emptyReviseFeedback
+// case (handlePrompted, below) -- a reply that DID match
+// plandomain.RevisePrefix, unlike every other case
+// planAwaitingApprovalReplyText itself still covers (a reply matching
+// neither an approve/reject keyword nor the revise: prefix at all). Mirrors
+// Slack's identical ackEmptyReviseFeedbackText (handler.go).
+var emptyReviseFeedbackReplyText = fmt.Sprintf(
+	"Your %q reply was recognized, but no feedback followed it — reply again with your requested changes after %q.",
+	plandomain.RevisePrefix, plandomain.RevisePrefix,
+)
+
 // Deps bundles every dependency NewWebhookHandler needs -- a plain struct
 // (rather than 10+ positional constructor parameters) since this handler
 // genuinely needs this many collaborators: the webhook toolkit pieces
@@ -645,6 +661,25 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// with plan_mode=true and the stripped feedback as its prompt.
 	prompt := payload.AgentActivity.Content.Body
 	planMode := false
+	// emptyReviseFeedback is the audit-remediation batch's own fix
+	// ("revise: accepts empty feedback"): plandomain.MatchRevise documents
+	// ok=true, feedback=="" for a bare "revise:" (or whitespace-only
+	// feedback) as an EXPLICIT caller's-own-job case (verdict.go's own doc
+	// comment: "deciding what to do with an empty feedback prompt is
+	// entirely the caller's own job") -- this codebase already has an
+	// answer to that question, at the pre-existing Slack "Request changes"
+	// Block Kit modal submission (slack/interactive.go's own
+	// handleViewSubmission, which this SAME batch's own follow-up fix now
+	// ALSO makes reject empty feedback with a user-visible inline modal
+	// error, instead of the bare "ignoring" 200 it used to write -- see
+	// that function's own doc comment). This applies the SAME rule here
+	// (treating whitespace-only feedback as empty too), rather than
+	// silently dispatching a genuine plan_mode=true revision turn with
+	// nothing at all for the agent to act on. Checked below, AFTER the
+	// authorizeSessionAction gate further down (an unauthorized actor must
+	// still be denied outright, regardless of what their reply's own
+	// feedback contains).
+	emptyReviseFeedback := false
 
 	if deps.Plans != nil {
 		if planID, hasAwaiting := deps.findAwaitingApprovalPlanID(ctx, logger, sessionID); hasAwaiting {
@@ -672,8 +707,19 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 			// case (planMode stays false), surfacing
 			// httpapi.ErrPlanAwaitingApproval, handled below.
 			if feedback, ok := plandomain.MatchRevise(payload.AgentActivity.Content.Body); ok {
-				prompt = feedback
-				planMode = true
+				// plandomain.IsBlankFeedback (LOW audit fix, confirmed
+				// finding "MatchRevise's feedback-emptiness check ... does
+				// not treat zero-width characters as whitespace") replaces
+				// a bare strings.TrimSpace(feedback) == "" check here --
+				// the shared definition also catches feedback made up ONLY
+				// of invisible zero-width runes (U+200B/200C/200D/FEFF),
+				// which TrimSpace alone would let through as "non-empty".
+				if plandomain.IsBlankFeedback(feedback) {
+					emptyReviseFeedback = true
+				} else {
+					prompt = feedback
+					planMode = true
+				}
 			}
 		}
 	}
@@ -721,6 +767,36 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 		return false
 	}
 
+	if emptyReviseFeedback {
+		// No CreateTurnCore call at all here -- unlike the
+		// ErrPlanAwaitingApproval branch just below (an ordinary,
+		// non-revise reply that CreateTurnCore's own awaiting-plan gate
+		// declines), an empty-feedback revise: reply must never even reach
+		// turn creation. LOW audit fix (SECOND fix-pass, confirmed finding
+		// "the honest reply reused for the new empty-feedback case is
+		// generic boilerplate"): this used to reuse the SAME
+		// planAwaitingApprovalReplyText reply the ErrPlanAwaitingApproval
+		// branch posts -- but that generic text reads identically whether
+		// the revise: prefix was never used at all, or used with nothing
+		// after it, giving the user no way to tell which happened. Posts
+		// emptyReviseFeedbackReplyText instead, which explicitly confirms
+		// the revise: prefix WAS recognized and says exactly what's
+		// missing.
+		//
+		// LOW audit fix (confirmed finding, "log-level inconsistency
+		// between the new empty-feedback-guard branch and the pre-existing
+		// ... 'blocked by awaiting-approval plan' branch"): logged at
+		// Info, matching the functionally identical ErrPlanAwaitingApproval
+		// branch just below -- both are routine, expected user mistakes
+		// that produce the exact same kind of honest reply and no adverse
+		// system state, so neither deserves a higher severity than the
+		// other. Previously Warn, which would flag this routine case above
+		// the identical one below on any Warn-level alert.
+		logger.Info("linear: revise reply had empty feedback, blocked by awaiting-approval plan guard", "session_id", sessionID.String())
+		deps.postThoughtNotice(ctx, payload.OrganizationID, payload.AgentSession.ID, appendNotice(emptyReviseFeedbackReplyText, notice))
+		return true
+	}
+
 	// Audit-fix batch update (L2/H7/L12/M6/L20): this ordinary-reply
 	// insert used to call deps.Turns.Create DIRECTLY on the raw pool, with
 	// NO transaction and NO lock at all -- a genuine check-then-act race
@@ -766,7 +842,16 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// investigating a bad push from a Linear-originated reply turn had no
 	// session_id/turn_id to correlate against. Mirrors github's own
 	// identical successful-mention log line shape (coalesce.go).
-	logger.Info("linear: added turn", "session_id", sessionID, "turn_id", createdTurn.ID)
+	//
+	// plan_mode is the audit-remediation batch's own SECOND fix
+	// ("neither Slack nor Linear logs the routing decision itself"):
+	// PREVIOUSLY this line carried only session_id/turn_id, so a revise:
+	// reply re-routed into a plan_mode=true revision turn was
+	// indistinguishable, in the logs, from an ordinary plan_mode=false
+	// build turn -- the negative branch (the ErrPlanAwaitingApproval log
+	// line above) was already logged, but the POSITIVE re-routing decision
+	// was not.
+	logger.Info("linear: added turn", "session_id", sessionID, "turn_id", createdTurn.ID, "plan_mode", planMode)
 
 	// turns carries no per-row actor column at all (migrations/
 	// 000005_turns.up.sql) -- unlike sessions.created_by/plans.decided_by,

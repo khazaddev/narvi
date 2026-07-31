@@ -80,7 +80,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -92,6 +91,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
+	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -344,6 +344,22 @@ const (
 
 	slackDecisionErrorText       = "Something went wrong recording this decision. Please try again."
 	slackRequestChangesErrorText = "Something went wrong submitting this. Please try again."
+
+	// slackEmptyFeedbackErrorText is this batch's own audit-remediation fix
+	// (CONFIRMED MEDIUM finding, "the pre-existing 'Request changes' modal
+	// still silently drops empty/whitespace-only feedback with zero
+	// user-visible signal"): handleViewSubmission's own empty-feedback guard
+	// below used to write a bare 200 with no response_action at all --
+	// Slack's own documented behavior for that shape is to close the modal
+	// as though the submission succeeded, giving the submitter no signal
+	// whatsoever that their feedback was discarded. This mirrors
+	// slackRequestChangesErrorText's own inline-modal-error mechanism
+	// (viewSubmissionErrorResponse) instead, matching the SAME honest
+	// "you must be told this failed" rule the new Slack/Linear revise: text
+	// path (handler.go's ackPlanAwaitingText / webhook.go's
+	// planAwaitingApprovalReplyText) already applies for the identical
+	// empty-feedback case reached via a chat reply.
+	slackEmptyFeedbackErrorText = "Feedback can't be empty. Please describe the changes you'd like."
 
 	// slackActorNotLinkedDecisionText is the SECOND review pass's own fix
 	// for the HIGH-severity button-stripping regression (see
@@ -728,9 +744,30 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 			feedback = *elem.Value
 		}
 	}
-	if strings.TrimSpace(feedback) == "" {
-		logger.Warn("slack: interactivity: empty feedback text in view_submission, ignoring")
-		w.WriteHeader(http.StatusOK)
+	if plandomain.IsBlankFeedback(feedback) {
+		// Audit-remediation batch fix (CONFIRMED MEDIUM finding): this used
+		// to log a Warn and write a bare 200 here, with NO response_action
+		// -- Slack's own documented behavior for that shape is to close the
+		// modal as though the submission had succeeded, so the submitter
+		// had zero signal their "request changes" feedback was silently
+		// discarded, unlike the new Slack/Linear revise: TEXT path
+		// (handler.go/webhook.go), which now posts an honest reply for the
+		// identical empty-feedback case. plandomain.IsBlankFeedback (LOW
+		// audit fix) is used here rather than a bare strings.TrimSpace ==
+		// "" check -- the shared definition also catches invisible
+		// zero-width-character-only feedback, matching handler.go/
+		// webhook.go's own identical guard exactly. Responds with
+		// viewSubmissionErrorResponse instead -- Slack's own inline
+		// validation-error mechanism, re-opening the modal with
+		// slackEmptyFeedbackErrorText shown against the feedback field, so
+		// the submitter can see why nothing happened and correct it.
+		logger.Warn("slack: interactivity: empty feedback text in view_submission, rejecting")
+		writeJSON(w, http.StatusOK, viewSubmissionErrorResponse{
+			ResponseAction: "errors",
+			Errors: map[string]string{
+				slackapi.RequestChangesBlockID: slackEmptyFeedbackErrorText,
+			},
+		})
 		return
 	}
 

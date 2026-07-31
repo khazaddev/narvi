@@ -187,3 +187,88 @@ func TestNewInteractivityHandler_RequestChangesTriggersViewsOpen(t *testing.T) {
 		t.Errorf("views.open view.private_metadata = %q, want %q", gotPrivateMetadata, value)
 	}
 }
+
+// TestNewInteractivityHandler_ViewSubmission_EmptyFeedback_RespondsWithInlineError
+// is the CONFIRMED MEDIUM audit finding's own regression test ("the
+// pre-existing 'Request changes' modal ... still silently drops empty/
+// whitespace-only feedback with zero user-visible signal"): a
+// view_submission whose feedback text is empty, whitespace-only, or made up
+// entirely of invisible zero-width runes must now get back a real
+// response_action:"errors" body (Slack's own inline-validation-error
+// mechanism, re-opening the modal) instead of the bare 200-with-no-body
+// this handler used to write, which Slack renders as a silently-closed
+// modal. This case never touches deps.Pool/deps.SlackClient at all (the
+// blank-feedback check runs before either is needed), so this stays a
+// plain unit test -- no Postgres/testcontainers required, unlike this
+// package's other view_submission coverage
+// (interactive_integration_test.go's own
+// TestInteractivityHandler_ViewSubmission_CreatesRequestChangesTurn).
+func TestNewInteractivityHandler_ViewSubmission_EmptyFeedback_RespondsWithInlineError(t *testing.T) {
+	const secret = "test-signing-secret"
+
+	tests := []struct {
+		name     string
+		feedback string
+	}{
+		{name: "empty string", feedback: ""},
+		{name: "ascii whitespace only", feedback: "   "},
+		{name: "tab/newline only", feedback: "\t\n"},
+		// LOW audit fix regression case (zero-width runes not caught by a
+		// bare strings.TrimSpace check): proves handleViewSubmission's own
+		// blank check (now plandomain.IsBlankFeedback) also rejects
+		// feedback made up ONLY of invisible zero-width runes.
+		{name: "zero-width-space only (U+200B)", feedback: "\u200B\u200B"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := NewInteractivityHandler(InteractiveDeps{
+				SigningSecret: secret,
+				Timeouts:      platform.Timeouts{WebhookTimestampFreshnessWindow: 5 * time.Minute},
+			})
+
+			privateMetadata := slackapi.EncodePlanActionValue("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222")
+			viewSubmission := map[string]any{
+				"type": "view_submission",
+				"user": map[string]string{"id": "U0TEST"},
+				"view": map[string]any{
+					"callback_id":      slackapi.RequestChangesCallbackID,
+					"private_metadata": privateMetadata,
+					"state": map[string]any{
+						"values": map[string]any{
+							slackapi.RequestChangesBlockID: map[string]any{
+								slackapi.RequestChangesActionID: map[string]any{
+									"type":  "plain_text_input",
+									"value": tc.feedback,
+								},
+							},
+						},
+					},
+				},
+			}
+			raw, err := json.Marshal(viewSubmission)
+			if err != nil {
+				t.Fatalf("marshal view_submission payload: %v", err)
+			}
+
+			req := newSignedFormRequest(t, secret, time.Now().Unix(), string(raw))
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d (body=%s)", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			var resp viewSubmissionErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode response body: %v (body=%s)", err, rec.Body.String())
+			}
+			if resp.ResponseAction != "errors" {
+				t.Errorf(`response_action = %q, want "errors" (body=%s) -- a bare 200 with no response_action silently closes the modal with zero signal to the submitter`, resp.ResponseAction, rec.Body.String())
+			}
+			if got := resp.Errors[slackapi.RequestChangesBlockID]; got != slackEmptyFeedbackErrorText {
+				t.Errorf("errors[%q] = %q, want %q", slackapi.RequestChangesBlockID, got, slackEmptyFeedbackErrorText)
+			}
+		})
+	}
+}

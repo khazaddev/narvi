@@ -131,3 +131,50 @@ func MatchRevise(text string) (feedback string, ok bool) {
 	}
 	return strings.TrimSpace(remaining), true
 }
+
+// isZeroWidthRune reports whether r is one of the small set of Unicode
+// code points that render as nothing at all (no visible glyph, no
+// advance) but which unicode.IsSpace does NOT classify as whitespace --
+// LOW audit fix (confirmed finding, "MatchRevise's feedback-emptiness
+// check ... does not treat zero-width characters as whitespace"):
+//   - U+200B ZERO WIDTH SPACE
+//   - U+200C ZERO WIDTH NON-JOINER
+//   - U+200D ZERO WIDTH JOINER
+//   - U+FEFF ZERO WIDTH NO-BREAK SPACE (a.k.a. the UTF-8 BOM, when it
+//     shows up mid-text rather than as a genuine byte-order mark)
+//
+// A reply consisting only of one or more of these after RevisePrefix --
+// e.g. a copy-paste from a web page, or a client that silently inserts a
+// ZWSP -- previously slipped past the "revise: accepts empty feedback"
+// guard entirely: strings.TrimSpace(feedback) == "" is false for such a
+// string (it isn't empty, and unicode.IsSpace doesn't fold these runes to
+// nothing), so a genuine plan_mode=true revision turn was dispatched with
+// an effectively invisible, blank prompt for the agent to act on --
+// exactly the failure mode the empty-feedback guard exists to close.
+func isZeroWidthRune(r rune) bool {
+	switch r {
+	case '\u200B', '\u200C', '\u200D', '\uFEFF':
+		return true
+	default:
+		return false
+	}
+}
+
+// IsBlankFeedback reports whether feedback (as returned by MatchRevise, or
+// any other free-text field this batch's empty-feedback guard needs to
+// evaluate) is EFFECTIVELY empty: either genuinely empty, made up entirely
+// of ordinary whitespace (unicode.IsSpace, exactly like strings.TrimSpace
+// already used everywhere this guard checks), or made up entirely of the
+// invisible zero-width runes isZeroWidthRune recognizes above, in any
+// combination. This is the SINGLE shared definition of "empty" every
+// empty-feedback guard in this codebase now calls (Slack's handler.go,
+// Linear's webhook.go, and Slack's own "Request changes" Block Kit modal,
+// interactive.go's handleViewSubmission) -- so all three can never drift
+// out of sync on what counts as blank, matching MatchVerdict/MatchRevise's
+// own "one shared definition, never duplicated" precedent (this file's own
+// top doc comments).
+func IsBlankFeedback(feedback string) bool {
+	return strings.TrimFunc(feedback, func(r rune) bool {
+		return unicode.IsSpace(r) || isZeroWidthRune(r)
+	}) == ""
+}
