@@ -130,18 +130,23 @@ const (
 
 // ackPlanAwaitingText is this batch's own honest reply (Step 37/38
 // follow-up fix, §8.1), posted instead of enqueuing a build turn when a
-// plain-text thread reply matches neither an approve/reject button click
-// (Slack plan verdicts are rendered via Block Kit buttons, interactive.go,
-// never text) nor plandomain.MatchRevise, while the mapped session
-// currently has a plan in StatusAwaitingApproval -- CLOSING the hole where
-// such a reply previously fell straight through into an ordinary,
-// plan_mode=false turn the human never approved. Mirrors ackBusyText's own
-// wording/tone immediately above; built (like Linear's identical
-// planAwaitingApprovalReplyText, webhook.go) off plandomain.RevisePrefix
-// itself, so the instructions here can never drift out of sync with what
-// MatchRevise actually accepts.
+// plain-text thread reply matches neither a plan verdict (plandomain.
+// MatchVerdict -- see this batch's own follow-up addition, "honour a typed
+// plan verdict", handleEvent below) nor plandomain.MatchRevise, while the
+// mapped session currently has a plan in StatusAwaitingApproval --
+// CLOSING the hole where such a reply previously fell straight through
+// into an ordinary, plan_mode=false turn the human never approved.
+// Mirrors ackBusyText's own wording/tone immediately above; built (like
+// Linear's identical planAwaitingApprovalReplyText, webhook.go) off
+// plandomain.ApproveKeywords/RejectKeywords/RevisePrefix themselves, so
+// the instructions here can never drift out of sync with what
+// MatchVerdict/MatchRevise actually accept. The Approve/Reject BUTTONS
+// (interactive.go) remain the primary, always-available affordance either
+// way -- this is an additional accepted input, not a replacement.
 var ackPlanAwaitingText = fmt.Sprintf(
-	"A plan is awaiting approval for this session — use the Approve/Reject buttons above to decide it, or start your reply with %q to request changes.",
+	"A plan is awaiting approval for this session — reply %s to approve it, %s to reject it, use the Approve/Reject buttons above, or start your reply with %q to request changes.",
+	strings.Join(plandomain.ApproveKeywords, "/"),
+	strings.Join(plandomain.RejectKeywords, "/"),
 	plandomain.RevisePrefix,
 )
 
@@ -178,15 +183,30 @@ type Deps struct {
 	Deliveries   *postgres.WebhookDeliveryStore
 	Threads      *postgres.SlackThreadSessionStore
 
-	// Plans (Step 37/38 follow-up fix, §8.1) -- handleEvent's own new
-	// awaiting-plan gate/revise-prefix check (below) needs this to find a
-	// mapped session's own awaiting_approval plan, if any, mirroring
+	// Plans (Step 37/38 follow-up fix, §8.1) -- handleEvent's own
+	// awaiting-plan gate/verdict/revise-prefix check (below) needs this to
+	// find a mapped session's own awaiting_approval plan, if any, mirroring
 	// Linear's identical Deps.Plans (webhook.go). nil-safe: a nil Plans
-	// simply skips the revise-prefix check (createTurnLocked's own
-	// awaiting-plan gate, httpapi/turn.go, is likewise nil-safe), so
-	// existing tests/wiring that don't care about plan mode keep working
-	// unchanged.
+	// simply skips the verdict/revise-prefix check entirely
+	// (createTurnLocked's own awaiting-plan gate, httpapi/turn.go, is
+	// likewise nil-safe), so existing tests/wiring that don't care about
+	// plan mode keep working unchanged.
 	Plans *postgres.PlanStore
+
+	// Outbox/LinearAgentSessions are this batch's own addition ("honour a
+	// typed plan verdict"): handlePlanVerdict below now calls the SAME
+	// shared httpapi.DecidePlan every other plan-decision entry point uses
+	// (interactive.go's decideAndUpdateMessage, Linear's own
+	// handlePlanVerdict, webhook.go) -- which needs Outbox for its own
+	// cross-channel-notify side effect and LinearAgentSessions to look up
+	// whether this session is ALSO backed by a Linear agent session worth
+	// notifying (decideplan.go). Mirrors InteractiveDeps's own identical
+	// two fields (interactive.go) exactly -- production wiring
+	// (cmd/control-plane/main.go) passes the SAME two store instances every
+	// other caller of DecidePlan already uses, never a second,
+	// independently-constructed copy.
+	Outbox              *postgres.OutboxStore
+	LinearAgentSessions *postgres.LinearAgentSessionStore
 
 	// AuditLog is Step 39's own addition (§13.3) -- threaded through to
 	// httpapi.CreateSessionCore below exactly like Environments already
@@ -593,18 +613,41 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		return handleEventResult{OK: true, ReleaseMessageClaim: res.ReleaseMessageClaim}
 	}
 
-	// Step 37/38 follow-up fix (§8.1): while res.SessionID has a plan in
-	// StatusAwaitingApproval, a plain-text reply matching
-	// plandomain.RevisePrefix is a deterministic "request changes" reply --
-	// route it through as a REAL plan_mode=true turn (the prompt becomes the
-	// stripped feedback) instead of an ordinary one. Every OTHER reply
-	// (matching neither an approve/reject button -- Slack verdicts are
-	// buttons, never text, see ackPlanAwaitingText's own doc comment -- nor
-	// this prefix) falls through unchanged into the ordinary addTurn call
-	// below; createTurnLocked's own awaiting-plan gate (httpapi/turn.go) is
-	// what actually declines it there, surfacing ErrPlanAwaitingApproval,
-	// handled just below. deps.Plans == nil (never true in production
-	// wiring) skips this check entirely, exactly like the gate itself does.
+	// This batch's own addition ("honour a typed plan verdict in a Slack
+	// thread", closing the gap where a user who types "approve" instead of
+	// clicking a button got no verdict honoured at all): while
+	// res.SessionID has a plan in StatusAwaitingApproval, a plain-text
+	// reply matching plandomain.MatchVerdict is a deterministic approve/
+	// reject decision -- route it through handlePlanVerdict below, which
+	// calls the EXACT SAME authorization check (Deps.authorizeSessionAction,
+	// identity.go, ActionApprovePlan) and the EXACT SAME shared
+	// httpapi.DecidePlan every other plan-decision entry point in this
+	// codebase uses (interactive.go's own button-driven decideAndUpdateMessage,
+	// Linear's own handlePlanVerdict, webhook.go) -- never a second,
+	// independently-authorized path to a plan decision. Checked BEFORE
+	// plandomain.MatchRevise below: MatchVerdict/MatchRevise can never both
+	// match the same text (RevisePrefix, "revise:", is not itself one of
+	// ApproveKeywords/RejectKeywords), but checking the verdict first keeps
+	// this ordering identical to Linear's own handlePrompted (webhook.go),
+	// which this Step's own domain package (plandomain) was written
+	// alongside. A match returns IMMEDIATELY -- a verdict IS the decision,
+	// never merely a prompt that also happens to fall through into an
+	// ordinary turn.
+	//
+	// Step 37/38 follow-up fix (§8.1), unchanged by this batch: a plain-text
+	// reply matching plandomain.RevisePrefix instead is a deterministic
+	// "request changes" reply -- route it through as a REAL plan_mode=true
+	// turn (the prompt becomes the stripped feedback) instead of an ordinary
+	// one. Every OTHER reply (matching neither a verdict nor this prefix)
+	// falls through unchanged into the ordinary addTurn call below;
+	// createTurnLocked's own awaiting-plan gate (httpapi/turn.go) is what
+	// actually declines it there, surfacing ErrPlanAwaitingApproval, handled
+	// just below. The Approve/Reject BUTTONS (interactive.go) remain the
+	// primary, always-available affordance either way -- this is an
+	// additional accepted input, not a replacement (invariant #2 of this
+	// batch's own brief). deps.Plans == nil (never true in production
+	// wiring) skips this whole check entirely, exactly like the gate
+	// itself does.
 	planMode := false
 	// emptyReviseFeedback is the audit-remediation batch's own fix
 	// ("revise: accepts empty feedback"): plandomain.MatchRevise documents
@@ -622,20 +665,25 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// dispatching a genuine plan_mode=true revision turn with nothing at
 	// all for the agent to act on.
 	emptyReviseFeedback := false
-	if deps.Plans != nil && hasAwaitingApprovalPlan(ctx, logger, deps.Plans, res.SessionID) {
-		if feedback, reviseOK := plandomain.MatchRevise(prompt); reviseOK {
-			// plandomain.IsBlankFeedback (LOW audit fix, confirmed finding
-			// "MatchRevise's feedback-emptiness check ... does not treat
-			// zero-width characters as whitespace") replaces a bare
-			// strings.TrimSpace(feedback) == "" check here -- the shared
-			// definition also catches feedback made up ONLY of invisible
-			// zero-width runes (U+200B/200C/200D/FEFF), which TrimSpace
-			// alone would let through as "non-empty".
-			if plandomain.IsBlankFeedback(feedback) {
-				emptyReviseFeedback = true
-			} else {
-				prompt = feedback
-				planMode = true
+	if deps.Plans != nil {
+		if planID, hasAwaiting := findAwaitingApprovalPlanID(ctx, logger, deps.Plans, res.SessionID); hasAwaiting {
+			if verdict, verdictOK := plandomain.MatchVerdict(prompt); verdictOK {
+				return deps.handlePlanVerdict(ctx, ack, logger, channel, key, res.SessionID, planID, verdict, actorUserID)
+			}
+			if feedback, reviseOK := plandomain.MatchRevise(prompt); reviseOK {
+				// plandomain.IsBlankFeedback (LOW audit fix, confirmed finding
+				// "MatchRevise's feedback-emptiness check ... does not treat
+				// zero-width characters as whitespace") replaces a bare
+				// strings.TrimSpace(feedback) == "" check here -- the shared
+				// definition also catches feedback made up ONLY of invisible
+				// zero-width runes (U+200B/200C/200D/FEFF), which TrimSpace
+				// alone would let through as "non-empty".
+				if plandomain.IsBlankFeedback(feedback) {
+					emptyReviseFeedback = true
+				} else {
+					prompt = feedback
+					planMode = true
+				}
 			}
 		}
 	}
@@ -750,6 +798,94 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// scoped to ev.User (Step 39's own security-remediation addition).
 	if err := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); err != nil {
 		logger.Warn("slack: post in-thread ack failed", "error", err)
+	}
+	return handleEventResult{OK: true}
+}
+
+// handlePlanVerdict decides planID via the shared httpapi.DecidePlan, then
+// posts a single in-thread reply describing the REAL final outcome --
+// handleEvent's own new entry point (this batch's own addition, "honour a
+// typed plan verdict") for a plain-text thread reply that matched
+// plandomain.MatchVerdict while sessionID had planID sitting in
+// StatusAwaitingApproval.
+//
+// Invariant #1 of this batch's own brief ("a text verdict MUST flow
+// through the SAME authorization check the button path already
+// performs"): this calls deps.authorizeSessionAction(..., authz.
+// ActionApprovePlan) -- the EXACT SAME method (identity.go), over the
+// EXACT SAME domain check (actorauthz.OwnedOrJoined +
+// actorauthz.AuthorizeResolvedActor), that InteractiveDeps.
+// authorizeSessionAction (interactive.go) renders for a button click --
+// both are thin, per-Deps-struct-type copies of the identical §13.3
+// verdict (see identity.go's own top doc comment for why this package
+// keeps them as two separate methods rather than one shared function:
+// Deps and InteractiveDeps are two distinct struct types). Never a second,
+// looser gate: an actor who could not click Approve/Reject cannot type
+// "approve" and have it stick either.
+//
+// actorUserID.Valid == false (not yet linked) is denied here too -- ordinary
+// errors.Is(err, ErrActorNotAuthorized) covers both "never linked" and
+// "linked but insufficient role" identically (see identity.go's own
+// ErrActorNotAuthorized/ErrActorNotLinked doc comments for why that
+// collapse is safe for every caller except interactive.go's own
+// decideAndUpdateMessage/handleViewSubmission): unlike those two, there are
+// no Block Kit buttons on THIS reply to worry about stripping (this is a
+// plain-text thread reply, never a button message), so this deliberately
+// does not need ErrActorNotLinked's own more specific handling. The denial
+// text reused below (slackPlanForbiddenText) is interactive.go's own exact
+// wording for this exact denial -- a plan-decision-specific message, not
+// handler.go's own generic ackNotAuthorizedReplyText ("not authorized to
+// prompt this session"), since this is not a prompt/turn-creation denial.
+//
+// Returns OK=false ONLY for a genuine backend error from
+// authorizeSessionAction's own check (already logged there) -- mirrors
+// authorizeExistingSessionReply's own identical MEDIUM-audit-fix
+// conflation-avoidance immediately below, and Linear's own handlePlanVerdict
+// (webhook.go): flows into the SAME release-the-claim-and-retry path H2
+// already wired up for every other post-claim failure in this package.
+// Every OTHER return is OK=true: a genuine authz denial (posted, honest,
+// never a hard failure) or DecidePlan's own outcome (won or lost the
+// decision elsewhere, or a revision already in flight) -- all deliberate
+// business decisions a retry could not usefully change.
+func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *slog.Logger, channel, key string, sessionID, planID pgtype.UUID, verdict string, actorUserID pgtype.UUID) handleEventResult {
+	if err := deps.authorizeSessionAction(ctx, logger, sessionID, actorUserID, authz.ActionApprovePlan); err != nil {
+		if errors.Is(err, ErrActorNotAuthorized) {
+			logger.Warn("slack: text plan verdict denied by authz", "session_id", sessionID.String(), "plan_id", planID.String(), "user_id", actorUserID.String())
+			if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, slackPlanForbiddenText); ackErr != nil {
+				logger.Warn("slack: post not-authorized text-verdict ack failed", "error", ackErr)
+			}
+			return handleEventResult{OK: true}
+		}
+		// A genuine backend failure while checking authorization (already
+		// logged inside authorizeSessionAction) -- distinct from the real
+		// denial above -- flows into the SAME release-the-claim-and-retry
+		// path H2 already wired up for every other post-claim failure in
+		// this package (mirrors authorizeExistingSessionReply's own
+		// identical MEDIUM-audit-fix distinction just below).
+		return handleEventResult{OK: false}
+	}
+
+	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), actorUserID)
+
+	var text string
+	switch {
+	case err != nil && errors.Is(err, httpapi.ErrPlanOpenTurnInFlight):
+		text = "A revision is already in progress for this plan — try again once it completes."
+	case err != nil:
+		logger.Error("slack: text plan verdict decide plan failed", "error", err, "session_id", sessionID.String(), "plan_id", planID.String())
+		text = "Something went wrong recording this decision. Please try again."
+	default:
+		// renderPlanOutcomeText (interactive.go) reports outcome.FinalStatus
+		// honestly, whether THIS reply won (the verdict it itself just
+		// rendered) or the plan was already decided elsewhere first (a
+		// button click, or a different channel entirely) -- reused
+		// verbatim, never a second, drifted copy of the same wording.
+		text = renderPlanOutcomeText(outcome)
+	}
+
+	logger.Info("slack: text plan verdict decided", "session_id", sessionID.String(), "plan_id", planID.String(), "verdict", verdict)
+	if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, text); ackErr != nil {
+		logger.Warn("slack: post plan-verdict outcome ack failed", "error", ackErr)
 	}
 	return handleEventResult{OK: true}
 }

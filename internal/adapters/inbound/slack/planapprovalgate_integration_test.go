@@ -35,12 +35,17 @@ import (
 )
 
 // newSlackPlanGateTestRig mirrors identity_integration_test.go's own
-// newSlackHandlerRigForIdentityTests exactly, with ONE addition: Plans is
-// wired to a real *narvipg.PlanStore (Deps.Plans, handler.go's own new
-// field) -- every other test rig in this package leaves it nil (harmless,
-// see that field's own doc comment), but this file's own tests need a
-// real one for handleEvent's own new awaiting-plan gate/revise-prefix
-// check to find anything at all.
+// newSlackHandlerRigForIdentityTests exactly, with additions: Plans is
+// wired to a real *narvipg.PlanStore (Deps.Plans, handler.go's own field)
+// -- every other test rig in this package leaves it nil (harmless, see
+// that field's own doc comment), but this file's own tests need a real
+// one for handleEvent's own awaiting-plan gate/verdict/revise-prefix check
+// to find anything at all. Outbox/LinearAgentSessions (this batch's own
+// addition, "honour a typed plan verdict") are likewise real, non-nil
+// stores -- textverdict_integration_test.go's own tests (this package)
+// exercise handlePlanVerdict's own httpapi.DecidePlan call, which needs
+// both, mirroring interactive_integration_test.go's own
+// newInteractiveTestRigWithTimeouts identical wiring.
 func newSlackPlanGateTestRig(t *testing.T, pool *pgxpool.Pool, recordingSlackServer *httptest.Server, auditLog *narvipg.AuditLogStore) *slackTestRig {
 	t.Helper()
 	ctx := context.Background()
@@ -51,6 +56,8 @@ func newSlackPlanGateTestRig(t *testing.T, pool *pgxpool.Pool, recordingSlackSer
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 	threads := narvipg.NewSlackThreadSessionStore(pool)
 	plans := narvipg.NewPlanStore(pool)
+	outbox := narvipg.NewOutboxStore(pool)
+	linearAgentSessions := narvipg.NewLinearAgentSessionStore(pool)
 
 	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
 	if err != nil {
@@ -59,26 +66,28 @@ func newSlackPlanGateTestRig(t *testing.T, pool *pgxpool.Pool, recordingSlackSer
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
 	handler := slack.NewHandler(slack.Deps{
-		Pool:            pool,
-		Sessions:        sessions,
-		Turns:           turns,
-		Environments:    environments,
-		Registry:        registry,
-		Deliveries:      deliveries,
-		Threads:         threads,
-		Plans:           plans,
-		AuditLog:        auditLog,
-		Participants:    narvipg.NewParticipantStore(pool),
-		SigningSecret:   testSigningSecret,
-		BotToken:        "test-bot-token",
-		DefaultRepoName: "narvi",
-		DefaultRepoURL:  "https://github.com/khazaddev/narvi",
-		TimestampWindow: 5 * time.Minute,
-		SlackAPIBaseURL: recordingSlackServer.URL,
-		AckTimeout:      platform.DefaultTimeouts().SlackAckTimeout,
-		SlackClient:     slackapi.New(recordingSlackServer.Client(), recordingSlackServer.URL, "test-bot-token"),
-		Timeouts:        platform.DefaultTimeouts(),
-		IdentityLink:    newIdentityLinkDepsForTest(pool, auditLog),
+		Pool:                pool,
+		Sessions:            sessions,
+		Turns:               turns,
+		Environments:        environments,
+		Registry:            registry,
+		Deliveries:          deliveries,
+		Threads:             threads,
+		Plans:               plans,
+		Outbox:              outbox,
+		LinearAgentSessions: linearAgentSessions,
+		AuditLog:            auditLog,
+		Participants:        narvipg.NewParticipantStore(pool),
+		SigningSecret:       testSigningSecret,
+		BotToken:            "test-bot-token",
+		DefaultRepoName:     "narvi",
+		DefaultRepoURL:      "https://github.com/khazaddev/narvi",
+		TimestampWindow:     5 * time.Minute,
+		SlackAPIBaseURL:     recordingSlackServer.URL,
+		AckTimeout:          platform.DefaultTimeouts().SlackAckTimeout,
+		SlackClient:         slackapi.New(recordingSlackServer.Client(), recordingSlackServer.URL, "test-bot-token"),
+		Timeouts:            platform.DefaultTimeouts(),
+		IdentityLink:        newIdentityLinkDepsForTest(pool, auditLog),
 	})
 
 	return &slackTestRig{handler: handler, pool: pool, sessions: sessions, turns: turns, threads: threads, plans: plans}
