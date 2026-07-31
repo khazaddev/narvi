@@ -164,32 +164,33 @@ func TestHandler_ReplyOnMappedThread_AwaitingPlan_TextVerdict_DecidesPlan(t *tes
 // fails domain/authz.Authorize(RoleViewer -- see authz/authorize_test.go's
 // own "viewer cannot approve any plan" case), can never decide a plan by
 // typing a verdict: the plan is left untouched, no turn is created, and an
-// honest denial is posted back to the thread -- never a silent decision.
+// honest, PLAN-SPECIFIC denial is posted back to the thread -- never a
+// silent decision, and never a generic denial that reads differently from
+// the identical button-driven/Linear denial.
 //
-// Judgment call (worth recording explicitly): the denial observed here
+// LOW audit fix (confirmed finding, re-review): the denial here still
 // fires at resolveOrClaimSession's own PRE-EXISTING authorizeExistingSessionReply
-// gate (domain/authz.ActionPromptSession, handler.go), which runs
+// gate (domain/authz.ActionPromptSession, handler.go), which still runs
 // unconditionally for ANY reply on an already-mapped thread, BEFORE
 // handleEvent's own plan-verdict check ever gets a chance to run --
-// unlike Linear's webhook.go, where the verdict check runs FIRST. This is
-// safe, not a bypass: authz/authorize.go's own matrix (see its "row 2"
-// comment) gives ActionPromptSession and ActionApprovePlan the IDENTICAL
-// allow/allowIfOwned role sets today, so this outer gate is never looser
-// than handlePlanVerdict's own inner authorizeSessionAction(...,
-// ActionApprovePlan) check -- no unauthorized actor's verdict can ever
-// reach DecidePlan regardless of which of the two gates catches it first.
-// handlePlanVerdict's own explicit ActionApprovePlan check (invariant #1
-// of this batch's own brief: "flow through the SAME authorization check
-// the button path already performs") is still the semantically correct,
-// necessary one to have called -- it is what would independently deny this
-// exact case should the two actions' matrices ever diverge in the future,
-// and it is unconditionally reached (with no earlier gate at all) via the
-// button path (interactive.go) and Linear's own text-verdict path
-// (webhook.go). This test asserts the ACTUAL observed denial text
-// (ackNotAuthorizedReplyText, the outer gate's own reply) rather than
-// slackPlanForbiddenText (handlePlanVerdict's own inner reply, unreachable
-// here given today's identical matrix) -- an honest assertion of what this
-// specific scenario actually produces end-to-end.
+// unlike Linear's webhook.go, where the verdict check runs FIRST. That
+// ordering is unchanged (still safe, not a bypass -- authz/authorize.go's
+// own matrix, "row 2" comment, gives ActionPromptSession and
+// ActionApprovePlan the IDENTICAL allow/allowIfOwned role sets today, so
+// this outer gate is never looser than handlePlanVerdict's own inner
+// authorizeSessionAction(..., ActionApprovePlan) check). What this fix
+// closes is the WORDING mismatch that ordering used to produce:
+// authorizeExistingSessionReply now recognizes that this exact denied
+// reply also matches plandomain.MatchVerdict against a session with a
+// plan in StatusAwaitingApproval, and posts slackPlanForbiddenText (the
+// SAME wording handlePlanVerdict's own inner denial branch, and the
+// button path, and Linear's own text-verdict path all give for the
+// identical underlying denial) instead of the generic
+// ackNotAuthorizedReplyText a non-verdict reply still gets. This test now
+// asserts that plan-specific text, matching
+// TestHandlePlanVerdict_UnauthorizedActor_DeniedByOwnAuthorizationCheck's
+// own assertion below byte-for-byte, rather than documenting the two as a
+// deliberately-accepted mismatch.
 func TestHandler_ReplyOnMappedThread_AwaitingPlan_TextVerdict_UnauthorizedActorDenied(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -261,7 +262,7 @@ drain:
 			if got.path != "/chat.postMessage" {
 				continue
 			}
-			if text, ok := got.body["text"].(string); ok && strings.Contains(text, "not authorized to prompt this session") {
+			if text, ok := got.body["text"].(string); ok && strings.Contains(text, "don't have permission to approve or reject") {
 				gotDenialReply = true
 			}
 		default:
@@ -269,7 +270,7 @@ drain:
 		}
 	}
 	if !gotDenialReply {
-		t.Error("no chat.postMessage call carried the honest denial reply")
+		t.Error("no chat.postMessage call carried the plan-specific denial reply")
 	}
 }
 
@@ -339,17 +340,21 @@ func TestHandler_ReplyOnMappedThread_NoAwaitingPlan_TextVerdict_TreatedAsOrdinar
 // HandlePlanVerdictForTest bridge rather than through a full HTTP request.
 //
 // Why this can't be proved via a black-box HTTP request (see
-// export_test.go's own top doc comment for the full reasoning, and
+// export_test.go's own top doc comment for the full reasoning):
+// resolveOrClaimSession's own PRE-EXISTING authorizeExistingSessionReply
+// gate (ActionPromptSession) always runs first for a reply on an
+// already-mapped thread, and today's authz matrix gives it the IDENTICAL
+// role rules ActionApprovePlan has -- so no actor a full HTTP request
+// could reach handlePlanVerdict with would ever be denied BY it; the
+// denial branch this test targets would be completely unreachable, and
+// its own accidental deletion completely undetected, by this file's
+// other, HTTP-level tests alone. Since the LOW audit fix above (see
 // TestHandler_ReplyOnMappedThread_AwaitingPlan_TextVerdict_UnauthorizedActorDenied's
-// own doc comment immediately above for the SAME finding from the other
-// direction): resolveOrClaimSession's own PRE-EXISTING
-// authorizeExistingSessionReply gate (ActionPromptSession) always runs
-// first for a reply on an already-mapped thread, and today's authz matrix
-// gives it the IDENTICAL role rules ActionApprovePlan has -- so no actor a
-// full HTTP request could reach handlePlanVerdict with would ever be
-// denied BY it; the denial branch this test targets would be completely
-// unreachable, and its own accidental deletion completely undetected, by
-// this file's other, HTTP-level tests alone.
+// own doc comment) makes authorizeExistingSessionReply post this SAME
+// slackPlanForbiddenText wording for the equivalent HTTP-level scenario,
+// the two tests now assert byte-identical text for two genuinely
+// different code paths -- this one still the only test exercising
+// handlePlanVerdict's own inner check directly.
 //
 // This test bypasses resolveOrClaimSession/authorizeExistingSessionReply
 // entirely -- session/turn/plan rows are seeded directly (mirroring

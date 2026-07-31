@@ -577,7 +577,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// resolution/notification still needs to run for it regardless.
 	actorUserID, notice := resolveSlackActor(ctx, logger, deps.SlackClient, deps.IdentityLink, deps.Timeouts, ev.User)
 
-	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key, actorUserID)
+	res, ok := resolveOrClaimSession(ctx, deps, ack, logger, ev, channel, key, actorUserID, prompt)
 
 	// Security-remediation addition (Step 39, "identities + full RBAC",
 	// §13.2): notice (the "connected your account" confirmation, or --
@@ -913,10 +913,19 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *
 // with no authz check at all, unlike the brand-new-thread/
 // ActionCreateSession branch below (already gated by this Step's FIRST
 // fix pass).
-func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent, channel, key string, creator pgtype.UUID) (sessionResolution, bool) {
+//
+// prompt (the normalized reply text, handleEvent's own `prompt` variable)
+// is threaded through to authorizeExistingSessionReply below -- LOW audit
+// fix (confirmed finding, "a plan-verdict reply from an underprivileged
+// actor is denied by this function's own ActionPromptSession gate before
+// handleEvent's own plan-specific ActionApprovePlan check ever runs, so
+// the denial text/log line don't match the button/Linear equivalents for
+// the identical underlying decision"): authorizeExistingSessionReply needs
+// it to recognize that shape of reply and choose the matching denial text.
+func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Logger, ev slackEvent, channel, key string, creator pgtype.UUID, prompt string) (sessionResolution, bool) {
 	existing, err := deps.Threads.Get(ctx, channel, key)
 	if err == nil {
-		return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, existing.SessionID, creator)
+		return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, existing.SessionID, creator, prompt)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		logger.Error("slack: lookup thread mapping failed", "error", err)
@@ -1004,7 +1013,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		logger.Error("slack: lookup winning thread mapping after lost claim failed", "error", err)
 		return sessionResolution{}, false
 	}
-	return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, winner.SessionID, creator)
+	return deps.authorizeExistingSessionReply(ctx, ack, logger, channel, key, winner.SessionID, creator, prompt)
 }
 
 // authorizeExistingSessionReply gates a session id that this event's own
@@ -1031,14 +1040,47 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 // denial, which still returns ok=true (Skip: true) exactly as before this
 // fix. See handleEvent's own doc comment for how ok=false here flows into
 // the release-the-claim-and-retry path.
-func (deps Deps) authorizeExistingSessionReply(ctx context.Context, ack *ackClient, logger *slog.Logger, channel, key string, sessionID, creator pgtype.UUID) (sessionResolution, bool) {
+//
+// prompt is handleEvent's own already-normalized reply text, used ONLY on
+// the ErrActorNotAuthorized branch below -- LOW audit fix (confirmed
+// finding, "an underprivileged actor's plan-verdict reply is denied HERE,
+// by ActionPromptSession, before handleEvent's own plan-specific
+// handlePlanVerdict/ActionApprovePlan check ever gets a chance to run, so
+// the denial text/log line this function posts don't match the plan-
+// specific wording the button path (interactive.go) and Linear's own
+// equivalent text-verdict path (webhook.go) give for the identical
+// underlying denial"): this gate still runs FIRST for every reply on an
+// already-mapped thread, and its own ActionPromptSession check is still
+// what actually renders the denial (never loosened or bypassed by the
+// check below -- see this function's own "block unlinked actor state
+// changes" doc comment above for why that gate must stay authoritative);
+// the check below only decides WHICH honest text/log line describes that
+// SAME denial, matching the plan-specific one handlePlanVerdict's own
+// (still separately exercised, see authz.ActionApprovePlan's own call
+// there) denial branch would give were it ever reached directly. deps.
+// Plans == nil (never true in production wiring) skips this recognition
+// entirely, falling back to the pre-existing generic wording.
+func (deps Deps) authorizeExistingSessionReply(ctx context.Context, ack *ackClient, logger *slog.Logger, channel, key string, sessionID, creator pgtype.UUID, prompt string) (sessionResolution, bool) {
 	err := deps.authorizeSessionAction(ctx, logger, sessionID, creator, authz.ActionPromptSession)
 	if err == nil {
 		return sessionResolution{SessionID: sessionID}, true
 	}
 	if errors.Is(err, ErrActorNotAuthorized) {
-		logger.Warn("slack: reply denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
-		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackNotAuthorizedReplyText); ackErr != nil {
+		ackText := ackNotAuthorizedReplyText
+		isPlanVerdictReply := false
+		if deps.Plans != nil {
+			if planID, hasAwaiting := findAwaitingApprovalPlanID(ctx, logger, deps.Plans, sessionID); hasAwaiting {
+				if _, verdictOK := plandomain.MatchVerdict(prompt); verdictOK {
+					isPlanVerdictReply = true
+					ackText = slackPlanForbiddenText
+					logger.Warn("slack: text plan verdict denied by outer prompt-session gate", "channel", channel, "thread_key", key, "session_id", sessionID.String(), "plan_id", planID.String(), "user_id", creator.String())
+				}
+			}
+		}
+		if !isPlanVerdictReply {
+			logger.Warn("slack: reply denied by authz", "channel", channel, "thread_key", key, "user_id", creator.String())
+		}
+		if ackErr := ack.postAckBounded(ctx, deps.AckTimeout, channel, key, ackText); ackErr != nil {
 			logger.Warn("slack: post not-authorized-reply ack failed", "error", ackErr)
 		}
 		return sessionResolution{Skip: true}, true
