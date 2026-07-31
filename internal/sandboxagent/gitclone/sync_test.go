@@ -1323,8 +1323,23 @@ func TestSyncAll_FetchSucceeds_InventedBranchNotOnOrigin_FallsBackToOriginDefaul
 // real but nonexistent path -- deterministic, offline), so checkoutBranch
 // has no remote-tracking ref of any kind available and falls all the way
 // back to today's original, unchanged HEAD-based creation.
+//
+// This IS a genuine degrade (Finding 2/3's own distinction): unlike the
+// "ordinary warm boot" case (TestSyncAll_FetchSucceeds_
+// InventedBranchNotOnOrigin_NoDegradeWarningLogged, below), the default
+// branch here was never even resolved (the remote is entirely unreachable),
+// so the top-level "boot-time fetch failed" WARN must still fire -- along
+// with checkoutBase's own new HEAD-fallback WARN (Finding 5). Deliberately
+// NOT t.Parallel(): swaps the process-wide slog default logger (platform.
+// Logger(ctx) always reads slog.Default()) to capture both -- see
+// TestSyncAll_FetchFails_BranchResolvableLocally_DegradesAndLogsWarning's
+// own doc comment for why this is safe against every t.Parallel() test in
+// this file.
 func TestSyncAll_FetchFails_InventedBranchNil_DegradesAndFallsBackToHead(t *testing.T) {
-	t.Parallel()
+	originalLogger := slog.Default()
+	var logBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(originalLogger)
 
 	workspaceDir := t.TempDir()
 	repoDir := filepath.Join(workspaceDir, "repo1")
@@ -1363,6 +1378,191 @@ func TestSyncAll_FetchFails_InventedBranchNil_DegradesAndFallsBackToHead(t *test
 	if string(data) != "hello\n" {
 		t.Errorf("README.md = %q, want %q -- the invented branch must be created from local HEAD, today's unchanged fallback, since the fetch failed entirely", data, "hello\n")
 	}
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, "boot-time fetch failed") {
+		t.Errorf("log output = %q, want the genuine-degrade WARN (the remote was entirely unreachable, not just this invented branch missing)", logged)
+	}
+	if !strings.Contains(logged, "checkout base falls back to local HEAD") {
+		t.Errorf("log output = %q, want checkoutBase's own new WARN naming HEAD as the (stale) selected base", logged)
+	}
+}
+
+// TestSyncAll_FetchSucceeds_InventedBranchNotOnOrigin_NoDegradeWarningLogged
+// proves the fix for Finding 2/3: an ORDINARY warm boot (repo.Branch nil,
+// origin perfectly reachable, its own default branch fetches cleanly) must
+// NOT log the "boot-time fetch failed" WARN, even though the invented
+// "narvi/<sessionID>" branch's own fetch does fail (by construction -- that
+// exact name never exists upstream). Before this fix, this exact scenario
+// logged the misleading WARN on virtually every ordinary boot, drowning the
+// genuine-degrade signal it exists to raise. The routine origin/<default>
+// fallback IS still logged, though -- at Info, not Warn, per Finding 3's own
+// "log the resolved base and the reason whenever the preferred branch is not
+// used".
+//
+// Deliberately NOT t.Parallel() -- same logger-swap justification as this
+// file's other slog-capturing tests.
+func TestSyncAll_FetchSucceeds_InventedBranchNotOnOrigin_NoDegradeWarningLogged(t *testing.T) {
+	originalLogger := slog.Default()
+	var logBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(originalLogger)
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir) // local "main", README.md = "hello\n" -- stale relative to origin's own tip below
+
+	originDir := newLocalOrigin(t)
+	updateOriginDefaultBranch(t, originDir, "origin's real default-branch tip\n")
+
+	runGit(t, repoDir, "remote", "add", "origin", originDir)
+
+	sessionID := "session-fetch-invented-branch-no-warn"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git"}, // Branch nil -> invented narvi/<sessionID>
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, sessionID,
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+
+	logged := logBuf.String()
+	if strings.Contains(logged, "boot-time fetch failed") {
+		t.Errorf("log output = %q, want NO degrade WARN -- this is an ordinary warm boot (origin reachable, default branch fetched cleanly), not a genuine degrade", logged)
+	}
+	if !strings.Contains(logged, "checkout base falls back to origin's default branch") {
+		t.Errorf("log output = %q, want the routine Info-level base-selection log naming origin/<default> as the reason the preferred (invented) branch wasn't used", logged)
+	}
+	if strings.Contains(logged, `"level":"WARN"`) {
+		t.Errorf("log output = %q, want no WARN-level line at all for this ordinary boot", logged)
+	}
+
+	// Finding 2 (audit-remediation batch B7): the Info-level fallback log
+	// line previously asserted a single invented reason ("target branch does
+	// not exist as a fetched remote-tracking ref") without ever including
+	// the actual gitFetchStep targetFetchErr for the invented branch's own
+	// fetch attempt -- discarding it entirely, even at Info. It must now be
+	// present and non-empty: a real, non-obvious cause (a transient auth/
+	// network blip specific to this branch's own fetch) would otherwise
+	// never surface anywhere in the log, indistinguishable from this
+	// routine, expected case.
+	if !strings.Contains(logged, `"fetch_error"`) {
+		t.Fatalf("log output = %q, want the checkout-base fallback Info line to carry a fetch_error field (the actual, real underlying git error), not silently discard it", logged)
+	}
+	if strings.Contains(logged, `"fetch_error":null`) || strings.Contains(logged, `"fetch_error":""`) {
+		t.Errorf("log output = %q, want fetch_error to carry the real underlying git fetch failure, not a null/empty placeholder", logged)
+	}
+}
+
+// TestSyncAll_DefaultBranchFetchFailsIndependently_LogsWarningEvenWhenTargetFetchSucceeds
+// proves the fix for Finding 5's second silently-swallowed error: gitFetchStep
+// used to discard defaultFetchErr ENTIRELY whenever branch != defaultBranch,
+// even on a boot where the actual target-branch fetch succeeds fine (no
+// "boot-time fetch failed" WARN would ever fire on this path at all -- the
+// only place that error could otherwise have surfaced).
+//
+// Origin is built with two branches with COMPLETELY DISJOINT history:
+// "feature" (this test's own explicit target, a REAL commit) and "main"
+// (HEAD's own default) -- but "main" is never given a real commit at all:
+// its own refs/heads/main file is written directly (bypassing `git
+// update-ref`, which would refuse a nonexistent object) with a well-formed
+// but entirely fictitious 40-hex-digit SHA that has never existed anywhere.
+// `git ls-remote --symref` still resolves defaultBranch to "main" correctly
+// (it reports the ref NAME/target from the ref store directly, never
+// validating that the SHA it names actually resolves to a real object --
+// verified directly against the real git binary, this package's own
+// established philosophy); `git fetch -- main` genuinely and
+// deterministically fails ("not our ref"), regardless of any gc/pack timing
+// -- unlike deleting a real loose object after the fact (this test's own
+// earlier, flakier approach under heavy parallel load: gc/pack timing is
+// never a factor when the object never existed in the first place).
+// "feature"'s own disjoint object graph is entirely untouched and fetches
+// fine.
+func TestSyncAll_DefaultBranchFetchFailsIndependently_LogsWarningEvenWhenTargetFetchSucceeds(t *testing.T) {
+	originalLogger := slog.Default()
+	var logBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(originalLogger)
+
+	originDir := filepath.Join(t.TempDir(), "origin")
+	if err := os.MkdirAll(originDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", originDir, err)
+	}
+	runGit(t, originDir, "init", "-b", "main")
+	runGit(t, originDir, "config", "user.email", "test@example.com")
+	runGit(t, originDir, "config", "user.name", "Test")
+
+	// "feature" is the only branch that ever gets a real commit -- created
+	// via --orphan (works fine against main's still-unborn HEAD), so its own
+	// object graph shares nothing with "main" at all.
+	runGit(t, originDir, "checkout", "--orphan", "feature")
+	if err := os.WriteFile(filepath.Join(originDir, "feature-file.txt"), []byte("feature content\n"), 0o644); err != nil {
+		t.Fatalf("write feature-file.txt: %v", err)
+	}
+	runGit(t, originDir, "add", ".")
+	runGit(t, originDir, "commit", "-m", "feature (disjoint history)")
+
+	// Point HEAD's own symref back at "main" (a lightweight ref-file rewrite
+	// -- no working-tree checkout, so it doesn't care that main has no real
+	// commit to check out), then write refs/heads/main directly with a
+	// fictitious SHA -- git's own plain-text loose-ref format, never once
+	// touching `git update-ref`/`git commit`, either of which would refuse
+	// (or be unable) to point a real ref at a nonexistent object.
+	runGit(t, originDir, "symbolic-ref", "HEAD", "refs/heads/main")
+	fakeSHA := strings.Repeat("ab", 20)
+	if err := os.WriteFile(filepath.Join(originDir, ".git", "refs", "heads", "main"), []byte(fakeSHA+"\n"), 0o644); err != nil {
+		t.Fatalf("write fictitious refs/heads/main: %v", err)
+	}
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	initRepo(t, repoDir)
+	runGit(t, repoDir, "remote", "add", "origin", originDir)
+
+	targetBranch := "feature"
+	repos := []sessionconfig.SessionConfigReposElem{
+		{Name: "repo1", Url: "https://example.invalid/repo1.git", Branch: &targetBranch},
+	}
+
+	sup := supervisor.New()
+	results, err := gitclone.SyncAll(context.Background(), sup, workspaceDir, repos, nil, "session-default-branch-fetch-fails",
+		testFetchStepTimeout, testSyncStepTimeout, testStopGrace, func(string, string, string) {})
+	if err != nil {
+		t.Fatalf("SyncAll() error = %v, want nil (the EXPLICIT target branch's own fetch succeeded)", err)
+	}
+
+	got := results[0]
+	if got.Err != nil {
+		t.Fatalf("results[0].Err = %v, want nil", got.Err)
+	}
+	if got.State != gitstate.StateReady {
+		t.Errorf("results[0].State = %s, want ready", got.State)
+	}
+	if head := currentBranch(t, repoDir); head != targetBranch {
+		t.Errorf("checked-out branch = %q, want %q", head, targetBranch)
+	}
+
+	logged := logBuf.String()
+	if strings.Contains(logged, "boot-time fetch failed") {
+		t.Errorf("log output = %q, want NO top-level degrade WARN -- the target branch's own fetch succeeded", logged)
+	}
+	if !strings.Contains(logged, "fetch of resolved default branch failed") {
+		t.Errorf("log output = %q, want a WARN naming the independently-failed default-branch fetch (previously silently discarded)", logged)
+	}
+	if !strings.Contains(logged, `"default_branch":"main"`) {
+		t.Errorf("log output = %q, want it to name the affected default branch %q", logged, "main")
+	}
 }
 
 // TestSyncAll_FetchFails_BranchResolvableLocally_DegradesAndLogsWarning
@@ -1370,17 +1570,20 @@ func TestSyncAll_FetchFails_InventedBranchNil_DegradesAndFallsBackToHead(t *test
 // locally: the fetch fails entirely, but nothing upstream was ever needed
 // to check this branch out, so SyncAll must degrade-and-proceed via
 // today's existing local checkout path AND log the boot-time warning §19.3
-// requires ("recorded in the boot log").
+// requires ("recorded in the boot log") -- AND the separate
+// resolveDefaultBranch failure this same scenario triggers (origin is
+// entirely unreachable), previously silently discarded (Finding 5).
 //
-// Deliberately NOT t.Parallel(): this is the one test in this file that
-// temporarily swaps the process-wide slog default logger (platform.
-// Logger(ctx) always reads slog.Default()) to capture that exact warning.
-// Go's own test scheduler never interleaves a NON-parallel test's body with
-// any OTHER test's body in the same package -- every t.Parallel() test
-// above pauses immediately at that call and only resumes once every
-// sequential (non-parallel) test in this file has already finished
-// running -- so this global mutation cannot race with any other test here,
-// specifically because this test never calls t.Parallel() itself.
+// Deliberately NOT t.Parallel(): this test (and its siblings added
+// alongside it in this Step) temporarily swaps the process-wide slog
+// default logger (platform.Logger(ctx) always reads slog.Default()) to
+// capture these exact lines. Go's own test scheduler never interleaves a
+// NON-parallel test's body with any OTHER test's body in the same package
+// -- every t.Parallel() test above pauses immediately at that call and only
+// resumes once every sequential (non-parallel) test in this file has
+// already finished running -- so this global mutation cannot race with any
+// other test here, specifically because none of these tests calls
+// t.Parallel() themselves.
 func TestSyncAll_FetchFails_BranchResolvableLocally_DegradesAndLogsWarning(t *testing.T) {
 	originalLogger := slog.Default()
 	var logBuf bytes.Buffer
@@ -1430,6 +1633,12 @@ func TestSyncAll_FetchFails_BranchResolvableLocally_DegradesAndLogsWarning(t *te
 	}
 	if !strings.Contains(logged, targetBranch) {
 		t.Errorf("log output = %q, want it to name the affected branch %q", logged, targetBranch)
+	}
+	// Finding 5: resolveDefaultBranch's own error (origin is entirely
+	// unreachable here, so ls-remote --symref fails too) must no longer be
+	// silently discarded.
+	if !strings.Contains(logged, "resolve default branch failed") {
+		t.Errorf("log output = %q, want it to also contain the resolve-default-branch failure warning (previously silently discarded)", logged)
 	}
 }
 
