@@ -65,6 +65,57 @@ func isContextOverflowError(err *openCodeTaggedError) bool {
 	return err != nil && err.Name == "ContextOverflowError"
 }
 
+// isTransientAPIError implements this Step's own ("typed transient-error
+// retry for the OpenCode adapter") design point — classify ONLY on the
+// typed field OpenCode itself already computed, never on a substring of
+// outcome.Reason or any raw provider error body: err.Name == "APIError" &&
+// err.Data != nil && err.Data.IsRetryable (openCodeTaggedError.Data,
+// types.go — decoded from the real, live-fetched OpenAPI schema's own
+// APIError.data.isRetryable, REQUIRED whenever "data" is present at all).
+// The same typed-discriminator discipline isContextOverflowError above
+// already follows.
+//
+// Deliberately checks err.Name == "APIError" FIRST, never Data.IsRetryable
+// alone: Data is decoded generically on openCodeTaggedError for every
+// tagged-union member (types.go), but only APIError's own real schema
+// defines "isRetryable" at all — a differently-shaped member that also
+// happens to carry a "data" object (e.g. MessageAbortedError's own real,
+// live-verified payload, {"data":{"message":"Aborted"}}, which has no
+// "isRetryable" key whatsoever) would still decode into a non-nil Data
+// whose IsRetryable is simply Go's zero value (false) — never a genuine
+// verdict from OpenCode about anything. Checking Name first prevents ever
+// mistaking that zero value for a real "permanent" classification from a
+// member that never expressed an opinion on retryability at all.
+//
+// A nil err, or a non-nil err with a nil Data (a same-name payload that
+// happened to omit "data" entirely — the schema says "data" itself is
+// optional on openCodeTaggedError even though "isRetryable" is required
+// WITHIN it, and this adapter never assumes a wire payload is
+// well-formed), is never transient: fail closed, exactly matching
+// isContextOverflowError's own nil handling above.
+//
+// Deliberately excludes local-connection failures BY CONSTRUCTION, not via
+// a special case checked here: a failure to reach OpenCode's OWN local
+// HTTP server (e.g. postPromptAsync's initial dispatch or its retried
+// re-dispatch, both routed through client.go's doJSON) surfaces as a plain
+// Go error returned directly from an HTTP round trip — there is no
+// OpenCode-side JSON payload to decode in that case at all (the call to
+// OpenCode itself never got a response to decode), so it can never reach
+// this function, or be handed to it, in the first place: this function
+// (and the retry path built on it, Adapter.finalizeOrRecoverFromOverflow/
+// attemptTransientRetry, adapter.go) only ever classifies the typed union
+// OpenCode's OWN session-level error events (session.error/
+// message.updated's info.error, or the final-message-fetch fallback's own
+// last.Info.Error) carry — never the adapter's own outbound HTTP failures
+// talking to OpenCode itself. Retrying THAT class of failure would hide a
+// crashed local OpenCode process behind a backoff-and-retry loop — exactly
+// the "sandbox-health signal, not a provider blip" conflation this Step's
+// own design avoids by construction, never by pattern-matching a
+// particular error shape.
+func isTransientAPIError(err *openCodeTaggedError) bool {
+	return err != nil && err.Name == "APIError" && err.Data != nil && err.Data.IsRetryable
+}
+
 // enrichReasonForFailedRecovery builds the finalize reason used when a
 // §7.2 compaction-retry recovery attempt itself failed -- either
 // forceCompaction (the POST /session/{id}/summarize call) errored, or the
@@ -103,6 +154,45 @@ func enrichReasonForRepeatedOverflow(retryReason *string) string {
 		reason = *retryReason
 	}
 	return fmt.Sprintf("%s (a compaction retry was already attempted this turn; the retried prompt also overflowed)", reason)
+}
+
+// enrichReasonForFailedTransientRetry is enrichReasonForFailedRecovery's own
+// sibling for this Step's own transient-APIError retry
+// (Adapter.attemptTransientRetry, adapter.go): built when the retry attempt
+// itself failed — the retried postPromptAsync dispatch errored at the
+// transport level, or the bounded backoff wait was interrupted by context
+// cancellation. A DELIBERATE SEPARATE function, not a reuse of
+// enrichReasonForFailedRecovery above with a relabeled detail string: this
+// failure class never forces a compaction (see attemptTransientRetry's own
+// doc comment) — reusing that function's own fixed "compaction retry
+// attempted and failed" wording verbatim would misdescribe what actually
+// happened to an operator reading the final reason string. Mirrors its
+// sibling's own "name BOTH facts" shape exactly: the original transient
+// error's own reason, AND that a retry was attempted and ALSO failed.
+func enrichReasonForFailedTransientRetry(originalReason *string, detail string) string {
+	original := "opencode: APIError"
+	if originalReason != nil {
+		original = *originalReason
+	}
+	return fmt.Sprintf("%s (transient-error retry attempted and failed: %s)", original, detail)
+}
+
+// enrichReasonForRepeatedTransientFailure is enrichReasonForRepeatedOverflow's
+// own sibling for this Step's own transient-APIError retry: built when the
+// RETRIED prompt also failed with another transient APIError
+// (Adapter.finalizeOrRecoverFromOverflow, adapter.go,
+// ts.compactionAlreadyAttempted() already true — the SAME shared one-way
+// latch §7.2's own compaction retry uses, reused here rather than a
+// parallel guard). Worded for this failure class instead of reusing
+// enrichReasonForRepeatedOverflow's own "also overflowed" text, which would
+// simply be false here — mirrors its sibling's own "never a silent double
+// failure" rationale exactly.
+func enrichReasonForRepeatedTransientFailure(retryReason *string) string {
+	reason := "opencode: APIError"
+	if retryReason != nil {
+		reason = *retryReason
+	}
+	return fmt.Sprintf("%s (a transient-error retry was already attempted this turn; the retried prompt also failed)", reason)
 }
 
 // subTaskOutcome maps an already-derived turn-level outcome onto

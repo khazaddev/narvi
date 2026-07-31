@@ -65,6 +65,13 @@ const (
 	// observed ~2s for one; testWait's own 15s budget below already
 	// covers ordinary test polling, this bounds the HTTP call itself).
 	testSummarizeTimeout = 60 * time.Second
+
+	// testTransientRetryBackoff is the New() param backing
+	// a.transientRetryBackoff (this Step: "typed transient-error retry for
+	// the OpenCode adapter") -- kept short (well below testWait's own 15s
+	// polling budget above) so a test exercising the retry path does not
+	// spend most of its own runtime just waiting out the backoff.
+	testTransientRetryBackoff = 10 * time.Millisecond
 )
 
 // startServer spawns a REAL `opencode serve` process — via
@@ -104,7 +111,7 @@ func startServer(t *testing.T) string {
 // stopping its persistent SSE loop via t.Cleanup.
 func newAdapter(t *testing.T) *Adapter {
 	t.Helper()
-	a := New(startServer(t), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(startServer(t), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 	return a
 }

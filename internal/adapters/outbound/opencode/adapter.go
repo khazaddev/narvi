@@ -164,6 +164,19 @@ type Adapter struct {
 	// message-list call.
 	summarizeTimeout time.Duration
 
+	// transientRetryBackoff bounds how long Adapter.attemptTransientRetry
+	// (this Step: "typed transient-error retry for the OpenCode adapter")
+	// waits before re-dispatching the SAME prompt after a first-time
+	// transient APIError (isTransientAPIError, outcome.go) --
+	// platform.Timeouts.OpenCodeTransientRetryBackoff. Deliberately a
+	// SEPARATE field from summarizeTimeout above (§7.2's own compaction
+	// retry needs no backoff at all -- forceCompaction itself is the
+	// recovery action there, not a wait) -- see that field's own doc
+	// comment (platform/timeouts.go) for why an immediate retry of a
+	// provider blip (429/529) is generally still likely to fail again
+	// instantly without a short pause first.
+	transientRetryBackoff time.Duration
+
 	mu               sync.Mutex
 	currentSessionID string
 
@@ -236,37 +249,43 @@ var _ ports.AgentRuntime = (*Adapter)(nil)
 // pattern internal/sandboxagent/supervisor.Supervisor.Spawn already
 // establishes for its own reap goroutine.
 //
-// sseInactivityTimeout, reconnectInterval, requestTimeout, and
-// summarizeTimeout are, in production, platform.Timeouts.
+// sseInactivityTimeout, reconnectInterval, requestTimeout, summarizeTimeout,
+// and transientRetryBackoff are, in production, platform.Timeouts.
 // SSEInactivityTimeout, OpenCodeSSEReconnectInterval, OpenCodeRequestTimeout,
-// and OpenCodeSummarizeTimeout respectively: sseInactivityTimeout is the
-// per-turn silence threshold both waitForTurn's own fallback and its own
-// disconnect-during-this-idle-episode disambiguation (disconnectedSince)
-// share; reconnectInterval is how long runEventLoop waits before retrying a
-// dropped GET /event connection (deliberately much shorter than
-// sseInactivityTimeout — Finding 2 — so reconnection has a real chance to
-// win against the fallback); requestTimeout bounds every doJSON-routed HTTP
-// call (Finding 3), applied per-request in client.go, never as a
-// client-wide http.Client.Timeout (which would also incorrectly bound the
-// persistent SSE connection below); summarizeTimeout (§7.2) bounds
-// forceCompaction's own POST /session/{id}/summarize call specifically,
-// deliberately separate from and more generous than requestTimeout.
-func New(baseURL string, sseInactivityTimeout, reconnectInterval, requestTimeout, summarizeTimeout time.Duration) *Adapter {
+// OpenCodeSummarizeTimeout, and OpenCodeTransientRetryBackoff respectively:
+// sseInactivityTimeout is the per-turn silence threshold both waitForTurn's
+// own fallback and its own disconnect-during-this-idle-episode
+// disambiguation (disconnectedSince) share; reconnectInterval is how long
+// runEventLoop waits before retrying a dropped GET /event connection
+// (deliberately much shorter than sseInactivityTimeout — Finding 2 — so
+// reconnection has a real chance to win against the fallback); requestTimeout
+// bounds every doJSON-routed HTTP call (Finding 3), applied per-request in
+// client.go, never as a client-wide http.Client.Timeout (which would also
+// incorrectly bound the persistent SSE connection below); summarizeTimeout
+// (§7.2) bounds forceCompaction's own POST /session/{id}/summarize call
+// specifically, deliberately separate from and more generous than
+// requestTimeout; transientRetryBackoff (this Step: "typed transient-error
+// retry for the OpenCode adapter") bounds Adapter.attemptTransientRetry's own
+// wait before re-dispatching after a first-time transient APIError — see
+// that field's own doc comment above for why this, unlike the compaction
+// retry, needs a backoff at all.
+func New(baseURL string, sseInactivityTimeout, reconnectInterval, requestTimeout, summarizeTimeout, transientRetryBackoff time.Duration) *Adapter {
 	bgCtx, cancel := context.WithCancel(context.Background())
 
 	a := &Adapter{
-		baseURL:              strings.TrimSuffix(baseURL, "/"),
-		httpClient:           &http.Client{},
-		sseInactivityTimeout: sseInactivityTimeout,
-		reconnectInterval:    reconnectInterval,
-		requestTimeout:       requestTimeout,
-		summarizeTimeout:     summarizeTimeout,
-		pollInterval:         sseInactivityTimeout / ssePollDivisor,
-		turns:                make(map[string]*turnState),
-		subtaskSessions:      make(map[string]subtaskSession),
-		connectedCh:          make(chan struct{}),
-		bgCtx:                bgCtx,
-		bgCancel:             cancel,
+		baseURL:               strings.TrimSuffix(baseURL, "/"),
+		httpClient:            &http.Client{},
+		sseInactivityTimeout:  sseInactivityTimeout,
+		reconnectInterval:     reconnectInterval,
+		requestTimeout:        requestTimeout,
+		summarizeTimeout:      summarizeTimeout,
+		transientRetryBackoff: transientRetryBackoff,
+		pollInterval:          sseInactivityTimeout / ssePollDivisor,
+		turns:                 make(map[string]*turnState),
+		subtaskSessions:       make(map[string]subtaskSession),
+		connectedCh:           make(chan struct{}),
+		bgCtx:                 bgCtx,
+		bgCancel:              cancel,
 	}
 
 	a.group.Go(func() error {
@@ -527,18 +546,19 @@ func (a *Adapter) waitForTurn(ctx context.Context, sessionID string, ts *turnSta
 					// (in which case returning early would be wrong
 					// regardless):
 					//
-					//   - It launched a brand-new compaction retry
+					//   - It launched a brand-new recovery retry
 					//     (finalizeOrRecoverFromOverflow's own
 					//     overflowActionBeginRetry branch, discovered via
 					//     THIS fallback path rather than the live SSE one):
-					//     attemptCompactionRetry (adapter.go) always
-					//     eventually calls a.finalize on every one of its own
-					//     failure paths, or lets a successful re-dispatch's
-					//     own eventual live session.idle/session.error do so
-					//     instead.
+					//     attemptCompactionRetry or attemptTransientRetry
+					//     (adapter.go, whichever this turn's own error kind
+					//     selected) always eventually calls a.finalize on
+					//     every one of its own failure paths, or lets a
+					//     successful re-dispatch's own eventual live
+					//     session.idle/session.error do so instead.
 					//   - It abandoned (turnState.resolveOverflowAction's own
 					//     overflowActionStale, turn.go, reached via
-					//     finalizeOrRecoverFromOverflow) because a compaction
+					//     finalizeOrRecoverFromOverflow) because a recovery
 					//     retry is live right now on some OTHER goroutine
 					//     (which owes this turn a finalize the exact same
 					//     way), or because this turn saw genuine activity
@@ -615,36 +635,40 @@ func (a *Adapter) waitForTurn(ctx context.Context, sessionID string, ts *turnSta
 func (a *Adapter) shouldFinalizeByFallback(ts *turnState) bool {
 	if ts.isCompacting() {
 		// §7.2 Finding 1's own fix: mirrors dispatchEvent's own four
-		// isCompacting-guarded cases (sse.go) — a genuine compaction retry
-		// (Adapter.attemptCompactionRetry, launched by
-		// finalizeOrRecoverFromOverflow below) may be in flight for this
-		// exact turn RIGHT NOW, bounded independently by a.summarizeTimeout/
-		// a.requestTimeout via forceCompaction/postPromptAsync's own
-		// doJSONTimeout wraps (compact.go, session.go) — NOT by this
-		// fallback. If the compaction's own sub-turn goes silent on the SSE
-		// stream for longer than a.sseInactivityTimeout before producing its
-		// own first event (e.g. the underlying provider is slow to emit a
-		// first token for the compaction agent — very plausible for exactly
-		// the large-context case this feature exists for), finalizeByFallback
-		// must NOT step in: it would fetch the final-state snapshot, still
-		// see the ORIGINAL ContextOverflowError-shaped message, and — since
-		// ts.compactionAlreadyAttempted() is already true the moment the
-		// attempt began — take the "already attempted" branch and finalize
-		// this turn immediately, closing ts.done and unregistering sessionID
-		// from a.turns WHILE the real background retry goroutine is still
-		// running. That orphaned goroutine's own eventual forceCompaction/
-		// postPromptAsync calls would then re-dispatch the stale original
-		// prompt against a session id a LATER, unrelated turn may already
-		// have re-registered by then (registerTurn unconditionally overwrites
-		// the map entry), corrupting that turn's own turnState with orphaned
-		// SSE traffic. The retry goroutine itself (attemptCompactionRetry) is
-		// the sole authority for finalizing this turn while compacting is
-		// true: it always eventually calls a.finalize on every one of its own
-		// failure paths, and only clears compacting to false once it is
-		// genuinely done (success: after re-dispatching via postPromptAsync;
-		// see that method's own doc comment for why even that clear is
-		// deliberately not any earlier) — at which point normal fallback
-		// evaluation below resumes as usual.
+		// isCompacting-guarded cases (sse.go) — a genuine recovery retry
+		// (Adapter.attemptCompactionRetry for a ContextOverflowError, or
+		// Adapter.attemptTransientRetry for a transient APIError — this
+		// Step's own retry, launched by finalizeOrRecoverFromOverflow below,
+		// sharing this SAME guard rather than a parallel one) may be in
+		// flight for this exact turn RIGHT NOW, bounded independently by
+		// a.summarizeTimeout/a.requestTimeout/a.transientRetryBackoff via
+		// forceCompaction/postPromptAsync's own doJSONTimeout wraps
+		// (compact.go, session.go) — NOT by this fallback. If the retry's
+		// own sub-turn goes silent on the SSE stream for longer than
+		// a.sseInactivityTimeout before producing its own first event (e.g.
+		// the underlying provider is slow to emit a first token — very
+		// plausible for exactly the large-context/overloaded-provider cases
+		// these two retries exist for), finalizeByFallback must NOT step in:
+		// it would fetch the final-state snapshot, still see the ORIGINAL
+		// error-shaped message, and — since ts.compactionAlreadyAttempted()
+		// is already true the moment the attempt began — take the "already
+		// attempted" branch and finalize this turn immediately, closing
+		// ts.done and unregistering sessionID from a.turns WHILE the real
+		// background retry goroutine is still running. That orphaned
+		// goroutine's own eventual forceCompaction/postPromptAsync calls
+		// would then re-dispatch the stale original prompt against a
+		// session id a LATER, unrelated turn may already have re-registered
+		// by then (registerTurn unconditionally overwrites the map entry),
+		// corrupting that turn's own turnState with orphaned SSE traffic.
+		// The retry goroutine itself (attemptCompactionRetry or
+		// attemptTransientRetry, whichever this turn's own recovery kind
+		// launched) is the sole authority for finalizing this turn while
+		// compacting is true: it always eventually calls a.finalize on
+		// every one of its own failure paths, and only clears compacting to
+		// false once it is genuinely done (success: after re-dispatching
+		// via postPromptAsync; see that method's own doc comment for why
+		// even that clear is deliberately not any earlier) — at which point
+		// normal fallback evaluation below resumes as usual.
 		return false
 	}
 	if !ts.idleFor(a.sseInactivityTimeout) {
@@ -756,14 +780,29 @@ func (a *Adapter) finalizeByFallback(ctx context.Context, sessionID string, ts *
 // hiccup right when the model overflows gets the exact same recovery
 // treatment as the live session.idle path.
 //
+// WIDENED by this Step ("typed transient-error retry for the OpenCode
+// adapter") to also cover a first-time transient APIError
+// (isTransientAPIError, outcome.go) — deliberately reusing this SAME
+// decision point and this SAME turnState guard (ts.compacting/
+// ts.compactionAttempted, turn.go) rather than building a second, parallel
+// one: both failure classes need the exact same three things — suppress
+// in-flight-recovery SSE noise, claim an atomic at-most-once retry, and
+// never leave a turn without its one execution_complete — and the name
+// "isOverflow" passed to resolveOverflowAction below now really means "is
+// this outcome eligible for EITHER of this turn's two recovery kinds",
+// still gating the SAME one-way latch either kind shares (§7.2's own
+// "at most one retry per turn" is now, unchanged in mechanism, "at most one
+// RECOVERY ATTEMPT of either kind per turn").
+//
 // err is the SAME typed *openCodeTaggedError each caller already had in
 // hand at the point it derived outcome (ts.errorForOutcome() for the live
 // path, last.Info.Error for the fallback path, possibly nil for
 // finalizeByFallback's own "fetch itself failed" case) — threaded through
 // explicitly rather than re-derived here, and checked via its own typed
-// Name field (isContextOverflowError, outcome.go), never string-matched
-// out of outcome.Reason (matching this package's own "typed discriminator,
-// not string-matching" discipline, e.g. deriveOutcome itself).
+// Name/Data fields (isContextOverflowError/isTransientAPIError, outcome.go),
+// never string-matched out of outcome.Reason (matching this package's own
+// "typed discriminator, not string-matching" discipline, e.g. deriveOutcome
+// itself).
 //
 // snapshotTime is forwarded, unexamined, straight into
 // turnState.resolveOverflowAction (turn.go) — see that method's own doc
@@ -789,30 +828,37 @@ func (a *Adapter) finalizeByFallback(ctx context.Context, sessionID string, ts *
 //     isCompacting() guard (checked just before this call, sse.go) makes
 //     this branch effectively unreachable for that caller in practice;
 //     finalizeByFallback is the caller this exists for.
-//   - overflowActionFinalizeDirect: err is not a ContextOverflowError —
-//     finalize exactly as derived (unchanged behavior).
-//   - overflowActionAlreadyAttempted: err IS again a ContextOverflowError,
-//     but a compaction retry was already fully attempted for this turn (and
-//     resolveOverflowAction has just confirmed, atomically, that nothing is
-//     live right now and nothing happened since snapshotTime) — finalize,
-//     but with outcome.Reason enriched (enrichReasonForRepeatedOverflow,
+//   - overflowActionFinalizeDirect: err is neither a ContextOverflowError
+//     nor a transient APIError — finalize exactly as derived (unchanged
+//     behavior).
+//   - overflowActionAlreadyAttempted: err IS again a recoverable error (of
+//     either kind), but a recovery retry was already fully attempted for
+//     this turn (and resolveOverflowAction has just confirmed, atomically,
+//     that nothing is live right now and nothing happened since
+//     snapshotTime) — finalize, but with outcome.Reason enriched
+//     (enrichReasonForRepeatedOverflow for a ContextOverflowError,
+//     enrichReasonForRepeatedTransientFailure for a transient APIError —
 //     outcome.go) so an operator reading the final reason string can tell a
 //     recovery WAS attempted, never a silent double failure
-//     indistinguishable from a first-time, never-retried overflow (§7.2
-//     point 3).
-//   - overflowActionBeginRetry: a genuine first-time ContextOverflowError,
-//     not yet attempted, and resolveOverflowAction has ATOMICALLY marked
+//     indistinguishable from a first-time, never-retried failure (§7.2
+//     point 3, extended to this Step's own failure class).
+//   - overflowActionBeginRetry: a genuine first-time recoverable error, not
+//     yet attempted, and resolveOverflowAction has ATOMICALLY marked
 //     ts.compactionAttempted/ts.compacting true as part of the SAME check
 //     (§7.2 Finding 2's own original "fold the check and the two writes
 //     into one ts.mu-guarded step" fix, now additionally folded together
 //     with the staleness check above) — this call launches the actual
-//     recovery attempt (attemptCompactionRetry below) on ITS OWN tracked
-//     background goroutine via a.group.Go — this Adapter's own existing
-//     errgroup field, the same "background work via the type's own
-//     errgroup field, never a bare go statement" convention New's own
-//     persistent SSE loop already establishes — rather than blocking
-//     dispatchEvent's own calling goroutine (the persistent SSE reader) for
-//     however long forceCompaction+the retried postPromptAsync take.
+//     recovery attempt on ITS OWN tracked background goroutine via
+//     a.group.Go — this Adapter's own existing errgroup field, the same
+//     "background work via the type's own errgroup field, never a bare go
+//     statement" convention New's own persistent SSE loop already
+//     establishes — rather than blocking dispatchEvent's own calling
+//     goroutine (the persistent SSE reader) for however long the recovery
+//     action takes. WHICH recovery action depends on err's own typed kind:
+//     a ContextOverflowError launches attemptCompactionRetry (forces a
+//     compaction first, §7.2); a transient APIError launches
+//     attemptTransientRetry below instead (a bounded backoff wait, no
+//     compaction at all — see that function's own doc comment for why).
 //
 // Uses a.bgCtx as the recovery attempt's own base context, NOT
 // context.Background() and NOT either caller's own per-call ctx (dispatchEvent
@@ -832,9 +878,17 @@ func (a *Adapter) finalizeByFallback(ctx context.Context, sessionID string, ts *
 // per call, so the whole attempt is bounded by summarizeTimeout+requestTimeout
 // even if Close is never called at all.
 func (a *Adapter) finalizeOrRecoverFromOverflow(sessionID string, ts *turnState, outcome turnOutcome, err *openCodeTaggedError, snapshotTime time.Time) {
-	switch ts.resolveOverflowAction(snapshotTime, isContextOverflowError(err)) {
+	kind := recoveryKindNone
+	switch {
+	case isTransientAPIError(err):
+		kind = recoveryKindTransientAPI
+	case isContextOverflowError(err):
+		kind = recoveryKindCompaction
+	}
+
+	switch ts.resolveOverflowAction(snapshotTime, kind) {
 	case overflowActionStale:
-		slog.Warn("opencode: this turn's own state changed since this outcome was derived (a compaction retry "+
+		slog.Warn("opencode: this turn's own state changed since this outcome was derived (a recovery retry "+
 			"is live right now, or activity was recorded since this call's own snapshot) -- abandoning, "+
 			"another goroutine already owns this turn's outcome",
 			"sessionID", sessionID)
@@ -844,16 +898,37 @@ func (a *Adapter) finalizeOrRecoverFromOverflow(sessionID string, ts *turnState,
 		a.finalize(ts, outcome)
 
 	case overflowActionAlreadyAttempted:
-		// A compaction retry was already fully attempted for this turn, and
-		// resolveOverflowAction has just confirmed atomically that nothing is
-		// live right now and nothing happened since snapshotTime. This call
-		// must NOT launch a second attempt: enrich and finalize instead.
-		reason := enrichReasonForRepeatedOverflow(outcome.Reason)
-		slog.Warn("opencode: retried prompt also overflowed, finalizing as failed",
+		// A recovery retry was already fully attempted for this turn, and
+		// resolveOverflowAction has just confirmed atomically that nothing
+		// is live right now and nothing happened since snapshotTime. This
+		// call must NOT launch a second attempt: enrich and finalize
+		// instead. Deliberately branches on ts.attemptedRecoveryKind() --
+		// WHICH kind this turn's one shot was ACTUALLY spent on -- never on
+		// this CURRENT failure's own kind (`kind` above): a turn whose
+		// first-time ContextOverflowError already consumed the shared latch,
+		// whose retried prompt then hits a transient APIError instead
+		// (`kind` would read recoveryKindTransientAPI here), must still be
+		// described as a compaction retry having already been attempted --
+		// that IS what actually happened this turn.
+		var reason string
+		if ts.attemptedRecoveryKind() == recoveryKindTransientAPI {
+			reason = enrichReasonForRepeatedTransientFailure(outcome.Reason)
+		} else {
+			reason = enrichReasonForRepeatedOverflow(outcome.Reason)
+		}
+		slog.Warn("opencode: retried prompt also failed, finalizing as failed",
 			"sessionID", sessionID, "reason", reason)
 		a.finalize(ts, turnOutcome{Outcome: outcome.Outcome, Reason: &reason})
 
 	case overflowActionBeginRetry:
+		if kind == recoveryKindTransientAPI {
+			slog.Warn("opencode: transient provider error detected, attempting retry", "sessionID", sessionID)
+			a.group.Go(func() error {
+				a.attemptTransientRetry(a.bgCtx, sessionID, ts, outcome)
+				return nil
+			})
+			return
+		}
 		slog.Warn("opencode: context overflow detected, attempting compaction retry", "sessionID", sessionID)
 		a.group.Go(func() error {
 			a.attemptCompactionRetry(a.bgCtx, sessionID, ts, outcome)
@@ -1078,6 +1153,139 @@ func (a *Adapter) attemptCompactionRetry(ctx context.Context, sessionID string, 
 		slog.Error("opencode: retry prompt dispatch failed, finalizing with the original overflow error",
 			"sessionID", sessionID, "error", err)
 		a.finalize(ts, turnOutcome{Outcome: originalOutcome.Outcome, Reason: &reason})
+	}
+}
+
+// attemptTransientRetry implements the actual recovery work
+// finalizeOrRecoverFromOverflow above launches on its own tracked
+// background goroutine for this Step's own transient-APIError retry ("typed
+// transient-error retry for the OpenCode adapter"): wait a bounded backoff
+// (a.transientRetryBackoff), then re-dispatch ts.cmd exactly once —
+// deliberately mirroring attemptCompactionRetry's own shape (the same
+// stillLive()-guarded, ts.compacting-suppressed structure, reusing the SAME
+// shared latch — see finalizeOrRecoverFromOverflow's own doc comment for
+// why this is the SAME machinery, not a parallel one) but WITHOUT a
+// forceCompaction step: a transient provider blip (429/529-shaped, per
+// OpenCode's own isRetryable verdict, isTransientAPIError outcome.go) needs
+// no compaction at all, only a short pause before trying the exact same
+// prompt again.
+//
+// ts.stillLive() is consulted TWICE, exactly mirroring
+// attemptCompactionRetry's own round-2 Finding 1 fix (see that function's
+// own doc comment for the full race this closes) — substituting "the
+// backoff wait" for "forceCompaction" as the first bounded operation this
+// goroutine performs before re-dispatching:
+//
+//   - The backoff wait itself is interrupted by ctx.Done() (a.bgCtx,
+//     canceled only by Adapter.Close): treated exactly like
+//     forceCompaction/postPromptAsync failing below — finalize with the
+//     ORIGINAL outcome, reason enriched via
+//     enrichReasonForFailedTransientRetry, rather than silently leaving
+//     this turn without its one execution_complete.
+//   - The backoff elapses, but the FIRST ts.stillLive() check is now
+//     false: a Stop landed for this exact turn, or the turn was ALREADY
+//     finalized by some other path — finalize as Cancelled, a.finalize
+//     called BEFORE ts.setCompacting(false), mirroring
+//     attemptCompactionRetry's own identical ordering rationale exactly
+//     (every dispatchEvent case that would otherwise observe a stray event
+//     for this session stays suppressed by isCompacting for as long as
+//     ts.compacting remains true, so claiming tryFinalize first closes the
+//     exact same race attemptCompactionRetry's own first stillLive branch
+//     closes).
+//   - The backoff elapses and the turn is still live: clear ts's stored
+//     errors (ts.clearErrorsForRetry — CRITICAL, identical reasoning to
+//     attemptCompactionRetry's own use of it: without it, the retry's own
+//     eventual session.idle would still see the STALE original APIError
+//     and incorrectly finalize as failed even though the retry actually
+//     succeeded), re-dispatch the SAME prompt via postPromptAsync using
+//     resolveModel — NOT resolveModelForced — unlike forceCompaction's own
+//     /summarize call (which has no "omit and let OpenCode pick" option at
+//     all, session.go), postPromptAsync's own "model" field is genuinely
+//     optional, exactly as the ORIGINAL dispatch in StartTurn already
+//     treats it; forcing a resolved model here would silently change this
+//     retry's own request shape relative to the attempt it is retrying.
+//     THEN re-check ts.stillLive() a SECOND time — identical to
+//     attemptCompactionRetry's own round-2 check, and ts.setCompacting(false)
+//     is likewise deliberately not called until after this second check,
+//     for the exact same §7.2 Finding 3 reason: closing the window between
+//     the retried dispatch being accepted and this goroutine's own
+//     tryFinalize claim, during which a stray original-attempt SSE event
+//     could otherwise slip through.
+func (a *Adapter) attemptTransientRetry(ctx context.Context, sessionID string, ts *turnState, originalOutcome turnOutcome) {
+	if waitErr := waitTransientRetryBackoff(ctx, a.transientRetryBackoff); waitErr != nil {
+		ts.setCompacting(false)
+		reason := enrichReasonForFailedTransientRetry(originalOutcome.Reason, fmt.Sprintf("backoff wait: %v", waitErr))
+		slog.Error("opencode: transient-error retry backoff wait was interrupted, finalizing with the original error",
+			"sessionID", sessionID, "error", waitErr)
+		a.finalize(ts, turnOutcome{Outcome: originalOutcome.Outcome, Reason: &reason})
+		return
+	}
+
+	if !ts.stillLive() {
+		// Mirrors attemptCompactionRetry's own first stillLive branch
+		// exactly (adapter.go) — a.finalize called BEFORE
+		// ts.setCompacting(false), for the identical reason given there.
+		reason := "opencode: turn was stopped or already finalized during the transient-error retry backoff, retry aborted"
+		slog.Warn("opencode: turn no longer live after the transient-error backoff wait, aborting retry without re-dispatching",
+			"sessionID", sessionID)
+		a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeCancelled, Reason: &reason})
+		ts.setCompacting(false)
+		return
+	}
+
+	slog.Warn("opencode: transient-error backoff elapsed, retrying the original prompt", "sessionID", sessionID)
+	ts.clearErrorsForRetry()
+
+	model := a.resolveModel(ctx, (*string)(ts.cmd.Model))
+
+	// setCompacting(false) intentionally happens AFTER postPromptAsync
+	// returns, not before it is called — mirrors attemptCompactionRetry's
+	// own §7.2 Finding 3 ordering exactly, for the identical reason (see
+	// that function's own doc comment).
+	err := a.postPromptAsync(ctx, sessionID, ts.cmd, model)
+
+	if !ts.stillLive() {
+		// Round-2 Finding 1, mirrored exactly: re-check stillLive() HERE,
+		// after postPromptAsync has actually returned — see
+		// attemptCompactionRetry's own identical branch for the full race
+		// this closes.
+		reason := "opencode: turn was stopped while the transient-error retry prompt was being (re-)dispatched, aborting"
+		slog.Warn("opencode: turn no longer live after the retry's own postPromptAsync call returned, aborting",
+			"sessionID", sessionID, "postPromptAsyncErr", err)
+		if err == nil {
+			if abortErr := a.postAbort(ctx, sessionID); abortErr != nil {
+				slog.Warn("opencode: failed to abort the re-dispatched retry prompt after a late stop",
+					"sessionID", sessionID, "error", abortErr)
+			}
+		}
+		a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeCancelled, Reason: &reason})
+		ts.setCompacting(false)
+		return
+	}
+
+	ts.setCompacting(false)
+
+	if err != nil {
+		reason := enrichReasonForFailedTransientRetry(originalOutcome.Reason, fmt.Sprintf("retry postPromptAsync: %v", err))
+		slog.Error("opencode: retry prompt dispatch failed, finalizing with the original transient error",
+			"sessionID", sessionID, "error", err)
+		a.finalize(ts, turnOutcome{Outcome: originalOutcome.Outcome, Reason: &reason})
+	}
+}
+
+// waitTransientRetryBackoff waits d, honoring ctx cancellation (a.bgCtx,
+// canceled only by Adapter.Close) — kept as its own tiny helper so
+// attemptTransientRetry's own doc comment can describe the backoff wait as
+// a single bounded operation, exactly like forceCompaction/postPromptAsync
+// already are from attemptCompactionRetry's own perspective.
+func waitTransientRetryBackoff(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

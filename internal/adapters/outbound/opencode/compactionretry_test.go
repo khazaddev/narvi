@@ -99,7 +99,7 @@ func TestCompactionRetry_SucceedsAfterOverflow(t *testing.T) {
 	f := newFakeOpenCodeServer(t)
 	f.setSummarizeOK(true)
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -233,7 +233,7 @@ func TestCompactionRetry_StepStartDuringCompactionIsSuppressed(t *testing.T) {
 	f.setSummarizeOK(true)
 	gate := f.armSummarizeGate()
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -338,7 +338,7 @@ func TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce(t *testing
 	f := newFakeOpenCodeServer(t)
 	f.setSummarizeOK(true)
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -418,7 +418,7 @@ func TestCompactionRetry_ForceCompactionFails(t *testing.T) {
 	f := newFakeOpenCodeServer(t)
 	f.setSummarizeOK(false)
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -521,7 +521,7 @@ func TestCompactionRetry_SessionErrorDuringCompactionIsSuppressed(t *testing.T) 
 	f.setSummarizeOK(true)
 	gate := f.armSummarizeGate()
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -675,7 +675,7 @@ func TestCompactionRetry_ConcurrentOverflowDetectionAttemptsExactlyOnce(t *testi
 	f := newFakeOpenCodeServer(t)
 	f.setSummarizeOK(true)
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -780,7 +780,7 @@ func TestCompactionRetry_ConcurrentOverflowDetectionNeverFinalizesPrematurely(t 
 	closeSummarizeGate := func() { closeSummarizeGateOnce.Do(func() { close(summarizeGate) }) }
 	t.Cleanup(closeSummarizeGate)
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -900,7 +900,7 @@ func TestTurnState_ResolveOverflowActionDetectsStalenessWithoutIsCompacting(t *t
 			"the staleness guard, the one ts.isCompacting() alone cannot detect")
 	}
 
-	got := ts.resolveOverflowAction(snapshotTime, true)
+	got := ts.resolveOverflowAction(snapshotTime, recoveryKindCompaction)
 	if got != overflowActionStale {
 		t.Errorf("resolveOverflowAction() = %v, want overflowActionStale (activity was recorded after the "+
 			"caller's own snapshot, even though ts.isCompacting() reads false) -- a version of this guard that "+
@@ -958,7 +958,7 @@ func TestCompactionRetry_FallbackAbandonsWhenRetryFullyCompletesDuringFetch(t *t
 	// even broadcast.
 	shortInactivity := 50 * time.Millisecond
 
-	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -1102,7 +1102,7 @@ func TestCompactionRetry_FallbackDoesNotFinalizeWhileCompacting(t *testing.T) {
 	// times over, while /summarize is still gated below.
 	shortInactivity := 50 * time.Millisecond
 
-	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -1203,7 +1203,7 @@ func TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed(
 	f.setSummarizeOK(true)
 	gate := f.armPromptAsyncGateForCall(2)
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -1324,7 +1324,7 @@ func TestCompactionRetry_StopDuringCompactionAbortsRetry(t *testing.T) {
 	f.setSummarizeOK(true)
 	gate := f.armSummarizeGate()
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -1439,7 +1439,7 @@ func TestCompactionRetry_StopDuringRetryDispatchAbortsRedispatchedPrompt(t *test
 	f.setSummarizeOK(true)
 	gate := f.armPromptAsyncGateForCall(2)
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -1540,7 +1540,7 @@ func TestCompactionRetry_RetryPostPromptAsyncFails(t *testing.T) {
 	f := newFakeOpenCodeServer(t)
 	f.setSummarizeOK(true)
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -1662,7 +1662,7 @@ func TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry(t *testing.T) 
 	// the fallback well before any overflow is even broadcast.
 	shortInactivity := 50 * time.Millisecond
 
-	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -1857,7 +1857,7 @@ func TestCompactionRetry_FallbackAbandonsWhenAlreadyAttemptedBeforeFetchBegins(t
 		{Info: openCodeMessageInfo{ID: "msg_original", Role: "assistant", Error: &openCodeTaggedError{Name: "ContextOverflowError"}}},
 	})
 
-	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -1993,7 +1993,7 @@ func TestCompactionRetry_FallbackReleaseRacesLiveOverflowAtomically(t *testing.T
 	// the fallback well before any overflow is even broadcast.
 	shortInactivity := 50 * time.Millisecond
 
-	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
@@ -2182,7 +2182,7 @@ func TestCompactionRetry_SilentRetryStillFinalizesViaFallback(t *testing.T) {
 	// testSSEInactivityTimeout.
 	const shortSSEInactivityTimeout = 150 * time.Millisecond
 
-	a := New(f.URL(), shortSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	a := New(f.URL(), shortSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
 
 	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)

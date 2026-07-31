@@ -120,6 +120,83 @@ func TestIsContextOverflowError(t *testing.T) {
 	}
 }
 
+// TestIsTransientAPIError mirrors TestIsContextOverflowError's own
+// table-driven style: isTransientAPIError is this Step's own ("typed
+// transient-error retry for the OpenCode adapter") "classify ONLY on the
+// typed isRetryable field OpenCode itself already computed" logic, tested
+// directly against constructed values (a real transient 429/529-shaped
+// APIError is hard to elicit reliably on demand from a live provider).
+//
+// The table below is this Step's own required classification proof: a
+// transient (isRetryable=true) APIError classifies true; a permanent
+// (isRetryable=false) APIError, and every OTHER tagged-union member name
+// (including one a "local-connection failure" could plausibly be tagged
+// with, e.g. UnknownError), classify false — never on a substring of any
+// error text, only err.Name and err.Data.IsRetryable.
+func TestIsTransientAPIError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  *openCodeTaggedError
+		want bool
+	}{
+		{name: "nil error is never transient", err: nil, want: false},
+		{
+			name: "APIError with isRetryable=true is transient",
+			err:  &openCodeTaggedError{Name: "APIError", Data: &openCodeErrorData{IsRetryable: true}},
+			want: true,
+		},
+		{
+			name: "APIError with isRetryable=true and a statusCode is transient (statusCode is corroborating only)",
+			err: &openCodeTaggedError{Name: "APIError", Data: &openCodeErrorData{
+				IsRetryable: true, StatusCode: intPtr(529),
+			}},
+			want: true,
+		},
+		{
+			name: "APIError with isRetryable=false is permanent, not transient",
+			err:  &openCodeTaggedError{Name: "APIError", Data: &openCodeErrorData{IsRetryable: false}},
+			want: false,
+		},
+		{
+			name: "APIError with nil Data is never transient (fail closed)",
+			err:  &openCodeTaggedError{Name: "APIError", Data: nil},
+			want: false,
+		},
+		{
+			name: "MessageAbortedError carrying a Data object with no real isRetryable opinion is never transient " +
+				"(Name gate prevents trusting a zero-value IsRetryable from a member that never expressed one)",
+			err:  &openCodeTaggedError{Name: "MessageAbortedError", Data: &openCodeErrorData{IsRetryable: false}},
+			want: false,
+		},
+		{
+			name: "ContextOverflowError is not a transient APIError (it has its own, separate recovery path)",
+			err:  &openCodeTaggedError{Name: "ContextOverflowError"},
+			want: false,
+		},
+		{
+			name: "UnknownError (the shape a local-connection/sandbox-health failure would plausibly surface as, " +
+				"were it ever decoded into this typed union at all -- see isTransientAPIError's own doc comment " +
+				"for why it structurally never is) is not transient",
+			err:  &openCodeTaggedError{Name: "UnknownError", Data: &openCodeErrorData{IsRetryable: true}},
+			want: false,
+		},
+		{name: "empty name is not transient", err: &openCodeTaggedError{Name: ""}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isTransientAPIError(tt.err); got != tt.want {
+				t.Errorf("isTransientAPIError(%+v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func intPtr(i int) *int { return &i }
+
 // TestEnrichReasonForFailedRecovery proves the reason-enrichment logic
 // used when a compaction/retry recovery attempt itself failed
 // (Adapter.attemptCompactionRetry, adapter.go): the result must reference
@@ -203,6 +280,108 @@ func TestEnrichReasonForRepeatedOverflow(t *testing.T) {
 			for _, want := range tt.wantContains {
 				if !strings.Contains(got, want) {
 					t.Errorf("enrichReasonForRepeatedOverflow() = %q, want it to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestEnrichReasonForFailedTransientRetry mirrors
+// TestEnrichReasonForFailedRecovery's own style for this Step's own sibling
+// function: enrichReasonForFailedTransientRetry must reference BOTH the
+// original transient-error reason AND the new failure detail, and must
+// NEVER reuse enrichReasonForFailedRecovery's own "compaction retry" wording
+// (no compaction is ever attempted for this failure class).
+func TestEnrichReasonForFailedTransientRetry(t *testing.T) {
+	t.Parallel()
+
+	original := "opencode: APIError"
+	tests := []struct {
+		name           string
+		originalReason *string
+		detail         string
+		wantContains   []string
+		wantNotContain []string
+	}{
+		{
+			name:           "nil original reason falls back to a fixed default",
+			originalReason: nil,
+			detail:         "backoff wait: context canceled",
+			wantContains:   []string{"APIError", "backoff wait: context canceled"},
+			wantNotContain: []string{"compaction"},
+		},
+		{
+			name:           "non-nil original reason is preserved verbatim",
+			originalReason: &original,
+			detail:         "retry postPromptAsync: boom",
+			wantContains:   []string{original, "retry postPromptAsync: boom"},
+			wantNotContain: []string{"compaction"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := enrichReasonForFailedTransientRetry(tt.originalReason, tt.detail)
+			if got == "" {
+				t.Fatal("enrichReasonForFailedTransientRetry() returned an empty string")
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("enrichReasonForFailedTransientRetry() = %q, want it to contain %q", got, want)
+				}
+			}
+			for _, notWant := range tt.wantNotContain {
+				if strings.Contains(got, notWant) {
+					t.Errorf("enrichReasonForFailedTransientRetry() = %q, want it NOT to contain %q "+
+						"(no compaction is ever attempted for a transient-error retry)", got, notWant)
+				}
+			}
+		})
+	}
+}
+
+// TestEnrichReasonForRepeatedTransientFailure mirrors
+// TestEnrichReasonForRepeatedOverflow's own style for this Step's own
+// sibling function: the result must mention that a retry was already
+// attempted, and must never claim the retried prompt "also overflowed"
+// (enrichReasonForRepeatedOverflow's own wording), which would simply be
+// false for this failure class.
+func TestEnrichReasonForRepeatedTransientFailure(t *testing.T) {
+	t.Parallel()
+
+	retryReason := "opencode: APIError"
+	tests := []struct {
+		name         string
+		retryReason  *string
+		wantContains []string
+	}{
+		{
+			name:         "nil retry reason falls back to a fixed default",
+			retryReason:  nil,
+			wantContains: []string{"APIError", "already attempted"},
+		},
+		{
+			name:         "non-nil retry reason is preserved verbatim",
+			retryReason:  &retryReason,
+			wantContains: []string{retryReason, "already attempted"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := enrichReasonForRepeatedTransientFailure(tt.retryReason)
+			if got == "" {
+				t.Fatal("enrichReasonForRepeatedTransientFailure() returned an empty string")
+			}
+			if strings.Contains(got, "overflowed") {
+				t.Errorf("enrichReasonForRepeatedTransientFailure() = %q, want it NOT to claim the prompt "+
+					"\"also overflowed\" -- that is enrichReasonForRepeatedOverflow's own, different, wording", got)
+			}
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("enrichReasonForRepeatedTransientFailure() = %q, want it to contain %q", got, want)
 				}
 			}
 		})
