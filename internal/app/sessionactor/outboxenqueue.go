@@ -14,6 +14,16 @@
 // (sessions.spawn_source == 'web' -> never), and if so, WHICH channel to
 // route it to and what payload to enqueue for that channel's own
 // ports.Notifier implementation to later consume.
+//
+// Step 47 ("server-side verdict", §8.2/§5.2) amendment: sessions.
+// spawn_source == 'github' now ALSO enqueues nothing via this generic
+// path -- a github-origin session is always a review session
+// (github_pr_sessions, Step 32, is the only mechanism that ever creates
+// one), and Step 47 forbids a review session's turn completion from
+// reaching the PR as an ordinary, untyped comment: the verdict-posting
+// tool (internal/adapters/inbound/httpapi/reviewverdict.go) is now the
+// ONLY sanctioned path. See that switch case's own doc comment, below,
+// for the full "why".
 
 package sessionactor
 
@@ -26,7 +36,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
@@ -87,19 +96,6 @@ func outcomeText(trig turn.Trigger, failureReason turn.FailureReason) string {
 	default:
 		return "Turn finished."
 	}
-}
-
-// splitRepoFullName splits a github_pr_sessions.repo_full_name value
-// (always "owner/repo", the exact shape internal/adapters/inbound/github's
-// own ingress path already writes it in) into its owner/repo halves. ok is
-// false for anything not shaped exactly "owner/repo" (defensive; should be
-// unreachable given that ingress path's own invariant).
-func splitRepoFullName(repoFullName string) (owner, repo string, ok bool) {
-	parts := strings.SplitN(repoFullName, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", false
-	}
-	return parts[0], parts[1], true
 }
 
 // enqueueOutboxNotification decides whether sessionRow's turn completion
@@ -167,22 +163,27 @@ func (a *Actor) enqueueOutboxNotification(ctx context.Context, tx pgx.Tx, sessio
 		}
 
 	case sqlcgen.SessionSpawnSourceGithub:
-		row, err := a.stores.githubPRSession.WithTx(tx).GetBySessionID(ctx, a.sessionID)
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				a.logger.Warn("sessionactor: enqueue outbox notification: github-origin session has no github_pr_sessions row; skipping")
-				return nil
-			}
-			return fmt.Errorf("sessionactor: enqueue outbox notification: get github pr session: %w", err)
-		}
-		owner, repo, ok := splitRepoFullName(row.RepoFullName)
-		if !ok {
-			a.logger.Warn("sessionactor: enqueue outbox notification: github_pr_sessions.repo_full_name not in owner/repo shape; skipping",
-				"repo_full_name", row.RepoFullName)
-			return nil
-		}
-		kind = ports.NotificationKindGitHub
-		payload = githubapi.Payload{Owner: owner, Repo: repo, PRNumber: int(row.PrNumber), Text: text}
+		// Step 47 ("server-side verdict", §8.2/§5.2) RAW-COMMENT BLOCKING:
+		// a github-origin session is, by construction, a review session --
+		// github_pr_sessions (Step 32) is the ONLY mechanism that ever
+		// creates one (internal/adapters/inbound/github/doc.go). Before
+		// this Step, EVERY turn completion on such a session posted this
+		// generic, system-synthesized outcomeText string ("Turn completed
+		// successfully."/"Turn failed (...).") as a raw GitHub issue
+		// comment -- completely independent of whatever the agent itself
+		// actually said, and with no way for a caller to distinguish it
+		// from a genuine, typed review verdict. That is exactly the
+		// "ordinary issue comment [that] bypass[es] the [verdict-posting]
+		// tool" this Step forbids inside a review session: the verdict-
+		// posting tool (internal/adapters/inbound/httpapi/
+		// reviewverdict.go) is now the ONLY sanctioned way a review
+		// session's output reaches the pull request as a comment or
+		// formal review. This branch therefore enqueues NOTHING any more
+		// -- a github-origin turn's completion is silent from THIS path's
+		// own perspective; whatever needs to reach the PR does so only
+		// via a real verdict-posting-tool call, scoped and validated
+		// there, never here.
+		return nil
 
 	case sqlcgen.SessionSpawnSourceLinear:
 		row, err := a.stores.linearAgentSession.WithTx(tx).GetBySessionID(ctx, a.sessionID)

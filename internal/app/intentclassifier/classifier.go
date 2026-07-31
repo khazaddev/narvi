@@ -128,7 +128,7 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 	if err != nil {
 		logger.Warn("intentclassifier: template fetch failed, falling back",
 			"fallback_branch", fallbackBranchTemplateFetch, "surface", input.Surface, "error", err)
-		return fallbackDecision(ports.FallbackReasonAPIError)
+		return fallbackDecision(ports.FallbackReasonAPIError, input.DeterministicTarget)
 	}
 
 	systemPrompt, err := intentdomain.AssembleTemplate(rawTemplate, map[string]string{
@@ -142,7 +142,7 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 		// rather than propagate.
 		logger.Warn("intentclassifier: template assemble failed, falling back",
 			"fallback_branch", fallbackBranchTemplateAssemble, "surface", input.Surface, "error", err)
-		return fallbackDecision(ports.FallbackReasonAPIError)
+		return fallbackDecision(ports.FallbackReasonAPIError, input.DeterministicTarget)
 	}
 
 	completion, err := s.llm.Complete(ctx, ports.CompletionRequest{
@@ -162,7 +162,7 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 		// gracefully.
 		logger.Warn("intentclassifier: llm call failed, falling back",
 			"fallback_branch", fallbackBranchLLMError, "surface", input.Surface, "error", err)
-		return fallbackFromLLMError(err)
+		return fallbackFromLLMError(err, input.DeterministicTarget)
 	}
 
 	var parsed structuredOutput
@@ -170,7 +170,7 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 		logger.Warn("intentclassifier: llm returned invalid output, falling back",
 			"fallback_branch", fallbackBranchInvalidOutput, "surface", input.Surface,
 			"unmarshal_error", unmarshalErr, "raw_output", string(completion.Raw))
-		return fallbackDecision(ports.FallbackReasonInvalidOutput)
+		return fallbackDecision(ports.FallbackReasonInvalidOutput, input.DeterministicTarget)
 	}
 
 	target := parsed.Target
@@ -233,10 +233,31 @@ func (s *Service) Classify(ctx context.Context, input ports.IntentClassifierInpu
 }
 
 // fallbackDecision builds the fixed fallback shape (§18.1) for reason.
-func fallbackDecision(reason string) ports.IntentDecision {
+//
+// deterministicTarget (Step 47, §5.2/§18.2 audit fix) is threaded through
+// to the returned decision's own Target field -- BEFORE this fix,
+// fallbackDecision unconditionally left Target empty on every fallback
+// path, discarding a caller-supplied deterministic signal (a regex/label
+// match, §18.2's own "independent deterministic check") even when one was
+// available. §5.2's own words state the corollary this was silently
+// failing: "Any re-run/re-review phrasing a posted verdict... recommends
+// to a user... must be recognizable by the intent classifier's
+// deterministic fail-open fallback... not only by its model-based path."
+// A caller that already has a structural, non-LLM answer for Target
+// (GitHub's ingress always does -- DeterministicTarget: intentdomain.
+// TargetReview, coalesce.go's own doc comment: "already deterministically
+// means this mention landed on a pull request") must have that answer
+// survive EVERY failure mode of the model-based path above (template
+// fetch/assemble failure, an LLM error, invalid output) -- not just the
+// happy path's own corroboration step (which only ever runs after a
+// successful LLM call). An empty deterministicTarget (no independent
+// signal available for this input -- Slack/Linear's own current callers,
+// which supply none) leaves Target exactly as empty as before this fix.
+func fallbackDecision(reason string, deterministicTarget string) ports.IntentDecision {
 	return ports.IntentDecision{
 		Source:         ports.IntentSourceFallback,
 		FallbackReason: reason,
+		Target:         deterministicTarget,
 	}
 }
 
@@ -245,18 +266,20 @@ func fallbackDecision(reason string) ports.IntentDecision {
 // error, never by string-matching err's own message (§18.1).
 // LLMErrorCode's five values and FallbackReason's five values are the
 // SAME strings (ports/llm_test.go's own TestLLMErrorCode_MatchesFallbackReason
-// locks this), so this is a direct 1:1 mapping.
-func fallbackFromLLMError(err error) ports.IntentDecision {
+// locks this), so this is a direct 1:1 mapping. deterministicTarget is
+// threaded straight through to fallbackDecision -- see that function's own
+// doc comment.
+func fallbackFromLLMError(err error, deterministicTarget string) ports.IntentDecision {
 	var llmErr *ports.LLMError
 	if errors.As(err, &llmErr) {
-		return fallbackDecision(string(llmErr.Code))
+		return fallbackDecision(string(llmErr.Code), deterministicTarget)
 	}
 	// A ports.LLM implementation that returns a non-*ports.LLMError is
 	// itself a bug in that implementation (the port's own contract
 	// requires typed errors) -- fall back to the generic api_error
 	// reason rather than propagate, per §18.1's never-throw contract,
 	// never panicking over another package's own bug.
-	return fallbackDecision(ports.FallbackReasonAPIError)
+	return fallbackDecision(ports.FallbackReasonAPIError, deterministicTarget)
 }
 
 // RecordDecision persists rec write-once onto sessionID's own

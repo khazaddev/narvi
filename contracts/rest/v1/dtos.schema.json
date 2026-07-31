@@ -326,6 +326,97 @@
         },
         "turnId": { "type": ["string", "null"], "format": "uuid", "description": "The newly enqueued implementation turn's id, set iff this call was ApprovePlan and it won. Always null for RejectPlan (reject never dispatches a new turn)." }
       }
+    },
+    "PostReviewVerdictRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request body for POST /sessions/:id/review/verdict (Step 47, 'server-side verdict', §8.2/§5.2) -- the verdict-posting tool's own typed-fields call, validated server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself, which this endpoint always recomputes server-side (review.ComputeShippable) and NEVER accepts from a caller -- see that package's own Verdict.Shippable doc comment (verdict.go) for why.",
+      "required": ["riskLevel", "premise", "blastRadius", "filesChanged", "testsCoverage", "docsDrift", "proposedShippable", "summary"],
+      "properties": {
+        "riskLevel": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "Matches internal/domain/review.RiskLevel's own three values exactly."
+        },
+        "premise": {
+          "type": "string",
+          "enum": ["ok", "questionable", "not_a_pr"],
+          "description": "Matches internal/domain/review.PremiseState's own three values exactly."
+        },
+        "blastRadius": {
+          "type": "array",
+          "description": "Matches internal/domain/review.Tag's own fixed, closed vocabulary exactly -- an empty array is legal (the reviewer found no tagged area touched).",
+          "items": {
+            "type": "string",
+            "enum": ["auth", "migrations", "contracts", "secrets", "infra", "public_api", "data_layer", "dependencies"]
+          }
+        },
+        "filesChanged": { "type": "integer", "minimum": 0 },
+        "testsCoverage": {
+          "type": "string",
+          "enum": ["adequate", "insufficient", "skipped"],
+          "description": "Matches internal/domain/review.TestsCoverageState's own three values exactly."
+        },
+        "docsDrift": {
+          "type": "string",
+          "enum": ["none", "found", "skipped"],
+          "description": "Matches internal/domain/review.DocsDriftState's own three values exactly."
+        },
+        "proposedShippable": {
+          "type": "string",
+          "enum": ["auto", "needs_human", "block"],
+          "description": "The MODEL's own self-report (internal/domain/review.ProposedShippable) -- advisory only, carried for audit/transparency, and structurally incapable of influencing the server-computed Shippable this endpoint returns (review.ComputeShippable's own signature does not accept it)."
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The agent's own free-text narrative explaining the verdict -- required, never re-parsed back out as structured data once posted (review/doc.go's own 'nothing here even imports a markdown parser, on principle' stance)."
+        }
+      }
+    },
+    "PostReviewVerdictResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "201 response body for POST /sessions/:id/review/verdict -- the server-computed authoritative results the caller cannot itself derive, so a review agent can log/confirm what actually happened.",
+      "required": ["shippable", "formalReviewEvent", "syncedLabel"],
+      "properties": {
+        "shippable": {
+          "type": "string",
+          "enum": ["auto", "needs_human", "block"],
+          "description": "The AUTHORITATIVE, server-computed classification (review.ComputeShippable's own result) -- never the request's own proposedShippable, converted or otherwise."
+        },
+        "formalReviewEvent": {
+          "type": "string",
+          "enum": ["COMMENT", "REQUEST_CHANGES"],
+          "description": "Which GitHub pull-request-review event this call submitted (internal/domain/reviewpost.ComputeFormalReviewEvent's own result) -- APPROVE is never a legal value here, see that function's own doc comment for why."
+        },
+        "syncedLabel": {
+          "type": "string",
+          "description": "The review:*-risk label (internal/domain/reviewpost.RiskLabel) now reflecting this verdict's own RiskLevel on the pull request."
+        }
+      }
+    },
+    "RepoSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: future Steps (48's sentinel auto-fix toggle, 58's auto-merge toggle, 61's automatic-re-review opt-in) are each expected to add a further boolean property here, never a bespoke DTO of their own.",
+      "required": ["repoFullName", "blockOnHighRisk"],
+      "properties": {
+        "repoFullName": { "type": "string", "description": "The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own shape." },
+        "blockOnHighRisk": {
+          "type": "boolean",
+          "description": "§21.2: an admin, per-repo, strict-boolean setting that reuses the verdict-posting tool's SAME formal-review submission path and carries no independent permission of its own -- see internal/domain/reviewpost.ComputeFormalReviewEvent's own doc comment for its exact effect."
+        }
+      }
+    },
+    "UpdateRepoSettingsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request body for PUT /api/repos/{owner}/{repo}/settings.",
+      "required": ["blockOnHighRisk"],
+      "properties": {
+        "blockOnHighRisk": { "type": "boolean" }
+      }
     }
   }
 }

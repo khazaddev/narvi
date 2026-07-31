@@ -6,6 +6,7 @@ import "encoding/json"
 import "fmt"
 import "reflect"
 import "time"
+import "unicode/utf8"
 
 // GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list
 // is expected to stay small.
@@ -1155,6 +1156,437 @@ func (j *Plan) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Request body for POST /sessions/:id/review/verdict (Step 47, 'server-side
+// verdict', §8.2/§5.2) -- the verdict-posting tool's own typed-fields call,
+// validated server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors
+// internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself,
+// which this endpoint always recomputes server-side (review.ComputeShippable) and
+// NEVER accepts from a caller -- see that package's own Verdict.Shippable doc
+// comment (verdict.go) for why.
+type PostReviewVerdictRequest struct {
+	// Matches internal/domain/review.Tag's own fixed, closed vocabulary exactly -- an
+	// empty array is legal (the reviewer found no tagged area touched).
+	BlastRadius []PostReviewVerdictRequestBlastRadiusElem `json:"blastRadius" yaml:"blastRadius" mapstructure:"blastRadius"`
+
+	// Matches internal/domain/review.DocsDriftState's own three values exactly.
+	DocsDrift PostReviewVerdictRequestDocsDrift `json:"docsDrift" yaml:"docsDrift" mapstructure:"docsDrift"`
+
+	// FilesChanged corresponds to the JSON schema field "filesChanged".
+	FilesChanged int `json:"filesChanged" yaml:"filesChanged" mapstructure:"filesChanged"`
+
+	// Matches internal/domain/review.PremiseState's own three values exactly.
+	Premise PostReviewVerdictRequestPremise `json:"premise" yaml:"premise" mapstructure:"premise"`
+
+	// The MODEL's own self-report (internal/domain/review.ProposedShippable) --
+	// advisory only, carried for audit/transparency, and structurally incapable of
+	// influencing the server-computed Shippable this endpoint returns
+	// (review.ComputeShippable's own signature does not accept it).
+	ProposedShippable PostReviewVerdictRequestProposedShippable `json:"proposedShippable" yaml:"proposedShippable" mapstructure:"proposedShippable"`
+
+	// Matches internal/domain/review.RiskLevel's own three values exactly.
+	RiskLevel PostReviewVerdictRequestRiskLevel `json:"riskLevel" yaml:"riskLevel" mapstructure:"riskLevel"`
+
+	// The agent's own free-text narrative explaining the verdict -- required, never
+	// re-parsed back out as structured data once posted (review/doc.go's own 'nothing
+	// here even imports a markdown parser, on principle' stance).
+	Summary string `json:"summary" yaml:"summary" mapstructure:"summary"`
+
+	// Matches internal/domain/review.TestsCoverageState's own three values exactly.
+	TestsCoverage PostReviewVerdictRequestTestsCoverage `json:"testsCoverage" yaml:"testsCoverage" mapstructure:"testsCoverage"`
+}
+
+type PostReviewVerdictRequestBlastRadiusElem string
+
+const PostReviewVerdictRequestBlastRadiusElemAuth PostReviewVerdictRequestBlastRadiusElem = "auth"
+const PostReviewVerdictRequestBlastRadiusElemContracts PostReviewVerdictRequestBlastRadiusElem = "contracts"
+const PostReviewVerdictRequestBlastRadiusElemDataLayer PostReviewVerdictRequestBlastRadiusElem = "data_layer"
+const PostReviewVerdictRequestBlastRadiusElemDependencies PostReviewVerdictRequestBlastRadiusElem = "dependencies"
+const PostReviewVerdictRequestBlastRadiusElemInfra PostReviewVerdictRequestBlastRadiusElem = "infra"
+const PostReviewVerdictRequestBlastRadiusElemMigrations PostReviewVerdictRequestBlastRadiusElem = "migrations"
+const PostReviewVerdictRequestBlastRadiusElemPublicApi PostReviewVerdictRequestBlastRadiusElem = "public_api"
+const PostReviewVerdictRequestBlastRadiusElemSecrets PostReviewVerdictRequestBlastRadiusElem = "secrets"
+
+var enumValues_PostReviewVerdictRequestBlastRadiusElem = []interface{}{
+	"auth",
+	"migrations",
+	"contracts",
+	"secrets",
+	"infra",
+	"public_api",
+	"data_layer",
+	"dependencies",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictRequestBlastRadiusElem) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictRequestBlastRadiusElem {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictRequestBlastRadiusElem, v)
+	}
+	*j = PostReviewVerdictRequestBlastRadiusElem(v)
+	return nil
+}
+
+type PostReviewVerdictRequestDocsDrift string
+
+const PostReviewVerdictRequestDocsDriftFound PostReviewVerdictRequestDocsDrift = "found"
+const PostReviewVerdictRequestDocsDriftNone PostReviewVerdictRequestDocsDrift = "none"
+const PostReviewVerdictRequestDocsDriftSkipped PostReviewVerdictRequestDocsDrift = "skipped"
+
+var enumValues_PostReviewVerdictRequestDocsDrift = []interface{}{
+	"none",
+	"found",
+	"skipped",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictRequestDocsDrift) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictRequestDocsDrift {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictRequestDocsDrift, v)
+	}
+	*j = PostReviewVerdictRequestDocsDrift(v)
+	return nil
+}
+
+type PostReviewVerdictRequestPremise string
+
+const PostReviewVerdictRequestPremiseNotAPr PostReviewVerdictRequestPremise = "not_a_pr"
+const PostReviewVerdictRequestPremiseOk PostReviewVerdictRequestPremise = "ok"
+const PostReviewVerdictRequestPremiseQuestionable PostReviewVerdictRequestPremise = "questionable"
+
+var enumValues_PostReviewVerdictRequestPremise = []interface{}{
+	"ok",
+	"questionable",
+	"not_a_pr",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictRequestPremise) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictRequestPremise {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictRequestPremise, v)
+	}
+	*j = PostReviewVerdictRequestPremise(v)
+	return nil
+}
+
+type PostReviewVerdictRequestProposedShippable string
+
+const PostReviewVerdictRequestProposedShippableAuto PostReviewVerdictRequestProposedShippable = "auto"
+const PostReviewVerdictRequestProposedShippableBlock PostReviewVerdictRequestProposedShippable = "block"
+const PostReviewVerdictRequestProposedShippableNeedsHuman PostReviewVerdictRequestProposedShippable = "needs_human"
+
+var enumValues_PostReviewVerdictRequestProposedShippable = []interface{}{
+	"auto",
+	"needs_human",
+	"block",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictRequestProposedShippable) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictRequestProposedShippable {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictRequestProposedShippable, v)
+	}
+	*j = PostReviewVerdictRequestProposedShippable(v)
+	return nil
+}
+
+type PostReviewVerdictRequestRiskLevel string
+
+const PostReviewVerdictRequestRiskLevelHigh PostReviewVerdictRequestRiskLevel = "high"
+const PostReviewVerdictRequestRiskLevelLow PostReviewVerdictRequestRiskLevel = "low"
+const PostReviewVerdictRequestRiskLevelMedium PostReviewVerdictRequestRiskLevel = "medium"
+
+var enumValues_PostReviewVerdictRequestRiskLevel = []interface{}{
+	"low",
+	"medium",
+	"high",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictRequestRiskLevel) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictRequestRiskLevel {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictRequestRiskLevel, v)
+	}
+	*j = PostReviewVerdictRequestRiskLevel(v)
+	return nil
+}
+
+type PostReviewVerdictRequestTestsCoverage string
+
+const PostReviewVerdictRequestTestsCoverageAdequate PostReviewVerdictRequestTestsCoverage = "adequate"
+const PostReviewVerdictRequestTestsCoverageInsufficient PostReviewVerdictRequestTestsCoverage = "insufficient"
+const PostReviewVerdictRequestTestsCoverageSkipped PostReviewVerdictRequestTestsCoverage = "skipped"
+
+var enumValues_PostReviewVerdictRequestTestsCoverage = []interface{}{
+	"adequate",
+	"insufficient",
+	"skipped",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictRequestTestsCoverage) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictRequestTestsCoverage {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictRequestTestsCoverage, v)
+	}
+	*j = PostReviewVerdictRequestTestsCoverage(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["blastRadius"]; raw != nil && !ok {
+		return fmt.Errorf("field blastRadius in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["docsDrift"]; raw != nil && !ok {
+		return fmt.Errorf("field docsDrift in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["filesChanged"]; raw != nil && !ok {
+		return fmt.Errorf("field filesChanged in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["premise"]; raw != nil && !ok {
+		return fmt.Errorf("field premise in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["proposedShippable"]; raw != nil && !ok {
+		return fmt.Errorf("field proposedShippable in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["riskLevel"]; raw != nil && !ok {
+		return fmt.Errorf("field riskLevel in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["summary"]; raw != nil && !ok {
+		return fmt.Errorf("field summary in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["testsCoverage"]; raw != nil && !ok {
+		return fmt.Errorf("field testsCoverage in PostReviewVerdictRequest: required")
+	}
+	type Plain PostReviewVerdictRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 0 > plain.FilesChanged {
+		return fmt.Errorf("field %s: must be >= %v", "filesChanged", 0)
+	}
+	if utf8.RuneCountInString(string(plain.Summary)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "summary", 1)
+	}
+	*j = PostReviewVerdictRequest(plain)
+	return nil
+}
+
+// 201 response body for POST /sessions/:id/review/verdict -- the server-computed
+// authoritative results the caller cannot itself derive, so a review agent can
+// log/confirm what actually happened.
+type PostReviewVerdictResponse struct {
+	// Which GitHub pull-request-review event this call submitted
+	// (internal/domain/reviewpost.ComputeFormalReviewEvent's own result) -- APPROVE
+	// is never a legal value here, see that function's own doc comment for why.
+	FormalReviewEvent PostReviewVerdictResponseFormalReviewEvent `json:"formalReviewEvent" yaml:"formalReviewEvent" mapstructure:"formalReviewEvent"`
+
+	// The AUTHORITATIVE, server-computed classification (review.ComputeShippable's
+	// own result) -- never the request's own proposedShippable, converted or
+	// otherwise.
+	Shippable PostReviewVerdictResponseShippable `json:"shippable" yaml:"shippable" mapstructure:"shippable"`
+
+	// The review:*-risk label (internal/domain/reviewpost.RiskLabel) now reflecting
+	// this verdict's own RiskLevel on the pull request.
+	SyncedLabel string `json:"syncedLabel" yaml:"syncedLabel" mapstructure:"syncedLabel"`
+}
+
+type PostReviewVerdictResponseFormalReviewEvent string
+
+const PostReviewVerdictResponseFormalReviewEventCOMMENT PostReviewVerdictResponseFormalReviewEvent = "COMMENT"
+const PostReviewVerdictResponseFormalReviewEventREQUESTCHANGES PostReviewVerdictResponseFormalReviewEvent = "REQUEST_CHANGES"
+
+var enumValues_PostReviewVerdictResponseFormalReviewEvent = []interface{}{
+	"COMMENT",
+	"REQUEST_CHANGES",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictResponseFormalReviewEvent) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictResponseFormalReviewEvent {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictResponseFormalReviewEvent, v)
+	}
+	*j = PostReviewVerdictResponseFormalReviewEvent(v)
+	return nil
+}
+
+type PostReviewVerdictResponseShippable string
+
+const PostReviewVerdictResponseShippableAuto PostReviewVerdictResponseShippable = "auto"
+const PostReviewVerdictResponseShippableBlock PostReviewVerdictResponseShippable = "block"
+const PostReviewVerdictResponseShippableNeedsHuman PostReviewVerdictResponseShippable = "needs_human"
+
+var enumValues_PostReviewVerdictResponseShippable = []interface{}{
+	"auto",
+	"needs_human",
+	"block",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictResponseShippable) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictResponseShippable {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictResponseShippable, v)
+	}
+	*j = PostReviewVerdictResponseShippable(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["formalReviewEvent"]; raw != nil && !ok {
+		return fmt.Errorf("field formalReviewEvent in PostReviewVerdictResponse: required")
+	}
+	if _, ok := raw["shippable"]; raw != nil && !ok {
+		return fmt.Errorf("field shippable in PostReviewVerdictResponse: required")
+	}
+	if _, ok := raw["syncedLabel"]; raw != nil && !ok {
+		return fmt.Errorf("field syncedLabel in PostReviewVerdictResponse: required")
+	}
+	type Plain PostReviewVerdictResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PostReviewVerdictResponse(plain)
+	return nil
+}
+
+// GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2)
+// -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql).
+// Deliberately a small, extensible shape: future Steps (48's sentinel auto-fix
+// toggle, 58's auto-merge toggle, 61's automatic-re-review opt-in) are each
+// expected to add a further boolean property here, never a bespoke DTO of their
+// own.
+type RepoSettings struct {
+	// §21.2: an admin, per-repo, strict-boolean setting that reuses the
+	// verdict-posting tool's SAME formal-review submission path and carries no
+	// independent permission of its own -- see
+	// internal/domain/reviewpost.ComputeFormalReviewEvent's own doc comment for its
+	// exact effect.
+	BlockOnHighRisk bool `json:"blockOnHighRisk" yaml:"blockOnHighRisk" mapstructure:"blockOnHighRisk"`
+
+	// The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own
+	// shape.
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *RepoSettings) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["blockOnHighRisk"]; raw != nil && !ok {
+		return fmt.Errorf("field blockOnHighRisk in RepoSettings: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in RepoSettings: required")
+	}
+	type Plain RepoSettings
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = RepoSettings(plain)
+	return nil
+}
+
 // Mirrors the sessions table (migrations/000004_sessions.up.sql).
 // status/failureReason/spawnSource enums match
 // session_status/session_failure_reason/session_spawn_source exactly.
@@ -1371,6 +1803,30 @@ func (j *UpdateMemberRoleRequest) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = UpdateMemberRoleRequest(plain)
+	return nil
+}
+
+// Request body for PUT /api/repos/{owner}/{repo}/settings.
+type UpdateRepoSettingsRequest struct {
+	// BlockOnHighRisk corresponds to the JSON schema field "blockOnHighRisk".
+	BlockOnHighRisk bool `json:"blockOnHighRisk" yaml:"blockOnHighRisk" mapstructure:"blockOnHighRisk"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateRepoSettingsRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["blockOnHighRisk"]; raw != nil && !ok {
+		return fmt.Errorf("field blockOnHighRisk in UpdateRepoSettingsRequest: required")
+	}
+	type Plain UpdateRepoSettingsRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpdateRepoSettingsRequest(plain)
 	return nil
 }
 

@@ -11,7 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
-	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -134,12 +133,25 @@ func TestCompleteProcessingTurn_SlackOrigin_EnqueuesExactlyOneSlackOutboxRow(t *
 	}
 }
 
-// TestCompleteProcessingTurn_GitHubOrigin_EnqueuesExactlyOneGitHubOutboxRow
-// proves a github-origin session's FAILED turn completion enqueues
-// exactly one 'github'-kind outbox row, shaped as githubapi.Payload, with
-// owner/repo split out of the session's own reverse-looked-up
-// repo_full_name.
-func TestCompleteProcessingTurn_GitHubOrigin_EnqueuesExactlyOneGitHubOutboxRow(t *testing.T) {
+// TestCompleteProcessingTurn_GitHubOrigin_EnqueuesNoRawCommentOutboxRow
+// proves a github-origin session's FAILED turn completion enqueues NO
+// outbox row at all any more.
+//
+// Step 47 ("server-side verdict", §8.2/§5.2) audit fix -- RAW-COMMENT
+// BLOCKING: a github-origin session is, by construction, a review
+// session (github_pr_sessions is the ONLY mechanism that ever creates
+// one, internal/adapters/inbound/github/doc.go) -- so this generic,
+// system-synthesized outcome-text comment ("Turn completed successfully."
+// / "Turn failed (...)."), posted completely independently of whatever
+// the agent itself said, is exactly the "ordinary issue comment [that]
+// bypasses the [verdict-posting] tool" this Step forbids. This test used
+// to prove the OPPOSITE (that this path enqueued exactly one
+// 'github'-kind row) -- it is renamed and inverted here to lock in the
+// new, correct behavior: a github-origin turn completion enqueues NOTHING
+// via this generic path any more. The verdict-posting tool
+// (internal/adapters/inbound/httpapi/reviewverdict.go) is now the ONLY
+// way a review session's turn reaches the PR as a comment/review.
+func TestCompleteProcessingTurn_GitHubOrigin_EnqueuesNoRawCommentOutboxRow(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 
@@ -176,23 +188,8 @@ func TestCompleteProcessingTurn_GitHubOrigin_EnqueuesExactlyOneGitHubOutboxRow(t
 		Raw:  executionCompleteRaw(t, sessionID.String(), 1, sandboxws.ExecutionCompleteOutcomeFailed),
 	})
 
-	row := getSoleOutboxRowForSession(ctx, t, pool, sessionID)
-	if row.Kind != string(ports.NotificationKindGitHub) {
-		t.Errorf("Kind = %q, want %q", row.Kind, ports.NotificationKindGitHub)
-	}
-
-	var payload githubapi.Payload
-	if err := json.Unmarshal(row.Payload, &payload); err != nil {
-		t.Fatalf("unmarshal payload as githubapi.Payload: %v", err)
-	}
-	if payload.Owner != "acme" || payload.Repo != "widgets" {
-		t.Errorf("Owner/Repo = %q/%q, want %q/%q", payload.Owner, payload.Repo, "acme", "widgets")
-	}
-	if payload.PRNumber != 42 {
-		t.Errorf("PRNumber = %d, want 42", payload.PRNumber)
-	}
-	if payload.Text == "" {
-		t.Error("Text is empty, want a human-readable outcome message")
+	if n := countOutboxRowsForSession(ctx, t, pool, sessionID); n != 0 {
+		t.Errorf("outbox row count = %d, want 0 (raw-comment posting must be blocked for a review session, §8.2/Step 47)", n)
 	}
 }
 

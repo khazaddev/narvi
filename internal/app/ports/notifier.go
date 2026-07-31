@@ -80,6 +80,20 @@ const (
 	// notification.Kind the exact same way planSlackNotifier's already
 	// does.
 	NotificationKindLinearProgress NotificationKind = "linear_progress"
+
+	// NotificationKindGitHubVerdict is Step 47's own addition ("server-side
+	// verdict", §8.2/§5.2/§21.2): routes to internal/adapters/outbound/
+	// githubapi's own verdict notifier, which submits a FORMAL pull request
+	// review (the "formal-review gate") or, deliberately, never a plain
+	// PostIssueComment call, plus syncs the review:*-risk label vocabulary
+	// (internal/domain/reviewpost.ComputeLabelSync) -- both in ONE Deliver
+	// call, since a caller only ever posts a verdict as one coherent unit
+	// (text + labels together), never independently. Distinct from
+	// NotificationKindGitHub (the generic outcome-text comment every OTHER
+	// github-origin turn used to post, now BLOCKED for a review session,
+	// internal/app/sessionactor/outboxenqueue.go) -- see that Kind's own
+	// doc comment for why a review session never uses it any more.
+	NotificationKindGitHubVerdict NotificationKind = "github_verdict"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

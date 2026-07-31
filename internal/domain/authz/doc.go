@@ -17,7 +17,7 @@
 //	| Manage automations, environments, repo/env secrets           |  ✓    |     ✓      |   —    |   —    |
 //	| Edit review verdicts; re-trigger reviews; auto-approve cfg   |  ✓    |     ✓      |   —    |   —    |
 //	| Integrations, global secrets, template activation, members  |  ✓    |     —      |   —    |   —    |
-//	  & roles, sentinel auto-fix toggle
+//	  & roles, sentinel auto-fix toggle, blockOnHighRisk (§8.2/Step 47)
 //
 // # Design: one map, not two parallel checks
 //
@@ -54,6 +54,10 @@
 //     ListMembers, UpdateMemberRole, LinkMemberIdentity,
 //     UnlinkMemberIdentity, ListAuditLog — every one of the members API's
 //     own endpoints (§13.2/§13.3's own "members API" deliverable).
+//   - internal/adapters/inbound/httpapi's reposettings.go
+//     (ActionConfigureBlockOnHighRisk, §8.2/Step 47): GetRepoSettings/
+//     PutRepoSettings, gating admin-only read/write of a repo's own
+//     blockOnHighRisk formal-review-gate policy flag.
 //   - Every other Action below (automations, environments, secrets,
 //     review verdicts, integrations, sentinel auto-fix) has NO caller
 //     yet — those features don't exist as of this Step (Phase 3 ingress
