@@ -41,7 +41,48 @@ type fakeOpenCodeServer struct {
 	messages       []messageListEntry
 	summarizeCalls []summarizeRequest
 	promptCalls    []string // cmd.Text of every POST .../prompt_async body, in order (§7.2 regression test)
+	abortCalls     int      // count of every POST .../abort call -- a LATER audit's own round-2 Finding 1 regression test
 	summarizeOK    bool     // whether POST .../summarize succeeds -- false unless armed otherwise (Finding 5)
+
+	// messageCalls counts every GET /session/{id}/message call, incremented
+	// BEFORE the handler waits on messageGate below -- a LATER audit's own
+	// test-adversarial finding: unlike promptCallCount/summarizeCallCount
+	// (which already have waitForCount-compatible counters a test can poll
+	// deterministically), no such counter existed for GET /message before
+	// this field, leaving tests that need to know "the fallback's own fetch
+	// has definitely reached and blocked on messageGate" with nothing better
+	// than a fixed wall-clock sleep to approximate it -- a sleep that can
+	// under-wait on a machine under heavy concurrent load, silently letting
+	// a test pass without ever having forced the race it exists to prove.
+	// messageCallCount below, paired with the existing waitForCount helper
+	// (compactionretry_test.go), closes that gap the same way
+	// promptCallCount/summarizeCallCount already do for their own endpoints.
+	messageCalls int
+
+	// promptAsyncFail, when true, makes EVERY SUBSEQUENT POST
+	// .../prompt_async call reply with a real non-2xx status instead of 200
+	// -- a LATER audit's own test-gap finding: attemptCompactionRetry's own
+	// THIRD documented failure branch (the retried postPromptAsync dispatch
+	// itself failing, adapter.go) had no fake-server-driven coverage at all
+	// before this field existed, mirroring summarizeOK/setSummarizeOK's own
+	// Finding 5 precedent exactly. Zero value (false) preserves this
+	// handler's own original, unconditional-200 behavior for every OTHER
+	// test in this package that never calls setPromptAsyncOK at all --
+	// checked at request time, so a test must call setPromptAsyncOK(false)
+	// AFTER the turn's own ORIGINAL dispatch has already happened (that
+	// first call must keep succeeding, or the overflow scenario a test like
+	// this needs could never even get triggered in the first place).
+	promptAsyncFail bool
+
+	// messageGate, when non-nil, blocks the GET /session/{id}/message
+	// handler (the SSE-inactivity fallback's own final-state fetch,
+	// fetchFinalMessages/finalizeByFallback, adapter.go) until closed --
+	// lets a test deterministically hold that fetch "in flight" for as
+	// long as it likes, mirroring summarizeGate/promptAsyncGate's own
+	// precedent, so a LATER audit's own Finding 2 (the fallback's
+	// check-then-act race across that exact fetch) can be exercised
+	// without racing wall-clock timing against a real HTTP round trip.
+	messageGate chan struct{}
 
 	// summarizeGate, when non-nil, blocks the /summarize handler until
 	// closed -- lets a test deterministically control exactly when a
@@ -175,18 +216,35 @@ func (f *fakeOpenCodeServer) handleSessionSubroutes(w http.ResponseWriter, r *ht
 		callIndex := len(f.promptCalls) // 1-based
 		gateFrom := f.promptAsyncGateFrom
 		gate := f.promptAsyncGate
+		fail := f.promptAsyncFail
 		f.mu.Unlock()
 		if gateFrom != 0 && callIndex >= gateFrom {
 			<-gate
 		}
+		if fail {
+			// Finding 5's own precedent, applied to prompt_async: a real
+			// non-2xx status, not just an inert flag -- see
+			// promptAsyncFail's own field comment for why this branch
+			// exists at all.
+			http.Error(w, `{"name":"UnknownError","data":{"message":"simulated prompt_async failure"}}`, http.StatusInternalServerError)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	case strings.HasSuffix(r.URL.Path, "/abort"):
+		f.mu.Lock()
+		f.abortCalls++
+		f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(false)
 	case strings.HasSuffix(r.URL.Path, "/message"):
 		f.mu.Lock()
 		entries := f.messages
+		gate := f.messageGate
+		f.messageCalls++ // recorded BEFORE the gate wait -- see messageCalls' own field comment
 		f.mu.Unlock()
+		if gate != nil {
+			<-gate // §7.2 Finding 2's own regression test: block until released
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if entries == nil {
 			entries = []messageListEntry{}
@@ -263,6 +321,34 @@ func (f *fakeOpenCodeServer) setSummarizeOK(ok bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.summarizeOK = ok
+}
+
+// setPromptAsyncOK arms whether POST .../prompt_async succeeds from this
+// point forward: true (also the zero value / default) replies 200 OK
+// exactly as this handler always has; false makes every SUBSEQUENT call
+// reply with a real non-2xx status instead -- mirroring setSummarizeOK's
+// own Finding 5 precedent, so a test can deterministically exercise
+// attemptCompactionRetry's own THIRD documented failure branch: compaction
+// succeeds, but the RETRIED postPromptAsync dispatch itself fails. Call
+// this AFTER the turn's own ORIGINAL dispatch has already happened -- see
+// promptAsyncFail's own field comment for why.
+func (f *fakeOpenCodeServer) setPromptAsyncOK(ok bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.promptAsyncFail = !ok
+}
+
+// armMessageGate arms the fake server to block the GET
+// /session/{id}/message handler (the SSE-inactivity fallback's own
+// final-state fetch) until the returned channel is closed -- see
+// messageGate's own field comment for why a LATER audit's own Finding 2
+// regression test needs this.
+func (f *fakeOpenCodeServer) armMessageGate() chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch := make(chan struct{})
+	f.messageGate = ch
+	return ch
 }
 
 // armSummarizeGate arms the fake server to block the /summarize handler
@@ -354,6 +440,26 @@ func (f *fakeOpenCodeServer) broadcastCompactionSuccessWave(sessionID string) {
 		f.broadcast(line)
 	}
 
+	// NOTE: a LATER audit's own test-gap finding (this wave's ORIGINAL
+	// "text"-only shape leaves message.part.updated's own isCompacting
+	// guard, sse.go, mutation-survivable, since dispatchPart's own
+	// isAssistantMessage gate already drops an unknown-message-id "text"
+	// part regardless) is proven by a DEDICATED test instead of by adding a
+	// step-start part HERE: TestCompactionRetry_StepStartDuringCompactionIsSuppressed
+	// (compactionretry_test.go) uses armSummarizeGate to broadcast a
+	// step-start part itself, deterministically, while /summarize is still
+	// gated (so ts.compacting is PROVABLY still true, no race). Adding a
+	// 4th queued event to THIS shared wave was tried and reverted: it
+	// measurably widened the pre-existing, explicitly-disclaimed cross-
+	// goroutine race attemptCompactionRetry's own doc comment describes
+	// (Finding 3) -- an in-process fake server's forceCompaction+
+	// postPromptAsync round trip can complete, and ts.compacting can flip
+	// false, before the SSE-reader goroutine has drained every event this
+	// handler just queued, especially under full-package `-race` load —
+	// occasionally letting THIS wave's own tail (not the real retry's) be
+	// misread as the turn's real completion. Keeping this wave exactly as
+	// small as the real, empirically-observed shape needs keeps that
+	// already-accepted risk at its original size instead of growing it.
 	part := struct {
 		ID        string `json:"id"`
 		MessageID string `json:"messageID"`
@@ -405,6 +511,18 @@ func (f *fakeOpenCodeServer) promptCallCount() int {
 	return len(f.promptCalls)
 }
 
+// messageCallCount reports how many GET /session/{id}/message calls have
+// been recorded so far -- incremented BEFORE the handler waits on
+// messageGate (messageCalls' own field comment), so a test can poll this via
+// waitForCount to know DETERMINISTICALLY that a gated fetch has reached and
+// is now blocked on the gate, rather than assuming so via a fixed wall-clock
+// sleep (a LATER audit's own test-adversarial finding).
+func (f *fakeOpenCodeServer) messageCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.messageCalls
+}
+
 func (f *fakeOpenCodeServer) lastPromptText() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -412,6 +530,18 @@ func (f *fakeOpenCodeServer) lastPromptText() string {
 		return ""
 	}
 	return f.promptCalls[len(f.promptCalls)-1]
+}
+
+// abortCallCount reports how many POST .../abort calls the fake server has
+// actually received -- a LATER audit's own round-2 Finding 1 regression
+// test uses this to prove attemptCompactionRetry's own late-stillLive()
+// check explicitly aborts a retry prompt that was already dispatched by
+// the time a Stop landed, on top of Adapter.Stop's own always-present
+// abort call.
+func (f *fakeOpenCodeServer) abortCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.abortCalls
 }
 
 // broadcast sends one raw SSE line (already "data: ...\n\n"-shaped, see
@@ -520,6 +650,31 @@ func waitForSawText(t *testing.T, ts *turnState) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("turn never observed the broadcast assistant text part within testWait")
+}
+
+// waitForNotCompacting polls ts.isCompacting() until it reads false, or
+// fails the test after testWait -- a LATER audit's own round-2 Finding 3
+// regression fix: a test that releases a gated retry postPromptAsync call
+// and then immediately broadcasts that retry's own completion events (via
+// f.broadcast, bypassing the real client-side HTTP round trip entirely)
+// must not race attemptCompactionRetry's own ts.setCompacting(false) call
+// (adapter.go, deliberately run only AFTER postPromptAsync returns, §7.2
+// Finding 3) -- broadcasting those events before compacting has actually
+// flipped false would have them silently dropped by dispatchEvent's own
+// isCompacting guard (sse.go), exactly the same hazard
+// TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed
+// deliberately controls via armPromptAsyncGateForCall. Waiting for this
+// deterministically, rather than a sleep, closes that window for good.
+func waitForNotCompacting(t *testing.T, ts *turnState) {
+	t.Helper()
+	deadline := time.Now().Add(testWait)
+	for time.Now().Before(deadline) {
+		if !ts.isCompacting() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("ts.isCompacting() never became false within testWait")
 }
 
 // lastExecutionComplete asserts events' own last entry is a

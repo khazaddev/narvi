@@ -181,9 +181,33 @@ func TestWaitForTurn_ReconnectWinsRaceAgainstFallback(t *testing.T) {
 	// loop several ticks to react to the now-reconnected stream, then
 	// confirm it did NOT finalize the turn on the strength of the reconnect
 	// alone -- fallbackReconnectGraceMultiplier's own 2x bound (800ms from
-	// this turn's own last activity) is still comfortably in the future at
-	// this point (the reconnect landed around the 600ms mark).
-	time.Sleep(6 * (reconnectRaceSSEInactivityTimeout / ssePollDivisor))
+	// this turn's own last activity) must still be comfortably in the
+	// future at this point.
+	//
+	// A LATER audit's own test-adversarial finding: sleeping a FIXED
+	// nominal amount here (assuming the reconnect landed "around the 600ms
+	// mark" and budgeting only ~100ms of margin against the 800ms bound)
+	// left only ~100ms of load-independent headroom -- under this
+	// machine's own documented heavy concurrent-workload conditions
+	// (scheduling delays, GC pauses, or the reconnect itself landing later
+	// than the nominal 600ms), that margin could be consumed, making the
+	// assertion below a genuine flake unrelated to any real regression.
+	// Computed from ts.lastActivityTime() directly instead -- the SAME
+	// real clock shouldFinalizeByFallback itself compares against -- so
+	// this sleeps only as long as still leaves a comfortable, fixed
+	// safety margin before the actual 800ms bound, regardless of how late
+	// the reconnect itself actually landed.
+	const reconnectRaceSafetyMargin = 250 * time.Millisecond
+	graceBound := time.Duration(fallbackReconnectGraceMultiplier) * reconnectRaceSSEInactivityTimeout
+	sinceLastActivity := time.Since(ts.lastActivityTime())
+	sleepFor := 6 * (reconnectRaceSSEInactivityTimeout / ssePollDivisor)
+	if remaining := graceBound - sinceLastActivity - reconnectRaceSafetyMargin; remaining < sleepFor {
+		if remaining < 0 {
+			remaining = 0
+		}
+		sleepFor = remaining
+	}
+	time.Sleep(sleepFor)
 	select {
 	case <-ts.done:
 		t.Fatal("turn finalized immediately after reconnect (bare handshake only, no turn-specific event yet) -- " +

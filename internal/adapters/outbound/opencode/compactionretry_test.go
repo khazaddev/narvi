@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -206,6 +207,125 @@ func TestCompactionRetry_SucceedsAfterOverflow(t *testing.T) {
 	if ts.isAssistantMessage("msg_compaction_ses_fake") {
 		t.Error("compaction-internal message.updated was treated as a real assistant message -- " +
 			"dispatchEvent's own isCompacting guard (sse.go) did not suppress it")
+	}
+}
+
+// TestCompactionRetry_StepStartDuringCompactionIsSuppressed is a LATER
+// audit's own test-gap finding: TestCompactionRetry_SucceedsAfterOverflow's
+// own compaction wave only ever emits a "text" part, which dispatchPart's
+// own isAssistantMessage gate (sse.go) already drops for a not-yet-known
+// message id regardless of ts.isCompacting() -- so message.part.updated's
+// own isCompacting guard was mutation-survivable (deleting it left every
+// existing test in this package green). "step-start" bypasses
+// isAssistantMessage entirely: dispatchPart's own "step-start" case calls
+// ts.emit(translateStepStart(...)) UNCONDITIONALLY, and forceCompaction's
+// own doc comment (compact.go) documents that a real compaction wave
+// genuinely does emit step/tool part traffic too. Broadcasts a step-start
+// part directly (not via the shared broadcastCompactionSuccessWave helper,
+// deliberately -- see that helper's own doc comment for why growing its
+// wave was tried and reverted) while /summarize is held open via
+// armSummarizeGate, so ts.compacting is PROVABLY still true the whole
+// time -- deterministic, no race against an independent connection,
+// mirroring TestCompactionRetry_SessionErrorDuringCompactionIsSuppressed's
+// own precedent exactly.
+func TestCompactionRetry_StepStartDuringCompactionIsSuppressed(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	gate := f.armSummarizeGate()
+
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-guard-stepstart", Gen: 1,
+		Text: "will overflow, compaction gated so we can script a step-start part mid-flight",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testWait)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	ts := waitForTurnRegistered(t, a, "ses_fake")
+
+	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+	if !ts.isCompacting() {
+		t.Fatal("ts.isCompacting() = false right after the overflow triggered a compaction attempt, want true")
+	}
+
+	// /summarize is gated (blocked before it would even respond), so
+	// ts.compacting is GUARANTEED to still be true right now and to remain
+	// true until we close(gate) below -- broadcasting a step-start part
+	// here has no ordering ambiguity at all.
+	const stepID = "prt_stepstart_guard"
+	before := ts.lastActivityTime()
+	stepStart := struct {
+		ID        string `json:"id"`
+		MessageID string `json:"messageID"`
+		Type      string `json:"type"`
+	}{ID: stepID, MessageID: "msg_compaction_ses_fake", Type: "step-start"}
+	raw, err := json.Marshal(stepStart)
+	if err != nil {
+		t.Fatalf("marshal step-start part: %v", err)
+	}
+	f.broadcast(sseLine(t, "message.part.updated", messagePartUpdatedProps{SessionID: "ses_fake", Part: raw}))
+
+	// touch() runs unconditionally as the very first thing dispatchEvent's
+	// own message.part.updated case does (sse.go), strictly before its
+	// isCompacting check -- polling for lastActivityTime to advance past
+	// `before` is a deterministic proxy for "this exact broadcast has now
+	// been fully dispatched" (guard included).
+	deadline := time.Now().Add(testWait)
+	for !ts.lastActivityTime().After(before) {
+		if time.Now().After(deadline) {
+			t.Fatal("the broadcast step-start part was never dispatched (ts.lastActivityTime never advanced) within testWait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	for _, e := range collector.snapshot() {
+		if step, ok := e.Payload.(sandboxws.StepStart); ok && step.StepId == stepID {
+			t.Error("compaction-internal step-start part leaked through as a real wire step_start event -- " +
+				"dispatchEvent's own isCompacting guard (sse.go, the \"message.part.updated\" case) did not suppress it")
+		}
+	}
+	if !ts.isCompacting() {
+		t.Fatal("ts.isCompacting() unexpectedly false while /summarize is still gated")
+	}
+
+	close(gate)
+
+	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
+	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeCompleted {
+		reason := "<nil>"
+		if final.Reason != nil {
+			reason = *final.Reason
+		}
+		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s)", final.Outcome, sandboxws.ExecutionCompleteOutcomeCompleted, reason)
 	}
 }
 
@@ -583,7 +703,7 @@ func TestCompactionRetry_ConcurrentOverflowDetectionAttemptsExactlyOnce(t *testi
 	for i := 0; i < racers; i++ {
 		group.Go(func() error {
 			<-start
-			a.finalizeOrRecoverFromOverflow("ses_fake", ts, outcome, overflowErr)
+			a.finalizeOrRecoverFromOverflow("ses_fake", ts, outcome, overflowErr, time.Now())
 			return nil
 		})
 	}
@@ -605,6 +725,358 @@ func TestCompactionRetry_ConcurrentOverflowDetectionAttemptsExactlyOnce(t *testi
 	if got := f.summarizeCallCount(); got != 1 {
 		t.Errorf("summarizeCallCount = %d, want exactly 1 (two concurrent finalizeOrRecoverFromOverflow "+
 			"calls for the SAME first-time overflow must attempt compaction exactly once)", got)
+	}
+}
+
+// TestCompactionRetry_ConcurrentOverflowDetectionNeverFinalizesPrematurely is
+// a LATER audit's own regression test for Finding 1, deterministic (no
+// network-timing luck needed, unlike
+// TestCompactionRetry_FallbackReleaseRacesLiveOverflowAtomically below, which
+// exercises the same class of bug via the real fallback-fetch-vs-live-SSE
+// path but is inherently subject to real scheduling/network timing): proves
+// that when several goroutines call finalizeOrRecoverFromOverflow
+// CONCURRENTLY for the SAME first-time overflow (exactly
+// TestCompactionRetry_ConcurrentOverflowDetectionAttemptsExactlyOnce's own
+// setup above), every LOSING goroutine correctly abandons
+// (overflowActionStale, turn.go) rather than incorrectly finalizing the
+// turn via the "already attempted" enriched-reason branch before the
+// winning goroutine's own real compaction retry has had any chance to run
+// at all.
+//
+// The PRE-FIX hazard this catches: finalizeOrRecoverFromOverflow used to
+// call ts.tryBeginCompactionRetry() directly, with no re-check of
+// staleness at that exact call site — a losing call (tryBeginCompactionRetry
+// returning false) fell straight into the "already attempted" branch and
+// called a.finalize() with the enriched "retried prompt also overflowed"
+// reason IMMEDIATELY, synchronously, on the LOSING goroutine — while the
+// WINNING goroutine's own recovery attempt (launched asynchronously via
+// a.group.Go) had not even called forceCompaction yet. Since a.finalize is
+// idempotent (tryFinalize), whichever of {a losing racer's own immediate,
+// wrong finalize} or {the winning retry's own eventual, correct finalize}
+// reaches tryFinalize FIRST wins — and the former has a structural head
+// start (zero I/O) over the latter (at least one HTTP round trip). The
+// existing TestCompactionRetry_ConcurrentOverflowDetectionAttemptsExactlyOnce
+// test above never actually caught this: it only ever asserts
+// summarizeCallCount, never ts.done/the eventual outcome, so it would pass
+// unchanged whether or not a losing racer wrongly finalized.
+//
+// armSummarizeGate holds the WINNING retry's own forceCompaction call open
+// deterministically, so the assertion "ts.done is not yet closed" right
+// after the race is a genuine proof of "no losing racer finalized
+// prematurely", not an accident of how fast a real HTTP round trip happened
+// to complete.
+func TestCompactionRetry_ConcurrentOverflowDetectionNeverFinalizesPrematurely(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	summarizeGate := f.armSummarizeGate()
+	// Guarantees summarizeGate is closed exactly once even if an assertion
+	// below calls t.Fatal before this test's own explicit close(summarizeGate)
+	// is reached -- otherwise the fake server's own gated /summarize handler
+	// goroutine would stay blocked forever, and f.srv.Close() (registered by
+	// newFakeOpenCodeServer, which therefore runs AFTER this cleanup thanks
+	// to t.Cleanup's own LIFO ordering) would hang the whole test binary
+	// waiting for that outstanding request to finish.
+	var closeSummarizeGateOnce sync.Once
+	closeSummarizeGate := func() { closeSummarizeGateOnce.Do(func() { close(summarizeGate) }) }
+	t.Cleanup(closeSummarizeGate)
+
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-race-premature", Gen: 1,
+		Text: "racing overflow detection must never finalize prematurely for a losing racer",
+	}
+	ts := newTurnState(cmd, collector.sink)
+	a.registerTurn("ses_fake", ts)
+	t.Cleanup(func() { a.unregisterTurn("ses_fake") })
+
+	overflowErr := &openCodeTaggedError{Name: "ContextOverflowError"}
+	outcome := deriveOutcome(overflowErr, false, false)
+
+	const racers = 8
+	start := make(chan struct{})
+	var group errgroup.Group
+	for i := 0; i < racers; i++ {
+		group.Go(func() error {
+			<-start
+			a.finalizeOrRecoverFromOverflow("ses_fake", ts, outcome, overflowErr, time.Now())
+			return nil
+		})
+	}
+	close(start)
+	_ = group.Wait()
+
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+
+	// THE headline assertion: no racer -- winner or loser -- may have
+	// finalized this turn yet. The pre-fix bug closes ts.done right here,
+	// discarding the real, winning retry (still gated, mid-flight, having
+	// not even reached forceCompaction's own response).
+	select {
+	case <-ts.done:
+		t.Fatal("turn finalized before the winning compaction retry even got a chance to run -- a losing racer " +
+			"incorrectly finalized via the 'already attempted' branch instead of cleanly abandoning (Finding 1's " +
+			"own class of TOCTOU)")
+	default:
+	}
+	if got := f.summarizeCallCount(); got != 1 {
+		t.Fatalf("summarizeCallCount = %d, want exactly 1", got)
+	}
+
+	closeSummarizeGate() // let the one genuine winner's own gated forceCompaction finally proceed
+	waitForCount(t, "promptCallCount", f.promptCallCount, 1)
+	waitForNotCompacting(t, ts)
+
+	// Script the real retry's own clean completion.
+	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
+	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	select {
+	case <-ts.done:
+	case <-time.After(testWait):
+		t.Fatal("turn never finalized after the real retry's own completion was scripted")
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeCompleted {
+		reason := "<nil>"
+		if final.Reason != nil {
+			reason = *final.Reason
+		}
+		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s)",
+			final.Outcome, sandboxws.ExecutionCompleteOutcomeCompleted, reason)
+	}
+}
+
+// TestTurnState_ResolveOverflowActionDetectsStalenessWithoutIsCompacting is a
+// LATER audit's own regression test for the SECOND half of
+// resolveOverflowAction's staleness guard (turn.go): a caller's snapshot can
+// go stale not only because a compaction retry is LIVE right now
+// (ts.compacting==true), but also because a retry began AND fully completed
+// its own re-dispatch (ts.compacting flipped back to false) sometime after
+// the caller's own snapshotTime -- a sub-case ts.isCompacting() alone can
+// never observe, since by the time the caller gets around to checking, the
+// retry is no longer "in flight" by any reasonable reading.
+//
+// Deterministic and fully synchronous (no fake server, no real timing at
+// all): directly drives turnState's own ts.touch() to simulate "activity
+// happened after the caller's snapshot was taken" (exactly what a completed
+// retry's own SSE traffic does in production, per ts.touch()'s own field
+// comment), then calls resolveOverflowAction with a snapshotTime taken
+// BEFORE that touch. Proves overflowActionStale fires (not
+// overflowActionBeginRetry, and NOT overflowActionAlreadyAttempted either --
+// this must never look like a retry was already attempted, since none ever
+// was for THIS turnState in this test) and that ts's own compacting/
+// compactionAttempted fields are left completely untouched (the caller must
+// abandon without mutating anything).
+func TestTurnState_ResolveOverflowActionDetectsStalenessWithoutIsCompacting(t *testing.T) {
+	collector := &eventCollector{}
+	ts := newTurnState(sandboxws.Prompt{}, collector.sink)
+
+	snapshotTime := ts.lastActivityTime()
+
+	// Simulate activity that happened AFTER the caller's own snapshot was
+	// taken -- exactly what a retry's own SSE traffic (ts.touch(), called by
+	// dispatchEvent for every dispatched event) does while
+	// finalizeByFallback's own fetchFinalMessages call is in flight.
+	time.Sleep(time.Millisecond) // ensure a strictly later wall-clock reading
+	ts.touch()
+
+	if !ts.lastActivityTime().After(snapshotTime) {
+		t.Fatal("test setup invalid: ts.touch() did not advance lastActivityTime past the snapshot")
+	}
+	if ts.isCompacting() {
+		t.Fatal("test setup invalid: ts.isCompacting() should read false -- this test proves the OTHER half of " +
+			"the staleness guard, the one ts.isCompacting() alone cannot detect")
+	}
+
+	got := ts.resolveOverflowAction(snapshotTime, true)
+	if got != overflowActionStale {
+		t.Errorf("resolveOverflowAction() = %v, want overflowActionStale (activity was recorded after the "+
+			"caller's own snapshot, even though ts.isCompacting() reads false) -- a version of this guard that "+
+			"dropped the lastActivity re-check entirely (Finding 4's own zero-coverage gap) would wrongly return "+
+			"overflowActionBeginRetry here instead, letting a stale caller launch a SECOND, spurious "+
+			"compaction retry", got)
+	}
+	if ts.compactionAlreadyAttempted() {
+		t.Error("compactionAlreadyAttempted() = true after a stale resolveOverflowAction call, want false -- " +
+			"the stale branch must abandon without mutating ts at all")
+	}
+	if ts.isCompacting() {
+		t.Error("isCompacting() = true after a stale resolveOverflowAction call, want false -- the stale branch " +
+			"must abandon without mutating ts at all")
+	}
+}
+
+// TestCompactionRetry_FallbackAbandonsWhenRetryFullyCompletesDuringFetch is a
+// LATER audit's own INTEGRATION-level regression test for the same gap
+// TestTurnState_ResolveOverflowActionDetectsStalenessWithoutIsCompacting
+// proves at the unit level, but driven through the real finalizeByFallback/
+// fetchFinalMessages/fake-server path: a compaction retry can both BEGIN and
+// FULLY complete its own re-dispatch (ts.compacting: false -> true -> false
+// again) ENTIRELY inside the window finalizeByFallback's own gated
+// GET /session/{id}/message fetch is blocked for -- so by the time that
+// fetch finally returns, ts.isCompacting() alone reads false (nothing is "in
+// flight" any more) and the ONLY thing that still proves the fetched
+// snapshot is stale is ts.lastActivityTime() having advanced past
+// finalizeByFallback's own preFetchActivity snapshot.
+//
+// Deterministic via armMessageGate (fake_server_test.go): holds
+// finalizeByFallback's own fetch open for as long as the test likes, so the
+// live retry (deliberately left UNGATED here -- setSummarizeOK(true), no
+// armSummarizeGate/armPromptAsyncGateForCall) has a real, bounded amount of
+// wall-clock time to run all the way to completion before this test ever
+// releases messageGate -- waitForNotCompacting + waitForCount(promptCallCount,
+// 2) below confirm that actually happened before proceeding, so there is no
+// timing luck involved in reaching the state this test needs.
+func TestCompactionRetry_FallbackAbandonsWhenRetryFullyCompletesDuringFetch(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	messageGate := f.armMessageGate()
+
+	// A stale snapshot: as if GET /session/{id}/message had been read before
+	// the live compaction retry ever touched anything -- still showing the
+	// ORIGINAL, not-yet-recovered overflow. If finalizeByFallback incorrectly
+	// acts on this once messageGate is released, it will (wrongly) finalize
+	// using this exact stale error.
+	f.setMessages([]messageListEntry{
+		{Info: openCodeMessageInfo{ID: "msg_original", Role: "assistant", Error: &openCodeTaggedError{Name: "ContextOverflowError"}}},
+	})
+
+	// Deliberately much shorter than testSSEInactivityTimeout -- must fire
+	// the fallback (and block it in messageGate) well before the overflow is
+	// even broadcast.
+	shortInactivity := 50 * time.Millisecond
+
+	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	promptText := "overflow whose real retry fully completes while the fallback's own stale fetch is still gated"
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-fully-completes-during-fetch", Gen: 1,
+		Text: promptText,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testWait)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	ts := waitForTurnRegistered(t, a, "ses_fake")
+
+	// Deterministically wait for waitForTurn's own fallback ticker to have
+	// actually reached (and blocked inside) its own fetchFinalMessages call
+	// (messageGate) -- messageCallCount is incremented BEFORE the fake
+	// server's own handler waits on the gate, so this proves the fetch is
+	// genuinely in flight, holding its own preFetchActivity snapshot from
+	// before the live retry below ever starts, rather than assuming so via a
+	// fixed wall-clock sleep (a LATER audit's own test-adversarial finding:
+	// a sleep here could under-wait under heavy concurrent load).
+	waitForCount(t, "messageCallCount", f.messageCallCount, 1)
+
+	// NOW the live overflow arrives, entirely ungated -- it will begin AND
+	// fully complete its own re-dispatch while messageGate is still held.
+	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+	waitForNotCompacting(t, ts) // proves the retry's own re-dispatch has already returned
+	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+	if !ts.compactionAlreadyAttempted() {
+		t.Fatal("compactionAlreadyAttempted() = false after the retry's own re-dispatch returned, want true -- " +
+			"this test's own precondition (the retry must have fully committed) is not yet satisfied")
+	}
+
+	// Update the fake server's own fixture to reflect the retry's real,
+	// genuine completion BEFORE releasing the gate -- shortInactivity is
+	// short enough that waitForTurn's own fallback ticker can legitimately
+	// fire AGAIN for the now-silent RETRIED prompt (still waiting on its own
+	// session.idle, not yet broadcast below) before this test gets to
+	// broadcast it; if that happens, that SECOND, entirely genuine
+	// (non-stale, from ITS OWN fresh snapshot) fallback fetch must see
+	// accurate data, not the ORIGINAL test fixture's now-stale
+	// ContextOverflowError, or it would derive an "already attempted /
+	// retried prompt also overflowed" outcome for a reason that has nothing
+	// to do with the staleness guard this test targets (a test-fixture
+	// artifact, not a production bug). This does not weaken what this test
+	// proves about the FIRST, already-blocked fetch below: that call's own
+	// preFetchActivity was snapshotted BEFORE any of this activity
+	// happened, so resolveOverflowAction's staleness check fires for it
+	// regardless of what the fixture now says.
+	f.setMessages([]messageListEntry{
+		{Info: openCodeMessageInfo{ID: "msg_retry", Role: "assistant"}, Parts: []json.RawMessage{textPartJSON(t, "prt_retry", "msg_retry", "all good now")}},
+	})
+
+	// Release the fallback's own stale fetch NOW -- strictly AFTER the
+	// retry above has both begun and fully completed its re-dispatch, so
+	// ts.isCompacting() will read false by the time finalizeByFallback
+	// resumes, and ONLY the lastActivity staleness check can still catch
+	// this. Immediately (no deliberate sleep in between) broadcast the real
+	// retry's own completion too -- this test does not attempt to peek at
+	// ts.done between the two: the fake server's own handler snapshots
+	// f.messages BEFORE waiting on the gate (see its own doc comment), so
+	// the just-unblocked fetch's own entries are STILL the original stale
+	// snapshot regardless of the setMessages call above -- resolveOverflowAction's
+	// lastActivity staleness check is the only thing that can make that
+	// unblocked fetch abandon correctly rather than wrongly finalizing with
+	// it. Asserting on the FINAL settled outcome below is what actually
+	// distinguishes the two: a version of this guard missing the lastActivity
+	// check would very likely let the stale fetch's own zero-I/O finalize
+	// call win tryFinalize before the real completion's own event-dispatch
+	// or a corrected fallback fetch's own HTTP round trip can, reporting the
+	// wrong Failed/"already attempted" outcome instead.
+	close(messageGate)
+	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
+	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+
+	select {
+	case <-ts.done:
+	case <-time.After(testWait):
+		t.Fatal("turn never finalized after the real retry's own completion was scripted")
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeCompleted {
+		reason := "<nil>"
+		if final.Reason != nil {
+			reason = *final.Reason
+		}
+		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s) -- the fallback's own STALE, "+
+			"already-in-flight fetch (snapshotted before the live retry even began) must have abandoned via "+
+			"the lastActivity staleness check rather than finalizing with its own outdated ContextOverflowError "+
+			"(Finding 4's own zero-coverage gap)",
+			final.Outcome, sandboxws.ExecutionCompleteOutcomeCompleted, reason)
+	}
+	if got := f.summarizeCallCount(); got != 1 {
+		t.Errorf("summarizeCallCount = %d, want exactly 1 (the fallback's own stale fetch must never have "+
+			"launched a second, spurious compaction attempt)", got)
 	}
 }
 
@@ -799,6 +1271,24 @@ func TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed(
 
 	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
 
+	// Deterministically wait for compacting to actually flip false (i.e. for
+	// attemptCompactionRetry's own postPromptAsync call to have genuinely
+	// returned) BEFORE broadcasting the retry's own completion -- mirroring
+	// TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry's own
+	// precedent (see waitForNotCompacting's own doc comment, fake_server_test.go,
+	// for the exact race this closes). Without this, waitForCount above only
+	// proves the FAKE SERVER'S handler recorded call #2 -- not that the
+	// ADAPTER's own client-side postPromptAsync HTTP round trip has actually
+	// returned and ts.setCompacting(false) has run (§7.2 Finding 3 deliberately
+	// defers that clear until AFTER postPromptAsync returns) -- so broadcasting
+	// the retry's real completion immediately after waitForCount can race
+	// dispatchEvent's own isCompacting guard (sse.go), which would silently
+	// drop session.idle if it lands before that clear, leaving nothing to ever
+	// close ts.done within this test's own testWait ctx budget: exactly the
+	// intermittent "cancelled / turn context canceled before completion"
+	// flake this fix eliminates.
+	waitForNotCompacting(t, ts)
+
 	// Script the retry's own REAL clean completion.
 	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
 	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
@@ -815,5 +1305,972 @@ func TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed(
 			reason = *final.Reason
 		}
 		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s)", final.Outcome, sandboxws.ExecutionCompleteOutcomeCompleted, reason)
+	}
+}
+
+// TestCompactionRetry_StopDuringCompactionAbortsRetry is a LATER audit's own
+// Finding 1 regression test: a user Stop landing WHILE forceCompaction is
+// still genuinely in flight must abort the retry entirely -- never
+// re-dispatch the very prompt the user just cancelled, and finalize as
+// Cancelled, not Completed/Failed. Before this fix, Adapter.Stop touched no
+// turnState at all, so the abort's own OpenCode-side signal was silently
+// swallowed by ts.isCompacting()'s own dispatchEvent guards (sse.go) and
+// attemptCompactionRetry re-dispatched unconditionally once forceCompaction
+// returned. Uses armSummarizeGate (fake_server_test.go) to hold
+// forceCompaction open long enough to call Stop deterministically while
+// compacting, rather than racing a real timing window.
+func TestCompactionRetry_StopDuringCompactionAbortsRetry(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	gate := f.armSummarizeGate()
+
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-stop", Gen: 1,
+		Text: "will overflow, then the user hits Stop while compaction is still in flight",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testWait)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	ts := waitForTurnRegistered(t, a, "ses_fake")
+
+	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+	if !ts.isCompacting() {
+		t.Fatal("ts.isCompacting() = false right after the overflow triggered a compaction attempt, want true")
+	}
+
+	// The user presses Stop WHILE forceCompaction is still gated/in-flight.
+	// Stop's own resulting OpenCode-side abort call would normally produce
+	// a session.idle/session.error this adapter's own isCompacting guards
+	// (sse.go) silently swallow -- markStopRequested (turn.go) is the
+	// dedicated, NON-swallowed signal this fix adds specifically so
+	// attemptCompactionRetry can still learn this happened.
+	stop := sandboxws.Stop{Type: "stop", MessageId: "m2", SessionId: "sess-stop", Gen: 1}
+	if err := a.Stop(ctx, stop); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	close(gate) // let the gated /summarize call finally return -- compaction itself still succeeds
+
+	// A LATER audit's own Finding 4: the Outcome assertion below is, on its
+	// own, non-discriminating -- reverting either half of the ACTUAL fix
+	// (stillLive()'s check in attemptCompactionRetry, or markStopRequested
+	// in Stop) still eventually produces Outcome==Cancelled here, but only
+	// via this test's own StartTurn ctx timing out after the full testWait
+	// (waitForTurn's ctx.Done() branch, finalizeCanceled) -- an entirely
+	// different, unrelated code path from the one this test exists to
+	// prove. Timing group.Wait() itself discriminates the two: with the fix
+	// intact, the turn finalizes within milliseconds of close(gate) (the
+	// Stop-driven Cancelled path); with either half reverted, it takes
+	// nearly the full testWait instead (confirmed by reverting each half
+	// independently and observing this elapsed check fail every time, while
+	// the bare Outcome assertion alone kept passing).
+	started := time.Now()
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Errorf("StartTurn took %s to return after Stop landed during compaction -- want a prompt "+
+			"Cancelled finalize via the Stop-driven path (markStopRequested + stillLive()), not the "+
+			"unrelated ctx-timeout fallback (which would take close to the full %s testWait)", elapsed, testWait)
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeCancelled {
+		reason := "<nil>"
+		if final.Reason != nil {
+			reason = *final.Reason
+		}
+		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s)", final.Outcome, sandboxws.ExecutionCompleteOutcomeCancelled, reason)
+	}
+
+	// THE headline assertion: the retry must NEVER have been re-dispatched
+	// -- a Stop must never be silently overridden by re-posting the exact
+	// prompt the user just cancelled.
+	if got := f.promptCallCount(); got != 1 {
+		t.Errorf("promptCallCount = %d, want exactly 1 (the original dispatch only -- "+
+			"Stop must abort the retry, never re-dispatch)", got)
+	}
+	if got := f.summarizeCallCount(); got != 1 {
+		t.Errorf("summarizeCallCount = %d, want exactly 1", got)
+	}
+	if ts.isCompacting() {
+		t.Error("ts.isCompacting() = true after the retry was aborted by Stop, want false")
+	}
+}
+
+// TestCompactionRetry_StopDuringRetryDispatchAbortsRedispatchedPrompt is a
+// LATER audit's own ROUND-2 Finding 1 regression test:
+// TestCompactionRetry_StopDuringCompactionAbortsRetry above only ever calls
+// Stop BEFORE forceCompaction returns -- attemptCompactionRetry's own
+// stillLive() check (adapter.go) used to be read exactly once, right after
+// forceCompaction returned, and never re-consulted between then and the
+// actual a.postPromptAsync re-dispatch call a few lines later -- including
+// across that call's own full HTTP round trip. A Stop landing in THAT
+// window went completely unobserved: the retry redispatched the very
+// prompt the user just asked to cancel. Deterministically forces exactly
+// that window via armPromptAsyncGateForCall(2) (gating ONLY the retry's own
+// re-dispatch call, mirroring
+// TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed's
+// own precedent for gating exactly this call), calling Stop WHILE that call
+// is gated/already in flight.
+func TestCompactionRetry_StopDuringRetryDispatchAbortsRedispatchedPrompt(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	gate := f.armPromptAsyncGateForCall(2)
+
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-stop-redispatch", Gen: 1,
+		Text: "will overflow; the user hits Stop while the RETRY's own redispatch is already in flight",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testWait)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	waitForTurnRegistered(t, a, "ses_fake")
+
+	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	// forceCompaction is NOT gated in this test, so it completes normally
+	// and attemptCompactionRetry's own FIRST stillLive() check (right after
+	// forceCompaction returns) passes -- no Stop has happened yet -- so it
+	// proceeds to clearErrorsForRetry and calls postPromptAsync for the
+	// retry, which IS gated (call #2) and blocks mid-flight.
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+
+	// The fake server's own /prompt_async handler records the call BEFORE
+	// blocking on the gate (fake_server_test.go), so this proves the
+	// retry's own re-dispatch has actually been accepted and is now
+	// genuinely in flight -- exactly the window this finding describes.
+	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+
+	// The user presses Stop WHILE the retry's own re-dispatch HTTP call is
+	// still gated/in-flight -- the exact window the ORIGINAL (round-1)
+	// stillLive() check, read only once BEFORE this call, could never see.
+	stop := sandboxws.Stop{Type: "stop", MessageId: "m2", SessionId: "sess-stop-redispatch", Gen: 1}
+	if err := a.Stop(ctx, stop); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	close(gate) // let the gated retry dispatch finally return (it succeeds)
+
+	started := time.Now()
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Errorf("StartTurn took %s to return after Stop landed during the retry's own redispatch -- "+
+			"want a prompt Cancelled finalize via the round-2 stillLive() re-check, not the unrelated "+
+			"ctx-timeout fallback path (which would take close to the full %s testWait)", elapsed, testWait)
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeCancelled {
+		reason := "<nil>"
+		if final.Reason != nil {
+			reason = *final.Reason
+		}
+		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s)", final.Outcome, sandboxws.ExecutionCompleteOutcomeCancelled, reason)
+	}
+
+	// The retry WAS actually redispatched -- it had already been accepted
+	// by OpenCode by the time Stop landed, and nothing can undo that HTTP
+	// call once it is in flight -- but it must have been explicitly aborted
+	// rather than silently left to run to completion having overridden the
+	// user's own Stop.
+	if got := f.promptCallCount(); got != 2 {
+		t.Errorf("promptCallCount = %d, want exactly 2 (original + the one retry -- it WAS already "+
+			"dispatched before Stop could prevent it)", got)
+	}
+	if got := f.abortCallCount(); got != 2 {
+		t.Errorf("abortCallCount = %d, want exactly 2 (Stop's own always-present abort call, PLUS this "+
+			"fix's explicit abort of the already-redispatched retry prompt)", got)
+	}
+}
+
+// TestCompactionRetry_RetryPostPromptAsyncFails is a LATER audit's own
+// test-gap finding: attemptCompactionRetry's own THIRD documented failure
+// branch -- compaction succeeds, but the RETRIED postPromptAsync dispatch
+// itself fails -- had zero fake-server-driven coverage at all before
+// setPromptAsyncOK existed (fake_server_test.go), mirroring
+// TestCompactionRetry_ForceCompactionFails' own Finding 5 precedent for the
+// SIBLING failure branch. Proves the resulting execution_complete carries
+// the ENRICHED original-overflow reason (naming both the original
+// ContextOverflowError AND the fact that the retry's own dispatch failed),
+// never a bare, indistinguishable-from-first-time-overflow reason.
+func TestCompactionRetry_RetryPostPromptAsyncFails(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-6", Gen: 1,
+		Text: "will overflow; compaction succeeds but the retried dispatch itself fails",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testWait)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	waitForTurnRegistered(t, a, "ses_fake")
+
+	// The ORIGINAL dispatch (call #1) must keep succeeding -- registerTurn
+	// happens BEFORE StartTurn's own postPromptAsync call, so
+	// waitForTurnRegistered alone does not yet prove call #1 has actually
+	// been sent; wait for it explicitly before arming the failure, or the
+	// overflow scenario this test needs could never even get triggered in
+	// the first place (see setPromptAsyncOK's own doc comment).
+	waitForCount(t, "promptCallCount", f.promptCallCount, 1)
+	f.setPromptAsyncOK(false)
+
+	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeFailed {
+		t.Errorf("execution_complete.Outcome = %q, want %q", final.Outcome, sandboxws.ExecutionCompleteOutcomeFailed)
+	}
+	if final.Reason == nil {
+		t.Fatal("execution_complete.Reason = nil, want a non-nil enriched reason")
+	}
+	reason := *final.Reason
+	if !strings.Contains(reason, "ContextOverflowError") {
+		t.Errorf("execution_complete.Reason = %q, want it to name the ORIGINAL overflow error too", reason)
+	}
+	if !strings.Contains(reason, "compaction retry attempted and failed") {
+		t.Errorf("execution_complete.Reason = %q, want it to mention the compaction retry itself failed", reason)
+	}
+	if !strings.Contains(reason, "retry postPromptAsync") {
+		t.Errorf("execution_complete.Reason = %q, want it to name retry postPromptAsync as the failed step", reason)
+	}
+
+	if got := f.summarizeCallCount(); got != 1 {
+		t.Errorf("summarizeCallCount = %d, want exactly 1", got)
+	}
+	if got := f.promptCallCount(); got != 2 {
+		t.Errorf("promptCallCount = %d, want exactly 2 (original + the one failed retry, no more)", got)
+	}
+}
+
+// TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry is a LATER
+// audit's own Finding 2 regression test: finalizeByFallback used to compute
+// its own finalize decision from a GET /session/{id}/message snapshot
+// fetched BEFORE a live compaction retry could have started, with no
+// re-check of that staleness AFTER the fetch actually returned -- so a live
+// retry that began and won tryBeginCompactionRetry's own race WHILE this
+// fetch was still in flight would still get its own turn prematurely
+// finalized by the fallback's stale data (via finalizeOrRecoverFromOverflow's
+// "already attempted" branch), orphaning the real retry goroutine.
+//
+// Deterministically forces exactly that interleaving via TWO gates: a very
+// short SSE-inactivity timeout triggers the fallback's own fetch first
+// (gated via armMessageGate, blocking it mid-flight); WHILE it is blocked,
+// the live overflow arrives and wins the compaction race (forceCompaction
+// itself ALSO gated via armSummarizeGate, so there is no additional race
+// once both gates are held: forceCompaction cannot possibly return before
+// this test explicitly releases it). Releasing messageGate first proves
+// the fallback correctly abandons its own stale decision instead of
+// finalizing; only then releasing summarizeGate lets the REAL retry
+// proceed and complete normally.
+func TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	messageGate := f.armMessageGate()
+	summarizeGate := f.armSummarizeGate()
+	// promptGate additionally holds the RETRY's own re-dispatch call (#2)
+	// open until this test explicitly releases it -- a LATER audit's own
+	// round-2 Finding 3: without this, releasing summarizeGate and then
+	// immediately broadcasting the retry's own completion (below) can race
+	// attemptCompactionRetry's own ts.setCompacting(false) call, which only
+	// runs AFTER the retry's real postPromptAsync HTTP round trip actually
+	// returns (§7.2 Finding 3) -- NOT the instant the fake server's own
+	// handler merely records the call, which is all waitForCount's own
+	// promptCallCount can observe. Gating call #2 explicitly, mirroring
+	// TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed's
+	// own precedent, lets this test control that exact ordering
+	// deterministically instead of racing it.
+	promptGate := f.armPromptAsyncGateForCall(2)
+
+	// A stale snapshot: as if GET /session/{id}/message had been read
+	// before the live compaction retry ever touched anything -- still
+	// showing the ORIGINAL, not-yet-recovered overflow.
+	f.setMessages([]messageListEntry{
+		{Info: openCodeMessageInfo{ID: "msg_original", Role: "assistant", Error: &openCodeTaggedError{Name: "ContextOverflowError"}}},
+	})
+
+	// Deliberately much shorter than testSSEInactivityTimeout -- must fire
+	// the fallback well before any overflow is even broadcast.
+	shortInactivity := 50 * time.Millisecond
+
+	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	promptText := "will overflow while the fallback's own stale fetch is still in flight"
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-fallback-race", Gen: 1,
+		Text: promptText,
+	}
+
+	// A LATER audit's own round-2 Finding 3: this test's own pollInterval
+	// (shortInactivity/ssePollDivisor, ~2ms) means waitForTurn's own ticker
+	// fires -- and, once compacting flips back to false after the real
+	// retry's own redispatch succeeds but before its completion has been
+	// broadcast/dispatched yet, calls finalizeByFallback (a REAL HTTP fetch)
+	// -- extremely often for as long as that narrow window lasts. Every one
+	// of those calls correctly abandons (compactionAlreadyAttempted() is
+	// permanently true from that point on -- the round-2 Finding 2 fix
+	// above), so this is harmless BY CONSTRUCTION, never a correctness
+	// concern -- but under genuine host contention (confirmed empirically:
+	// this exact test observed failing via testWait/ctx expiring, Outcome
+	// reported Cancelled instead of Completed, NOT via the wrong-Failed
+	// symptom round-1's own fix left unguarded) that harmless polling storm
+	// can itself consume enough scheduler time to delay the SSE-reader
+	// goroutine's own processing of the retry's scripted completion past a
+	// tight ctx budget. Nothing here is unboundedly stuck -- the storm
+	// self-terminates the instant that completion is actually dispatched
+	// (touch() resets idleFor) -- so a materially longer, still-bounded ctx
+	// budget is the correct fix for a "slow under contention", not "hung",
+	// failure mode: raceTestWait gives this specific test generous
+	// contention headroom without weakening what it actually proves (a
+	// GENUINE hang/regression would still be caught, just after a longer
+	// wait) -- the fully deterministic, gate-free
+	// TestCompactionRetry_FallbackAbandonsWhenAlreadyAttemptedBeforeFetchBegins
+	// above already covers the exact correctness property this test proves,
+	// with zero timing dependency at all.
+	const raceTestWait = 60 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), raceTestWait)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	ts := waitForTurnRegistered(t, a, "ses_fake")
+
+	// Deterministically wait for waitForTurn's own fallback ticker to have
+	// actually reached (and blocked inside) its own fetchFinalMessages call
+	// (messageGate) -- a LATER audit's own test-adversarial finding: the
+	// fixed wall-clock sleep this replaced only ASSUMED the fetch had
+	// already reached and blocked on messageGate by the time it returned,
+	// with no direct signal to confirm that; under this machine's own
+	// documented heavy concurrent load, that assumption could silently fail
+	// (the overflow below would then win tryBeginCompactionRetry BEFORE
+	// fetchFinalMessages was even called, flipping ts.compacting true and
+	// causing shouldFinalizeByFallback's own isCompacting guard to skip
+	// calling finalizeByFallback entirely for the rest of the test --
+	// messageGate would then never even be reached, silently never
+	// exercising the race this test exists to prove, while still reporting
+	// PASS). messageCallCount is incremented BEFORE the fake server's own
+	// handler waits on the gate, so waiting for it to reach 1 is a genuine,
+	// deterministic proof the fetch is blocked, not an assumption.
+	waitForCount(t, "messageCallCount", f.messageCallCount, 1)
+
+	// NOW the live overflow arrives -- races the (already in-flight,
+	// gated) fallback fetch exactly as Finding 2 describes.
+	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	// forceCompaction has been invoked (and gated) -- this can ONLY happen
+	// after tryBeginCompactionRetry already won, i.e. ts.compactionAttempted
+	// is already true by this point.
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+	if !ts.isCompacting() {
+		t.Fatal("ts.isCompacting() = false right after the overflow triggered a compaction attempt, want true")
+	}
+
+	// Release the fallback's own stale fetch. With the fix, it must detect
+	// that a compaction retry began during its own fetch and abandon its
+	// decision entirely -- NOT finalize using the stale ContextOverflowError
+	// snapshot above.
+	close(messageGate)
+
+	// Give the (just-unblocked) fallback goroutine time to finish deciding
+	// -- deterministic regardless of exactly how long this is, since
+	// forceCompaction is STILL gated (summarizeGate): there is no live
+	// retry activity this could possibly race against right now.
+	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case <-ts.done:
+		t.Fatal("turn finalized via the fallback's own STALE pre-compaction fetch while a real " +
+			"compaction retry was already committed to -- Finding 2's own regression")
+	default:
+	}
+	if !ts.isCompacting() {
+		t.Fatal("ts.isCompacting() unexpectedly false while forceCompaction is still gated")
+	}
+
+	close(summarizeGate) // let the real, gated compaction attempt finally proceed
+
+	// The retry's own re-dispatch (call #2) is still gated (promptGate) --
+	// its own call has been recorded (so waitForCount below can observe
+	// it), but the ADAPTER's own client-side postPromptAsync call has not
+	// yet returned, and therefore ts.setCompacting(false) has not yet run.
+	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+	if got := f.lastPromptText(); got != promptText {
+		t.Errorf("retried prompt text = %q, want %q", got, promptText)
+	}
+
+	close(promptGate) // let the gated retry dispatch finally return
+
+	// Deterministically wait for compacting to actually flip false (i.e.
+	// for attemptCompactionRetry's own postPromptAsync call to have
+	// genuinely returned) BEFORE broadcasting the retry's own completion --
+	// round-2 Finding 3's own fix, see waitForNotCompacting's own doc
+	// comment (fake_server_test.go) for the exact race this closes.
+	waitForNotCompacting(t, ts)
+
+	// Script the REAL retry's own clean completion.
+	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
+	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+
+	// StartTurn's own waitForTurn call already returned earlier -- the
+	// instant it called finalizeByFallback once, above, exactly like
+	// finalizeOrRecoverFromOverflow's own "tryBeginCompactionRetry succeeds"
+	// branch already does when discovered via the LIVE path (see this
+	// method's own doc comment): it does not itself block on ts.done once a
+	// background recovery attempt has taken over responsibility for
+	// finalizing this turn. group.Wait() above already returned (nil, no
+	// error) the moment that happened, well before the real retry's own
+	// completion was even scripted -- so THIS test must wait on ts.done
+	// directly rather than treating group.Wait() as a proxy for "the turn
+	// is actually finished".
+	select {
+	case <-ts.done:
+	case <-time.After(raceTestWait):
+		t.Fatalf("turn never finalized within raceTestWait after the real retry's own completion was scripted "+
+			"(isCompacting=%v promptCallCount=%d summarizeCallCount=%d events=%d)",
+			ts.isCompacting(), f.promptCallCount(), f.summarizeCallCount(), len(collector.snapshot()))
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeCompleted {
+		reason := "<nil>"
+		if final.Reason != nil {
+			reason = *final.Reason
+		}
+		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s)", final.Outcome, sandboxws.ExecutionCompleteOutcomeCompleted, reason)
+	}
+}
+
+// TestCompactionRetry_FallbackAbandonsWhenAlreadyAttemptedBeforeFetchBegins
+// is a LATER audit's own ROUND-2 Finding 2 regression test:
+// TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry above only
+// ever forces the sub-case where compactionAlreadyAttempted() flips from
+// false to true DURING finalizeByFallback's own fetch -- the ORIGINAL fix's
+// own "attemptedBefore" snapshot already handled that sub-case correctly.
+// The sub-case that fix actually MISSED is this one: a compaction retry
+// already won tryBeginCompactionRetry() and is already genuinely in flight
+// STRICTLY BEFORE finalizeByFallback is ever even called (so
+// attemptedBefore would already read true, before the fetch has even
+// started) -- the OLD "!attemptedBefore && ts.compactionAlreadyAttempted()"
+// guard evaluates to false in that case and finalizeByFallback wrongly
+// proceeds to finalize from a stale snapshot anyway. Proven directly and
+// deterministically (no timing/gates needed at all): calls
+// ts.tryBeginCompactionRetry() to simulate "a retry already won" BEFORE
+// ever calling a.finalizeByFallback, then asserts the fallback abandons
+// instead of finalizing.
+func TestCompactionRetry_FallbackAbandonsWhenAlreadyAttemptedBeforeFetchBegins(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	// A stale snapshot: as if GET /session/{id}/message had been read
+	// showing the ORIGINAL, not-yet-recovered overflow -- the fallback must
+	// never trust this once a retry has already been attempted, regardless
+	// of when that happened relative to this fetch.
+	f.setMessages([]messageListEntry{
+		{Info: openCodeMessageInfo{ID: "msg_original", Role: "assistant", Error: &openCodeTaggedError{Name: "ContextOverflowError"}}},
+	})
+
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-already-attempted", Gen: 1,
+		Text: "a compaction retry already won before the fallback was ever called at all",
+	}
+	ts := newTurnState(cmd, collector.sink)
+	a.registerTurn("ses_fake", ts)
+	t.Cleanup(func() { a.unregisterTurn("ses_fake") })
+
+	// Simulate a live compaction retry having ALREADY won
+	// tryBeginCompactionRetry (and therefore being genuinely in flight)
+	// BEFORE finalizeByFallback is ever called at all -- the exact
+	// pre-fetch sub-case the round-1 "attemptedBefore" comparison could
+	// never detect, since attemptedBefore itself would already read true.
+	if !ts.tryBeginCompactionRetry() {
+		t.Fatal("tryBeginCompactionRetry() = false on a fresh turnState, want true")
+	}
+	if !ts.isCompacting() {
+		t.Fatal("isCompacting() = false right after a winning tryBeginCompactionRetry call, want true")
+	}
+
+	a.finalizeByFallback(context.Background(), "ses_fake", ts)
+
+	select {
+	case <-ts.done:
+		t.Fatal("finalizeByFallback finalized the turn despite compactionAlreadyAttempted() already being " +
+			"true BEFORE its own fetch even started -- round-2 Finding 2's own regression (the stale " +
+			"pre-fetch sub-case the original before/after comparison could not detect)")
+	default:
+	}
+	if !ts.isCompacting() {
+		t.Error("isCompacting() = false after finalizeByFallback should have abandoned without touching ts at all")
+	}
+	if got := f.summarizeCallCount(); got != 0 {
+		t.Errorf("summarizeCallCount = %d, want exactly 0 (finalizeByFallback must not itself have launched "+
+			"anything -- it only ever abandons here)", got)
+	}
+}
+
+// TestCompactionRetry_FallbackReleaseRacesLiveOverflowAtomically is a LATER
+// audit's own regression test for the TOCTOU Finding 1 identified:
+// finalizeByFallback's own "abandon if a retry is live/stale" guards used to
+// be evaluated in a SEPARATE critical section from the
+// tryBeginCompactionRetry check-and-act they exist to protect — a live SSE
+// session.idle for the SAME first-time overflow that began (touched ts,
+// checked isCompacting, won tryBeginCompactionRetry) strictly AFTER
+// finalizeByFallback's own checks read clean, but BEFORE finalizeByFallback's
+// own call actually reached tryBeginCompactionRetry, was invisible to those
+// checks — finalizeByFallback would then lose tryBeginCompactionRetry, fall
+// into the "already attempted" branch, and finalize using its STALE
+// pre-retry snapshot (with the misleading "a compaction retry was already
+// attempted this turn; the retried prompt also overflowed" reason) even
+// though the just-launched real retry had not even called forceCompaction
+// yet — discarding a legitimate in-flight recovery attempt and reporting a
+// wrong outcome.
+//
+// Unlike TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry above
+// (which deterministically sequences the live retry to have ALREADY won
+// tryBeginCompactionRetry, and to already be gated behind armSummarizeGate,
+// before ever releasing messageGate — so finalizeByFallback's own
+// isCompacting() check alone already reads true, never actually forcing the
+// narrower gap Finding 1 describes), this test releases the fallback's own
+// gated fetch and broadcasts the live overflow event from two goroutines
+// synchronized on a common barrier, so which one reaches
+// turnState.resolveOverflowAction's single ts.mu-guarded decision point
+// first is left to genuine goroutine scheduling — exactly the interleaving
+// the fix must handle correctly regardless of which side wins:
+//
+//   - If the live SSE dispatch reaches the decision point first: it wins
+//     tryBeginCompactionRetry (overflowActionBeginRetry) and
+//     finalizeByFallback's own later arrival at the SAME decision point
+//     atomically observes ts.compacting==true (or ts.lastActivity already
+//     advanced past preFetchActivity) and abandons (overflowActionStale) —
+//     never finalizing at all.
+//   - If finalizeByFallback reaches the decision point first: it correctly
+//     wins the retry itself instead (using its own, in this exact
+//     interleaving still-fresh, stale-looking snapshot's error, which is
+//     the same ContextOverflowError the live path would have used anyway)
+//     and the live SSE dispatch's own prior isCompacting() guard (sse.go)
+//     then correctly suppresses its own attempt to reach the decision point
+//     at all.
+//
+// Either way, exactly ONE compaction attempt is ever launched and the turn
+// must go on to finalize Completed via that attempt's own real success —
+// NEVER a premature Failed carrying the "already attempted... retried
+// prompt also overflowed" reason while the real retry was still (or never
+// even) genuinely running. Run with -count=N (see this package's own test
+// instructions) to exercise both interleavings across repeated runs, since
+// which goroutine wins this particular race is not itself deterministic —
+// what the assertions below guarantee IS deterministic regardless of who
+// wins.
+func TestCompactionRetry_FallbackReleaseRacesLiveOverflowAtomically(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	messageGate := f.armMessageGate()
+	summarizeGate := f.armSummarizeGate()
+	// promptGate holds the retry's own re-dispatch (call #2) open until
+	// released -- see TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry's
+	// own doc comment (round-2 Finding 3) for why this matters.
+	promptGate := f.armPromptAsyncGateForCall(2)
+	// Guarantee every gate is closed exactly once even if an assertion below
+	// calls t.Fatalf before this test's own explicit close calls are
+	// reached -- otherwise the fake server's own gated handler goroutines
+	// stay blocked forever, and f.srv.Close() (registered by
+	// newFakeOpenCodeServer, which runs AFTER these thanks to t.Cleanup's own
+	// LIFO ordering) would hang the whole test binary waiting for those
+	// outstanding requests to finish. messageGate itself is always closed
+	// unconditionally by its own barrier goroutine below regardless of any
+	// assertion outcome, so it needs no such guard.
+	var closeSummarizeGateOnce, closePromptGateOnce sync.Once
+	closeSummarizeGate := func() { closeSummarizeGateOnce.Do(func() { close(summarizeGate) }) }
+	closePromptGate := func() { closePromptGateOnce.Do(func() { close(promptGate) }) }
+	t.Cleanup(closePromptGate)
+	t.Cleanup(closeSummarizeGate)
+
+	// A stale snapshot: as if GET /session/{id}/message had been read
+	// before the live compaction retry ever touched anything -- still
+	// showing the ORIGINAL, not-yet-recovered overflow.
+	f.setMessages([]messageListEntry{
+		{Info: openCodeMessageInfo{ID: "msg_original", Role: "assistant", Error: &openCodeTaggedError{Name: "ContextOverflowError"}}},
+	})
+
+	// Deliberately much shorter than testSSEInactivityTimeout -- must fire
+	// the fallback well before any overflow is even broadcast.
+	shortInactivity := 50 * time.Millisecond
+
+	a := New(f.URL(), shortInactivity, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	promptText := "overflow racing the fallback's own stale-fetch release against the live event as simultaneously as possible"
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-atomic-race", Gen: 1,
+		Text: promptText,
+	}
+
+	// See TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry's own
+	// doc comment for why a generous, still-bounded ctx budget (rather than
+	// testWait) is the right tool for a test whose own timing is
+	// deliberately racy under host contention.
+	const raceTestWait = 60 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), raceTestWait)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	ts := waitForTurnRegistered(t, a, "ses_fake")
+
+	// Deterministically wait for waitForTurn's own fallback ticker to have
+	// actually reached (and blocked inside) its own fetchFinalMessages call
+	// (messageGate), holding its own preFetchActivity snapshot from before
+	// any of the barrier-released activity below -- see
+	// TestCompactionRetry_FallbackAbandonsOnStaleRaceWithLiveRetry's own doc
+	// comment for why a fixed sleep here would only assume, never prove,
+	// that the fetch is genuinely blocked.
+	waitForCount(t, "messageCallCount", f.messageCallCount, 1)
+
+	// Release the fallback's own stale fetch AND broadcast the live
+	// overflow from two goroutines synchronized on a common barrier, so
+	// neither is sequenced strictly before the other -- see this test's own
+	// doc comment for exactly which interleaving this forces and why both
+	// are safe under the fix.
+	// errgroup.Group rather than bare `go` statements: §11's
+	// no-naked-goroutine rule is lint-enforced (tools/lint/narvichecks) and
+	// applies to test code too. The Wait is deferred, not immediate --
+	// these two are deliberately fire-and-forget racers, and the
+	// synchronization the assertions below actually depend on is the
+	// waitForCount polls, not either goroutine's own completion. Waiting
+	// here instead would serialize the very race this test exists to force.
+	var startRace sync.WaitGroup
+	startRace.Add(2)
+	var raceGroup errgroup.Group
+	raceGroup.Go(func() error {
+		startRace.Done()
+		startRace.Wait()
+		close(messageGate)
+		return nil
+	})
+	raceGroup.Go(func() error {
+		startRace.Done()
+		startRace.Wait()
+		f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+		f.broadcast(sessionIdleLine(t, "ses_fake"))
+		return nil
+	})
+	defer func() { _ = raceGroup.Wait() }()
+
+	// Exactly one compaction attempt must ever be launched, regardless of
+	// which side won the race to claim it.
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+
+	// A generous extra wait to give a SECOND, wrongly-launched compaction
+	// attempt (the historical bug's own signature: the "losing" side
+	// incorrectly falling through to "already attempted" and finalizing
+	// instead of cleanly abandoning, while ALSO having raced a legitimate
+	// attempt into existence) a real chance to show up before asserting the
+	// negative below -- there is no direct "no more attempts are coming"
+	// signal to poll for instead.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if f.summarizeCallCount() > 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := f.summarizeCallCount(); got != 1 {
+		t.Fatalf("summarizeCallCount = %d, want exactly 1 regardless of which goroutine won the release-vs-broadcast "+
+			"race (Finding 1's own regression: a losing fallback used to finalize with a stale snapshot instead of "+
+			"cleanly abandoning)", got)
+	}
+
+	closeSummarizeGate() // let the winning, gated compaction attempt finally proceed
+
+	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+	if got := f.lastPromptText(); got != promptText {
+		t.Errorf("retried prompt text = %q, want %q", got, promptText)
+	}
+
+	closePromptGate() // let the gated retry dispatch finally return
+
+	waitForNotCompacting(t, ts)
+
+	// Script the REAL retry's own clean completion.
+	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
+	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+
+	select {
+	case <-ts.done:
+	case <-time.After(raceTestWait):
+		t.Fatalf("turn never finalized within raceTestWait after the real retry's own completion was scripted "+
+			"(isCompacting=%v promptCallCount=%d summarizeCallCount=%d events=%d)",
+			ts.isCompacting(), f.promptCallCount(), f.summarizeCallCount(), len(collector.snapshot()))
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeCompleted {
+		reason := "<nil>"
+		if final.Reason != nil {
+			reason = *final.Reason
+		}
+		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s) -- a premature 'already attempted' finalize "+
+			"from finalizeByFallback's own stale pre-fetch snapshot (Finding 1's own regression) would report "+
+			"Failed here instead, discarding the legitimate retry mid-flight",
+			final.Outcome, sandboxws.ExecutionCompleteOutcomeCompleted, reason)
+	}
+}
+
+// TestCompactionRetry_SilentRetryStillFinalizesViaFallback is a diagnosis
+// proof, not a documented "Finding": Batch B5's own Finding 2 fix made
+// finalizeByFallback abandon (return without finalizing at all, adapter.go)
+// whenever ts.compactionAlreadyAttempted() reads true after its own
+// fetchFinalMessages call. But compactionAttempted (turn.go) is a ONE-WAY
+// LATCH -- tryBeginCompactionRetry sets it true and NOTHING ever clears it
+// back to false, including long after the retry it once guarded has fully
+// completed. finalizeByFallback's own check cannot tell "a retry is in
+// flight for THIS overflow right now" apart from "a retry happened at SOME
+// point during this turn's entire life, and has long since finished" -- it
+// treats both exactly the same: abandon.
+//
+// This test drives exactly the ordinary POST-RETRY STEADY STATE that
+// exposes the difference: overflow -> compaction succeeds -> the retried
+// prompt is re-dispatched -> ts.compacting clears back to false (the retry
+// is no longer "in flight" by any reasonable reading) -- and then the
+// RETRIED prompt's own SSE traffic goes silent forever (the stream never
+// emits session.idle/session.error for it at all), exactly the scenario
+// the SSE-inactivity fallback exists to rescue.
+//
+//   - shouldFinalizeByFallback (adapter.go) correctly observes
+//     isCompacting()==false and idleFor(sseInactivityTimeout)==true (no
+//     disconnect ever occurred), so it fires, exactly as intended.
+//   - finalizeByFallback fetches the final-state snapshot, then reads
+//     ts.compactionAlreadyAttempted()==true -- true FOREVER since the
+//     earlier, already-fully-resolved retry, not because anything is
+//     currently in flight -- and abandons without finalizing.
+//   - waitForTurn (adapter.go), since Finding 2 also stopped it from
+//     returning unconditionally after calling finalizeByFallback, sees
+//     ts.done still open and keeps polling. The NEXT tick reaches the
+//     exact same conclusion, forever.
+//
+// The turn can therefore never finalize via the fallback at all in this
+// state -- only StartTurn's own ctx expiring can ever end it, reporting a
+// misleading "Cancelled / turn context canceled before completion" instead
+// of the fallback's own honest, much faster real outcome. Uses a
+// deliberately short, test-local sseInactivityTimeout (NOT the shared
+// testSSEInactivityTimeout constant, which is generous specifically so the
+// fallback almost never fires in every OTHER test in this file) so the
+// fallback's own real threshold can actually be reached well inside a ctx
+// budget generous enough to also make the bug's own hang-to-ctx-deadline
+// failure mode unambiguous when it happens.
+func TestCompactionRetry_SilentRetryStillFinalizesViaFallback(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+
+	// Deliberately short so the SSE-inactivity fallback's own real
+	// threshold is reached in well under a second -- see this test's own
+	// doc comment for why this is a test-local override, not
+	// testSSEInactivityTimeout.
+	const shortSSEInactivityTimeout = 150 * time.Millisecond
+
+	a := New(f.URL(), shortSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-silent-retry", Gen: 1,
+		Text: "will overflow, compaction succeeds, the retry is re-dispatched, then goes silent forever",
+	}
+
+	// A ctx budget generously above shortSSEInactivityTimeout (by more
+	// than an order of magnitude) so this test can actually DISTINGUISH
+	// "finalized fast, via the fallback" from "hung all the way to this
+	// ctx's own unrelated deadline" -- the bug's own failure mode -- rather
+	// than the two becoming indistinguishable because the budgets happen
+	// to be close together.
+	const ctxBudget = 3 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), ctxBudget)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	ts := waitForTurnRegistered(t, a, "ses_fake")
+
+	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+
+	// Wait for the retry to have actually been re-dispatched AND
+	// ts.compacting to have cleared back to false -- the ordinary steady
+	// state this test targets: overflow -> compaction succeeded -> retry
+	// re-dispatched -> now waiting on the RETRIED prompt's own
+	// session.idle, exactly like any normal turn.
+	waitForNotCompacting(t, ts)
+	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+
+	if !ts.compactionAlreadyAttempted() {
+		t.Fatal("ts.compactionAlreadyAttempted() = false after a completed compaction retry, want true " +
+			"(this test's own steady-state precondition -- the latch this diagnosis is about)")
+	}
+
+	// Deliberately broadcast NOTHING further: the retried prompt's own SSE
+	// traffic goes silent forever -- no session.idle, no session.error,
+	// nothing -- exactly the scenario the SSE-inactivity fallback exists to
+	// rescue.
+
+	started := time.Now()
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	elapsed := time.Since(started)
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	reason := "<nil>"
+	if final.Reason != nil {
+		reason = *final.Reason
+	}
+
+	// THE headline assertion: the turn must finalize via the
+	// SSE-inactivity fallback -- well under the ctx budget -- reporting a
+	// real, honest outcome, NOT by hanging all the way to ctxBudget and
+	// reporting Cancelled. A generous bound (well above
+	// shortSSEInactivityTimeout, well below ctxBudget) keeps this robust
+	// to ordinary scheduling jitter while still cleanly separating "the
+	// fallback fired" from "we hit the ctx deadline".
+	const wantWithin = 1500 * time.Millisecond
+	if elapsed > wantWithin {
+		t.Errorf("StartTurn took %s to return after the retried prompt went silent forever -- want a prompt "+
+			"finalize via the SSE-inactivity fallback (bounded by shortSSEInactivityTimeout=%s), well within "+
+			"%s, not a hang all the way to the unrelated %s ctx deadline (outcome=%q, reason=%s)",
+			elapsed, shortSSEInactivityTimeout, wantWithin, ctxBudget, final.Outcome, reason)
+	}
+	if final.Outcome == sandboxws.ExecutionCompleteOutcomeCancelled {
+		t.Errorf("execution_complete.Outcome = %q, want a REAL outcome from the SSE-inactivity fallback "+
+			"(e.g. %q), not %q via ctx-deadline exhaustion (reason=%s) -- finalizeByFallback's own "+
+			"unconditional post-fetch compactionAlreadyAttempted() check (adapter.go) cannot tell a retry "+
+			"that is genuinely in flight apart from one that fully completed long ago, since "+
+			"compactionAttempted (turn.go) is a one-way latch that is never cleared",
+			final.Outcome, sandboxws.ExecutionCompleteOutcomeFailed, final.Outcome, reason)
 	}
 }
