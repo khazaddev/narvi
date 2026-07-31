@@ -1,9 +1,12 @@
 package boot_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -183,5 +186,49 @@ func TestRunHooks_TimeoutIsFatalWhenPolicyFatal(t *testing.T) {
 		200*time.Millisecond, 200*time.Millisecond)
 	if err == nil {
 		t.Fatal("RunHooks() error = nil, want an error (hook exceeded hookTimeout, fatal per build mode's setup.sh policy)")
+	}
+}
+
+// TestRunHooks_LogsSetupRerunDecision proves the fix for the observability
+// finding: the §19.4 setup-rerun decision (repo, boot_mode, workspace_moved,
+// and what was actually decided) was never logged at all -- "working as
+// designed, the repo moved" was indistinguishable from "the build service
+// stopped baking manifests". No script is even created on disk here: the
+// decision must be logged BEFORE hookScriptPresent is ever consulted (the
+// decision itself is what determines whether setup.sh would even be
+// attempted, not the other way around).
+//
+// Deliberately NOT t.Parallel(): swaps the process-wide slog default logger
+// (platform.Logger(ctx) always reads slog.Default()) to capture it -- same
+// justification as gitclone/sync_test.go's own identical precedent (Go's own
+// test scheduler never interleaves a non-parallel test's body with any
+// other test's body in the same package).
+func TestRunHooks_LogsSetupRerunDecision(t *testing.T) {
+	originalLogger := slog.Default()
+	var logBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(originalLogger)
+
+	workspaceDir := t.TempDir()
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo-decision-test", Primary: true}}
+	workspaceMoved := map[string]bool{"repo-decision-test": true}
+
+	if err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
+		5*time.Second, time.Second); err != nil {
+		t.Fatalf("RunHooks() error = %v, want nil", err)
+	}
+
+	logged := logBuf.String()
+	for _, want := range []string{
+		"boot: setup-rerun decision",
+		`"repo":"repo-decision-test"`,
+		`"boot_mode":"repo_image"`,
+		`"workspace_moved":true`,
+		`"setup_will_run":true`,
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("log output = %q, want it to contain %q", logged, want)
+		}
 	}
 }

@@ -1514,6 +1514,30 @@ type Timeouts struct {
 	// ImageRefreshCheckInterval (10m) ticks rather than leaving it wedged
 	// for hours.
 	ImageRefreshClaimStaleAfter time.Duration
+
+	// --- Audit-remediation batch B7 addition: bounds cmd/sandbox-agent's
+	// own OTel shutdown/flush (see main.go's own shutdownOTel deferred
+	// call). No ordering relationship with any invariant chain above -- a
+	// standalone field, matching every other standalone addition's own
+	// precedent.
+
+	// OTelShutdownTimeout bounds cmd/sandbox-agent's own deferred
+	// shutdownOTel(ctx) call -- the metric/trace flush platform.SetupOTel's
+	// own returned shutdown func performs against the stdout exporter.
+	// Unlike cmd/control-plane's own IDENTICAL shutdownOTel call (which this
+	// field deliberately does NOT apply to -- see main.go's own doc comment),
+	// sandbox-agent is a single boot+session process for which this really
+	// is "the last chance before the process exits", not one flush among
+	// many periodic ones a long-running daemon would get regardless. Without
+	// a bound of its own, a backpressured os.Stdout (a slow/blocked log
+	// collector, a full pipe buffer under load, ...) would let
+	// metric.NewPeriodicReader/tracerProvider.Shutdown's own synchronous
+	// write block this deferred call indefinitely, hanging sandbox teardown
+	// past whatever grace period the orchestrator expects. Not specified in
+	// the plan; chosen as 10s, matching ShutdownGracePeriod/
+	// ProcessStopGracePeriod's own "not specified; chosen" precedent for a
+	// bounded-but-generous final-teardown wait.
+	OTelShutdownTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1644,6 +1668,8 @@ func DefaultTimeouts() Timeouts {
 		RepoAccessCacheTTL:           10 * time.Minute, // not specified; chosen, matches ImageRefreshCheckInterval's own "acceptable staleness" reasoning
 		RepoAccessCheckBreakerWindow: 2 * time.Minute,  // not specified (fix postdates the plan); chosen, short enough to retry a resolved outage promptly
 		ImageRefreshClaimStaleAfter:  30 * time.Minute, // audit-remediation batch B2; not specified, chosen -- matches ImageBuildBackoffMax's own exact value/reasoning (see field doc comment)
+
+		OTelShutdownTimeout: 10 * time.Second, // audit-remediation batch B7; not specified, chosen -- matches ShutdownGracePeriod/ProcessStopGracePeriod's own precedent
 	}
 }
 

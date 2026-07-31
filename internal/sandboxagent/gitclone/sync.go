@@ -304,8 +304,17 @@ func syncOne(
 	}
 	degradeAllowed := localBranchExists || repo.Branch == nil
 
-	defaultBranch, fetchErr := gitFetchStep(ctx, sup, credHelperArg, dir, branch, fetchStepTimeout, stopGrace)
+	// Audit-remediation batch B7 (Finding 3, HIGH): time the whole §19.3
+	// fetch step and record it as sandbox_agent_git_fetch_duration_seconds
+	// (telemetry.go) -- previously entirely untimed, leaving §19.6's own
+	// "warm-boot latency" gating question with no visibility into this
+	// step's own contribution (up to GitFetchStepTimeout's 90s ceiling).
+	fetchStart := time.Now()
+	fetchResult := gitFetchStep(ctx, sup, credHelperArg, repo.Name, dir, branch, fetchStepTimeout, stopGrace)
+	defaultBranch := fetchResult.defaultBranch
+	fetchErr := fetchResult.targetFetchErr
 	fetchSucceeded := fetchErr == nil
+	recordGitFetchDuration(ctx, repo.Name, time.Since(fetchStart).Seconds(), !fetchSucceeded)
 
 	// Legal from StateFetching by construction: TriggerForFetch only ever
 	// returns one of the three fetch triggers, all of which StateFetching's
@@ -334,10 +343,35 @@ func syncOne(
 		// (state == StateFetchFailed already returned) only because
 		// degradeAllowed was true here -- proceed on stale image state,
 		// exactly as §19.3 requires ("warm boot must never become
-		// network-dependent for liveness"), logged as a warning mirroring
-		// SyncAll's own existing secondary-repo-failure warning precedent.
-		platform.Logger(ctx).Warn("gitclone: boot-time fetch failed, proceeding on stale image state",
-			"repo", repo.Name, "branch", branch, "error", fetchErr)
+		// network-dependent for liveness").
+		//
+		// genuineDegrade distinguishes the routine case this warning used to
+		// drown in from a real one (§19.3 point 3's own framing): when
+		// repo.Branch is nil, `branch` is the invented "narvi/<sessionID>"
+		// name, which BY CONSTRUCTION almost never exists upstream -- its own
+		// fetch failing is expected, not a signal of anything wrong, exactly
+		// as long as the repo's real default branch (checkoutBase's own
+		// fallback preference) resolved AND fetched cleanly. Only when EVEN
+		// THAT failed (defaultBranch never resolved, or its own fetch also
+		// errored) has nothing at all actually updated from origin -- the
+		// genuine degrade §19.3 point 3 wants recorded. An explicit
+		// repo.Branch, by contrast, has no "expected to miss" case at all:
+		// its own fetch failing is always worth a warning, regardless of the
+		// default branch's outcome.
+		genuineDegrade := repo.Branch != nil || defaultBranch == "" || fetchResult.defaultFetchErr != nil
+		if genuineDegrade {
+			attrs := []any{"repo", repo.Name, "branch", branch, "error", fetchErr}
+			if defaultBranch != "" {
+				attrs = append(attrs, "default_branch", defaultBranch)
+			}
+			if fetchResult.resolveDefaultErr != nil {
+				attrs = append(attrs, "resolve_default_branch_error", fetchResult.resolveDefaultErr)
+			}
+			if fetchResult.defaultFetchErr != nil {
+				attrs = append(attrs, "default_branch_fetch_error", fetchResult.defaultFetchErr)
+			}
+			platform.Logger(ctx).Warn("gitclone: boot-time fetch failed, proceeding on stale image state", attrs...)
+		}
 	}
 
 	// state is StateIdle here (a successful OR degraded fetch both land
@@ -374,7 +408,14 @@ func syncOne(
 	}
 
 	onGitSync(repo.Name, "checkout", branch)
-	checkoutErr := checkoutBranch(ctx, sup, dir, branch, defaultBranch, stepTimeout, stopGrace)
+	// Audit-remediation batch B7 (Finding 3, HIGH): time checkoutBranch
+	// itself and record it as sandbox_agent_git_checkout_duration_seconds
+	// (telemetry.go) -- deliberately excludes the stash push/pop above and
+	// below (each their own, separately meaningful phase, not this step's
+	// own checkout latency) and the fetch step already timed above.
+	checkoutStart := time.Now()
+	checkoutErr := checkoutBranch(ctx, sup, repo.Name, dir, branch, defaultBranch, fetchErr, stepTimeout, stopGrace)
+	recordGitCheckoutDuration(ctx, repo.Name, time.Since(checkoutStart).Seconds(), checkoutErr != nil)
 	// Checked directly against checkoutErr, not gitstate.IsTerminal(state):
 	// a SUCCESSFUL checkout also lands in a state IsTerminal reports true
 	// for whenever the tree was clean (StateReady itself is one of the
@@ -521,13 +562,38 @@ func gitStashPop(ctx context.Context, sup *supervisor.Supervisor, dir string, st
 	return err
 }
 
+// fetchStepOutcome is gitFetchStep's own full return shape -- richer than a
+// single (defaultBranch, err) pair specifically so syncOne can tell "the
+// target branch fetch failed because it was an invented name that was never
+// going to exist upstream, and everything else (the default branch) is
+// fine" apart from "the remote itself is genuinely degraded" (§19.3 point
+// 3), and so resolveDefaultErr/defaultFetchErr -- Finding 5's own two
+// previously-swallowed errors -- reach a caller able to log them instead of
+// discarding them.
+type fetchStepOutcome struct {
+	// defaultBranch is the repo's resolved default-branch name, or "" if
+	// resolveDefaultBranch could not even determine it.
+	defaultBranch string
+	// resolveDefaultErr is resolveDefaultBranch's own error, if any --
+	// PREVIOUSLY checked (as lsErr) but never logged or returned anywhere.
+	resolveDefaultErr error
+	// defaultFetchErr is the default-branch fetch's own error, if any --
+	// PREVIOUSLY discarded entirely whenever branch != defaultBranch (the
+	// common case). nil when branch == defaultBranch (the single fetch below
+	// covers both; see targetFetchErr) or when resolveDefaultErr != nil (no
+	// default branch was ever resolved to fetch).
+	defaultFetchErr error
+	// targetFetchErr is the ACTUAL target branch's own fetch outcome (nil =
+	// succeeded) -- the one value gitstate.TriggerForFetch's fetchSucceeded
+	// needs.
+	targetFetchErr error
+}
+
 // gitFetchStep implements §19.3's own new boot-time fetch step: it resolves
 // the repo's real default-branch name from the remote (resolveDefaultBranch)
-// and fetches it, then fetches the actual resolved target branch too --
-// returning that SECOND fetch's own outcome (nil = succeeded), the fact fed
-// to gitstate.TriggerForFetch as fetchSucceeded, and the resolved default
-// branch name (or "" if it could not even be determined) for
-// checkoutBranch's own remote-tracking preference chain (checkoutBase).
+// and fetches it, then fetches the actual resolved target branch too,
+// returning every outcome involved (fetchStepOutcome, above) rather than
+// silently discarding the ones the target-branch fetch alone doesn't need.
 //
 // The default-branch fetch and the target-branch fetch are two SEPARATE git
 // invocations, never combined into the single `git fetch origin
@@ -551,9 +617,15 @@ func gitStashPop(ctx context.Context, sup *supervisor.Supervisor, dir string, st
 // does NOT by itself make the fetch step as a whole "failed" -- it only
 // costs checkoutBranch its own origin/<default-branch> fallback preference;
 // what gitstate.TriggerForFetch's fetchSucceeded actually needs to know is
-// whether the ACTUAL target branch was fetched, which is this function's own
-// return value.
-func gitFetchStep(ctx context.Context, sup *supervisor.Supervisor, credHelperArg, dir, branch string, stepTimeout, stopGrace time.Duration) (defaultBranch string, err error) {
+// whether the ACTUAL target branch was fetched (targetFetchErr). Both of
+// those narrower failures are still logged here, though -- unconditionally,
+// regardless of whether the target-branch fetch itself succeeded -- because
+// losing the origin/<default-branch> fallback preference is a real,
+// independently-worth-recording event (Finding 5's own failure scenario: a
+// primary repo whose EXPLICIT branch fetches fine, while its default-branch
+// fetch alone silently fails, invisibly loses the fallback checkoutBase
+// would otherwise have used had this exact branch itself ever needed it).
+func gitFetchStep(ctx context.Context, sup *supervisor.Supervisor, credHelperArg, repoName, dir, branch string, stepTimeout, stopGrace time.Duration) fetchStepOutcome {
 	defaultBranch, lsErr := resolveDefaultBranch(ctx, sup, credHelperArg, dir, stepTimeout, stopGrace)
 	if lsErr != nil {
 		// The remote is unreachable (or its advertised default branch name
@@ -561,18 +633,38 @@ func gitFetchStep(ctx context.Context, sup *supervisor.Supervisor, credHelperArg
 		// doomed for the same underlying reason, but it is still attempted
 		// directly rather than short-circuited here, so the error actually
 		// returned/logged is the more specific, directly-relevant one for
-		// the branch this repo actually needed.
-		return "", gitFetchRef(ctx, sup, credHelperArg, dir, branch, stepTimeout, stopGrace)
+		// the branch this repo actually needed. Logged here -- previously
+		// silently discarded (Finding 5): this costs checkoutBase its own
+		// origin/<defaultBranch> fallback preference, worth a record even
+		// when the target-branch fetch immediately below happens to succeed
+		// anyway (branch == defaultBranch, e.g.).
+		platform.Logger(ctx).Warn("gitclone: resolve default branch failed; origin/<default-branch> checkout fallback unavailable",
+			"repo", repoName, "error", lsErr)
+		return fetchStepOutcome{
+			resolveDefaultErr: lsErr,
+			targetFetchErr:    gitFetchRef(ctx, sup, credHelperArg, dir, branch, stepTimeout, stopGrace),
+		}
 	}
 
 	defaultFetchErr := gitFetchRef(ctx, sup, credHelperArg, dir, defaultBranch, stepTimeout, stopGrace)
 	if branch == defaultBranch {
 		// Same ref -- the fetch above already covers it; a second,
-		// identical invocation would be pure waste.
-		return defaultBranch, defaultFetchErr
+		// identical invocation would be pure waste, and this single outcome
+		// is both the default-branch AND the target-branch result.
+		return fetchStepOutcome{defaultBranch: defaultBranch, defaultFetchErr: defaultFetchErr, targetFetchErr: defaultFetchErr}
 	}
 
-	return defaultBranch, gitFetchRef(ctx, sup, credHelperArg, dir, branch, stepTimeout, stopGrace)
+	targetFetchErr := gitFetchRef(ctx, sup, credHelperArg, dir, branch, stepTimeout, stopGrace)
+	if defaultFetchErr != nil {
+		// Logged here -- previously discarded entirely whenever branch !=
+		// defaultBranch (Finding 5): resolveDefaultBranch itself succeeded,
+		// but the default branch's own fetch failed, silently costing
+		// checkoutBase its own fallback preference even on a boot where the
+		// target-branch fetch (logged/handled by the caller) succeeds fine.
+		platform.Logger(ctx).Warn("gitclone: fetch of resolved default branch failed; origin/<default-branch> checkout fallback unavailable",
+			"repo", repoName, "default_branch", defaultBranch, "error", defaultFetchErr)
+	}
+	return fetchStepOutcome{defaultBranch: defaultBranch, defaultFetchErr: defaultFetchErr, targetFetchErr: targetFetchErr}
 }
 
 // resolveDefaultBranch runs `git -C <dir> -c credential.helper=<credHelperArg>
@@ -723,7 +815,14 @@ func remoteBranchExists(ctx context.Context, sup *supervisor.Supervisor, dir, br
 // branch name (e.g. the remote was completely unreachable) -- checkoutBase
 // treats that exactly like "no remote-tracking ref available", falling
 // through to HEAD.
-func checkoutBranch(ctx context.Context, sup *supervisor.Supervisor, dir, branch, defaultBranch string, stepTimeout, stopGrace time.Duration) error {
+//
+// targetFetchErr is gitFetchStep's own fetchStepOutcome.targetFetchErr for
+// THIS branch -- passed through untouched so checkoutBase's own fallback
+// log line (Finding 2, audit-remediation batch B7) can report the actual
+// reason branch's own fetch did not land a usable remote-tracking ref,
+// rather than asserting a single, invented reason ("does not exist
+// upstream") regardless of what really happened.
+func checkoutBranch(ctx context.Context, sup *supervisor.Supervisor, repoName, dir, branch, defaultBranch string, targetFetchErr error, stepTimeout, stopGrace time.Duration) error {
 	exists, err := branchExistsLocally(ctx, sup, dir, branch, stepTimeout, stopGrace)
 	if err != nil {
 		return fmt.Errorf("determine whether branch %s exists: %w", branch, err)
@@ -733,7 +832,7 @@ func checkoutBranch(ctx context.Context, sup *supervisor.Supervisor, dir, branch
 	if exists {
 		args = append(args, branch, "--")
 	} else {
-		base, err := checkoutBase(ctx, sup, dir, branch, defaultBranch, stepTimeout, stopGrace)
+		base, err := checkoutBase(ctx, sup, repoName, dir, branch, defaultBranch, targetFetchErr, stepTimeout, stopGrace)
 		if err != nil {
 			return fmt.Errorf("determine checkout base for %s: %w", branch, err)
 		}
@@ -749,7 +848,30 @@ func checkoutBranch(ctx context.Context, sup *supervisor.Supervisor, dir, branch
 // own doc comment above for the full reasoning. Verified directly against
 // real git behavior (sync_test.go), not assumed, for every step of this
 // chain, matching this package's own house style.
-func checkoutBase(ctx context.Context, sup *supervisor.Supervisor, dir, branch, defaultBranch string, stepTimeout, stopGrace time.Duration) (string, error) {
+//
+// Every branch of this chain OTHER than the preferred one (origin/branch
+// itself) is logged, along with the reason -- previously entirely silent,
+// including the last-resort HEAD fallback (Finding 5): a genuinely stale
+// base could be selected with no record anywhere of why. The origin/
+// <defaultBranch> fallback is routine/expected (the common invented-branch
+// case) and logged at Info; falling all the way through to HEAD means
+// NEITHER remote-tracking ref was usable, which is the concerning case and
+// logged at Warn.
+//
+// targetFetchErr (audit-remediation batch B7, Finding 2) is gitFetchStep's
+// own actual fetchStepOutcome.targetFetchErr for branch, threaded all the
+// way through from syncOne via checkoutBranch -- included verbatim in the
+// Info-level fallback log line below (as "fetch_error", nil-able) so a real,
+// non-obvious cause (a transient auth/permission or network failure
+// specific to this branch's own fetch) is never narrated identically to the
+// routine, expected case (an invented "narvi/<sessionID>" branch that was
+// never going to exist upstream, whose fetch also fails, but for the
+// mundane, harmless reason of the ref simply not existing). Previously this
+// log line asserted a single invented reason regardless of targetFetchErr's
+// actual value, and targetFetchErr itself was silently discarded here --
+// this is the ONE place in this package that reason would otherwise have
+// been surfaced at all, even at Info.
+func checkoutBase(ctx context.Context, sup *supervisor.Supervisor, repoName, dir, branch, defaultBranch string, targetFetchErr error, stepTimeout, stopGrace time.Duration) (string, error) {
 	branchFetched, err := remoteBranchExists(ctx, sup, dir, branch, stepTimeout, stopGrace)
 	if err != nil {
 		return "", err
@@ -769,10 +891,16 @@ func checkoutBase(ctx context.Context, sup *supervisor.Supervisor, dir, branch, 
 			return "", err
 		}
 		if defaultFetched {
+			platform.Logger(ctx).Info("gitclone: checkout base falls back to origin's default branch (preferred branch not fetched)",
+				"repo", repoName, "branch", branch, "base", "origin/"+defaultBranch,
+				"reason", "target branch's own fetch did not produce a usable remote-tracking ref (see fetch_error for the actual, real cause -- not necessarily nonexistence upstream); using origin's own default branch instead",
+				"fetch_error", targetFetchErr)
 			return "origin/" + defaultBranch, nil
 		}
 	}
 
+	platform.Logger(ctx).Warn("gitclone: checkout base falls back to local HEAD (stale) -- neither the target branch nor the default branch is a fetched remote-tracking ref",
+		"repo", repoName, "branch", branch, "default_branch", defaultBranch, "base", "HEAD", "fetch_error", targetFetchErr)
 	return "HEAD", nil
 }
 

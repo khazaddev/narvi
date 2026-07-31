@@ -129,8 +129,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
@@ -658,6 +660,64 @@ func (*commandHandler) HandleGitSyncComplete(_ context.Context, cmd sandboxws.Gi
 		"messageId", cmd.MessageId)
 }
 
+// setupSandboxAgentOTel wires this binary's own global OTel MeterProvider
+// (and TracerProvider) exactly the way cmd/control-plane/main.go's serve()
+// already does, via the SAME platform.SetupOTel bootstrap -- this binary was
+// the one production caller that never did (§5.3's own "day one, not later"
+// gap this Step closes for sandbox-agent's own
+// sandbox_agent_hook_rerun_duration_seconds histogram, §19.5(b)).
+//
+// A TracerProvider is registered alongside the MeterProvider (platform.
+// SetupOTel always sets up both together, matching control-plane's own
+// identical call) even though nothing in this binary emits a span today --
+// exactly control-plane's own "bootstrap only, no instruments defined here"
+// scope note, unchanged for this binary.
+//
+// serviceName is fixed ("narvi-sandbox-agent") rather than parameterized:
+// there is exactly one production caller (run(), below) and no reason for a
+// second, different value to ever exist -- mirroring control-plane's own
+// identical fixed-literal call.
+//
+// Factored out of run() specifically so it is unit-testable in isolation
+// (see main_test.go's own TestSetupSandboxAgentOTel_InstallsRealMeterProvider):
+// run() itself blocks on OS signals / a live WS bridge / a real opencode
+// spawn, none of which this seam needs or touches.
+func setupSandboxAgentOTel(ctx context.Context) (shutdown func(context.Context) error, err error) {
+	return platform.SetupOTel(ctx, "narvi-sandbox-agent")
+}
+
+// shutdownSandboxAgentOTel bounds one call to shutdown (setupSandboxAgentOTel's
+// own returned func) by timeout, against a fresh background context -- never
+// run()'s own long-lived ctx, which is already canceled by the time run()'s
+// deferred call reaches this function (see that defer's own comment).
+//
+// Audit-remediation batch B7 (MEDIUM finding): run() previously called
+// shutdownOTel(context.Background()) directly, with nothing in-process
+// bounding it. cmd/control-plane/main.go's serve() has the IDENTICAL
+// no-timeout shape today and is deliberately left unchanged by this fix --
+// that binary is a long-running daemon that would eventually get another
+// periodic metric export anyway even if one flush somehow hung or was
+// missed. sandbox-agent has no such fallback: its own package doc comment
+// (setupSandboxAgentOTel, above run()) calls this shutdown "the last chance
+// before the process exits" for a single boot+session process. If os.Stdout
+// backpressures (a slow/blocked log collector, a full pipe buffer under
+// load, ...) while metric.NewPeriodicReader/tracerProvider.Shutdown are
+// flushing, the underlying write blocks synchronously -- with no bound of
+// its own, that hangs sandbox teardown indefinitely, past whatever grace
+// period the orchestrator expects, and a subsequent force-kill would then
+// discard the still-unflushed metrics (including this batch's own
+// hook-rerun-duration histogram) anyway, defeating the point of flushing at
+// all.
+//
+// Factored out of run() specifically so it is unit-testable in isolation
+// (see main_test.go's own TestShutdownSandboxAgentOTel_BoundsAHungShutdown),
+// exactly like setupSandboxAgentOTel's own precedent just above.
+func shutdownSandboxAgentOTel(shutdown func(context.Context) error, timeout time.Duration) error {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return shutdown(shutdownCtx)
+}
+
 // run mirrors cmd/control-plane/main.go's serve() shape: a thin main()
 // dispatches to this testable, error-returning function.
 func run() error {
@@ -693,6 +753,68 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// §5.3 "day one, not later": sandbox-agent's own hook-rerun-duration
+	// histogram (internal/sandboxagent/boot's recordHookRerunDuration,
+	// §19.5(b)) has, until now, recorded against the no-op global
+	// MeterProvider every process starts with by default -- cmd/control-
+	// plane/main.go is the only caller of platform.SetupOTel today, so this
+	// binary's own metric reached no collector at all. Wired here, exactly
+	// mirroring control-plane's own bootstrap precedent (same function, same
+	// shutdown/flush shape) -- see this call's own deferred shutdown below
+	// for why that shape (not just construction) is load-bearing.
+	//
+	// Registered BEFORE sup/opencodeproc/gitclone/boot.RunBoot ever run:
+	// boot's own hookRerunDurationHistogram resolves LAZILY, via
+	// sync.OnceValue, against whatever MeterProvider is globally registered
+	// the FIRST time a hook actually runs (telemetry.go's own doc comment) --
+	// this call must land before that first use, and runBootSequence (the
+	// earliest possible hook run) happens well after this point in run().
+	//
+	// Factored into its own tiny function (setupSandboxAgentOTel, below)
+	// rather than inlined here, specifically so it is unit-testable in
+	// isolation: run() itself is not (it blocks on OS signals / a live WS
+	// bridge / a real opencode spawn), but this seam alone is exactly the
+	// piece this Step's own audit finding is about ("cmd/sandbox-agent never
+	// calls platform.SetupOTel") -- see main_test.go's own
+	// TestSetupSandboxAgentOTel_InstallsRealMeterProvider.
+	shutdownOTel, err := setupSandboxAgentOTel(ctx)
+	if err != nil {
+		return fmt.Errorf("sandbox-agent: setup otel: %w", err)
+	}
+	defer func() {
+		// Deliberately a fresh background context, not ctx: by the time this
+		// deferred call runs, ctx is already canceled (that's exactly what
+		// triggers shutdown), and a canceled context would make the flush
+		// itself fail immediately -- same reasoning as control-plane's own
+		// identical deferred shutdownOTel call.
+		//
+		// Registered THIRD from the top of run() (after `defer stop()`),
+		// meaning Go's own LIFO defer ordering runs it LAST of every defer
+		// registered in run() (agentRuntime.Close(), the shutdownCtx cancel,
+		// ...) -- i.e. as late as possible, after supervised-process shutdown
+		// and WS-bridge drain have both already completed. sandbox-agent's
+		// own lifetime is a single boot+session, not control-plane's
+		// long-running daemon -- there is no "next periodic export" to rely
+		// on if this doesn't flush now: this IS the last chance before the
+		// process exits, unlike control-plane, which would eventually get
+		// another periodic export anyway even if one flush were somehow
+		// missed.
+		//
+		// Audit-remediation batch B7: bounded by timeouts.OTelShutdownTimeout
+		// (a fresh WithTimeout over the same background context above), NOT
+		// left to run unbounded the way control-plane's identical-looking
+		// call is -- see shutdownSandboxAgentOTel's own doc comment for why
+		// that difference is deliberate, not an inconsistency: a hang in the
+		// stdout metric/trace exporter's own flush (a slow/blocked log
+		// collector, a full pipe buffer under load, ...) must cost this
+		// process's exit at most this bounded amount, never an unbounded
+		// wait, since there is no future periodic export here to fall back
+		// on the way there is for control-plane's own long-running daemon.
+		if err := shutdownSandboxAgentOTel(shutdownOTel, timeouts.OTelShutdownTimeout); err != nil {
+			slog.Error("sandbox-agent: otel shutdown failed", "error", err)
+		}
+	}()
 
 	sup := supervisor.New()
 
@@ -862,7 +984,18 @@ func run() error {
 		}
 	}
 
+	// Audit-remediation batch B7 (Finding 3, HIGH): bracket the WHOLE repo
+	// prepare + RunBoot span with a wall-clock timer and record it as
+	// sandbox_agent_boot_duration_seconds (boot.RecordBootDuration) --
+	// previously nothing in this binary measured total boot-to-ready
+	// latency at all, so §19.6's "is a hook rerun materially eroding the
+	// warm-boot latency win" gating question had no denominator to compare
+	// hookRerunDurationHistogram's own per-hook number against. Recorded
+	// regardless of bootErr (tagged failed=bootErr!=nil): even a failed
+	// boot's own elapsed time is a real data point, not one to discard.
+	bootStart := time.Now()
 	bootErr := runBootSequence(ctx, sup, cfg, timeouts, reportBootProgress, onGitSync)
+	boot.RecordBootDuration(ctx, string(cfg.BootMode), time.Since(bootStart).Seconds(), bootErr != nil)
 	if bootErr != nil {
 		// A boot failure needs the same graceful convergence a fatal WS
 		// status or an OS signal gets -- cancel ctx (stop is a genuine
@@ -933,6 +1066,98 @@ func run() error {
 		return fmt.Errorf("sandbox-agent: boot: %w", bootErr)
 	}
 	return stopErr
+}
+
+// logImageManifest logs whatever boot.LoadImageManifest(boot.ImageManifestPath)
+// (runBootSequence's own one call site, below) actually found, split three
+// ways -- previously, only the manifestErr != nil case logged anything at
+// all, leaving the other two cases (a genuinely missing manifest under
+// repo_image; a manifest that DID load) completely silent:
+//
+//   - manifestErr != nil: a real I/O/parse failure (unchanged from before
+//     this Step).
+//   - !manifestFound (and no error): entirely expected for every boot mode
+//     OTHER than repo_image (no image-build step ever ran to bake one), so
+//     only logged under repo_image, where a missing manifest is either a
+//     pre-Step image or a build-service bug that silently forces EVERY repo
+//     to rerun setup.sh via ComputeWorkspaceMoved's own safe default --
+//     "working as designed, the repo moved" and "the build service stopped
+//     baking manifests" must not look identical in the log.
+//   - found: manifest.Fingerprint/BuiltAt (carried for diagnostic/log
+//     purposes only, manifest.go's own doc comment on ImageManifest) and
+//     BuiltRepoShas are logged -- the one place that purpose is actually
+//     fulfilled: which baked image this sandbox is really running, and the
+//     built_repo_shas its post-clone/-sync SHAs (logged separately, "boot
+//     fingerprint (post-clone)") are about to be compared against for
+//     §19.4's workspaceMoved decision. Additionally (audit-remediation
+//     batch B7, Finding 5), any repo present in currentSHAs but ABSENT as
+//     its own key in manifest.BuiltRepoShas is now named individually, at
+//     Warn -- see logRepoMissingFromManifest's own doc comment for why this
+//     is a distinct case from a repo whose SHA simply moved, and why it
+//     previously had no log signal of its own at all.
+//
+// Factored out of runBootSequence specifically so it is unit-testable
+// without touching the real filesystem at boot.ImageManifestPath's own
+// fixed, absolute, /narvi/-rooted location (main_test.go's own
+// TestLogImageManifest).
+func logImageManifest(bootMode sandboxboot.BootMode, manifest boot.ImageManifest, manifestFound bool, manifestErr error, currentSHAs map[string]string) {
+	switch {
+	case manifestErr != nil:
+		slog.Warn("sandbox-agent: read image manifest failed; treating every repo as workspace-moved (safe default, §19.4)",
+			"path", boot.ImageManifestPath, "error", manifestErr)
+	case !manifestFound:
+		if bootMode == sandboxboot.BootModeRepoImage {
+			slog.Warn("sandbox-agent: repo_image boot has no image manifest; treating every repo as workspace-moved (safe default, §19.4)",
+				"path", boot.ImageManifestPath)
+		}
+	default:
+		slog.Info("sandbox-agent: image manifest",
+			"fingerprint", manifest.Fingerprint,
+			"built_at", manifest.BuiltAt,
+			"built_repo_shas", manifest.BuiltRepoShas,
+		)
+		logRepoMissingFromManifest(manifest, currentSHAs)
+	}
+}
+
+// logRepoMissingFromManifest implements the fix for Finding 5 (LOW,
+// audit-remediation batch B7): boot.ComputeWorkspaceMoved's own per-repo
+// predicate already folds two genuinely different cases into the identical
+// workspaceMoved: true outcome -- (a) a repo whose checked-out SHA simply
+// differs from manifest.BuiltRepoShas[name] (a normal, expected image/
+// workspace drift), and (b) a repo that is not a key in
+// manifest.BuiltRepoShas AT ALL (e.g. added to this session's repo list
+// after the image was last baked, so the build service never had a chance
+// to record a built SHA for it). Before this fix, an operator could only
+// tell the two apart by manually diffing this function's own "image
+// manifest" log line's built_repo_shas map against the separate "boot
+// fingerprint (post-clone)" log line's repo_shas map -- a partial
+// build-service gap (one new repo never gets baked in) read identically to
+// routine per-repo drift in every log line that actually exists.
+//
+// Logs one Warn line per such repo, sorted by name for deterministic
+// output -- this is expected to be rare (it only fires for case (b) above,
+// not for every ordinary SHA-moved repo, which is still covered by the
+// unremarkable "image manifest" Info line plus the existing per-repo
+// workspace_moved:true boot_progress signal from hooks.go), so a handful of
+// extra Warn lines is a fair cost for making a real, previously-invisible
+// build-service gap surface on its own.
+func logRepoMissingFromManifest(manifest boot.ImageManifest, currentSHAs map[string]string) {
+	if len(currentSHAs) == 0 {
+		return
+	}
+	names := make([]string, 0, len(currentSHAs))
+	for name := range currentSHAs {
+		if _, ok := manifest.BuiltRepoShas[name]; ok {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		slog.Warn("sandbox-agent: repo absent from image manifest's built_repo_shas (distinct from a genuine SHA move -- likely added to this session's repo list after the image was last baked); treating as workspace-moved (safe default, §19.4)",
+			"repo", name)
+	}
 }
 
 // runBootSequence prepares every repo cfg.SessionConfig names (in order),
@@ -1065,10 +1290,7 @@ func runBootSequence(
 		// policy ignores it entirely, so computing it uniformly costs
 		// nothing and keeps this call site simple.
 		manifest, manifestFound, manifestErr := boot.LoadImageManifest(boot.ImageManifestPath)
-		if manifestErr != nil {
-			slog.Warn("sandbox-agent: read image manifest failed; treating every repo as workspace-moved (safe default, §19.4)",
-				"path", boot.ImageManifestPath, "error", manifestErr)
-		}
+		logImageManifest(cfg.BootMode, manifest, manifestFound, manifestErr, postCloneFingerprint.RepoSHAs)
 		workspaceMoved = boot.ComputeWorkspaceMoved(manifest, manifestFound, postCloneFingerprint.RepoSHAs)
 	}
 

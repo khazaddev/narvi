@@ -93,13 +93,17 @@ func RunHooks(
 // internal/sandboxagent/boot's new RunBoot (runboot.go) can reuse it for a
 // repo that falls back to the hook contract.
 //
-// Each hook run is timed (recordHookRerunDuration, §19.5(b)) and its own
-// combined stdout+stderr is captured into a bounded, ANSI-stripped tail
-// (runHook's own *outputTail, §19.5(a)) -- surfaced in the boot log
-// alongside EITHER outcome (fatal or non-fatal): a non-fatal failure is
-// otherwise "undiagnosable by construction" (§19.5's own framing, the
-// specific gap this closes), and attaching it to a fatal failure too costs
-// nothing further and is only ever additional diagnostic information.
+// Each hook run is timed (recordHookRerunDuration, §19.5(b), now also
+// carrying boot_mode/workspace_moved attributes) and its own combined
+// stdout+stderr is captured into a bounded, ANSI-stripped tail (runHook's
+// own *outputTail, §19.5(a)) -- surfaced in the boot log alongside EITHER
+// outcome (fatal or non-fatal): a non-fatal failure is otherwise
+// "undiagnosable by construction" (§19.5's own framing, the specific gap
+// this closes), and attaching it to a fatal failure too costs nothing
+// further and is only ever additional diagnostic information. The §19.4
+// setup-rerun decision itself (ShouldRun for HookSetup specifically) is now
+// also logged, unconditionally, before that hook is even attempted -- see
+// the HookSetup branch below.
 func runRepoHooks(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -113,6 +117,22 @@ func runRepoHooks(
 
 	for _, hook := range []sandboxboot.Hook{sandboxboot.HookSetup, sandboxboot.HookStart} {
 		outcome := sandboxboot.EvaluateHook(mode, hook, repo.Primary, moved)
+
+		if hook == sandboxboot.HookSetup {
+			// §19.4's own setup-rerun decision -- previously never logged at
+			// all: an operator reading the boot log had no way to tell
+			// "working as designed, the repo moved so setup.sh reran" apart
+			// from "the build service stopped baking manifests" (both
+			// produce an identical-looking log otherwise). Logged uniformly
+			// for every mode, not just repo_image -- workspace_moved is only
+			// actually CONSULTED by EvaluateHook for the repo_image cell,
+			// but including it for every mode costs nothing and lets an
+			// operator grep this one line regardless of boot mode.
+			platform.Logger(ctx).Info("boot: setup-rerun decision",
+				"repo", repo.Name, "boot_mode", string(mode), "workspace_moved", moved,
+				"setup_will_run", outcome.ShouldRun, "fatal_on_failure", outcome.FatalOnFailure)
+		}
+
 		if !outcome.ShouldRun {
 			continue
 		}
@@ -135,7 +155,7 @@ func runRepoHooks(
 
 		start := time.Now()
 		tail, runErr := runHook(ctx, sup, scriptPath, repoDir, hookTimeout, stopGrace)
-		recordHookRerunDuration(ctx, repo.Name, string(hook), time.Since(start).Seconds(), runErr != nil)
+		recordHookRerunDuration(ctx, repo.Name, string(hook), string(mode), moved, time.Since(start).Seconds(), runErr != nil)
 
 		if runErr != nil {
 			if outcome.FatalOnFailure {
