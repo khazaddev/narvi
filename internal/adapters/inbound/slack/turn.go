@@ -63,29 +63,38 @@ func addTurn(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.Session
 	return turnRow, wasCreated, nil
 }
 
-// hasAwaitingApprovalPlan reports whether sessionID currently has a plan in
-// StatusAwaitingApproval -- mirrors internal/adapters/inbound/linear's own
-// identical findAwaitingApprovalPlanID (webhook.go): a package-private copy
-// rather than a shared helper, matching this codebase's own established
-// per-package convention for small, cheap-to-duplicate webhook-adjacent
-// helpers (see this package's own maxRequestBodyBytes doc comment,
-// handler.go, for the identical precedent). Used by handleEvent
-// (handler.go) to decide whether an incoming reply's own text should be
-// checked against plandomain.MatchRevise at all -- a lookup failure is
-// logged and treated as "no awaiting plan" (false), since a revise-prefix
-// parsing convenience must never turn into a hard failure of the
-// underlying event; createTurnLocked's own awaiting-plan gate (httpapi/
-// turn.go) is what actually enforces the invariant either way.
-func hasAwaitingApprovalPlan(ctx context.Context, logger *slog.Logger, plans *postgres.PlanStore, sessionID pgtype.UUID) bool {
+// findAwaitingApprovalPlanID reports sessionID's own current
+// awaiting_approval plan id, if any -- mirrors internal/adapters/inbound/
+// linear's own identical findAwaitingApprovalPlanID (webhook.go): a
+// package-private copy rather than a shared helper, matching this
+// codebase's own established per-package convention for small,
+// cheap-to-duplicate webhook-adjacent helpers (see this package's own
+// maxRequestBodyBytes doc comment, handler.go, for the identical
+// precedent). Used by handleEvent (handler.go) to decide whether an
+// incoming reply's own text should be checked against
+// plandomain.MatchVerdict/plandomain.MatchRevise at all -- a lookup
+// failure is logged and treated as "no awaiting plan" (false, zero
+// pgtype.UUID), since a keyword-parsing convenience must never turn into a
+// hard failure of the underlying event: createTurnLocked's own
+// awaiting-plan gate (httpapi/turn.go) is what actually enforces the
+// invariant for the ordinary-reply fallthrough regardless, and
+// handlePlanVerdict's own httpapi.DecidePlan call re-validates the plan's
+// real, current status itself before ever deciding it.
+//
+// Renamed from hasAwaitingApprovalPlan (this batch's own addition, "honour
+// a typed plan verdict"): the ONE caller (handleEvent) now needs the
+// plan's own id too, to pass to handlePlanVerdict/httpapi.DecidePlan on a
+// plandomain.MatchVerdict match -- a bare bool was no longer enough.
+func findAwaitingApprovalPlanID(ctx context.Context, logger *slog.Logger, plans *postgres.PlanStore, sessionID pgtype.UUID) (pgtype.UUID, bool) {
 	summaries, err := plans.ListSummariesForSession(ctx, sessionID)
 	if err != nil {
-		logger.Warn("slack: list plan summaries for revise check failed", "error", err, "session_id", sessionID.String())
-		return false
+		logger.Warn("slack: list plan summaries for verdict/revise check failed", "error", err, "session_id", sessionID.String())
+		return pgtype.UUID{}, false
 	}
 	for _, s := range summaries {
 		if s.Status == sqlcgen.PlanStatusAwaitingApproval {
-			return true
+			return s.ID, true
 		}
 	}
-	return false
+	return pgtype.UUID{}, false
 }

@@ -398,10 +398,19 @@ func serve() error {
 		AuditLog:     auditLogStore,
 		// Plans (Step 37/38 follow-up fix, §8.1): the SAME planStore
 		// instance every other caller above already uses -- handleEvent's
-		// own new awaiting-plan gate/revise-prefix check (handler.go) needs
-		// this to find a mapped session's own awaiting_approval plan, if
-		// any, exactly like Linear's identical Deps.Plans wiring below.
+		// own awaiting-plan gate/verdict/revise-prefix check (handler.go)
+		// needs this to find a mapped session's own awaiting_approval plan,
+		// if any, exactly like Linear's identical Deps.Plans wiring below.
 		Plans: planStore,
+		// Outbox/LinearAgentSessions (this batch's own addition, "honour a
+		// typed plan verdict"): handlePlanVerdict's own httpapi.DecidePlan
+		// call (handler.go) needs these exactly like the interactivity
+		// route's own identical Outbox/LinearAgentSessions wiring
+		// immediately below -- the SAME outboxStore/linearAgentSessionStore
+		// instances every other caller of DecidePlan already uses, never a
+		// second, independently-constructed copy.
+		Outbox:              outboxStore,
+		LinearAgentSessions: linearAgentSessionStore,
 		// Participants (this Step's own SECOND fix-pass addition,
 		// "identities + full RBAC", §13.2/§13.3): the SAME participantStore
 		// instance every other caller (the interactivity route immediately
