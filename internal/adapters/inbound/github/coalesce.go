@@ -152,6 +152,23 @@ type SessionCoalescer struct {
 // calling httpapi.CreateTurnForBot, so only ever one connection is open
 // at a time there too.
 //
+// # REUSE-branch authz action: ActionPromptSession vs. ActionRetriggerReview
+// # (audit fix, §13.3 row 5)
+//
+// The REUSE branch below is reached by TWO structurally different
+// triggers landing on an already-tracked PR: an ordinary second @mention
+// (just prompting the existing review session -- "what did you mean by
+// X") and Step 46's own manual re-trigger-via-LABEL lane (payload.go's
+// parsePullRequestLabeled). Both used to render the identical
+// authz.ActionPromptSession verdict (member allowed on own/joined), which
+// let a member re-trigger a review on any session they created/joined --
+// but §13.3 row 5 ("re-trigger reviews") is admin/maintainer only, with NO
+// member own/joined carve-out, unlike row 2's ordinary prompt/create
+// carve-out ActionPromptSession correctly implements. isLabelRetrigger
+// (threaded from mention.IsLabelRetrigger, handler.go) selects the
+// correct action for THIS call: ActionRetriggerReview for a label
+// re-trigger, ActionPromptSession (unchanged) for an ordinary @mention.
+//
 // # actor / domain/authz.Authorize gating (batch fix/audit-github-actor-rbac;
 // # hardened to a DENY by batch fix/deny-unlinked-github-actors)
 //
@@ -184,14 +201,38 @@ type SessionCoalescer struct {
 // for httpapi.CreateSessionForBot -- the same discipline applies here:
 // resolve it once, cheaply, with no ambient transaction, then just
 // consult the already-computed bool once inside the critical section (no
-// query, no risk). The REUSE path's own domain/authz.
-// Authorize(ActionPromptSession) check (below, ownership-aware) runs
-// AFTER that path's own tx.Commit -- by then no transaction is open at
-// all, so there is nothing to protect there either. Denying here (either
-// path) leaves the claim row exactly as safe as an authorized denial
-// always was -- see this function's own "claim row on the deny path"
-// note further down, at each denial site, for why.
-func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
+// query, no risk). The REUSE path's own domain/authz.Authorize check
+// (below, ownership-aware for ActionPromptSession, admin/maintainer-only
+// for ActionRetriggerReview -- see this function's own "REUSE-branch authz
+// action" doc comment above) runs AFTER that path's own tx.Commit -- by
+// then no transaction is open at all, so there is nothing to protect there
+// either. Denying here (either path) leaves the claim row exactly as safe
+// as an authorized denial always was -- see this function's own "claim row
+// on the deny path" note further down, at each denial site, for why.
+//
+// isLabelRetrigger (mention.IsLabelRetrigger, handler.go) selects the
+// REUSE branch's own authz action (see this function's own "REUSE-branch
+// authz action" doc comment above) -- ignored entirely on the WINNER path,
+// which always renders ActionCreateSession regardless of trigger kind (a
+// label event creating a brand-new session is still a create, never a
+// re-trigger of an existing review).
+//
+// classifyText is the text Step 36's own intent classifier call (WINNER
+// path only, further down) classifies -- the mention's own ORIGINAL,
+// un-enriched comment/command text (handler.go captures this BEFORE
+// folding the pre-fetched diff/stack context into req.Prompt via
+// review.RenderTurnPrompt). Audit fix: this used to be *req.Prompt
+// directly, which by the time CreateOrJoin ran already had Step 46's own
+// inline pre-fetched diff (up to several MB) appended -- feeding the
+// classifier's LLM call the entire PR diff instead of just the triggering
+// comment/label text, inflating cost/latency by orders of magnitude and
+// risking exceeding the model's context window the moment this classifier
+// is switched from shadow to active (§18.5). classifyText decouples the
+// two: req.Prompt still carries the full context-enriched text for the
+// turn itself, classifyText carries only the human's own words, exactly
+// matching IntentClassifierInput.Text's own documented contract ("a
+// session's initial prompt, a Slack message, a GitHub comment body").
+func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID, isLabelRetrigger bool, classifyText string) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
 	logger := platform.Logger(ctx)
 
 	// Resolved BEFORE any transaction opens -- see this function's own
@@ -275,16 +316,32 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// -- the SAME "no query, no risk" discipline this function's own
 		// top doc comment already applies to createAuthorized above,
 		// simply preserved here rather than lost when the guard came out.
+		// reuseAction (audit fix, §13.3 row 5 -- see this function's own
+		// "REUSE-branch authz action" doc comment above): a label re-trigger
+		// on an already-tracked PR is §13.3's admin/maintainer-only
+		// "re-trigger reviews" row, never the member-on-own/joined
+		// ActionPromptSession an ordinary second @mention correctly renders.
+		reuseAction := authz.ActionPromptSession
+		if isLabelRetrigger {
+			reuseAction = authz.ActionRetriggerReview
+		}
+
+		// joined is only ever CONSULTED by Authorize for ActionPromptSession
+		// (ActionRetriggerReview has no allowIfOwned entry at all,
+		// domain/authz/authorize.go) -- skip the Participants read entirely
+		// for a label re-trigger, the SAME "no query, no risk" discipline
+		// this function's own top doc comment already applies to
+		// createAuthorized above.
 		var joined bool
-		if actor.Valid {
+		if actor.Valid && reuseAction == authz.ActionPromptSession {
 			var err error
 			joined, err = actorauthz.OwnedOrJoined(ctx, c.Participants, existingSession, actor)
 			if err != nil {
 				return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: check participant for authorization: %w", err)
 			}
 		}
-		if !actorauthz.AuthorizeLinkedActor(ctx, logger, authzSurface, c.Users, actor, authz.ActionPromptSession, authz.Resource{OwnedOrJoined: joined}) {
-			logger.Warn("github: prompt on existing session denied by authz", "session_id", existingSession.ID, "repo", repoFullName, "pr_number", prNumber, "user_id", actor.String())
+		if !actorauthz.AuthorizeLinkedActor(ctx, logger, authzSurface, c.Users, actor, reuseAction, authz.Resource{OwnedOrJoined: joined}) {
+			logger.Warn("github: prompt/retrigger on existing session denied by authz", "session_id", existingSession.ID, "repo", repoFullName, "pr_number", prNumber, "user_id", actor.String(), "action", string(reuseAction))
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, ErrActorNotAuthorized
 		}
 
@@ -416,8 +473,20 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// package's own IntentClassifierInput never has a "first prompt"
 		// stage; the full prompt is always in hand at session-create
 		// time), and DeterministicTarget below.
+		//
+		// Text is classifyText, deliberately NOT *req.Prompt (audit fix,
+		// §5.2/§18.5) -- see this function's own doc comment on the
+		// classifyText parameter, above, for the full "why": req.Prompt is
+		// this SAME mention text with Step 46's own inline pre-fetched
+		// diff/stack context already folded in (handler.go, BEFORE
+		// CreateOrJoin is ever called), which for a real PR can run to
+		// several MB -- feeding that whole diff into the classifier's LLM
+		// call on every new GitHub review session would inflate its
+		// cost/latency by orders of magnitude and risk exceeding the
+		// model's context window the moment this classifier is switched
+		// from shadow to active.
 		c.IntentClassifier.ClassifyAndRecord(ctx, created.ID, ports.IntentClassifierInput{
-			Text:    *req.Prompt,
+			Text:    classifyText,
 			Surface: intentClassifierSurface,
 			// DeterministicTarget IS a real, already-known signal here,
 			// not an absent one: CreateOrJoin (this function) is only ever

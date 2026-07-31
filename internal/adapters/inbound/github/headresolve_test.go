@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
+	"github.com/khazaddev/narvi/internal/domain/review"
 )
 
 // discardLogger is a *slog.Logger that writes nowhere -- every test below
@@ -159,6 +160,51 @@ func TestResolveIssueCommentHead_NullHeadRepoKeepsBaseRepo(t *testing.T) {
 	}
 }
 
+// TestResolveIssueCommentHead_StackThreadedThrough proves Step 46's own
+// §17.6 amendment: a successful GetPullRequest response carrying a stack
+// object populates m.Stack -- the SAME already-made call this function's
+// own top doc comment describes, never a second one (this test's own
+// resolver.calls assertion proves that directly).
+func TestResolveIssueCommentHead_StackThreadedThrough(t *testing.T) {
+	resolver := &fakePullRequestResolver{
+		pr: githubapi.PullRequest{
+			HeadRef: "feature-x",
+			// Position/Size deliberately distinguishable (2 vs 3, not an
+			// equal-valued pair) -- a confirmed audit finding noted that a
+			// Position/Size field swap in this function's own mapping would
+			// pass undetected against a fixture where both fields carried
+			// the same value.
+			Stack: &githubapi.StackInfo{Position: 2, Size: 3, BaseRef: "main", BaseSHA: "deadbeef"},
+		},
+	}
+
+	got := resolveIssueCommentHead(context.Background(), discardLogger(), resolver, "gho_bottoken", baseIssueCommentMention())
+
+	if resolver.calls != 1 {
+		t.Fatalf("GetPullRequest call count = %d, want 1 (stack context must come from the SAME already-made call)", resolver.calls)
+	}
+	if got.Stack == nil {
+		t.Fatal("Stack = nil, want non-nil when GetPullRequest reports one")
+	}
+	want := review.StackContext{Position: 2, Size: 3, UltimateBaseRef: "main", UltimateBaseSHA: "deadbeef"}
+	if *got.Stack != want {
+		t.Errorf("Stack = %+v, want %+v", *got.Stack, want)
+	}
+}
+
+// TestResolveIssueCommentHead_NoStackLeavesNil proves the ordinary,
+// non-stacked case leaves m.Stack nil, never a zero-valued, misleadingly-
+// present struct.
+func TestResolveIssueCommentHead_NoStackLeavesNil(t *testing.T) {
+	resolver := &fakePullRequestResolver{pr: githubapi.PullRequest{HeadRef: "feature-x"}}
+
+	got := resolveIssueCommentHead(context.Background(), discardLogger(), resolver, "gho_bottoken", baseIssueCommentMention())
+
+	if got.Stack != nil {
+		t.Errorf("Stack = %+v, want nil when GetPullRequest reports no stack", got.Stack)
+	}
+}
+
 // TestResolveIssueCommentHead_UnsplittableRepoFullNameFallsBack proves a
 // defensively-handled, never-expected-from-real-GitHub malformed
 // RepoFullName (no "/") falls back rather than panicking or calling
@@ -178,30 +224,11 @@ func TestResolveIssueCommentHead_UnsplittableRepoFullNameFallsBack(t *testing.T)
 	}
 }
 
-func TestSplitOwnerRepo(t *testing.T) {
-	tests := []struct {
-		name      string
-		fullName  string
-		wantOwner string
-		wantRepo  string
-		wantOK    bool
-	}{
-		{name: "well-formed", fullName: "acme/widgets", wantOwner: "acme", wantRepo: "widgets", wantOK: true},
-		{name: "no slash", fullName: "widgets", wantOK: false},
-		{name: "empty owner", fullName: "/widgets", wantOK: false},
-		{name: "empty repo", fullName: "acme/", wantOK: false},
-		{name: "empty string", fullName: "", wantOK: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			owner, repo, ok := splitOwnerRepo(tc.fullName)
-			if ok != tc.wantOK {
-				t.Fatalf("splitOwnerRepo(%q) ok = %v, want %v", tc.fullName, ok, tc.wantOK)
-			}
-			if ok && (owner != tc.wantOwner || repo != tc.wantRepo) {
-				t.Errorf("splitOwnerRepo(%q) = (%q, %q), want (%q, %q)", tc.fullName, owner, repo, tc.wantOwner, tc.wantRepo)
-			}
-		})
-	}
-}
+// Owner/repo splitting itself (formerly this file's own splitOwnerRepo) now
+// lives at internal/domain/reposource.SplitFullName -- see that function's
+// own doc comment for why (Step 46, "review sessions", §8.2: a second
+// caller, in a different package, needed the identical split). Its own
+// table-driven test moved with it, to reposource_test.go's own
+// TestSplitFullName; TestResolveIssueCommentHead_UnsplittableRepoFullNameFallsBack
+// above still exercises this file's own resolveIssueCommentHead wrapping
+// that shared function's ok=false return.

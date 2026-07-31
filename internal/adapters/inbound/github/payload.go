@@ -4,15 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+
+	"github.com/khazaddev/narvi/internal/domain/review"
 )
 
-// eventTypeIssueComment and eventTypePullRequestReviewComment are the only
-// two "X-GitHub-Event" values that can carry a PR @mention (doc.go's own
-// writeup) -- GitHub's real event names, verbatim.
+// eventTypeIssueComment and eventTypePullRequestReviewComment are the two
+// "X-GitHub-Event" values that can carry a PR @mention (doc.go's own
+// writeup) -- GitHub's real event names, verbatim. eventTypePullRequest
+// (Step 46, "review sessions", §8.2) is a THIRD, unrelated trigger: not a
+// mention at all, but GitHub's own "labeled" action on a pull request,
+// detecting a maintainer's deliberate manual re-trigger command (§5.1: "a
+// human applying a label ... is a legitimate, deliberate command").
 const (
 	eventTypeIssueComment             = "issue_comment"
 	eventTypePullRequestReviewComment = "pull_request_review_comment"
+	eventTypePullRequest              = "pull_request"
 	commentActionCreated              = "created"
+	pullRequestActionLabeled          = "labeled"
 )
 
 // mention is the detected result of a single webhook delivery: a real,
@@ -54,13 +62,21 @@ type mention struct {
 	CommentBody string
 
 	// CommenterID/CommenterLogin are the GitHub user id/login of the real
-	// human who authored this comment ("comment.user.id"/"comment.user.
-	// login" -- GitHub's own real webhook shape, IDENTICAL field names/
-	// shape across both issue_comment and pull_request_review_comment;
-	// verified against GitHub's own live webhook-events documentation
-	// during this batch's own design phase). CommenterID is 0 only if the
-	// webhook payload itself omitted comment.user entirely (never expected
-	// from a real GitHub delivery, but not assumed away).
+	// human who triggered this event -- for a comment mention
+	// (issue_comment/pull_request_review_comment), "comment.user.id"/
+	// "comment.user.login" (GitHub's own real webhook shape, IDENTICAL
+	// field names/shape across both event types; verified against GitHub's
+	// own live webhook-events documentation during this batch's own design
+	// phase); for a label retrigger (pull_request/"labeled", Step 46,
+	// "review sessions", §8.2), "sender.id"/"sender.login" -- the actor who
+	// APPLIED the label, GitHub's own analogous field for an event with no
+	// comment/commenter at all. Both shapes are handled identically by
+	// every downstream consumer (identity.go's own resolveCommenterActor,
+	// coalesce.go's own authz gates): "the GitHub user id of whoever is
+	// asking for this" is the same question regardless of which surface
+	// asked it. CommenterID is 0 only if the webhook payload itself omitted
+	// the relevant user object entirely (never expected from a real GitHub
+	// delivery, but not assumed away).
 	//
 	// identity.go's own resolveCommenterActor uses CommenterID (never
 	// CommenterLogin, which GitHub allows a user to change at any time) to
@@ -69,20 +85,55 @@ type mention struct {
 	// Linear. CommenterLogin is carried only for logging.
 	CommenterID    int64
 	CommenterLogin string
+
+	// IsLabelRetrigger (audit fix, §13.3 row 5) reports whether THIS event
+	// is Step 46's own manual re-trigger-via-LABEL lane
+	// (parsePullRequestLabeled below) rather than an ordinary @mention
+	// comment (parseIssueComment/parsePullRequestReviewComment). coalesce.go's
+	// own REUSE branch consults this to choose the right authz gate: an
+	// ordinary second @mention on an already-tracked PR is just prompting
+	// the existing review session (authz.ActionPromptSession, member
+	// allowed on own/joined), but a label-triggered re-trigger on that SAME
+	// already-tracked PR is §13.3 row 5's "re-trigger reviews"
+	// (authz.ActionRetriggerReview, admin/maintainer only, no member
+	// carve-out) -- a DIFFERENT, stricter action, even though both reach
+	// the identical REUSE code path. false for every event type except a
+	// genuine label re-trigger.
+	IsLabelRetrigger bool
+
+	// Stack (Step 46, "review sessions", §17.6's amendment) is non-nil
+	// exactly when this event's own webhook payload directly embeds
+	// GitHub's own stack object -- today, only ever true for
+	// parsePullRequestLabeled below (a native "pull_request" event, the
+	// ONE event type §17.6 confirms carries it inline; comment-mention
+	// events do not). nil here does NOT mean "not stacked" -- it means "not
+	// learned from THIS payload"; handler.go's own review-context fetch
+	// (internal/app/reviewcontext.Fetch) falls back to a fresh GitHub API
+	// lookup for every OTHER trigger path, using this field as-is only when
+	// already populated, to avoid a redundant network round trip for data
+	// already in hand (see that function's own doc comment).
+	Stack *review.StackContext
 }
 
 // parseMention dispatches on eventType and reports whether body is a
-// genuine, actionable PR @mention. ok=false (nil error) means "ignore
-// this delivery" -- an unrecognized event type, a non-"created" comment
-// action, a plain-issue (not PR) comment, or a comment that doesn't
-// mention botHandle. A non-nil error means the body itself failed to
-// parse as the shape its own X-GitHub-Event header claims.
-func parseMention(eventType string, body []byte, mentionRE *regexp.Regexp) (mention, bool, error) {
+// genuine, actionable review-session trigger: a comment mentioning
+// reReviewLabel's own configured bot handle (mentionRE), or a
+// pull_request/"labeled" event naming reReviewLabel (Step 46, "review
+// sessions", §8.2's own manual re-trigger-via-label lane). ok=false (nil
+// error) means "ignore this delivery" -- an unrecognized event type, a
+// non-"created" comment action, a plain-issue (not PR) comment, a comment
+// that doesn't mention botHandle, or a pull_request action/label that isn't
+// this deployment's own configured re-trigger label. A non-nil error means
+// the body itself failed to parse as the shape its own X-GitHub-Event
+// header claims.
+func parseMention(eventType string, body []byte, mentionRE *regexp.Regexp, reReviewLabel string) (mention, bool, error) {
 	switch eventType {
 	case eventTypeIssueComment:
 		return parseIssueComment(body, mentionRE)
 	case eventTypePullRequestReviewComment:
 		return parsePullRequestReviewComment(body, mentionRE)
+	case eventTypePullRequest:
+		return parsePullRequestLabeled(body, reReviewLabel)
 	default:
 		return mention{}, false, nil
 	}
@@ -248,6 +299,141 @@ func parsePullRequestReviewComment(body []byte, mentionRE *regexp.Regexp) (menti
 		// that would make the session try to clone an empty repo spec.
 		m.RepoName = p.Repository.Name
 		m.RepoCloneURL = p.Repository.CloneURL
+	}
+	return m, true, nil
+}
+
+// labelRetriggerPromptText is the fixed, deterministically-synthesized
+// "comment body" a label-triggered manual re-trigger carries as its own
+// mention.CommentBody -- a pull_request/"labeled" event has no comment at
+// all to reuse (unlike issue_comment/pull_request_review_comment, whose
+// own comment body IS the trigger). A plain, fixed constant, never
+// model-generated: §5.2's own requirement that any re-run/re-trigger
+// phrasing be routable by the intent classifier's deterministic fallback,
+// not only its model-based path, holds here trivially -- this text is not
+// classified by an LLM at all (coalesce.go's own DeterministicTarget:
+// intentdomain.TargetReview already applies to every trigger this package
+// creates a session for, comment-mention or label alike), so there is no
+// model path for it to depend on in the first place.
+const labelRetriggerPromptText = "Manual re-review requested via the configured GitHub label."
+
+// pullRequestPayload is the subset of GitHub's real "pull_request" webhook
+// payload this adapter needs (verified against GitHub's own live
+// webhook-events documentation) -- Step 46's ("review sessions", §8.2) own
+// manual re-trigger-via-label lane. GitHub fires this event type for many
+// actions (opened, closed, synchronize, labeled, ...); only "labeled" (with
+// a matching label.name) is ever actionable here -- every other action is
+// acknowledged and ignored by parsePullRequestLabeled below, mirroring
+// issueCommentPayload's own "action != created" gate for comments.
+//
+// Unlike issue_comment, this event's payload embeds the FULL pull_request
+// object directly -- head.ref/head.repo (like pull_request_review_comment
+// already does) AND, per §17.6's own confirmed guarantee ("only the
+// dedicated pull_request event type is confirmed to [carry stack]"), the
+// stack object itself, when this PR belongs to one -- no separate
+// GetPullRequest API call needed for either, unlike issue_comment's own
+// head-branch resolution (headresolve.go) or every OTHER trigger path's own
+// stack-context lookup (internal/app/reviewcontext.Fetch).
+type pullRequestPayload struct {
+	Action string `json:"action"`
+	Label  struct {
+		Name string `json:"name"`
+	} `json:"label"`
+	// Sender is GitHub's own field for "who performed this action" on an
+	// event with no comment/commenter concept at all -- the label-applier,
+	// mirroring issueCommentPayload.Comment.User's own id/login shape
+	// exactly (mention.CommenterID/CommenterLogin's own doc comment above).
+	Sender struct {
+		ID    int64  `json:"id"`
+		Login string `json:"login"`
+	} `json:"sender"`
+	PullRequest struct {
+		Number int32 `json:"number"`
+		Head   struct {
+			Ref  string `json:"ref"`
+			Repo *struct {
+				Name     string `json:"name"`
+				CloneURL string `json:"clone_url"`
+			} `json:"repo"`
+		} `json:"head"`
+		// Stack mirrors internal/adapters/outbound/githubapi's own
+		// stackResponse shape exactly (that package's own doc comment) --
+		// two independent packages each decoding their own copy of the
+		// identical GitHub wire shape, deliberately, matching this
+		// package's own existing precedent of never sharing a payload
+		// struct with the outbound adapter package (pullRequestResponse/
+		// pullRequestReviewCommentPayload already each decode head.ref/
+		// head.repo independently, for the same reason).
+		Stack *struct {
+			Size     int `json:"size"`
+			Position int `json:"position"`
+			Base     struct {
+				Ref string `json:"ref"`
+				SHA string `json:"sha"`
+			} `json:"base"`
+		} `json:"stack"`
+	} `json:"pull_request"`
+	Repository struct {
+		FullName string `json:"full_name"`
+		Name     string `json:"name"`
+		CloneURL string `json:"clone_url"`
+	} `json:"repository"`
+}
+
+// parsePullRequestLabeled detects a genuine manual re-trigger: a
+// pull_request event whose action is "labeled" and whose own label.name
+// case-sensitively equals reReviewLabel (this deployment's own configured
+// label, Config.ReReviewLabel -- a plain, exact string comparison, the
+// SAME kind of "deterministic, no model in the loop" check labelRetrigger
+// PromptText's own doc comment already describes). Every other action
+// value (opened, closed, synchronize, unlabeled, ...) is acknowledged and
+// ignored, mirroring issueCommentPayload's own "action != created" gate.
+//
+// reReviewLabel == "" (a defensively-handled, never-expected-from-real-
+// deployment misconfiguration -- platform.Config.Load's own
+// defaultGitHubReReviewLabel always supplies a non-empty value) never
+// matches any real label.name, so an empty configured label degrades to
+// "this lane never fires" rather than a wildcard match against every
+// labeled event on every PR.
+func parsePullRequestLabeled(body []byte, reReviewLabel string) (mention, bool, error) {
+	var p pullRequestPayload
+	if err := json.Unmarshal(body, &p); err != nil {
+		return mention{}, false, fmt.Errorf("github: unmarshal pull_request payload: %w", err)
+	}
+	if p.Action != pullRequestActionLabeled {
+		return mention{}, false, nil
+	}
+	if reReviewLabel == "" || p.Label.Name != reReviewLabel {
+		return mention{}, false, nil
+	}
+
+	headBranch := p.PullRequest.Head.Ref
+	m := mention{
+		RepoFullName:     p.Repository.FullName, // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
+		PRNumber:         p.PullRequest.Number,
+		HeadBranch:       &headBranch,
+		CommentBody:      labelRetriggerPromptText,
+		CommenterID:      p.Sender.ID,
+		CommenterLogin:   p.Sender.Login,
+		IsLabelRetrigger: true,
+	}
+	if p.PullRequest.Head.Repo != nil {
+		m.RepoName = p.PullRequest.Head.Repo.Name // head repo -- may be a fork; the repo to actually clone.
+		m.RepoCloneURL = p.PullRequest.Head.Repo.CloneURL
+	} else {
+		// Mirrors parsePullRequestReviewComment's own identical L15-style
+		// fallback: GitHub's own head.repo was null (the head/fork repo has
+		// since been deleted) -- fall back to the base repo.
+		m.RepoName = p.Repository.Name
+		m.RepoCloneURL = p.Repository.CloneURL
+	}
+	if p.PullRequest.Stack != nil {
+		m.Stack = &review.StackContext{
+			Position:        p.PullRequest.Stack.Position,
+			Size:            p.PullRequest.Stack.Size,
+			UltimateBaseRef: p.PullRequest.Stack.Base.Ref,
+			UltimateBaseSHA: p.PullRequest.Stack.Base.SHA,
+		}
 	}
 	return m, true, nil
 }

@@ -128,4 +128,62 @@
 // PR that already has a review session therefore all succeed, producing
 // exactly one session and N turns, dispatched one at a time by that
 // session's own actor -- exactly what "session reuse" (§8.2) means.
+//
+// # Step 46 ("review sessions", §8.2): manual re-trigger via label, and
+// inline pre-fetched diff/stack context
+//
+// Step 32 above already delivers two of Step 46's own three named
+// properties in full -- "per-PR reuse: a second mention on the same PR
+// joins the existing review session" IS the REUSE branch this file's own
+// coalescing design section already describes, and "atomic claim on
+// concurrent mentions" IS the two-step EnsureRow+LockForUpdate sequence
+// that same section documents. Step 46 does not rebuild either: it
+// EXTENDS them to a new trigger surface and adds the one genuinely new
+// capability neither Step 32 nor Step 45 (domain/review, the Verdict type)
+// touches.
+//
+//  1. Manual re-trigger via LABEL, alongside the existing @mention (comment)
+//     trigger: a new "X-GitHub-Event: pull_request" lane, action ==
+//     "labeled", label.name == Config.ReReviewLabel (payload.go's own
+//     parsePullRequestLabeled) -- a maintainer applying this deployment's
+//     configured label is exactly as legitimate a deliberate command as an
+//     @mention (§5.1: "a human applying a label or clicking a button ...
+//     is a legitimate, deliberate command"). It resolves to the SAME
+//     mention shape parseIssueComment/parsePullRequestReviewComment already
+//     produce and is handed to the SAME coalescer.CreateOrJoin this file's
+//     own coalescing section describes -- no second claim mechanism, no
+//     new mapping table: a label event on a PR with no existing review
+//     session becomes a genuine WINNER (creates one, exactly like a first
+//     @mention would); a label event on a PR that already has one becomes
+//     an ordinary REUSE, enqueuing a new turn. The manual re-review REST
+//     button (internal/adapters/inbound/httpapi's RetriggerReview) is
+//     Step 46's own THIRD re-trigger surface, targeting an already-known
+//     session_id directly rather than routing through this per-PR claim at
+//     all (that handler's own doc comment explains why it doesn't need
+//     to). Every one of these three manual triggers is a STRUCTURED signal
+//     (an exact label-name match, or a plain authenticated REST call) --
+//     never text an LLM classifies -- so the requirement that "any re-run
+//     phrasing recommended to a user must be routable by the intent
+//     classifier's deterministic fail-open fallback" (§5.2) holds trivially
+//     here: there is no model-based path for either trigger to depend on
+//     in the first place, exactly like coalesce.go's own existing
+//     DeterministicTarget: intentdomain.TargetReview already means a plain
+//     @mention never asks a model whether this is a review request either.
+//
+//  2. Inline pre-fetched diff and (when present) GitHub-native stack
+//     context (§17.6's amendment): handler.go, immediately before handing
+//     off to coalescer.CreateOrJoin, calls internal/app/reviewcontext.Fetch
+//     (Config.DiffFetcher) to fetch this PR's own current diff and,
+//     when not already known from the triggering event's own payload (the
+//     label lane's own native pull_request event, which -- per §17.6 --
+//     already embeds GitHub's stack object directly, no extra call
+//     needed), a fresh lookup for its stack context. internal/domain/
+//     review.RenderTurnPrompt folds both into the mention's own comment
+//     body/synthesized command text, delimited and labeled as untrusted
+//     data (§5.2), BEFORE req.Prompt is built -- so this runs identically
+//     for BOTH the WINNER and REUSE branches of coalesce.go, which never
+//     needs to know this happened. Stack context is REVIEW CONTEXT ONLY
+//     (§21.1): position/size/ultimate base, never additional diff to
+//     verdict over -- RenderTurnPrompt's own rendering keeps that
+//     invariant legible to whichever agent reads the resulting prompt.
 package github

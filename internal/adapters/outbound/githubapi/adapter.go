@@ -514,10 +514,35 @@ type pullRequestResponse struct {
 			CloneURL string `json:"clone_url"`
 		} `json:"repo"`
 	} `json:"head"`
+
+	// Stack is GitHub's own "stack" object (§17.6's amendment, Step 46,
+	// "review sessions"), riding on this SAME PR resource -- confirmed
+	// present via live schema introspection during that amendment's own
+	// design phase. A POINTER, mirroring Head.Repo's own nullable-pointer
+	// discipline immediately above: GitHub's own documentation states a
+	// non-stacked PR (the ordinary, common case today) carries no "stack"
+	// key at all, which unmarshals a Go pointer field to nil rather than a
+	// zero-valued, misleadingly-present struct.
+	Stack *stackResponse `json:"stack"`
+}
+
+// stackResponse is the subset of GitHub's own "stack" object shape (§17.6)
+// this adapter needs: size, this PR's own 1-based position, and the
+// stack's ultimate base (ref+sha) -- deliberately omits GitHub's own
+// stack "id"/PR "number" fields, which nothing in this codebase consumes
+// (StackInfo's own doc comment below).
+type stackResponse struct {
+	Size     int `json:"size"`
+	Position int `json:"position"`
+	Base     struct {
+		Ref string `json:"ref"`
+		SHA string `json:"sha"`
+	} `json:"base"`
 }
 
 // PullRequest is GetPullRequest's own return shape: enough to resolve a
-// PR's TRUE head branch/repo (H5 audit fix).
+// PR's TRUE head branch/repo (H5 audit fix), plus (Step 46, "review
+// sessions", §8.2/§17.6) its GitHub-native stack context, when present.
 type PullRequest struct {
 	// HeadRef is the PR's real head branch name (GitHub's own
 	// "head.ref") -- never empty for a real, open GitHub pull request.
@@ -530,6 +555,28 @@ type PullRequest struct {
 	// repo spec.
 	HeadRepoName     string
 	HeadRepoCloneURL string
+	// Stack is non-nil exactly when this PR belongs to a GitHub-native
+	// stack (§17.6) -- nil is the ordinary, ungrouped case. Callers building
+	// a review turn's pre-fetched context (internal/app/reviewcontext)
+	// convert this into internal/domain/review.StackContext; this adapter
+	// itself stays domain-agnostic, mirroring how it already never imports
+	// internal/adapters/inbound/github's own mention type.
+	Stack *StackInfo
+}
+
+// StackInfo is GetPullRequest's own stack-context return shape (§17.6) --
+// GitHub's stack "size"/"position"/"base.ref"/"base.sha" fields, unchanged
+// from the wire shape (stackResponse above) other than being exported.
+// Deliberately omits GitHub's own stack "id" and PR "number" fields: nothing
+// in this codebase's review-context rendering (internal/domain/review.
+// StackContext, consumed by RenderTurnPrompt) needs either -- §21.1 names
+// exactly three things a review needs from a stack as context: "position,
+// size, and the stack's ultimate base".
+type StackInfo struct {
+	Size     int
+	Position int
+	BaseRef  string
+	BaseSHA  string
 }
 
 // GetPullRequest resolves pull request number's real head branch/repo via
@@ -561,7 +608,116 @@ func (a *Adapter) GetPullRequest(ctx context.Context, owner, repo string, number
 		pr.HeadRepoName = parsed.Head.Repo.Name
 		pr.HeadRepoCloneURL = parsed.Head.Repo.CloneURL
 	}
+	if parsed.Stack != nil {
+		pr.Stack = &StackInfo{
+			Size:     parsed.Stack.Size,
+			Position: parsed.Stack.Position,
+			BaseRef:  parsed.Stack.Base.Ref,
+			BaseSHA:  parsed.Stack.Base.SHA,
+		}
+	}
 	return pr, nil
+}
+
+// diffAcceptHeader requests GitHub's own raw unified-diff representation of
+// a pull request via content negotiation on the IDENTICAL GET
+// /repos/{owner}/{repo}/pulls/{number} endpoint GetPullRequest already
+// calls (https://docs.github.com/rest/pulls/pulls#get-a-pull-request,
+// "Custom media types" section) -- not a distinct endpoint, just a
+// different Accept header against the same resource. Verified against
+// GitHub's own live REST API documentation (fetched 2026-07-31, this
+// Step's own design phase): "application/vnd.github.diff" is the CURRENT
+// documented value --
+// deliberately NOT "application/vnd.github.v3.diff" (an older, version-
+// embedded media-type shape GitHub's own docs confirm it has since moved
+// away from in favor of versionless media types plus the separate
+// X-GitHub-Api-Version header; every other custom media type this
+// endpoint documents today -- raw+json, text+json, html+json, full+json --
+// follows the SAME versionless "vnd.github.PARAM[+json]" shape, with no
+// "v3" component anywhere).
+const diffAcceptHeader = "application/vnd.github.diff"
+
+// maxPRDiffResponseBytes bounds how much of GitHub's own raw diff response
+// GetPullRequestDiff reads -- deliberately a DIFFERENT (larger) cap than
+// maxResponseBodySize (this package's own cap for every OTHER response,
+// all small JSON payloads): a real PR's unified diff can legitimately run
+// well past 1 MiB (a large refactor, a vendored or generated file changed
+// wholesale), where every other response this adapter reads is a small,
+// bounded JSON document. 4 MiB is generous for the large-but-ordinary case
+// while still bounding worst-case memory for a truly enormous diff --
+// GetPullRequestDiff reports (via its own truncated return) when this cap
+// was actually hit, rather than silently handing back a partial diff with
+// no signal that it is partial (see internal/domain/review.RenderTurnPrompt's
+// own truncation-notice rendering, this method's one real consumer's own
+// consumer).
+const maxPRDiffResponseBytes = 4 << 20 // 4 MiB
+
+// GetPullRequestDiff fetches pull request number's own current unified diff
+// (Step 46, "review sessions", §8.2: "inline diff pre-fetched into
+// context") via the SAME GET https://api.github.com/repos/{owner}/{repo}/
+// pulls/{number} call GetPullRequest makes, content-negotiated for GitHub's
+// raw diff media type instead of its default JSON resource shape --
+// authenticated with token as a Bearer token, agnostic to whose token it's
+// handed, exactly like GetPullRequest/PostIssueComment above.
+//
+// truncated reports whether the real diff was cut short at
+// maxPRDiffResponseBytes -- true means diff is a PREFIX of the PR's real,
+// full diff, not the whole thing; callers must surface this honestly
+// (RenderTurnPrompt's own explicit notice) rather than silently treating a
+// partial diff as complete.
+//
+// Errors are plain, exactly like GetPullRequest/CreatePR above -- no
+// caller of this method retries or trips a circuit breaker on a fetch
+// failure; every real caller today (internal/app/reviewcontext.Fetch)
+// treats a failure here as "no pre-fetched diff available", logged, never
+// a reason to fail the review turn's own creation.
+func (a *Adapter) GetPullRequestDiff(ctx context.Context, owner, repo string, number int32, token string) (diff string, truncated bool, err error) {
+	// Owner/Repo escaped via url.PathEscape (single opaque segments,
+	// mirroring GetPullRequest's own identical discipline); number needs no
+	// escaping (a plain decimal integer).
+	path := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), number)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", false, fmt.Errorf("githubapi: build get pull request diff request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", diffAcceptHeader)
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return "", false, fmt.Errorf("githubapi: get pull request diff request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Read one byte past the cap so a full cap-sized read (len ==
+	// maxPRDiffResponseBytes+1) is distinguishable from a real diff that
+	// happens to end exactly at the cap (len == maxPRDiffResponseBytes) --
+	// without this, a diff exactly maxPRDiffResponseBytes long would be
+	// misreported as truncated even though nothing was actually cut.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPRDiffResponseBytes+1))
+	if err != nil {
+		return "", false, fmt.Errorf("githubapi: read pull request diff response: %w", err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		// GitHub's own error envelope is still plain JSON even when the
+		// SUCCESS response would have been a raw diff -- the Accept header
+		// only affects a 2xx body's shape, mirroring doGet's own identical
+		// error-envelope parsing.
+		message := "no error body"
+		var parsedErr githubErrorBody
+		if jsonErr := json.Unmarshal(body, &parsedErr); jsonErr == nil && parsedErr.Message != "" {
+			message = parsedErr.Message
+		} else if len(body) > 0 {
+			message = "error body did not match GitHub's expected error envelope"
+		}
+		return "", false, &APIError{Status: resp.StatusCode, Message: message}
+	}
+
+	if len(body) > maxPRDiffResponseBytes {
+		return string(body[:maxPRDiffResponseBytes]), true, nil
+	}
+	return string(body), false, nil
 }
 
 // PostIssueComment posts body as a new comment on repo owner/repo's

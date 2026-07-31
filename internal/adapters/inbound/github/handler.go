@@ -10,6 +10,9 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/reviewcontext"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -72,6 +75,29 @@ type Config struct {
 	BotToken     string
 	PullRequests PullRequestResolver
 	Timeouts     platform.Timeouts
+
+	// ReReviewLabel (Step 46, "review sessions", §8.2) is this deployment's
+	// own configured label NAME (platform.Config.GitHubReReviewLabel) a
+	// maintainer applies to a PR to manually re-trigger its review session
+	// -- parsePullRequestLabeled's own matching criterion (payload.go).
+	// Empty (this package's own handler_test.go, or any other minimal
+	// wiring that doesn't care about this lane) means this lane never
+	// fires -- see that function's own doc comment.
+	ReReviewLabel string
+
+	// DiffFetcher (Step 46, "review sessions", §8.2) fetches this PR's own
+	// inline pre-fetched diff (and, when not already known from the
+	// triggering event's own payload, its GitHub-native stack context,
+	// §17.6) via internal/app/reviewcontext.Fetch -- folded into every
+	// review turn's own prompt text (review.RenderTurnPrompt) BEFORE
+	// coalescer.CreateOrJoin, so both the WINNER and REUSE branches get it
+	// identically without either needing its own copy of this logic.
+	// Nil-safe: nil (this package's own handler_test.go, or any other
+	// minimal wiring that doesn't care about this Step) simply skips the
+	// fetch entirely -- see this file's own call site doc comment.
+	// *githubapi.Adapter (the SAME instance PullRequests/Comments above
+	// already wire, cmd/control-plane/main.go) satisfies this directly.
+	DiffFetcher reviewcontext.Fetcher
 
 	// Comments (Step 37/38 follow-up fix, Finding 1) posts the honest
 	// planAwaitingApprovalReplyText reply (planawaitingreply.go) back to a
@@ -180,7 +206,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		}
 
 		eventType := r.Header.Get("X-GitHub-Event")
-		m, ok, err := parseMention(eventType, body, mentionRE)
+		m, ok, err := parseMention(eventType, body, mentionRE, cfg.ReReviewLabel)
 		if err != nil {
 			logger.Error("github: parse webhook payload failed", "error", err, "event_type", eventType, "delivery_id", deliveryID)
 			// This delivery was claimed above but never actually processed --
@@ -281,6 +307,40 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			cancel()
 		}
 
+		// mentionText (audit fix, §5.2/§18.5) is the mention's own ORIGINAL,
+		// un-enriched comment/label text -- captured BEFORE the pre-fetched
+		// diff/stack context below is folded into m.CommentBody, and passed
+		// through to coalescer.CreateOrJoin as its own, separate classifyText
+		// argument. Without this, Step 36's own intent classifier call
+		// (coalesce.go, WINNER path) would classify the FULL diff-enriched
+		// turn prompt instead of just the human's own words the moment a
+		// diff fetcher is wired -- see CreateOrJoin's own doc comment on its
+		// classifyText parameter for the full "why".
+		mentionText := m.CommentBody
+
+		// Step 46 ("review sessions", §8.2): fold this PR's own inline
+		// pre-fetched diff (and, when present, its GitHub-native stack
+		// context, §17.6) into the turn's own prompt text -- BEFORE
+		// coalescer.CreateOrJoin, so this happens identically for BOTH the
+		// WINNER (brand-new session) and REUSE (existing session) branches
+		// without either of coalesce.go's own two code paths needing to
+		// know about it (see this file's own doc comment on why the fetch
+		// itself must never run with a Postgres transaction open -- it
+		// doesn't: CreateOrJoin has not been called yet at this point).
+		// Nil-safe: cfg.DiffFetcher == nil (this package's own handler_test.go,
+		// or any other minimal wiring that doesn't care about this Step)
+		// simply skips the fetch entirely, leaving m.CommentBody as the
+		// turn's own prompt verbatim -- today's pre-Step-46 behavior.
+		if cfg.DiffFetcher != nil {
+			if owner, repo, ok := reposource.SplitFullName(m.RepoFullName); ok {
+				prCtx := reviewcontext.Fetch(ctx, logger, cfg.DiffFetcher, cfg.Timeouts, owner, repo, m.PRNumber, cfg.BotToken, m.Stack)
+				m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
+			} else {
+				logger.Warn("github: could not split repo_full_name into owner/repo, skipping pre-fetched review context",
+					"repo_full_name", m.RepoFullName, "pr_number", m.PRNumber)
+			}
+		}
+
 		req := restdtos.CreateSessionRequest{
 			SpawnSource: restdtos.CreateSessionRequestSpawnSourceGithub,
 			Prompt:      restdtos.CreateSessionRequestPrompt(&m.CommentBody),
@@ -329,7 +389,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor)
+		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor, m.IsLabelRetrigger, mentionText)
 		if err != nil {
 			if errors.Is(err, ErrActorNotAuthorized) {
 				// ErrActorNotAuthorized fires for TWO distinct reasons

@@ -917,3 +917,38 @@ func TestLoadGitHubImageBuildToken(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadGitHubReReviewLabel covers Step 46's ("review sessions", §8.2)
+// own optional NARVI_GITHUB_REREVIEW_LABEL -- mirrors
+// TestLoadGitHubImageBuildToken's own "unset succeeds, set carries through"
+// shape exactly, except an unset value here defaults to a non-empty,
+// genuinely usable label name rather than an empty string (this field's
+// own doc comment: a safe, product-level default exists, unlike a
+// credential with no safe placeholder).
+func TestLoadGitHubReReviewLabel(t *testing.T) {
+	t.Run("unset defaults to run-review", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_REREVIEW_LABEL", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (this label name is optional)", err)
+		}
+		if cfg.GitHubReReviewLabel != "run-review" {
+			t.Errorf("Load().GitHubReReviewLabel = %q, want %q when unset", cfg.GitHubReReviewLabel, "run-review")
+		}
+	})
+
+	t.Run("set carries the real value through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_GITHUB_REREVIEW_LABEL", "please-review-again")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.GitHubReReviewLabel != "please-review-again" {
+			t.Errorf("Load().GitHubReReviewLabel = %q, want %q", cfg.GitHubReReviewLabel, "please-review-again")
+		}
+	})
+}

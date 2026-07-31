@@ -2,6 +2,8 @@ package github
 
 import (
 	"testing"
+
+	"github.com/khazaddev/narvi/internal/domain/review"
 )
 
 func TestCompileMentionPattern(t *testing.T) {
@@ -262,9 +264,20 @@ func TestParsePullRequestReviewComment(t *testing.T) {
 	}
 }
 
+// TestParseMention_UnrecognizedEventType proves an event type genuinely
+// outside this package's own three-lane dispatch (issue_comment,
+// pull_request_review_comment, pull_request -- payload.go's own parseMention
+// doc comment) is acknowledged and ignored, never an error. "star" is used
+// here rather than "pull_request" (this test's own pre-Step-46 event type
+// choice): pull_request is NOW a recognized-and-dispatched event type (Step
+// 46, "review sessions", §8.2's own label-retrigger lane) -- see
+// TestParsePullRequestLabeled below for that lane's own dedicated coverage,
+// including its own "labeled action, but no configured label matches" case,
+// which is a DIFFERENT reason for ok=false than "this event type is not
+// dispatched on at all".
 func TestParseMention_UnrecognizedEventType(t *testing.T) {
 	mentionRE := compileMentionPattern(testBotHandle)
-	_, ok, err := parseMention("pull_request", []byte(`{}`), mentionRE)
+	_, ok, err := parseMention("star", []byte(`{}`), mentionRE, "run-review")
 	if err != nil {
 		t.Fatalf("parseMention() error = %v, want nil", err)
 	}
@@ -344,11 +357,32 @@ func TestParseMention_CommenterIdentity(t *testing.T) {
 			wantCommenterID:    0,
 			wantCommenterLogin: "",
 		},
+		{
+			// Step 46 ("review sessions", §8.2): a label-triggered retrigger
+			// has no comment/commenter at all -- CommenterID/CommenterLogin
+			// instead come from GitHub's own "sender" field (the label
+			// applier), mirroring the comment.user shape (mention.
+			// CommenterID's own doc comment, payload.go).
+			name:      "pull_request labeled event carries sender id/login",
+			eventType: eventTypePullRequest,
+			body: `{
+				"action": "labeled",
+				"label": {"name": "run-review"},
+				"sender": {"id": 999333, "login": "maintainer-x"},
+				"pull_request": {
+					"number": 99,
+					"head": {"ref": "feature-x", "repo": {"name": "widgets", "clone_url": "https://github.com/contributor/widgets.git"}}
+				},
+				"repository": {"full_name": "acme/widgets"}
+			}`,
+			wantCommenterID:    999333,
+			wantCommenterLogin: "maintainer-x",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			m, ok, err := parseMention(tc.eventType, []byte(tc.body), mentionRE)
+			m, ok, err := parseMention(tc.eventType, []byte(tc.body), mentionRE, "run-review")
 			if err != nil {
 				t.Fatalf("parseMention() error = %v, want nil", err)
 			}
@@ -360,6 +394,180 @@ func TestParseMention_CommenterIdentity(t *testing.T) {
 			}
 			if m.CommenterLogin != tc.wantCommenterLogin {
 				t.Errorf("CommenterLogin = %q, want %q", m.CommenterLogin, tc.wantCommenterLogin)
+			}
+		})
+	}
+}
+
+// TestParsePullRequestLabeled is Step 46's ("review sessions", §8.2) own
+// table-driven test for the manual re-trigger-via-label lane: a
+// pull_request/"labeled" event whose label.name matches this deployment's
+// own configured reReviewLabel is actionable; every other action/label
+// combination is acknowledged and ignored.
+func TestParsePullRequestLabeled(t *testing.T) {
+	const reReviewLabel = "run-review"
+
+	tests := []struct {
+		name          string
+		body          string
+		reReviewLabel string
+		wantOK        bool
+		wantErr       bool
+		check         func(t *testing.T, m mention)
+	}{
+		{
+			name: "matching label on labeled action -- actionable",
+			body: `{
+				"action": "labeled",
+				"label": {"name": "run-review"},
+				"sender": {"id": 42, "login": "maintainer-x"},
+				"pull_request": {
+					"number": 7,
+					"head": {"ref": "feature-x", "repo": {"name": "widgets", "clone_url": "https://github.com/contributor/widgets.git"}}
+				},
+				"repository": {"full_name": "acme/widgets", "name": "widgets", "clone_url": "https://github.com/acme/widgets.git"}
+			}`,
+			reReviewLabel: reReviewLabel,
+			wantOK:        true,
+			check: func(t *testing.T, m mention) {
+				if m.RepoFullName != "acme/widgets" {
+					t.Errorf("RepoFullName = %q, want %q", m.RepoFullName, "acme/widgets")
+				}
+				if m.PRNumber != 7 {
+					t.Errorf("PRNumber = %d, want 7", m.PRNumber)
+				}
+				if m.HeadBranch == nil || *m.HeadBranch != "feature-x" {
+					t.Errorf("HeadBranch = %v, want %q", m.HeadBranch, "feature-x")
+				}
+				if m.RepoName != "widgets" || m.RepoCloneURL != "https://github.com/contributor/widgets.git" {
+					t.Errorf("RepoName/RepoCloneURL = %q/%q, want the PR's own head (fork) repo", m.RepoName, m.RepoCloneURL)
+				}
+				if m.CommentBody != labelRetriggerPromptText {
+					t.Errorf("CommentBody = %q, want the fixed labelRetriggerPromptText constant", m.CommentBody)
+				}
+				if m.Stack != nil {
+					t.Errorf("Stack = %+v, want nil (this fixture reports no stack object)", m.Stack)
+				}
+			},
+		},
+		{
+			name: "matching label with a stack object present",
+			body: `{
+				"action": "labeled",
+				"label": {"name": "run-review"},
+				"sender": {"id": 42, "login": "maintainer-x"},
+				"pull_request": {
+					"number": 7,
+					"head": {"ref": "feature-x", "repo": {"name": "widgets", "clone_url": "https://github.com/contributor/widgets.git"}},
+					"stack": {"size": 3, "position": 2, "base": {"ref": "main", "sha": "deadbeef"}}
+				},
+				"repository": {"full_name": "acme/widgets"}
+			}`,
+			reReviewLabel: reReviewLabel,
+			wantOK:        true,
+			check: func(t *testing.T, m mention) {
+				if m.Stack == nil {
+					t.Fatal("Stack = nil, want non-nil when the payload embeds one")
+				}
+				// Position/Size deliberately distinguishable (2 vs 3, not an
+				// equal-valued pair) -- a confirmed audit finding noted that a
+				// Position/Size field swap in parsePullRequestLabeled's own
+				// mapping would pass undetected against a fixture where both
+				// fields carried the same value.
+				want := review.StackContext{Position: 2, Size: 3, UltimateBaseRef: "main", UltimateBaseSHA: "deadbeef"}
+				if *m.Stack != want {
+					t.Errorf("Stack = %+v, want %+v", *m.Stack, want)
+				}
+			},
+		},
+		{
+			name: "null head.repo falls back to the base repo",
+			body: `{
+				"action": "labeled",
+				"label": {"name": "run-review"},
+				"sender": {"id": 42, "login": "maintainer-x"},
+				"pull_request": {
+					"number": 7,
+					"head": {"ref": "feature-x", "repo": null}
+				},
+				"repository": {"full_name": "acme/widgets", "name": "widgets", "clone_url": "https://github.com/acme/widgets.git"}
+			}`,
+			reReviewLabel: reReviewLabel,
+			wantOK:        true,
+			check: func(t *testing.T, m mention) {
+				if m.RepoName != "widgets" || m.RepoCloneURL != "https://github.com/acme/widgets.git" {
+					t.Errorf("RepoName/RepoCloneURL = %q/%q, want the base repo fallback", m.RepoName, m.RepoCloneURL)
+				}
+			},
+		},
+		{
+			name: "non-matching label ignored",
+			body: `{
+				"action": "labeled",
+				"label": {"name": "bug"},
+				"pull_request": {"number": 7, "head": {"ref": "feature-x", "repo": null}},
+				"repository": {"full_name": "acme/widgets"}
+			}`,
+			reReviewLabel: reReviewLabel,
+			wantOK:        false,
+		},
+		{
+			name: "non-labeled action ignored even with a matching label name present",
+			body: `{
+				"action": "unlabeled",
+				"label": {"name": "run-review"},
+				"pull_request": {"number": 7, "head": {"ref": "feature-x", "repo": null}},
+				"repository": {"full_name": "acme/widgets"}
+			}`,
+			reReviewLabel: reReviewLabel,
+			wantOK:        false,
+		},
+		{
+			name: "other pull_request actions (opened, synchronize, closed) ignored",
+			body: `{
+				"action": "synchronize",
+				"pull_request": {"number": 7, "head": {"ref": "feature-x", "repo": null}},
+				"repository": {"full_name": "acme/widgets"}
+			}`,
+			reReviewLabel: reReviewLabel,
+			wantOK:        false,
+		},
+		{
+			name: "empty configured reReviewLabel never matches, even a labeled event with an empty label name",
+			body: `{
+				"action": "labeled",
+				"label": {"name": ""},
+				"pull_request": {"number": 7, "head": {"ref": "feature-x", "repo": null}},
+				"repository": {"full_name": "acme/widgets"}
+			}`,
+			reReviewLabel: "",
+			wantOK:        false,
+		},
+		{
+			name:          "malformed JSON is an error",
+			body:          `not valid json`,
+			reReviewLabel: reReviewLabel,
+			wantErr:       true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m, ok, err := parsePullRequestLabeled([]byte(tc.body), tc.reReviewLabel)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("parsePullRequestLabeled() error = nil, want non-nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parsePullRequestLabeled() error = %v, want nil", err)
+			}
+			if ok != tc.wantOK {
+				t.Fatalf("parsePullRequestLabeled() ok = %v, want %v", ok, tc.wantOK)
+			}
+			if ok && tc.check != nil {
+				tc.check(t, m)
 			}
 		})
 	}

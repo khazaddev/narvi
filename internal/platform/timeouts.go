@@ -1599,6 +1599,35 @@ type Timeouts struct {
 	// that a genuinely still-unlinked commenter is reminded again on
 	// their next active day rather than only once, ever.
 	GitHubActorNoticeTTL time.Duration
+
+	// --- Step 46 standalone addition ("review sessions", §8.2): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior standalone addition), so -- per those additions' own precedent
+	// -- a plain field with a sensible default, not wired into a fake
+	// invariant link.
+
+	// GitHubPRDiffTimeout bounds a single internal/adapters/outbound/
+	// githubapi.Adapter.GetPullRequestDiff call -- a real outbound GET
+	// against GitHub's own pulls/{number} endpoint, content-negotiated for
+	// the raw unified-diff media type rather than pullRequestResponse's own
+	// JSON shape. Made synchronously, inline, by whichever review-session
+	// trigger path (a PR @mention, a label retrigger, or the manual
+	// re-review REST button) is about to create or reuse a review turn --
+	// mirrors GitHubGetPRTimeout's own identical "a genuine outbound
+	// network call made inline in a webhook/request handler must never run
+	// against an unbounded context" precedent. A DISTINCT field from
+	// GitHubGetPRTimeout (not a reuse), because a PR's own diff can
+	// legitimately be far larger than its plain JSON resource -- a large
+	// refactor or a vendored/generated-file change can genuinely take
+	// longer to transfer than the small pullRequestResponse payload
+	// GitHubGetPRTimeout bounds. Not specified in the plan (this Step
+	// postdates it); chosen as 20s -- double GitHubGetPRTimeout's own 10s,
+	// generous for a real, possibly-large diff transfer while still
+	// keeping the triggering request/webhook response prompt. This fetch
+	// is always best-effort (internal/app/reviewcontext.Fetch's own doc
+	// comment): a timeout here degrades to "no pre-fetched diff", never a
+	// reason to fail the review session's own turn creation.
+	GitHubPRDiffTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1735,6 +1764,8 @@ func DefaultTimeouts() Timeouts {
 		OTelShutdownTimeout: 10 * time.Second, // audit-remediation batch B7; not specified, chosen -- matches ShutdownGracePeriod/ProcessStopGracePeriod's own precedent
 
 		GitHubActorNoticeTTL: 24 * time.Hour, // batch fix/deny-unlinked-github-actors; not specified, chosen -- see field doc comment for why this is a DISTINCT constant from IdentityLinkPromptTTL despite sharing its value
+
+		GitHubPRDiffTimeout: 20 * time.Second, // not specified (Step 46 postdates the plan); chosen, double GitHubGetPRTimeout's own 10s -- generous for a real, possibly-large diff transfer
 	}
 }
 

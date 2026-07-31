@@ -47,6 +47,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
@@ -169,9 +170,35 @@ type testRig struct {
 	// per-test via its own exported fields, backing this rig's own
 	// snapshot-mint route below.
 	provider *fakeSnapshotProvider
+
+	// prSessions is Step 46's ("review sessions", §8.2) own addition --
+	// backing this rig's own manual re-review REST button route
+	// (reviewretrigger_integration_test.go). diffFetcher/botToken default
+	// nil/"" (RetriggerReview's own nil-safe "skip the fetch" contract,
+	// mirrored from internal/adapters/inbound/github's own identical
+	// Config.DiffFetcher precedent): the pre-fetched-diff/stack-context
+	// ASSEMBLY itself is already covered exhaustively, with no DB
+	// interaction needed, by internal/app/reviewcontext's own
+	// 100%-covered unit tests -- this rig's own job is proving the REST
+	// endpoint's OWN behavior (404/400/403/201, the AlwaysQueue policy,
+	// and real-Postgres concurrency), not re-proving a pure function
+	// composition. A test that specifically wants to prove THIS call
+	// site's own owner/repo/token args reach reviewcontext.Fetch
+	// correctly (audit fix, test-coverage finding) overrides diffFetcher/
+	// botToken via newTestRig's own mutate func, below.
+	prSessions *narvipg.GitHubPRSessionStore
+
+	diffFetcher reviewcontext.Fetcher
+	botToken    string
 }
 
-func newTestRig(t *testing.T) testRig {
+// newTestRig builds the default rig. mutate (variadic so every EXISTING
+// newTestRig(t) call site keeps compiling unchanged) lets a caller
+// override this rig's own fields -- e.g. diffFetcher/botToken -- BEFORE
+// the router below is built, mirroring internal/adapters/inbound/github's
+// own newTestRig(t, mutate...) precedent (handler_integration_test.go)
+// exactly.
+func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	t.Helper()
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -208,8 +235,13 @@ func newTestRig(t *testing.T) testRig {
 		auditLog:            narvipg.NewAuditLogStore(pool),
 		linkPrompts:         narvipg.NewIdentityLinkPromptStore(pool),
 		promptTemplates:     narvipg.NewPromptTemplateStore(pool),
+		prSessions:          narvipg.NewGitHubPRSessionStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
+
+	for _, m := range mutate {
+		m(&rig)
+	}
 
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
@@ -225,6 +257,12 @@ func newTestRig(t *testing.T) testRig {
 		// Audit-fix batch (completeness/discoverability, M3) -- see
 		// httpapi/plans.go's own doc comment.
 		r.Get("/{sessionID}/plans", httpapi.ListPlans(rig.sessions, rig.plans))
+		// review/retrigger (Step 46, "review sessions", §8.2's own manual
+		// re-trigger-via-BUTTON surface) -- see reviewretrigger.go's own doc
+		// comment. rig.diffFetcher/rig.botToken default nil/"" -- see this
+		// rig's own diffFetcher field doc comment for why, and for how a
+		// test overrides them.
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.botToken, platform.DefaultTimeouts()))
 	})
 	// /api/members, /api/audit-log (Step 39, "identities + full RBAC",
 	// §13.2/§13.3) -- mounted exactly like cmd/control-plane/main.go's own
