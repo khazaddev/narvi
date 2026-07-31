@@ -128,9 +128,20 @@ func completeOpenTurn(t *testing.T, turns *narvipg.TurnStore, sessionID pgtype.U
 // finding names: a synthetic app_mention+message pair (two separate
 // webhook POST requests, distinct event_ids, IDENTICAL channel/ts/text,
 // referencing an ALREADY-MAPPED thread) results in exactly ONE turn
-// created and exactly ONE in-thread ack posted -- never two -- and
-// resolveSlackActor's own users.info call happens only once, not once per
-// twin.
+// created and exactly ONE in-thread ack posted -- never two.
+//
+// Perf-fix update (identity.go's own identitylink.LookupLinkedUserID
+// pre-check): dualUser is linked via linkSlackIdentityForTest BELOW,
+// before the root mention ever fires -- so EVERY resolveSlackActor call
+// this test triggers, root and twin alike, now hits that pre-check's
+// already-linked fast path and skips the users.info fetch entirely,
+// exactly like TestHandler_AppMention_AlreadyLinkedIdentity_SkipsUsersInfoFetch
+// (identity_fetchskip_integration_test.go) proves in isolation. This test
+// used to assert the twin pair produced exactly ONE such fetch (proving
+// the L3 dedup claim: resolveSlackActor itself only runs once for the
+// coalesced pair, never once per twin) -- now asserts ZERO, a strictly
+// tighter version of the SAME dedup guarantee (a call that never happens
+// cannot happen twice either).
 func TestHandler_DualDelivery_AppMentionAndMessage_CoalescesToOneTurnAndOneAck(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -149,7 +160,7 @@ func TestHandler_DualDelivery_AppMentionAndMessage_CoalescesToOneTurnAndOneAck(t
 	if rec.Code != http.StatusOK {
 		t.Fatalf("root mention: status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
 	}
-	drainAllSlackRequests(rig) // discard the root mention's own ack + users.info call
+	drainAllSlackRequests(rig) // discard the root mention's own ack (no users.info call: dualUser is already linked)
 
 	mapping, err := rig.threads.Get(ctx, channel, rootTS)
 	if err != nil {
@@ -203,10 +214,15 @@ func TestHandler_DualDelivery_AppMentionAndMessage_CoalescesToOneTurnAndOneAck(t
 		t.Errorf("chat.postMessage count for thread %s = %d, want exactly 1 (the dual-delivery pair must produce ONE ack, not two)", rootTS, got)
 	}
 
-	// Exactly ONE resolveSlackActor call (a real users.info API call) --
-	// never a redundant second one for the twin event.
-	if got := countRequestsByPath(captured, "/users.info"); got != 1 {
-		t.Errorf("/users.info call count = %d, want exactly 1 (resolveSlackActor must run only once for this dual-delivery pair)", got)
+	// ZERO users.info calls -- dualUser is already linked (linkSlackIdentityForTest
+	// above, before the root mention even fired), so identitylink.
+	// LookupLinkedUserID's own pre-check (identity.go) short-circuits every
+	// resolveSlackActor call this test triggers, root and twin alike, before
+	// any fetch is ever attempted. This is a STRICTER form of the original
+	// L3 dedup guarantee (never a redundant second call for the twin event):
+	// a call that never happens at all cannot happen twice either.
+	if got := countRequestsByPath(captured, "/users.info"); got != 0 {
+		t.Errorf("/users.info call count = %d, want exactly 0 (dualUser is already linked -- the perf-fix pre-check must skip the fetch entirely, and in particular never call it twice for the twin pair)", got)
 	}
 }
 

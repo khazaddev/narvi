@@ -45,7 +45,15 @@ const authzSurface = "slack"
 // Slack's own users.info API first -- ONLY when slackUserID is non-empty
 // (every real app_mention/message/interactivity payload this package
 // processes carries one; empty is a defensive no-op, never expected in
-// practice).
+// practice) AND this identity is not ALREADY linked (identitylink.
+// LookupLinkedUserID pre-check below): every inbound event used to pay a
+// users.info round trip regardless of link state, even though Resolve's own
+// internal fast path never reads the fetched email on a hit -- in the
+// steady state where most actors are already linked, that was a discarded
+// network call on every single message. The pre-check is the SAME indexed
+// lookup Resolve itself still performs internally (kept there as a safety
+// net, see that function's own doc comment) -- this just does it BEFORE
+// spending a fetch whose result would be thrown away.
 //
 // Returns (actorUserID, notice): actorUserID is Valid iff this identity is
 // now known to belong to a real user (already linked, or auto-linked THIS
@@ -66,6 +74,18 @@ const authzSurface = "slack"
 func resolveSlackActor(ctx context.Context, logger *slog.Logger, slackClient *slackapi.Client, identityLinkDeps identitylink.Deps, timeouts platform.Timeouts, slackUserID string) (actorUserID pgtype.UUID, notice string) {
 	if slackUserID == "" {
 		return pgtype.UUID{}, ""
+	}
+
+	// Pre-check: already linked -> skip the fetch entirely, exactly
+	// mirroring Resolve's own internal fast path (identitylink/service.go)
+	// with none of the round trip below. A lookup error is NOT "not
+	// linked" -- fall through to the fetch/Resolve path unchanged, since
+	// Resolve's own identical internal lookup will hit the SAME error a
+	// moment later and this function's existing error handling (below)
+	// already logs and degrades to bot attribution for it; a pre-check
+	// error would just be the identical outcome one call earlier.
+	if userID, linked, err := identitylink.LookupLinkedUserID(ctx, identityLinkDeps, sqlcgen.IdentityProviderSlack, slackUserID); err == nil && linked {
+		return userID, ""
 	}
 
 	email, ok := identitylink.FetchEmailWithRetry(ctx, logger, timeouts, sqlcgen.IdentityProviderSlack, func(attemptCtx context.Context) (string, bool, error) {
@@ -105,9 +125,22 @@ func resolveSlackActor(ctx context.Context, logger *slog.Logger, slackClient *sl
 // resolution to the next event from this same identity (an Events API
 // message, a later click, a modal submission all naturally retry via
 // resolveSlackActor's own full algorithm).
+//
+// Pre-checks identitylink.LookupLinkedUserID (same as resolveSlackActor's
+// own pre-check above, see its doc comment) BEFORE spending any of
+// fetchTimeout's already-tight budget on a fetch whose result would be
+// discarded on an already-linked hit -- this is the SINGLE most exposed
+// instance of the pre-fix defect this pre-check closes: a hanging/slow
+// fetch here eats directly into the sliver of Slack's ~3s non-retryable
+// interactivity-ack window this function's own doc comment above says is
+// already fully spoken for by other work.
 func resolveSlackActorSingleAttempt(ctx context.Context, logger *slog.Logger, slackClient *slackapi.Client, identityLinkDeps identitylink.Deps, fetchTimeout time.Duration, slackUserID string) (actorUserID pgtype.UUID, notice string) {
 	if slackUserID == "" {
 		return pgtype.UUID{}, ""
+	}
+
+	if userID, linked, err := identitylink.LookupLinkedUserID(ctx, identityLinkDeps, sqlcgen.IdentityProviderSlack, slackUserID); err == nil && linked {
+		return userID, ""
 	}
 
 	fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)

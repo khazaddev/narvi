@@ -41,6 +41,20 @@ const authzSurface = "linear"
 // immediately, with no lookup attempted at all (there is nothing to look
 // up).
 //
+// "not already linked" above is now enforced HERE, before either the
+// installation-token decrypt or the profile-email fetch below: every
+// inbound event used to pay both regardless of link state, even though
+// identitylink.Resolve's own internal fast path never reads the fetched
+// email on a hit -- in the steady state where most actors are already
+// linked, that was two discarded calls (one decrypt, one Linear API round
+// trip) on every single event. identitylink.LookupLinkedUserID performs the
+// SAME indexed lookup Resolve itself still performs internally (kept there
+// as a safety net, see that function's own doc comment) -- this just does
+// it before spending work whose result would be thrown away. A lookup
+// error is NOT "not linked": it falls through to the fetch/Resolve path
+// unchanged, since Resolve's own identical internal lookup would hit the
+// same error a moment later regardless.
+//
 // Returns (actorUserID, notice): actorUserID is Valid iff this identity is
 // now known to belong to a real user (already linked, or auto-linked THIS
 // call); notice is §13.2's own "notify in-channel" text (Resolution.
@@ -52,6 +66,10 @@ const authzSurface = "linear"
 func (deps Deps) resolveActor(ctx context.Context, logger *slog.Logger, organizationID, externalID string) (actorUserID pgtype.UUID, notice string) {
 	if externalID == "" {
 		return pgtype.UUID{}, ""
+	}
+
+	if userID, linked, err := identitylink.LookupLinkedUserID(ctx, deps.IdentityLink, sqlcgen.IdentityProviderLinear, externalID); err == nil && linked {
+		return userID, ""
 	}
 
 	accessToken, ok := deps.decryptLinearAccessToken(ctx, logger, organizationID)

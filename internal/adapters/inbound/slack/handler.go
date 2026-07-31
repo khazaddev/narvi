@@ -537,9 +537,19 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 
 	// Step 39 ("identities + full RBAC", §13.2) update: resolve the REAL
 	// actor behind ev.User ONCE, regardless of whether this event ends up
-	// starting a brand-new thread or replying to an existing one -- the
-	// auto-link algorithm runs "on first event from an unknown provider
-	// identity" (§13.2), on every event, not only session-creating ones.
+	// starting a brand-new thread or replying to an existing one --
+	// resolveSlackActor itself is called on every event (session-creating
+	// or a reply on an existing thread), since a reply needs actorUserID
+	// for authorizeSessionAction below just as much as a new thread needs
+	// it for resolveOrClaimSession's own created_by, and there is no
+	// cheaper way to tell which kind of event this is before resolving it.
+	// The actual auto-link ALGORITHM inside it (identitylink.Resolve's
+	// fetch+match+link) is what §13.2 means by "runs on first event from
+	// an unknown provider identity": resolveSlackActor's own pre-check
+	// (identity.go) now short-circuits straight to the already-linked
+	// user id for every OTHER event, with no provider fetch at all, so
+	// that algorithm genuinely only executes once per never-before-seen
+	// identity, matching §13.2 as written.
 	// actorUserID is only actually CONSUMED by resolveOrClaimSession below
 	// (a bare session's own created_by) -- a reply on an existing thread
 	// has nowhere to attribute it (turns carries no actor column, mirrors

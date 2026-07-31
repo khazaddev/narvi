@@ -102,18 +102,67 @@ func (r Resolution) NotificationText() string {
 	}
 }
 
+// LookupLinkedUserID performs the SAME existing-identity lookup Resolve's
+// own internal fast path (below) does, but is EXPORTED for a caller that
+// wants to pre-check BEFORE spending a provider profile-email fetch it
+// would otherwise just discard on a Resolve fast-path hit -- see
+// internal/adapters/inbound/{slack,linear}/identity.go's own pre-check call
+// sites for the "why" (every event, for every already-linked identity, used
+// to pay a fetch round trip whose result Resolve's own fast path below
+// never even reads).
+//
+// Returns (userID, true, nil) on a hit (this (provider, externalID) is
+// already linked -- userID is who to), (pgtype.UUID{}, false, nil) on a
+// definitive miss (pgx.ErrNoRows -- not linked, the caller should proceed
+// with its own fetch+Resolve exactly as before this pre-check existed), or
+// (pgtype.UUID{}, false, err) on any OTHER lookup error -- deliberately NOT
+// collapsed into "not linked": a transient DB error is not evidence of
+// anything about this identity's link state, so every current caller
+// treats it as "unknown, fall through to the fetch", the same behavior this
+// pre-check didn't change (Resolve's own identical internal lookup below
+// would hit the exact same error a moment later regardless).
+func LookupLinkedUserID(ctx context.Context, deps Deps, provider sqlcgen.IdentityProvider, externalID string) (userID pgtype.UUID, linked bool, err error) {
+	existing, found, err := lookupExistingIdentity(ctx, deps, provider, externalID)
+	if err != nil {
+		return pgtype.UUID{}, false, err
+	}
+	return existing.UserID, found, nil
+}
+
+// lookupExistingIdentity is Resolve's own fast-path lookup AND
+// LookupLinkedUserID's shared implementation -- factored out so the one
+// (provider, externalID) -> identities row query used by both has exactly
+// one place it can drift from.
+func lookupExistingIdentity(ctx context.Context, deps Deps, provider sqlcgen.IdentityProvider, externalID string) (sqlcgen.Identity, bool, error) {
+	existing, err := deps.Identities.GetByProviderAndExternalID(ctx, provider, externalID)
+	if err == nil {
+		return existing, true, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sqlcgen.Identity{}, false, nil
+	}
+	return sqlcgen.Identity{}, false, err
+}
+
 // Resolve implements §13.2's auto-linking algorithm for one inbound event
 // from (provider, externalID) -- see this package's own doc.go for the
 // complete step-by-step design. email/emailOK is the CALLER's own
 // already-fetched-and-retried provider profile email (see that doc
 // comment for why fetching itself is not this function's job).
+//
+// Kept as a SAFETY NET even though every current caller now pre-checks via
+// LookupLinkedUserID above before ever fetching (see that function's own
+// doc comment): a future caller that forgets to pre-check still gets the
+// exact same correct fast-path outcome here, just without the fetch having
+// been skipped -- belt and braces, one indexed lookup, deliberately never
+// removed.
 func Resolve(ctx context.Context, deps Deps, provider sqlcgen.IdentityProvider, externalID, email string, emailOK bool) (Resolution, error) {
-	existing, err := deps.Identities.GetByProviderAndExternalID(ctx, provider, externalID)
-	if err == nil {
-		return Resolution{UserID: existing.UserID}, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	existing, found, err := lookupExistingIdentity(ctx, deps, provider, externalID)
+	if err != nil {
 		return Resolution{}, fmt.Errorf("identitylink: look up existing identity: %w", err)
+	}
+	if found {
+		return Resolution{UserID: existing.UserID}, nil
 	}
 
 	if !emailOK {
