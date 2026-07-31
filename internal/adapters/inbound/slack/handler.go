@@ -19,6 +19,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
@@ -142,6 +143,25 @@ const (
 var ackPlanAwaitingText = fmt.Sprintf(
 	"A plan is awaiting approval for this session — use the Approve/Reject buttons above to decide it, or start your reply with %q to request changes.",
 	plandomain.RevisePrefix,
+)
+
+// ackEmptyReviseFeedbackText is the audit-remediation batch's own SECOND
+// fix-pass addition (LOW audit finding, "the honest reply reused for the
+// new empty-feedback case is generic boilerplate ... gives the user no
+// indication that their revise: reply WAS recognized ... but was rejected
+// specifically because the feedback was empty"): posted instead of
+// ackPlanAwaitingText specifically for the emptyReviseFeedback case (below)
+// -- a reply that DID match plandomain.RevisePrefix, unlike every other
+// case ackPlanAwaitingText itself still covers (a reply matching neither an
+// approve/reject button nor the revise: prefix at all). Telling the user
+// their revise: syntax WAS recognized, and exactly why nothing happened
+// (no feedback followed the prefix), is strictly more actionable than
+// ackPlanAwaitingText's own generic "here's how this works" wording, which
+// reads identically whether the prefix was never used or used with nothing
+// after it.
+var ackEmptyReviseFeedbackText = fmt.Sprintf(
+	"Your %q reply was recognized, but no feedback followed it — reply again with your requested changes after %q.",
+	plandomain.RevisePrefix, plandomain.RevisePrefix,
 )
 
 // Deps bundles every dependency NewHandler needs -- a small config
@@ -576,25 +596,79 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// handled just below. deps.Plans == nil (never true in production
 	// wiring) skips this check entirely, exactly like the gate itself does.
 	planMode := false
+	// emptyReviseFeedback is the audit-remediation batch's own fix
+	// ("revise: accepts empty feedback"): plandomain.MatchRevise documents
+	// ok=true, feedback=="" for a bare "revise:" (or whitespace-only
+	// feedback) as an EXPLICIT caller's-own-job case (verdict.go's own doc
+	// comment: "deciding what to do with an empty feedback prompt is
+	// entirely the caller's own job") -- this codebase already has an
+	// answer to that question, at the pre-existing "Request changes" Block
+	// Kit modal submission (interactive.go's own handleViewSubmission,
+	// which this SAME batch's own follow-up fix now ALSO makes reject
+	// empty feedback with a user-visible inline modal error, instead of
+	// the bare "ignoring" 200 it used to write -- see that function's own
+	// doc comment). This applies the SAME rule here (treating
+	// whitespace-only feedback as empty too), rather than silently
+	// dispatching a genuine plan_mode=true revision turn with nothing at
+	// all for the agent to act on.
+	emptyReviseFeedback := false
 	if deps.Plans != nil && hasAwaitingApprovalPlan(ctx, logger, deps.Plans, res.SessionID) {
 		if feedback, reviseOK := plandomain.MatchRevise(prompt); reviseOK {
-			prompt = feedback
-			planMode = true
+			// plandomain.IsBlankFeedback (LOW audit fix, confirmed finding
+			// "MatchRevise's feedback-emptiness check ... does not treat
+			// zero-width characters as whitespace") replaces a bare
+			// strings.TrimSpace(feedback) == "" check here -- the shared
+			// definition also catches feedback made up ONLY of invisible
+			// zero-width runes (U+200B/200C/200D/FEFF), which TrimSpace
+			// alone would let through as "non-empty".
+			if plandomain.IsBlankFeedback(feedback) {
+				emptyReviseFeedback = true
+			} else {
+				prompt = feedback
+				planMode = true
+			}
 		}
 	}
 
-	createdTurn, created, err := addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, actorUserID)
 	gatedByAwaitingPlan := false
-	if err != nil {
-		if !errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
-			logger.Error("slack: add turn failed", "error", err)
-			return handleEventResult{OK: false}
-		}
-		// Honest reply (this batch's own addition), never a hard failure --
-		// mirrors DropIfOpen's own existing "still busy" precedent for the
-		// analogous open-turn case (M6 audit fix) just below.
+	var createdTurn sqlcgen.Turn
+	var created bool
+	if emptyReviseFeedback {
+		// No addTurn call at all here -- unlike the createTurnLocked-gated
+		// case just below (an ordinary, non-revise reply that
+		// createTurnLocked's own awaiting-plan gate declines), an empty-
+		// feedback revise: reply must never even reach turn creation: this
+		// reuses the SAME honest ackPlanAwaitingText reply that case gets
+		// (the ackText switch below), so the human sees exactly the
+		// clarification they'd see for any other reply that fails to
+		// request changes properly.
 		gatedByAwaitingPlan = true
-		logger.Info("slack: reply blocked by awaiting-approval plan", "session_id", res.SessionID)
+		// LOW audit fix (confirmed finding, "log-level inconsistency
+		// between the new empty-feedback-guard branch and the pre-existing
+		// ... 'blocked by awaiting-approval plan' branch"): logged at Info,
+		// matching the functionally identical ErrPlanAwaitingApproval
+		// branch just below -- both are routine, expected user mistakes
+		// (an ordinary reply or an empty revise: reply reaching an
+		// awaiting-approval gate) that produce the exact same honest
+		// ackPlanAwaitingText reply and no adverse system state, so neither
+		// deserves a higher severity than the other. Previously Warn,
+		// which would flag this routine case above the identical one below
+		// on any Warn-level alert.
+		logger.Info("slack: revise: reply had empty feedback, blocked by awaiting-approval plan guard", "session_id", res.SessionID)
+	} else {
+		var err error
+		createdTurn, created, err = addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, actorUserID)
+		if err != nil {
+			if !errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
+				logger.Error("slack: add turn failed", "error", err)
+				return handleEventResult{OK: false}
+			}
+			// Honest reply (this batch's own addition), never a hard failure --
+			// mirrors DropIfOpen's own existing "still busy" precedent for the
+			// analogous open-turn case (M6 audit fix) just below.
+			gatedByAwaitingPlan = true
+			logger.Info("slack: reply blocked by awaiting-approval plan", "session_id", res.SessionID)
+		}
 	}
 
 	// L20 audit fix: this package previously logged NOTHING on a
@@ -603,9 +677,17 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// correlate against in the logs. Mirrors github's own identical
 	// successful-mention log line shape (coalesce.go). The busy/dropped
 	// case (M6) gets its own, distinct log line instead of silence.
+	//
+	// plan_mode is the audit-remediation batch's own SECOND fix
+	// ("neither Slack nor Linear logs the routing decision itself"):
+	// PREVIOUSLY this line carried only session_id/turn_id, so a revise:
+	// reply re-routed into a plan_mode=true revision turn was
+	// indistinguishable, in the logs, from an ordinary plan_mode=false
+	// build turn -- the negative branch (gatedByAwaitingPlan, just above)
+	// was already logged, but the POSITIVE re-routing decision was not.
 	if !gatedByAwaitingPlan {
 		if created {
-			logger.Info("slack: added turn", "session_id", res.SessionID, "turn_id", createdTurn.ID)
+			logger.Info("slack: added turn", "session_id", res.SessionID, "turn_id", createdTurn.ID, "plan_mode", planMode)
 		} else {
 			logger.Warn("slack: session already has an open turn, dropping message", "session_id", res.SessionID)
 		}
@@ -637,6 +719,15 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 
 	ackText := ackReplyText
 	switch {
+	// LOW audit fix: emptyReviseFeedback gets its OWN, more specific text
+	// (ackEmptyReviseFeedbackText) -- checked BEFORE the general
+	// gatedByAwaitingPlan case below (emptyReviseFeedback always implies
+	// gatedByAwaitingPlan == true, never the reverse), so a reply that DID
+	// match the revise: prefix but carried no feedback gets told exactly
+	// that, instead of ackPlanAwaitingText's own generic "here's how this
+	// works" wording shared with every other awaiting-plan-gated case.
+	case emptyReviseFeedback:
+		ackText = ackEmptyReviseFeedbackText
 	case gatedByAwaitingPlan:
 		ackText = ackPlanAwaitingText
 	case res.IsNewThread:
