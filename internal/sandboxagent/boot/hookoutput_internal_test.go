@@ -25,18 +25,30 @@ import (
 // (no '\r' anywhere, so nothing ever short-circuits a full remaining-buffer
 // scan for it) must cost ~O(n), not ~O(k·n).
 //
-// This is exactly the failure scenario the review measured directly in
-// this worktree before the fix: L=20,000 -> 38.6ms; L=40,000 -> 135.5ms
-// (~3.5x, not ~2x); L=80,000 -> 528.5ms (~3.9x again) -- quadratic, not
-// linear, scaling. A wall-clock ratio is inherently noisy, so this
-// compares a 4x input-size step and allows a generous ratio well under the
-// ~13-16x a quadratic implementation would show at that step, while still
-// well above the ~4x true linear scaling (plus fixed overhead) produces --
-// wide enough to be robust on a loaded CI box, narrow enough to fail hard
-// the instant indexLineBoundary regresses back to scanning the whole
-// remainder for '\r' on every line.
+// This is exactly the failure scenario the review measured directly before
+// the fix: L=20,000 -> 38.6ms; L=40,000 -> 135.5ms (~3.5x, not ~2x);
+// L=80,000 -> 528.5ms (~3.9x again) -- quadratic, not linear.
+//
+// # Why this measures a RATIO of minima, and no absolute wall-clock bound
+//
+// The first version of this test also asserted an absolute bound (the 4x
+// case must finish under 400ms). That bound made the test flaky the moment
+// the machine was busy: it failed at 491ms on a host running other work,
+// with the implementation perfectly correct. An absolute wall-clock
+// assertion measures the machine, not the code, so it cannot distinguish
+// "this regressed to O(k·n)" from "something else was compiling at the
+// time" -- and a test that fails for reasons unrelated to its subject stops
+// being read as a signal. It is gone.
+//
+// What remains is self-normalizing: both sizes are measured on the same
+// machine moments apart, so a load spike that inflates one tends to inflate
+// the other, leaving the RATIO informative where either absolute number is
+// not. Each size is measured repeatedly and the MINIMUM taken -- the
+// minimum of a set of timings is the estimator least contaminated by
+// interference, since scheduling noise, GC and page faults can only ever
+// make a run slower, never faster.
 func TestIndexLineBoundary_WriteNewlineOnlyLinesScalesLinearly(t *testing.T) {
-	measure := func(lines int) time.Duration {
+	measureOnce := func(lines int) time.Duration {
 		var buf strings.Builder
 		buf.Grow(lines * 11)
 		for i := 0; i < lines; i++ {
@@ -52,36 +64,43 @@ func TestIndexLineBoundary_WriteNewlineOnlyLinesScalesLinearly(t *testing.T) {
 		return time.Since(start)
 	}
 
+	// Repeats are cheap here (the largest case is well under a second even
+	// quadratically) and buy a much steadier estimate than a single sample.
+	const repeats = 5
+	measureMin := func(lines int) time.Duration {
+		best := measureOnce(lines)
+		for i := 1; i < repeats; i++ {
+			if d := measureOnce(lines); d < best {
+				best = d
+			}
+		}
+		return best
+	}
+
 	const small = 20_000
 	const large = 4 * small // 80,000 -- same 4x step the review measured
 
 	// Warm up (page faults, allocator warm-up, GC) so the first measured
-	// call isn't penalized relative to the second.
-	_ = measure(1_000)
+	// call isn't penalized relative to the rest.
+	_ = measureOnce(1_000)
 
-	smallElapsed := measure(small)
-	largeElapsed := measure(large)
+	smallElapsed := measureMin(small)
+	largeElapsed := measureMin(large)
 
-	t.Logf("Write(%d lines) = %v, Write(%d lines) = %v (ratio %.2fx)",
-		small, smallElapsed, large, largeElapsed, float64(largeElapsed)/float64(smallElapsed))
+	t.Logf("min of %d: Write(%d lines) = %v, Write(%d lines) = %v (ratio %.2fx)",
+		repeats, small, smallElapsed, large, largeElapsed, float64(largeElapsed)/float64(smallElapsed))
 
-	// Absolute guard: even on a slow, loaded CI box, a genuinely linear
-	// 880,000-byte Write must not take anywhere near what the quadratic
-	// version's OWN measured 80,000-line time was (528.5ms) -- give it a
-	// full order of magnitude of headroom.
-	const absoluteBound = 400 * time.Millisecond
-	if largeElapsed > absoluteBound {
-		t.Errorf("Write(%d lines) took %v, want under %v (O(k·n) regression?)", large, largeElapsed, absoluteBound)
-	}
-
-	// Ratio guard: quadratic scaling over a 4x step would land near 13-16x;
-	// linear scaling lands near 4x. 8x sits well clear of both directions.
+	// Quadratic scaling over a 4x step lands near 13-16x; linear scaling
+	// lands near 4x. 8x sits well clear of both, so this fails hard the
+	// instant indexLineBoundary regresses to rescanning the whole remainder
+	// for '\r' on every line, without tripping on ordinary measurement
+	// noise.
 	const maxRatio = 8.0
-	if smallElapsed > 0 {
-		ratio := float64(largeElapsed) / float64(smallElapsed)
-		if ratio > maxRatio {
-			t.Errorf("Write() time ratio for a 4x input-size step = %.2fx, want under %.1fx (O(k·n) regression?)", ratio, maxRatio)
-		}
+	if smallElapsed <= 0 {
+		t.Fatalf("Write(%d lines) measured as %v -- clock resolution too coarse to compare against", small, smallElapsed)
+	}
+	if ratio := float64(largeElapsed) / float64(smallElapsed); ratio > maxRatio {
+		t.Errorf("Write() time ratio for a 4x input-size step = %.2fx, want under %.1fx (O(k·n) regression?)", ratio, maxRatio)
 	}
 }
 
