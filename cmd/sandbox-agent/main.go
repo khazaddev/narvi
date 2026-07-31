@@ -1199,16 +1199,23 @@ func runBootSequence(
 
 		// pathScope (§14.1) is extracted ONCE, here, before the switch below
 		// -- it is NOT fresh-clone-specific. A repo_image/snapshot_restore
-		// boot's own fingerprint/ImageSpec is (base, repoSHAs,
-		// runtimeVersion) ONLY -- scope-independent -- so the exact same
-		// prebuilt image (or restored snapshot) can be shared across
-		// sessions with different path_scope values, or none at all. That
-		// means the on-disk sparse-checkout state a SyncAll boot finds
-		// reflects whatever scope (or lack of one) happened to produce that
-		// image/snapshot, NOT necessarily THIS session's own scope --
-		// relying on "git preserves a working tree's sparse-checkout config"
-		// would silently carry over the WRONG session's scope (or a full,
-		// unscoped checkout) rather than enforce this session's own. Both
+		// boot's own fingerprint (domain/imagebuild.Fingerprint, §19.1) is
+		// keyed on (base, repos map[name]url, runtimeVersion) -- each
+		// repo's normalized clone URL, NOT a resolved SHA -- so it stays
+		// scope-independent AND SHA-independent: the exact same prebuilt
+		// image (or restored snapshot) is shared across every session with
+		// the same repo SET, regardless of path_scope or which commit each
+		// repo happened to be at when the image was built or last
+		// refreshed (§19.2's freshness pump). That means the on-disk
+		// sparse-checkout state a SyncAll boot finds reflects whatever
+		// scope (or lack of one) happened to produce that image/snapshot,
+		// NOT necessarily THIS session's own scope -- relying on "git
+		// preserves a working tree's sparse-checkout config" would
+		// silently carry over the WRONG session's scope (or a full,
+		// unscoped checkout) rather than enforce this session's own. This
+		// is more load-bearing than it was pre-Step-41: URL-keyed images
+		// are shared far more broadly than SHA-keyed ones were, so more
+		// sessions with differing path_scope can land on one image. Both
 		// switch cases below therefore need pathScope: CloneAll applies it
 		// to a brand-new clone, and SyncAll re-applies/re-narrows it against
 		// whatever already exists on disk, so the two never drift.

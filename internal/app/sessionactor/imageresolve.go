@@ -36,23 +36,23 @@
 // # Step 41/42 boundary (§19.1 vs §19.9) -- documented design decision
 //
 // §19.1's own prose describes the builder resolving each repo's
-// default-branch tip SHA "at claim time" -- but §19.9's phasing note
-// assigns that exact claim-time SHA resolution, and the new
-// platform-level GitHub credential it needs (the freshness pump/background
-// builder has no session/creator context to borrow a token from, unlike
-// this spawn-time call site), to Step 42, not this one. This Step's own
-// resolved design decision, applied consistently across this file and
-// app/imagebuild.Builder.attempt: a cache MISS here creates a
-// best-effort, URL-only pending row (repo_urls, no built_repo_shas yet)
-// and does NOTHING further -- no per-repo SHA resolution of any kind
-// happens anywhere in Step 41, on the spawn path or the background pump.
-// This spawn still uses the base image regardless, exactly as before.
-// Step 41 lands the fingerprint/type/migration/spawn-path plumbing; Step
-// 42's own claim-time resolution is what makes a brand-new fingerprint
-// actually buildable end-to-end. The warm-HIT path below (a fingerprint
-// that already has a 'ready' row -- e.g. seeded by whatever produces one
-// once Step 42 ships) is unaffected by this boundary and works today,
-// zero network calls either way.
+// default-branch tip SHA "at claim time" -- §19.9's phasing note assigns
+// that exact claim-time SHA resolution, and the new platform-level GitHub
+// credential it needs (the freshness pump/background builder has no
+// session/creator context to borrow a token from, unlike this spawn-time
+// call site), to Step 42, not this one. Step 41's own resolved design
+// decision, still exactly as implemented in THIS file: a cache MISS here
+// creates a best-effort, URL-only pending row (repo_urls, no
+// built_repo_shas yet) and does NOTHING further -- this spawn-path call
+// site never resolves a per-repo SHA, on this spawn or any other; this
+// spawn still uses the base image regardless, exactly as before. Step 42
+// has since shipped: app/imagebuild.Builder.attempt is what actually
+// performs that claim-time SHA resolution now (using
+// platform.Config.GitHubImageBuildToken, §19.2), turning a brand-new
+// pending row into a buildable one asynchronously, off this spawn's own
+// path. The warm-HIT path below (a fingerprint that already has a
+// 'ready' row) is unaffected by this boundary and always worked, zero
+// network calls either way.
 //
 // # Why this runs where it runs (not "before assembling CreateSpec")
 //
@@ -183,10 +183,11 @@
 //     was down" -- they are different failures), and NEVER cached, so the
 //     very next spawn attempt re-checks live rather than freezing a
 //     transient outage into a stale deny for this cache entry's whole TTL.
-//     This still satisfies "never block a spawn" (§10 Phase 2): the spawn
-//     itself is never held up or failed by this -- it just falls back to
-//     the base image for this one attempt, identically to a genuine
-//     image_builds lookup error a few lines below.
+//     This still satisfies §10 Phase 2's own "never block a session"
+//     invariant: the spawn itself is never held up or failed by this --
+//     it just falls back to the base image for this one attempt,
+//     identically to a genuine image_builds lookup error a few lines
+//     below.
 //
 // # Caching
 //
@@ -268,9 +269,10 @@ func (a *Actor) resolveAndSetImage(ctx context.Context, plan *spawnPlan) {
 		// internal/app/imagebuild's own background loop has a record of
 		// this repo set (see this file's own top comment for the Step
 		// 41/42 boundary this best-effort row sits on: no SHA resolution
-		// happens here or in that background loop yet, in Step 41). This
-		// spawn still uses the base image regardless of whether the
-		// upsert itself succeeds.
+		// ever happens on this spawn path -- app/imagebuild.Builder's
+		// claim-time resolution, Step 42, is what later resolves and
+		// builds this row asynchronously). This spawn still uses the base
+		// image regardless of whether the upsert itself succeeds.
 		a.upsertPendingImageBuildBestEffort(ctx, fingerprint, repoURLs)
 		return
 	}

@@ -19,12 +19,18 @@
 //     network-bound BuildImage call must never hold a Postgres
 //     transaction open, the same discipline app/sessionactor/dispatch.go's
 //     own top comment establishes for CreateSandbox).
-//  2. For each claimed row, OUTSIDE any transaction: calls
-//     ports.SandboxProvider.BuildImage with the row's own persisted
-//     (base, repo_shas, runtime_version) -- see migrations/
-//     000024_image_builds.up.sql's own doc comment for why those raw
-//     inputs are persisted alongside the fingerprint hash, not just the
-//     hash itself. On success, records status='ready' + image_ref. On
+//  2. For each claimed row, OUTSIDE any transaction: resolves each named
+//     repo's current default-branch tip SHA from the row's own persisted
+//     (base, repo_urls, runtime_version) -- repo_urls, not repo_shas since
+//     Step 41/§19.1 renamed the column and re-keyed it on each repo's
+//     normalized clone URL rather than a resolved SHA (migrations/
+//     000039_image_builds_shared_fingerprint.up.sql's own doc comment) --
+//     then calls ports.SandboxProvider.BuildImage with those concrete,
+//     freshly-resolved SHAs (attempt, builder.go). See migrations/
+//     000024_image_builds.up.sql's own doc comment for why the raw
+//     fingerprint inputs are persisted alongside the fingerprint hash at
+//     all, not just the hash itself. On success, records status='ready'
+//     + image_ref. On
 //     failure, computes the next retry time via domain/imagebuild.
 //     EvaluateBackoff (§3.5: "not fixed 30 min") and records
 //     status='failed' + next_retry_at, logging a warning (and

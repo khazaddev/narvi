@@ -52,6 +52,14 @@ type HookOutcome struct {
 // setup.sh exactly as before this amendment -- SHA-equality is a pure
 // optimization, zero regression for that case.
 //
+// This makes the repo-authored setup.sh's own idempotency/incremental
+// contract a real, load-bearing requirement rather than a nice-to-have:
+// under this policy setup.sh reruns on essentially every warm boot (the
+// freshness pump's own staleness window, §19.2, plus any ordinary branch
+// activity makes an exact SHA match the exception, not the rule). See
+// docs/environments.md for the named requirement this places on every
+// repo, from the repo author's own side of the contract.
+//
 // setup.sh's FatalOnFailure never depends on primary -- only build-vs-not
 // matters for it (it fails the whole sequence only during an image build,
 // where there is no running session to fall back on) -- and, as of this
