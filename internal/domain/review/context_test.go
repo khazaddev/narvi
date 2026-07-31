@@ -1,9 +1,11 @@
 package review_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/domain/review"
 )
 
@@ -25,16 +27,26 @@ func TestRenderTurnPrompt(t *testing.T) {
 		wantNotContains []string
 	}{
 		{
-			name:       "no diff, no stack: base prompt returned verbatim",
+			name:       "no diff, no stack: base prompt plus the unconditional verdict-tool block, no diff/stack blocks",
 			basePrompt: "@narvi-bot please review",
 			ctx:        review.PreFetchedContext{},
-			wantExact:  "@narvi-bot please review",
+			wantContains: []string{
+				"@narvi-bot please review",
+				"POST " + review.VerdictToolURLPlaceholder,
+				"Authorization: Bearer " + review.VerdictToolBearerPlaceholder,
+				"X-Sandbox-Gen: " + review.VerdictToolGenPlaceholder,
+			},
+			wantNotContains: []string{"<pr_diff>", "<pr_stack_context>"},
 		},
 		{
 			name:       "empty diff never renders a diff block, even if DiffTruncated is (nonsensically) set",
 			basePrompt: "please review",
 			ctx:        review.PreFetchedContext{Diff: "", DiffTruncated: true},
-			wantExact:  "please review",
+			wantContains: []string{
+				"please review",
+				"POST " + review.VerdictToolURLPlaceholder,
+			},
+			wantNotContains: []string{"<pr_diff>", "truncated at the fetch"},
 		},
 		{
 			name:       "diff present, not truncated",
@@ -165,5 +177,95 @@ func TestRenderTurnPrompt_DiffAndStackOrdering(t *testing.T) {
 	}
 	if diffIdx > stackIdx {
 		t.Errorf("diff block index %d, stack block index %d -- want diff block to precede stack block", diffIdx, stackIdx)
+	}
+}
+
+// TestRenderTurnPrompt_VerdictToolInstructionsAlwaysLast proves the
+// verdict-tool-calling block (Step 47, §8.2/§5.2) is unconditionally
+// appended after every other optional piece (diff, stack) and after the
+// human's own basePrompt -- confirmed 46 findings deep or not, an agent
+// reading top-to-bottom always sees "what to review" before "how to
+// submit the verdict".
+func TestRenderTurnPrompt_VerdictToolInstructionsAlwaysLast(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{
+		Diff:  "diff content\n",
+		Stack: &review.StackContext{Position: 1, Size: 2, UltimateBaseRef: "main", UltimateBaseSHA: "abc123"},
+	})
+
+	stackCloseIdx := strings.Index(got, "</pr_stack_context>")
+	toolIdx := strings.Index(got, "POST "+review.VerdictToolURLPlaceholder)
+	if stackCloseIdx == -1 || toolIdx == -1 {
+		t.Fatalf("expected both the stack block and the verdict-tool block present, got %q", got)
+	}
+	if toolIdx < stackCloseIdx {
+		t.Errorf("verdict-tool block index %d, stack block close index %d -- want the verdict-tool block to come last", toolIdx, stackCloseIdx)
+	}
+}
+
+// TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract is the
+// cross-package regression test verdictToolInstructions' own doc comment
+// (context.go) promises: every field name and enum value the rendered
+// instructions name for the verdict-posting tool's JSON body must still
+// be one restdtos.PostReviewVerdictRequest actually accepts. This package
+// cannot import that generated type directly (doc.go: "zero external
+// imports"), so the instructions' JSON shape is hand-written prose in
+// context.go -- this test is what stands between an evolving
+// review.schema.json/restdtos regeneration and that hand-written copy
+// silently drifting out of sync, which would misinform every future
+// review agent about a tool call the server would then reject.
+func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("", review.PreFetchedContext{})
+
+	// One representative, schema-valid value straight from the generated
+	// enum constants -- if any of these constants is ever renamed or
+	// removed, this test fails to COMPILE, which is an even stronger
+	// signal than a failing string-containment assertion.
+	fieldsAndEnums := []string{
+		`"riskLevel"`, string(restdtos.PostReviewVerdictRequestRiskLevelLow), string(restdtos.PostReviewVerdictRequestRiskLevelMedium), string(restdtos.PostReviewVerdictRequestRiskLevelHigh),
+		`"premise"`, string(restdtos.PostReviewVerdictRequestPremiseOk), string(restdtos.PostReviewVerdictRequestPremiseQuestionable), string(restdtos.PostReviewVerdictRequestPremiseNotAPr),
+		`"filesChanged"`,
+		`"testsCoverage"`, string(restdtos.PostReviewVerdictRequestTestsCoverageAdequate), string(restdtos.PostReviewVerdictRequestTestsCoverageInsufficient), string(restdtos.PostReviewVerdictRequestTestsCoverageSkipped),
+		`"docsDrift"`, string(restdtos.PostReviewVerdictRequestDocsDriftNone), string(restdtos.PostReviewVerdictRequestDocsDriftFound), string(restdtos.PostReviewVerdictRequestDocsDriftSkipped),
+		`"proposedShippable"`, string(restdtos.PostReviewVerdictRequestProposedShippableAuto), string(restdtos.PostReviewVerdictRequestProposedShippableNeedsHuman), string(restdtos.PostReviewVerdictRequestProposedShippableBlock),
+		`"blastRadius"`,
+		string(restdtos.PostReviewVerdictRequestBlastRadiusElemAuth), string(restdtos.PostReviewVerdictRequestBlastRadiusElemMigrations),
+		string(restdtos.PostReviewVerdictRequestBlastRadiusElemContracts), string(restdtos.PostReviewVerdictRequestBlastRadiusElemSecrets),
+		string(restdtos.PostReviewVerdictRequestBlastRadiusElemInfra), string(restdtos.PostReviewVerdictRequestBlastRadiusElemPublicApi),
+		string(restdtos.PostReviewVerdictRequestBlastRadiusElemDataLayer), string(restdtos.PostReviewVerdictRequestBlastRadiusElemDependencies),
+		`"summary"`,
+	}
+	for _, want := range fieldsAndEnums {
+		if !strings.Contains(got, want) {
+			t.Errorf("verdict-tool instructions do not mention %q (contract field/enum value) -- rendered:\n%s", want, got)
+		}
+	}
+
+	// Also prove a real, fully-populated restdtos.PostReviewVerdictRequest
+	// value round-trips through encoding/json using exactly these field
+	// names -- belt-and-braces against a JSON tag rename that the
+	// string-containment checks above (which do not exercise the real
+	// struct's own tags) would not otherwise catch.
+	example := restdtos.PostReviewVerdictRequest{
+		BlastRadius:       []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
+		DocsDrift:         restdtos.PostReviewVerdictRequestDocsDriftNone,
+		FilesChanged:      1,
+		Premise:           restdtos.PostReviewVerdictRequestPremiseOk,
+		ProposedShippable: restdtos.PostReviewVerdictRequestProposedShippableAuto,
+		RiskLevel:         restdtos.PostReviewVerdictRequestRiskLevelLow,
+		Summary:           "example",
+		TestsCoverage:     restdtos.PostReviewVerdictRequestTestsCoverageAdequate,
+	}
+	raw, err := json.Marshal(example)
+	if err != nil {
+		t.Fatalf("marshal example restdtos.PostReviewVerdictRequest: %v", err)
+	}
+	for _, wantKey := range []string{`"riskLevel"`, `"premise"`, `"filesChanged"`, `"testsCoverage"`, `"docsDrift"`, `"proposedShippable"`, `"blastRadius"`, `"summary"`} {
+		if !strings.Contains(string(raw), wantKey) {
+			t.Errorf("marshaled restdtos.PostReviewVerdictRequest = %s, want it to contain key %q", raw, wantKey)
+		}
 	}
 }

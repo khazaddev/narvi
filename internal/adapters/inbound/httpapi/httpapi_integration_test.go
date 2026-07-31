@@ -305,7 +305,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// outside auth.Middleware entirely -- see scmcredentials.go's own doc
 	// comment.
 	router.Post("/sessions/{sessionID}/scm-credentials",
-		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.users, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
+		httpapi.ScmCredentials(rig.sessions, rig.sandboxes, rig.identities, rig.users, rig.prSessions, rig.botToken, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
 	// snapshot-mint (Step 22, "snapshots & restore") is mounted the SAME
 	// way -- see snapshotmint.go's own doc comment.
 	router.Post("/sessions/{sessionID}/snapshot",

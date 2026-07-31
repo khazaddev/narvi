@@ -298,6 +298,14 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 		return
 	}
 
+	// Step 47 ("server-side verdict", §8.2/§5.2): a review turn's own text
+	// (internal/domain/review.RenderTurnPrompt) carries FIXED placeholder
+	// tokens in place of this turn's real verdict-posting-tool URL/bearer/
+	// gen -- see reviewverdicttoolprompt.go's own top doc comment for why
+	// this is the one place those placeholders can actually be resolved. A
+	// no-op for every non-review turn (no placeholders present).
+	cmd.Text = renderVerdictToolPromptText(cmd.Text, h.cfg.SessionConfig)
+
 	h.group.Go(func() error {
 		sink := func(event ports.AgentEvent) {
 			if event.Critical {

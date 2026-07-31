@@ -380,8 +380,12 @@ func serve() error {
 	// Middleware entirely -- a sandbox-bearer-token-authenticated
 	// endpoint, not a browser-facing one (see that handler's own doc
 	// comment in internal/adapters/inbound/httpapi/scmcredentials.go).
+	// githubPRSessionStore/cfg.GitHubBotToken (Step 47 audit remediation)
+	// are the SAME instances review/verdict below already uses, so a
+	// review session mints the SAME bot credential either way, never the
+	// creator's own personal OAuth token.
 	router.Post("/sessions/{sessionID}/scm-credentials",
-		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, cfg.TokenEncryptionKey, cfg.Timeouts))
+		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, githubPRSessionStore, cfg.GitHubBotToken, cfg.TokenEncryptionKey, cfg.Timeouts))
 
 	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.

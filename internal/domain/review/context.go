@@ -81,6 +81,84 @@ const (
 	stackContentDelimiter = "pr_stack_context"
 )
 
+// VerdictToolURLPlaceholder, VerdictToolBearerPlaceholder, and
+// VerdictToolGenPlaceholder are the fixed tokens RenderTurnPrompt's own
+// verdict-tool-calling instructions (below) carry in place of this turn's
+// REAL POST /sessions/{sessionID}/review/verdict URL, sandbox bearer
+// token, and X-Sandbox-Gen value (reviewverdict.go, Step 47) -- this
+// package (§11: no I/O, no time.Now(), no randomness, zero external
+// imports) runs at TURN-CREATION time, in the control plane, before any
+// sandbox even exists for a brand-new review session, and before ANY
+// respawn (a NEW gen, and per §5.2 a NEW rotated token) of an EXISTING
+// one -- Step 46's own per-PR session-reuse means the SAME persisted turn
+// text built here can later be dispatched to any number of different
+// gens, each with its own distinct token, over that session's lifetime.
+// There is therefore no live secret this package could ever legitimately
+// embed: sandboxes.token_hash is the only thing ever persisted
+// control-plane-side (§5.2 "hashed at rest"), and the plaintext token
+// itself is generated fresh, then discarded from memory, once per
+// spawn/restore/resume (internal/app/sessionactor/dispatch.go's
+// planFreshSpawn/planRestore/planResume).
+//
+// These placeholders are substituted for their real, live, CURRENT-gen
+// values exactly once in the whole system: inside sandbox-agent itself,
+// immediately before a "prompt" command's own Text is handed to OpenCode
+// (cmd/sandbox-agent's renderVerdictToolPromptText) -- the ONE place a
+// specific, about-to-run turn's sessionID/SandboxToken/Gen are all
+// simultaneously and CURRENTLY in scope together (sandbox-agent already
+// holds all three, read from its own NARVI_SESSION_CONFIG at boot, for
+// the sandbox WS handshake and the scm-credentials/snapshot-mint calls it
+// already makes). A prompt with none of these three tokens (every
+// non-review turn -- RenderTurnPrompt is never called to build one, see
+// this file's own two real callers) is left untouched by that
+// substitution, so no wire-contract change (a new sandboxws.Prompt field,
+// §6.1) is needed to tell sandbox-agent "this is a review turn": the
+// placeholders' own presence already is that signal.
+const (
+	VerdictToolURLPlaceholder    = "{{REVIEW_VERDICT_TOOL_URL}}"
+	VerdictToolBearerPlaceholder = "{{REVIEW_VERDICT_TOOL_BEARER}}"
+	VerdictToolGenPlaceholder    = "{{REVIEW_VERDICT_TOOL_GEN}}"
+)
+
+// verdictToolInstructions is RenderTurnPrompt's own fixed, deterministic
+// block instructing the review agent how to post its verdict (§8.2/Step
+// 47, reviewverdict.go's own doc comment: "the review turn's own prompt
+// ... is the natural place to instruct the agent HOW to call this
+// endpoint (URL, bearer token, gen header, JSON shape)"). Trusted,
+// first-party instructional text (unlike the diff/stack blocks above), so
+// it is never delimiter-wrapped as untrusted content -- it is part of
+// what THIS SYSTEM tells the agent to do, exactly like basePrompt itself.
+//
+// The JSON body's own field names and enum values below are hand-kept in
+// sync with contracts/gen/go/restdtos.PostReviewVerdictRequest (this
+// package's own "zero external imports" convention, doc.go, means that
+// generated type cannot be imported here to derive this text instead) --
+// this package's own context_test.go (an external review_test package,
+// free to import restdtos even though this production file cannot)
+// carries a cross-package regression test asserting every field name/enum
+// value named below is still one restdtos.PostReviewVerdictRequest
+// actually accepts, so a schema change that silently drifts from this
+// hand-written copy fails a test instead of silently misinforming every
+// future review agent.
+const verdictToolInstructions = "\n\n" +
+	"When you have finished reviewing, post your verdict by calling this system's own verdict-posting tool below -- a single authenticated HTTP request. Do NOT post an ordinary PR/issue comment yourself, do NOT submit a GitHub pull request review yourself (via `gh`, a direct GitHub API call, or any other means), and do NOT call any GitHub API directly to report your findings: the request below is the ONLY sanctioned way for this review to reach the pull request, and its typed fields -- never free text parsed back out of anything you post -- are the actual verdict of record.\n\n" +
+	"POST " + VerdictToolURLPlaceholder + "\n" +
+	"Authorization: Bearer " + VerdictToolBearerPlaceholder + "\n" +
+	"X-Sandbox-Gen: " + VerdictToolGenPlaceholder + "\n" +
+	"Content-Type: application/json\n\n" +
+	"JSON body (every field required):\n" +
+	"{\n" +
+	"  \"riskLevel\": \"low\" | \"medium\" | \"high\",\n" +
+	"  \"premise\": \"ok\" | \"questionable\" | \"not_a_pr\",\n" +
+	"  \"filesChanged\": <integer, count of files changed>,\n" +
+	"  \"testsCoverage\": \"adequate\" | \"insufficient\" | \"skipped\",\n" +
+	"  \"docsDrift\": \"none\" | \"found\" | \"skipped\",\n" +
+	"  \"proposedShippable\": \"auto\" | \"needs_human\" | \"block\" (your own self-reported assessment; the server independently recomputes the authoritative classification and never trusts this value),\n" +
+	"  \"blastRadius\": [zero or more of \"auth\", \"migrations\", \"contracts\", \"secrets\", \"infra\", \"public_api\", \"data_layer\", \"dependencies\"],\n" +
+	"  \"summary\": \"<your free-text narrative explaining the verdict>\"\n" +
+	"}\n\n" +
+	"A 201 response confirms the verdict was recorded and posted; the server -- never you -- computes the authoritative shippable classification, the formal GitHub review event, and the synced review:*-risk label from these fields."
+
 // RenderTurnPrompt assembles a review turn's final prompt text from
 // basePrompt (the human-authored or deterministically-synthesized command
 // text that triggered this turn -- a mention comment's own body, or a fixed
@@ -114,6 +192,18 @@ const (
 //     (StackContext's own doc comment) -- position/size/ultimate base as
 //     CONTEXT, an explicit sentence that this PR's own diff above is the
 //     only thing to verdict over, never the cumulative stack diff.
+//
+// A FOURTH piece, unconditional and always last: verdictToolInstructions
+// (above), instructing the agent how to post its verdict via Step 47's
+// own verdict-posting tool -- unconditional because both of this
+// function's own real callers (internal/adapters/inbound/github's own
+// handler.go and internal/adapters/inbound/httpapi's own
+// reviewretrigger.go) build a review turn's prompt ONLY by calling this
+// function; there is no OTHER kind of turn this function is ever asked to
+// render text for. The URL/bearer/gen this block names are placeholder
+// tokens (VerdictToolURLPlaceholder et al.), never live secrets -- see
+// their own doc comment for why this package cannot fill them in itself,
+// and where they actually get resolved.
 func RenderTurnPrompt(basePrompt string, ctx PreFetchedContext) string {
 	out := basePrompt
 
@@ -138,6 +228,8 @@ func RenderTurnPrompt(basePrompt string, ctx PreFetchedContext) string {
 		out += "ultimate_base_sha: " + ctx.Stack.UltimateBaseSHA + "\n"
 		out += "</" + stackContentDelimiter + ">"
 	}
+
+	out += verdictToolInstructions
 
 	return out
 }
