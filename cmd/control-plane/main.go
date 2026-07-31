@@ -249,6 +249,12 @@ func serve() error {
 	webhookDeliveryStore := postgres.NewWebhookDeliveryStore(pool)
 	slackThreadSessionStore := postgres.NewSlackThreadSessionStore(pool)
 	githubPRSessionStore := postgres.NewGitHubPRSessionStore(pool)
+	// githubActorLinkNoticeStore (batch fix/deny-unlinked-github-actors)
+	// backs the GitHub webhook ingress's own anti-spam dedupe for the
+	// "please sign in" reply posted to an unlinked commenter's denied
+	// mention (see githubingress.Config.LinkNotices' own doc comment,
+	// below).
+	githubActorLinkNoticeStore := postgres.NewGitHubActorLinkNoticeStore(pool)
 
 	// intentClassifierSvc is Step 36's own real classifier (§8.3, §18):
 	// llm.New resolves cfg.IntentClassifierProvider against this
@@ -501,15 +507,22 @@ func serve() error {
 			// with, never a per-commenter credential.
 			BotToken:     cfg.GitHubBotToken,
 			PullRequests: sourceControl,
-			// Comments (Step 37/38 follow-up fix, Finding 1): posts the
-			// honest plan-awaiting-approval reply back to a PR thread when
-			// coalesce.go's REUSE path declines to enqueue a build turn
-			// because the session's plan is currently awaiting approval.
-			// The SAME *githubapi.Adapter instance as PullRequests/
-			// sourceControl above -- never a second, independently-
-			// constructed copy.
+			// Comments (Step 37/38 follow-up fix, Finding 1; also posts
+			// batch fix/deny-unlinked-github-actors' own "please sign in"
+			// reply): the SAME *githubapi.Adapter instance as
+			// PullRequests/sourceControl above -- never a second,
+			// independently-constructed copy.
 			Comments: sourceControl,
 			Timeouts: cfg.Timeouts,
+			// PublicBaseURL/LinkNotices (batch fix/deny-unlinked-github-
+			// actors): PublicBaseURL is the SAME base identitylink.
+			// BuildMagicLinkURL already uses (appIdentityLinkDeps above),
+			// never a second, independently-configured base. LinkNotices
+			// is a freshly constructed store over the SAME pool every
+			// other store here already shares -- see
+			// githubActorLinkNoticeStore's own construction below.
+			PublicBaseURL: cfg.PublicBaseURL,
+			LinkNotices:   githubActorLinkNoticeStore,
 		},
 	))
 

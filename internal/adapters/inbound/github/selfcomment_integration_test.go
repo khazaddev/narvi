@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
 
 // issueCommentBodyFromCommenter is issueCommentBody's own twin
@@ -128,15 +130,21 @@ func TestGitHubIntegration_SelfComment_GitHubAppBotSuffix_Ignored(t *testing.T) 
 // this file's own regression guard: a genuine human commenter whose login
 // does NOT match BotHandle must still be processed completely normally --
 // proving the filter is scoped to an exact match, never over-broad enough
-// to swallow a real mention.
+// to swallow a real mention. commenterID is a genuinely LINKED account
+// (batch fix/deny-unlinked-github-actors: an unlinked one would now be
+// denied outright, a different property than the self-comment filter this
+// test exists to prove).
 func TestGitHubIntegration_GenuineCommenter_DifferentLogin_StillProcessed(t *testing.T) {
 	ctx := context.Background()
 	rig := newTestRig(t)
 
 	const repoFullName = "acme/genuine-commenter-repo"
 	const prNumber = 708
+	const commenterID = 12345
 
-	body := issueCommentBodyFromCommenter(repoFullName, "genuine-commenter-repo", "https://github.com/acme/genuine-commenter-repo.git", prNumber, "genuine", 12345, "a-real-human")
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMaintainer)
+
+	body := issueCommentBodyFromCommenter(repoFullName, "genuine-commenter-repo", "https://github.com/acme/genuine-commenter-repo.git", prNumber, "genuine", commenterID, "a-real-human")
 	status := postWebhook(t, rig, body, "delivery-genuine-commenter")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)

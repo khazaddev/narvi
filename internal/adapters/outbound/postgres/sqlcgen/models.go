@@ -588,6 +588,13 @@ type Event struct {
 	MessageID string             `json:"message_id"`
 }
 
+type GithubActorLinkNotice struct {
+	RepoFullName string             `json:"repo_full_name"`
+	PrNumber     int32              `json:"pr_number"`
+	CommenterID  int64              `json:"commenter_id"`
+	NotifiedAt   pgtype.Timestamptz `json:"notified_at"`
+}
+
 type GithubPrSession struct {
 	RepoFullName string             `json:"repo_full_name"`
 	PrNumber     int32              `json:"pr_number"`

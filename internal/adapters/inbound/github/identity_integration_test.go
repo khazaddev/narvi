@@ -287,10 +287,17 @@ func TestGitHubIntegration_ReplyOnExistingSessionDeniedForUnownedMember(t *testi
 	const repoFullName = "acme/reuse-deny-repo"
 	const prNumber = 504
 
-	// First mention: unresolved (bot-attributed) commenter, creating the
-	// PR's own review session with no human creator -- mirrors this
-	// package's own existing TestGitHubIntegration_FullHTTPFlow shape.
-	first := issueCommentBody(repoFullName, "reuse-deny-repo", "https://github.com/acme/reuse-deny-repo.git", prNumber, "first-mention")
+	// First mention: a DIFFERENT already-linked maintainer, creating the
+	// PR's own review session -- batch fix/deny-unlinked-github-actors
+	// means an unresolved (bot-attributed) commenter is now denied outright
+	// on the WINNER path too, so this first mention can no longer be
+	// unlinked the way it was before that batch (it would simply never
+	// create the session this test's own REUSE-path denial assertion below
+	// depends on existing at all).
+	const creatorCommenterID = 90001003
+	rig.createLinkedUser(t, creatorCommenterID, sqlcgen.UserRoleMaintainer)
+
+	first := issueCommentBodyWithCommenter(repoFullName, "reuse-deny-repo", "https://github.com/acme/reuse-deny-repo.git", prNumber, "first-mention", creatorCommenterID, "session-creator")
 	firstStatus := rig.post(t, first, "delivery-reuse-deny-first")
 	if firstStatus != http.StatusOK {
 		t.Fatalf("first mention status = %d, want %d", firstStatus, http.StatusOK)

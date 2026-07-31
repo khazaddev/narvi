@@ -1538,6 +1538,36 @@ type Timeouts struct {
 	// ProcessStopGracePeriod's own "not specified; chosen" precedent for a
 	// bounded-but-generous final-teardown wait.
 	OTelShutdownTimeout time.Duration
+
+	// --- Batch fix/deny-unlinked-github-actors addition: bounds the
+	// anti-spam dedupe window for the "please sign in via GitHub OAuth"
+	// reply internal/adapters/inbound/github's own handler.go now posts
+	// when an unlinked commenter's mention is denied. No ordering
+	// relationship with any invariant chain above -- a standalone field,
+	// matching every other standalone addition's own precedent.
+
+	// GitHubActorNoticeTTL bounds how long a
+	// github_actor_link_notices.notified_at row (migrations/
+	// 000043_github_actor_link_notices.up.sql) suppresses a repeat
+	// "please sign in" reply to the SAME still-unlinked commenter on the
+	// SAME PR. A deliberately DISTINCT constant from IdentityLinkPromptTTL
+	// above, even though both are currently 24h and both gate a
+	// GitHub-adjacent "tell the user to link their account" notice: that
+	// field bounds how long a Slack/Linear magic-LINK stays clickable (an
+	// auto-linking mechanism GitHub has no equivalent of, see
+	// actorauthz.AuthorizeLinkedActor's own doc comment); this field
+	// bounds how long this package waits before repeating an ORDINARY
+	// comment reply that carries no bearer secret at all. Collapsing the
+	// two into one shared constant would make a future, independent
+	// change to either policy (e.g. shortening the magic-link expiry for
+	// security reasons) silently also retune this unrelated anti-spam
+	// window. Not specified in the plan (this fix postdates it); chosen
+	// as 24h, matching IdentityLinkPromptTTL's own "not specified beyond
+	// short-lived" reasoning -- long enough that a repeat mention within
+	// the same working day doesn't re-spam the PR thread, short enough
+	// that a genuinely still-unlinked commenter is reminded again on
+	// their next active day rather than only once, ever.
+	GitHubActorNoticeTTL time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1670,6 +1700,8 @@ func DefaultTimeouts() Timeouts {
 		ImageRefreshClaimStaleAfter:  30 * time.Minute, // audit-remediation batch B2; not specified, chosen -- matches ImageBuildBackoffMax's own exact value/reasoning (see field doc comment)
 
 		OTelShutdownTimeout: 10 * time.Second, // audit-remediation batch B7; not specified, chosen -- matches ShutdownGracePeriod/ProcessStopGracePeriod's own precedent
+
+		GitHubActorNoticeTTL: 24 * time.Hour, // batch fix/deny-unlinked-github-actors; not specified, chosen -- see field doc comment for why this is a DISTINCT constant from IdentityLinkPromptTTL despite sharing its value
 	}
 }
 
