@@ -658,7 +658,7 @@ func serve() error {
 		// sourceControl/cfg.GitHubBotToken are the SAME instances the
 		// GitHub webhook ingress wiring above already constructs, never a
 		// second, independently-constructed copy.
-		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, participantStore, auditLogStore, registry, githubPRSessionStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts))
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts))
 	})
 
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see

@@ -459,7 +459,7 @@ func TestParsePullRequestLabeled(t *testing.T) {
 				"pull_request": {
 					"number": 7,
 					"head": {"ref": "feature-x", "repo": {"name": "widgets", "clone_url": "https://github.com/contributor/widgets.git"}},
-					"stack": {"size": 2, "position": 2, "base": {"ref": "main", "sha": "deadbeef"}}
+					"stack": {"size": 3, "position": 2, "base": {"ref": "main", "sha": "deadbeef"}}
 				},
 				"repository": {"full_name": "acme/widgets"}
 			}`,
@@ -469,7 +469,12 @@ func TestParsePullRequestLabeled(t *testing.T) {
 				if m.Stack == nil {
 					t.Fatal("Stack = nil, want non-nil when the payload embeds one")
 				}
-				want := review.StackContext{Position: 2, Size: 2, UltimateBaseRef: "main", UltimateBaseSHA: "deadbeef"}
+				// Position/Size deliberately distinguishable (2 vs 3, not an
+				// equal-valued pair) -- a confirmed audit finding noted that a
+				// Position/Size field swap in parsePullRequestLabeled's own
+				// mapping would pass undetected against a fixture where both
+				// fields carried the same value.
+				want := review.StackContext{Position: 2, Size: 3, UltimateBaseRef: "main", UltimateBaseSHA: "deadbeef"}
 				if *m.Stack != want {
 					t.Errorf("Stack = %+v, want %+v", *m.Stack, want)
 				}

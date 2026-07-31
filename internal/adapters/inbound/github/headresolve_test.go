@@ -169,7 +169,12 @@ func TestResolveIssueCommentHead_StackThreadedThrough(t *testing.T) {
 	resolver := &fakePullRequestResolver{
 		pr: githubapi.PullRequest{
 			HeadRef: "feature-x",
-			Stack:   &githubapi.StackInfo{Position: 2, Size: 2, BaseRef: "main", BaseSHA: "deadbeef"},
+			// Position/Size deliberately distinguishable (2 vs 3, not an
+			// equal-valued pair) -- a confirmed audit finding noted that a
+			// Position/Size field swap in this function's own mapping would
+			// pass undetected against a fixture where both fields carried
+			// the same value.
+			Stack: &githubapi.StackInfo{Position: 2, Size: 3, BaseRef: "main", BaseSHA: "deadbeef"},
 		},
 	}
 
@@ -181,7 +186,7 @@ func TestResolveIssueCommentHead_StackThreadedThrough(t *testing.T) {
 	if got.Stack == nil {
 		t.Fatal("Stack = nil, want non-nil when GetPullRequest reports one")
 	}
-	want := review.StackContext{Position: 2, Size: 2, UltimateBaseRef: "main", UltimateBaseSHA: "deadbeef"}
+	want := review.StackContext{Position: 2, Size: 3, UltimateBaseRef: "main", UltimateBaseSHA: "deadbeef"}
 	if *got.Stack != want {
 		t.Errorf("Stack = %+v, want %+v", *got.Stack, want)
 	}

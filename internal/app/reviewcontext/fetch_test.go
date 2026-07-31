@@ -20,25 +20,66 @@ func discardLogger() *slog.Logger {
 // fakeFetcher is a test-only reviewcontext.Fetcher -- no real HTTP round
 // trip, exactly the point of that interface being narrow and locally
 // defined (fetch.go's own doc comment).
+//
+// diffOwner/diffRepo/diffNumber/diffToken and prOwner/prRepo/prNumber/
+// prToken (audit fix, test-coverage finding) record the exact arguments
+// each method was actually called with -- every test below now asserts
+// against these, closing a confirmed gap where a swapped-argument
+// regression in fetch.go's own two call sites (e.g. owner/repo transposed)
+// would previously pass every test in this file undetected, since neither
+// method used to consult its own arguments at all.
 type fakeFetcher struct {
 	diff          string
 	diffTruncated bool
 	diffErr       error
 	diffCalls     int
+	diffOwner     string
+	diffRepo      string
+	diffNumber    int32
+	diffToken     string
 
-	pr      githubapi.PullRequest
-	prErr   error
-	prCalls int
+	pr       githubapi.PullRequest
+	prErr    error
+	prCalls  int
+	prOwner  string
+	prRepo   string
+	prNumber int32
+	prToken  string
 }
 
-func (f *fakeFetcher) GetPullRequestDiff(_ context.Context, _, _ string, _ int32, _ string) (string, bool, error) {
+func (f *fakeFetcher) GetPullRequestDiff(_ context.Context, owner, repo string, number int32, token string) (string, bool, error) {
 	f.diffCalls++
+	f.diffOwner, f.diffRepo, f.diffNumber, f.diffToken = owner, repo, number, token
 	return f.diff, f.diffTruncated, f.diffErr
 }
 
-func (f *fakeFetcher) GetPullRequest(_ context.Context, _, _ string, _ int32, _ string) (githubapi.PullRequest, error) {
+func (f *fakeFetcher) GetPullRequest(_ context.Context, owner, repo string, number int32, token string) (githubapi.PullRequest, error) {
 	f.prCalls++
+	f.prOwner, f.prRepo, f.prNumber, f.prToken = owner, repo, number, token
 	return f.pr, f.prErr
+}
+
+// assertDiffArgs/assertPRArgs (audit fix, test-coverage finding) check the
+// EXACT (owner, repo, number, token) each fake method was invoked with --
+// owner and repo are deliberately distinguishable strings in every test
+// below ("acme" vs "widgets"), so a caller-side owner/repo transposition
+// in fetch.go's own two call sites would fail these assertions, closing
+// the confirmed blind spot where neither fake used to consult its own
+// arguments at all.
+func assertDiffArgs(t *testing.T, f *fakeFetcher, wantOwner, wantRepo string, wantNumber int32, wantToken string) {
+	t.Helper()
+	if f.diffOwner != wantOwner || f.diffRepo != wantRepo || f.diffNumber != wantNumber || f.diffToken != wantToken {
+		t.Errorf("GetPullRequestDiff args = (%q, %q, %d, %q), want (%q, %q, %d, %q)",
+			f.diffOwner, f.diffRepo, f.diffNumber, f.diffToken, wantOwner, wantRepo, wantNumber, wantToken)
+	}
+}
+
+func assertPRArgs(t *testing.T, f *fakeFetcher, wantOwner, wantRepo string, wantNumber int32, wantToken string) {
+	t.Helper()
+	if f.prOwner != wantOwner || f.prRepo != wantRepo || f.prNumber != wantNumber || f.prToken != wantToken {
+		t.Errorf("GetPullRequest args = (%q, %q, %d, %q), want (%q, %q, %d, %q)",
+			f.prOwner, f.prRepo, f.prNumber, f.prToken, wantOwner, wantRepo, wantNumber, wantToken)
+	}
 }
 
 // TestFetch_DiffSuccess_NoKnownStack_NoStackOnPR proves the ordinary case:
@@ -66,6 +107,8 @@ func TestFetch_DiffSuccess_NoKnownStack_NoStackOnPR(t *testing.T) {
 	if fetcher.prCalls != 1 {
 		t.Errorf("prCalls = %d, want 1 (no knownStack supplied, so Fetch must look it up)", fetcher.prCalls)
 	}
+	assertDiffArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
+	assertPRArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
 }
 
 // TestFetch_KnownStackShortCircuitsGetPullRequest proves a caller-supplied
@@ -86,6 +129,7 @@ func TestFetch_KnownStackShortCircuitsGetPullRequest(t *testing.T) {
 	if fetcher.prCalls != 0 {
 		t.Errorf("prCalls = %d, want 0 (knownStack supplied, GetPullRequest must never be called)", fetcher.prCalls)
 	}
+	assertDiffArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
 }
 
 // TestFetch_StackPresentOnPR proves a fresh GetPullRequest call reporting a
@@ -110,6 +154,8 @@ func TestFetch_StackPresentOnPR(t *testing.T) {
 	if *got.Stack != want {
 		t.Errorf("Stack = %+v, want %+v", *got.Stack, want)
 	}
+	assertDiffArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
+	assertPRArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
 }
 
 // TestFetch_DiffFetchFails_DegradesGracefully proves a diff-fetch failure
@@ -129,6 +175,7 @@ func TestFetch_DiffFetchFails_DegradesGracefully(t *testing.T) {
 	if got.DiffTruncated {
 		t.Error("DiffTruncated = true, want false on a fetch failure (the diffTruncated=true fake field must be ignored once diffErr fired)")
 	}
+	assertDiffArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
 }
 
 // TestFetch_StackLookupFails_DegradesGracefully proves a GetPullRequest
@@ -147,6 +194,8 @@ func TestFetch_StackLookupFails_DegradesGracefully(t *testing.T) {
 	if got.Stack != nil {
 		t.Errorf("Stack = %+v, want nil on a lookup failure", got.Stack)
 	}
+	assertDiffArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
+	assertPRArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
 }
 
 // TestFetch_DiffTruncated proves DiffTruncated is carried through verbatim
@@ -164,4 +213,5 @@ func TestFetch_DiffTruncated(t *testing.T) {
 	if got.Diff != "partial diff..." {
 		t.Errorf("Diff = %q, want %q", got.Diff, "partial diff...")
 	}
+	assertDiffArgs(t, fetcher, "acme", "widgets", 42, "gho_bottoken")
 }

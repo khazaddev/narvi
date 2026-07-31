@@ -457,8 +457,13 @@ func TestGetPullRequest_StackPresent(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"number": 42,
 			"head":   map[string]any{"ref": "feature-x", "repo": nil},
+			// Position/Size deliberately distinguishable (2 vs 3, not an
+			// equal-valued pair) -- a confirmed audit finding noted that a
+			// Position/Size field swap in GetPullRequest's own mapping would
+			// pass undetected against a fixture where both fields carried
+			// the same value.
 			"stack": map[string]any{
-				"size":     2,
+				"size":     3,
 				"position": 2,
 				"base": map[string]any{
 					"ref": "main",
@@ -479,8 +484,8 @@ func TestGetPullRequest_StackPresent(t *testing.T) {
 	if pr.Stack == nil {
 		t.Fatal("PullRequest.Stack = nil, want non-nil when GitHub reports a stack object")
 	}
-	if pr.Stack.Size != 2 {
-		t.Errorf("Stack.Size = %d, want 2", pr.Stack.Size)
+	if pr.Stack.Size != 3 {
+		t.Errorf("Stack.Size = %d, want 3", pr.Stack.Size)
 	}
 	if pr.Stack.Position != 2 {
 		t.Errorf("Stack.Position = %d, want 2", pr.Stack.Position)

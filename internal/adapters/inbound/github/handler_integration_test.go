@@ -372,6 +372,14 @@ func pullRequestLabeledBody(repoFullName, cloneRepoName, cloneURL string, prNumb
 // GetPullRequestDiff so one fake can back cfg.PullRequests AND
 // cfg.DiffFetcher identically in a test that wires both to the same
 // instance.
+//
+// diffOwner/diffRepo/diffNumber/diffToken (audit fix, test-coverage
+// finding) record GetPullRequestDiff's own last call args -- asserted
+// against in TestGitHubIntegration_InlineDiffAndStackPreFetched_
+// FoldedIntoTurnPrompt below, closing a confirmed gap where this fake used
+// to ignore its own arguments entirely, so an owner/repo swap in
+// reviewcontext.Fetch's own call site would have passed every integration
+// test in this package undetected.
 type fakeReviewContextFetcher struct {
 	pr    githubapi.PullRequest
 	prErr error
@@ -379,13 +387,19 @@ type fakeReviewContextFetcher struct {
 	diff          string
 	diffTruncated bool
 	diffErr       error
+
+	diffOwner  string
+	diffRepo   string
+	diffNumber int32
+	diffToken  string
 }
 
 func (f *fakeReviewContextFetcher) GetPullRequest(_ context.Context, _, _ string, _ int32, _ string) (githubapi.PullRequest, error) {
 	return f.pr, f.prErr
 }
 
-func (f *fakeReviewContextFetcher) GetPullRequestDiff(_ context.Context, _, _ string, _ int32, _ string) (string, bool, error) {
+func (f *fakeReviewContextFetcher) GetPullRequestDiff(_ context.Context, owner, repo string, number int32, token string) (string, bool, error) {
+	f.diffOwner, f.diffRepo, f.diffNumber, f.diffToken = owner, repo, number, token
 	return f.diff, f.diffTruncated, f.diffErr
 }
 
@@ -524,6 +538,97 @@ func TestGitHubIntegration_LabelRetrigger_ReusesExistingSession(t *testing.T) {
 	}
 }
 
+// TestGitHubIntegration_LabelRetrigger_MemberDenied_EvenAsSessionCreator is
+// this package's own regression test for a confirmed privilege-escalation
+// audit finding: the label-retrigger lane's REUSE branch (coalesce.go) used
+// to authorize identically to an ordinary second @mention
+// (authz.ActionPromptSession, member allowed on own/joined), which let a
+// plain member re-trigger a review via the configured label on a PR whose
+// review session THEY THEMSELVES created via an earlier ordinary mention.
+// §13.3 row 5 ("re-trigger reviews") is admin/maintainer only with no
+// member carve-out -- a label re-trigger on an already-tracked PR must now
+// be denied for a member, even the session's own creator, unlike an
+// ordinary @mention on that same session (see the next test).
+func TestGitHubIntegration_LabelRetrigger_MemberDenied_EvenAsSessionCreator(t *testing.T) {
+	ctx := context.Background()
+	rig := newTestRig(t, func(cfg *githubingress.Config) {
+		cfg.ReReviewLabel = "run-review"
+	})
+
+	const repoFullName = "acme/label-member-denied-repo"
+	const cloneURL = "https://github.com/acme/label-member-denied-repo.git"
+	const prNumber = 707
+	const commenterID = 80000707
+
+	// A plain member (NOT maintainer/admin) -- unlike every other test in
+	// this file, which deliberately uses a maintainer to isolate the
+	// property under test elsewhere.
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMember)
+
+	first := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "label-member-denied-repo", cloneURL, prNumber, "first-mention", commenterID, "member-user"), "delivery-label-member-denied-1")
+	if first != http.StatusOK {
+		t.Fatalf("first (mention) delivery status = %d, want %d (a member may always CREATE a session, §13.3 row 2)", first, http.StatusOK)
+	}
+
+	labelBody := pullRequestLabeledBody(repoFullName, "label-member-denied-repo", cloneURL, prNumber, "run-review", commenterID, "member-user")
+	second := postWebhookEventType(t, rig, labelBody, "delivery-label-member-denied-2", "pull_request")
+	if second != http.StatusOK {
+		t.Fatalf("second (label retrigger) delivery status = %d, want %d (denied-but-acked, mirroring ErrActorNotAuthorized's own linked-but-denied handling)", second, http.StatusOK)
+	}
+
+	var sessionID string
+	if err := rig.pool.QueryRow(ctx, `SELECT id::text FROM sessions WHERE spawn_source = 'github'`).Scan(&sessionID); err != nil {
+		t.Fatalf("query session id: %v", err)
+	}
+	var turnCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM turns WHERE session_id = $1`, sessionID).Scan(&turnCount); err != nil {
+		t.Fatalf("count turns: %v", err)
+	}
+	if turnCount != 1 {
+		t.Errorf("turn count = %d, want exactly 1 (only the first mention's own turn -- the label retrigger must be DENIED for a member, even the session's own creator)", turnCount)
+	}
+}
+
+// TestGitHubIntegration_OrdinaryMention_MemberAllowedOnOwnSession proves
+// the fix above does not overreach: an ORDINARY second @mention (not a
+// label retrigger) on a PR whose review session a member themselves
+// created is still authz.ActionPromptSession, member-allowed-on-own/joined
+// -- exactly unchanged from before this fix. Only the label-retrigger lane
+// specifically now requires admin/maintainer.
+func TestGitHubIntegration_OrdinaryMention_MemberAllowedOnOwnSession(t *testing.T) {
+	ctx := context.Background()
+	rig := newTestRig(t)
+
+	const repoFullName = "acme/member-ordinary-mention-repo"
+	const cloneURL = "https://github.com/acme/member-ordinary-mention-repo.git"
+	const prNumber = 808
+	const commenterID = 80000808
+
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMember)
+
+	first := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "member-ordinary-mention-repo", cloneURL, prNumber, "first-mention", commenterID, "member-user"), "delivery-member-ordinary-1")
+	if first != http.StatusOK {
+		t.Fatalf("first delivery status = %d, want %d", first, http.StatusOK)
+	}
+
+	second := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "member-ordinary-mention-repo", cloneURL, prNumber, "second-mention", commenterID, "member-user"), "delivery-member-ordinary-2")
+	if second != http.StatusOK {
+		t.Fatalf("second delivery status = %d, want %d", second, http.StatusOK)
+	}
+
+	var sessionID string
+	if err := rig.pool.QueryRow(ctx, `SELECT id::text FROM sessions WHERE spawn_source = 'github'`).Scan(&sessionID); err != nil {
+		t.Fatalf("query session id: %v", err)
+	}
+	var turnCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM turns WHERE session_id = $1`, sessionID).Scan(&turnCount); err != nil {
+		t.Fatalf("count turns: %v", err)
+	}
+	if turnCount != 2 {
+		t.Errorf("turn count = %d, want exactly 2 (an ordinary second @mention by the session's own creator must still succeed, unchanged)", turnCount)
+	}
+}
+
 // TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt
 // is Step 46's ("review sessions", §8.2/§17.6) own end-to-end proof that
 // the pre-fetched diff AND GitHub-native stack context are actually folded
@@ -569,6 +674,17 @@ func TestGitHubIntegration_InlineDiffAndStackPreFetched_FoldedIntoTurnPrompt(t *
 	}
 	if !strings.Contains(prompt, "<pr_stack_context>") || !strings.Contains(prompt, "position: 1 of 2") || !strings.Contains(prompt, "main") || !strings.Contains(prompt, "cafebabe") {
 		t.Errorf("prompt = %q, want it to contain the pre-fetched stack context block", prompt)
+	}
+
+	// Audit fix (test-coverage finding): prove reviewcontext.Fetch was
+	// actually called with THIS mention's own owner/repo/number/token --
+	// owner ("acme") and repo ("prefetch-repo") are deliberately
+	// distinguishable strings, so a swapped-argument regression at either
+	// of fetch.go's own call sites, or at this handler's own
+	// reposource.SplitFullName + Fetch call, would fail this assertion.
+	if fetcher.diffOwner != "acme" || fetcher.diffRepo != "prefetch-repo" || fetcher.diffNumber != 909 || fetcher.diffToken != "test-bot-token" {
+		t.Errorf("GetPullRequestDiff args = (%q, %q, %d, %q), want (%q, %q, %d, %q)",
+			fetcher.diffOwner, fetcher.diffRepo, fetcher.diffNumber, fetcher.diffToken, "acme", "prefetch-repo", 909, "test-bot-token")
 	}
 }
 

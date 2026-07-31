@@ -86,6 +86,21 @@ type mention struct {
 	CommenterID    int64
 	CommenterLogin string
 
+	// IsLabelRetrigger (audit fix, §13.3 row 5) reports whether THIS event
+	// is Step 46's own manual re-trigger-via-LABEL lane
+	// (parsePullRequestLabeled below) rather than an ordinary @mention
+	// comment (parseIssueComment/parsePullRequestReviewComment). coalesce.go's
+	// own REUSE branch consults this to choose the right authz gate: an
+	// ordinary second @mention on an already-tracked PR is just prompting
+	// the existing review session (authz.ActionPromptSession, member
+	// allowed on own/joined), but a label-triggered re-trigger on that SAME
+	// already-tracked PR is §13.3 row 5's "re-trigger reviews"
+	// (authz.ActionRetriggerReview, admin/maintainer only, no member
+	// carve-out) -- a DIFFERENT, stricter action, even though both reach
+	// the identical REUSE code path. false for every event type except a
+	// genuine label re-trigger.
+	IsLabelRetrigger bool
+
 	// Stack (Step 46, "review sessions", §17.6's amendment) is non-nil
 	// exactly when this event's own webhook payload directly embeds
 	// GitHub's own stack object -- today, only ever true for
@@ -394,12 +409,13 @@ func parsePullRequestLabeled(body []byte, reReviewLabel string) (mention, bool, 
 
 	headBranch := p.PullRequest.Head.Ref
 	m := mention{
-		RepoFullName:   p.Repository.FullName, // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
-		PRNumber:       p.PullRequest.Number,
-		HeadBranch:     &headBranch,
-		CommentBody:    labelRetriggerPromptText,
-		CommenterID:    p.Sender.ID,
-		CommenterLogin: p.Sender.Login,
+		RepoFullName:     p.Repository.FullName, // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
+		PRNumber:         p.PullRequest.Number,
+		HeadBranch:       &headBranch,
+		CommentBody:      labelRetriggerPromptText,
+		CommenterID:      p.Sender.ID,
+		CommenterLogin:   p.Sender.Login,
+		IsLabelRetrigger: true,
 	}
 	if p.PullRequest.Head.Repo != nil {
 		m.RepoName = p.PullRequest.Head.Repo.Name // head repo -- may be a fork; the repo to actually clone.

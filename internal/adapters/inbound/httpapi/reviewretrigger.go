@@ -60,10 +60,27 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // 404 if sessionID doesn't exist; 400 if it exists but was never created
 // via a GitHub PR mention (github_pr_sessions has no reverse row for it --
 // this action is meaningless for a session with no PR to review); 403 if
-// the authenticated caller fails the SAME ActionPromptSession check
-// CreateTurn's own REST endpoint already applies (turn.go); otherwise 201
-// with the newly-queued turn, exactly like CreateTurn's own response shape.
-func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
+// the authenticated caller fails the authz.ActionRetriggerReview check
+// (§13.3 row 5: "edit review verdicts; re-trigger reviews; auto-approval
+// eligibility config" -- admin/maintainer only, no member own/joined
+// carve-out, unlike CreateTurn's own ActionPromptSession gate); otherwise
+// 201 with the newly-queued turn, exactly like CreateTurn's own response
+// shape.
+//
+// Audit fix: this endpoint previously authorized against
+// authz.ActionPromptSession (the SAME own/joined-aware check CreateTurn's
+// REST endpoint applies), which let a plain member re-trigger a review on
+// any session they created or joined -- a privilege escalation against
+// §13.3's own RBAC matrix, which reserves "re-trigger reviews" for
+// admin/maintainer with no member carve-out at all (unlike row 2's
+// ordinary prompt/create carve-out). ActionRetriggerReview has no
+// allowIfOwned entry (domain/authz/authorize.go), so ownership/
+// participation is never consulted here any more -- ownedOrJoined is no
+// longer computed at all (it would be silently ignored by Authorize for
+// this Action regardless, per Resource's own doc comment on fields an
+// Action doesn't consult), avoiding a wasted Postgres participants read on
+// every call.
+func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -73,17 +90,18 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		r = r.WithContext(ctx)
 		logger := platform.Logger(ctx)
 
-		// Mirrors CreateTurn's own identical authorization sequencing
-		// (turn.go) verbatim: fetch (404), compute ownedOrJoined, then the
-		// SAME ActionPromptSession check -- a manual re-review is, at the
-		// authorization layer, just another turn on an existing session.
+		// Mirrors CreateTurn's own "404 before 403" sequencing (turn.go):
+		// fetch the session first so a caller never learns "you can't
+		// retrigger this" about a session that doesn't exist at all, THEN
+		// render the authz verdict -- but the verdict itself is
+		// authz.ActionRetriggerReview, admin/maintainer only (§13.3 row 5),
+		// never CreateTurn's own own/joined-aware ActionPromptSession.
 		actorUserID, ok := authenticatedUserID(w, r)
 		if !ok {
 			return
 		}
 
-		sessionRow, err := sessions.Get(ctx, sessionID)
-		if err != nil {
+		if _, err := sessions.Get(ctx, sessionID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				writeError(w, http.StatusNotFound, "session not found")
 				return
@@ -93,17 +111,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 			return
 		}
 
-		ownedOrJoined := sessionRow.CreatedBy.Valid && sessionRow.CreatedBy == actorUserID
-		if !ownedOrJoined {
-			exists, err := participants.Exists(ctx, sessionRow.ID, actorUserID)
-			if err != nil {
-				logger.Error("httpapi: check participant for authorization failed", "error", err)
-				writeError(w, http.StatusInternalServerError, "internal error")
-				return
-			}
-			ownedOrJoined = exists
-		}
-		if !authorize(w, r, authz.ActionPromptSession, authz.Resource{OwnedOrJoined: ownedOrJoined}) {
+		if !authorize(w, r, authz.ActionRetriggerReview, authz.Resource{}) {
 			return
 		}
 

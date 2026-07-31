@@ -307,6 +307,17 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			cancel()
 		}
 
+		// mentionText (audit fix, §5.2/§18.5) is the mention's own ORIGINAL,
+		// un-enriched comment/label text -- captured BEFORE the pre-fetched
+		// diff/stack context below is folded into m.CommentBody, and passed
+		// through to coalescer.CreateOrJoin as its own, separate classifyText
+		// argument. Without this, Step 36's own intent classifier call
+		// (coalesce.go, WINNER path) would classify the FULL diff-enriched
+		// turn prompt instead of just the human's own words the moment a
+		// diff fetcher is wired -- see CreateOrJoin's own doc comment on its
+		// classifyText parameter for the full "why".
+		mentionText := m.CommentBody
+
 		// Step 46 ("review sessions", §8.2): fold this PR's own inline
 		// pre-fetched diff (and, when present, its GitHub-native stack
 		// context, §17.6) into the turn's own prompt text -- BEFORE
@@ -378,7 +389,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor)
+		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor, m.IsLabelRetrigger, mentionText)
 		if err != nil {
 			if errors.Is(err, ErrActorNotAuthorized) {
 				// ErrActorNotAuthorized fires for TWO distinct reasons
