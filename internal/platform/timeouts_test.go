@@ -398,6 +398,36 @@ func TestDefaultTimeouts_Step44StandaloneField(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_OpenCodeTransientRetryBackoffStandaloneField proves
+// this Step's own ("OpenCode adapter: typed transient-error retry")
+// addition -- OpenCodeTransientRetryBackoff -- ships with a sensible,
+// non-zero default, is deliberately much shorter than
+// OpenCodeSummarizeTimeout (a genuinely different kind of duration -- a
+// short, deliberately-chosen pause this adapter itself inserts, not a
+// bound on how long an external HTTP call is allowed to take -- see this
+// field's own doc comment), and does not disturb either invariant chain.
+func TestDefaultTimeouts_OpenCodeTransientRetryBackoffStandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.OpenCodeTransientRetryBackoff <= 0 {
+		t.Errorf("OpenCodeTransientRetryBackoff = %v, want > 0", to.OpenCodeTransientRetryBackoff)
+	}
+	if to.OpenCodeTransientRetryBackoff != 2*time.Second {
+		t.Errorf("OpenCodeTransientRetryBackoff = %v, want %v", to.OpenCodeTransientRetryBackoff, 2*time.Second)
+	}
+	if to.OpenCodeTransientRetryBackoff >= to.OpenCodeSummarizeTimeout {
+		t.Errorf("OpenCodeTransientRetryBackoff = %v, want strictly less than OpenCodeSummarizeTimeout = %v "+
+			"(a deliberately short retry pause, not a bound on a slow HTTP call)",
+			to.OpenCodeTransientRetryBackoff, to.OpenCodeSummarizeTimeout)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (this field must not disturb either invariant chain)", err)
+	}
+}
+
 // TestDefaultTimeouts_InboundHygieneStandaloneFields proves the
 // audit-remediation (inbound-hygiene lens, WS/REST hygiene batch)
 // standalone additions (ClientWSPingInterval, ClientFetchHistoryMinInterval)

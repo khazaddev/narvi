@@ -96,8 +96,38 @@ type turnState struct {
 	// reset) guarding against a SECOND compaction attempt if the retried
 	// prompt ALSO overflows — at most one retry per turn (§7.2 point 3's
 	// own infinite-loop guard).
+	//
+	// WIDENED by this Step ("typed transient-error retry for the OpenCode
+	// adapter") to also guard a transient-APIError retry — deliberately
+	// the SAME shared latch, not a second parallel one: a turn gets AT MOST
+	// ONE recovery attempt per turn, of EITHER kind (see
+	// finalizeOrRecoverFromOverflow's own doc comment, adapter.go, for why
+	// sharing is correct here). attemptedKind below records WHICH kind that
+	// one shot was actually spent on.
 	compacting          bool
 	compactionAttempted bool
+
+	// attemptedKind records WHICH kind of recovery (recoveryKindCompaction
+	// or recoveryKindTransientAPI) this turn's own at-most-one recovery
+	// attempt was spent on — set ONLY by resolveOverflowAction below, in the
+	// EXACT SAME ts.mu-guarded critical section that sets
+	// compactionAttempted/compacting to true (never as a separate,
+	// after-the-fact write: a version of this that set it via a second,
+	// independently-locked call site AFTER resolveOverflowAction already
+	// returned would reopen exactly the "two separately-locked critical
+	// sections" TOCTOU class §7.2 Finding 2/this method's own doc comment
+	// already closed once — a concurrent SECOND caller landing on
+	// overflowActionAlreadyAttempted could then read attemptedKind's own
+	// zero value before the WINNING caller ever got scheduled to set it).
+	// Exists so the "already attempted" branch (finalizeOrRecoverFromOverflow,
+	// adapter.go) can describe, honestly, which kind of retry this turn
+	// already spent its one shot on, even when the CURRENT (second) failure
+	// is of the OTHER kind — e.g. a turn whose first-time ContextOverflowError
+	// already consumed the shared latch, whose retried prompt then hits a
+	// transient APIError, must never be described as "a transient-error
+	// retry was already attempted" when the retry this turn actually got was
+	// a compaction one.
+	attemptedKind recoveryKind
 
 	// stopRequested is set by Adapter.Stop (adapter.go) the moment a user
 	// Stop is observed for this exact turn's own OpenCode session — a
@@ -330,6 +360,32 @@ func (ts *turnState) tryBeginCompactionRetry() bool {
 	return true
 }
 
+// recoveryKind distinguishes WHICH of this turn's own at-most-one recovery
+// attempts (compacting/compactionAttempted/attemptedKind above) is being
+// claimed or was already spent — shared guard state across both kinds (this
+// Step: "typed transient-error retry for the OpenCode adapter" widens §7.2's
+// original compaction-only guard to also cover a transient APIError), but
+// the concrete recovery action taken (Adapter.attemptCompactionRetry vs.
+// Adapter.attemptTransientRetry, adapter.go) differs by kind: a
+// ContextOverflowError forces a compaction before re-dispatching; a
+// transient APIError re-dispatches directly, after a bounded backoff, with
+// no compaction step at all.
+type recoveryKind int
+
+const (
+	// recoveryKindNone means no recovery is applicable at all (the derived
+	// outcome is neither a ContextOverflowError nor a transient APIError),
+	// or (attemptedRecoveryKind's own zero value) no recovery has ever been
+	// claimed for this turn yet.
+	recoveryKindNone recoveryKind = iota
+	// recoveryKindCompaction is §7.2's original context-overflow recovery:
+	// forceCompaction, then re-dispatch.
+	recoveryKindCompaction
+	// recoveryKindTransientAPI is this Step's own transient-APIError
+	// recovery: a bounded backoff wait, then re-dispatch — no compaction.
+	recoveryKindTransientAPI
+)
+
 // overflowAction is the result of resolveOverflowAction below — the single
 // decision Adapter.finalizeOrRecoverFromOverflow (adapter.go) acts on,
 // whichever of its two callers (the live SSE dispatch path, or
@@ -348,16 +404,21 @@ const (
 	// first-time ContextOverflowError eligible for a retry — finalize with
 	// it exactly as derived, unchanged behavior.
 	overflowActionFinalizeDirect
-	// overflowActionAlreadyAttempted means the derived outcome IS again a
-	// ContextOverflowError, but a compaction retry was already fully
-	// attempted for this turn (and, per the checks above, is not live
-	// right now and nothing happened since snapshotTime) — finalize with
-	// an enriched reason instead of launching a second attempt.
+	// overflowActionAlreadyAttempted means the derived outcome IS again
+	// eligible for recovery (either kind), but a recovery retry was already
+	// fully attempted for this turn (and, per the checks above, is not live
+	// right now and nothing happened since snapshotTime) — finalize with an
+	// enriched reason instead of launching a second attempt. The caller
+	// reads ts.attemptedRecoveryKind() to know WHICH kind that was, so the
+	// enriched reason describes the retry this turn actually got, not
+	// necessarily the kind of the CURRENT (second) failure.
 	overflowActionAlreadyAttempted
 	// overflowActionBeginRetry means THIS call atomically won the retry:
-	// ts.compactionAttempted/ts.compacting are now both true, and the
-	// caller must launch attemptCompactionRetry on its own tracked
-	// goroutine.
+	// ts.compactionAttempted/ts.compacting are now both true, ts.attemptedKind
+	// now records which kind (recoveryKindCompaction/recoveryKindTransientAPI)
+	// was claimed, and the caller must launch the matching recovery
+	// function (attemptCompactionRetry or attemptTransientRetry) on its own
+	// tracked goroutine.
 	overflowActionBeginRetry
 )
 
@@ -403,18 +464,25 @@ const (
 // NEITHER matters any more: only the state AT THE INSTANT of this single
 // locked check governs the outcome now.
 //
-// isOverflow is whether the caller's own already-derived outcome is a
-// ContextOverflowError — a pure computation over already-fetched data
-// (isContextOverflowError, outcome.go), safe to perform before this call
+// kind is recoveryKindNone when the caller's own already-derived outcome is
+// eligible for neither recovery kind, or the specific kind
+// (recoveryKindCompaction/recoveryKindTransientAPI) it computed via
+// isContextOverflowError/isTransientAPIError (outcome.go) — a pure
+// computation over already-fetched data, safe to perform before this call
 // since it never touches ts.
-func (ts *turnState) resolveOverflowAction(snapshotTime time.Time, isOverflow bool) overflowAction {
+//
+// On overflowActionBeginRetry, kind is ALSO recorded into ts.attemptedKind
+// in this SAME critical section (never a separate, after-the-fact write —
+// see that field's own doc comment above for the TOCTOU a second,
+// independently-locked write here would reopen).
+func (ts *turnState) resolveOverflowAction(snapshotTime time.Time, kind recoveryKind) overflowAction {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 
 	if ts.compacting || ts.lastActivity.After(snapshotTime) {
 		return overflowActionStale
 	}
-	if !isOverflow {
+	if kind == recoveryKindNone {
 		return overflowActionFinalizeDirect
 	}
 	if ts.compactionAttempted {
@@ -422,7 +490,18 @@ func (ts *turnState) resolveOverflowAction(snapshotTime time.Time, isOverflow bo
 	}
 	ts.compactionAttempted = true
 	ts.compacting = true
+	ts.attemptedKind = kind
 	return overflowActionBeginRetry
+}
+
+// attemptedRecoveryKind reports WHICH recovery kind this turn's own
+// at-most-one attempt was spent on (recoveryKindNone if none has been
+// claimed yet) — read-only; see resolveOverflowAction above for the ONLY
+// path allowed to actually set it.
+func (ts *turnState) attemptedRecoveryKind() recoveryKind {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.attemptedKind
 }
 
 // clearErrorsForRetry resets this turn's own tracked assistant/session

@@ -152,8 +152,42 @@ type openCodeMessageInfo struct {
 // ContextOverflowError, ContentFilterError, APIError) are schema-derived
 // only (confirmed present in /doc, not independently elicited live — none
 // of this Step's own scripted turns produced one).
+//
+// Data (this Step: "typed transient-error retry for the OpenCode adapter")
+// decodes APIError's own "data" object — VERIFIED against the real,
+// live-fetched /doc OpenAPI schema (components.schemas.APIError):
+// {"data":{"message","statusCode"?,"isRetryable","responseHeaders"?,
+// "responseBody"?,"metadata"?}, "required":["message","isRetryable"]} —
+// "isRetryable" is a REQUIRED field whenever "data" is present at all, an
+// explicit transient-vs-permanent verdict OpenCode itself already computed
+// after calling out to the upstream model provider. A *pointer* here (not
+// embedded flat on this struct) deliberately, because OTHER tagged-union
+// members carry a "data" object with a DIFFERENT, unrelated shape (e.g.
+// MessageAbortedError's own real live-verified payload,
+// {"data":{"message":"Aborted"}}, has no "isRetryable" key at all) — see
+// isTransientAPIError's own doc comment (outcome.go) for why this
+// adapter never trusts Data.IsRetryable without first checking Name ==
+// "APIError".
 type openCodeTaggedError struct {
-	Name string `json:"name"`
+	Name string             `json:"name"`
+	Data *openCodeErrorData `json:"data,omitempty"`
+}
+
+// openCodeErrorData is openCodeTaggedError's own "data" object, modeled
+// only for the fields this Step's own typed-transient-retry classification
+// (isTransientAPIError, outcome.go) actually reads — VERIFIED against the
+// real, live-fetched /doc OpenAPI schema (components.schemas.APIError),
+// see openCodeTaggedError's own doc comment above for the full captured
+// shape. StatusCode is OPTIONAL (e.g. a real HTTP status the upstream
+// provider returned, 429/529) — corroborating detail only, never itself
+// consulted for retry classification (this Step's own explicit
+// instruction: classify ONLY on the typed isRetryable field, never on a
+// substring of error text, and statusCode is exactly that kind of
+// secondary signal a future misguided change might be tempted to
+// string/number-match on instead).
+type openCodeErrorData struct {
+	IsRetryable bool `json:"isRetryable"`
+	StatusCode  *int `json:"statusCode,omitempty"`
 }
 
 // messagePartUpdatedProps is "message.part.updated"'s own properties shape

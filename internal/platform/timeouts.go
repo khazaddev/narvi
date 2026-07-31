@@ -528,6 +528,37 @@ type Timeouts struct {
 	// generous bound at all.
 	OpenCodeSummarizeTimeout time.Duration
 
+	// --- Standalone addition ("OpenCode adapter: typed transient-error
+	// retry"): no ordering relationship with either invariant chain above
+	// (or with any prior Step's standalone additions), so -- per those
+	// additions' own precedent -- a plain field with a sensible default,
+	// not wired into a fake invariant link.
+
+	// OpenCodeTransientRetryBackoff bounds internal/adapters/outbound/
+	// opencode.Adapter.attemptTransientRetry's own wait before re-dispatching
+	// the same prompt after a first-time transient APIError (OpenCode's own
+	// typed isRetryable verdict, isTransientAPIError in that package's
+	// outcome.go) -- reusing the SAME at-most-one-retry-per-turn latch
+	// OpenCodeSummarizeTimeout's own §7.2 compaction retry already
+	// established (ts.compacting/ts.compactionAttempted, turn.go), but this
+	// failure class needs a WAIT of its own first: unlike a context
+	// overflow (where forceCompaction IS the recovery action), a transient
+	// provider blip (a 429/529-shaped response, per OpenCode's own
+	// corroborating statusCode) is generally still likely to fail again
+	// near-instantly without a short pause first -- immediately hammering
+	// an overloaded or rate-limited provider a second time is not a
+	// meaningfully different attempt from the first. Not specified in the
+	// plan; chosen as 2s -- short enough that a genuinely transient blip's
+	// own real-world recovery window (a rate-limit window resetting, a
+	// brief provider-side overload clearing) has already plausibly passed
+	// by the time this adapter retries, without adding a perceptible delay
+	// to a turn that already failed once and is worth resolving promptly;
+	// deliberately NOT as large as OpenCodeSummarizeTimeout's own 120s
+	// (that field bounds a genuinely slow HTTP call this adapter must
+	// WAIT OUT; this field is a deliberately-chosen pause this adapter
+	// itself inserts, an entirely different kind of duration).
+	OpenCodeTransientRetryBackoff time.Duration
+
 	// --- Audit-remediation (inbound-hygiene lens, WS/REST hygiene batch)
 	// standalone additions: no ordering relationship with either
 	// invariant chain above (or with any prior Step's standalone
@@ -1607,6 +1638,8 @@ func DefaultTimeouts() Timeouts {
 		OpenCodeRequestTimeout:       30 * time.Second, // not specified; chosen, bounds every doJSON call except the persistent SSE connection
 
 		OpenCodeSummarizeTimeout: 120 * time.Second, // not specified; chosen generously (§7.2, a single non-streaming summarization call)
+
+		OpenCodeTransientRetryBackoff: 2 * time.Second, // not specified; chosen, short pause before retrying a transient (isRetryable) provider blip
 
 		ClientWSPingInterval:          30 * time.Second,       // not specified; chosen, matches SandboxWSHeartbeatInterval's own 30s cadence (§6.1)
 		ClientFetchHistoryMinInterval: 250 * time.Millisecond, // not specified; chosen, generous for real pagination while blocking a tight-loop hammer
