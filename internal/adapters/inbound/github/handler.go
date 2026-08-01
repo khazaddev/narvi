@@ -99,6 +99,17 @@ type Config struct {
 	// already wire, cmd/control-plane/main.go) satisfies this directly.
 	DiffFetcher reviewcontext.Fetcher
 
+	// ReviewFindings (Step 48, "sentinels + suggestions", §22.1) fetches
+	// this PR's own currently open+rebutted review_findings rows
+	// (internal/app/reviewcontext.FetchAlreadyAnswered), rendered as a
+	// deterministic "already answered" fact block PREPENDED to (never
+	// replacing) the mention's own prose text, BEFORE DiffFetcher/
+	// RenderTurnPrompt append the diff/stack/tool-instructions blocks.
+	// Nil-safe: nil (this package's own handler_test.go) simply skips
+	// this fetch entirely. *postgres.ReviewFindingStore (cmd/control-
+	// plane/main.go) satisfies this directly.
+	ReviewFindings reviewcontext.FindingsFetcher
+
 	// Comments (Step 37/38 follow-up fix, Finding 1) posts the honest
 	// planAwaitingApprovalReplyText reply (planawaitingreply.go) back to a
 	// PR thread when coalesce.go's CreateOrJoin declines to enqueue a build
@@ -141,6 +152,20 @@ type Config struct {
 	// in this Config/SessionCoalescer already shares) satisfies this
 	// directly in production.
 	LinkNotices ActorLinkNoticeClaimer
+
+	// SentinelFixes/RepoSettings/AuditLog (Step 48, "sentinels +
+	// suggestions", §17.4/§17.5) back the NEW `pull_request`/action=="closed"
+	// merge-gating lane (pullrequestevent.go) -- SentinelFixes looks up
+	// whether the closing PR had a sentinel-auto-fix in flight at all
+	// (the overwhelming common case: no, nothing to do); RepoSettings
+	// re-reads the toggle FRESH at gating time; AuditLog records the
+	// outcome (§17.5). Nil-safe: a nil SentinelFixes means this lane never
+	// fires (every "closed" pull_request event is acknowledged as a
+	// plain no-op) -- this package's own handler_test.go, or any other
+	// minimal wiring that doesn't care about this Step, leaves it nil.
+	SentinelFixes *postgres.SentinelFixStore
+	RepoSettings  *postgres.RepoSettingsStore
+	AuditLog      *postgres.AuditLogStore
 }
 
 // NewHandler builds the POST /webhooks/github handler (cmd/control-plane/
@@ -206,6 +231,24 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		}
 
 		eventType := r.Header.Get("X-GitHub-Event")
+
+		// Step 48 (§17.4/§17.5): a `pull_request` event whose own action is
+		// "closed" is the merge-gating trigger -- a STRUCTURALLY DIFFERENT
+		// thing from the "labeled" manual re-trigger lane parseMention
+		// already handles for this SAME event type (payload.go's own doc
+		// comment on eventTypePullRequest) -- never a mention, never
+		// reaching CreateOrJoin. Checked BEFORE parseMention so a closed-PR
+		// event is routed here, not misparsed as (or silently ignored by)
+		// the mention pipeline. cfg.SentinelFixes == nil (this package's
+		// own handler_test.go, or any other minimal wiring that doesn't
+		// care about this Step) falls through to the ordinary pipeline
+		// unchanged, which acknowledges it as a no-op exactly like today.
+		if eventType == eventTypePullRequest && cfg.SentinelFixes != nil && readPullRequestEventAction(body) == "closed" {
+			dataSource := &githubMergeGateDataSource{diffFetcher: cfg.DiffFetcher, botToken: cfg.BotToken, timeouts: cfg.Timeouts}
+			handlePullRequestClosed(ctx, w, body, cfg.SentinelFixes, cfg.RepoSettings, cfg.AuditLog, dataSource, notImplementedFixMerger{})
+			return
+		}
+
 		m, ok, err := parseMention(eventType, body, mentionRE, cfg.ReReviewLabel)
 		if err != nil {
 			logger.Error("github: parse webhook payload failed", "error", err, "event_type", eventType, "delivery_id", deliveryID)
@@ -331,6 +374,15 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// or any other minimal wiring that doesn't care about this Step)
 		// simply skips the fetch entirely, leaving m.CommentBody as the
 		// turn's own prompt verbatim -- today's pre-Step-46 behavior.
+		// Step 48 (§22.1): prepend this PR's own already-answered facts
+		// BEFORE the diff/stack/tool-instructions blocks below -- prepended
+		// to, never replacing, the mention's own prose text captured as
+		// mentionText above.
+		if cfg.ReviewFindings != nil {
+			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, cfg.ReviewFindings, m.RepoFullName, m.PRNumber); alreadyAnswered != "" {
+				m.CommentBody = alreadyAnswered + m.CommentBody
+			}
+		}
 		if cfg.DiffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(m.RepoFullName); ok {
 				prCtx := reviewcontext.Fetch(ctx, logger, cfg.DiffFetcher, cfg.Timeouts, owner, repo, m.PRNumber, cfg.BotToken, m.Stack)

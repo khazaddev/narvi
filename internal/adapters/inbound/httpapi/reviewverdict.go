@@ -61,12 +61,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
@@ -107,10 +109,28 @@ import (
 //     enqueued exactly one ports.NotificationKindGitHubVerdict outbox row
 //     (internal/adapters/outbound/githubapi.VerdictNotifier delivers it:
 //     the formal review, then the label sync).
+//
+// Step 48 ("sentinels + suggestions", §17/§22.1) extends this handler,
+// never replaces it: after building the verdict, it ALSO builds
+// []reviewpost.Finding from req.Findings (optional, additive -- see
+// restdtos.PostReviewVerdictRequest's own doc comment), computes each
+// finding's identity server-side, and upserts review_findings -- all
+// inside the SAME transaction as the outbox write below (pool.Begin ...
+// tx.Commit), never a second, independently-committed write. When a
+// posted finding names a sentinel kind (coverage/docs_drift) AND the
+// repo's own sentinel_autofix_enabled toggle is on AND this session is
+// NOT itself a sentinel-auto-fix child session (§17.1's "no recursion"
+// rule), a SECOND outbox row (ports.NotificationKindSentinelAutoFix) is
+// enqueued in the SAME transaction, claiming (or reusing an
+// already-claimed) sentinel_fixes row for this PR.
 func PostReviewVerdict(
+	pool *pgxpool.Pool,
 	sandboxes *postgres.SandboxStore,
+	sessions *postgres.SessionStore,
 	prSessions *postgres.GitHubPRSessionStore,
 	repoSettings *postgres.RepoSettingsStore,
+	reviewFindings *postgres.ReviewFindingStore,
+	sentinelFixes *postgres.SentinelFixStore,
 	outbox *postgres.OutboxStore,
 	botHandle string,
 ) http.HandlerFunc {
@@ -200,6 +220,9 @@ func PostReviewVerdict(
 		for _, tag := range req.BlastRadius {
 			input.BlastRadius = append(input.BlastRadius, review.Tag(tag))
 		}
+		for _, f := range req.Findings {
+			input.Findings = append(input.Findings, findingInputFromWire(f))
+		}
 
 		if err := reviewpost.ValidateVerdictInput(input); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -207,26 +230,30 @@ func PostReviewVerdict(
 		}
 
 		verdict := reviewpost.BuildVerdict(input)
+		findings := reviewpost.BuildFindings(input)
 
-		// blockOnHighRisk (§21.2): an admin, per-repo, strict-boolean
-		// setting -- a missing row OR any read error defaults to false
-		// (fail-closed, mirroring §24.5's own identical "if the setting
-		// cannot be read... treated as OFF" precedent for a comparable
-		// per-repo policy flag). A genuine read error is logged but never
-		// blocks verdict posting -- this is a policy nuance, not a
-		// precondition for the tool call to succeed at all.
+		// blockOnHighRisk/sentinelAutofixEnabled (§21.2, §17.1): both
+		// admin, per-repo, strict-boolean settings -- a missing row OR any
+		// read error defaults BOTH to false (fail-closed, mirroring
+		// §24.5's own identical "if the setting cannot be read... treated
+		// as OFF" precedent for a comparable per-repo policy flag). A
+		// genuine read error is logged but never blocks verdict posting --
+		// this is a policy nuance, not a precondition for the tool call to
+		// succeed at all.
 		blockOnHighRisk := false
+		sentinelAutofixEnabled := false
 		if settings, settingsErr := repoSettings.Get(ctx, prSession.RepoFullName); settingsErr != nil {
 			if !errors.Is(settingsErr, pgx.ErrNoRows) {
-				logger.Warn("httpapi: review-verdict: read repo settings failed, defaulting blockOnHighRisk to false", "error", settingsErr)
+				logger.Warn("httpapi: review-verdict: read repo settings failed, defaulting blockOnHighRisk/sentinelAutofixEnabled to false", "error", settingsErr)
 			}
 		} else {
 			blockOnHighRisk = settings.BlockOnHighRisk
+			sentinelAutofixEnabled = settings.SentinelAutofixEnabled
 		}
 
 		event := reviewpost.ComputeFormalReviewEvent(verdict.Shippable, verdict.RiskLevel, blockOnHighRisk)
 		syncedLabel := reviewpost.RiskLabel(verdict.RiskLevel)
-		body := reviewpost.RenderVerdictComment(verdict, req.Summary, botHandle, syncedLabel)
+		body := reviewpost.RenderVerdictComment(verdict, findings, req.Summary, botHandle, syncedLabel)
 
 		payload, err := json.Marshal(githubapi.VerdictPayload{
 			Owner:     owner,
@@ -250,7 +277,74 @@ func PostReviewVerdict(
 			correlationID = &id
 		}
 
-		if _, err := outbox.Create(ctx, sqlcgen.CreateOutboxEntryParams{
+		// Step 48: is the sentinel-auto-fix flow even a CANDIDATE for this
+		// verdict at all -- the toggle is on AND at least one posted
+		// finding names a sentinel kind? Computed BEFORE opening the
+		// transaction below (a pure, in-memory check) so the "fetch the
+		// origin session's own repos/provenance_tag" read below is only
+		// ever paid for when it could actually matter.
+		autoFixCandidate := sentinelAutofixEnabled && hasSentinelFinding(findings)
+
+		var originHeadBranch, repoName, repoCloneURL string
+		if autoFixCandidate {
+			sessionRow, sessErr := sessions.Get(ctx, sessionID)
+			var repos []restdtos.CreateSessionRequestReposElem
+			var reposErr error
+			if sessErr == nil {
+				reposErr = json.Unmarshal(sessionRow.Repos, &repos)
+			}
+
+			switch {
+			case sessErr != nil:
+				logger.Warn("httpapi: review-verdict: read session row for sentinel-auto-fix eligibility failed, skipping trigger", "error", sessErr)
+				autoFixCandidate = false
+			case provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag):
+				// §17.1's own "no recursion" rule: a PR opened by a
+				// sentinel-auto-fix child session is never itself
+				// eligible to trigger another, regardless of what its own
+				// verdict finds.
+				autoFixCandidate = false
+			case reposErr != nil || len(repos) == 0 || repos[0].Branch == nil || *repos[0].Branch == "":
+				logger.Warn("httpapi: review-verdict: could not determine origin head branch from session repos, skipping sentinel-auto-fix trigger",
+					"error", reposErr)
+				autoFixCandidate = false
+			default:
+				originHeadBranch = *repos[0].Branch
+				repoName = repos[0].Name
+				repoCloneURL = repos[0].Url
+			}
+		}
+
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			logger.Error("httpapi: review-verdict: begin tx failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		findingsTx := reviewFindings.WithTx(tx)
+		findingIdentityHashes := make([]string, 0, len(findings))
+		for _, f := range findings {
+			if _, upsertErr := findingsTx.Upsert(ctx, sqlcgen.UpsertReviewFindingParams{
+				RepoFullName: prSession.RepoFullName,
+				PrNumber:     prSession.PrNumber,
+				IdentityHash: f.IdentityHash,
+				SentinelKind: sentinelKindColumn(f.SentinelKind),
+				Severity:     string(f.Severity),
+				FilePath:     f.FilePath,
+				Line:         lineColumn(f.Line),
+				Description:  f.Description,
+				SuggestedFix: f.SuggestedFix,
+			}); upsertErr != nil {
+				logger.Error("httpapi: review-verdict: upsert review finding failed", "error", upsertErr)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			findingIdentityHashes = append(findingIdentityHashes, f.IdentityHash)
+		}
+
+		if _, err := outbox.WithTx(tx).Create(ctx, sqlcgen.CreateOutboxEntryParams{
 			SessionID:     sessionID,
 			Kind:          string(ports.NotificationKindGitHubVerdict),
 			Payload:       payload,
@@ -261,10 +355,120 @@ func PostReviewVerdict(
 			return
 		}
 
+		if autoFixCandidate {
+			claim, claimErr := sentinelFixes.WithTx(tx).Claim(ctx, prSession.RepoFullName, prSession.PrNumber, sessionID, originHeadBranch)
+			if claimErr != nil {
+				logger.Error("httpapi: review-verdict: claim sentinel_fixes row failed", "error", claimErr)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			// FixChildSessionID.Valid means a fix is ALREADY in flight for
+			// this PR (an earlier qualifying finding claimed this same
+			// row) -- never enqueue a second, redundant spawn.
+			if !claim.FixChildSessionID.Valid {
+				var hashes, descriptions []string
+				for _, f := range findings {
+					if f.SentinelKind != nil {
+						hashes = append(hashes, f.IdentityHash)
+						descriptions = append(descriptions, f.Description)
+					}
+				}
+				autoFixPayload, marshalErr := json.Marshal(ports.SentinelAutoFixPayload{
+					SentinelFixID:         claim.ID.String(),
+					RepoFullName:          prSession.RepoFullName,
+					OriginPRNumber:        prSession.PrNumber,
+					OriginReviewSessionID: sessionID.String(),
+					OriginHeadBranch:      originHeadBranch,
+					RepoName:              repoName,
+					RepoCloneURL:          repoCloneURL,
+					FindingIdentityHashes: hashes,
+					FindingDescriptions:   descriptions,
+				})
+				if marshalErr != nil {
+					logger.Error("httpapi: review-verdict: marshal sentinel-auto-fix outbox payload failed", "error", marshalErr)
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
+				}
+				if _, err := outbox.WithTx(tx).Create(ctx, sqlcgen.CreateOutboxEntryParams{
+					SessionID:     sessionID,
+					Kind:          string(ports.NotificationKindSentinelAutoFix),
+					Payload:       autoFixPayload,
+					CorrelationID: correlationID,
+				}); err != nil {
+					logger.Error("httpapi: review-verdict: enqueue sentinel-auto-fix outbox entry failed", "error", err)
+					writeError(w, http.StatusInternalServerError, "internal error")
+					return
+				}
+			}
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			logger.Error("httpapi: review-verdict: commit tx failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
 		writeJSON(w, http.StatusCreated, restdtos.PostReviewVerdictResponse{
-			Shippable:         restdtos.PostReviewVerdictResponseShippable(verdict.Shippable),
-			FormalReviewEvent: restdtos.PostReviewVerdictResponseFormalReviewEvent(event),
-			SyncedLabel:       syncedLabel,
+			Shippable:             restdtos.PostReviewVerdictResponseShippable(verdict.Shippable),
+			FormalReviewEvent:     restdtos.PostReviewVerdictResponseFormalReviewEvent(event),
+			SyncedLabel:           syncedLabel,
+			FindingIdentityHashes: findingIdentityHashes,
 		})
 	}
+}
+
+// findingInputFromWire converts one restdtos.PostedFinding (the wire
+// shape) into reviewpost.FindingInput -- the one place this conversion
+// happens, so a future field addition to either shape only ever needs
+// updating here.
+func findingInputFromWire(f restdtos.PostedFinding) reviewpost.FindingInput {
+	in := reviewpost.FindingInput{
+		Severity:    review.RiskLevel(f.Severity),
+		FilePath:    f.FilePath,
+		Description: f.Description,
+	}
+	if f.SentinelKind != nil {
+		k := reviewpost.SentinelKind(*f.SentinelKind)
+		in.SentinelKind = &k
+	}
+	if f.Line != nil {
+		line := int(*f.Line)
+		in.Line = &line
+	}
+	if f.SuggestedFix != nil {
+		in.SuggestedFix = f.SuggestedFix
+	}
+	return in
+}
+
+// hasSentinelFinding reports whether any of findings names a sentinel
+// kind (coverage/docs_drift) -- §17.1: "no other sentinel or finding type
+// triggers this [sentinel-auto-fix flow]".
+func hasSentinelFinding(findings []reviewpost.Finding) bool {
+	for _, f := range findings {
+		if f.SentinelKind != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// sentinelKindColumn converts a reviewpost.Finding's own *SentinelKind
+// into review_findings.sentinel_kind's own *string column shape.
+func sentinelKindColumn(k *reviewpost.SentinelKind) *string {
+	if k == nil {
+		return nil
+	}
+	s := string(*k)
+	return &s
+}
+
+// lineColumn converts a reviewpost.Finding's own *int Line into
+// review_findings.line's own *int32 column shape.
+func lineColumn(line *int) *int32 {
+	if line == nil {
+		return nil
+	}
+	l := int32(*line)
+	return &l
 }

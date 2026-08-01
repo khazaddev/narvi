@@ -21,7 +21,7 @@ func TestRenderVerdictComment(t *testing.T) {
 		Shippable:         review.ShippableNeedsHuman,
 	}
 
-	got := reviewpost.RenderVerdictComment(v, "Timing-unsafe comparison in verify.go.", "narvi-bot", reviewpost.LabelMediumRisk)
+	got := reviewpost.RenderVerdictComment(v, nil, "Timing-unsafe comparison in verify.go.", "narvi-bot", reviewpost.LabelMediumRisk)
 
 	for _, want := range []string{
 		string(review.RiskLevelMedium),
@@ -60,7 +60,7 @@ func TestRenderVerdictComment_EmptyBlastRadiusOmitsLine(t *testing.T) {
 		Shippable:     review.ShippableAuto,
 	}
 
-	got := reviewpost.RenderVerdictComment(v, "Nothing to flag.", "narvi-bot", reviewpost.LabelLowRisk)
+	got := reviewpost.RenderVerdictComment(v, nil, "Nothing to flag.", "narvi-bot", reviewpost.LabelLowRisk)
 	if strings.Contains(got, "Blast radius") {
 		t.Errorf("RenderVerdictComment() rendered a Blast radius line for an empty BlastRadius:\n%s", got)
 	}

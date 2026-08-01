@@ -36,11 +36,15 @@ func (s *RepoSettingsStore) Get(ctx context.Context, repoFullName string) (sqlcg
 }
 
 // Upsert idempotently creates-or-updates repoFullName's settings row with
-// blockOnHighRisk as the new, full current value (never a delta/patch --
-// see UpsertRepoSettings' own generated doc comment).
-func (s *RepoSettingsStore) Upsert(ctx context.Context, repoFullName string, blockOnHighRisk bool) (sqlcgen.RepoSetting, error) {
+// blockOnHighRisk/sentinelAutofixEnabled as the new, full current values
+// (never a delta/patch -- see UpsertRepoSettings' own generated doc
+// comment). sentinelAutofixEnabled (Step 48, §17.1) is this same table's
+// own further admin-only, per-repo boolean -- migrations/000048's own doc
+// comment.
+func (s *RepoSettingsStore) Upsert(ctx context.Context, repoFullName string, blockOnHighRisk, sentinelAutofixEnabled bool) (sqlcgen.RepoSetting, error) {
 	return s.q.UpsertRepoSettings(ctx, sqlcgen.UpsertRepoSettingsParams{
-		RepoFullName:    repoFullName,
-		BlockOnHighRisk: blockOnHighRisk,
+		RepoFullName:           repoFullName,
+		BlockOnHighRisk:        blockOnHighRisk,
+		SentinelAutofixEnabled: sentinelAutofixEnabled,
 	})
 }

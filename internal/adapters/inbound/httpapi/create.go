@@ -33,6 +33,49 @@ import (
 // session ever carries a provenance tag at all (a non-empty pathScope).
 const scopedEnvironmentProvenanceTag = "scoped_environment"
 
+// ChildSessionOptions is CreateSessionOnTx's own additive, OPTIONAL extra
+// parameter (Step 48, "sentinels + suggestions", §17.2) -- a variadic
+// trailing parameter (see CreateSessionOnTx's own signature) so every
+// EXISTING call site (every caller before this Step, including internal/
+// adapters/inbound/github's own coalesce.go, which imports this function
+// directly) keeps compiling and behaving byte-for-byte identically with
+// no change of its own: omitting the argument entirely is exactly the
+// same as passing a zero-value ChildSessionOptions{}, which sets nothing.
+//
+// SpawnSentinelFixChildSession (childsession.go) is this Step's own ONE
+// real caller that supplies a non-zero value.
+type ChildSessionOptions struct {
+	// ParentSessionID is the review session that spawned this child
+	// session (§17.2) -- pgtype.UUID{} (invalid/NULL) for every ordinary
+	// session.
+	ParentSessionID pgtype.UUID
+	// SpawnDepth is 1 for a direct child of a depth-0 session -- this
+	// Step's own one producer always sets exactly 1 (migrations/000045's
+	// own doc comment: recorded as honest, queryable data, never gated on
+	// numerically by any code path in this Step -- §17.1's "no recursion"
+	// rule is enforced via ProvenanceTag below, not a depth check).
+	SpawnDepth int32
+	// ProvenanceTag, when non-nil, OVERRIDES whatever this function would
+	// otherwise compute for sessions.provenance_tag from the request's own
+	// pathScope/mockConfig (the "scoped_environment" tag, above) -- a
+	// sentinel-auto-fix child session carries provenance.SentinelAutoFix
+	// instead, and is never itself a scoped-Environment session at the
+	// same time (§17.2: "in the origin PR's own environment -- full
+	// access -- never a scoped prototyping environment").
+	ProvenanceTag *string
+}
+
+// childSessionOptionsFrom returns opts[0] if the caller supplied one, or
+// the zero value otherwise -- the one place CreateSessionOnTx unwraps its
+// own variadic parameter, so every read site below stays a plain field
+// access.
+func childSessionOptionsFrom(opts []ChildSessionOptions) ChildSessionOptions {
+	if len(opts) > 0 {
+		return opts[0]
+	}
+	return ChildSessionOptions{}
+}
+
 // defaultContractsPath is the contracts_path value CreateSession stores
 // when a request's mockConfig is present but omits (or nulls)
 // contractsPath -- Row 27's ("mocking + contract drift", §14.3) own
@@ -461,8 +504,9 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 // Slack/Linear session creation, createdBy left invalid) alike, mirroring
 // sessions.created_by's own existing NULL-for-bot convention: actor_user_id
 // is NULL on a bot-attributed row, never a fabricated "system user".
-func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
+func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, childOpts ...ChildSessionOptions) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
 	logger := platform.Logger(ctx)
+	opts := childSessionOptionsFrom(childOpts)
 
 	// All request validation (repos non-empty, each repo's Name/Url/
 	// Branch, pathScope, mockConfig.contractsPath) lives in
@@ -527,6 +571,15 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		}
 	}
 
+	// Step 48 (§17.2): an explicit ChildSessionOptions.ProvenanceTag
+	// OVERRIDES whatever was just computed from pathScope/mockConfig above
+	// -- see ChildSessionOptions' own doc comment for why a
+	// sentinel-auto-fix child session is never ALSO a scoped-Environment
+	// session at the same time.
+	if opts.ProvenanceTag != nil {
+		provenanceTag = opts.ProvenanceTag
+	}
+
 	created, err := sessions.WithTx(tx).Create(ctx, sqlcgen.CreateSessionParams{
 		Title:         (*string)(req.Title),
 		SpawnSource:   sqlcgen.SessionSpawnSource(req.SpawnSource),
@@ -540,6 +593,11 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// context" convention (a non-plan-mode session simply never reads
 		// it back).
 		BuildModelID: (*string)(req.BuildModelId),
+		// ParentSessionID/SpawnDepth (Step 48, §17.2, migrations/000045):
+		// zero values (pgtype.UUID{}, int32(0)) for every ordinary
+		// session -- see ChildSessionOptions' own doc comment.
+		ParentSessionID: opts.ParentSessionID,
+		SpawnDepth:      opts.SpawnDepth,
 	})
 	if err != nil {
 		logger.Error("httpapi: create session failed", "error", err)

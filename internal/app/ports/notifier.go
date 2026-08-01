@@ -94,6 +94,17 @@ const (
 	// internal/app/sessionactor/outboxenqueue.go) -- see that Kind's own
 	// doc comment for why a review session never uses it any more.
 	NotificationKindGitHubVerdict NotificationKind = "github_verdict"
+
+	// NotificationKindSentinelAutoFix is Step 48's own addition
+	// ("sentinels + suggestions", §17.2): routes to internal/app/
+	// outboxworker's own sentinel-auto-fix notifier, which spawns a
+	// child session (httpapi.SpawnChildSession) pre-loaded with the
+	// origin diff and the specific coverage/doc-drift finding(s) that
+	// triggered it -- see SentinelAutoFixPayload's own doc comment for
+	// the payload shape, and reviewverdict.go for the ONE place this Kind
+	// is ever enqueued (inside the same transaction as the triggering
+	// verdict's own findings-upsert write).
+	NotificationKindSentinelAutoFix NotificationKind = "sentinel_auto_fix"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

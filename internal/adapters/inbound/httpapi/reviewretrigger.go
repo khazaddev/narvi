@@ -80,7 +80,7 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // this Action regardless, per Resource's own doc comment on fields an
 // Action doesn't consult), avoiding a wasted Postgres participants read on
 // every call.
-func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
+func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -133,6 +133,16 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		}
 
 		prompt := manualRetriggerPromptText
+		// Step 48 (§22.1): prepend this PR's own already-answered facts
+		// (open+rebutted review_findings) BEFORE calling RenderTurnPrompt
+		// -- prepended to, never replacing, the prose fallback above.
+		// Independent of diffFetcher (a review turn can still get
+		// reconciliation facts even with no diff fetcher wired).
+		if reviewFindings != nil {
+			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, reviewFindings, prSession.RepoFullName, prSession.PrNumber); alreadyAnswered != "" {
+				prompt = alreadyAnswered + prompt
+			}
+		}
 		if diffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(prSession.RepoFullName); ok {
 				prCtx := reviewcontext.Fetch(ctx, logger, diffFetcher, timeouts, owner, repo, prSession.PrNumber, botToken, nil)

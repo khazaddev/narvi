@@ -134,6 +134,21 @@ func (f *whiteboxFakeSourceControl) CheckRepoAccess(context.Context, ports.Check
 	return false, errors.New("whiteboxFakeSourceControl: CheckRepoAccess not implemented")
 }
 
+// GetFileContent/UpdateFileContent/RegisterPRStack (Step 48, "sentinels +
+// suggestions") are never reached from this package either -- same
+// "not implemented" precedent as CheckRepoAccess above.
+func (f *whiteboxFakeSourceControl) GetFileContent(context.Context, ports.GetFileContentSpec) (string, string, bool, error) {
+	return "", "", false, errors.New("whiteboxFakeSourceControl: GetFileContent not implemented")
+}
+
+func (f *whiteboxFakeSourceControl) UpdateFileContent(context.Context, ports.UpdateFileContentSpec) (string, error) {
+	return "", errors.New("whiteboxFakeSourceControl: UpdateFileContent not implemented")
+}
+
+func (f *whiteboxFakeSourceControl) RegisterPRStack(context.Context, ports.RegisterPRStackSpec) error {
+	return errors.New("whiteboxFakeSourceControl: RegisterPRStack not implemented")
+}
+
 // whiteboxFakeBuildProvider is a minimal test-only ports.SandboxProvider,
 // duplicated from builder_integration_test.go's own fakeBuildProvider for
 // the identical cross-package reason.

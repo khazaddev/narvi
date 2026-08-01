@@ -95,6 +95,14 @@ type fakeSourceControl struct {
 	denyAllAccess    bool
 	accessErr        error
 	accessErrFor     map[string]error // keyed by "owner/repo"; overrides accessErr if present
+
+	// registerStackCalls (Step 48, "sentinels + suggestions", §17.2/§17.6)
+	// is this fake's own extension for RegisterPRStack -- recorded so a
+	// test can prove createSentinelFixPRBestEffort (pushpr.go) calls it
+	// exactly once, with the origin+fix PR numbers bottom-to-top, AFTER
+	// CreatePR succeeds.
+	registerStackCalls []ports.RegisterPRStackSpec
+	registerStackErr   error
 }
 
 var _ ports.SourceControl = (*fakeSourceControl)(nil)
@@ -224,6 +232,41 @@ func (f *fakeSourceControl) lastAccessCtxDeadline() (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return f.accessCtxs[len(f.accessCtxs)-1].Deadline()
+}
+
+// GetFileContent/UpdateFileContent (Step 48, §12.2 item 2) are never
+// reached from this package (apply-suggestion is an httpapi-only surface)
+// -- clear "not implemented" errors, mirroring whiteboxFakeSourceControl's
+// own identical precedent (internal/app/imagebuild).
+func (f *fakeSourceControl) GetFileContent(context.Context, ports.GetFileContentSpec) (string, string, bool, error) {
+	return "", "", false, errors.New("fakeSourceControl: GetFileContent not implemented")
+}
+
+func (f *fakeSourceControl) UpdateFileContent(context.Context, ports.UpdateFileContentSpec) (string, error) {
+	return "", errors.New("fakeSourceControl: UpdateFileContent not implemented")
+}
+
+// RegisterPRStack (Step 48, §17.2/§17.6) records every call this fake
+// receives and returns a caller-configured error -- registerStackErr
+// defaults to nil (registration "succeeds"), mirroring nextErr's own
+// default-success precedent for CreatePR above.
+func (f *fakeSourceControl) RegisterPRStack(_ context.Context, spec ports.RegisterPRStackSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.registerStackCalls = append(f.registerStackCalls, spec)
+	return f.registerStackErr
+}
+
+func (f *fakeSourceControl) registerStackCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.registerStackCalls)
+}
+
+func (f *fakeSourceControl) lastRegisterStackSpec() ports.RegisterPRStackSpec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.registerStackCalls[len(f.registerStackCalls)-1]
 }
 
 // reposJSONForTest builds the sessions.repos JSONB shape (design decision

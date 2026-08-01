@@ -116,3 +116,71 @@ func TestPutRepoSettings_MemberDenied_NeverWrites(t *testing.T) {
 		t.Error("repo_settings row exists after a denied PUT, want no row at all")
 	}
 }
+
+// TestGetRepoSettings_SentinelAutofixEnabled_NoRowYet_DefaultsOff is Step
+// 48's own explicitly required test: the sentinel-auto-fix admin toggle
+// (§17.1) defaults to OFF for a repo with no settings row at all --
+// migrations/000048_repo_settings_sentinel_autofix.up.sql's own documented
+// safe default.
+func TestGetRepoSettings_SentinelAutofixEnabled_NoRowYet_DefaultsOff(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+
+	var got restdtos.RepoSettings
+	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/never-configured-sentinel/settings", nil, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.SentinelAutofixEnabled {
+		t.Errorf("SentinelAutofixEnabled = true, want false (no row yet -- must default off)")
+	}
+}
+
+// TestPutRepoSettings_SentinelAutofixEnabled_RoundTrips proves an admin
+// can arm the sentinel-auto-fix toggle, independently of blockOnHighRisk,
+// and a subsequent GET reflects it.
+func TestPutRepoSettings_SentinelAutofixEnabled_RoundTrips(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+
+	var putResp restdtos.RepoSettings
+	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/sentinel-toggle-repo/settings", []byte(`{"blockOnHighRisk":false,"sentinelAutofixEnabled":true}`), &putResp, token)
+	if status != http.StatusOK {
+		t.Fatalf("PUT status = %d, want %d", status, http.StatusOK)
+	}
+	if !putResp.SentinelAutofixEnabled {
+		t.Errorf("PUT response SentinelAutofixEnabled = false, want true")
+	}
+	if putResp.BlockOnHighRisk {
+		t.Errorf("PUT response BlockOnHighRisk = true, want false (independent of sentinelAutofixEnabled)")
+	}
+
+	var getResp restdtos.RepoSettings
+	status = rig.doJSON(t, http.MethodGet, "/api/repos/acme/sentinel-toggle-repo/settings", nil, &getResp, token)
+	if status != http.StatusOK {
+		t.Fatalf("GET status = %d, want %d", status, http.StatusOK)
+	}
+	if !getResp.SentinelAutofixEnabled {
+		t.Errorf("GET response SentinelAutofixEnabled = false, want true (must reflect the PUT)")
+	}
+}
+
+// TestPutRepoSettings_MaintainerDenied_SentinelAutofixNeverArmed proves a
+// maintainer (who CAN edit review verdicts, row 5) cannot arm this
+// stricter, admin-only row-6 toggle.
+func TestPutRepoSettings_MaintainerDenied_SentinelAutofixNeverArmed(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/maintainer-denied-sentinel/settings", []byte(`{"blockOnHighRisk":false,"sentinelAutofixEnabled":true}`), nil, token)
+	if status != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d (admin only, no maintainer carve-out)", status, http.StatusForbidden)
+	}
+
+	if _, err := rig.repoSettings.Get(ctx, "acme/maintainer-denied-sentinel"); err == nil {
+		t.Error("repo_settings row exists after a denied maintainer PUT, want no row at all")
+	}
+}

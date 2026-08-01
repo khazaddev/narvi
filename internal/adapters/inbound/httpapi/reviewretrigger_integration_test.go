@@ -329,3 +329,60 @@ func TestRetriggerReview_ConcurrentClicks_AllSucceedNoDeadlock(t *testing.T) {
 		t.Errorf("turn count = %d, want exactly %d (one turn per concurrent click, none lost/raced away)", turnCount, n)
 	}
 }
+
+// TestRetriggerReview_AlreadyAnsweredFacts_PrependedNeverReplacingProse is
+// Step 48's own explicitly required test (§22.1): an already-open
+// review_findings row for this PR renders as a deterministic "already
+// answered" fact block PREPENDED to -- never replacing -- the manual
+// re-trigger's own fixed prose text (manualRetriggerPromptText,
+// reviewretrigger.go).
+func TestRetriggerReview_AlreadyAnsweredFacts_PrependedNeverReplacingProse(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	repoFullName := "acme/already-answered-repo"
+	const prNumber = int32(55)
+	session := rig.createOwnedGitHubReviewSession(ctx, t, owner.ID, repoFullName, prNumber)
+
+	const wantDescription = "Missing test coverage for the timeout path."
+	if _, err := rig.reviewFindings.Upsert(ctx, sqlcgen.UpsertReviewFindingParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+		IdentityHash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		Severity:     "medium",
+		FilePath:     "internal/foo/bar.go",
+		Description:  wantDescription,
+	}); err != nil {
+		t.Fatalf("upsert review finding: %v", err)
+	}
+
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/review/retrigger", nil, nil, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var prompt string
+	if err := rig.pool.QueryRow(ctx, `SELECT prompt FROM turns WHERE session_id = $1`, session.ID).Scan(&prompt); err != nil {
+		t.Fatalf("query turn prompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, wantDescription) {
+		t.Fatalf("prompt = %q, want it to contain the already-answered finding's own description %q", prompt, wantDescription)
+	}
+	// The exact literal manualRetriggerPromptText renders (reviewretrigger.go)
+	// -- unexported, so named here as a literal rather than imported (this
+	// is package httpapi_test, mirroring every other black-box test in
+	// this file).
+	const wantProseFallback = "Manual re-review requested via the web review button."
+	if !strings.Contains(prompt, wantProseFallback) {
+		t.Fatalf("prompt = %q, want it to STILL contain the manual re-trigger's own prose fallback (prepended TO, never REPLACING it)", prompt)
+	}
+
+	factsIdx := strings.Index(prompt, wantDescription)
+	proseIdx := strings.Index(prompt, wantProseFallback)
+	if factsIdx >= proseIdx {
+		t.Errorf("already-answered facts appear at index %d, prose fallback at index %d -- want facts PREPENDED (before), not appended after", factsIdx, proseIdx)
+	}
+}

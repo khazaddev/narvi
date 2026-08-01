@@ -32,6 +32,16 @@ type VerdictInput struct {
 	// field's own handling matches: it is rendered once (rendercomment.go)
 	// and never read again.
 	Summary string
+
+	// Findings is Step 48's own additive extension (§8.2/§17/§22.1): zero
+	// or more per-finding typed fields, alongside the verdict's own
+	// aggregate fields above -- restdtos.PostReviewVerdictRequest.findings
+	// is OPTIONAL, so an old caller posting no findings at all (every
+	// caller before this Step) keeps posting exactly as before: nil/empty
+	// is a fully legitimate value, never rejected by ValidateVerdictInput
+	// below. See finding.go's own doc comment for why this type lives
+	// here, in reviewpost, rather than as a new review.Verdict field.
+	Findings []FindingInput
 }
 
 // The errors ValidateVerdictInput returns -- one per rejected field, named
@@ -119,6 +129,17 @@ func ValidateVerdictInput(in VerdictInput) error {
 		return ErrEmptySummary
 	}
 
+	// Findings (Step 48, additive): each one validated by
+	// ValidateFindingInput, in order -- first bad finding wins, mirroring
+	// this function's own fixed-order, first-error-wins discipline above.
+	// nil/empty Findings is not iterated at all, so an old caller posting
+	// none is never rejected here.
+	for _, f := range in.Findings {
+		if err := ValidateFindingInput(f); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -143,4 +164,23 @@ func BuildVerdict(in VerdictInput) review.Verdict {
 		ProposedShippable: in.ProposedShippable,
 		Shippable:         review.ComputeShippable(in.RiskLevel, in.TestsCoverage, in.Premise),
 	}
+}
+
+// BuildFindings is BuildVerdict's own per-finding sibling (Step 48,
+// additive): turns an ALREADY-VALIDATED VerdictInput.Findings (every
+// element already passed ValidateFindingInput, via ValidateVerdictInput's
+// own loop above) into the []Finding a caller upserts into review_findings
+// -- IdentityHash computed via BuildFinding for each, never client-supplied.
+// nil/empty in.Findings returns nil, never a zero-length-but-non-nil
+// slice, so a caller's own "did this verdict report any findings at all"
+// check can use a plain len()/nil check either way.
+func BuildFindings(in VerdictInput) []Finding {
+	if len(in.Findings) == 0 {
+		return nil
+	}
+	out := make([]Finding, len(in.Findings))
+	for i, f := range in.Findings {
+		out[i] = BuildFinding(f)
+	}
+	return out
 }

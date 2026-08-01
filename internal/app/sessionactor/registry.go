@@ -104,6 +104,14 @@ type storeBundle struct {
 	// a real human/bot decision, now extended to this automatic,
 	// system-triggered transition too.
 	auditLog *postgres.AuditLogStore
+
+	// sentinelFix/reviewFinding are Step 48's ("sentinels + suggestions",
+	// §17) own additions -- pushpr.go's own createSentinelFixPRBestEffort
+	// reads sentinelFix (by this Actor's own session id, the FIX session)
+	// to learn the origin PR's own head branch/number, then writes both
+	// stores back once the fix PR actually opens.
+	sentinelFix   *postgres.SentinelFixStore
+	reviewFinding *postgres.ReviewFindingStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
@@ -125,6 +133,8 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		linearAgentSession: postgres.NewLinearAgentSessionStore(pool),
 		plan:               postgres.NewPlanStore(pool),
 		auditLog:           postgres.NewAuditLogStore(pool),
+		sentinelFix:        postgres.NewSentinelFixStore(pool),
+		reviewFinding:      postgres.NewReviewFindingStore(pool),
 	}
 }
 
@@ -184,6 +194,21 @@ type Registry struct {
 	// version still fingerprints deterministically, it just means every
 	// session's own fingerprint shares that one (test-only) value.
 	openCodeRuntimeVersion string
+
+	// githubBotToken is Step 48's ("sentinels + suggestions", §17.2) own
+	// addition, threaded through to every Actor this Registry hydrates
+	// exactly like the fields above: pushpr.go's own
+	// createSentinelFixPRBestEffort uses this SAME static bot credential
+	// (platform.Config.GitHubBotToken -- the identical one internal/
+	// adapters/outbound/githubapi.BotNotifier/VerdictNotifier already
+	// authenticate with) to open the fix PR, since a sentinel-auto-fix
+	// child session has NO human creator of its own to decrypt an OAuth
+	// token FOR (sessionRow.CreatedBy is invalid/NULL, SpawnChildSession's
+	// own doc comment) -- the fix PR is a system-initiated action,
+	// bot-attributed by design, mirroring §17.4's own "system-initiated,
+	// not a delegated human one" framing for the eventual merge. May be
+	// empty (tests that never exercise the sentinel-fix PR path).
+	githubBotToken string
 
 	// contractDriftDetected is Step 27's ("mocking + contract drift", §14.3)
 	// own OTel counter, constructed exactly once here (NewRegistry), then
@@ -274,6 +299,7 @@ func NewRegistry(
 	sourceControl ports.SourceControl,
 	tokenEncryptionKey []byte,
 	openCodeRuntimeVersion string,
+	githubBotToken ...string,
 ) (*Registry, error) {
 	meter := otel.Meter(meterName)
 
@@ -284,6 +310,11 @@ func NewRegistry(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: construct contract_drift_detected counter: %w", err)
+	}
+
+	var botToken string
+	if len(githubBotToken) > 0 {
+		botToken = githubBotToken[0]
 	}
 
 	lifecycleCtx, cancel := context.WithCancel(ctx)
@@ -299,6 +330,7 @@ func NewRegistry(
 		sourceControl:          sourceControl,
 		tokenEncryptionKey:     tokenEncryptionKey,
 		openCodeRuntimeVersion: openCodeRuntimeVersion,
+		githubBotToken:         botToken,
 		contractDriftDetected:  contractDriftDetected,
 		repoAccessCache:        newRepoAccessCache(),
 		lifecycleCtx:           lifecycleCtx,

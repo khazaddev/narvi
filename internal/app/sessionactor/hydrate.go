@@ -108,6 +108,7 @@ func (r *Registry) hydrateAndAcquire(ctx context.Context, sessionID pgtype.UUID)
 		sourceControl:          r.sourceControl,
 		tokenEncryptionKey:     r.tokenEncryptionKey,
 		openCodeRuntimeVersion: r.openCodeRuntimeVersion,
+		githubBotToken:         r.githubBotToken,
 		contractDriftDetected:  r.contractDriftDetected,
 		repoAccessCache:        r.repoAccessCache,
 		registry:               r,
