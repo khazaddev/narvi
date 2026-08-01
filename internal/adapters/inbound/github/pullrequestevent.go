@@ -128,17 +128,33 @@ type mergeGateDataSource interface {
 	// real cherry-pick mechanic exists -- see this file's own top doc
 	// comment).
 	MergeableCleanly(ctx context.Context, owner, repo string, fixPRNumber int32) (bool, error)
+	// StackRegistered reports whether the fix PR currently belongs to a
+	// GitHub-native stack -- confirmed-finding fix: §17.6 (and this file's
+	// own fixMerger doc comment) is explicit that this signal must ALWAYS
+	// be a FRESH GetPullRequest.Stack check, made at merge-gating time,
+	// never a locally-persisted boolean (sentinel_fixes.stack_registered
+	// is deliberately an observability-only column, per its own migration's
+	// doc comment: registration and merge-gating can be arbitrarily far
+	// apart in time, and the pair's own real stack status can change in
+	// between). Called ONLY once decision.Allowed is already true, and
+	// ONLY to decide WHICH merge endpoint fixMerger.CherryPickAndMerge
+	// should use -- it is never one of sentinelfix.EvaluateMergeGate's own
+	// four checks, and never widens or narrows that four-check policy.
+	StackRegistered(ctx context.Context, owner, repo string, fixPRNumber int32) (bool, error)
 }
 
 // githubMergeGateDataSource is this Step's own one real mergeGateDataSource:
 // ChangedFiles is REAL (parses the fix PR's own pre-fetched diff via the
 // SAME GetPullRequestDiff call this ingress already makes elsewhere);
-// CIStatus/MergeableCleanly are a named, NOT-yet-implemented gap (this
-// file's own top doc comment) -- both fail closed.
+// StackRegistered is REAL too (a fresh GetPullRequest call, PullRequestResolver
+// -- confirmed-finding fix, see mergeGateDataSource's own doc comment
+// above); CIStatus/MergeableCleanly are a named, NOT-yet-implemented gap
+// (this file's own top doc comment) -- both fail closed.
 type githubMergeGateDataSource struct {
-	diffFetcher reviewcontext.Fetcher
-	botToken    string
-	timeouts    platform.Timeouts
+	diffFetcher  reviewcontext.Fetcher
+	pullRequests PullRequestResolver
+	botToken     string
+	timeouts     platform.Timeouts
 }
 
 func (d *githubMergeGateDataSource) ChangedFiles(ctx context.Context, owner, repo string, fixPRNumber int32) ([]string, error) {
@@ -162,28 +178,82 @@ func (d *githubMergeGateDataSource) MergeableCleanly(context.Context, string, st
 	return false, errors.New("github: sentinel-auto-fix merge gate: mergeable-cleanly check is not yet implemented (no GitHub mergeable-state API research was performed for this Step)")
 }
 
-// parseChangedFilesFromDiff extracts every file path named by a unified
-// diff's own "+++ b/<path>" headers (GitHub's own raw-diff format, the
-// SAME shape GetPullRequestDiff already returns for the ordinary
-// pre-fetched-context feature, §8.2/Step 46) -- deliberately reuses "+++"
-// (the NEW-side header) rather than "---", so a file DELETED by the fix
-// session (named only by "--- a/<path>" with "+++ /dev/null") is not
-// double-counted incorrectly; this is a defensive detail that does not
-// matter for this feature's own real inputs (a sentinel fix only ever
-// adds/modifies test/doc files in practice) but keeps this parser
-// correct for any diff shape it might actually be handed.
+// StackRegistered implements mergeGateDataSource: a FRESH
+// PullRequestResolver.GetPullRequest call against the fix PR itself,
+// checked at merge-gating time -- confirmed-finding fix, see
+// mergeGateDataSource's own doc comment for why this must never be the
+// persisted sentinel_fixes.stack_registered column instead. d.pullRequests
+// == nil (this package's own handler_test.go, or any other minimal wiring
+// that doesn't care about this Step) is reported as a plain error, never
+// silently defaulted to false/true -- the caller (handlePullRequestClosed)
+// treats a failure here exactly like any other CherryPickAndMerge failure:
+// logged, no merge, fix PR left for ordinary human review.
+func (d *githubMergeGateDataSource) StackRegistered(ctx context.Context, owner, repo string, fixPRNumber int32) (bool, error) {
+	if d.pullRequests == nil {
+		return false, errors.New("github: sentinel-auto-fix merge gate: no pull request resolver configured")
+	}
+	getCtx, cancel := context.WithTimeout(ctx, d.timeouts.GitHubGetPRTimeout)
+	defer cancel()
+	pr, err := d.pullRequests.GetPullRequest(getCtx, owner, repo, fixPRNumber, d.botToken)
+	if err != nil {
+		return false, err
+	}
+	return pr.Stack != nil, nil
+}
+
+// parseChangedFilesFromDiff extracts every file path this diff touches,
+// from TWO distinct signal shapes in a unified diff (GitHub's own raw-diff
+// format, the SAME shape GetPullRequestDiff already returns for the
+// ordinary pre-fetched-context feature, §8.2/Step 46):
+//
+//   - "+++ b/<path>" headers (deliberately reuses "+++", the NEW-side
+//     header, rather than "---", so a file DELETED by the fix session
+//     (named only by "--- a/<path>" with "+++ /dev/null") is not
+//     double-counted incorrectly);
+//   - "rename from <path>"/"rename to <path>" lines -- confirmed-finding
+//     fix: a PURE rename (100% similarity, zero content change) produces
+//     NEITHER a "+++" NOR a "---" line at all (verified directly against
+//     real git behavior), so relying on "+++ " alone made this function
+//     -- and therefore firstNonTestOrDocPath/EvaluateMergeGate, this
+//     Step's own documented "independent of, and never assuming, §17.2's
+//     spawn-time capability restriction" backstop -- BLIND to a sentinel-
+//     fix session's own bash tool (never restricted by that capability
+//     layer) simply `git mv`-ing an existing production file onto a
+//     test/doc-looking path with no content change at all: changedFiles
+//     came back empty, and firstNonTestOrDocPath's own doc comment treats
+//     an empty list as "every file is test/doc, trivially" -- vacuously
+//     passing the one check this Step ships as that backstop's authoritative,
+//     tested-independent implementation. Both the OLD path ("rename from")
+//     and the NEW path ("rename to") are recorded: the new path alone would
+//     read as an innocent test/doc file (that IS the attack), so the old,
+//     real production path must also appear in this function's own return
+//     value for firstNonTestOrDocPath to ever see it and correctly deny.
+//     A rename WITH a content change also emits real "+++"/"---" lines
+//     alongside "rename from"/"rename to" -- recording the new path twice
+//     in that case is harmless (firstNonTestOrDocPath only needs to see an
+//     offending path once).
 func parseChangedFilesFromDiff(diff string) []string {
 	var files []string
 	for _, line := range strings.Split(diff, "\n") {
-		if !strings.HasPrefix(line, "+++ ") {
-			continue
+		switch {
+		case strings.HasPrefix(line, "+++ "):
+			path := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+			path = strings.TrimPrefix(path, "b/")
+			if path == "" || path == "/dev/null" {
+				continue
+			}
+			files = append(files, path)
+		case strings.HasPrefix(line, "rename from "):
+			path := strings.TrimSpace(strings.TrimPrefix(line, "rename from "))
+			if path != "" {
+				files = append(files, path)
+			}
+		case strings.HasPrefix(line, "rename to "):
+			path := strings.TrimSpace(strings.TrimPrefix(line, "rename to "))
+			if path != "" {
+				files = append(files, path)
+			}
 		}
-		path := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
-		path = strings.TrimPrefix(path, "b/")
-		if path == "" || path == "/dev/null" {
-			continue
-		}
-		files = append(files, path)
 	}
 	return files
 }
@@ -281,7 +351,20 @@ func handlePullRequestClosed(
 	mergeErrString := ""
 	if decision.Allowed {
 		mergeAttempted = true
-		if mergeErr := merger.CherryPickAndMerge(ctx, owner, repo, int(*fix.FixPrNumber), fix.StackRegistered); mergeErr != nil {
+		// Confirmed-finding fix: stackRegistered is resolved FRESH, right
+		// here, at merge-gating time -- never fix.StackRegistered (the
+		// persisted, observability-only column) -- see mergeGateDataSource.
+		// StackRegistered's own doc comment for why. A failure to determine
+		// it fresh is treated exactly like a CherryPickAndMerge failure
+		// itself: logged into mergeErrString, no merge attempted, fix PR
+		// left for ordinary human review -- never a silent fallback to a
+		// stale/guessed value that could route the real merge call to the
+		// wrong endpoint (legacy vs Stacks API), reproducing the exact
+		// GitHub-documented failure this amendment exists to avoid.
+		stackRegistered, stackErr := dataSource.StackRegistered(ctx, owner, repo, *fix.FixPrNumber)
+		if stackErr != nil {
+			mergeErrString = "could not determine fresh stack-registration state: " + stackErr.Error()
+		} else if mergeErr := merger.CherryPickAndMerge(ctx, owner, repo, int(*fix.FixPrNumber), stackRegistered); mergeErr != nil {
 			mergeErrString = mergeErr.Error()
 		} else {
 			if _, err := sentinelFixes.MarkMerged(ctx, fix.ID); err != nil {

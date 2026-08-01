@@ -260,3 +260,90 @@ func TestBuildFindings_NilForEmptyInput(t *testing.T) {
 		t.Errorf("BuildFindings(no findings) = %v, want nil", got)
 	}
 }
+
+// TestBuildFindings_DistinctLinesSameContentGetDistinctIdentities is the
+// confirmed-finding regression test: two DIFFERENT findings in the same
+// verdict submission, same file, same (post-normalization) description,
+// but different lines -- the exact "a coverage sentinel reports two real
+// gaps in the same file with the same boilerplate wording" scenario the
+// finding names -- must never collapse onto the same IdentityHash. Before
+// this fix, ComputeFindingIdentity(kind, path, description) alone (Line
+// deliberately excluded) made both hash identically, so the second
+// finding was silently lost (UpsertReviewFinding's own ON CONFLICT clause
+// only refreshes last_seen_at on a re-post of an already-known identity).
+func TestBuildFindings_DistinctLinesSameContentGetDistinctIdentities(t *testing.T) {
+	in := reviewpost.VerdictInput{
+		Findings: []reviewpost.FindingInput{
+			{SentinelKind: coverageKind(), Severity: review.RiskLevelMedium, FilePath: "internal/foo/bar.go", Line: intPtr(10), Description: "Missing test coverage for this function"},
+			{SentinelKind: coverageKind(), Severity: review.RiskLevelMedium, FilePath: "internal/foo/bar.go", Line: intPtr(80), Description: "Missing test coverage for this function"},
+		},
+	}
+
+	got := reviewpost.BuildFindings(in)
+	if len(got) != 2 {
+		t.Fatalf("BuildFindings() returned %d findings, want 2", len(got))
+	}
+	if got[0].IdentityHash == got[1].IdentityHash {
+		t.Errorf("BuildFindings() gave both findings the SAME IdentityHash %q -- two distinct findings at different lines silently collapsed onto one review_findings row", got[0].IdentityHash)
+	}
+	// Every other field still carries through untouched -- only IdentityHash
+	// is affected by the disambiguation.
+	if got[0].Line == nil || *got[0].Line != 10 || got[1].Line == nil || *got[1].Line != 80 {
+		t.Errorf("BuildFindings() Line fields = %v/%v, want 10/80 carried verbatim", got[0].Line, got[1].Line)
+	}
+}
+
+// TestBuildFindings_SingleOccurrenceIdentityUnaffected proves the fix is
+// scoped exactly to same-batch collisions: a finding whose own (kind,
+// path, description) is UNIQUE within its own verdict submission still
+// gets EXACTLY ComputeFindingIdentity's own return value -- byte for
+// byte -- so the ordinary, single-finding-per-identity, shifted-line-
+// still-matches behavior TestComputeFindingIdentity_SurvivesLineShift
+// pins is completely unaffected by this fix.
+func TestBuildFindings_SingleOccurrenceIdentityUnaffected(t *testing.T) {
+	in := reviewpost.VerdictInput{
+		Findings: []reviewpost.FindingInput{
+			{SentinelKind: coverageKind(), Severity: review.RiskLevelMedium, FilePath: "internal/foo/bar.go", Line: intPtr(10), Description: "Missing test coverage for the error path."},
+			{SentinelKind: docsDriftKind(), Severity: review.RiskLevelLow, FilePath: "docs/README.md", Line: intPtr(3), Description: "Stale example."},
+		},
+	}
+
+	got := reviewpost.BuildFindings(in)
+	if len(got) != 2 {
+		t.Fatalf("BuildFindings() returned %d findings, want 2", len(got))
+	}
+	for i, f := range in.Findings {
+		want := reviewpost.ComputeFindingIdentity(f.SentinelKind, f.FilePath, f.Description)
+		if got[i].IdentityHash != want {
+			t.Errorf("BuildFindings()[%d].IdentityHash = %q, want %q (an identity unique within its own batch must be left untouched)", i, got[i].IdentityHash, want)
+		}
+	}
+	if got[0].IdentityHash == got[1].IdentityHash {
+		t.Errorf("two genuinely different findings produced the SAME IdentityHash: %q", got[0].IdentityHash)
+	}
+}
+
+// TestBuildFindings_RepeatedBatchIsDeterministic proves the disambiguation
+// itself is pure/deterministic: calling BuildFindings twice with the exact
+// same (already-validated) VerdictInput -- mirroring a redelivered outbox
+// entry re-processing the identical posted verdict -- produces IDENTICAL
+// IdentityHash values both times, in order, so a genuine redelivery still
+// upserts onto the SAME two review_findings rows rather than minting two
+// new ones.
+func TestBuildFindings_RepeatedBatchIsDeterministic(t *testing.T) {
+	in := reviewpost.VerdictInput{
+		Findings: []reviewpost.FindingInput{
+			{SentinelKind: coverageKind(), Severity: review.RiskLevelMedium, FilePath: "a.go", Line: intPtr(1), Description: "same text"},
+			{SentinelKind: coverageKind(), Severity: review.RiskLevelMedium, FilePath: "a.go", Line: intPtr(2), Description: "same text"},
+		},
+	}
+
+	first := reviewpost.BuildFindings(in)
+	second := reviewpost.BuildFindings(in)
+	if len(first) != 2 || len(second) != 2 {
+		t.Fatalf("BuildFindings() returned %d/%d findings, want 2/2", len(first), len(second))
+	}
+	if first[0].IdentityHash != second[0].IdentityHash || first[1].IdentityHash != second[1].IdentityHash {
+		t.Errorf("BuildFindings() not deterministic across repeated calls with the same input: first=%v, second=%v", first, second)
+	}
+}

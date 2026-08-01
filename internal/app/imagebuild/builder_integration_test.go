@@ -178,6 +178,13 @@ func (f *fakeSourceControl) RegisterPRStack(context.Context, ports.RegisterPRSta
 	return errors.New("fakeSourceControl: RegisterPRStack not implemented")
 }
 
+// CreateBranch (Step 48 confirmed-finding fix) is never reached from this
+// package either -- same "not implemented" precedent as
+// GetFileContent/UpdateFileContent/RegisterPRStack above.
+func (f *fakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
+	return errors.New("fakeSourceControl: CreateBranch not implemented")
+}
+
 func (f *fakeSourceControl) shaCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

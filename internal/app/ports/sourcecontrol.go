@@ -223,6 +223,31 @@ type RegisterPRStackSpec struct {
 	Token     string
 }
 
+// CreateBranchSpec is what SourceControl.CreateBranch (Step 48 confirmed-
+// finding fix, §17.2) needs to create a brand-new branch ref pointing at
+// an already-known commit SHA -- the sentinel-auto-fix flow's own fix for
+// giving a fix child session an upstream branch DISTINCT from the origin
+// PR's own head branch to check out and push to (see
+// internal/app/outboxworker/sentinelautofix.go's own Deliver doc comment
+// for the full "why": without this, the fix session's repos[].branch was
+// the origin's own literal head-branch name, so its clone/checkout/push
+// all targeted that SAME branch -- silently fast-forwarding the still-
+// open origin PR with an unreviewed commit, and dooming the eventual fix-
+// PR CreatePR call to Head == Base, which GitHub rejects outright).
+type CreateBranchSpec struct {
+	Owner string
+	Repo  string
+	// Branch is the NEW branch name to create (refs/heads/<Branch>).
+	Branch string
+	// SHA is the commit this new branch is created FROM -- the caller's
+	// own already-resolved value (e.g. ResolveBranchSHA's own first return
+	// value), never re-resolved by this method itself.
+	SHA string
+	// Token is the same plaintext, decrypted OAuth/bot access token shape
+	// every other spec in this file already uses. Never logged.
+	Token string
+}
+
 // SourceControl is the port that creates a pull request against a source-
 // control host (§4.3). internal/adapters/outbound/githubapi (Step 21) is
 // the first real implementation; internal/adapters/outbound/gitlabapi
@@ -333,4 +358,17 @@ type SourceControl interface {
 	// createSentinelFixPRBestEffort, not something this port silently
 	// swallows on the caller's behalf).
 	RegisterPRStack(ctx context.Context, spec RegisterPRStackSpec) error
+
+	// CreateBranch creates a new branch ref (refs/heads/spec.Branch)
+	// pointing at spec.SHA (Step 48 confirmed-finding fix, §17.2) --
+	// IDEMPOTENT: a spec.Branch that already exists is treated as success,
+	// never an error, since this method's own one real caller (the
+	// sentinel-auto-fix notifier) may be redelivered for the SAME claim
+	// before the branch's own creation is durably recorded anywhere else,
+	// and re-observing an already-created ref is exactly the outcome an
+	// idempotent retry must produce. Errors are plain, exactly like
+	// CreatePR/ResolveBranchSHA above -- no caller of this port retries or
+	// trips a circuit-breaker on a creation failure beyond the outbox
+	// worker's own existing backoff/retry machinery.
+	CreateBranch(ctx context.Context, spec CreateBranchSpec) error
 }

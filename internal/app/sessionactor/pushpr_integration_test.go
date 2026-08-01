@@ -269,6 +269,15 @@ func (f *fakeSourceControl) lastRegisterStackSpec() ports.RegisterPRStackSpec {
 	return f.registerStackCalls[len(f.registerStackCalls)-1]
 }
 
+// CreateBranch (Step 48 confirmed-finding fix) is never reached from this
+// package's own pushpr.go -- that call happens in internal/app/outboxworker
+// (sentinelautofix.go), BEFORE this package's own code ever runs for a
+// sentinel-auto-fix session -- clear "not implemented" mirrors
+// GetFileContent/UpdateFileContent's own identical precedent above.
+func (f *fakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
+	return errors.New("fakeSourceControl: CreateBranch not implemented")
+}
+
 // reposJSONForTest builds the sessions.repos JSONB shape (design decision
 // 1) for exactly one repo, name/url/branch as given.
 func reposJSONForTest(t *testing.T, name, url, branch string) []byte {

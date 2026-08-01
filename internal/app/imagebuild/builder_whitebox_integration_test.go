@@ -149,6 +149,12 @@ func (f *whiteboxFakeSourceControl) RegisterPRStack(context.Context, ports.Regis
 	return errors.New("whiteboxFakeSourceControl: RegisterPRStack not implemented")
 }
 
+// CreateBranch (Step 48 confirmed-finding fix) is never reached from this
+// package either -- same "not implemented" precedent as the methods above.
+func (f *whiteboxFakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
+	return errors.New("whiteboxFakeSourceControl: CreateBranch not implemented")
+}
+
 // whiteboxFakeBuildProvider is a minimal test-only ports.SandboxProvider,
 // duplicated from builder_integration_test.go's own fakeBuildProvider for
 // the identical cross-package reason.

@@ -349,6 +349,9 @@ func (f *applySuggestionFakeSourceControl) UpdateFileContent(_ context.Context, 
 func (f *applySuggestionFakeSourceControl) RegisterPRStack(context.Context, ports.RegisterPRStackSpec) error {
 	return errors.New("not implemented")
 }
+func (f *applySuggestionFakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
+	return errors.New("not implemented")
+}
 
 var _ ports.SourceControl = (*applySuggestionFakeSourceControl)(nil)
 

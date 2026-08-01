@@ -244,7 +244,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// care about this Step) falls through to the ordinary pipeline
 		// unchanged, which acknowledges it as a no-op exactly like today.
 		if eventType == eventTypePullRequest && cfg.SentinelFixes != nil && readPullRequestEventAction(body) == "closed" {
-			dataSource := &githubMergeGateDataSource{diffFetcher: cfg.DiffFetcher, botToken: cfg.BotToken, timeouts: cfg.Timeouts}
+			dataSource := &githubMergeGateDataSource{diffFetcher: cfg.DiffFetcher, pullRequests: cfg.PullRequests, botToken: cfg.BotToken, timeouts: cfg.Timeouts}
 			handlePullRequestClosed(ctx, w, body, cfg.SentinelFixes, cfg.RepoSettings, cfg.AuditLog, dataSource, notImplementedFixMerger{})
 			return
 		}

@@ -933,6 +933,49 @@ func (a *Adapter) RegisterPRStack(ctx context.Context, spec ports.RegisterPRStac
 	return nil
 }
 
+// createRefRequest is the body POSTed to /repos/{owner}/{repo}/git/refs
+// (Step 48 confirmed-finding fix, §17.2 -- "Git References" API:
+// https://docs.github.com/rest/git/refs#create-a-reference).
+type createRefRequest struct {
+	Ref string `json:"ref"`
+	SHA string `json:"sha"`
+}
+
+// createRefAlreadyExistsMarker is the distinctive substring GitHub's own
+// documented error message carries when POST .../git/refs names a ref
+// that already exists ("Reference already exists") -- GitHub reports this
+// as a plain 422, the SAME status a dozen other validation failures also
+// use, so there is no status-code-alone way to distinguish "idempotent
+// retry, already created" from a genuine validation error; this adapter's
+// own doGet/CreatePR error-envelope parsing already surfaces GitHub's
+// message text for exactly this reason (see APIError's own doc comment).
+const createRefAlreadyExistsMarker = "already exists"
+
+// CreateBranch implements ports.SourceControl (Step 48 confirmed-finding
+// fix, §17.2): a real POST /repos/{owner}/{repo}/git/refs call. Idempotent
+// per ports.SourceControl.CreateBranch's own doc comment: a 422 whose
+// message names the ref as already existing is treated as success, never
+// an error -- see createRefAlreadyExistsMarker's own doc comment for why
+// message-matching, not status-code-matching, is this adapter's only way
+// to recognize it.
+func (a *Adapter) CreateBranch(ctx context.Context, spec ports.CreateBranchSpec) error {
+	reqBody, err := json.Marshal(createRefRequest{Ref: "refs/heads/" + spec.Branch, SHA: spec.SHA})
+	if err != nil {
+		return fmt.Errorf("githubapi: encode create-branch request: %w", err)
+	}
+
+	path := fmt.Sprintf("%s/repos/%s/%s/git/refs", a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo))
+	if _, err := a.doPost(ctx, path, spec.Token, reqBody); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnprocessableEntity &&
+			strings.Contains(strings.ToLower(apiErr.Message), createRefAlreadyExistsMarker) {
+			return nil
+		}
+		return fmt.Errorf("githubapi: create branch: %w", err)
+	}
+	return nil
+}
+
 // doPut performs one authenticated PUT against a.apiBaseURL+path with
 // reqBody as the JSON request body -- the doPost-analog this package's
 // own doc.go promises, needed because GitHub's Contents API create-or-
