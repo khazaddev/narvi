@@ -62,4 +62,8 @@ export interface SessionConfig {
    * §14.1: the session's own Environment.path_scope, when one is attached -- the sparse-checkout glob patterns internal/sandboxagent/gitclone.CloneAll passes to `git sparse-checkout set` for each repo, immediately after that repo's own clone succeeds. Genuinely OPTIONAL (may be absent from the document entirely), NOT required-nullable like the fields above: absent or null both mean unscoped, today's exact unchanged full-access behavior -- the overwhelming common case, and every SessionConfig document produced before this field existed remains valid as-is.
    */
   pathScope?: string[] | null;
+  /**
+   * Step 48 (§17.2): true exactly for a sentinel-auto-fix child session (sessions.provenance_tag == 'sentinel_auto_fix') -- sandbox-agent writes a glob-restricted 'sentinel-fix' OpenCode custom agent config (edit permission allowed only for test/doc path patterns) into the workspace BEFORE spawning `opencode serve`, and every build-mode turn dispatched on this session selects that agent instead of the ordinary 'build' one. A second, independent layer alongside §17.4's own post-hoc diff-scope check -- restricts the edit TOOL specifically, never bash (see internal/adapters/outbound/opencode's own sentinelfixagent.go doc comment for the full mechanism and its own honest, named limits). Genuinely OPTIONAL, like pathScope above: absent/false is today's exact unchanged behavior for every session created before this field existed.
+   */
+  capabilityRestricted?: boolean;
 }

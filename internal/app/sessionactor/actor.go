@@ -87,6 +87,13 @@ type Actor struct {
 	// e.g. the resilience test).
 	sourceControl ports.SourceControl
 
+	// githubBotToken is Step 48's ("sentinels + suggestions", §17.2) own
+	// addition -- see Registry's own identical field doc comment
+	// (registry.go) for the full rationale; createSentinelFixPRBestEffort
+	// (pushpr.go) is this Actor's own one use of it. May be empty (tests
+	// that never exercise the sentinel-fix PR path).
+	githubBotToken string
+
 	// tokenEncryptionKey decrypts identities.access_token_encrypted (§13.1)
 	// to obtain the session creator's own plaintext GitHub OAuth access
 	// token -- the SAME key platform.Config.TokenEncryptionKey already

@@ -47,6 +47,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -201,6 +202,22 @@ type testRig struct {
 	// handle to build RerunGuidance from.
 	repoSettings *narvipg.RepoSettingsStore
 	botHandle    string
+
+	// reviewFindings/sentinelFixes (Step 48, "sentinels + suggestions",
+	// §17/§22.1) back this rig's own findings-upsert/rebut/apply-
+	// suggestion routes (reviewfindings_integration_test.go) and the
+	// verdict-posting route's own extended findings/sentinel-auto-fix
+	// behavior (reviewverdict_integration_test.go).
+	reviewFindings *narvipg.ReviewFindingStore
+	sentinelFixes  *narvipg.SentinelFixStore
+
+	// sourceControl backs the apply-suggestion route's own GetFileContent/
+	// UpdateFileContent calls -- defaults to nil (ApplySuggestion's own
+	// callers all fail closed on a nil port the same way every other
+	// nil-safe optional dependency in this rig does); a test exercising
+	// ApplySuggestion's happy path overrides this via newTestRig's own
+	// mutate func with a fake implementing ports.SourceControl.
+	sourceControl ports.SourceControl
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -249,6 +266,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		prSessions:          narvipg.NewGitHubPRSessionStore(pool),
 		repoSettings:        narvipg.NewRepoSettingsStore(pool),
 		botHandle:           "narvi-test-bot",
+		reviewFindings:      narvipg.NewReviewFindingStore(pool),
+		sentinelFixes:       narvipg.NewSentinelFixStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -275,7 +294,11 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		// comment. rig.diffFetcher/rig.botToken default nil/"" -- see this
 		// rig's own diffFetcher field doc comment for why, and for how a
 		// test overrides them.
-		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.botToken, platform.DefaultTimeouts()))
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.reviewFindings, rig.botToken, platform.DefaultTimeouts()))
+		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48)
+		// -- see reviewfindings.go's own doc comment.
+		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(rig.sessions, rig.prSessions, rig.reviewFindings, rig.auditLog))
+		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(rig.sessions, rig.prSessions, rig.reviewFindings, rig.identities, rig.sourceControl, rig.tokenEncryptionKey, platform.DefaultTimeouts()))
 	})
 	// /api/members, /api/audit-log (Step 39, "identities + full RBAC",
 	// §13.2/§13.3) -- mounted exactly like cmd/control-plane/main.go's own
@@ -313,7 +336,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2) is mounted
 	// the SAME way -- see reviewverdict.go's own doc comment.
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(rig.sandboxes, rig.prSessions, rig.repoSettings, rig.outbox, rig.botHandle))
+		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.botHandle))
 	// /api/repos/{owner}/{repo}/settings (Step 47) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
 	// (see reposettings.go's own doc comment).

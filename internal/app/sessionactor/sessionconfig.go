@@ -17,6 +17,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/domain/provenance"
 )
 
 // publicWsBaseURL derives a ws(s):// base URL from httpBaseURL (platform.
@@ -190,5 +191,13 @@ func (a *Actor) assembleSessionConfig(
 		SandboxId:         sandboxID,
 		SandboxToken:      plaintextToken,
 		SessionId:         sessionID,
+		// CapabilityRestricted (Step 48, §17.2): true exactly for a
+		// sentinel-auto-fix child session -- see provenance.
+		// IsSentinelAutoFix's own doc comment for the three independent
+		// things that key off this SAME provenance_tag value; this is the
+		// third: sandbox-agent writes the glob-restricted OpenCode agent
+		// config into the workspace before ever spawning `opencode serve`
+		// for this ONE kind of session.
+		CapabilityRestricted: provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag),
 	}, nil
 }

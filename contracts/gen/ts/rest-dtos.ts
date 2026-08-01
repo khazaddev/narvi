@@ -387,6 +387,81 @@ export interface PostReviewVerdictRequest {
    * The agent's own free-text narrative explaining the verdict -- required, never re-parsed back out as structured data once posted (review/doc.go's own 'nothing here even imports a markdown parser, on principle' stance).
    */
   summary: string;
+  /**
+   * Step 48's own additive extension (§8.2/§17/§22.1): zero or more per-finding typed fields, alongside the verdict's own aggregate fields above. OPTIONAL -- absent/empty means this verdict reports no individual findings, exactly like every verdict posted before this Step. See internal/domain/reviewpost/finding.go's own doc comment for why identityHash is NEVER accepted here (server-computed only, from sentinelKind+filePath+description).
+   */
+  findings?: PostedFinding[];
+}
+/**
+ * One finding's own typed fields, as posted by the verdict-posting tool call (Step 48) -- NEVER carries an identity hash (server-computed, internal/domain/reviewpost.ComputeFindingIdentity, never client-supplied -- the same 'don't trust the model with anything authoritative' discipline as PostReviewVerdictRequest.proposedShippable).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PostedFinding".
+ */
+export interface PostedFinding {
+  /**
+   * Null for an ordinary (non-sentinel) risk-map finding. One of 'coverage'/'docs_drift' when present (§17.1: only these two sentinels can ever trigger the sentinel-auto-fix flow) -- deliberately modeled as an unconstrained nullable string here, not a schema-level enum (mirroring UpdateMemberRoleRequest.role's own identical precedent): the closed vocabulary is enforced at the application layer (internal/domain/reviewpost.ValidateFindingInput), which owns the specific 'unrecognized sentinel kind' 400 message.
+   */
+  sentinelKind?: string | null;
+  /**
+   * Reuses review.RiskLevel's own three-tier vocabulary -- one finding's own severity, independent of the verdict's overall riskLevel.
+   */
+  severity: 'low' | 'medium' | 'high';
+  filePath: string;
+  /**
+   * Informational only -- NEVER part of this finding's own identity hash, so a finding re-reported at a shifted line number is still recognized as the same finding (§22.1).
+   */
+  line?: number | null;
+  description: string;
+  /**
+   * An optional unified-diff/patch text the apply-suggestion endpoint (§12.2 item 2) can attempt to apply.
+   */
+  suggestedFix?: string | null;
+}
+/**
+ * One review_findings row's own REST wire shape (migrations/000046_review_findings.up.sql) -- returned by the rebut and apply-suggestion endpoints (Step 48) so a caller can confirm the resulting state.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ReviewFinding".
+ */
+export interface ReviewFinding {
+  identityHash: string;
+  sentinelKind: string | null;
+  severity: 'low' | 'medium' | 'high';
+  filePath: string;
+  line: number | null;
+  description: string;
+  suggestedFix: string | null;
+  /**
+   * Matches internal/domain/reviewpost.FindingStatus exactly.
+   */
+  status: 'open' | 'rebutted' | 'fix_pending' | 'fix_open' | 'fix_merged' | 'fix_applied';
+  rebuttalText: string | null;
+}
+/**
+ * Request body for POST /api/sessions/:id/review/findings/:identityHash/rebut (Step 48, §22.1) -- maintainer+ only (authz.ActionEditReviewVerdict).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "RebutFindingRequest".
+ */
+export interface RebutFindingRequest {
+  /**
+   * The maintainer's own reason this finding is not a genuine issue.
+   */
+  rebuttalText: string;
+}
+/**
+ * 200 response body for POST /api/sessions/:id/review/findings/:identityHash/apply-suggestion (Step 48, §12.2 item 2).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ApplySuggestionResponse".
+ */
+export interface ApplySuggestionResponse {
+  identityHash: string;
+  /**
+   * The new commit this call created on the PR's own head branch, applying the finding's suggestedFix.
+   */
+  commitSha: string;
 }
 /**
  * 201 response body for POST /sessions/:id/review/verdict -- the server-computed authoritative results the caller cannot itself derive, so a review agent can log/confirm what actually happened.
@@ -407,9 +482,13 @@ export interface PostReviewVerdictResponse {
    * The review:*-risk label (internal/domain/reviewpost.RiskLabel) now reflecting this verdict's own RiskLevel on the pull request.
    */
   syncedLabel: string;
+  /**
+   * Step 48's own additive extension: the server-computed identityHash for each posted finding, in the SAME order as the request's own findings array -- so a caller can log/correlate them. Absent/empty when the request posted no findings.
+   */
+  findingIdentityHashes?: string[];
 }
 /**
- * GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: future Steps (48's sentinel auto-fix toggle, 58's auto-merge toggle, 61's automatic-re-review opt-in) are each expected to add a further boolean property here, never a bespoke DTO of their own.
+ * GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: future Steps (58's auto-merge toggle, 61's automatic-re-review opt-in) are each expected to add a further boolean property here, never a bespoke DTO of their own.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "RepoSettings".
@@ -423,13 +502,18 @@ export interface RepoSettings {
    * §21.2: an admin, per-repo, strict-boolean setting that reuses the verdict-posting tool's SAME formal-review submission path and carries no independent permission of its own -- see internal/domain/reviewpost.ComputeFormalReviewEvent's own doc comment for its exact effect.
    */
   blockOnHighRisk: boolean;
+  /**
+   * §17.1: admin-only, per-repo, off by default -- enables the sentinel-auto-fix flow (coverage/doc-drift findings spawn a child session that opens its own merge-gated follow-up PR). A stricter gate than blockOnHighRisk/the criteria-driven auto-approval config, since it ends in an unattended merge.
+   */
+  sentinelAutofixEnabled: boolean;
 }
 /**
- * Request body for PUT /api/repos/{owner}/{repo}/settings.
+ * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "UpdateRepoSettingsRequest".
  */
 export interface UpdateRepoSettingsRequest {
   blockOnHighRisk: boolean;
+  sentinelAutofixEnabled?: boolean;
 }

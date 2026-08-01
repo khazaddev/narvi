@@ -163,6 +163,28 @@ func (f *fakeSourceControl) CheckRepoAccess(context.Context, ports.CheckRepoAcce
 	return false, errors.New("fakeSourceControl: CheckRepoAccess not implemented")
 }
 
+// GetFileContent/UpdateFileContent/RegisterPRStack (Step 48, "sentinels +
+// suggestions") are never reached from this package -- same "not
+// implemented" precedent as CheckRepoAccess above.
+func (f *fakeSourceControl) GetFileContent(context.Context, ports.GetFileContentSpec) (string, string, bool, error) {
+	return "", "", false, errors.New("fakeSourceControl: GetFileContent not implemented")
+}
+
+func (f *fakeSourceControl) UpdateFileContent(context.Context, ports.UpdateFileContentSpec) (string, error) {
+	return "", errors.New("fakeSourceControl: UpdateFileContent not implemented")
+}
+
+func (f *fakeSourceControl) RegisterPRStack(context.Context, ports.RegisterPRStackSpec) error {
+	return errors.New("fakeSourceControl: RegisterPRStack not implemented")
+}
+
+// CreateBranch (Step 48 confirmed-finding fix) is never reached from this
+// package either -- same "not implemented" precedent as
+// GetFileContent/UpdateFileContent/RegisterPRStack above.
+func (f *fakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
+	return errors.New("fakeSourceControl: CreateBranch not implemented")
+}
+
 func (f *fakeSourceControl) shaCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

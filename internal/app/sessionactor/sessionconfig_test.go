@@ -9,12 +9,14 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/domain/provenance"
 )
 
 // sessionRowWithRepos builds a minimal sqlcgen.Session carrying a real,
 // randomly generated id and reposJSON as its raw repos bytes -- enough for
-// assembleSessionConfig, which only reads ID/Repos from its sessionRow
-// argument.
+// assembleSessionConfig, which reads ID/Repos/ProvenanceTag from its
+// sessionRow argument (ProvenanceTag left nil here -- see
+// sessionRowWithReposAndProvenance below for a sentinel-auto-fix session).
 func sessionRowWithRepos(t *testing.T, reposJSON string) sqlcgen.Session {
 	t.Helper()
 	var id pgtype.UUID
@@ -22,6 +24,20 @@ func sessionRowWithRepos(t *testing.T, reposJSON string) sqlcgen.Session {
 		t.Fatalf("scan uuid: %v", err)
 	}
 	return sqlcgen.Session{ID: id, Repos: []byte(reposJSON)}
+}
+
+// sessionRowWithReposAndProvenance is sessionRowWithRepos' own sibling,
+// additionally setting ProvenanceTag -- used by
+// TestAssembleSessionConfig_CapabilityRestricted below to prove
+// CapabilityRestricted's own confirmed-finding test gap: the wiring from
+// a session's own provenance_tag to SessionConfig.CapabilityRestricted
+// (sessionconfig.go) had zero test coverage anywhere in this diff before
+// this fix.
+func sessionRowWithReposAndProvenance(t *testing.T, reposJSON, provenanceTag string) sqlcgen.Session {
+	t.Helper()
+	row := sessionRowWithRepos(t, reposJSON)
+	row.ProvenanceTag = &provenanceTag
+	return row
 }
 
 // TestPublicWsBaseURL is table-driven over http->ws and https->wss scheme
@@ -187,6 +203,56 @@ func TestAssembleSessionConfig(t *testing.T) {
 			if cfg.SessionId != sessionRow.ID.String() {
 				t.Errorf("SessionId = %q, want %q", cfg.SessionId, sessionRow.ID.String())
 			}
+			if cfg.CapabilityRestricted {
+				t.Errorf("CapabilityRestricted = true, want false (an ordinary session, no provenance_tag set at all)")
+			}
 		})
 	}
 }
+
+// TestAssembleSessionConfig_CapabilityRestricted is the confirmed-finding
+// regression test for SessionConfig.CapabilityRestricted's own wiring
+// (sessionconfig.go): true exactly when sessionRow.ProvenanceTag is
+// provenance.SentinelAutoFix, false for every other value (including nil,
+// covered by TestAssembleSessionConfig above, and an ordinary, unrelated
+// non-empty tag). Before this fix, no test anywhere in this diff ever
+// constructed a sessionRow with ProvenanceTag set at all, so a regression
+// silently setting CapabilityRestricted to a constant false (or deleting
+// the line entirely) would have compiled and passed every existing test.
+func TestAssembleSessionConfig_CapabilityRestricted(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		provenanceTag *string
+		want          bool
+	}{
+		{name: "sentinel-auto-fix provenance restricts capability", provenanceTag: strPtr(provenance.SentinelAutoFix), want: true},
+		{name: "nil provenance tag is unrestricted", provenanceTag: nil, want: false},
+		{name: "an unrelated provenance tag is unrestricted", provenanceTag: strPtr("something_else"), want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := &Actor{publicBaseURL: "https://narvi.example.com"}
+			var sessionRow sqlcgen.Session
+			if tc.provenanceTag != nil {
+				sessionRow = sessionRowWithReposAndProvenance(t, `[{"name":"widgets","url":"https://github.com/acme/widgets","branch":null}]`, *tc.provenanceTag)
+			} else {
+				sessionRow = sessionRowWithRepos(t, `[{"name":"widgets","url":"https://github.com/acme/widgets","branch":null}]`)
+			}
+
+			cfg, err := a.assembleSessionConfig(context.Background(), nil, sessionRow, 1, "plaintext-token", uuid.NewString(), sessionconfig.SessionConfigBootModeFresh)
+			if err != nil {
+				t.Fatalf("assembleSessionConfig() error = %v, want nil", err)
+			}
+			if cfg.CapabilityRestricted != tc.want {
+				t.Errorf("CapabilityRestricted = %v, want %v (provenance_tag = %v)", cfg.CapabilityRestricted, tc.want, tc.provenanceTag)
+			}
+		})
+	}
+}
+
+func strPtr(s string) *string { return &s }

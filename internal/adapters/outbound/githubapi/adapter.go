@@ -3,6 +3,7 @@ package githubapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -806,4 +807,211 @@ func (a *Adapter) ResolveContractsFingerprint(ctx context.Context, spec ports.Re
 	}
 
 	return contractdrift.Fingerprint(shas), true, nil
+}
+
+// getFileContentResponse is the subset of GitHub's real GET
+// /repos/{owner}/{repo}/contents/{path} response shape this adapter needs
+// for a SINGLE FILE (as opposed to a directory listing, decoded via
+// []contentsEntry above) -- https://docs.github.com/rest/repos/contents#get-repository-content.
+// GitHub base64-encodes Content, with embedded newlines every 60 chars
+// (its own documented behavior) -- base64.StdEncoding.DecodeString
+// tolerates that fine (it ignores non-alphabet whitespace).
+type getFileContentResponse struct {
+	Content string `json:"content"`
+	Sha     string `json:"sha"`
+}
+
+// GetFileContent implements ports.SourceControl (Step 48, "sentinels +
+// suggestions", §12.2 item 2): a real GET https://api.github.com/repos/
+// {owner}/{repo}/contents/{path}?ref={ref} call, authenticated with
+// spec.Token. exists=false, err=nil on a 404 -- mirrors
+// ResolveContractsFingerprint's own identical "a missing path is a
+// legitimate answer, never conflated with a real API failure" discipline
+// immediately above.
+func (a *Adapter) GetFileContent(ctx context.Context, spec ports.GetFileContentSpec) (content, sha string, exists bool, err error) {
+	// Escaping discipline mirrors ResolveContractsFingerprint exactly:
+	// Owner/Repo as opaque path segments, Path segment-by-segment
+	// (review_findings.file_path is a real, multi-segment repo-relative
+	// path), Ref as a query value.
+	contentsPath := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
+		a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo), escapePathSegments(spec.Path), url.QueryEscape(spec.Ref))
+	body, err := a.doGet(ctx, contentsPath, spec.Token)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return "", "", false, nil
+		}
+		return "", "", false, fmt.Errorf("githubapi: get file content: %w", err)
+	}
+
+	var parsed getFileContentResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", "", false, fmt.Errorf("githubapi: decode get-file-content response: %w", err)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(parsed.Content, "\n", ""))
+	if err != nil {
+		return "", "", false, fmt.Errorf("githubapi: decode file content base64: %w", err)
+	}
+
+	return string(decoded), parsed.Sha, true, nil
+}
+
+// updateFileContentRequest is the body PUT to /repos/{owner}/{repo}/
+// contents/{path} (real GitHub REST API shape --
+// https://docs.github.com/rest/repos/contents#create-or-update-file-contents).
+type updateFileContentRequest struct {
+	Message string `json:"message"`
+	Content string `json:"content"`
+	Sha     string `json:"sha"`
+	Branch  string `json:"branch"`
+}
+
+// updateFileContentResponse is the subset of GitHub's real response shape
+// this adapter needs -- the new commit's own sha.
+type updateFileContentResponse struct {
+	Commit struct {
+		SHA string `json:"sha"`
+	} `json:"commit"`
+}
+
+// UpdateFileContent implements ports.SourceControl (Step 48, §12.2 item
+// 2): a real PUT https://api.github.com/repos/{owner}/{repo}/contents/
+// {path} call, authenticated with spec.Token AS THE ACTING MAINTAINER
+// (never the original session creator's token -- see
+// ports.UpdateFileContentSpec's own doc comment) -- the commit this call
+// creates is attributed to spec.Token's own identity by GitHub itself,
+// exactly like CreatePR's own token-based attribution.
+func (a *Adapter) UpdateFileContent(ctx context.Context, spec ports.UpdateFileContentSpec) (string, error) {
+	reqBody, err := json.Marshal(updateFileContentRequest{
+		Message: spec.Message,
+		Content: base64.StdEncoding.EncodeToString([]byte(spec.Content)),
+		Sha:     spec.SHA,
+		Branch:  spec.Branch,
+	})
+	if err != nil {
+		return "", fmt.Errorf("githubapi: encode update-file-content request: %w", err)
+	}
+
+	contentsPath := fmt.Sprintf("%s/repos/%s/%s/contents/%s",
+		a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo), escapePathSegments(spec.Path))
+	body, err := a.doPut(ctx, contentsPath, spec.Token, reqBody)
+	if err != nil {
+		return "", fmt.Errorf("githubapi: update file content: %w", err)
+	}
+
+	var parsed updateFileContentResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("githubapi: decode update-file-content response: %w", err)
+	}
+
+	return parsed.Commit.SHA, nil
+}
+
+// registerPRStackRequest is the body POSTed to /repos/{owner}/{repo}/stacks
+// (§17.2/§17.6's own amendment -- "POST /repos/{owner}/{repo}/stacks with
+// pull_requests: [originPR, fixPR] (bottom to top)").
+type registerPRStackRequest struct {
+	PullRequests []int `json:"pull_requests"`
+}
+
+// RegisterPRStack implements ports.SourceControl (Step 48, §17.2/§17.6).
+// Per that section's own design, a failure here is the CALLER's own
+// policy to log-and-ignore (pushpr.go's createSentinelFixPRBestEffort) --
+// this method itself still reports the plain error either way, never
+// swallowing it silently on the caller's behalf.
+func (a *Adapter) RegisterPRStack(ctx context.Context, spec ports.RegisterPRStackSpec) error {
+	reqBody, err := json.Marshal(registerPRStackRequest{PullRequests: spec.PRNumbers})
+	if err != nil {
+		return fmt.Errorf("githubapi: encode register-pr-stack request: %w", err)
+	}
+
+	stacksPath := fmt.Sprintf("%s/repos/%s/%s/stacks", a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo))
+	if _, err := a.doPost(ctx, stacksPath, spec.Token, reqBody); err != nil {
+		return fmt.Errorf("githubapi: register pr stack: %w", err)
+	}
+	return nil
+}
+
+// createRefRequest is the body POSTed to /repos/{owner}/{repo}/git/refs
+// (Step 48 confirmed-finding fix, §17.2 -- "Git References" API:
+// https://docs.github.com/rest/git/refs#create-a-reference).
+type createRefRequest struct {
+	Ref string `json:"ref"`
+	SHA string `json:"sha"`
+}
+
+// createRefAlreadyExistsMarker is the distinctive substring GitHub's own
+// documented error message carries when POST .../git/refs names a ref
+// that already exists ("Reference already exists") -- GitHub reports this
+// as a plain 422, the SAME status a dozen other validation failures also
+// use, so there is no status-code-alone way to distinguish "idempotent
+// retry, already created" from a genuine validation error; this adapter's
+// own doGet/CreatePR error-envelope parsing already surfaces GitHub's
+// message text for exactly this reason (see APIError's own doc comment).
+const createRefAlreadyExistsMarker = "already exists"
+
+// CreateBranch implements ports.SourceControl (Step 48 confirmed-finding
+// fix, §17.2): a real POST /repos/{owner}/{repo}/git/refs call. Idempotent
+// per ports.SourceControl.CreateBranch's own doc comment: a 422 whose
+// message names the ref as already existing is treated as success, never
+// an error -- see createRefAlreadyExistsMarker's own doc comment for why
+// message-matching, not status-code-matching, is this adapter's only way
+// to recognize it.
+func (a *Adapter) CreateBranch(ctx context.Context, spec ports.CreateBranchSpec) error {
+	reqBody, err := json.Marshal(createRefRequest{Ref: "refs/heads/" + spec.Branch, SHA: spec.SHA})
+	if err != nil {
+		return fmt.Errorf("githubapi: encode create-branch request: %w", err)
+	}
+
+	path := fmt.Sprintf("%s/repos/%s/%s/git/refs", a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo))
+	if _, err := a.doPost(ctx, path, spec.Token, reqBody); err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnprocessableEntity &&
+			strings.Contains(strings.ToLower(apiErr.Message), createRefAlreadyExistsMarker) {
+			return nil
+		}
+		return fmt.Errorf("githubapi: create branch: %w", err)
+	}
+	return nil
+}
+
+// doPut performs one authenticated PUT against a.apiBaseURL+path with
+// reqBody as the JSON request body -- the doPost-analog this package's
+// own doc.go promises, needed because GitHub's Contents API create-or-
+// update-file-contents endpoint is specifically a PUT, never a POST.
+// Otherwise byte-for-byte the same bounded-read/error-envelope-parsing
+// shape as doGet/doPost.
+func (a *Adapter) doPut(ctx context.Context, path, token string, reqBody []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, path, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: build put request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: put request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: read put response: %w", err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		message := "no error body"
+		var parsed githubErrorBody
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Message != "" {
+			message = parsed.Message
+		} else if len(body) > 0 {
+			message = "error body did not match GitHub's expected error envelope"
+		}
+		return nil, &APIError{Status: resp.StatusCode, Message: message}
+	}
+
+	return body, nil
 }

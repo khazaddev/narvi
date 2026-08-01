@@ -1,0 +1,16 @@
+-- sentinel_autofix_enabled: Step 48's own admin-only, per-repo toggle
+-- (§17.1: "Disabled by default; a per-repo toggle enables it ...
+-- admin-only -- a STRICTER gate than the criteria-driven auto-approval
+-- config (§21) ... the risk delta justifies the stricter row"). Added as
+-- a further column on the SAME repo_settings table Step 47 already shaped
+-- for exactly this (migrations/000044_repo_settings.up.sql's own doc
+-- comment: "future Steps (48's sentinel auto-fix toggle...) are each
+-- expected to add a further boolean property here, never a bespoke DTO of
+-- their own") -- NOT a new table, NOT a new endpoint (httpapi/
+-- reposettings.go's own GET/PUT routes are extended, not duplicated).
+--
+-- DEFAULT false: a repo's own settings row (or its total absence, the
+-- table's own established "fail-closed on missing row" precedent) always
+-- means this automation is OFF unless an admin has explicitly armed it --
+-- matching block_on_high_risk's own identical default-false precedent.
+ALTER TABLE repo_settings ADD COLUMN sentinel_autofix_enabled BOOLEAN NOT NULL DEFAULT false;

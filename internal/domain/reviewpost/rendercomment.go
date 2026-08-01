@@ -20,7 +20,17 @@ import (
 // ComputeLabelSync (label.go) just applied, rendered here purely for
 // visibility (mirrors docs/design/mockups.html's own verdict-foot "labels
 // synced: `review:medium-risk`" line); botHandle feeds RerunGuidance.
-func RenderVerdictComment(v review.Verdict, summary, botHandle, syncedLabel string) string {
+// findings (Step 48, additive) is v's own already-built []Finding (nil/
+// empty for a verdict reporting none -- every verdict posted before this
+// Step) -- rendered as bullets under the summary, EXACTLY the same
+// "typed fields -> rendered text, never parsed back" discipline as every
+// other field this function renders (review/doc.go's own top-level
+// stance): a finding's own IdentityHash is deliberately NOT rendered here
+// (an internal reconciliation key, not something a PR reader needs to
+// see) -- RenderAlreadyAnsweredFacts (reconcile.go) is the one place a
+// short form of it is ever surfaced, for a different, internal audience
+// (a re-reviewing agent's own prompt, not a human reading the PR).
+func RenderVerdictComment(v review.Verdict, findings []Finding, summary, botHandle, syncedLabel string) string {
 	var b strings.Builder
 
 	b.WriteString("### Code review verdict\n\n")
@@ -40,6 +50,22 @@ func RenderVerdictComment(v review.Verdict, summary, botHandle, syncedLabel stri
 
 	b.WriteString(strings.TrimSpace(summary))
 	b.WriteString("\n\n")
+
+	if len(findings) > 0 {
+		b.WriteString("**Findings:**\n\n")
+		for _, f := range findings {
+			kind := findingIdentityGeneralKind
+			if f.SentinelKind != nil {
+				kind = string(*f.SentinelKind)
+			}
+			if f.Line != nil {
+				fmt.Fprintf(&b, "- [%s/%s] `%s:%d`: %s\n", kind, f.Severity, f.FilePath, *f.Line, f.Description)
+			} else {
+				fmt.Fprintf(&b, "- [%s/%s] `%s`: %s\n", kind, f.Severity, f.FilePath, f.Description)
+			}
+		}
+		b.WriteString("\n")
+	}
 
 	fmt.Fprintf(&b, "_Posted via Narvi's server-side verdict tool_ · labels synced: `%s`\n\n", syncedLabel)
 	b.WriteString(RerunGuidance(botHandle))

@@ -140,13 +140,30 @@ const (
 // actually accepts, so a schema change that silently drifts from this
 // hand-written copy fails a test instead of silently misinforming every
 // future review agent.
+//
+// Confirmed-finding fix (Step 48 own re-review): the "findings" array
+// (restdtos.PostReviewVerdictRequest.Findings/PostedFinding, added by this
+// SAME Step for sentinel/apply-suggestion/rebuttal reconciliation) was
+// never mentioned anywhere in this hand-written template -- this is the
+// ONLY place a reviewing agent ever learns the wire shape it may POST to
+// this endpoint (reviewverdict.go's own doc comment, above), so an agent
+// following only the ORIGINAL 8-key template could never emit a
+// structured finding at all: review_findings would never be upserted, the
+// sentinel-auto-fix flow could never trigger regardless of the repo's own
+// toggle, and RenderAlreadyAnsweredFacts would always render empty,
+// silently defeating every one of those already-shipped, already-tested
+// features. The block below is additive and OPTIONAL (mirrors
+// PostReviewVerdictRequest.Findings' own "omitempty" wire shape and
+// ValidateVerdictInput's own "nil/empty Findings is never rejected"
+// precedent) -- an agent that reports no findings at all keeps posting
+// exactly the same body it always did.
 const verdictToolInstructions = "\n\n" +
 	"When you have finished reviewing, post your verdict by calling this system's own verdict-posting tool below -- a single authenticated HTTP request. Do NOT post an ordinary PR/issue comment yourself, do NOT submit a GitHub pull request review yourself (via `gh`, a direct GitHub API call, or any other means), and do NOT call any GitHub API directly to report your findings: the request below is the ONLY sanctioned way for this review to reach the pull request, and its typed fields -- never free text parsed back out of anything you post -- are the actual verdict of record.\n\n" +
 	"POST " + VerdictToolURLPlaceholder + "\n" +
 	"Authorization: Bearer " + VerdictToolBearerPlaceholder + "\n" +
 	"X-Sandbox-Gen: " + VerdictToolGenPlaceholder + "\n" +
 	"Content-Type: application/json\n\n" +
-	"JSON body (every field required):\n" +
+	"JSON body (every field below the top level is required; \"findings\" itself is optional):\n" +
 	"{\n" +
 	"  \"riskLevel\": \"low\" | \"medium\" | \"high\",\n" +
 	"  \"premise\": \"ok\" | \"questionable\" | \"not_a_pr\",\n" +
@@ -155,9 +172,19 @@ const verdictToolInstructions = "\n\n" +
 	"  \"docsDrift\": \"none\" | \"found\" | \"skipped\",\n" +
 	"  \"proposedShippable\": \"auto\" | \"needs_human\" | \"block\" (your own self-reported assessment; the server independently recomputes the authoritative classification and never trusts this value),\n" +
 	"  \"blastRadius\": [zero or more of \"auth\", \"migrations\", \"contracts\", \"secrets\", \"infra\", \"public_api\", \"data_layer\", \"dependencies\"],\n" +
-	"  \"summary\": \"<your free-text narrative explaining the verdict>\"\n" +
+	"  \"summary\": \"<your free-text narrative explaining the verdict>\",\n" +
+	"  \"findings\": [zero or more of the following object -- OPTIONAL, omit or leave empty if you have nothing structured to report beyond your summary above:\n" +
+	"    {\n" +
+	"      \"sentinelKind\": \"coverage\" | \"docs_drift\" | null (null for an ordinary risk-map finding with no sentinel origin),\n" +
+	"      \"severity\": \"low\" | \"medium\" | \"high\" (required, independent of the verdict's own overall riskLevel above),\n" +
+	"      \"filePath\": \"<repo-relative path this finding is about>\" (required),\n" +
+	"      \"line\": <integer, optional -- the specific line, if any; never treat this as identifying the finding, only as a human-readable pointer>,\n" +
+	"      \"description\": \"<your own finding text>\" (required -- this is compared, normalized, against every future review pass on this same PR, so describe the SAME underlying issue with the SAME wording every time you re-report it, rather than paraphrasing),\n" +
+	"      \"suggestedFix\": \"<optional unified-diff/patch text a maintainer's apply-suggestion action can attempt to apply>\"\n" +
+	"    }\n" +
+	"  ],\n" +
 	"}\n\n" +
-	"A 201 response confirms the verdict was recorded and posted; the server -- never you -- computes the authoritative shippable classification, the formal GitHub review event, and the synced review:*-risk label from these fields."
+	"A 201 response confirms the verdict was recorded and posted; the server -- never you -- computes the authoritative shippable classification, the formal GitHub review event, the synced review:*-risk label, and (when \"findings\" names a sentinelKind and this repo's own sentinel-auto-fix toggle is on) whether an automated fix session is triggered, from these fields."
 
 // RenderTurnPrompt assembles a review turn's final prompt text from
 // basePrompt (the human-authored or deterministically-synthesized command

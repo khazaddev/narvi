@@ -54,10 +54,12 @@ func repoFullNameFromRoute(r *http.Request) (string, bool) {
 // GetRepoSettings backs GET /api/repos/{owner}/{repo}/settings: 403 if the
 // caller fails authz.ActionConfigureBlockOnHighRisk (admin only); 200 with
 // restdtos.RepoSettings otherwise -- a repo with no repo_settings row yet
-// (pgx.ErrNoRows) renders as {repoFullName, blockOnHighRisk: false}, its
-// own documented safe default (migrations/000044_repo_settings.up.sql),
-// never a 404: "no row yet" is not an error condition for a policy flag
-// that always has a well-defined value.
+// (pgx.ErrNoRows) renders as {repoFullName, blockOnHighRisk: false,
+// sentinelAutofixEnabled: false}, both documented safe defaults
+// (migrations/000044_repo_settings.up.sql, migrations/
+// 000048_repo_settings_sentinel_autofix.up.sql), never a 404: "no row
+// yet" is not an error condition for a policy flag that always has a
+// well-defined value.
 func GetRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -80,26 +82,39 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc 
 				writeError(w, http.StatusInternalServerError, "internal error")
 				return
 			}
-			writeJSON(w, http.StatusOK, restdtos.RepoSettings{RepoFullName: repoFullName, BlockOnHighRisk: false})
+			writeJSON(w, http.StatusOK, restdtos.RepoSettings{RepoFullName: repoFullName, BlockOnHighRisk: false, SentinelAutofixEnabled: false})
 			return
 		}
 
-		writeJSON(w, http.StatusOK, restdtos.RepoSettings{RepoFullName: repoFullName, BlockOnHighRisk: settings.BlockOnHighRisk})
+		writeJSON(w, http.StatusOK, restdtos.RepoSettings{
+			RepoFullName:           repoFullName,
+			BlockOnHighRisk:        settings.BlockOnHighRisk,
+			SentinelAutofixEnabled: settings.SentinelAutofixEnabled,
+		})
 	}
 }
 
 // PutRepoSettings backs PUT /api/repos/{owner}/{repo}/settings: 403 if the
-// caller fails authz.ActionConfigureBlockOnHighRisk (admin only); 400 for
-// a malformed request body; 200 with the resulting restdtos.RepoSettings
-// otherwise. Idempotent create-or-update (postgres.RepoSettingsStore.
-// Upsert), always writing the full, current desired value -- never a
-// partial patch.
+// caller fails EITHER authz.ActionConfigureBlockOnHighRisk OR (Step 48)
+// authz.ActionToggleSentinelAutoFix -- both admin-only today (§13.3 row
+// 6), checked independently since this ONE endpoint now writes both
+// flags together (repo_settings' own "always the full, current desired
+// value, never a partial patch" precedent, migrations/000044's own doc
+// comment) -- a future divergence in either action's own role matrix
+// would still correctly demand BOTH permissions for this combined write,
+// rather than silently falling back to whichever check happens to run
+// first; 400 for a malformed request body; 200 with the resulting
+// restdtos.RepoSettings otherwise. Idempotent create-or-update
+// (postgres.RepoSettingsStore.Upsert).
 func PutRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
 
 		if !authorize(w, r, authz.ActionConfigureBlockOnHighRisk, authz.Resource{}) {
+			return
+		}
+		if !authorize(w, r, authz.ActionToggleSentinelAutoFix, authz.Resource{}) {
 			return
 		}
 
@@ -116,13 +131,17 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc 
 			return
 		}
 
-		settings, err := repoSettings.Upsert(ctx, repoFullName, req.BlockOnHighRisk)
+		settings, err := repoSettings.Upsert(ctx, repoFullName, req.BlockOnHighRisk, req.SentinelAutofixEnabled)
 		if err != nil {
 			logger.Error("httpapi: upsert repo settings failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 
-		writeJSON(w, http.StatusOK, restdtos.RepoSettings{RepoFullName: repoFullName, BlockOnHighRisk: settings.BlockOnHighRisk})
+		writeJSON(w, http.StatusOK, restdtos.RepoSettings{
+			RepoFullName:           repoFullName,
+			BlockOnHighRisk:        settings.BlockOnHighRisk,
+			SentinelAutofixEnabled: settings.SentinelAutofixEnabled,
+		})
 	}
 }

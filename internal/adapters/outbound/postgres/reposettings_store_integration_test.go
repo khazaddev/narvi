@@ -41,12 +41,15 @@ func TestRepoSettingsStore_Upsert_CreateThenUpdate(t *testing.T) {
 	pool := newTestPool(t)
 	store := narvipg.NewRepoSettingsStore(pool)
 
-	created, err := store.Upsert(ctx, "acme/toggle-repo", true)
+	created, err := store.Upsert(ctx, "acme/toggle-repo", true, true)
 	if err != nil {
 		t.Fatalf("Upsert (create): %v", err)
 	}
 	if !created.BlockOnHighRisk {
 		t.Errorf("BlockOnHighRisk = false, want true after create")
+	}
+	if !created.SentinelAutofixEnabled {
+		t.Errorf("SentinelAutofixEnabled = false, want true after create")
 	}
 
 	got, err := store.Get(ctx, "acme/toggle-repo")
@@ -57,12 +60,15 @@ func TestRepoSettingsStore_Upsert_CreateThenUpdate(t *testing.T) {
 		t.Errorf("Get().BlockOnHighRisk = false, want true")
 	}
 
-	updated, err := store.Upsert(ctx, "acme/toggle-repo", false)
+	updated, err := store.Upsert(ctx, "acme/toggle-repo", false, false)
 	if err != nil {
 		t.Fatalf("Upsert (update): %v", err)
 	}
 	if updated.BlockOnHighRisk {
 		t.Errorf("BlockOnHighRisk = true after update, want false")
+	}
+	if updated.SentinelAutofixEnabled {
+		t.Errorf("SentinelAutofixEnabled = true after update, want false")
 	}
 
 	var count int

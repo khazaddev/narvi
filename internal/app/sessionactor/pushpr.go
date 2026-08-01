@@ -67,6 +67,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 )
@@ -371,6 +372,20 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		return
 	}
 
+	// Step 48 (§17.2 amendment): a sentinel-auto-fix child session has NO
+	// human creator to attribute a PR to (sessionRow.CreatedBy is
+	// invalid/NULL, SpawnChildSession's own doc comment) -- routing it
+	// through creatorMayGetPRAttribution below would ALWAYS reject it
+	// (that guard's own doc comment: "if !createdBy.Valid { return
+	// false }"), silently dropping every sentinel fix PR. This is a
+	// SEPARATE, dedicated code path -- never resolvePRBaseBranch, never
+	// the per-repo loop below -- see createSentinelFixPRBestEffort's own
+	// doc comment.
+	if provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag) {
+		a.createSentinelFixPRBestEffort(ctx, evt)
+		return
+	}
+
 	if !a.creatorMayGetPRAttribution(ctx, sessionRow.CreatedBy) {
 		return // already logged by creatorMayGetPRAttribution
 	}
@@ -450,6 +465,132 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 
 		if err := a.recordPRArtifact(ctx, repoName, ref); err != nil {
 			a.logger.Error("sessionactor: record PR artifact failed", "repo", pushed.Name, "error", err)
+		}
+	}
+}
+
+// createSentinelFixPRBestEffort implements Step 48's own ("sentinels +
+// suggestions", §17.2 amendment) fix-PR-creation path: called ONLY for a
+// session whose provenance_tag is provenance.SentinelAutoFix
+// (createPRBestEffort's own caller check, above) -- a DEDICATED path that
+// NEVER calls resolvePRBaseBranch (the amendment's own central
+// requirement: "the fix PR's base is never resolved, only assigned"). The
+// fix PR's Base is fix.OriginHeadBranch, a LITERAL value captured once, at
+// claim time, from the origin session's own repos config
+// (reviewverdict.go) -- a stacked PR's base is its parent's head branch,
+// never the repository's default.
+//
+// Also deliberately does NOT call creatorMayGetPRAttribution/
+// decryptCreatorGitHubToken: this session has no human creator to check
+// or decrypt a token for (sessionRow.CreatedBy is invalid/NULL,
+// SpawnChildSession's own doc comment) -- the fix PR is a SYSTEM-INITIATED
+// action, bot-attributed via a.githubBotToken (the SAME static credential
+// internal/adapters/outbound/githubapi's own BotNotifier/VerdictNotifier
+// already authenticate with), mirroring §17.4's own "system-initiated,
+// not a delegated human one" framing for the eventual merge -- a
+// deliberate design choice this Step's own report names explicitly (no
+// other credential source exists for a session with no creator).
+//
+// Once the fix PR opens successfully, this ALSO (§17.2's own amendment,
+// "a second call after creation, never a substitute for it") calls
+// RegisterPRStack with the origin+fix PR numbers, bottom to top -- logged
+// and otherwise ignored on any failure (§17.2: "never fails the fix-
+// session flow"), recording only whether it stuck (sentinel_fixes.
+// stack_registered) as an observability signal, never the authority on
+// whether registration actually took (§17.6: that authority is always a
+// FRESH GetPullRequest.Stack field, checked later, at merge-gating time).
+func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws.PushComplete) {
+	fix, err := a.stores.sentinelFix.GetByFixSession(ctx, a.sessionID)
+	if err != nil {
+		a.logger.Error("sessionactor: get sentinel_fixes row by fix session failed; skipping fix PR creation", "error", err)
+		return
+	}
+
+	if a.githubBotToken == "" {
+		a.logger.Warn("sessionactor: push_complete arrived for a sentinel-auto-fix session but no bot token is configured; skipping PR creation")
+		return
+	}
+
+	sessionRow, err := a.stores.session.Get(ctx, a.sessionID)
+	if err != nil {
+		a.logger.Error("sessionactor: get session for sentinel-fix PR creation failed", "error", err)
+		return
+	}
+	repos, err := reposFromJSON(sessionRow.Repos)
+	if err != nil {
+		a.logger.Error("sessionactor: parse session repos for sentinel-fix PR creation failed", "error", err)
+		return
+	}
+	reposByName := make(map[string]sessionconfig.SessionConfigReposElem, len(repos))
+	for _, r := range repos {
+		reposByName[r.Name] = r
+	}
+
+	for _, pushed := range evt.Repos {
+		repoCfg, ok := reposByName[pushed.Name]
+		if !ok {
+			a.logger.Warn("sessionactor: sentinel-fix push_complete named a repo not in this session's own repos", "repo", pushed.Name)
+			continue
+		}
+
+		if err := reposource.CheckRepoHost(repoCfg.Url, ports.SupportedSourceControlHosts()...); err != nil {
+			a.logger.Error("sessionactor: create sentinel-fix PR: repo url does not name a supported source-control host; skipping this repo",
+				"repo", pushed.Name, "url", repoCfg.Url, "error", err)
+			continue
+		}
+
+		owner, repoName, err := reposource.ParseOwnerRepo(repoCfg.Url)
+		if err != nil {
+			a.logger.Error("sessionactor: parse owner/repo from clone url for sentinel-fix PR creation failed",
+				"repo", pushed.Name, "error", err)
+			continue
+		}
+
+		prCtx, cancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
+		ref, createErr := a.sourceControl.CreatePR(prCtx, ports.CreatePRSpec{
+			Owner: owner,
+			Repo:  repoName,
+			Head:  pushed.Branch,
+			// NEVER resolvePRBaseBranch -- this literal, already-captured
+			// value IS the point of this dedicated code path (this
+			// function's own doc comment).
+			Base:  fix.OriginHeadBranch,
+			Title: "Sentinel auto-fix: " + prTitle(sessionRow),
+			Body:  fmt.Sprintf("Automated sentinel-auto-fix remediation (Narvi, §17) for pull request #%d, branch %s.", fix.OriginPrNumber, pushed.Branch),
+			Token: a.githubBotToken,
+		})
+		cancel()
+		if createErr != nil {
+			a.logger.Error("sessionactor: create sentinel-fix PR failed", "repo", pushed.Name, "error", createErr)
+			continue
+		}
+
+		if err := a.recordPRArtifact(ctx, repoName, ref); err != nil {
+			a.logger.Error("sessionactor: record sentinel-fix PR artifact failed", "repo", pushed.Name, "error", err)
+		}
+
+		if _, err := a.stores.sentinelFix.UpdateOpened(ctx, fix.ID, int32(ref.Number)); err != nil {
+			a.logger.Error("sessionactor: update sentinel_fixes with opened fix PR failed", "error", err)
+		}
+		if _, err := a.stores.reviewFinding.MarkFixOpen(ctx, a.sessionID, int32(ref.Number)); err != nil {
+			a.logger.Warn("sessionactor: mark review findings fix_open failed", "error", err)
+		}
+
+		// Registering the stack is a SECOND call, made only now that both
+		// PRs exist (§17.2) -- best-effort, log-and-ignore.
+		stackCtx, stackCancel := context.WithTimeout(ctx, a.timeouts.PRCreateTimeout)
+		registerErr := a.sourceControl.RegisterPRStack(stackCtx, ports.RegisterPRStackSpec{
+			Owner:     owner,
+			Repo:      repoName,
+			PRNumbers: []int{int(fix.OriginPrNumber), ref.Number},
+			Token:     a.githubBotToken,
+		})
+		stackCancel()
+		if registerErr != nil {
+			a.logger.Warn("sessionactor: register pr stack failed (logged and ignored, per §17.2)", "error", registerErr)
+		}
+		if _, err := a.stores.sentinelFix.UpdateStackRegistered(ctx, fix.ID, registerErr == nil); err != nil {
+			a.logger.Warn("sessionactor: record stack-registered observability flag failed", "error", err)
 		}
 	}
 }

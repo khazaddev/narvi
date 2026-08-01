@@ -847,6 +847,39 @@ func run() error {
 			return fmt.Errorf("sandbox-agent: create workspace dir: %w", err)
 		}
 
+		// Step 48 (§17.2): for a sentinel-auto-fix child session
+		// (SessionConfig.CapabilityRestricted), write the glob-restricted
+		// "sentinel-fix" OpenCode agent config into the workspace BEFORE
+		// spawning `opencode serve` below -- OpenCode reads its own config
+		// once, at boot (opencode/sentinelfixagent.go's own top doc
+		// comment: "verified live... loading path=.../opencode.json" at
+		// startup), so this must land before Spawn, not after. Any
+		// existing opencode.json at this path (a repo's own committed
+		// config -- unusual this early, since gitclone.CloneAll hasn't
+		// run yet, but not impossible for a warm/resumed sandbox reusing
+		// the same workspace dir) is merged, never clobbered wholesale
+		// (MergeSentinelFixAgentConfig's own doc comment). A malformed
+		// existing file, or any other write failure, is logged and
+		// otherwise NON-FATAL -- this session then simply runs with
+		// today's ordinary, unrestricted agent selection instead of a
+		// hard boot failure over a defense-in-depth layer (§17.4's own
+		// post-hoc diff-scope check is the OTHER, independent layer that
+		// still applies regardless).
+		if cfg.SessionConfig.CapabilityRestricted {
+			configPath := filepath.Join(cfg.WorkspaceDir, "opencode.json")
+			existing, readErr := os.ReadFile(configPath)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				slog.Warn("sandbox-agent: read existing opencode.json for sentinel-fix agent merge failed, proceeding without a restricted agent config", "error", readErr)
+			} else {
+				merged, mergeErr := opencode.MergeSentinelFixAgentConfig(existing)
+				if mergeErr != nil {
+					slog.Warn("sandbox-agent: merge sentinel-fix agent config failed, proceeding without a restricted agent config", "error", mergeErr)
+				} else if writeErr := os.WriteFile(configPath, merged, 0o644); writeErr != nil {
+					slog.Warn("sandbox-agent: write sentinel-fix agent config failed, proceeding without a restricted agent config", "error", writeErr)
+				}
+			}
+		}
+
 		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir,
 			timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
 		if spawnErr != nil {
@@ -865,7 +898,8 @@ func run() error {
 
 		agentRuntime = opencode.New(result.BaseURL, timeouts.SSEInactivityTimeout,
 			timeouts.OpenCodeSSEReconnectInterval, timeouts.OpenCodeRequestTimeout,
-			timeouts.OpenCodeSummarizeTimeout, timeouts.OpenCodeTransientRetryBackoff)
+			timeouts.OpenCodeSummarizeTimeout, timeouts.OpenCodeTransientRetryBackoff,
+			cfg.SessionConfig.CapabilityRestricted)
 		defer agentRuntime.Close()
 
 		// §7: "Pin the OpenCode version in the image; record it in the

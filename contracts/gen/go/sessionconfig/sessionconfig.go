@@ -10,6 +10,20 @@ type SessionConfig struct {
 	// §6.4. Delivered to the sandbox as the NARVI_BOOT_MODE env var.
 	BootMode SessionConfigBootMode `json:"bootMode" yaml:"bootMode" mapstructure:"bootMode"`
 
+	// Step 48 (§17.2): true exactly for a sentinel-auto-fix child session
+	// (sessions.provenance_tag == 'sentinel_auto_fix') -- sandbox-agent writes a
+	// glob-restricted 'sentinel-fix' OpenCode custom agent config (edit permission
+	// allowed only for test/doc path patterns) into the workspace BEFORE spawning
+	// `opencode serve`, and every build-mode turn dispatched on this session selects
+	// that agent instead of the ordinary 'build' one. A second, independent layer
+	// alongside §17.4's own post-hoc diff-scope check -- restricts the edit TOOL
+	// specifically, never bash (see internal/adapters/outbound/opencode's own
+	// sentinelfixagent.go doc comment for the full mechanism and its own honest,
+	// named limits). Genuinely OPTIONAL, like pathScope above: absent/false is
+	// today's exact unchanged behavior for every session created before this field
+	// existed.
+	CapabilityRestricted bool `json:"capabilityRestricted,omitempty,omitzero" yaml:"capabilityRestricted,omitempty" mapstructure:"capabilityRestricted,omitempty"`
+
 	// Where sandbox-agent connects back for the sandbox WS (§6.1).
 	ControlPlaneWsUrl string `json:"controlPlaneWsUrl" yaml:"controlPlaneWsUrl" mapstructure:"controlPlaneWsUrl"`
 
@@ -169,6 +183,9 @@ func (j *SessionConfig) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["capabilityRestricted"]; !ok || v == nil {
+		plain.CapabilityRestricted = false
 	}
 	if plain.Repos != nil && len(plain.Repos) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "repos", 1)

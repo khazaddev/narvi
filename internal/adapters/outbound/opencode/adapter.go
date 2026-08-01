@@ -134,6 +134,14 @@ type Adapter struct {
 	baseURL    string
 	httpClient *http.Client
 
+	// capabilityRestricted (Step 48, "sentinels + suggestions", §17.2) is
+	// set ONCE, at construction, from SessionConfig.CapabilityRestricted
+	// -- true exactly for a sentinel-auto-fix child session. postPromptAsync
+	// (session.go) is this field's own one reader: every build-mode turn
+	// dispatched while it is true selects OpenCode's own glob-restricted
+	// "sentinel-fix" custom agent instead of the ordinary "build" one.
+	capabilityRestricted bool
+
 	sseInactivityTimeout time.Duration
 	pollInterval         time.Duration
 
@@ -269,11 +277,24 @@ var _ ports.AgentRuntime = (*Adapter)(nil)
 // wait before re-dispatching after a first-time transient APIError — see
 // that field's own doc comment above for why this, unlike the compaction
 // retry, needs a backoff at all.
-func New(baseURL string, sseInactivityTimeout, reconnectInterval, requestTimeout, summarizeTimeout, transientRetryBackoff time.Duration) *Adapter {
+// capabilityRestricted (Step 48, §17.2) is a trailing, variadic bool
+// parameter -- so every EXISTING caller (cmd/sandbox-agent/main.go's own
+// production wiring, this package's own newAdapter(t) test helper) keeps
+// compiling and behaving identically (capabilityRestricted false) with no
+// change of its own; only the ONE real caller that needs true (cmd/
+// sandbox-agent/main.go, threading SessionConfig.CapabilityRestricted)
+// supplies it explicitly.
+func New(baseURL string, sseInactivityTimeout, reconnectInterval, requestTimeout, summarizeTimeout, transientRetryBackoff time.Duration, capabilityRestricted ...bool) *Adapter {
 	bgCtx, cancel := context.WithCancel(context.Background())
+
+	restricted := false
+	if len(capabilityRestricted) > 0 {
+		restricted = capabilityRestricted[0]
+	}
 
 	a := &Adapter{
 		baseURL:               strings.TrimSuffix(baseURL, "/"),
+		capabilityRestricted:  restricted,
 		httpClient:            &http.Client{},
 		sseInactivityTimeout:  sseInactivityTimeout,
 		reconnectInterval:     reconnectInterval,

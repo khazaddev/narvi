@@ -703,10 +703,32 @@ type PromptTemplate struct {
 }
 
 type RepoSetting struct {
-	RepoFullName    string             `json:"repo_full_name"`
-	BlockOnHighRisk bool               `json:"block_on_high_risk"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	RepoFullName           string             `json:"repo_full_name"`
+	BlockOnHighRisk        bool               `json:"block_on_high_risk"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
+	SentinelAutofixEnabled bool               `json:"sentinel_autofix_enabled"`
+}
+
+type ReviewFinding struct {
+	ID                pgtype.UUID        `json:"id"`
+	RepoFullName      string             `json:"repo_full_name"`
+	PrNumber          int32              `json:"pr_number"`
+	IdentityHash      string             `json:"identity_hash"`
+	SentinelKind      *string            `json:"sentinel_kind"`
+	Severity          string             `json:"severity"`
+	FilePath          string             `json:"file_path"`
+	Line              *int32             `json:"line"`
+	Description       string             `json:"description"`
+	SuggestedFix      *string            `json:"suggested_fix"`
+	Status            string             `json:"status"`
+	RebuttalText      *string            `json:"rebuttal_text"`
+	RebuttedBy        pgtype.UUID        `json:"rebutted_by"`
+	RebuttedAt        pgtype.Timestamptz `json:"rebutted_at"`
+	FixChildSessionID pgtype.UUID        `json:"fix_child_session_id"`
+	FixPrNumber       *int32             `json:"fix_pr_number"`
+	FirstSeenAt       pgtype.Timestamptz `json:"first_seen_at"`
+	LastSeenAt        pgtype.Timestamptz `json:"last_seen_at"`
 }
 
 type Sandbox struct {
@@ -736,6 +758,20 @@ type SandboxHistory struct {
 	SnapshotID *string            `json:"snapshot_id"`
 }
 
+type SentinelFix struct {
+	ID                    pgtype.UUID        `json:"id"`
+	RepoFullName          string             `json:"repo_full_name"`
+	OriginPrNumber        int32              `json:"origin_pr_number"`
+	OriginReviewSessionID pgtype.UUID        `json:"origin_review_session_id"`
+	OriginHeadBranch      string             `json:"origin_head_branch"`
+	FixChildSessionID     pgtype.UUID        `json:"fix_child_session_id"`
+	FixPrNumber           *int32             `json:"fix_pr_number"`
+	Status                string             `json:"status"`
+	StackRegistered       bool               `json:"stack_registered"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Session struct {
 	ID                     pgtype.UUID           `json:"id"`
 	Title                  *string               `json:"title"`
@@ -753,6 +789,8 @@ type Session struct {
 	ProvenanceTag          *string               `json:"provenance_tag"`
 	IntentDecision         []byte                `json:"intent_decision"`
 	BuildModelID           *string               `json:"build_model_id"`
+	ParentSessionID        pgtype.UUID           `json:"parent_session_id"`
+	SpawnDepth             int32                 `json:"spawn_depth"`
 }
 
 type SessionTimer struct {

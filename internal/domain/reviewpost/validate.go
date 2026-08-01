@@ -1,7 +1,10 @@
 package reviewpost
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 
 	"github.com/khazaddev/narvi/internal/domain/review"
@@ -32,6 +35,16 @@ type VerdictInput struct {
 	// field's own handling matches: it is rendered once (rendercomment.go)
 	// and never read again.
 	Summary string
+
+	// Findings is Step 48's own additive extension (§8.2/§17/§22.1): zero
+	// or more per-finding typed fields, alongside the verdict's own
+	// aggregate fields above -- restdtos.PostReviewVerdictRequest.findings
+	// is OPTIONAL, so an old caller posting no findings at all (every
+	// caller before this Step) keeps posting exactly as before: nil/empty
+	// is a fully legitimate value, never rejected by ValidateVerdictInput
+	// below. See finding.go's own doc comment for why this type lives
+	// here, in reviewpost, rather than as a new review.Verdict field.
+	Findings []FindingInput
 }
 
 // The errors ValidateVerdictInput returns -- one per rejected field, named
@@ -119,6 +132,17 @@ func ValidateVerdictInput(in VerdictInput) error {
 		return ErrEmptySummary
 	}
 
+	// Findings (Step 48, additive): each one validated by
+	// ValidateFindingInput, in order -- first bad finding wins, mirroring
+	// this function's own fixed-order, first-error-wins discipline above.
+	// nil/empty Findings is not iterated at all, so an old caller posting
+	// none is never rejected here.
+	for _, f := range in.Findings {
+		if err := ValidateFindingInput(f); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -143,4 +167,99 @@ func BuildVerdict(in VerdictInput) review.Verdict {
 		ProposedShippable: in.ProposedShippable,
 		Shippable:         review.ComputeShippable(in.RiskLevel, in.TestsCoverage, in.Premise),
 	}
+}
+
+// BuildFindings is BuildVerdict's own per-finding sibling (Step 48,
+// additive): turns an ALREADY-VALIDATED VerdictInput.Findings (every
+// element already passed ValidateFindingInput, via ValidateVerdictInput's
+// own loop above) into the []Finding a caller upserts into review_findings
+// -- IdentityHash computed via BuildFinding for each, never client-supplied.
+// nil/empty in.Findings returns nil, never a zero-length-but-non-nil
+// slice, so a caller's own "did this verdict report any findings at all"
+// check can use a plain len()/nil check either way.
+//
+// Confirmed-finding fix: ComputeFindingIdentity deliberately excludes Line
+// (its own doc comment, finding.go) so a finding re-reported at a shifted
+// line number still matches its own prior row -- but that SAME property
+// means two genuinely DIFFERENT findings in the same file, at different
+// lines, that happen to share identical (post-normalization) kind/path/
+// description text would otherwise collide onto the identical
+// IdentityHash and silently collapse onto the SAME review_findings row
+// (UpsertReviewFinding's own ON CONFLICT clause only refreshes
+// last_seen_at on a re-post of an already-known identity) -- losing one of
+// the two findings entirely, and later making a maintainer's rebuttal of
+// "the" finding silently suppress the OTHER, never-looked-at one too, on
+// every future re-review (reconcile.go's RenderAlreadyAnsweredFacts).
+//
+// This function is the one place that can see every finding in the SAME
+// verdict submission at once, so it is the one place that can catch this:
+// when two or more elements of in.Findings hash to the SAME base identity
+// (ComputeFindingIdentity's own kind/path/description triple), each one
+// beyond the first is disambiguated by additionally hashing in ITS OWN
+// Line (or, absent that, its own position within the colliding group) --
+// see disambiguateFindingIdentity below. A base identity that occurs
+// exactly once in this batch (the overwhelming common case) is left
+// completely untouched, so the ordinary single-finding-per-identity,
+// shifted-line-still-matches behavior this package's own tests already
+// pin (TestComputeFindingIdentity_SurvivesLineShift) is unaffected.
+//
+// This deliberately fails toward "an under-match" (two findings that
+// really are the SAME issue, reported with a shifted line NUMBER in a
+// batch that also happens to contain another same-worded finding, might
+// occasionally be treated as distinct across passes) rather than "an
+// over-match" (two DIFFERENT findings silently collapsing into one) --
+// the identical fail-conservative direction ComputeFindingIdentity's own
+// doc comment already commits to for its own residual ambiguity.
+func BuildFindings(in VerdictInput) []Finding {
+	if len(in.Findings) == 0 {
+		return nil
+	}
+
+	baseIdentities := make([]string, len(in.Findings))
+	counts := make(map[string]int, len(in.Findings))
+	for i, f := range in.Findings {
+		h := ComputeFindingIdentity(f.SentinelKind, f.FilePath, f.Description)
+		baseIdentities[i] = h
+		counts[h]++
+	}
+
+	seenInGroup := make(map[string]int, len(in.Findings))
+	out := make([]Finding, len(in.Findings))
+	for i, f := range in.Findings {
+		base := baseIdentities[i]
+		identity := base
+		if counts[base] > 1 {
+			identity = disambiguateFindingIdentity(base, f.Line, seenInGroup[base])
+			seenInGroup[base]++
+		}
+		out[i] = Finding{
+			IdentityHash: identity,
+			SentinelKind: f.SentinelKind,
+			Severity:     f.Severity,
+			FilePath:     f.FilePath,
+			Line:         f.Line,
+			Description:  f.Description,
+			SuggestedFix: f.SuggestedFix,
+		}
+	}
+	return out
+}
+
+// disambiguateFindingIdentity re-hashes base (an already-computed
+// ComputeFindingIdentity value shared by two or more findings in the SAME
+// verdict submission, per BuildFindings' own doc comment above) together
+// with line (formatted, or a fixed "noline" token when nil) and ordinal
+// (this finding's own zero-based position among the colliding group, so
+// even two findings sharing both content AND line still resolve to
+// distinct identities rather than one silently winning). Never called for
+// a base identity that occurs only once in its own batch -- BuildFindings
+// is the only caller, and only inside its own counts[base] > 1 branch.
+func disambiguateFindingIdentity(base string, line *int, ordinal int) string {
+	lineComponent := "noline"
+	if line != nil {
+		lineComponent = strconv.Itoa(*line)
+	}
+	joined := base + findingIdentitySeparator + lineComponent + findingIdentitySeparator + strconv.Itoa(ordinal)
+	sum := sha256.Sum256([]byte(joined))
+	return hex.EncodeToString(sum[:])
 }

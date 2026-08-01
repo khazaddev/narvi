@@ -237,6 +237,15 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		string(restdtos.PostReviewVerdictRequestBlastRadiusElemInfra), string(restdtos.PostReviewVerdictRequestBlastRadiusElemPublicApi),
 		string(restdtos.PostReviewVerdictRequestBlastRadiusElemDataLayer), string(restdtos.PostReviewVerdictRequestBlastRadiusElemDependencies),
 		`"summary"`,
+		// Confirmed-finding fix (Step 48 own re-review): "findings" (and its
+		// own per-object fields/enum) was completely absent from this
+		// template before this fix -- see verdictToolInstructions' own doc
+		// comment for why that silently made review_findings/sentinel-auto-
+		// fix/rebuttal-reconciliation unreachable by any real reviewing
+		// agent despite being fully built and tested in isolation.
+		`"findings"`, `"sentinelKind"`, `"filePath"`, `"line"`, `"description"`, `"suggestedFix"`,
+		`"severity"`,
+		string(restdtos.PostedFindingSeverityLow), string(restdtos.PostedFindingSeverityMedium), string(restdtos.PostedFindingSeverityHigh),
 	}
 	for _, want := range fieldsAndEnums {
 		if !strings.Contains(got, want) {
@@ -245,14 +254,28 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 	}
 
 	// Also prove a real, fully-populated restdtos.PostReviewVerdictRequest
-	// value round-trips through encoding/json using exactly these field
-	// names -- belt-and-braces against a JSON tag rename that the
-	// string-containment checks above (which do not exercise the real
-	// struct's own tags) would not otherwise catch.
+	// value -- INCLUDING a findings entry -- round-trips through
+	// encoding/json using exactly these field names -- belt-and-braces
+	// against a JSON tag rename that the string-containment checks above
+	// (which do not exercise the real struct's own tags) would not
+	// otherwise catch.
+	findingLine := restdtos.PostedFindingLine(new(int))
+	*findingLine = 42
+	findingSuggestedFix := restdtos.PostedFindingSuggestedFix(new(string))
+	*findingSuggestedFix = "--- a/x\n+++ b/x\n"
 	example := restdtos.PostReviewVerdictRequest{
-		BlastRadius:       []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
-		DocsDrift:         restdtos.PostReviewVerdictRequestDocsDriftNone,
-		FilesChanged:      1,
+		BlastRadius:  []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
+		DocsDrift:    restdtos.PostReviewVerdictRequestDocsDriftNone,
+		FilesChanged: 1,
+		Findings: []restdtos.PostedFinding{
+			{
+				Description:  "example finding",
+				FilePath:     "internal/foo/bar.go",
+				Line:         findingLine,
+				Severity:     restdtos.PostedFindingSeverityMedium,
+				SuggestedFix: findingSuggestedFix,
+			},
+		},
 		Premise:           restdtos.PostReviewVerdictRequestPremiseOk,
 		ProposedShippable: restdtos.PostReviewVerdictRequestProposedShippableAuto,
 		RiskLevel:         restdtos.PostReviewVerdictRequestRiskLevelLow,
@@ -263,7 +286,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal example restdtos.PostReviewVerdictRequest: %v", err)
 	}
-	for _, wantKey := range []string{`"riskLevel"`, `"premise"`, `"filesChanged"`, `"testsCoverage"`, `"docsDrift"`, `"proposedShippable"`, `"blastRadius"`, `"summary"`} {
+	for _, wantKey := range []string{`"riskLevel"`, `"premise"`, `"filesChanged"`, `"testsCoverage"`, `"docsDrift"`, `"proposedShippable"`, `"blastRadius"`, `"summary"`, `"findings"`} {
 		if !strings.Contains(string(raw), wantKey) {
 			t.Errorf("marshaled restdtos.PostReviewVerdictRequest = %s, want it to contain key %q", raw, wantKey)
 		}

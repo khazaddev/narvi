@@ -189,7 +189,7 @@ func serve() error {
 	// counter), mirroring recon/builder's own identical error handling
 	// immediately below.
 	registry, err := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
-		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion)
+		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, cfg.GitHubBotToken)
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
 	}
@@ -254,6 +254,14 @@ func serve() error {
 	// tool's own blockOnHighRisk read (reviewverdict.go) -- one store,
 	// shared, never a second independently-constructed copy.
 	repoSettingsStore := postgres.NewRepoSettingsStore(pool)
+	// reviewFindingStore/sentinelFixStore (Step 48, "sentinels +
+	// suggestions", §17/§22.1) back the verdict-posting tool's own
+	// per-finding upsert + sentinel-auto-fix claim (reviewverdict.go), the
+	// rebut/apply-suggestion endpoints (reviewfindings.go), and re-review
+	// reconciliation (internal/app/reviewcontext) -- one store each,
+	// shared, never a second independently-constructed copy.
+	reviewFindingStore := postgres.NewReviewFindingStore(pool)
+	sentinelFixStore := postgres.NewSentinelFixStore(pool)
 	// githubActorLinkNoticeStore (batch fix/deny-unlinked-github-actors)
 	// backs the GitHub webhook ingress's own anti-spam dedupe for the
 	// "please sign in" reply posted to an unlinked commenter's denied
@@ -409,7 +417,7 @@ func serve() error {
 	// reviewpost.RerunGuidance) is built to be recognized by that SAME
 	// regex (§5.2).
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(sandboxStore, githubPRSessionStore, repoSettingsStore, outboxStore, cfg.GitHubBotHandle))
+		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, cfg.GitHubBotHandle))
 
 	// Slack ingress (Step 33, §8.10): deliberately mounted OUTSIDE
 	// /api/sessions and outside auth.Middleware entirely -- Slack itself
@@ -536,6 +544,9 @@ func serve() error {
 			// wired as this Step's own diff/stack pre-fetch source.
 			ReReviewLabel: cfg.GitHubReReviewLabel,
 			DiffFetcher:   sourceControl,
+			// ReviewFindings (Step 48, §22.1): the SAME reviewFindingStore
+			// instance every other caller above already uses.
+			ReviewFindings: reviewFindingStore,
 			// BotToken/PullRequests (batch fix/audit-github-pr-payload-
 			// correctness, H5 audit fix): resolve an issue_comment
 			// mention's TRUE head branch/repo via one authenticated
@@ -564,6 +575,11 @@ func serve() error {
 			// githubActorLinkNoticeStore's own construction below.
 			PublicBaseURL: cfg.PublicBaseURL,
 			LinkNotices:   githubActorLinkNoticeStore,
+			// SentinelFixes/RepoSettings/AuditLog (Step 48, §17.4/§17.5):
+			// the SAME instances every other caller above already uses.
+			SentinelFixes: sentinelFixStore,
+			RepoSettings:  repoSettingsStore,
+			AuditLog:      auditLogStore,
 		},
 	))
 
@@ -682,7 +698,16 @@ func serve() error {
 		// sourceControl/cfg.GitHubBotToken are the SAME instances the
 		// GitHub webhook ingress wiring above already constructs, never a
 		// second, independently-constructed copy.
-		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts))
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, reviewFindingStore, cfg.GitHubBotToken, cfg.Timeouts))
+		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48,
+		// "sentinels + suggestions", §12.2 item 2/§22.1) -- maintainer+
+		// only (authz.ActionEditReviewVerdict, checked inside each
+		// handler). identityStore/sourceControl/cfg.TokenEncryptionKey are
+		// the SAME instances every other caller above already uses --
+		// ApplySuggestion decrypts the ACTING (authenticated) maintainer's
+		// own GitHub token, never the session creator's.
+		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(sessionStore, githubPRSessionStore, reviewFindingStore, auditLogStore))
+		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(sessionStore, githubPRSessionStore, reviewFindingStore, identityStore, sourceControl, cfg.TokenEncryptionKey, cfg.Timeouts))
 	})
 
 	// /api/repos/{owner}/{repo}/settings (Step 47, "server-side verdict",
@@ -793,6 +818,10 @@ func serve() error {
 	// the (now-blocked-for-review-sessions) generic outcome comment used
 	// to be, never a per-commenter credential.
 	githubVerdictNotifier := githubapi.NewVerdictNotifier(sourceControl, cfg.GitHubBotToken)
+	// sentinelAutoFixNotifier (Step 48, "sentinels + suggestions", §17.2)
+	// spawns the child session -- reviewFindingStore/sentinelFixStore are
+	// the SAME instances every other caller above already uses.
+	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts)
 
 	// outboxStore is constructed earlier, alongside linearAgentSessionStore
 	// -- see that construction site's own doc comment for why.
@@ -804,6 +833,7 @@ func serve() error {
 		ports.NotificationKindSlackPlanApproval: planSlackNotifier,
 		ports.NotificationKindSlackPlanDecided:  planSlackNotifier,
 		ports.NotificationKindGitHubVerdict:     githubVerdictNotifier,
+		ports.NotificationKindSentinelAutoFix:   sentinelAutoFixNotifier,
 	}, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)

@@ -158,6 +158,96 @@ type CheckRepoAccessSpec struct {
 	Token string
 }
 
+// GetFileContentSpec is what SourceControl.GetFileContent (Step 48,
+// "sentinels + suggestions", §12.2 item 2) needs to read one file's own
+// current content at a ref -- the apply-suggestion endpoint's own
+// precondition read, before it ever attempts to validate or commit a
+// finding's SuggestedFix.
+type GetFileContentSpec struct {
+	Owner string
+	Repo  string
+	// Path is the repo-relative file path (review_findings.file_path).
+	Path string
+	// Ref is the commit SHA/branch to read at -- the PR's own CURRENT
+	// head branch, so the apply-suggestion endpoint always validates
+	// against the PR's real, live state, never a stale snapshot.
+	Ref string
+	// Token is the ACTING maintainer's own plaintext, decrypted OAuth
+	// access token (§17.4/apply-suggestion's own "using the acting
+	// maintainer's own OAuth token for attribution -- not the original
+	// session creator's" requirement) -- never logged.
+	Token string
+}
+
+// UpdateFileContentSpec is what SourceControl.UpdateFileContent (Step 48,
+// §12.2 item 2) needs to commit a new version of one file directly onto a
+// branch, via the source-control host's Contents API -- the apply-
+// suggestion endpoint's own write, once ValidateSuggestionApplies (pure,
+// internal/domain/reviewpost) has already confirmed the patch still
+// applies against the file's current content.
+type UpdateFileContentSpec struct {
+	Owner string
+	Repo  string
+	Path  string
+	// Content is the file's own NEW, full content (this port's
+	// implementation is never asked to apply a patch itself -- the caller
+	// has already computed the resulting content).
+	Content string
+	// SHA is the blob SHA of the CURRENT content being replaced (GitHub's
+	// Contents API requires this on every update, as its own optimistic-
+	// concurrency check -- a mismatched SHA means the file changed since
+	// it was last read, and the API itself rejects the write).
+	SHA string
+	// Branch is the branch to commit onto (the PR's own current head
+	// branch).
+	Branch string
+	// Message is the commit message.
+	Message string
+	// Token is the acting maintainer's own OAuth token, exactly like
+	// GetFileContentSpec.Token above -- the resulting commit is
+	// attributed to THIS user, never the original session creator.
+	Token string
+}
+
+// RegisterPRStackSpec is what SourceControl.RegisterPRStack (Step 48,
+// §17.2/§17.6) needs to register an already-open origin+fix PR pair as a
+// real GitHub stack, once both exist.
+type RegisterPRStackSpec struct {
+	Owner string
+	Repo  string
+	// PRNumbers is bottom-to-top (§17.2: "pull_requests: [originPR,
+	// fixPR]") -- always exactly two elements for this Step's one real
+	// producer (§17.6: "the one pair, not an N-deep producer"), though
+	// this port itself places no length restriction of its own.
+	PRNumbers []int
+	Token     string
+}
+
+// CreateBranchSpec is what SourceControl.CreateBranch (Step 48 confirmed-
+// finding fix, §17.2) needs to create a brand-new branch ref pointing at
+// an already-known commit SHA -- the sentinel-auto-fix flow's own fix for
+// giving a fix child session an upstream branch DISTINCT from the origin
+// PR's own head branch to check out and push to (see
+// internal/app/outboxworker/sentinelautofix.go's own Deliver doc comment
+// for the full "why": without this, the fix session's repos[].branch was
+// the origin's own literal head-branch name, so its clone/checkout/push
+// all targeted that SAME branch -- silently fast-forwarding the still-
+// open origin PR with an unreviewed commit, and dooming the eventual fix-
+// PR CreatePR call to Head == Base, which GitHub rejects outright).
+type CreateBranchSpec struct {
+	Owner string
+	Repo  string
+	// Branch is the NEW branch name to create (refs/heads/<Branch>).
+	Branch string
+	// SHA is the commit this new branch is created FROM -- the caller's
+	// own already-resolved value (e.g. ResolveBranchSHA's own first return
+	// value), never re-resolved by this method itself.
+	SHA string
+	// Token is the same plaintext, decrypted OAuth/bot access token shape
+	// every other spec in this file already uses. Never logged.
+	Token string
+}
+
 // SourceControl is the port that creates a pull request against a source-
 // control host (§4.3). internal/adapters/outbound/githubapi (Step 21) is
 // the first real implementation; internal/adapters/outbound/gitlabapi
@@ -239,4 +329,46 @@ type SourceControl interface {
 	// right now" must never collapse into the same on-disk consequence
 	// for every session in the fleet.
 	CheckRepoAccess(ctx context.Context, spec CheckRepoAccessSpec) (bool, error)
+
+	// GetFileContent reads spec.Path's own content at spec.Ref (Step 48,
+	// §12.2 item 2). exists=false, err=nil means the file does not exist
+	// at that ref -- a legitimate answer (the apply-suggestion endpoint
+	// treats this as "stale: the file this finding named no longer
+	// exists"), never conflated with a genuine API failure (err != nil),
+	// mirroring ResolveContractsFingerprint's own identical
+	// exists/err-are-independent-signals discipline above.
+	GetFileContent(ctx context.Context, spec GetFileContentSpec) (content, sha string, exists bool, err error)
+
+	// UpdateFileContent commits spec.Content onto spec.Branch at spec.Path,
+	// replacing the blob spec.SHA names (Step 48, §12.2 item 2) -- returns
+	// the new commit's own SHA. Errors are plain, exactly like CreatePR/
+	// ResolveBranchSHA above -- a stale spec.SHA (the file changed since
+	// it was read) is one real, expected way this call fails; the caller
+	// (reviewfindings.go's own ApplySuggestion handler) surfaces that as a
+	// 409, never retries or auto-resolves.
+	UpdateFileContent(ctx context.Context, spec UpdateFileContentSpec) (commitSHA string, err error)
+
+	// RegisterPRStack groups spec.PRNumbers into a real GitHub stack (Step
+	// 48, §17.2/§17.6) -- a SECOND call, made only after every named PR
+	// already exists (this port never creates a PR itself here). Per
+	// §17.2's own explicit design: a 404 or any other failure from this
+	// call is meant to be logged and otherwise IGNORED by the caller --
+	// this method itself still returns a plain error either way (the
+	// ignoring is the caller's own policy decision, pushpr.go's
+	// createSentinelFixPRBestEffort, not something this port silently
+	// swallows on the caller's behalf).
+	RegisterPRStack(ctx context.Context, spec RegisterPRStackSpec) error
+
+	// CreateBranch creates a new branch ref (refs/heads/spec.Branch)
+	// pointing at spec.SHA (Step 48 confirmed-finding fix, §17.2) --
+	// IDEMPOTENT: a spec.Branch that already exists is treated as success,
+	// never an error, since this method's own one real caller (the
+	// sentinel-auto-fix notifier) may be redelivered for the SAME claim
+	// before the branch's own creation is durably recorded anywhere else,
+	// and re-observing an already-created ref is exactly the outcome an
+	// idempotent retry must produce. Errors are plain, exactly like
+	// CreatePR/ResolveBranchSHA above -- no caller of this port retries or
+	// trips a circuit-breaker on a creation failure beyond the outbox
+	// worker's own existing backoff/retry machinery.
+	CreateBranch(ctx context.Context, spec CreateBranchSpec) error
 }

@@ -358,7 +358,7 @@ func TestPostReviewVerdict_BlockOnHighRisk(t *testing.T) {
 		repoFullName := "acme/verdict-blockonhighrisk-on"
 		session := setupReviewSessionWithSandbox(ctx, t, rig, repoFullName, 11)
 
-		if _, err := rig.repoSettings.Upsert(ctx, repoFullName, true); err != nil {
+		if _, err := rig.repoSettings.Upsert(ctx, repoFullName, true, false); err != nil {
 			t.Fatalf("upsert repo settings: %v", err)
 		}
 
