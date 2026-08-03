@@ -34,6 +34,11 @@ import (
 type fakeOpenCodeServer struct {
 	srv *httptest.Server
 
+	// t is held so broadcast can FAIL the test when it cannot deliver,
+	// instead of silently dropping the line -- see broadcast's own doc
+	// comment for the CI failure that motivated this.
+	t *testing.T
+
 	mu             sync.Mutex
 	current        *fakeSSEConn
 	connSeq        int
@@ -121,7 +126,10 @@ type fakeSSEConn struct {
 func newFakeOpenCodeServer(t *testing.T) *fakeOpenCodeServer {
 	t.Helper()
 
-	f := &fakeOpenCodeServer{connected: make(chan int, 64)}
+	f := &fakeOpenCodeServer{
+		t:         t,
+		connected: make(chan int, 64),
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/event", f.handleEvent)
@@ -548,14 +556,49 @@ func (f *fakeOpenCodeServer) abortCallCount() int {
 // sseLine below) to whichever /event connection is CURRENTLY live -- a
 // no-op if none is connected. Callers are expected to have already
 // consumed at least one value from f.connected first.
+// broadcast delivers line on the CURRENT /event connection, waiting for one
+// to exist (and re-waiting if a reconnect races the send) rather than
+// dropping the line when f.current happens to be nil.
+//
+// It used to return silently in that case, and that is exactly how CI lost
+// TestCompactionRetry_SharesOneShotBudgetWithTransientRetry and
+// TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce: the
+// adapter's own SSE reconnect fires mid-test on a loaded runner (the failing
+// runs' logs show "event stream connection lost, reconnecting" in the same
+// second as the failure), so an error-carrying message.updated vanished,
+// only the following session.idle landed, and the turn finalized as
+// completed with a nil reason -- surfacing as a wrong-outcome assertion two
+// layers from its cause, on tests that pass every time locally where no
+// reconnect happens.
+//
+// t.Errorf rather than t.Fatalf: this is reachable from a non-test goroutine,
+// where FailNow is not allowed.
 func (f *fakeOpenCodeServer) broadcast(line string) {
-	f.mu.Lock()
-	conn := f.current
-	f.mu.Unlock()
-	if conn == nil {
-		return
+	deadline := time.After(testWait)
+	for {
+		f.mu.Lock()
+		conn := f.current
+		f.mu.Unlock()
+		if conn != nil {
+			select {
+			case conn.send <- line:
+				return
+			case <-conn.close:
+				// A reconnect raced us between reading f.current
+				// and sending; wait for the replacement.
+			case <-deadline:
+				f.t.Errorf("fake server: no live /event connection accepted a broadcast within %s", testWait)
+				return
+			}
+			continue
+		}
+		select {
+		case <-time.After(time.Millisecond):
+		case <-deadline:
+			f.t.Errorf("fake server: never observed a live /event connection to broadcast on within %s", testWait)
+			return
+		}
 	}
-	conn.send <- line
 }
 
 // dropConnection force-closes whichever /event connection is currently
@@ -600,49 +643,6 @@ func sseLine(t *testing.T, eventType string, props any) string {
 // fails the test after testWait -- used to know precisely when the Nth
 // /event connection (1-based) has been accepted, e.g. after a
 // dropConnection-triggered reconnect.
-// broadcastLive is broadcast's own non-silent sibling: it waits until the
-// fake actually HAS a live /event connection, then sends, instead of
-// dropping the line on the floor when f.current happens to be nil.
-//
-// That silent drop is exactly how CI lost
-// TestCompactionRetry_SharesOneShotBudgetWithTransientRetry: the adapter's
-// own SSE reconnect fired mid-test (the run's log shows "event stream
-// connection lost, reconnecting" in the same second as the failure), so the
-// error-carrying message.updated vanished, only the following session.idle
-// landed, and the turn finalized as completed with a nil reason -- a
-// confusing assertion failure several layers away from its cause, on a test
-// that passes every time locally where no reconnect happens.
-//
-// Use this for any broadcast whose delivery the test's own assertions
-// depend on. Plain broadcast stays for the tests that deliberately send
-// into a dropped connection.
-func broadcastLive(t *testing.T, f *fakeOpenCodeServer, line string) {
-	t.Helper()
-	deadline := time.After(testWait)
-	for {
-		f.mu.Lock()
-		conn := f.current
-		f.mu.Unlock()
-		if conn != nil {
-			select {
-			case conn.send <- line:
-				return
-			case <-conn.close:
-				// Reconnect raced us between the check and the
-				// send; fall through and wait for the new one.
-			case <-deadline:
-				t.Fatalf("broadcastLive: no live /event connection accepted the line within %s", testWait)
-			}
-			continue
-		}
-		select {
-		case <-time.After(time.Millisecond):
-		case <-deadline:
-			t.Fatalf("broadcastLive: never observed a live /event connection within %s", testWait)
-		}
-	}
-}
-
 func waitForConnNumber(t *testing.T, f *fakeOpenCodeServer, n int) {
 	t.Helper()
 	deadline := time.After(testWait)
