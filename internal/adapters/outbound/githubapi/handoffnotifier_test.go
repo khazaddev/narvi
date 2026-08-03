@@ -13,11 +13,12 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/handoff"
 )
 
-// TestHandoffNotifier_Deliver_PostsCommentAndAddsLabel proves ONE Deliver
-// call does both halves of a handoff-sentinel run: posts the already-
-// rendered summary as a plain issue comment, THEN adds the fixed
-// "handoff" label.
-func TestHandoffNotifier_Deliver_PostsCommentAndAddsLabel(t *testing.T) {
+// TestHandoffNotifier_Deliver_AddsLabelAndPostsComment proves ONE Deliver
+// call does both halves of a handoff-sentinel run: adds the fixed
+// "handoff" label, THEN posts the already-rendered summary as a plain
+// issue comment -- label first, since it's the idempotent half; see
+// Deliver's own doc comment for why that ordering matters for retries.
+func TestHandoffNotifier_Deliver_AddsLabelAndPostsComment(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
@@ -80,27 +81,29 @@ func TestHandoffNotifier_Deliver_PostsCommentAndAddsLabel(t *testing.T) {
 		t.Errorf("added labels = %v, want [%q]", addLabelsBody["labels"], handoff.Label)
 	}
 
-	if len(order) != 2 || order[0] != "comment" || order[1] != "label" {
-		t.Errorf("call order = %v, want [comment, label] (comment posted before the label sync)", order)
+	if len(order) != 2 || order[0] != "label" || order[1] != "comment" {
+		t.Errorf("call order = %v, want [label, comment] (label synced before the comment is posted)", order)
 	}
 }
 
-// TestHandoffNotifier_Deliver_CommentFailure_NeverSyncsLabel proves the
-// ordering contract: if posting the comment itself fails, the label is
-// never added at all -- no partial "labeled but no comment posted" state.
-func TestHandoffNotifier_Deliver_CommentFailure_NeverSyncsLabel(t *testing.T) {
+// TestHandoffNotifier_Deliver_LabelFailure_NeverPostsComment proves the
+// ordering contract: if adding the label itself fails, the comment is
+// never posted at all -- no partial "commented but not labeled" state,
+// and critically, no risk of a duplicate comment on the next retry (the
+// whole point of putting the non-idempotent operation last).
+func TestHandoffNotifier_Deliver_LabelFailure_NeverPostsComment(t *testing.T) {
 	t.Parallel()
 
-	var labelCalls int
+	var commentCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/repos/acme/widgets/issues/42/comments" {
+		if r.URL.Path == "/repos/acme/widgets/issues/42/labels" {
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			_ = json.NewEncoder(w).Encode(map[string]any{"message": "boom"})
 			return
 		}
-		labelCalls++
+		commentCalls++
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode([]map[string]any{})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
 	}))
 	defer server.Close()
 
@@ -116,10 +119,76 @@ func TestHandoffNotifier_Deliver_CommentFailure_NeverSyncsLabel(t *testing.T) {
 
 	err = notifier.Deliver(context.Background(), ports.Notification{Kind: ports.NotificationKindHandoffSentinel, Payload: payload})
 	if err == nil {
-		t.Fatal("Deliver() error = nil, want a non-nil error when posting the comment itself fails")
+		t.Fatal("Deliver() error = nil, want a non-nil error when adding the label itself fails")
 	}
-	if labelCalls != 0 {
-		t.Errorf("labelCalls = %d, want 0 (label sync must never run after a failed comment post)", labelCalls)
+	if commentCalls != 0 {
+		t.Errorf("commentCalls = %d, want 0 (comment must never post after a failed label add)", commentCalls)
+	}
+}
+
+// TestHandoffNotifier_Deliver_RetryAfterCommentFailure_NeverDuplicatesComment
+// proves the exact scenario the label-first/comment-last ordering exists
+// for: a transient failure on the (now-last) comment call after the label
+// already succeeded must not cause a retried Deliver to post twice --
+// only the never-yet-succeeded comment is attempted again.
+func TestHandoffNotifier_Deliver_RetryAfterCommentFailure_NeverDuplicatesComment(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var labelCalls, commentCalls int
+	failCommentOnce := true
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch r.URL.Path {
+		case "/repos/acme/widgets/issues/42/labels":
+			labelCalls++
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/widgets/issues/42/comments":
+			commentCalls++
+			if failCommentOnce {
+				failCommentOnce = false
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "transient"})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+	notifier := githubapi.NewHandoffNotifier(adapter, "baked-in-bot-token")
+
+	payload, err := json.Marshal(githubapi.HandoffPayload{
+		Owner: "acme", Repo: "widgets", PRNumber: 42, Body: "text", Label: handoff.Label,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	notification := ports.Notification{Kind: ports.NotificationKindHandoffSentinel, Payload: payload}
+
+	if err := notifier.Deliver(context.Background(), notification); err == nil {
+		t.Fatal("first Deliver() error = nil, want a transient comment-post error")
+	}
+	if err := notifier.Deliver(context.Background(), notification); err != nil {
+		t.Fatalf("second Deliver() error = %v, want nil (comment should succeed on retry)", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if commentCalls != 2 {
+		t.Errorf("commentCalls = %d, want 2 (one failed attempt, one successful retry -- never a THIRD, duplicate post)", commentCalls)
+	}
+	if labelCalls != 2 {
+		t.Errorf("labelCalls = %d, want 2 (safe no-op re-run on each Deliver call)", labelCalls)
 	}
 }
 

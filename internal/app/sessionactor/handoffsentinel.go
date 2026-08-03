@@ -89,16 +89,21 @@ type PRDiffFetcher interface {
 // runHandoffSentinelBestEffort implements this file's own top comment.
 // token is the session creator's own already-decrypted GitHub OAuth
 // token (createPRBestEffort's own token, reused here rather than
-// decrypted a second time); owner/repoName/branch/sha describe the repo
-// this PR was just opened for; prNumber is the just-created PR's own
-// number. Every early return here is a plain, logged no-op -- this
-// function never blocks or fails PR creation, mirroring
-// checkContractDrift's/createPRBestEffort's own identical "never block a
-// spawn/push" discipline.
+// decrypted a second time); owner/repoName describe the repo this PR was
+// just opened for; configuredBranch is that repo's own CONFIGURED base
+// branch (nil means "the repo's real default branch") -- the SAME value
+// Step 27's checkContractDriftForRepo reads, and deliberately NEVER the
+// session's own pushed branch (see checkHandoffContractDrift's own doc
+// comment for why that distinction is load-bearing). prNumber is the
+// just-created PR's own number. Every early return here is a plain,
+// logged no-op -- this function never blocks or fails PR creation,
+// mirroring checkContractDrift's/createPRBestEffort's own identical
+// "never block a spawn/push" discipline.
 func (a *Actor) runHandoffSentinelBestEffort(
 	ctx context.Context,
 	sessionRow sqlcgen.Session,
-	token, owner, repoName, branch, sha string,
+	token, owner, repoName string,
+	configuredBranch *string,
 	prNumber int,
 ) {
 	if !provenance.IsScopedEnvironment(sessionRow.ProvenanceTag) {
@@ -109,7 +114,7 @@ func (a *Actor) runHandoffSentinelBestEffort(
 
 	repoFullName := owner + "/" + repoName
 
-	contractDrifted := a.checkHandoffContractDrift(ctx, sessionRow, owner, repoName, branch, sha, token)
+	contractDrifted := a.checkHandoffContractDrift(ctx, sessionRow, owner, repoName, configuredBranch, token)
 	todos := a.fetchHandoffTODOs(ctx, owner, repoName, prNumber, token)
 
 	if !contractDrifted && len(todos) == 0 {
@@ -169,16 +174,44 @@ func (a *Actor) runHandoffSentinelBestEffort(
 // against, and this returns false, exactly like a "first sighting" does
 // in checkContractDriftForRepo.
 //
-// Unlike checkContractDriftForRepo, this NEVER re-resolves the repo's
-// current SHA via a.sourceControl.ResolveBranchSHA: sha is already known,
-// verbatim, from the push_complete event that led to this PR being
-// created (sandboxws.PushCompleteReposElem.Sha) -- reusing it saves one
-// GitHub API round trip this Step's own call site would otherwise pay for
-// on every scoped-session PR. This also NEVER upserts a new snapshot back
-// (a read-only comparison) -- checkContractDrift (spawn/restore time)
-// remains the ONE writer of contract_drift_snapshots; this function only
-// ever reads what that writer already recorded.
-func (a *Actor) checkHandoffContractDrift(ctx context.Context, sessionRow sqlcgen.Session, owner, repoName, branch, sha, token string) bool {
+// Fixed confirmed finding: this function used to reuse the session's OWN
+// pushed branch/sha directly (from the push_complete event that led to
+// this PR being created), reasoning that doing so "saves one GitHub API
+// round trip." That reasoning was wrong and the reuse was a real bug with
+// two distinct failure modes depending on how the Environment's repo is
+// configured:
+//   - repos[].branch left nil (the common case -- session branches are
+//     auto-generated as narvi/<sessionID>): checkContractDriftForRepo
+//     writes its snapshot keyed on the repo's real DEFAULT branch, but
+//     this function was reading under the session's own generated branch
+//     -- a DIFFERENT key entirely, so the read was always pgx.ErrNoRows
+//     and contractDrifted was always silently false, regardless of any
+//     real drift.
+//   - repos[].branch explicitly set to a fixed name: both sides resolved
+//     to the SAME key, but then previous/current were BOTH derived from
+//     this session's own commits (its pre-push snapshot vs. its own
+//     post-push state) -- HasDrifted fired on virtually every commit the
+//     session itself made, since the SHA always differs and the
+//     contracts fingerprint never can (a scoped session's sparse
+//     checkout cannot touch contracts/api/* at all).
+//
+// Both share one root cause: current must be computed from the repo's own
+// CONFIGURED/base branch, independent of this session's own commits --
+// the real question this signal answers is "has this repo's backend
+// drifted from its contract since it was last checked", never "did THIS
+// session's own push change anything". The fix: re-resolve the
+// configured branch fresh, via the SAME a.sourceControl.ResolveBranchSHA
+// call checkContractDriftForRepo itself makes, and build BOTH the
+// comparison and the repoKey from ITS results -- provably the same key
+// that writer used, byte for byte. This costs one real GitHub API round
+// trip per scoped-session PR (paid only for a scoped + mock-configured
+// Environment, a narrow case) -- correctness here is worth that cost.
+//
+// This still NEVER upserts a new snapshot back (a read-only comparison)
+// -- checkContractDrift (spawn/restore time) remains the ONE writer of
+// contract_drift_snapshots; this function only ever reads what that
+// writer already recorded.
+func (a *Actor) checkHandoffContractDrift(ctx context.Context, sessionRow sqlcgen.Session, owner, repoName string, configuredBranch *string, token string) bool {
 	if !sessionRow.EnvironmentID.Valid {
 		return false
 	}
@@ -193,6 +226,21 @@ func (a *Actor) checkHandoffContractDrift(ctx context.Context, sessionRow sqlcge
 	}
 	if a.sourceControl == nil {
 		a.logger.Warn("sessionactor: handoff sentinel: no SourceControl configured; skipping contract-drift check")
+		return false
+	}
+
+	branch := ""
+	if configuredBranch != nil {
+		branch = *configuredBranch
+	}
+
+	shaCtx, shaCancel := context.WithTimeout(ctx, a.timeouts.ContractsFingerprintResolutionTimeout)
+	sha, resolvedBranch, err := a.sourceControl.ResolveBranchSHA(shaCtx, ports.ResolveBranchSHASpec{
+		Owner: owner, Repo: repoName, Branch: branch, Token: token,
+	})
+	shaCancel()
+	if err != nil {
+		a.logger.Warn("sessionactor: handoff sentinel: resolve branch sha failed; skipping contract-drift check", "error", err)
 		return false
 	}
 
@@ -215,12 +263,14 @@ func (a *Actor) checkHandoffContractDrift(ctx context.Context, sessionRow sqlcge
 	}
 
 	// Mirrors contractdrift.go's own repoKey construction EXACTLY (owner +
-	// "/" + repoName + "@" + branch) so this read hits the SAME row
-	// checkContractDrift last wrote at this session's own spawn/restore --
-	// branch here is the just-pushed session branch, never empty (this
-	// function is only ever called once a real push_complete event named
-	// it), so there is no default-branch-resolution ambiguity to resolve.
-	repoKey := owner + "/" + repoName + "@" + branch
+	// "/" + repoName + "@" + resolvedBranch) so this read hits the SAME
+	// row checkContractDrift last wrote at this session's own
+	// spawn/restore -- resolvedBranch (ResolveBranchSHA's own second
+	// return), NEVER the raw configuredBranch/branch string, for the
+	// exact reason checkContractDriftForRepo's own doc comment gives: a
+	// nil-branch config resolves to the repo's real default branch name,
+	// and the key must match on THAT name, not on an empty string.
+	repoKey := owner + "/" + repoName + "@" + resolvedBranch
 
 	row, err := a.stores.contractDrift.Get(ctx, repoKey)
 	if err != nil {

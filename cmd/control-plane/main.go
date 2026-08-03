@@ -827,6 +827,11 @@ func serve() error {
 	// spawns the child session -- reviewFindingStore/sentinelFixStore are
 	// the SAME instances every other caller above already uses.
 	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts)
+	// handoffNotifier (Step 49, "handoff-readiness sentinel", §14.4) posts
+	// the handoff-readiness comment and applies the "handoff" label on a
+	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken
+	// every other GitHub-flavored notifier above already uses.
+	handoffNotifier := githubapi.NewHandoffNotifier(sourceControl, cfg.GitHubBotToken)
 
 	// outboxStore is constructed earlier, alongside linearAgentSessionStore
 	// -- see that construction site's own doc comment for why.
@@ -839,6 +844,7 @@ func serve() error {
 		ports.NotificationKindSlackPlanDecided:  planSlackNotifier,
 		ports.NotificationKindGitHubVerdict:     githubVerdictNotifier,
 		ports.NotificationKindSentinelAutoFix:   sentinelAutoFixNotifier,
+		ports.NotificationKindHandoffSentinel:   handoffNotifier,
 	}, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)

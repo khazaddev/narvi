@@ -125,6 +125,36 @@ func TestScanTODOs_TableDriven(t *testing.T) {
 				{FilePath: "a.ts", Line: 51, Text: "// TODO: later in the file"},
 			},
 		},
+		{
+			// doc.go's own design call #4: no content filtering -- the marker
+			// is reported regardless of WHERE in the added line it appears,
+			// never requiring it to sit inside a "//"/"#" comment specifically.
+			name: "TODO inside a string literal still reported",
+			diff: "diff --git a/foo.ts b/foo.ts\n" +
+				"--- a/foo.ts\n" +
+				"+++ b/foo.ts\n" +
+				"@@ -1,1 +1,2 @@\n" +
+				" line1\n" +
+				"+const msg = \"TODO: fix this string before shipping\"\n",
+			want: []handoff.TODOFinding{
+				{FilePath: "foo.ts", Line: 2, Text: "const msg = \"TODO: fix this string before shipping\""},
+			},
+		},
+		{
+			// doc.go's own design call #4: no path filtering -- a test file
+			// is scanned exactly like any other file, never excluded by its
+			// own name/extension.
+			name: "TODO inside a test file still reported",
+			diff: "diff --git a/foo_test.go b/foo_test.go\n" +
+				"--- a/foo_test.go\n" +
+				"+++ b/foo_test.go\n" +
+				"@@ -1,1 +1,2 @@\n" +
+				" line1\n" +
+				"+// TODO: assert the error case too\n",
+			want: []handoff.TODOFinding{
+				{FilePath: "foo_test.go", Line: 2, Text: "// TODO: assert the error case too"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

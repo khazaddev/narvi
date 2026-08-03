@@ -53,37 +53,41 @@ func NewHandoffNotifier(adapter *Adapter, botToken string) *HandoffNotifier {
 }
 
 // Deliver implements ports.Notifier: decodes n.Payload as HandoffPayload,
-// posts the comment, then adds the label. n.Kind is not checked -- mirrors
+// adds the label, then posts the comment. n.Kind is not checked -- mirrors
 // VerdictNotifier.Deliver's own identical "only ever asked to Deliver its
 // own matching Kind in practice" precedent.
 //
-// Ordering (comment first, then label) is deliberate, mirroring
-// VerdictNotifier.Deliver's own "the review is the substantive content a
-// human reads; the label is a secondary, purely-visual sync" reasoning.
-// AddLabels is naturally idempotent on GitHub's own side (adding a label
-// a PR already carries is a harmless no-op); PostIssueComment is NOT --
-// a retried Deliver posts a SECOND comment, the SAME known, accepted
-// limitation VerdictNotifier's own CreateReview already carries (this
-// package's own established precedent, not a new gap this Step
-// introduces). This is exactly why the caller (internal/app/sessionactor/
-// handoffsentinel.go) claims idempotency BEFORE ever enqueueing this
-// outbox row at all -- Deliver itself is never asked to re-run for a PR
-// that already succeeded, only for a genuine transient-failure retry of
-// the SAME still-pending attempt.
+// Ordering (label FIRST, comment LAST) is deliberate -- and the reverse of
+// what an earlier version of this function did, which had a real bug: with
+// comment-then-label, a transient failure on the label call AFTER a
+// successful comment left the outbox row "pending", so the next retry
+// re-ran Deliver from the top and posted a SECOND comment. AddLabels is
+// naturally idempotent on GitHub's own side (adding a label a PR already
+// carries is a harmless no-op); PostIssueComment is NOT. Putting the
+// non-idempotent operation LAST means: once it succeeds, Deliver returns
+// nil and the row is never retried again; a retry after any EARLIER
+// failure re-runs AddLabels (safe no-op) and then attempts
+// PostIssueComment again -- which, never having succeeded on a prior
+// attempt, posts exactly once. This is exactly why the caller
+// (internal/app/sessionactor/handoffsentinel.go) ALSO claims idempotency
+// before ever enqueueing this outbox row at all -- Deliver itself is
+// never asked to re-run for a PR that already succeeded, only for a
+// genuine transient-failure retry of the SAME still-pending attempt; this
+// ordering is what makes that retry safe.
 func (n *HandoffNotifier) Deliver(ctx context.Context, notification ports.Notification) error {
 	var payload HandoffPayload
 	if err := json.Unmarshal(notification.Payload, &payload); err != nil {
 		return fmt.Errorf("githubapi: decode handoff payload: %w", err)
 	}
 
-	if err := n.adapter.PostIssueComment(ctx, payload.Owner, payload.Repo, payload.PRNumber, n.botToken, payload.Body); err != nil {
-		return fmt.Errorf("githubapi: deliver handoff (post comment): %w", err)
-	}
-
 	if payload.Label != "" {
 		if err := n.adapter.AddLabels(ctx, payload.Owner, payload.Repo, payload.PRNumber, n.botToken, []string{payload.Label}); err != nil {
 			return fmt.Errorf("githubapi: deliver handoff (add label): %w", err)
 		}
+	}
+
+	if err := n.adapter.PostIssueComment(ctx, payload.Owner, payload.Repo, payload.PRNumber, n.botToken, payload.Body); err != nil {
+		return fmt.Errorf("githubapi: deliver handoff (post comment): %w", err)
 	}
 
 	return nil

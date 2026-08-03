@@ -92,6 +92,18 @@ func TestBuildFindingInputs_TableDriven(t *testing.T) {
 					t.Errorf("BuildFindingInputs() produced an invalid FindingInput: %v", err)
 				}
 			}
+			if tt.name == "both" {
+				// The contract-drift finding always comes first, then TODO
+				// findings in scan order -- BuildFindingInputs' own doc
+				// comment order (append contract-drift, then range over
+				// todos), never a repeat-input-order-into-output guess.
+				if got[0].Line != nil {
+					t.Errorf("BuildFindingInputs()[0].Line = %v, want nil (the contract-drift finding, which is repo-level, not line-level)", *got[0].Line)
+				}
+				if got[1].Line == nil || *got[1].Line != todo1.Line {
+					t.Errorf("BuildFindingInputs()[1].Line = %v, want %d (the TODO finding)", got[1].Line, todo1.Line)
+				}
+			}
 		})
 	}
 }

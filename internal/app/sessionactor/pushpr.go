@@ -472,7 +472,7 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		// immediately with no further work (handoffsentinel.go's own top
 		// check). See that file's own top comment for why this runs HERE
 		// rather than via a GitHub pull_request webhook lane.
-		a.runHandoffSentinelBestEffort(ctx, sessionRow, token, owner, repoName, pushed.Branch, pushed.Sha, ref.Number)
+		a.runHandoffSentinelBestEffort(ctx, sessionRow, token, owner, repoName, repoCfg.Branch, ref.Number)
 	}
 }
 
@@ -611,6 +611,16 @@ func (a *Actor) createSentinelFixPRBestEffort(ctx context.Context, evt sandboxws
 // an artifact row is not session/turn/sandbox state -- transact's own
 // fencing check does not care what a caller's fn writes, only that the
 // actor invoking it is still the legitimate owner of the session.
+// recordPRArtifact inserts a "pr"-typed artifact row for ref, unless one
+// already exists for this session (Step 49 confirmed-finding fix,
+// companion to CreatePR's own new idempotency, githubapi/adapter.go):
+// making CreatePR idempotent means createPRBestEffort's per-repo loop now
+// "succeeds" (recovering the SAME PR) on turn 2+ instead of erroring, so
+// without this guard the same PR would gain one duplicate artifact row per
+// subsequent completed turn. No new migration/unique constraint --an
+// application-level guard, the same idempotency idiom the outbox/claim
+// paths elsewhere in this codebase already use, and cheap: this list is
+// expected to stay small (ArtifactStore.ListForSession's own doc comment).
 func (a *Actor) recordPRArtifact(ctx context.Context, repoName string, ref ports.PRRef) error {
 	metadata, err := json.Marshal(map[string]any{"repo": repoName, "number": ref.Number})
 	if err != nil {
@@ -618,6 +628,16 @@ func (a *Actor) recordPRArtifact(ctx context.Context, repoName string, ref ports
 	}
 
 	return a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		existing, err := a.stores.artifact.WithTx(tx).ListForSession(ctx, a.sessionID)
+		if err != nil {
+			return fmt.Errorf("sessionactor: list existing artifacts: %w", err)
+		}
+		for _, art := range existing {
+			if art.Type == sqlcgen.ArtifactTypePr && art.Url == ref.URL {
+				return nil
+			}
+		}
+
 		if _, err := a.stores.artifact.WithTx(tx).Create(ctx, sqlcgen.CreateArtifactParams{
 			SessionID: a.sessionID,
 			Type:      sqlcgen.ArtifactTypePr,

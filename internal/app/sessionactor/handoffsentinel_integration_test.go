@@ -396,10 +396,12 @@ func TestHandoffSentinel_Idempotent_RunningTwiceDoesNotDuplicate(t *testing.T) {
 	})
 
 	// Second, duplicate delivery -- same repo/branch/sha, same fake
-	// (same nextRef.Number). createPRBestEffort itself is not idempotent
-	// (a second "pr" artifact row IS created -- a pre-existing, separate
-	// concern this Step does not change), but the handoff sentinel's own
-	// claim must hold regardless.
+	// (same nextRef.Number). CreatePR's own idempotency (githubapi/
+	// adapter.go, Step 49 confirmed-finding fix) means this "succeeds" by
+	// recovering the SAME PR rather than erroring, and recordPRArtifact's
+	// own companion dedup guard means this does NOT create a second "pr"
+	// artifact row for it -- both fixed together, not a pre-existing
+	// accepted limitation anymore.
 	sendSandboxEventForTest(ctx, t, a, SandboxEvent{
 		Type: "push_complete",
 		Gen:  1,
@@ -409,7 +411,7 @@ func TestHandoffSentinel_Idempotent_RunningTwiceDoesNotDuplicate(t *testing.T) {
 	artifactStore := narvipg.NewArtifactStore(pool)
 	waitUntil(t, 5*time.Second, func() bool {
 		rows, err := artifactStore.ListForSession(ctx, sessionID)
-		return err == nil && len(rows) == 2
+		return err == nil && len(rows) == 1
 	})
 
 	if got := countOutboxRowsForSessionKind(ctx, t, pool, sessionID, string(ports.NotificationKindHandoffSentinel)); got != 1 {
@@ -417,5 +419,101 @@ func TestHandoffSentinel_Idempotent_RunningTwiceDoesNotDuplicate(t *testing.T) {
 	}
 	if got := countHandoffSentinelRuns(ctx, t, pool, "acme/"+repoName, 55); got != 1 {
 		t.Errorf("handoff_sentinel_runs row count = %d, want exactly 1", got)
+	}
+}
+
+// TestHandoffSentinel_ScopedPR_OwnCommitsAlone_NeverFalselyReportsDrift is
+// the confirmed-finding regression test for checkHandoffContractDrift's own
+// fix (handoffsentinel.go's doc comment on that function has the full
+// bug writeup): the pre-fix code reused THIS session's own just-pushed
+// branch/sha directly as the drift-check's "current" state, instead of the
+// repo's real configured/default branch -- so the session's own commits,
+// alone (on a branch/sha completely unrelated to the repo's tracked
+// branch), must never be what drives the comparison.
+//
+// This session's repo config leaves branch nil (the common case --
+// createTestSessionWithRepoAndEnvironmentNilBranch), which
+// checkContractDriftForRepo resolves to the repo's real default branch,
+// "main" (fakeSourceControl.defaultBranchName below) -- the snapshot is
+// seeded under "acme/<repo>@main", genuinely drifted (a different SHA,
+// same contracts fingerprint) from what ResolveBranchSHA/
+// ResolveContractsFingerprint report as "main"'s current state. The
+// push_complete event names a THIRD, unrelated branch/sha (this session's
+// own generated branch and its own commit) that never appears anywhere in
+// the seeded snapshot or the fake's configured current state.
+//
+// Pre-fix, this would have read repoKey "acme/<repo>@narvi/session-own-
+// branch" (ErrNoRows -- never seeded) and returned false, missing real
+// drift on "main" entirely. Post-fix, checkHandoffContractDrift re-resolves
+// "main" itself (ignoring the session's own branch/sha) and correctly
+// finds it.
+func TestHandoffSentinel_ScopedPR_OwnCommitsAlone_NeverFalselyReportsDrift(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	creator := createTestUserWithGitHubToken(ctx, t, pool, "gh-fake-token-handoff-5")
+	env := createTestEnvironment(ctx, t, pool, true, contractsPathPtr("contracts/api"))
+
+	const repoName = "repo-handoff-5"
+	sessionID := createTestSessionWithRepoAndEnvironmentNilBranch(ctx, t, pool, creator, env,
+		repoName, "https://github.com/acme/"+repoName+".git")
+	if _, err := pool.Exec(ctx, `UPDATE sessions SET provenance_tag = $1 WHERE id = $2`, provenance.ScopedEnvironment, sessionID); err != nil {
+		t.Fatalf("set provenance_tag: %v", err)
+	}
+
+	repoKey := "acme/" + repoName + "@main"
+	seedContractDriftSnapshot(ctx, t, pool, repoKey, "main-sha-old", "fp-stable")
+
+	sandboxStore := narvipg.NewSandboxStore(pool)
+	if _, err := sandboxStore.Create(ctx, sessionID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+
+	sourceControl := &fakeSourceControl{
+		nextRef:               ports.PRRef{Number: 66, URL: "https://github.com/acme/" + repoName + "/pull/66"},
+		defaultBranchName:     "main",
+		nextSHA:               "main-sha-new", // main moved -- genuine drift, contract fingerprint unchanged.
+		nextFingerprint:       "fp-stable",
+		nextFingerprintExists: true,
+	}
+
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown() })
+
+	a, err := r.GetOrSpawn(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+
+	// This session's OWN push: its own generated branch and its own
+	// commit sha, both deliberately absent from the seeded snapshot and
+	// the fake's configured "main" state above.
+	sendSandboxEventForTest(ctx, t, a, SandboxEvent{
+		Type: "push_complete",
+		Gen:  1,
+		Raw:  pushCompleteRaw(t, sessionID.String(), 1, repoName, "narvi/session-own-branch", "session-own-commit-sha"),
+	})
+
+	waitUntil(t, 5*time.Second, func() bool {
+		return countOutboxRowsForSessionKind(ctx, t, pool, sessionID, string(ports.NotificationKindHandoffSentinel)) == 1
+	})
+
+	payload := getOutboxPayloadForSessionKind(ctx, t, pool, sessionID, string(ports.NotificationKindHandoffSentinel))
+	var decoded struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode outbox payload: %v", err)
+	}
+	if want := "acme/" + repoName; !strings.Contains(decoded.Body, want) {
+		t.Errorf("payload body = %q, want it to mention %q (contract-drift finding, resolved against the repo's real default branch)", decoded.Body, want)
+	}
+
+	if got := sourceControl.lastSHASpec(); got.Branch != "" {
+		t.Errorf("ResolveBranchSHA's last spec.Branch = %q, want \"\" (the repo's own nil-configured branch, never this session's own push branch %q)",
+			got.Branch, "narvi/session-own-branch")
 	}
 }
