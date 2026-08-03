@@ -58,7 +58,23 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
 
-	container, err := tcpostgres.Run(ctx, "postgres:17-alpine",
+	// startCtx bounds ONLY the container-startup call below (image pull +
+	// Docker daemon round trip + Postgres's own internal ready-wait) --
+	// an unbounded context.Background() here can hang for Go's own full
+	// 10-minute test-binary panic timeout if the CI runner's Docker daemon
+	// stalls (CONFIRMED: CI run 30831633470's own goroutine dump showed
+	// exactly this, blocked in moby/moby client.ContainerStart via
+	// net/http.(*persistConn).roundTrip, panicking the whole test binary
+	// after 10m0s and burning that binary's entire remaining test budget).
+	// A healthy container start normally takes single-digit seconds; 2
+	// minutes is generous margin for a slow image pull on a cold runner
+	// cache while still failing fast, with an honest error, well short of
+	// that 10-minute ceiling. ctx itself (unbounded) is still used for
+	// everything else below, unchanged.
+	startCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	container, err := tcpostgres.Run(startCtx, "postgres:17-alpine",
 		tcpostgres.WithDatabase("narvi_test"),
 		tcpostgres.WithUsername("narvi"),
 		tcpostgres.WithPassword("narvi"),
