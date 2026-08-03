@@ -228,8 +228,8 @@ func TestTransientRetry_RetryAlsoFailsFinalizesFailedExactlyOnce(t *testing.T) {
 	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
 
 	// The RETRIED prompt ALSO hits a transient APIError.
-	f.broadcast(apiErrorMessageUpdated(t, "ses_fake", "msg_retry", true))
-	f.broadcast(sessionIdleLine(t, "ses_fake"))
+	broadcastLive(t, f, apiErrorMessageUpdated(t, "ses_fake", "msg_retry", true))
+	broadcastLive(t, f, sessionIdleLine(t, "ses_fake"))
 
 	if err := group.Wait(); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
@@ -408,8 +408,8 @@ func TestTransientRetry_SharesOneShotBudgetWithCompactionRetry(t *testing.T) {
 	// The RETRIED prompt overflows instead of hitting another transient
 	// error -- must NOT trigger a compaction retry: the shared latch is
 	// already spent.
-	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_retry"))
-	f.broadcast(sessionIdleLine(t, "ses_fake"))
+	broadcastLive(t, f, overflowMessageUpdated(t, "ses_fake", "msg_retry"))
+	broadcastLive(t, f, sessionIdleLine(t, "ses_fake"))
 
 	if err := group.Wait(); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
@@ -499,8 +499,8 @@ func TestCompactionRetry_SharesOneShotBudgetWithTransientRetry(t *testing.T) {
 	// The RETRIED prompt hits a transient APIError instead of overflowing
 	// again -- must NOT trigger a transient-error retry: the shared latch
 	// is already spent.
-	f.broadcast(apiErrorMessageUpdated(t, "ses_fake", "msg_retry", true))
-	f.broadcast(sessionIdleLine(t, "ses_fake"))
+	broadcastLive(t, f, apiErrorMessageUpdated(t, "ses_fake", "msg_retry", true))
+	broadcastLive(t, f, sessionIdleLine(t, "ses_fake"))
 
 	if err := group.Wait(); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)

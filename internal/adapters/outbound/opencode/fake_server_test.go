@@ -600,6 +600,49 @@ func sseLine(t *testing.T, eventType string, props any) string {
 // fails the test after testWait -- used to know precisely when the Nth
 // /event connection (1-based) has been accepted, e.g. after a
 // dropConnection-triggered reconnect.
+// broadcastLive is broadcast's own non-silent sibling: it waits until the
+// fake actually HAS a live /event connection, then sends, instead of
+// dropping the line on the floor when f.current happens to be nil.
+//
+// That silent drop is exactly how CI lost
+// TestCompactionRetry_SharesOneShotBudgetWithTransientRetry: the adapter's
+// own SSE reconnect fired mid-test (the run's log shows "event stream
+// connection lost, reconnecting" in the same second as the failure), so the
+// error-carrying message.updated vanished, only the following session.idle
+// landed, and the turn finalized as completed with a nil reason -- a
+// confusing assertion failure several layers away from its cause, on a test
+// that passes every time locally where no reconnect happens.
+//
+// Use this for any broadcast whose delivery the test's own assertions
+// depend on. Plain broadcast stays for the tests that deliberately send
+// into a dropped connection.
+func broadcastLive(t *testing.T, f *fakeOpenCodeServer, line string) {
+	t.Helper()
+	deadline := time.After(testWait)
+	for {
+		f.mu.Lock()
+		conn := f.current
+		f.mu.Unlock()
+		if conn != nil {
+			select {
+			case conn.send <- line:
+				return
+			case <-conn.close:
+				// Reconnect raced us between the check and the
+				// send; fall through and wait for the new one.
+			case <-deadline:
+				t.Fatalf("broadcastLive: no live /event connection accepted the line within %s", testWait)
+			}
+			continue
+		}
+		select {
+		case <-time.After(time.Millisecond):
+		case <-deadline:
+			t.Fatalf("broadcastLive: never observed a live /event connection within %s", testWait)
+		}
+	}
+}
+
 func waitForConnNumber(t *testing.T, f *fakeOpenCodeServer, n int) {
 	t.Helper()
 	deadline := time.After(testWait)
