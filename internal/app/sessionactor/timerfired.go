@@ -449,6 +449,33 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 		if err := a.persistDerivedSessionStatus(ctx, tx, summariesWithOverride(turns, processing.ID, to, failureReason)); err != nil {
 			return err
 		}
+
+		// Step 35 ("outbox delivery", §5.1): a turn that fails HERE, on its
+		// own turn_deadline, needs the same outbound notification a turn
+		// that fails via a real execution_complete already gets
+		// (completeProcessingTurn, pushpr.go). Before this fix, only that
+		// real-event path enqueued one -- so a Slack- or Linear-origin
+		// session whose turn simply timed out went permanently silent on
+		// its originating channel, visible only to the web UI (which reads
+		// turn state directly and so needs no notification at all).
+		//
+		// The plan argument is unconditionally nil: recordPlanIfNeeded
+		// (planrecord.go) only ever records a plan for a genuinely
+		// COMPLETED plan_mode turn, so a timed-out turn can never have one
+		// to route a plan-approval-request notification for.
+		//
+		// Enqueued inside this handler's own already-open transact, before
+		// the deleteTimer that closes it -- §5.1's "written in the same tx
+		// as the state change" rule, identical to how completeProcessingTurn
+		// enqueues inside handleSandboxEvent's own transact.
+		sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
+		if err != nil {
+			return fmt.Errorf("sessionactor: get session: %w", err)
+		}
+		if err := a.enqueueOutboxNotification(ctx, tx, sessionRow, turn.TriggerTimeout, failureReason, processing, nil); err != nil {
+			return err
+		}
+
 		return a.deleteTimer(ctx, tx, TimerTurnDeadline)
 	})
 }
