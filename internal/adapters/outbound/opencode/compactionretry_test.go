@@ -362,6 +362,24 @@ func TestCompactionRetry_StepStartDuringCompactionIsSuppressed(t *testing.T) {
 	close(gate)
 
 	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+
+	// Deterministically wait for ts.compacting to have actually cleared
+	// before broadcasting the retry's own real completion below -- the
+	// SAME latent test-synchronization gap this file already closed
+	// elsewhere via waitForNotCompacting (see that helper's own doc
+	// comment, fake_server_test.go, and e.g.
+	// TestCompactionRetry_SucceedsAfterOverflow above): waitForCount above
+	// only proves the fake server's own handler recorded the retry's own
+	// prompt_async call, strictly EARLIER than the adapter's own
+	// client-side postPromptAsync call actually returning and
+	// attemptCompactionRetry clearing ts.compacting (§7.2 Finding 3's own
+	// ordering, adapter.go) -- broadcasting immediately after waitForCount
+	// would race dispatchEvent's own isCompacting guard (sse.go) into
+	// silently and PERMANENTLY dropping the retry's own completion (there
+	// is no replay), leaving nothing to finalize this turn within the
+	// test's own testWait ctx budget.
+	waitForNotCompacting(t, ts)
+
 	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
 	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
 	f.broadcast(sessionIdleLine(t, "ses_fake"))
