@@ -573,8 +573,25 @@ func (f *fakeOpenCodeServer) abortCallCount() int {
 //
 // t.Errorf rather than t.Fatalf: this is reachable from a non-test goroutine,
 // where FailNow is not allowed.
+// broadcastWaitBudget bounds broadcast's own wait for a live connection --
+// deliberately NOT testWait. A single blocked broadcast call must never be
+// able to consume a whole test's entire time budget: several tests share
+// that same testWait window across their own context AND everything they
+// do with it (StartTurn, group.Wait, assertions), so if broadcast silently
+// borrowed all of testWait waiting for a reconnect, it could starve the
+// turn's own ctx into cancelling first -- exactly what happened under
+// `-tags=integration -race` load in CI (TestTransientRetry_
+// RetryAlsoFailsFinalizesFailedExactlyOnce: a broadcast call blocked the
+// full testWait=15s waiting for a connection that legitimately reappeared
+// via the adapter's own reconnect logic, but not before the turn's own
+// 15s ctx expired first -- outcome "cancelled" instead of "failed").
+// A real reconnect completes within testReconnectInterval; this budget is
+// several multiples of that, generous for scheduling jitter under a loaded
+// CI runner without ever approaching testWait itself.
+const broadcastWaitBudget = 4 * testReconnectInterval
+
 func (f *fakeOpenCodeServer) broadcast(line string) {
-	deadline := time.After(testWait)
+	deadline := time.After(broadcastWaitBudget)
 	for {
 		f.mu.Lock()
 		conn := f.current
@@ -587,7 +604,7 @@ func (f *fakeOpenCodeServer) broadcast(line string) {
 				// A reconnect raced us between reading f.current
 				// and sending; wait for the replacement.
 			case <-deadline:
-				f.t.Errorf("fake server: no live /event connection accepted a broadcast within %s", testWait)
+				f.t.Errorf("fake server: no live /event connection accepted a broadcast within %s", broadcastWaitBudget)
 				return
 			}
 			continue
@@ -595,7 +612,7 @@ func (f *fakeOpenCodeServer) broadcast(line string) {
 		select {
 		case <-time.After(time.Millisecond):
 		case <-deadline:
-			f.t.Errorf("fake server: never observed a live /event connection to broadcast on within %s", testWait)
+			f.t.Errorf("fake server: never observed a live /event connection to broadcast on within %s", broadcastWaitBudget)
 			return
 		}
 	}
