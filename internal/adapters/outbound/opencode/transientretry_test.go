@@ -104,6 +104,21 @@ func TestTransientRetry_SucceedsAfterTransientAPIError(t *testing.T) {
 		t.Errorf("ts.attemptedRecoveryKind() = %v, want recoveryKindTransientAPI", ts.attemptedRecoveryKind())
 	}
 
+	// Deterministically wait for ts.compacting to have actually cleared
+	// before broadcasting the retry's own real completion -- mirroring
+	// compactionretry_test.go's own established waitForNotCompacting
+	// precedent (e.g.
+	// TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed):
+	// waitForCount above only proves the fake server's own handler recorded
+	// the retry's own prompt_async call, strictly EARLIER than the adapter's
+	// own client-side postPromptAsync call actually returning and clearing
+	// ts.compacting (attemptTransientRetry mirrors attemptCompactionRetry's
+	// own §7.2 Finding 3 ordering exactly, adapter.go) -- broadcasting
+	// immediately after waitForCount would race dispatchEvent's own
+	// isCompacting guard (sse.go) into silently and permanently dropping the
+	// retry's own completion.
+	waitForNotCompacting(t, ts)
+
 	// Now script the RETRY's own clean completion.
 	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
 	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
@@ -220,12 +235,25 @@ func TestTransientRetry_RetryAlsoFailsFinalizesFailedExactlyOnce(t *testing.T) {
 		return err
 	})
 
-	waitForTurnRegistered(t, a, "ses_fake")
+	ts := waitForTurnRegistered(t, a, "ses_fake")
 
 	// First transient error -- triggers the one and only retry.
 	f.broadcast(apiErrorMessageUpdated(t, "ses_fake", "msg_original", true))
 	f.broadcast(sessionIdleLine(t, "ses_fake"))
 	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+
+	// Deterministically wait for ts.compacting to have actually cleared
+	// before broadcasting the RETRIED prompt's own second transient error
+	// below -- see TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce's
+	// own doc comment (compactionretry_test.go) for the exact race this
+	// closes: waitForCount above only proves the fake server's own handler
+	// recorded the retry's own prompt_async call, strictly EARLIER than the
+	// adapter's own client-side postPromptAsync call actually returning and
+	// clearing ts.compacting -- broadcasting immediately after it would race
+	// dispatchEvent's own isCompacting guard (sse.go) into silently and
+	// PERMANENTLY dropping this event (there is no replay), leaving nothing
+	// to finalize this turn within the test's own testWait ctx budget.
+	waitForNotCompacting(t, ts)
 
 	// The RETRIED prompt ALSO hits a transient APIError.
 	f.broadcast(apiErrorMessageUpdated(t, "ses_fake", "msg_retry", true))
@@ -405,6 +433,15 @@ func TestTransientRetry_SharesOneShotBudgetWithCompactionRetry(t *testing.T) {
 		t.Fatalf("ts.attemptedRecoveryKind() = %v, want recoveryKindTransientAPI (test setup check)", got)
 	}
 
+	// Deterministically wait for ts.compacting to have actually cleared
+	// before broadcasting the RETRIED prompt's own second failure below --
+	// see TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce's
+	// own doc comment (compactionretry_test.go) for the exact race this
+	// closes: waitForCount above only proves the retry's own prompt_async
+	// call was recorded server-side, strictly EARLIER than ts.compacting
+	// actually clearing client-side.
+	waitForNotCompacting(t, ts)
+
 	// The RETRIED prompt overflows instead of hitting another transient
 	// error -- must NOT trigger a compaction retry: the shared latch is
 	// already spent.
@@ -495,6 +532,15 @@ func TestCompactionRetry_SharesOneShotBudgetWithTransientRetry(t *testing.T) {
 	if got := ts.attemptedRecoveryKind(); got != recoveryKindCompaction {
 		t.Fatalf("ts.attemptedRecoveryKind() = %v, want recoveryKindCompaction (test setup check)", got)
 	}
+
+	// Deterministically wait for ts.compacting to have actually cleared
+	// before broadcasting the RETRIED prompt's own second failure below --
+	// see TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce's
+	// own doc comment (compactionretry_test.go) for the exact race this
+	// closes: waitForCount above only proves the retry's own prompt_async
+	// call was recorded server-side, strictly EARLIER than ts.compacting
+	// actually clearing client-side.
+	waitForNotCompacting(t, ts)
 
 	// The RETRIED prompt hits a transient APIError instead of overflowing
 	// again -- must NOT trigger a transient-error retry: the shared latch

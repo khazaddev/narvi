@@ -95,9 +95,35 @@ func sessionIdleLine(t *testing.T, sessionID string) string {
 // overflow -> exactly one /summarize call -> exactly one retried
 // prompt_async call (same prompt text) -> a clean retry completion ->
 // final execution_complete is Completed, never Failed.
+//
+// Gates the RETRY's own re-dispatch (call #2, armPromptAsyncGateForCall) --
+// a LATER audit's own finding: a PRIOR version of this test asserted its own
+// "compaction message never leaked through" check (see the isAssistantMessage
+// check below) only AFTER group.Wait() returned, reasoning that the
+// compaction wave and the retry's own later completion travel over the SAME
+// single, strictly-ordered persistent connection, so processing is
+// guaranteed complete by then. That reasoning is true but insufficient: it
+// only proves dispatchEvent was CALLED for the compaction wave's own events,
+// never that ts.isCompacting() read true AT THE MOMENT it was -- a genuine
+// race against attemptCompactionRetry's own ts.setCompacting(false) call
+// (adapter.go), deliberately made only AFTER postPromptAsync returns (§7.2
+// Finding 3), on a completely different goroutine. Confirmed to actually
+// flake under CI's own slower/more-contended scheduling (this branch's own
+// broadcast-wait fix shifted timing enough to expose it): the retry's own
+// re-dispatch can be accepted and its own ts.setCompacting(false) can run
+// before the SSE-reader goroutine has drained the compaction wave the
+// /summarize handler already broadcast, in which case the assertion below
+// would previously have been checking a coin flip. Gating call #2 (mirroring
+// TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed's
+// own precedent for using this exact gate to make an isCompacting-guarded
+// assertion deterministic) guarantees ts.compacting cannot possibly have
+// cleared yet -- postPromptAsync's own client-side call is still blocked --
+// regardless of how long the reader takes to catch up, closing the race
+// instead of merely hoping to win it.
 func TestCompactionRetry_SucceedsAfterOverflow(t *testing.T) {
 	f := newFakeOpenCodeServer(t)
 	f.setSummarizeOK(true)
+	gate := f.armPromptAsyncGateForCall(2)
 
 	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
 	t.Cleanup(a.Close)
@@ -139,6 +165,14 @@ func TestCompactionRetry_SucceedsAfterOverflow(t *testing.T) {
 	// ...and, on that call succeeding, exactly one RETRIED prompt_async
 	// call for the SAME session with the SAME prompt text (promptCalls[0]
 	// is the ORIGINAL dispatch from StartTurn itself; [1] is the retry).
+	// The fake server's own handler (fake_server_test.go) records this call
+	// BEFORE blocking on the gate armed above, so this proves forceCompaction
+	// has ALREADY succeeded (its own compaction wave already fully broadcast,
+	// see below) and the retry's own re-dispatch has been accepted and is now
+	// genuinely gated/in-flight -- ts.compacting is GUARANTEED still true for
+	// as long as the gate stays closed, since attemptCompactionRetry's own
+	// ts.setCompacting(false) call cannot run until this gated postPromptAsync
+	// call returns.
 	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
 	if got := f.lastPromptText(); got != promptText {
 		t.Errorf("retried prompt text = %q, want %q (the EXACT same prompt)", got, promptText)
@@ -154,6 +188,44 @@ func TestCompactionRetry_SucceedsAfterOverflow(t *testing.T) {
 	if err := ts.errorForOutcome(); err != nil {
 		t.Errorf("ts.errorForOutcome() = %+v, want nil (clearErrorsForRetry should have cleared it after a successful compaction)", err)
 	}
+
+	// §7.2 Finding 6's own mutation-testing proof, made deterministic by the
+	// gate above: the fake server's own /summarize handler broadcasts a real
+	// compaction-internal message.updated for "msg_compaction_ses_fake" from
+	// INSIDE forceCompaction's own HTTP round trip, well before this point --
+	// this must NEVER have been recorded as a KNOWN assistant message id,
+	// proving dispatchEvent's own isCompacting guard (sse.go, the
+	// "message.updated" case) actually fired for it (confirmed by temporarily
+	// short-circuiting all four dispatchEvent isCompacting guards to dead
+	// code and observing this exact assertion fail) rather than this
+	// fake-server-backed test simply never exercising that guard at all.
+	// The sleep gives the SSE-reader goroutine ample opportunity to have
+	// actually processed that broadcast; the gate is what makes this
+	// assertion meaningful regardless of exactly how long that takes --
+	// ts.compacting cannot possibly have cleared yet, since postPromptAsync
+	// (and therefore this goroutine's own ts.setCompacting(false)) is still
+	// blocked on the gate.
+	time.Sleep(100 * time.Millisecond)
+	if ts.isAssistantMessage("msg_compaction_ses_fake") {
+		t.Error("compaction-internal message.updated was treated as a real assistant message -- " +
+			"dispatchEvent's own isCompacting guard (sse.go) did not suppress it")
+	}
+	if !ts.isCompacting() {
+		t.Fatal("ts.isCompacting() = false while the retry's own re-dispatch is still gated, want true")
+	}
+
+	close(gate) // let the gated retry dispatch finally return
+
+	// Deterministically wait for compacting to actually flip false (i.e. for
+	// attemptCompactionRetry's own postPromptAsync call to have genuinely
+	// returned) BEFORE broadcasting the retry's own completion -- without
+	// this, broadcasting immediately after waitForCount above only proves the
+	// FAKE SERVER'S handler recorded the call, not that the ADAPTER's own
+	// client-side postPromptAsync HTTP round trip has actually returned and
+	// ts.setCompacting(false) has run, which would otherwise race
+	// dispatchEvent's own isCompacting guard (sse.go) into silently dropping
+	// the retry's own real completion.
+	waitForNotCompacting(t, ts)
 
 	// Now script the RETRY's own clean completion: a fresh assistant
 	// message, a real text part, then session.idle.
@@ -186,27 +258,6 @@ func TestCompactionRetry_SucceedsAfterOverflow(t *testing.T) {
 	wantProviderID, wantModelID, _ := strings.Cut(fallbackModel, "/")
 	if calls[0].ProviderID != wantProviderID || calls[0].ModelID != wantModelID {
 		t.Errorf("summarize request = %+v, want providerID=%q modelID=%q", calls[0], wantProviderID, wantModelID)
-	}
-
-	// §7.2 Finding 6's own mutation-testing proof: the fake server's own
-	// /summarize handler (fake_server_test.go) broadcasts a real
-	// compaction-internal message.updated for "msg_compaction_ses_fake"
-	// WHILE ts.compacting was true, above -- this must NEVER have been
-	// recorded as a KNOWN assistant message id, proving dispatchEvent's own
-	// isCompacting guard (sse.go, the "message.updated" case) actually fired
-	// for it rather than this fake-server-backed test simply never
-	// exercising that guard at all (confirmed by temporarily
-	// short-circuiting all four dispatchEvent isCompacting guards to dead
-	// code and observing this exact assertion fail). Checked here, AFTER
-	// the turn's own execution_complete: the compaction wave and the
-	// retry's own later completion both travel over the SAME single,
-	// strictly-ordered persistent SSE connection, so by the time
-	// group.Wait() has returned, the SSE-reader goroutine is guaranteed to
-	// have already finished processing (and, if the guard held, discarding)
-	// every event broadcast during compaction.
-	if ts.isAssistantMessage("msg_compaction_ses_fake") {
-		t.Error("compaction-internal message.updated was treated as a real assistant message -- " +
-			"dispatchEvent's own isCompacting guard (sse.go) did not suppress it")
 	}
 }
 
@@ -363,13 +414,32 @@ func TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce(t *testing
 		return err
 	})
 
-	waitForTurnRegistered(t, a, "ses_fake")
+	ts := waitForTurnRegistered(t, a, "ses_fake")
 
 	// First overflow -- triggers the one and only compaction attempt.
 	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
 	f.broadcast(sessionIdleLine(t, "ses_fake"))
 	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
 	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+
+	// Deterministically wait for ts.compacting to have actually flipped back
+	// to false (i.e. for attemptCompactionRetry's own postPromptAsync call to
+	// have genuinely returned, adapter.go) BEFORE broadcasting the RETRIED
+	// prompt's own second overflow below. waitForCount above only proves the
+	// FAKE SERVER'S handler recorded the retry's own prompt_async call --
+	// promptCalls is appended BEFORE that handler blocks on/returns from
+	// anything, strictly EARLIER than the ADAPTER's own client-side
+	// postPromptAsync call actually returning and clearing ts.compacting
+	// (§7.2 Finding 3 deliberately keeps that flag true through the whole
+	// round trip). Broadcasting the second overflow before that clear has
+	// actually run would have dispatchEvent's own isCompacting guard (sse.go)
+	// silently and PERMANENTLY drop it (there is no replay), leaving nothing
+	// to ever finalize this turn within the test's own testWait ctx budget --
+	// exactly the intermittent "cancelled / turn context canceled before
+	// completion" flake this closes, mirroring the same-shaped fix already
+	// established by waitForNotCompacting's other call sites in this file
+	// (e.g. TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed).
+	waitForNotCompacting(t, ts)
 
 	// The RETRIED prompt ALSO overflows.
 	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_retry"))
@@ -592,6 +662,17 @@ func TestCompactionRetry_SessionErrorDuringCompactionIsSuppressed(t *testing.T) 
 	close(gate)
 
 	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+	// Deterministically wait for ts.compacting to have actually cleared
+	// (attemptCompactionRetry's own postPromptAsync call genuinely returned,
+	// adapter.go) before broadcasting the retry's own real completion below
+	// -- waitForCount above only proves the fake server's handler recorded
+	// the call, strictly EARLIER than the client-side clear (§7.2 Finding 3),
+	// so broadcasting immediately after it would race dispatchEvent's own
+	// isCompacting guard (sse.go) into silently and permanently dropping the
+	// retry's own completion (mirroring this file's own established
+	// waitForNotCompacting precedent, e.g.
+	// TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed).
+	waitForNotCompacting(t, ts)
 	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
 	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
 	f.broadcast(sessionIdleLine(t, "ses_fake"))
@@ -1163,6 +1244,16 @@ func TestCompactionRetry_FallbackDoesNotFinalizeWhileCompacting(t *testing.T) {
 	if got := f.lastPromptText(); got != promptText {
 		t.Errorf("retried prompt text = %q, want %q", got, promptText)
 	}
+
+	// Deterministically wait for ts.compacting to have actually cleared
+	// before broadcasting the retry's own real completion below -- see
+	// TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed's
+	// own doc comment (and waitForNotCompacting's, fake_server_test.go) for
+	// the exact race this closes: waitForCount above only proves the fake
+	// server's handler recorded the retry's own prompt_async call, strictly
+	// EARLIER than the adapter's own client-side postPromptAsync call
+	// actually returning and clearing ts.compacting (§7.2 Finding 3).
+	waitForNotCompacting(t, ts)
 
 	// Script the retry's own clean completion, exactly like
 	// TestCompactionRetry_SucceedsAfterOverflow.
