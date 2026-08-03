@@ -146,7 +146,7 @@ func TestInteractivityHandler_BlockActions_ApprovePlan_AutoLinksUniqueMatch(t *t
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestInteractivityHandler_BlockActions_ApprovePlan_DeniedForUnownedMember(t 
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestInteractivityHandler_BlockActions_ApprovePlan_DeniedForViewerEvenIfOwne
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestInteractivityHandler_ViewSubmission_DeniedForUnownedMember(t *testing.T
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -564,7 +564,7 @@ func newSlackHandlerRigForIdentityTests(t *testing.T, pool *pgxpool.Pool, record
 	deliveries := narvipg.NewWebhookDeliveryStore(pool)
 	threads := narvipg.NewSlackThreadSessionStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -1087,7 +1087,7 @@ func TestInteractivityHandler_ViewSubmission_UnknownActorDeniedAndNoticeDelivere
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -1247,7 +1247,7 @@ func TestInteractivityHandler_BlockActions_ApprovePlan_RetrySucceedsOnceLinked(t
 	auditLog := narvipg.NewAuditLogStore(pool)
 	identityLinkDeps := newIdentityLinkDepsForTest(pool, auditLog)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

@@ -27,3 +27,27 @@ func TestIsSentinelAutoFix_TableDriven(t *testing.T) {
 		})
 	}
 }
+
+// TestIsScopedEnvironment_TableDriven pins Step 49's own central gate
+// (handoffsentinel.go's "an ordinary PR is completely untouched" check):
+// only an EXACT "scoped_environment" tag counts, never a nil tag, a
+// different known tag (SentinelAutoFix), or an empty string.
+func TestIsScopedEnvironment_TableDriven(t *testing.T) {
+	tests := []struct {
+		name string
+		tag  *string
+		want bool
+	}{
+		{"nil tag is not scoped", nil, false},
+		{"exact match is scoped", strPtr(provenance.ScopedEnvironment), true},
+		{"sentinel-auto-fix tag is not scoped", strPtr(provenance.SentinelAutoFix), false},
+		{"empty string is not scoped", strPtr(""), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := provenance.IsScopedEnvironment(tt.tag); got != tt.want {
+				t.Errorf("IsScopedEnvironment(%v) = %v, want %v", tt.tag, got, tt.want)
+			}
+		})
+	}
+}

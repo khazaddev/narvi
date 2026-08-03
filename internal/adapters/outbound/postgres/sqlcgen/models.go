@@ -602,6 +602,14 @@ type GithubPrSession struct {
 	ClaimedAt    pgtype.Timestamptz `json:"claimed_at"`
 }
 
+type HandoffSentinelRun struct {
+	ID           pgtype.UUID        `json:"id"`
+	RepoFullName string             `json:"repo_full_name"`
+	PrNumber     int32              `json:"pr_number"`
+	SessionID    pgtype.UUID        `json:"session_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Identity struct {
 	ID                   pgtype.UUID        `json:"id"`
 	UserID               pgtype.UUID        `json:"user_id"`

@@ -188,7 +188,7 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

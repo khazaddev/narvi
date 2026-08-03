@@ -105,6 +105,21 @@ const (
 	// is ever enqueued (inside the same transaction as the triggering
 	// verdict's own findings-upsert write).
 	NotificationKindSentinelAutoFix NotificationKind = "sentinel_auto_fix"
+
+	// NotificationKindHandoffSentinel is Step 49's own addition
+	// ("handoff-readiness sentinel", §14.4): routes to internal/adapters/
+	// outbound/githubapi's own handoff notifier, which posts the
+	// sentinel's already-rendered summary as a plain issue comment
+	// (PostIssueComment) AND syncs the fixed "handoff" label (AddLabels)
+	// -- both in ONE Deliver call, mirroring NotificationKindGitHubVerdict's
+	// own identical "text + labels together, one outbox row" precedent.
+	// Distinct from that Kind: this sentinel never computes or posts a
+	// risk verdict at all (§14.4: "alongside or INSTEAD OF a normal risk
+	// verdict") -- see internal/app/sessionactor/handoffsentinel.go for
+	// the ONE place this Kind is ever enqueued, inside the same
+	// transaction as this PR's own idempotency claim
+	// (internal/adapters/outbound/postgres.HandoffSentinelStore.Claim).
+	NotificationKindHandoffSentinel NotificationKind = "handoff_sentinel"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

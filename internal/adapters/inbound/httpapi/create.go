@@ -18,6 +18,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/environment"
+	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -27,11 +28,21 @@ import (
 // (§14.4) can act on it without re-deriving intent") CreateSession writes
 // onto a session's sessions.provenance_tag column whenever
 // environment.RequiresProvenanceTag reports true for the Environment it just
-// created. §14.1 does not specify an exact wire value, so this is this
-// batch's own concrete choice -- a single fixed constant, not derived from
-// anything about the request, since today there is exactly one reason a
-// session ever carries a provenance tag at all (a non-empty pathScope).
-const scopedEnvironmentProvenanceTag = "scoped_environment"
+// created. §14.1 does not specify an exact wire value, so this was this
+// package's own concrete choice -- a single fixed constant, not derived
+// from anything about the request, since today there is exactly one
+// reason a session ever carries a provenance tag at all (a non-empty
+// pathScope).
+//
+// Step 49 (§14.4, "handoff-readiness sentinel") promotes the underlying
+// string into internal/domain/provenance.ScopedEnvironment (that
+// package's own doc comment explains why: a fourth caller,
+// internal/app/sessionactor, needs to read this exact value and cannot
+// import httpapi). This alias keeps every reference in THIS file
+// unchanged -- see provenance.ScopedEnvironment's own doc comment for the
+// authoritative definition; this is deliberately the ONLY place the
+// string literal itself is written in Go source.
+const scopedEnvironmentProvenanceTag = provenance.ScopedEnvironment
 
 // ChildSessionOptions is CreateSessionOnTx's own additive, OPTIONAL extra
 // parameter (Step 48, "sentinels + suggestions", §17.2) -- a variadic

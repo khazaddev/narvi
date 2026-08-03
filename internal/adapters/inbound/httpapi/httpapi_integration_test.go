@@ -236,7 +236,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// the full spawn/dispatch decision tree then does with it --
 	// internal/app/sessionactor's own dispatch_integration_test.go covers
 	// that decision tree exhaustively.
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

@@ -129,7 +129,7 @@ func TestCreateSessionCore_NilCreator_StoresNullCreatedBy(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestCreateSessionCore_NilCreator_WithPromptDispatches(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -450,7 +450,7 @@ func TestCreateSessionCore_ValidationFailure_NeverAcquiresConnection(t *testing.
 	turns := narvipg.NewTurnStore(limitedPool)
 	environments := narvipg.NewEnvironmentStore(limitedPool)
 	auditLog := narvipg.NewAuditLogStore(limitedPool)
-	registry, err := sessionactor.NewRegistry(ctx, limitedPool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, limitedPool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestTriggerDispatch_ExistingSession_SucceedsAndSpawns(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -552,7 +552,7 @@ func TestTriggerDispatch_UnknownSession_DoesNotPanic(t *testing.T) {
 	ctx := context.Background()
 	pool := newCoreTestPool(t)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

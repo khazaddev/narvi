@@ -94,6 +94,13 @@ type Actor struct {
 	// that never exercise the sentinel-fix PR path).
 	githubBotToken string
 
+	// diffFetcher is Step 49's ("handoff-readiness sentinel", §14.4) own
+	// addition -- see Registry's own identical field doc comment
+	// (registry.go) for the full rationale; handoffsentinel.go's own
+	// runHandoffSentinelBestEffort is this Actor's own one use of it. May
+	// be nil (tests that never exercise the handoff-sentinel path).
+	diffFetcher PRDiffFetcher
+
 	// tokenEncryptionKey decrypts identities.access_token_encrypted (§13.1)
 	// to obtain the session creator's own plaintext GitHub OAuth access
 	// token -- the SAME key platform.Config.TokenEncryptionKey already

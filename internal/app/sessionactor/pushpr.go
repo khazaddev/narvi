@@ -466,6 +466,13 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 		if err := a.recordPRArtifact(ctx, repoName, ref); err != nil {
 			a.logger.Error("sessionactor: record PR artifact failed", "repo", pushed.Name, "error", err)
 		}
+
+		// Step 49 ("handoff-readiness sentinel", §14.4): best-effort, never
+		// blocks -- an ordinary (non-scoped) session's PR returns
+		// immediately with no further work (handoffsentinel.go's own top
+		// check). See that file's own top comment for why this runs HERE
+		// rather than via a GitHub pull_request webhook lane.
+		a.runHandoffSentinelBestEffort(ctx, sessionRow, token, owner, repoName, pushed.Branch, pushed.Sha, ref.Number)
 	}
 }
 

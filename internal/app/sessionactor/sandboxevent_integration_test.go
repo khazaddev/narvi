@@ -68,7 +68,7 @@ func TestHandleSandboxEvent_FullRoundTrip(t *testing.T) {
 		return n
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestHandleSnapshotReadyEvent_Normal_TransitionsToReadyAndPersistsID(t *test
 	// this event is "snapshot_ready", not "execution_complete", so that
 	// call is never even attempted here; the sandbox simply lands on
 	// Ready via handleSnapshotReadyEvent itself and stays there.
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -903,7 +903,7 @@ func TestHandleSnapshotReadyEvent_LateOrDuplicate_NoOp(t *testing.T) {
 		t.Fatalf("seed old snapshot_id: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -1107,7 +1107,7 @@ func TestHandleSnapshotReadyEvent_DecodeFailure_RevertsToReadyInsteadOfWedging(t
 		t.Fatalf("seed pending snapshot message id: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -1196,7 +1196,7 @@ func TestHandleSnapshotReadyEvent_DecodeFailureRevert_RearmsLivenessAndInactivit
 		}
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -1274,7 +1274,7 @@ func TestHandleSandboxEvent_ArmsLivenessAndInactivityOnceOnBootingToReady(t *tes
 	}
 
 	timeouts := platform.DefaultTimeouts()
-	r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -1444,7 +1444,7 @@ func TestHandleSandboxEvent_AckReplySentBeforeSlowPostCommitSideEffects(t *testi
 	createProcessingTurn(ctx, t, turnStore, sessionID)
 
 	commander := newBlockingCommander()
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

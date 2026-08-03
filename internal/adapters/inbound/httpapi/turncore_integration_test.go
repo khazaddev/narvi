@@ -46,7 +46,7 @@ func newTurnCoreTestRig(t *testing.T) *turnCoreTestRig {
 	ctx := context.Background()
 	pool := newBotTestPool(t)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

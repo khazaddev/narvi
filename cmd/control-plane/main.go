@@ -187,9 +187,14 @@ func serve() error {
 	// each is used for. Step 27 ("mocking + contract drift") makes
 	// NewRegistry fallible (constructs the contract_drift_detected OTel
 	// counter), mirroring recon/builder's own identical error handling
-	// immediately below.
+	// immediately below. Step 49 ("handoff-readiness sentinel") adds
+	// diffFetcher -- the SAME sourceControl *githubapi.Adapter instance
+	// passed a second time, satisfying sessionactor.PRDiffFetcher exactly
+	// like it already satisfies the github inbound handler's own
+	// reviewcontext.Fetcher below (DiffFetcher: sourceControl) -- never a
+	// second, independently-constructed client.
 	registry, err := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
-		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, cfg.GitHubBotToken)
+		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, sourceControl, cfg.GitHubBotToken)
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
 	}
