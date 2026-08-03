@@ -873,7 +873,8 @@ traffic from day one — the three existing lanes become three non-deletable, `i
 workflows, never a parallel opt-in path — plus a canvas-style visual editor (Phase 7) on top of it.
 
 Decisions already made, not reopened here: full drag-and-drop canvas UI (§25.12); review/request/
-plan become three system workflows an admin may duplicate and customize per repo, never delete;
+plan become three system workflows an admin may duplicate and customize — globally or per repo,
+never in place — never delete;
 Gemini ships alongside Anthropic/OpenAI in v1 (§8.8/Step 59, amended); the backend engine lands in
 Phase 5 right after the automations work (Steps 51-52), the canvas editor in Phase 7 right after
 Settings (Step 77); a HITL "revise" verdict is always a re-execution of the same step with the
@@ -960,8 +961,23 @@ custom workflow. All three are seeded `is_built_in = true` directly in the migra
 `DELETE` on an `is_built_in = true` row is refused unconditionally — a structural invariant, not an
 RBAC rule.
 
-Resolution: `(repo_full_name, lane)` → `workflow_bindings` → `(workflow_definition_id, version)`;
-an absent row resolves to the lane's system default, never "block."
+**System template, global binding, and repo override are three distinct concepts, not three rungs
+of one fallback ladder:**
+
+- **System template** — a `WorkflowDefinition` row with `IsBuiltIn = true`. Read-only starting
+  content; never itself a live setting; the only thing "system" means.
+- **Global binding** — a `workflow_bindings` row keyed `(lane, repo_full_name = NULL)`. Exactly one
+  per lane, seeded by the migration to point at that lane's system template — but from that point on
+  it is an ordinary, independently-repointable setting, not a fallback anyone "reaches." Because it
+  is seeded for every lane, this row is **never absent** — there is no "no binding configured" state
+  to fail open or closed on.
+- **Repo override** — a `workflow_bindings` row keyed `(lane, repo_full_name = '<owner>/<repo>')`.
+  Optional, and shadows the global binding for that one repo only.
+
+Resolution: look up `workflow_bindings` for `(lane, repo_full_name)`; if a repo-specific row exists,
+use it; otherwise use the `(lane, NULL)` global row. The global row is guaranteed to exist by the
+seed migration, so this is a two-step lookup with a guaranteed second step, never an "absent row →
+default" fail-open branch — `workflow_bindings` has no row that resolves to nothing.
 
 ### 25.5 Circuit breaker — `internal/domain/loopguard` (Step 54)
 
@@ -1023,8 +1039,12 @@ classifier and the review's single-completion calls, never an agentic turn with 
   explicitly exempted from the circuit breaker.
 - **request**: one step, passthrough, no behavior change.
 
-The Gemini→Opus→Sonnet→Codex example is a non-built-in workflow bound via `workflow_bindings` to
-`(repo, request)` — it proves the override mechanism, not a fourth default.
+The Gemini→Opus→Sonnet→Codex example is a non-built-in workflow bound as the **global** Request-lane
+binding (`workflow_bindings` row keyed `(request, NULL)`) — it demonstrates that a global binding is
+a real, repointable setting, not a fourth built-in default. A repo may still shadow it locally: a
+scoped-Environment repo with no backend to audit against can bind a lighter, repo-specific override
+(e.g. a two-step prototype flow with no audit step) via its own `(request, '<repo>')` row, which
+shadows the global one for that repo alone.
 
 ### 25.9 HITL gate (Step 56)
 
@@ -1059,7 +1079,8 @@ Three new actions, each mirroring an existing row in `internal/domain/authz/auth
 - `ActionManageWorkflowDefinitions` — maintainer+ (same row as `ActionManageAutomations`):
   create/edit an unbound draft.
 - `ActionActivateWorkflowBinding` — admin-only (same row as `ActionActivatePromptTemplate`): bind
-  `(repo, lane)` to a specific definition.
+  `(repo, lane)` to a specific definition — `repo` may be a specific repository or the global
+  (org-wide, `repo_full_name = NULL`) scope; the same action gates both.
 - `ActionDecideWorkflowStep` — own/joined-aware (same row as `ActionApprovePlan`).
 
 `is_built_in` immutability is a structural invariant, not an RBAC row (§25.4).
