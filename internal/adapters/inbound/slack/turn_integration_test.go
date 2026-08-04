@@ -11,7 +11,6 @@
 package slack_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -300,9 +299,16 @@ func TestHandler_ReplyOnMappedThread_LogsSessionAndTurnID(t *testing.T) {
 	pool := newTestPool(t)
 	rig := newSlackAckTestRig(t, pool)
 
-	var logBuf bytes.Buffer
+	// syncLogBuffer (handler_integration_test.go), not a bare bytes.Buffer:
+	// this test's own mention below creates a turn, which fires the SAME
+	// fire-and-forget GetOrSpawn+EnsureDispatched dispatch trigger every
+	// turn-creation call site uses -- the session's Actor can still be
+	// mid-flight on its own background goroutine, logging through this SAME
+	// redirected default logger, while this test's own goroutine reads
+	// logOutput below. See syncLogBuffer's own doc comment for the full race.
+	logBuf := &syncLogBuffer{}
 	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 
 	envelope := appMentionEnvelope("Ev0LOG001", "C0LOG", "1700000070.000100", "", "please help")
