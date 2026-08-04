@@ -1628,6 +1628,31 @@ type Timeouts struct {
 	// comment): a timeout here degrades to "no pre-fetched diff", never a
 	// reason to fail the review session's own turn creation.
 	GitHubPRDiffTimeout time.Duration
+
+	// --- Step 50 standalone addition ("release PR review", §15.2): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior standalone addition), so -- per those additions' own precedent
+	// -- a plain field with a sensible default, not wired into a fake
+	// invariant link.
+
+	// GitHubListMergedBetweenTimeout bounds ONE internal/adapters/outbound/
+	// githubapi.Adapter.ListMergedBetween call -- a caller wraps its own
+	// ctx with this before calling, mirroring GitHubPRDiffTimeout's own
+	// identical "a genuine outbound network call must never run against
+	// an unbounded context" precedent. Distinct from (and MUCH more
+	// generous than) every other GitHub-flavored timeout in this struct:
+	// ListMergedBetween is not one lightweight REST call but a bounded
+	// SEQUENCE of them -- one compare, one revert search, plus up to six
+	// further calls per discovered constituent PR, capped at
+	// githubapi.maxConstituentPRs (100) -- so this budget covers the
+	// WHOLE sequence, never a single request. Not specified in the plan
+	// (this Step postdates it); chosen as 2 minutes: generous enough for
+	// a real release cut bundling dozens of PRs against GitHub's real API
+	// latency, while this check is always best-effort on the caller's own
+	// side (internal/app/releasereview) -- a timeout here degrades to "no
+	// manifest posted for this release PR", never a reason to fail
+	// session creation itself.
+	GitHubListMergedBetweenTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1766,6 +1791,8 @@ func DefaultTimeouts() Timeouts {
 		GitHubActorNoticeTTL: 24 * time.Hour, // batch fix/deny-unlinked-github-actors; not specified, chosen -- see field doc comment for why this is a DISTINCT constant from IdentityLinkPromptTTL despite sharing its value
 
 		GitHubPRDiffTimeout: 20 * time.Second, // not specified (Step 46 postdates the plan); chosen, double GitHubGetPRTimeout's own 10s -- generous for a real, possibly-large diff transfer
+
+		GitHubListMergedBetweenTimeout: 2 * time.Minute, // not specified (Step 50 postdates the plan); chosen, generous for the whole bounded call sequence a real release cut makes -- see field doc comment
 	}
 }
 

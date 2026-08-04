@@ -86,6 +86,13 @@ func (f *fakeSentinelAutoFixSourceControl) RegisterPRStack(context.Context, port
 	return errors.New("fakeSentinelAutoFixSourceControl: RegisterPRStack not implemented")
 }
 
+// ListMergedBetween (Step 50, "release PR review", §15.2) is never
+// reached from this package -- same "not implemented" precedent as
+// RegisterPRStack above.
+func (f *fakeSentinelAutoFixSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, error) {
+	return nil, errors.New("fakeSentinelAutoFixSourceControl: ListMergedBetween not implemented")
+}
+
 func (f *fakeSentinelAutoFixSourceControl) CreateBranch(_ context.Context, spec ports.CreateBranchSpec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

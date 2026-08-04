@@ -101,6 +101,13 @@ func (f *whiteboxFakeSourceControl) CreateBranch(context.Context, ports.CreateBr
 	return errors.New("whiteboxFakeSourceControl: CreateBranch not implemented")
 }
 
+// ListMergedBetween (Step 50, "release PR review", §15.2) is never
+// reached from this package either -- same "not implemented" precedent
+// as the methods above.
+func (f *whiteboxFakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, error) {
+	return nil, errors.New("whiteboxFakeSourceControl: ListMergedBetween not implemented")
+}
+
 // whiteboxFakeBuildProvider is a minimal test-only ports.SandboxProvider,
 // duplicated from builder_integration_test.go's own fakeBuildProvider for
 // the identical cross-package reason.

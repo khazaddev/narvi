@@ -10,6 +10,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/releasereview"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
@@ -166,6 +167,25 @@ type Config struct {
 	SentinelFixes *postgres.SentinelFixStore
 	RepoSettings  *postgres.RepoSettingsStore
 	AuditLog      *postgres.AuditLogStore
+
+	// SourceControl/Outbox/ReleaseLabel/ReleaseBranchPattern (Step 50,
+	// "release PR review", §15) back triggerReleaseManifestCheckBestEffort
+	// (releasemanifest.go): SourceControl is the SAME *githubapi.Adapter
+	// instance PullRequests/Comments above already wire (it satisfies
+	// internal/app/releasereview.MergedPRLister directly, needing no
+	// adapter-side change beyond what this Step already adds); Outbox is
+	// where the manifest check's own outbox row is enqueued.
+	// ReleaseLabel/ReleaseBranchPattern are this deployment's own
+	// configured release-PR detection values (platform.Config.
+	// GitHubReleaseLabel/GitHubReleaseBranchPattern). Nil-safe: a nil
+	// SourceControl or Outbox (this package's own handler_test.go, or any
+	// other minimal wiring that doesn't care about this Step) simply
+	// skips this entirely -- see triggerReleaseManifestCheckBestEffort's
+	// own doc comment.
+	SourceControl        releasereview.MergedPRLister
+	Outbox               releasereview.OutboxEnqueuer
+	ReleaseLabel         string
+	ReleaseBranchPattern string
 }
 
 // NewHandler builds the POST /webhooks/github handler (cmd/control-plane/
@@ -521,6 +541,17 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			}
 			w.WriteHeader(http.StatusInternalServerError)
 			return
+		}
+
+		// Step 50 ("release PR review", §15): only the WINNER (brand-new
+		// session) path ever triggers release detection/the manifest check
+		// -- see triggerReleaseManifestCheckBestEffort's own doc comment
+		// (releasemanifest.go) for the full "why". Runs AFTER the mention
+		// itself is fully processed and best-effort throughout: a failure
+		// here never turns an already-successful mention into a failed
+		// webhook response.
+		if isNew {
+			triggerReleaseManifestCheckBestEffort(ctx, logger, cfg, m.RepoFullName, m.PRNumber, session.ID)
 		}
 
 		logger.Info("github: mention processed",

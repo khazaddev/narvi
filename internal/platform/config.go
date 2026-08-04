@@ -342,6 +342,38 @@ const gitHubReReviewLabelEnvVarName = "NARVI_GITHUB_REREVIEW_LABEL"
 // review", never confusable with a bot-posted status.
 const defaultGitHubReReviewLabel = "run-review"
 
+// gitHubReleaseLabelEnvVarName and gitHubReleaseBranchPatternEnvVarName
+// configure Step 50's own ("release PR review", §15.1) deterministic
+// release-PR detection rule: "a PR is treated as a release review when
+// it matches a configurable pattern: originates from/targets a
+// release/* branch, or carries a release label." Both DELIBERATELY
+// OPTIONAL, mirroring gitHubReReviewLabelEnvVarName's own identical
+// "product/UX naming choice with a genuinely safe out-of-the-box
+// default" precedent immediately above -- an operator who never sets
+// either still gets a working, sensibly-named release-detection rule.
+//
+// A single, GLOBAL pair rather than a per-repo repo_settings row
+// (unlike block_on_high_risk/sentinel_autofix_enabled): §15.1 itself
+// gives no indication this needs to vary per repo the way those two
+// admin-toggled POLICY flags do, and internal/platform/config.go's own
+// gitHubReReviewLabelEnvVarName is the SAME kind of value (a naming/
+// pattern convention, not a per-repo risk-tolerance decision) already
+// configured this exact way -- adding a repo_settings column (and its
+// own httpapi GET/PUT route extension) for a value with no described
+// per-repo variation need would be speculative scope this Step's own
+// brief does not ask for.
+const gitHubReleaseLabelEnvVarName = "NARVI_GITHUB_RELEASE_LABEL"
+const gitHubReleaseBranchPatternEnvVarName = "NARVI_GITHUB_RELEASE_BRANCH_PATTERN"
+
+// defaultGitHubReleaseLabel/defaultGitHubReleaseBranchPattern are the
+// values Load assumes when their own env vars are unset -- mirrors
+// defaultGitHubReReviewLabel's own precedent immediately above.
+// "release" and "release/*" are §15.1's own literal example values
+// ("originates from/targets a release/* branch, or carries a release
+// label").
+const defaultGitHubReleaseLabel = "release"
+const defaultGitHubReleaseBranchPattern = "release/*"
+
 // tokenEncryptionKeyEnvVarName is the env var Load reads for the AES-256-GCM
 // key protecting provider tokens at rest (§13.1: "Provider tokens encrypted
 // at rest (AES-GCM), per-user"). Required in every stage; the raw value
@@ -664,6 +696,15 @@ type Config struct {
 	// default (defaultGitHubReReviewLabel) exists here at all.
 	GitHubReReviewLabel string
 
+	// GitHubReleaseLabel/GitHubReleaseBranchPattern are Step 50's own
+	// ("release PR review", §15.1) deterministic release-PR detection
+	// configuration, read from NARVI_GITHUB_RELEASE_LABEL/
+	// NARVI_GITHUB_RELEASE_BRANCH_PATTERN. Both deliberately OPTIONAL --
+	// see gitHubReleaseLabelEnvVarName's own doc comment for the safe
+	// defaults (defaultGitHubReleaseLabel/defaultGitHubReleaseBranchPattern).
+	GitHubReleaseLabel         string
+	GitHubReleaseBranchPattern string
+
 	// GitHubBotToken configures Step 35's ("outbox delivery", §5.1) own
 	// GitHub Notifier adapter, read from NARVI_GITHUB_BOT_TOKEN. Required
 	// in every stage -- never defaulted. See gitHubBotTokenEnvVarName's own
@@ -904,6 +945,18 @@ func Load() (*Config, error) {
 		gitHubReReviewLabel = defaultGitHubReReviewLabel
 	}
 
+	// gitHubReleaseLabel/gitHubReleaseBranchPattern are DELIBERATELY
+	// OPTIONAL -- see their own env-var doc comment above. No
+	// MissingRequiredEnvError is ever appended for either.
+	gitHubReleaseLabel := os.Getenv(gitHubReleaseLabelEnvVarName)
+	if gitHubReleaseLabel == "" {
+		gitHubReleaseLabel = defaultGitHubReleaseLabel
+	}
+	gitHubReleaseBranchPattern := os.Getenv(gitHubReleaseBranchPatternEnvVarName)
+	if gitHubReleaseBranchPattern == "" {
+		gitHubReleaseBranchPattern = defaultGitHubReleaseBranchPattern
+	}
+
 	gitHubBotToken := os.Getenv(gitHubBotTokenEnvVarName)
 	if gitHubBotToken == "" {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: gitHubBotTokenEnvVarName})
@@ -1037,32 +1090,34 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Stage:                  stage,
-		Timeouts:               timeouts,
-		LogLevel:               logLevel,
-		DatabaseURL:            databaseURL,
-		HTTPAddr:               httpAddr,
-		DBPoolMaxConns:         dbPoolMaxConns,
-		HMACSandboxSecret:      hmacSandboxSecret,
-		HMACBotsSecret:         hmacBotsSecret,
-		HMACWebhookSecret:      hmacWebhookSecret,
-		GitHubClientID:         gitHubClientID,
-		GitHubClientSecret:     gitHubClientSecret,
-		GitHubWebhookSecret:    gitHubWebhookSecret,
-		GitHubBotHandle:        gitHubBotHandle,
-		GitHubReReviewLabel:    gitHubReReviewLabel,
-		GitHubBotToken:         gitHubBotToken,
-		GitHubImageBuildToken:  gitHubImageBuildToken,
-		PublicBaseURL:          publicBaseURL,
-		TokenEncryptionKey:     tokenEncryptionKey,
-		AllowedEmailDomains:    allowedEmailDomains,
-		AllowedGitHubOrgs:      allowedGitHubOrgs,
-		AllowedEmails:          allowedEmails,
-		InitialAdminEmails:     initialAdminEmails,
-		ModalBaseURL:           modalBaseURL,
-		ModalAuthToken:         modalAuthToken,
-		ModalEgressProxyURL:    modalEgressProxyURL,
-		OpenCodeRuntimeVersion: openCodeRuntimeVersion,
+		Stage:                      stage,
+		Timeouts:                   timeouts,
+		LogLevel:                   logLevel,
+		DatabaseURL:                databaseURL,
+		HTTPAddr:                   httpAddr,
+		DBPoolMaxConns:             dbPoolMaxConns,
+		HMACSandboxSecret:          hmacSandboxSecret,
+		HMACBotsSecret:             hmacBotsSecret,
+		HMACWebhookSecret:          hmacWebhookSecret,
+		GitHubClientID:             gitHubClientID,
+		GitHubClientSecret:         gitHubClientSecret,
+		GitHubWebhookSecret:        gitHubWebhookSecret,
+		GitHubBotHandle:            gitHubBotHandle,
+		GitHubReReviewLabel:        gitHubReReviewLabel,
+		GitHubReleaseLabel:         gitHubReleaseLabel,
+		GitHubReleaseBranchPattern: gitHubReleaseBranchPattern,
+		GitHubBotToken:             gitHubBotToken,
+		GitHubImageBuildToken:      gitHubImageBuildToken,
+		PublicBaseURL:              publicBaseURL,
+		TokenEncryptionKey:         tokenEncryptionKey,
+		AllowedEmailDomains:        allowedEmailDomains,
+		AllowedGitHubOrgs:          allowedGitHubOrgs,
+		AllowedEmails:              allowedEmails,
+		InitialAdminEmails:         initialAdminEmails,
+		ModalBaseURL:               modalBaseURL,
+		ModalAuthToken:             modalAuthToken,
+		ModalEgressProxyURL:        modalEgressProxyURL,
+		OpenCodeRuntimeVersion:     openCodeRuntimeVersion,
 
 		LinearWebhookSecret:     linearWebhookSecret,
 		LinearOAuthClientID:     linearOAuthClientID,

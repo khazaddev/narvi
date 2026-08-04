@@ -591,6 +591,16 @@ func serve() error {
 			SentinelFixes: sentinelFixStore,
 			RepoSettings:  repoSettingsStore,
 			AuditLog:      auditLogStore,
+			// SourceControl/Outbox/ReleaseLabel/ReleaseBranchPattern (Step
+			// 50, "release PR review", §15): the SAME sourceControl instance
+			// every other GitHub-flavored dependency above already uses
+			// (it satisfies internal/app/releasereview.MergedPRLister
+			// directly); outboxStore is the SAME instance every other
+			// enqueue site in this file already uses.
+			SourceControl:        sourceControl,
+			Outbox:               outboxStore,
+			ReleaseLabel:         cfg.GitHubReleaseLabel,
+			ReleaseBranchPattern: cfg.GitHubReleaseBranchPattern,
 		},
 	))
 
@@ -838,6 +848,11 @@ func serve() error {
 	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken
 	// every other GitHub-flavored notifier above already uses.
 	handoffNotifier := githubapi.NewHandoffNotifier(sourceControl, cfg.GitHubBotToken)
+	// releaseManifestNotifier (Step 50, "release PR review", §15.2) posts
+	// the release manifest check's own summary comment -- the SAME
+	// sourceControl/cfg.GitHubBotToken every other GitHub-flavored
+	// notifier above already uses.
+	releaseManifestNotifier := githubapi.NewReleaseManifestNotifier(sourceControl, cfg.GitHubBotToken)
 
 	// outboxStore is constructed earlier, alongside linearAgentSessionStore
 	// -- see that construction site's own doc comment for why.
@@ -851,6 +866,7 @@ func serve() error {
 		ports.NotificationKindGitHubVerdict:     githubVerdictNotifier,
 		ports.NotificationKindSentinelAutoFix:   sentinelAutoFixNotifier,
 		ports.NotificationKindHandoffSentinel:   handoffNotifier,
+		ports.NotificationKindReleaseManifest:   releaseManifestNotifier,
 	}, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)
