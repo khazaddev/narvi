@@ -173,7 +173,32 @@ func (a *Adapter) CreatePR(ctx context.Context, spec ports.CreatePRSpec) (ports.
 		} else if len(respBody) > 0 {
 			message = "error body did not match GitHub's expected error envelope"
 		}
-		return ports.PRRef{}, &CreatePRError{Status: resp.StatusCode, Message: message}
+		createErr := &CreatePRError{Status: resp.StatusCode, Message: message}
+
+		// Idempotency, mirroring CreateBranch's own identical
+		// already-exists-is-success precedent (createRefAlreadyExistsMarker's
+		// own doc comment): a 422 whose message names a PR as already
+		// existing means a PREVIOUS turn's CreatePR call already succeeded
+		// for this exact head/base pair, and the caller (createPRBestEffort,
+		// pushpr.go) runs on every completed turn, not just the first --
+		// without this, turn 2+ would treat a real, already-open PR as a
+		// hard error and never reach recordPRArtifact/the handoff sentinel.
+		// Recovering the EXISTING PR's own Number/URL (rather than just
+		// swallowing the error) is necessary because callers need real
+		// PRRef data, not just "it's fine" -- unlike CreateBranch, which
+		// has no return value to reconstruct.
+		if resp.StatusCode == http.StatusUnprocessableEntity &&
+			strings.Contains(strings.ToLower(message), alreadyExistsMarker) {
+			if ref, lookupErr := a.findExistingOpenPR(ctx, spec.Owner, spec.Repo, spec.Head, spec.Base, spec.Token); lookupErr == nil {
+				return ref, nil
+			}
+			// Lookup itself failed (or found no matching open PR) -- fall
+			// through to the ORIGINAL error. Never worse than today: the
+			// caller sees the exact same CreatePRError it would have seen
+			// without this idempotency path at all.
+		}
+
+		return ports.PRRef{}, createErr
 	}
 
 	var parsed createPRResponse
@@ -182,6 +207,44 @@ func (a *Adapter) CreatePR(ctx context.Context, spec ports.CreatePRSpec) (ports.
 	}
 
 	return ports.PRRef{Number: parsed.Number, URL: parsed.HTMLURL}, nil
+}
+
+// pullRequestListItem is the subset of GitHub's real GET
+// /repos/{owner}/{repo}/pulls list-item response shape findExistingOpenPR
+// needs (https://docs.github.com/rest/pulls/pulls#list-pull-requests).
+type pullRequestListItem struct {
+	Number  int    `json:"number"`
+	HTMLURL string `json:"html_url"`
+}
+
+// findExistingOpenPR recovers the already-open pull request CreatePR's own
+// idempotency path needs: GitHub's create-PR 422 message names a PR as
+// already existing but never includes its number/URL, so a second, real API
+// call is required to get PRRef data a caller can actually use. Scoped by
+// BOTH head and base (never head alone) -- head/base together is what
+// "already exists" actually means on GitHub's own side; matching head alone
+// could recover a PR against an unrelated base branch. An empty result list
+// is a plain error, never silently swallowed -- the caller decides whether
+// to fall back to the original CreatePRError.
+func (a *Adapter) findExistingOpenPR(ctx context.Context, owner, repo, head, base, token string) (ports.PRRef, error) {
+	path := fmt.Sprintf("%s/repos/%s/%s/pulls?head=%s&base=%s&state=open",
+		a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo),
+		url.QueryEscape(owner+":"+head), url.QueryEscape(base))
+
+	body, err := a.doGet(ctx, path, token)
+	if err != nil {
+		return ports.PRRef{}, fmt.Errorf("githubapi: find existing open pr: %w", err)
+	}
+
+	var items []pullRequestListItem
+	if err := json.Unmarshal(body, &items); err != nil {
+		return ports.PRRef{}, fmt.Errorf("githubapi: decode existing-pr list: %w", err)
+	}
+	if len(items) == 0 {
+		return ports.PRRef{}, fmt.Errorf("githubapi: no open pull request found for %s:%s -> %s", owner, head, base)
+	}
+
+	return ports.PRRef{Number: items[0].Number, URL: items[0].HTMLURL}, nil
 }
 
 // repoInfoResponse is the subset of GitHub's real GET /repos/{owner}/{repo}
@@ -941,21 +1004,24 @@ type createRefRequest struct {
 	SHA string `json:"sha"`
 }
 
-// createRefAlreadyExistsMarker is the distinctive substring GitHub's own
-// documented error message carries when POST .../git/refs names a ref
-// that already exists ("Reference already exists") -- GitHub reports this
-// as a plain 422, the SAME status a dozen other validation failures also
-// use, so there is no status-code-alone way to distinguish "idempotent
-// retry, already created" from a genuine validation error; this adapter's
-// own doGet/CreatePR error-envelope parsing already surfaces GitHub's
-// message text for exactly this reason (see APIError's own doc comment).
-const createRefAlreadyExistsMarker = "already exists"
+// alreadyExistsMarker is the distinctive substring GitHub's own documented
+// error message carries when a create call names something that already
+// exists -- "Reference already exists" for POST .../git/refs,
+// "A pull request already exists for ..." for POST .../pulls. GitHub
+// reports both as a plain 422, the SAME status a dozen other validation
+// failures also use, so there is no status-code-alone way to distinguish
+// "idempotent retry, already created" from a genuine validation error;
+// this adapter's own doGet/CreatePR error-envelope parsing already
+// surfaces GitHub's message text for exactly this reason (see APIError's
+// own doc comment). Shared by CreateBranch and CreatePR -- both treat this
+// exact substring, case-insensitively, as their own already-exists signal.
+const alreadyExistsMarker = "already exists"
 
 // CreateBranch implements ports.SourceControl (Step 48 confirmed-finding
 // fix, §17.2): a real POST /repos/{owner}/{repo}/git/refs call. Idempotent
 // per ports.SourceControl.CreateBranch's own doc comment: a 422 whose
 // message names the ref as already existing is treated as success, never
-// an error -- see createRefAlreadyExistsMarker's own doc comment for why
+// an error -- see alreadyExistsMarker's own doc comment for why
 // message-matching, not status-code-matching, is this adapter's only way
 // to recognize it.
 func (a *Adapter) CreateBranch(ctx context.Context, spec ports.CreateBranchSpec) error {
@@ -968,7 +1034,7 @@ func (a *Adapter) CreateBranch(ctx context.Context, spec ports.CreateBranchSpec)
 	if _, err := a.doPost(ctx, path, spec.Token, reqBody); err != nil {
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusUnprocessableEntity &&
-			strings.Contains(strings.ToLower(apiErr.Message), createRefAlreadyExistsMarker) {
+			strings.Contains(strings.ToLower(apiErr.Message), alreadyExistsMarker) {
 			return nil
 		}
 		return fmt.Errorf("githubapi: create branch: %w", err)

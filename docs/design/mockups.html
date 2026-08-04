@@ -1,4 +1,4 @@
-<title>UI Redesign — 9 Views</title>
+<title>UI Redesign — 10 Views</title>
 <style>
   :root{
     --ground:#F2F6F5; --surface:#FFFFFF; --surface-2:#EAF0EE;
@@ -389,15 +389,120 @@
   .footnote{margin-top:36px;padding-top:18px;border-top:1px solid var(--line);color:var(--faint);
             font-size:12px;max-width:78ch}
   .footnote code{font-family:var(--mono);font-size:11px}
+
+  .wftoolbar{display:flex;align-items:center;gap:8px;padding:12px 18px;border-bottom:1px solid var(--line);
+             background:var(--surface);flex-wrap:wrap}
+  .wfrepo{font-size:15px;font-weight:700;color:var(--ink);cursor:pointer}
+  .wfrepo:hover{color:var(--accent)}
+  .wfsep{color:var(--faint)}
+  .wfdefname{font-size:13px;font-weight:600;color:var(--ink)}
+
+  .wfshell{display:grid;grid-template-columns:248px 1fr 272px;min-height:660px}
+  @media (max-width:980px){.wfshell{grid-template-columns:1fr}.wflist,.wfrail{display:none}}
+  .wflist{border-right:1px solid var(--line);background:var(--surface);padding:12px 8px;display:flex;
+          flex-direction:column;gap:0;overflow-y:auto}
+  .wfrepo-head{font-weight:700;font-size:13px;padding:2px 8px 12px;color:var(--ink)}
+  .wflane{padding:2px 0 12px;margin-bottom:10px;border-bottom:1px dashed var(--line)}
+  .wflane:last-child{border-bottom:none;margin-bottom:0}
+  .wflane-head{display:flex;justify-content:space-between;align-items:baseline;padding:2px 8px 6px;gap:8px}
+  .wflane-head b{font-size:12.5px}
+  .wflane-head .wm{font-family:var(--mono);font-size:10px;color:var(--faint);white-space:nowrap}
+  .wfdup{display:block;padding:4px 8px 0;color:var(--accent);font-size:11px;font-weight:600;
+         text-decoration:none}
+  .wfdup:hover{text-decoration:underline}
+  .wfoverride{display:flex;flex-direction:column;gap:3px;padding:7px 10px 7px 18px;margin:2px 0 0;
+              border-left:2px dashed var(--line-strong);cursor:pointer}
+  .wfoverride:hover{background:var(--surface-2)}
+  .wfoverride .wt{font-size:11.5px;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .wfoverride .wm{font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .wfitem{display:flex;flex-direction:column;gap:4px;padding:9px 10px;border-radius:8px;cursor:pointer;
+          border:1px solid transparent}
+  .wfitem:hover{background:var(--surface-2)}
+  .wfitem.active{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 30%,transparent)}
+  .wfitem .wt{display:flex;align-items:center;gap:6px;font-weight:600;font-size:12.5px}
+  .wfitem .wm{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+  .lockicon{display:inline-flex;color:var(--faint);flex:none}
+
+  .wfmain{overflow-x:auto;background:var(--ground)}
+  .wfcanvas{position:relative;width:960px;height:480px;margin:20px auto 0;
+            background-image:radial-gradient(color-mix(in srgb,var(--line-strong) 55%,transparent) 1px,transparent 1px);
+            background-size:20px 20px}
+  .wfedges{position:absolute;inset:0}
+  .wfedges path{fill:none;stroke-width:2}
+  .wfedges path.e-ok{stroke:var(--ok)}
+  .wfedges path.e-fix{stroke:var(--warn);stroke-dasharray:5 4}
+  .wfedges path.e-blocked{stroke:var(--crit);stroke-dasharray:2 4}
+  .wfedges path.e-revise{stroke:var(--accent);stroke-dasharray:3 5}
+
+  .wfnode{position:absolute;width:168px;background:var(--surface);border:1.5px solid var(--line-strong);
+          border-radius:10px;box-shadow:var(--shadow);padding:11px 12px;display:flex;flex-direction:column;gap:6px}
+  .wfnode.selected{border-color:var(--accent);
+                    box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%,transparent),var(--shadow)}
+  .wfnode .nh{display:flex;align-items:center;gap:7px}
+  .wfnode .nord{width:19px;height:19px;border-radius:50%;flex:none;border:1.5px solid var(--line-strong);
+                color:var(--muted);display:inline-flex;align-items:center;justify-content:center;
+                font-family:var(--mono);font-size:10.5px;font-weight:700}
+  .wfnode .nt{font-size:12.5px;font-weight:600}
+  .wfnode .nmodel{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;
+                  color:var(--accent-ink);background:var(--accent-soft);border-radius:6px;padding:2px 7px;
+                  width:fit-content}
+  .wfnode .nmeta{font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .wfnode .hitl{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;
+                color:var(--warn);width:fit-content}
+
+  .hitlnode{position:absolute;width:168px;border:1.5px dashed var(--line-strong);border-radius:10px;
+            background:var(--surface-2);padding:10px 12px;display:flex;flex-direction:column;gap:6px;
+            text-align:center}
+  .hitlnode b{font-size:12px}
+  .hitlnode .hsub{font-family:var(--mono);font-size:10px;color:var(--faint)}
+
+  .termnode{position:absolute;width:168px;border:1.5px dashed var(--line-strong);border-radius:10px;
+            padding:10px 12px;text-align:center}
+  .termnode b{font-size:12px}
+  .termnode .hsub{font-family:var(--mono);font-size:10px}
+  .termnode.crit{border-color:color-mix(in srgb,var(--crit) 40%,var(--line-strong));background:var(--crit-soft)}
+  .termnode.crit b,.termnode.crit .hsub{color:var(--crit)}
+  .termnode.ok{border-color:color-mix(in srgb,var(--ok) 40%,var(--line-strong));background:var(--ok-soft)}
+  .termnode.ok b,.termnode.ok .hsub{color:var(--ok)}
+
+  .flowtag{position:absolute;font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:6px;
+           display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+  .flowtag.ok{color:var(--ok);background:var(--ok-soft)}
+  .flowtag.fix{color:var(--warn);background:var(--warn-soft)}
+  .flowtag.blocked{color:var(--crit);background:var(--crit-soft)}
+  .flowtag.revise{color:var(--accent-ink);background:var(--accent-soft)}
+
+  .wfrail{border-left:1px solid var(--line);background:var(--surface);padding:14px;display:flex;
+          flex-direction:column;gap:16px;overflow-y:auto}
+  .wfvhist{display:flex;flex-direction:column;gap:3px;margin-top:9px}
+  .wfvrow{display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:6px;
+          font-family:var(--mono);font-size:11.5px;color:var(--muted);cursor:pointer}
+  .wfvrow:hover{background:var(--surface-2)}
+  .wfvrow.active{background:var(--accent-soft);color:var(--accent-ink);font-weight:700}
+  .validbar{display:flex;align-items:center;gap:8px;padding:9px 18px;border-top:1px dashed var(--line);
+            font-family:var(--mono);font-size:10.5px;color:var(--muted);background:var(--surface)}
+
+  .wffield{display:flex;flex-direction:column;gap:5px;margin-bottom:11px}
+  .wffield:last-child{margin-bottom:0}
+  .wffield label{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+                 color:var(--faint)}
+  .wffield.row{flex-direction:row;gap:16px;align-items:center;flex-wrap:wrap}
+  .wffield .sel{width:fit-content}
+  .stepper{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12.5px;
+           font-weight:700}
+  .stepbtn{width:20px;height:20px;border-radius:6px;border:1px solid var(--line-strong);background:var(--surface);
+           color:var(--muted);font-size:13px;line-height:1;cursor:pointer;display:inline-flex;
+           align-items:center;justify-content:center;font-family:var(--sans)}
+  .stepbtn:hover{border-color:var(--accent);color:var(--accent)}
 </style>
 
 <div class="wrap">
-  <p class="eyebrow">UI redesign proposal · 9 views</p>
+  <p class="eyebrow">UI redesign proposal · 10 views</p>
   <h1>The new UI, screen by screen</h1>
   <p class="lede">A decision inbox as the home screen, plus session, code review, release review, plan mode,
-  automations, settings, analytics and sign-in — a thin SPA rendering the typed events of the generated
-  contracts, embedded in the Go binary. Every numbered marker maps to a design decision justified by a real
-  failure mode it prevents (details below the mockup). Light/dark theme follows your system.</p>
+  automations, the workflow editor, settings, analytics and sign-in — a thin SPA rendering the typed events of
+  the generated contracts, embedded in the Go binary. Every numbered marker maps to a design decision justified
+  by a real failure mode it prevents (details below the mockup). Light/dark theme follows your system.</p>
 
   <div class="tabs" role="tablist">
     <button class="tab active" role="tab" aria-selected="true" data-v="v-inbox">Inbox</button>
@@ -406,6 +511,7 @@
     <button class="tab" role="tab" aria-selected="false" data-v="v-release">Release review</button>
     <button class="tab" role="tab" aria-selected="false" data-v="v-plan">Plan mode</button>
     <button class="tab" role="tab" aria-selected="false" data-v="v-autos">Automations</button>
+    <button class="tab" role="tab" aria-selected="false" data-v="v-workflow">Workflow editor</button>
     <button class="tab" role="tab" aria-selected="false" data-v="v-settings">Settings</button>
     <button class="tab" role="tab" aria-selected="false" data-v="v-analytics">Analytics</button>
     <button class="tab" role="tab" aria-selected="false" data-v="v-signin">Sign in</button>
@@ -791,24 +897,20 @@
               <thead><tr><th>Area</th><th>Status</th><th>Detail</th></tr></thead>
               <tbody>
                 <tr>
-                  <td>Endpoints called</td>
-                  <td><span class="chip warn"><span class="dot"></span>2 uncontracted</span></td>
-                  <td><code>/api/checkout/quote</code>, <code>/api/inventory/reserve</code> — no entry in <code>contracts/api/*</code></td>
+                  <td>Contract drift</td>
+                  <td><span class="chip warn"><span class="dot"></span>drifted</span></td>
+                  <td>storefront-web's own backend appears to have changed since <code>contracts/api/*</code> was last checked — a repo-level signal, never a per-endpoint list</td>
                 </tr>
                 <tr>
                   <td>Backend TODOs</td>
                   <td><span class="chip warn"><span class="dot"></span>1 found</span></td>
                   <td><code>// TODO(backend): real discount calc</code> — apps/storefront-web/src/pricing.ts:41</td>
                 </tr>
-                <tr>
-                  <td>Mock coverage</td>
-                  <td><span class="chip ok"><span class="dot"></span>full</span></td>
-                  <td>Prism mock serves all called routes — prototype runs end-to-end</td>
-                </tr>
               </tbody>
             </table>
             <div class="verdict-foot">
-              <span class="lock">⛨ posted via server-side verdict tool</span>
+              <span class="lock">⛨ posted via the handoff-sentinel notifier</span>
+              <span>· never the review-verdict tool above — this sentinel runs alongside it, never through it</span>
               <span>· label applied: <code>handoff</code></span>
             </div>
             <div class="btnrow" style="margin-top:8px">
@@ -1129,6 +1231,193 @@
       </section>
     </div>
     </div>
+
+    <!-- ================= VIEW WF : WORKFLOW EDITOR ================= -->
+    <div class="view" id="v-workflow">
+    <div class="wftoolbar">
+      <span class="wfrepo">All repos ▾</span>
+      <span class="mk" title="Decision 40">40</span>
+      <span class="wfsep">/</span>
+      <span class="wfdefname">Spec-to-ship audit pipeline</span>
+      <span class="chip neutral">Request lane</span>
+      <span class="sel">v3 ▾</span>
+      <span class="chip warn"><span class="dot"></span>editing draft — v2 active globally</span>
+      <span style="flex:1"></span>
+      <button class="btn">Save draft</button>
+      <button class="btn primary">Activate v3 globally</button>
+      <span class="chip neutral">admin-only</span>
+    </div>
+
+    <div class="wfshell">
+      <nav class="wflist" aria-label="Workflows">
+        <div class="wfrepo-head">All repos <span class="wm" style="font-weight:400">· org-wide defaults</span></div>
+
+        <div class="wflane">
+          <div class="wflane-head"><b>Review</b>
+            <span class="wm">global: system template</span></div>
+          <div class="wfitem active">
+            <span class="wt"><span class="lockicon" title="is_built_in — a read-only starting template, never itself a live setting">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="2.5" y="5.3" width="7" height="5.2" rx="1" stroke="currentColor" stroke-width="1.1"/><path d="M3.8 5.3V3.6a2.2 2.2 0 0 1 4.4 0v1.7" stroke="currentColor" stroke-width="1.1"/></svg>
+            </span>Review (system template) <span class="mk" title="Decision 35">35</span></span>
+            <span class="wm">1 step · no HITL <span class="chip ok" style="margin-left:3px"><span class="dot"></span>global</span></span>
+          </div>
+          <a class="wfdup" href="#" onclick="return false">Duplicate to set a global override →</a>
+        </div>
+
+        <div class="wflane">
+          <div class="wflane-head"><b>Request</b>
+            <span class="wm">global: Spec-to-ship audit pipeline · v2</span></div>
+          <div class="wfitem">
+            <span class="wt"><span class="lockicon"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="2.5" y="5.3" width="7" height="5.2" rx="1" stroke="currentColor" stroke-width="1.1"/><path d="M3.8 5.3V3.6a2.2 2.2 0 0 1 4.4 0v1.7" stroke="currentColor" stroke-width="1.1"/></svg></span>Request (system template)</span>
+            <span class="wm">1 step · passthrough</span>
+          </div>
+          <div class="wfitem active">
+            <span class="wt">Spec-to-ship audit pipeline</span>
+            <span class="wm">4 steps · v3 <span class="chip warn" style="margin-left:3px"><span class="dot"></span>draft</span> <span class="chip ok" style="margin-left:3px"><span class="dot"></span>global</span> <span class="mk" title="Decision 41">41</span></span>
+          </div>
+          <div class="wfoverride">
+            <span class="wt">↳ fountain/storefront-web <span class="chip neutral">repo override</span></span>
+            <span class="wm">Storefront quick prototype flow · 2 steps · no audit</span>
+          </div>
+          <a class="wfdup" href="#" onclick="return false">Duplicate to set a global override →</a>
+        </div>
+
+        <div class="wflane">
+          <div class="wflane-head"><b>Plan</b><span class="wm">global: system template</span></div>
+          <div class="wfitem active">
+            <span class="wt"><span class="lockicon"><svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true"><rect x="2.5" y="5.3" width="7" height="5.2" rx="1" stroke="currentColor" stroke-width="1.1"/><path d="M3.8 5.3V3.6a2.2 2.2 0 0 1 4.4 0v1.7" stroke="currentColor" stroke-width="1.1"/></svg></span>Plan (system template)</span>
+            <span class="wm">2 steps · HITL after 1 <span class="chip ok" style="margin-left:3px"><span class="dot"></span>global</span></span>
+          </div>
+          <a class="wfdup" href="#" onclick="return false">Duplicate to set a global override →</a>
+        </div>
+      </nav>
+
+      <section class="wfmain">
+        <div class="wfcanvas">
+          <svg class="wfedges" width="960" height="480" aria-hidden="true">
+            <defs>
+              <marker id="wf-arrow-ok" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--ok)"/></marker>
+              <marker id="wf-arrow-fix" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--warn)"/></marker>
+              <marker id="wf-arrow-blocked" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--crit)"/></marker>
+              <marker id="wf-arrow-revise" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--accent)"/></marker>
+            </defs>
+            <path class="e-ok" d="M198,100 L250,100" marker-end="url(#wf-arrow-ok)"/>
+            <path class="e-ok" d="M418,100 L470,100" marker-end="url(#wf-arrow-ok)"/>
+            <path class="e-ok" d="M638,100 L690,100" marker-end="url(#wf-arrow-ok)"/>
+            <path class="e-fix" d="M774,60 C 774,8 554,8 554,60" marker-end="url(#wf-arrow-fix)"/>
+            <path class="e-ok" d="M774,156 L774,250" marker-end="url(#wf-arrow-ok)"/>
+            <path class="e-blocked" d="M718,156 C 668,200 608,222 554,248" marker-end="url(#wf-arrow-blocked)"/>
+            <path class="e-ok" d="M774,312 L774,388" marker-end="url(#wf-arrow-ok)"/>
+            <path class="e-revise" d="M858,281 C 940,281 940,112 858,112" marker-end="url(#wf-arrow-revise)"/>
+          </svg>
+
+          <div class="wfnode" style="left:30px;top:60px">
+            <div class="nh"><span class="nord">1</span><span class="nt">Draft spec</span></div>
+            <span class="nmodel">gemini-2.5-pro</span>
+            <span class="nmeta">same_session · fresh</span>
+          </div>
+          <div class="wfnode" style="left:250px;top:60px">
+            <div class="nh"><span class="nord">2</span><span class="nt">Scaffold</span></div>
+            <span class="nmodel">claude-opus-4-8</span>
+            <span class="nmeta">same_session · continue</span>
+          </div>
+          <div class="wfnode" style="left:470px;top:60px">
+            <div class="nh"><span class="nord">3</span><span class="nt">Build</span></div>
+            <span class="nmodel">claude-sonnet-5</span>
+            <span class="nmeta">same_session · continue</span>
+          </div>
+          <div class="wfnode selected" style="left:690px;top:60px">
+            <div class="nh"><span class="nord">4</span><span class="nt">Audit</span></div>
+            <span class="nmodel">codex</span>
+            <span class="nmeta">same_session · fresh</span>
+            <span class="hitl">◆ HITL after</span>
+          </div>
+
+          <div class="hitlnode" style="left:690px;top:250px">
+            <b>HITL gate <span class="mk" title="Decision 37">37</span></b>
+            <span class="hsub">approve · reject · revise</span>
+          </div>
+
+          <div class="termnode ok" style="left:690px;top:388px">
+            <b>Done</b>
+            <div class="hsub">approved</div>
+          </div>
+
+          <div class="termnode crit" style="left:470px;top:250px">
+            <b>Needs review</b>
+            <div class="hsub">escalated · one notice</div>
+          </div>
+
+          <span class="flowtag ok" style="left:784px;top:198px">ok</span>
+          <span class="flowtag fix" style="left:565px;top:16px">needs_fix → retry (≤3, circuit breaker)</span>
+          <span class="flowtag blocked" style="left:552px;top:198px">blocked or exhausted → escalate</span>
+          <span class="flowtag revise" style="left:895px;top:192px">revise → re-run Audit</span>
+        </div>
+      </section>
+
+      <aside class="wfrail" aria-label="Workflow details">
+        <div>
+          <h3>Definition</h3>
+          <dl class="kv">
+            <dt>lane</dt><dd>request</dd>
+            <dt>scope</dt><dd>all repos (global)</dd>
+            <dt>origin</dt><dd>duplicated from Request default</dd>
+          </dl>
+          <div class="wfvhist">
+            <div class="wfvrow"><span>v3</span><span class="chip warn"><span class="dot"></span>draft</span></div>
+            <div class="wfvrow active"><span>v2</span><span class="chip ok"><span class="dot"></span>active</span></div>
+            <div class="wfvrow"><span>v1</span><span class="wm">superseded</span></div>
+          </div>
+        </div>
+        <div>
+          <h3>Circuit breaker <span class="mk" title="Decision 38">38</span></h3>
+          <div class="wffield">
+            <label>Max attempts</label>
+            <span class="stepper"><button class="stepbtn" aria-label="Decrease max attempts">−</button><span>3</span><button class="stepbtn" aria-label="Increase max attempts">+</button></span>
+          </div>
+          <p style="margin:2px 0 0;color:var(--faint);font-size:11px">On exhaust → escalates once to
+            <code>needs_review</code> (the <code>blocked</code> path, shown on canvas) — this is a design-time
+            setting, not a live run counter; this screen edits the definition, it never watches one execute.</p>
+        </div>
+        <div>
+          <h3>Selected step · Audit</h3>
+          <div class="wffield">
+            <label>Model</label>
+            <span class="sel">codex ▾</span>
+          </div>
+          <div class="wffield">
+            <label>Execution scope</label>
+            <span class="sel">same_session ▾</span>
+          </div>
+          <div class="wffield">
+            <label>Conversation continuity</label>
+            <span class="sel">fresh ▾</span>
+          </div>
+          <div class="wffield row">
+            <label class="toggle"><span class="tk"></span>HITL before</label>
+            <label class="toggle"><span class="tk on"></span>HITL after</label>
+          </div>
+        </div>
+        <div>
+          <h3>Prompt template <span class="mk" title="Decision 39">39</span></h3>
+          <div class="wffield">
+            <label>Template</label>
+            <span class="sel">Spec-to-ship audit — review pass · v2 ▾</span>
+          </div>
+          <p style="margin:2px 0 0;color:var(--faint);font-size:11px">Reuses Settings → Prompt templates — the
+            same versioned, editable-in-production store the intent classifier's own prompts already live in,
+            never a second copy of prompt text pasted into this step.
+            <a href="#" onclick="return false" style="color:var(--accent);font-weight:600;text-decoration:none">Edit in Settings →</a></p>
+        </div>
+      </aside>
+    </div>
+
+    <div class="validbar">
+      <span class="chip ok"><span class="dot"></span>valid</span>
+      <span>every edge resolves to a step this engine can execute <span class="mk" title="Decision 36">36</span></span>
+    </div>
+    </div>
+
     <!-- ================= VIEW 6 : SETTINGS ================= -->
     <div class="view" id="v-settings">
     <div class="settings">
@@ -1246,6 +1535,15 @@
             <span style="margin-left:auto;display:flex;gap:6px">
               <button class="btn" style="padding:2px 9px;font-size:11px">Edit</button>
               <button class="btn primary" style="padding:2px 9px;font-size:11px">Activate</button>
+            </span>
+          </div>
+          <div class="tplrow">
+            <b>Spec-to-ship audit — review pass</b>
+            <span class="chip ok"><span class="dot"></span>active · v2</span>
+            <span class="meta">used by 1 workflow step · global</span>
+            <span style="margin-left:auto;display:flex;gap:6px">
+              <button class="btn" style="padding:2px 9px;font-size:11px">Edit</button>
+              <button class="btn" style="padding:2px 9px;font-size:11px">Preview assembled prompt</button>
             </span>
           </div>
         </div>
@@ -1438,9 +1736,12 @@
         <p>Concurrent @mentions are coalesced (atomic claim) and the session is reused — the rail shows it
         instead of hiding it, with the history of successive reviews.</p></div>
       <div class="dcard"><div class="dh"><span class="mk">11</span><b>Handoff-readiness runs only on scoped sessions</b></div>
-        <p>A PR from a path-scoped Environment gets an extra check: which called endpoints have no entry in
-        <code>contracts/api/*</code>, and what backend TODOs the agent left behind. It never blocks or re-litigates
-        the PR's own risk verdict — it exists so an engineer picks up exactly what's missing, not the whole diff.</p></div>
+        <p>A PR from a path-scoped Environment gets an extra check: has the repo's backend drifted from its
+        declared contract since it was last checked — a repo-level signal, deliberately never a fabricated
+        per-endpoint list nothing in the pipeline can actually see — and what backend TODOs the agent left
+        behind. It posts through its own dedicated notifier, never the risk-verdict tool, and never blocks or
+        re-litigates the PR's own risk verdict — it exists so an engineer picks up exactly what's missing, not
+        the whole diff.</p></div>
     </div>
 
     <h2>Release review</h2>
@@ -1487,6 +1788,54 @@
       <div class="dcard"><div class="dh"><span class="mk">20</span><b>The result readable without opening the session</b></div>
         <p><code>artifact_summary</code> as the first line of every run: what the automation produced, in one
         sentence. A classic gap: the column exists in the UI but the backend never fills it.</p></div>
+    </div>
+
+    <h2>Workflow editor</h2>
+    <p class="sub">Every lane was already a fixed one-step pipeline; this makes the steps first-class and configurable, without touching what runs today.</p>
+    <div class="dgrid">
+      <div class="dcard"><div class="dh"><span class="mk">35</span><b>Built-in workflows are duplicated, never edited in place</b></div>
+        <p>Review, Request and Plan ship as three system template rows anyone can copy from — but a row marked
+        <code>is_built_in</code> refuses <code>PUT</code>/<code>DELETE</code> unconditionally, a structural
+        invariant, not an RBAC check. Even an admin edits a copy, whether they're setting a new global default
+        or a repo's own override; the template itself can never silently drift underfoot.</p></div>
+      <div class="dcard"><div class="dh"><span class="mk">36</span><b>The canvas can draw more than the engine can run</b></div>
+        <p>The canvas is a general node/edge surface; the engine only ever executes ordered steps plus a closed
+        three-outcome edge model (<code>ok</code> / <code>needs_fix</code> / <code>blocked</code>) — no
+        expression language. A graph the engine cannot execute is rejected at save time, with the reason shown
+        inline, never accepted and left to fail silently the first time a session actually hits it.</p></div>
+      <div class="dcard"><div class="dh"><span class="mk">37</span><b>One human verdict, reused everywhere</b></div>
+        <p>The HITL gate posts through the exact same approve/reject/revise mechanism plan mode already uses —
+        Slack, Linear, GitHub, and web all deliver to the same place, and <code>revise</code> is always the
+        human's text re-run as an extra instruction, never a silent substitution of a structured artifact. A
+        fourth, bespoke approval flow was never on the table.</p></div>
+      <div class="dcard"><div class="dh"><span class="mk">38</span><b>The audit-fix loop is bounded, and escalates once — not silently</b></div>
+        <p>A <code>needs_fix</code> verdict can send the run back a step, but only up to a configured attempt
+        count; past it, the run escalates to <code>needs_review</code> with a single notice, never a repeated
+        one on every later attempt. Per-step model selection itself needed no new plumbing — the real gap this
+        chantier closed first was that no provider credential was ever injected into the agent process at all,
+        for any provider.</p></div>
+      <div class="dcard"><div class="dh"><span class="mk">39</span><b>A step's prompt is a template reference, never pasted-in text</b></div>
+        <p>The step inspector picks an existing, versioned entry from the same Prompt templates store Settings
+        already exposes (decision 24) — it never opens a free-text box for typing a prompt directly into the
+        canvas. One editable-in-production surface for every prompt in the system, one edit history, one place
+        a maintainer checks — never a second, untracked copy of the same text drifting inside a workflow
+        definition.</p></div>
+      <div class="dcard"><div class="dh"><span class="mk">40</span><b>One screen, one axis: scope, not a menu of equals</b></div>
+        <p>The single switcher that used to default to a repo now opens on <b>All repos</b> — the org-wide
+        scope every zero-config repo actually runs — because that's the setting most edits are about. A
+        specific repository is an explicit, secondary narrowing of that same control, never a separate mode
+        with its own layout. Lane stays a fixed heading over three always-visible sections, never a dropdown;
+        version and Activate live in exactly one place each. Nothing on this screen asks the same question
+        twice, and no two panels disagree about what scope you're looking at.</p></div>
+      <div class="dcard"><div class="dh"><span class="mk">41</span><b>System and global are different things: one ships templates, the other decides what runs</b></div>
+        <p>The three built-in workflows are read-only starting templates — never themselves a live setting.
+        Every lane also has exactly one global binding: the org-wide setting every repo runs unless it
+        overrides it, which is why this screen shows it first. A global binding always resolves to something
+        (it starts out pointing at that lane's system template, unmodified — Plan's still does), but it's a
+        real, independently-changeable setting, never a fallback you "reach" once something else is absent. A
+        repo's own override is the only thing that shadows it — visible from the global view itself as a
+        subordinate row, as <code>fountain/storefront-web</code>'s is here, rather than something you can only
+        discover by first switching into that repo.</p></div>
     </div>
 
     <h2>Settings</h2>

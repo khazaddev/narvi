@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -198,6 +199,53 @@ func postWebhook(t *testing.T, handler http.HandlerFunc, body []byte, deliveryID
 	return rec
 }
 
+// syncLogBuffer is a mutex-guarded io.Writer + String() capture buffer for
+// tests that redirect slog's own default logger (via slog.SetDefault) to
+// assert on the log lines a webhook call emits -- mirrors this package's
+// own shared-helper convention (postWebhook/newHandlerDeps/
+// newGenericLinearGraphQLStub above and below): one definition, used from
+// every test file in this package that needs it, instead of each file
+// hand-rolling its own capture.
+//
+// A plain bytes.Buffer/strings.Builder here is NOT safe for concurrent
+// use, and postWebhook's own synchronous request-handling goroutine is
+// never the only writer once a reply creates a turn: httpapi.
+// CreateTurnCore fires the SAME GetOrSpawn+EnsureDispatched post-commit
+// dispatch trigger httpapi.TriggerDispatch's own doc comment documents as
+// deliberately fire-and-forget (by design, never awaited by the caller --
+// GetOrSpawn hydrates fast, but the actual dispatch decision runs
+// entirely on the session's Actor's own background goroutine, started by
+// Registry.GetOrSpawn via errgroup.Group.Go). That goroutine can still be
+// mid-flight -- e.g. logging sessionactor/dispatch.go's own
+// "spawn decision would proceed but no SandboxProvider is configured"
+// Warn line, since every one of these tests' own newHandlerDeps wires up
+// a nil SandboxProvider -- writing through this SAME redirected default
+// logger while the test's own goroutine reads back what was captured so
+// far. This is a plain unsynchronized-concurrent-access bug on the
+// underlying writer itself (ordering is not the issue: every log line
+// these tests actually assert on is written synchronously, on the
+// request-handling goroutine, before postWebhook returns) -- caught by
+// -race in CI run 30887614911 (TestWebhookHandler_Prompted_
+// LogsSessionAndTurnID's own "WARNING: DATA RACE", log/slog.
+// (*commonHandler).handle -> bytes.Buffer.Write racing that test's own
+// logBuf.String() read).
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // newHandlerDeps builds a full linear.Deps against pool -- nil sandbox
 // provider/commander in the registry (mirroring httpapi_test's own
 // newTestRig precedent exactly: these tests only assert that a session/
@@ -207,7 +255,7 @@ func newHandlerDeps(t *testing.T, pool *pgxpool.Pool) linear.Deps {
 	t.Helper()
 	ctx := context.Background()
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -93,7 +94,7 @@ func TestCompleteProcessingTurn_SlackOrigin_EnqueuesExactlyOneSlackOutboxRow(t *
 		t.Fatalf("claim slack thread session: ok=%v err=%v", ok, err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestCompleteProcessingTurn_GitHubOrigin_EnqueuesNoRawCommentOutboxRow(t *te
 		t.Fatalf("set github pr session id: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -217,7 +218,7 @@ func TestCompleteProcessingTurn_LinearOrigin_EnqueuesExactlyOneLinearOutboxRow(t
 		t.Fatalf("set linear agent session id: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -254,6 +255,211 @@ func TestCompleteProcessingTurn_LinearOrigin_EnqueuesExactlyOneLinearOutboxRow(t
 	}
 }
 
+// TestTurnDeadlineTimeout_EnqueuesOutboxNotificationPerOrigin proves the
+// turn_deadline TIMEOUT path (handleTurnDeadlineTimer, timerfired.go)
+// enqueues the same per-origin outbox notification the real-
+// execution_complete path (completeProcessingTurn) already did.
+//
+// The gap this locks closed: Step 35 wired enqueueOutboxNotification into
+// completeProcessingTurn only. A turn that reached its terminal `failed`
+// state via turn_deadline expiring -- the SAME turn.Transition +
+// UpdateStatus + synthetic execution_complete shape, just driven by a
+// timer instead of a wire event -- wrote no outbox row at all, so a Slack-
+// or Linear-origin session whose turn simply timed out never told its
+// originating channel anything. Only the web UI, which reads turn state
+// directly and needs no notification, ever showed the failure.
+//
+// Table-driven across all four spawn_source values, since the correct
+// answer genuinely differs per origin and each case must be pinned
+// independently: slack/linear DO get a row, github does NOT (Step 47's own
+// raw-comment blocking, §8.2/§5.2 -- see the github case in
+// outboxenqueue.go), and web does NOT (no external channel at all).
+func TestTurnDeadlineTimeout_EnqueuesOutboxNotificationPerOrigin(t *testing.T) {
+	tests := []struct {
+		name        string
+		spawnSource sqlcgen.SessionSpawnSource
+		// seedReverseLookup writes the origin's own reverse-lookup row
+		// (slack_thread_sessions / linear_agent_sessions / ...), the same
+		// row the real ingress path writes at session creation. nil for an
+		// origin that has none.
+		seedReverseLookup func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID)
+		wantRows          int
+		wantKind          ports.NotificationKind
+		// checkPayload asserts the origin-specific payload shape, run only
+		// when wantRows is 1.
+		checkPayload func(t *testing.T, raw []byte)
+	}{
+		{
+			name:        "slack origin notifies its thread that the turn timed out",
+			spawnSource: sqlcgen.SessionSpawnSourceSlack,
+			seedReverseLookup: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID) {
+				t.Helper()
+				if _, ok, err := narvipg.NewSlackThreadSessionStore(pool).Claim(ctx, "C999", "1700000000.000999", sessionID); err != nil || !ok {
+					t.Fatalf("claim slack thread session: ok=%v err=%v", ok, err)
+				}
+			},
+			wantRows: 1,
+			wantKind: ports.NotificationKindSlack,
+			checkPayload: func(t *testing.T, raw []byte) {
+				t.Helper()
+				var payload slackapi.Payload
+				if err := json.Unmarshal(raw, &payload); err != nil {
+					t.Fatalf("unmarshal payload as slackapi.Payload: %v", err)
+				}
+				if payload.ChannelID != "C999" {
+					t.Errorf("ChannelID = %q, want %q", payload.ChannelID, "C999")
+				}
+				if payload.ThreadTS != "1700000000.000999" {
+					t.Errorf("ThreadTS = %q, want %q", payload.ThreadTS, "1700000000.000999")
+				}
+				// The whole point of notifying at all: the text must say the
+				// turn FAILED, and name the timeout as the reason -- not
+				// outcomeText's generic "Turn finished." fallback, which is
+				// what an unhandled turn.TriggerTimeout used to render.
+				if want := "Turn failed (timeout)."; payload.Text != want {
+					t.Errorf("Text = %q, want %q", payload.Text, want)
+				}
+			},
+		},
+		{
+			name:        "linear origin notifies its agent session with Success=false",
+			spawnSource: sqlcgen.SessionSpawnSourceLinear,
+			seedReverseLookup: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID) {
+				t.Helper()
+				agentSessions := narvipg.NewLinearAgentSessionStore(pool)
+				if _, err := agentSessions.Claim(ctx, "agent-session-timeout", "org-timeout"); err != nil {
+					t.Fatalf("claim linear agent session: %v", err)
+				}
+				if err := agentSessions.SetSessionID(ctx, "agent-session-timeout", sessionID); err != nil {
+					t.Fatalf("set linear agent session id: %v", err)
+				}
+			},
+			wantRows: 1,
+			wantKind: ports.NotificationKindLinear,
+			checkPayload: func(t *testing.T, raw []byte) {
+				t.Helper()
+				var payload linearapi.Payload
+				if err := json.Unmarshal(raw, &payload); err != nil {
+					t.Fatalf("unmarshal payload as linearapi.Payload: %v", err)
+				}
+				if payload.AgentSessionID != "agent-session-timeout" {
+					t.Errorf("AgentSessionID = %q, want %q", payload.AgentSessionID, "agent-session-timeout")
+				}
+				if payload.OrganizationID != "org-timeout" {
+					t.Errorf("OrganizationID = %q, want %q", payload.OrganizationID, "org-timeout")
+				}
+				// Linear renders an error AgentActivity, not a response one,
+				// off this flag -- a timed-out turn is never a success.
+				if payload.Success {
+					t.Error("Success = true, want false for a timed-out turn")
+				}
+				if want := "Turn failed (timeout)."; payload.Text != want {
+					t.Errorf("Text = %q, want %q", payload.Text, want)
+				}
+			},
+		},
+		{
+			name:        "github origin stays silent (Step 47 raw-comment blocking)",
+			spawnSource: sqlcgen.SessionSpawnSourceGithub,
+			seedReverseLookup: func(ctx context.Context, t *testing.T, pool *pgxpool.Pool, sessionID pgtype.UUID) {
+				t.Helper()
+				prSessions := narvipg.NewGitHubPRSessionStore(pool)
+				if err := prSessions.EnsureRow(ctx, "acme/widgets", 99); err != nil {
+					t.Fatalf("ensure github pr session row: %v", err)
+				}
+				if err := prSessions.SetSessionID(ctx, "acme/widgets", 99, sessionID); err != nil {
+					t.Fatalf("set github pr session id: %v", err)
+				}
+			},
+			wantRows: 0,
+		},
+		{
+			name:        "web origin stays silent (no external channel)",
+			spawnSource: sqlcgen.SessionSpawnSourceWeb,
+			wantRows:    0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTestPool(t)
+
+			sessionID := createTestSessionWithSpawnSource(ctx, t, pool, tt.spawnSource)
+			if tt.seedReverseLookup != nil {
+				tt.seedReverseLookup(ctx, t, pool, sessionID)
+			}
+
+			timeouts := platform.DefaultTimeouts()
+			timeouts.TurnDeadline = 50 * time.Millisecond // tiny, injected -- not the real 60m default
+
+			// Seeded exactly like TestTurnDeadlineTimerFired_FullRoundTrip
+			// (timerfired_integration_test.go): a turn already Processing
+			// whose dispatched_at is comfortably past the tiny injected
+			// deadline, so EvaluateTurnDeadline genuinely reports IsTimedOut.
+			turnStore := narvipg.NewTurnStore(pool)
+			created, err := turnStore.Create(ctx, sqlcgen.CreateTurnParams{
+				SessionID: sessionID,
+				Status:    sqlcgen.TurnStatusPending,
+			})
+			if err != nil {
+				t.Fatalf("create turn: %v", err)
+			}
+			if _, err := turnStore.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
+				ID:           created.ID,
+				Status:       sqlcgen.TurnStatusProcessing,
+				DispatchedAt: pgtype.Timestamptz{Time: time.Now().Add(-1 * time.Hour), Valid: true},
+			}); err != nil {
+				t.Fatalf("move turn to processing: %v", err)
+			}
+
+			r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "", nil)
+			if err != nil {
+				t.Fatalf("NewRegistry: %v", err)
+			}
+			t.Cleanup(func() { _ = r.Shutdown() })
+
+			a, err := r.GetOrSpawn(ctx, sessionID)
+			if err != nil {
+				t.Fatalf("GetOrSpawn: %v", err)
+			}
+
+			// The REAL production entry point -- a TimerFired command
+			// through the actor's own mailbox, never a direct call into the
+			// unexported handler.
+			if err := a.Send(ctx, TimerFired{Name: TimerTurnDeadline}); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+
+			// The turn reaching Failed is what tells us the handler's own
+			// transact has committed -- the outbox row, written in that SAME
+			// transaction (§5.1), is therefore already durable by then.
+			waitUntil(t, 5*time.Second, func() bool {
+				got, err := turnStore.Get(ctx, created.ID)
+				return err == nil && got.Status == sqlcgen.TurnStatusFailed
+			})
+
+			if tt.wantRows == 0 {
+				if n := countOutboxRowsForSession(ctx, t, pool, sessionID); n != 0 {
+					t.Errorf("outbox row count = %d, want 0", n)
+				}
+				return
+			}
+
+			row := getSoleOutboxRowForSession(ctx, t, pool, sessionID)
+			if row.Kind != string(tt.wantKind) {
+				t.Errorf("Kind = %q, want %q", row.Kind, tt.wantKind)
+			}
+			if row.Status != sqlcgen.OutboxStatusPending {
+				t.Errorf("Status = %q, want %q", row.Status, sqlcgen.OutboxStatusPending)
+			}
+			if tt.checkPayload != nil {
+				tt.checkPayload(t, row.Payload)
+			}
+		})
+	}
+}
+
 // TestCompleteProcessingTurn_WebOrigin_EnqueuesNoOutboxRow proves a
 // 'web'-origin session's turn completion enqueues NOTHING -- there is no
 // external channel to notify.
@@ -269,7 +475,7 @@ func TestCompleteProcessingTurn_WebOrigin_EnqueuesNoOutboxRow(t *testing.T) {
 	turnStore := narvipg.NewTurnStore(pool)
 	createProcessingTurn(ctx, t, turnStore, sessionID)
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

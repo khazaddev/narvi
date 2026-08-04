@@ -201,7 +201,7 @@ func newHarness(t *testing.T) *Harness {
 func (h *Harness) NewRegistry(ctx context.Context, t *testing.T) *sessionactor.Registry {
 	t.Helper()
 
-	r, err := sessionactor.NewRegistry(ctx, h.Pool, h.Timeouts, h.Hub, nil, nil, "", nil, nil, "")
+	r, err := sessionactor.NewRegistry(ctx, h.Pool, h.Timeouts, h.Hub, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("sessionactor.NewRegistry: %v", err)
 	}
@@ -222,7 +222,7 @@ func (h *Harness) NewRegistry(ctx context.Context, t *testing.T) *sessionactor.R
 func (h *Harness) NewRegistryWithCommander(ctx context.Context, t *testing.T, commander ports.SandboxCommander) *sessionactor.Registry {
 	t.Helper()
 
-	r, err := sessionactor.NewRegistry(ctx, h.Pool, h.Timeouts, h.Hub, commander, nil, "", nil, nil, "")
+	r, err := sessionactor.NewRegistry(ctx, h.Pool, h.Timeouts, h.Hub, commander, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("sessionactor.NewRegistry (with commander): %v", err)
 	}

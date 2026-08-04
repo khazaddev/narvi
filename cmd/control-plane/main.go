@@ -120,11 +120,17 @@ func serve() error {
 		}
 	}()
 
-	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := postgres.NewPoolWithMaxConns(ctx, cfg.DatabaseURL, cfg.DBPoolMaxConns)
 	if err != nil {
 		return fmt.Errorf("open postgres pool: %w", err)
 	}
 	defer pool.Close()
+	// Logged at boot, not just documented, so an operator sizing a
+	// deployment (or diagnosing a hang) has the resolved value in hand
+	// without reading source -- see platform.Config.DBPoolMaxConns's own
+	// doc comment for why this number matters independently of host core
+	// count.
+	slog.Info("narvi control-plane: postgres pool configured", "max_conns", pool.Config().MaxConns)
 
 	if err := applyMigrations(cfg.DatabaseURL); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
@@ -187,9 +193,14 @@ func serve() error {
 	// each is used for. Step 27 ("mocking + contract drift") makes
 	// NewRegistry fallible (constructs the contract_drift_detected OTel
 	// counter), mirroring recon/builder's own identical error handling
-	// immediately below.
+	// immediately below. Step 49 ("handoff-readiness sentinel") adds
+	// diffFetcher -- the SAME sourceControl *githubapi.Adapter instance
+	// passed a second time, satisfying sessionactor.PRDiffFetcher exactly
+	// like it already satisfies the github inbound handler's own
+	// reviewcontext.Fetcher below (DiffFetcher: sourceControl) -- never a
+	// second, independently-constructed client.
 	registry, err := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
-		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, cfg.GitHubBotToken)
+		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, sourceControl, cfg.GitHubBotToken)
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
 	}
@@ -822,6 +833,11 @@ func serve() error {
 	// spawns the child session -- reviewFindingStore/sentinelFixStore are
 	// the SAME instances every other caller above already uses.
 	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts)
+	// handoffNotifier (Step 49, "handoff-readiness sentinel", §14.4) posts
+	// the handoff-readiness comment and applies the "handoff" label on a
+	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken
+	// every other GitHub-flavored notifier above already uses.
+	handoffNotifier := githubapi.NewHandoffNotifier(sourceControl, cfg.GitHubBotToken)
 
 	// outboxStore is constructed earlier, alongside linearAgentSessionStore
 	// -- see that construction site's own doc comment for why.
@@ -834,6 +850,7 @@ func serve() error {
 		ports.NotificationKindSlackPlanDecided:  planSlackNotifier,
 		ports.NotificationKindGitHubVerdict:     githubVerdictNotifier,
 		ports.NotificationKindSentinelAutoFix:   sentinelAutoFixNotifier,
+		ports.NotificationKindHandoffSentinel:   handoffNotifier,
 	}, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)

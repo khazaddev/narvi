@@ -260,6 +260,13 @@ type SourceControl interface {
 	// transient/permanent classification for source-control errors --
 	// no caller of this port needs one yet: PR creation is not retried by
 	// any circuit-breaker-style mechanism this Step builds).
+	//
+	// Idempotent (Step 49 confirmed-finding fix, mirroring CreateBranch's
+	// own identical guarantee): a caller that already opened this exact
+	// head/base pull request -- createPRBestEffort (pushpr.go) runs on
+	// every completed turn, not just the first -- gets back the EXISTING
+	// PR's own Number/URL instead of an error, recovered via a follow-up
+	// lookup when GitHub's own create call reports "already exists".
 	CreatePR(ctx context.Context, spec CreatePRSpec) (PRRef, error)
 
 	// ResolveBranchSHA returns spec.Branch's current commit SHA (or the

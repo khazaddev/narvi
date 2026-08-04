@@ -112,29 +112,37 @@ type storeBundle struct {
 	// stores back once the fix PR actually opens.
 	sentinelFix   *postgres.SentinelFixStore
 	reviewFinding *postgres.ReviewFindingStore
+
+	// handoffSentinelRuns is Step 49's ("handoff-readiness sentinel",
+	// §14.4) own addition -- pushpr.go's own createPRBestEffort (via
+	// handoffsentinel.go's runHandoffSentinelBestEffort) claims a row here,
+	// in the SAME transaction as its own outbox enqueue, exactly mirroring
+	// sentinelFix's own claim-before-outbox-enqueue precedent above.
+	handoffSentinelRuns *postgres.HandoffSentinelStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 	return storeBundle{
-		session:            postgres.NewSessionStore(pool),
-		turn:               postgres.NewTurnStore(pool),
-		sandbox:            postgres.NewSandboxStore(pool),
-		timer:              postgres.NewTimerStore(pool),
-		event:              postgres.NewEventStore(pool),
-		identity:           postgres.NewIdentityStore(pool),
-		artifact:           postgres.NewArtifactStore(pool),
-		user:               postgres.NewUserStore(pool),
-		imageBuild:         postgres.NewImageBuildStore(pool),
-		environment:        postgres.NewEnvironmentStore(pool),
-		contractDrift:      postgres.NewContractDriftStore(pool),
-		outbox:             postgres.NewOutboxStore(pool),
-		slackThreadSession: postgres.NewSlackThreadSessionStore(pool),
-		githubPRSession:    postgres.NewGitHubPRSessionStore(pool),
-		linearAgentSession: postgres.NewLinearAgentSessionStore(pool),
-		plan:               postgres.NewPlanStore(pool),
-		auditLog:           postgres.NewAuditLogStore(pool),
-		sentinelFix:        postgres.NewSentinelFixStore(pool),
-		reviewFinding:      postgres.NewReviewFindingStore(pool),
+		session:             postgres.NewSessionStore(pool),
+		turn:                postgres.NewTurnStore(pool),
+		sandbox:             postgres.NewSandboxStore(pool),
+		timer:               postgres.NewTimerStore(pool),
+		event:               postgres.NewEventStore(pool),
+		identity:            postgres.NewIdentityStore(pool),
+		artifact:            postgres.NewArtifactStore(pool),
+		user:                postgres.NewUserStore(pool),
+		imageBuild:          postgres.NewImageBuildStore(pool),
+		environment:         postgres.NewEnvironmentStore(pool),
+		contractDrift:       postgres.NewContractDriftStore(pool),
+		outbox:              postgres.NewOutboxStore(pool),
+		slackThreadSession:  postgres.NewSlackThreadSessionStore(pool),
+		githubPRSession:     postgres.NewGitHubPRSessionStore(pool),
+		linearAgentSession:  postgres.NewLinearAgentSessionStore(pool),
+		plan:                postgres.NewPlanStore(pool),
+		auditLog:            postgres.NewAuditLogStore(pool),
+		sentinelFix:         postgres.NewSentinelFixStore(pool),
+		reviewFinding:       postgres.NewReviewFindingStore(pool),
+		handoffSentinelRuns: postgres.NewHandoffSentinelStore(pool),
 	}
 }
 
@@ -210,6 +218,24 @@ type Registry struct {
 	// empty (tests that never exercise the sentinel-fix PR path).
 	githubBotToken string
 
+	// diffFetcher is Step 49's ("handoff-readiness sentinel", §14.4) own
+	// addition, threaded through to every Actor this Registry hydrates
+	// exactly like the fields above: handoffsentinel.go's own
+	// runHandoffSentinelBestEffort uses it to fetch a just-created PR's own
+	// diff (GetPullRequestDiff) to scan for backend-adjacent TODO/FIXME
+	// markers. A narrow, locally-defined interface (PRDiffFetcher,
+	// handoffsentinel.go) -- NOT ports.SourceControl -- mirrors internal/
+	// app/reviewcontext.Fetcher's own identical, deliberate choice for the
+	// SAME underlying capability: diff-fetching is a GitHub-specific
+	// capability with no GitLab (ports.SourceControl's own still-stubbed
+	// second implementation) equivalent designed anywhere in this plan, so
+	// it does not belong on that port (see reviewcontext's own doc comment
+	// for the full precedent this mirrors). May be nil (tests that never
+	// exercise the handoff-sentinel path) -- runHandoffSentinelBestEffort
+	// treats a nil diffFetcher as "no diff available", degrading to a
+	// TODO-scan of nothing, never a panic.
+	diffFetcher PRDiffFetcher
+
 	// contractDriftDetected is Step 27's ("mocking + contract drift", §14.3)
 	// own OTel counter, constructed exactly once here (NewRegistry), then
 	// threaded through to every Actor this Registry hydrates -- mirroring
@@ -275,10 +301,13 @@ type Registry struct {
 // decrypts the session creator's own stored GitHub OAuth access token for
 // that same call. openCodeRuntimeVersion is Step 26's ("image builds") own
 // addition: the RuntimeVersion input to every Actor's own image-fingerprint
-// computation (dispatch.go/imageresolve.go). All six may be nil/empty --
-// callers that never exercise the spawn/dispatch/push/PR/image-resolution
-// path (e.g. the resilience test, design decision 12) can safely omit
-// them.
+// computation (dispatch.go/imageresolve.go). diffFetcher is Step 49's
+// ("handoff-readiness sentinel", §14.4) own addition: the narrow
+// PRDiffFetcher (handoffsentinel.go) createPRBestEffort's own handoff-
+// sentinel hook uses to fetch a just-created PR's diff. All seven may be
+// nil/empty -- callers that never exercise the spawn/dispatch/push/PR/
+// image-resolution/handoff-sentinel path (e.g. the resilience test,
+// design decision 12) can safely omit them.
 //
 // Step 27 ("mocking + contract drift") adds the contract_drift_detected
 // OTel counter's construction here -- exactly once per Registry, mirroring
@@ -299,6 +328,7 @@ func NewRegistry(
 	sourceControl ports.SourceControl,
 	tokenEncryptionKey []byte,
 	openCodeRuntimeVersion string,
+	diffFetcher PRDiffFetcher,
 	githubBotToken ...string,
 ) (*Registry, error) {
 	meter := otel.Meter(meterName)
@@ -330,6 +360,7 @@ func NewRegistry(
 		sourceControl:          sourceControl,
 		tokenEncryptionKey:     tokenEncryptionKey,
 		openCodeRuntimeVersion: openCodeRuntimeVersion,
+		diffFetcher:            diffFetcher,
 		githubBotToken:         botToken,
 		contractDriftDetected:  contractDriftDetected,
 		repoAccessCache:        newRepoAccessCache(),
