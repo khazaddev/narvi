@@ -46,3 +46,16 @@ const (
 	ModePlan  = "plan"
 	ModeBuild = "build"
 )
+
+// The two Target values Step 50's own release-vs-feature category
+// distinguishes (§15.1, §18.6: "release-vs-feature is just one more
+// category alongside review-vs-request and plan-vs-build ... through the
+// same contract, rubric, and record shape"). A release PR review (§15) is
+// a materially different job from an ordinary feature/fix PR review
+// (§15's own opening paragraph) -- these two values are this category's
+// own concrete Target vocabulary, exactly like TargetReview/TargetRequest
+// above are review-vs-request's.
+const (
+	TargetRelease = "release"
+	TargetFeature = "feature"
+)

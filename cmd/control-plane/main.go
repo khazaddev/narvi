@@ -46,6 +46,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/outboxworker"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reconciler"
+	"github.com/khazaddev/narvi/internal/app/releasereview"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
@@ -236,6 +237,16 @@ func serve() error {
 	// {slack,linear}'s own new plan-decision entry points -- needs both, to
 	// enqueue this Step's own cross-channel-notify outbox rows.
 	outboxStore := postgres.NewOutboxStore(pool)
+	// releaseManifestPendingStore (blocking-finding fix #1, "release PR
+	// review", §15.2) is the durable release_manifest_pending queue --
+	// the github Config below writes to it inline (a single, fast
+	// INSERT, before its own webhook ack); releasereview.Worker (started
+	// alongside every other background loop below) is what later claims
+	// and actually runs the manifest check -- see
+	// migrations/000050_release_manifest_pending.up.sql's own doc
+	// comment for the full "why" this exists as its own table/loop,
+	// never folded into outboxStore/outboxworker itself.
+	releaseManifestPendingStore := postgres.NewReleaseManifestPendingStore(pool)
 	linearAgentSessionStore := postgres.NewLinearAgentSessionStore(pool)
 
 	// slackNotifier/planSlackNotifier are constructed here (rather than
@@ -591,6 +602,19 @@ func serve() error {
 			SentinelFixes: sentinelFixStore,
 			RepoSettings:  repoSettingsStore,
 			AuditLog:      auditLogStore,
+			// PendingChecks/ReleaseLabel/ReleaseBranchPattern (Step 50,
+			// "release PR review", §15; PendingChecks itself is
+			// blocking-finding fix #1): releaseManifestPendingStore is the
+			// SAME instance constructed above, alongside outboxStore --
+			// the webhook handler only ever writes ONE cheap row here now;
+			// the actual check (ListMergedBetween, sourceControl, and
+			// outboxStore's own release_manifest row) runs LATER, on
+			// releaseManifestWorker's own background loop (started below,
+			// alongside every other background loop), never inline on
+			// this request's own context.
+			PendingChecks:        releaseManifestPendingStore,
+			ReleaseLabel:         cfg.GitHubReleaseLabel,
+			ReleaseBranchPattern: cfg.GitHubReleaseBranchPattern,
 		},
 	))
 
@@ -838,6 +862,11 @@ func serve() error {
 	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken
 	// every other GitHub-flavored notifier above already uses.
 	handoffNotifier := githubapi.NewHandoffNotifier(sourceControl, cfg.GitHubBotToken)
+	// releaseManifestNotifier (Step 50, "release PR review", §15.2) posts
+	// the release manifest check's own summary comment -- the SAME
+	// sourceControl/cfg.GitHubBotToken every other GitHub-flavored
+	// notifier above already uses.
+	releaseManifestNotifier := githubapi.NewReleaseManifestNotifier(sourceControl, cfg.GitHubBotToken)
 
 	// outboxStore is constructed earlier, alongside linearAgentSessionStore
 	// -- see that construction site's own doc comment for why.
@@ -851,10 +880,33 @@ func serve() error {
 		ports.NotificationKindGitHubVerdict:     githubVerdictNotifier,
 		ports.NotificationKindSentinelAutoFix:   sentinelAutoFixNotifier,
 		ports.NotificationKindHandoffSentinel:   handoffNotifier,
+		ports.NotificationKindReleaseManifest:   releaseManifestNotifier,
 	}, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)
 	}
+
+	// releaseManifestWorker (blocking-finding fix #1, "release PR
+	// review", §15.2) is the SEPARATE background loop that claims
+	// release_manifest_pending rows (releaseManifestPendingStore,
+	// constructed earlier alongside outboxStore) and runs the actual
+	// manifest check (releasereview.Run) for each -- entirely decoupled
+	// from any webhook request's own context/lifetime, started below via
+	// this SAME errgroup as outboxBuilder/every other background loop.
+	// deps mirrors what the pre-fix inline call used to pass directly:
+	// the SAME sourceControl instance (it satisfies releasereview.
+	// MergedPRLister directly) and the SAME outboxStore instance every
+	// other enqueue site in this file already uses -- Run itself still
+	// enqueues the check's own already-rendered comment there, unchanged
+	// by this fix. cfg.GitHubBotToken is the SAME bot credential the
+	// pre-fix inline call authenticated ListMergedBetween with -- never
+	// persisted onto a release_manifest_pending row itself (see
+	// releasereview.Enqueue's own doc comment).
+	releaseManifestWorker := releasereview.NewWorker(releaseManifestPendingStore, releasereview.Deps{
+		SourceControl: sourceControl,
+		Outbox:        outboxStore,
+		Timeouts:      cfg.Timeouts,
+	}, cfg.GitHubBotToken, cfg.Timeouts)
 
 	srv := &http.Server{
 		Addr:    cfg.HTTPAddr,
@@ -927,6 +979,23 @@ func serve() error {
 	group.Go(func() error {
 		if err := outboxBuilder.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("outbox delivery worker: %w", err)
+		}
+		return nil
+	})
+
+	// Blocking-finding fix #1 ("release PR review", §15.2): started/shut
+	// down through this SAME errgroup as every other background loop
+	// above -- no naked goroutine (§11) -- with the identical
+	// context.Canceled carve-out every other background loop already
+	// establishes for normal shutdown. Runs against groupCtx, the SAME
+	// process-lifetime context every other background loop uses -- NEVER
+	// any individual webhook request's own context, which is the entire
+	// point of this fix (see releaseManifestWorker's own construction
+	// site doc comment, and migrations/000050_release_manifest_pending.
+	// up.sql's own doc comment, for the full "why").
+	group.Go(func() error {
+		if err := releaseManifestWorker.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("release manifest check worker: %w", err)
 		}
 		return nil
 	})

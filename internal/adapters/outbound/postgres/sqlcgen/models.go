@@ -710,6 +710,18 @@ type PromptTemplate struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type ReleaseManifestPending struct {
+	ID            pgtype.UUID        `json:"id"`
+	SessionID     pgtype.UUID        `json:"session_id"`
+	Owner         string             `json:"owner"`
+	Repo          string             `json:"repo"`
+	PrNumber      int32              `json:"pr_number"`
+	BaseRef       string             `json:"base_ref"`
+	HeadRef       string             `json:"head_ref"`
+	CorrelationID *string            `json:"correlation_id"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type RepoSetting struct {
 	RepoFullName           string             `json:"repo_full_name"`
 	BlockOnHighRisk        bool               `json:"block_on_high_risk"`

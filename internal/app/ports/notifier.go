@@ -120,6 +120,21 @@ const (
 	// transaction as this PR's own idempotency claim
 	// (internal/adapters/outbound/postgres.HandoffSentinelStore.Claim).
 	NotificationKindHandoffSentinel NotificationKind = "handoff_sentinel"
+
+	// NotificationKindReleaseManifest is Step 50's own addition ("release
+	// PR review", §15.2): routes to internal/adapters/outbound/githubapi's
+	// own release-manifest notifier, which posts the manifest check's
+	// already-rendered comment (internal/domain/reviewpost.
+	// RenderManifestComment) as a plain issue comment (PostIssueComment)
+	// -- NEVER a formal review (the manifest check is "an audit, not a
+	// risk verdict", §15.2's own words: it has no RiskLevel/Shippable of
+	// its own to gate a formal-review event on, unlike
+	// NotificationKindGitHubVerdict). Distinct from that Kind for exactly
+	// the same reason NotificationKindHandoffSentinel already is (that
+	// Kind's own doc comment): a mechanical, always-runs check that never
+	// computes or posts a risk verdict. See internal/app/releasereview
+	// for the ONE place this Kind is ever enqueued.
+	NotificationKindReleaseManifest NotificationKind = "release_manifest"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

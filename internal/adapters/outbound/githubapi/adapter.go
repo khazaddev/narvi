@@ -579,6 +579,23 @@ type pullRequestResponse struct {
 		} `json:"repo"`
 	} `json:"head"`
 
+	// Base (Step 50, "release PR review", §15.1) is this PR's own real
+	// base branch name -- release detection's own "originates from/
+	// targets a release/* branch" check needs this alongside Head.Ref,
+	// which this response already decoded for an entirely different
+	// reason (H5's head-branch resolution). Never nullable on a real
+	// GitHub PR resource (unlike Head.Repo, a base branch/repo can never
+	// be deleted while the PR referencing it is open/merged).
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+
+	// Labels (Step 50, §15.1) is this PR's own CURRENT label set --
+	// release detection's own "carries a release label" check.
+	Labels []struct {
+		Name string `json:"name"`
+	} `json:"labels"`
+
 	// Stack is GitHub's own "stack" object (§17.6's amendment, Step 46,
 	// "review sessions"), riding on this SAME PR resource -- confirmed
 	// present via live schema introspection during that amendment's own
@@ -619,6 +636,10 @@ type PullRequest struct {
 	// repo spec.
 	HeadRepoName     string
 	HeadRepoCloneURL string
+	// BaseRef (Step 50, §15.1) is this PR's own real base branch name.
+	BaseRef string
+	// Labels (Step 50, §15.1) is this PR's own current label names.
+	Labels []string
 	// Stack is non-nil exactly when this PR belongs to a GitHub-native
 	// stack (§17.6) -- nil is the ordinary, ungrouped case. Callers building
 	// a review turn's pre-fetched context (internal/app/reviewcontext)
@@ -667,10 +688,16 @@ func (a *Adapter) GetPullRequest(ctx context.Context, owner, repo string, number
 		return PullRequest{}, fmt.Errorf("githubapi: decode pull request response: %w", err)
 	}
 
-	pr := PullRequest{HeadRef: parsed.Head.Ref}
+	pr := PullRequest{HeadRef: parsed.Head.Ref, BaseRef: parsed.Base.Ref}
 	if parsed.Head.Repo != nil {
 		pr.HeadRepoName = parsed.Head.Repo.Name
 		pr.HeadRepoCloneURL = parsed.Head.Repo.CloneURL
+	}
+	if len(parsed.Labels) > 0 {
+		pr.Labels = make([]string, len(parsed.Labels))
+		for i, l := range parsed.Labels {
+			pr.Labels[i] = l.Name
+		}
 	}
 	if parsed.Stack != nil {
 		pr.Stack = &StackInfo{

@@ -10,6 +10,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/releasereview"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
@@ -166,6 +167,30 @@ type Config struct {
 	SentinelFixes *postgres.SentinelFixStore
 	RepoSettings  *postgres.RepoSettingsStore
 	AuditLog      *postgres.AuditLogStore
+
+	// PendingChecks/ReleaseLabel/ReleaseBranchPattern (Step 50, "release
+	// PR review", §15; PendingChecks itself is blocking-finding fix #1)
+	// back triggerReleaseManifestCheckBestEffort (releasemanifest.go):
+	// PendingChecks is where a detected release PR's own manifest-check
+	// request is durably enqueued (internal/app/releasereview.Enqueue) --
+	// a single, fast, cheap INSERT into release_manifest_pending; the
+	// ACTUAL check (ListMergedBetween, up to ~80+ sequential GitHub API
+	// calls) is run LATER, by a separate internal/app/releasereview.Worker
+	// background loop, never inline on this webhook request's own
+	// context -- see migrations/000050_release_manifest_pending.up.sql's
+	// own doc comment for the full "why" (this fixes a real bug: the
+	// check used to run synchronously here, and silently, permanently
+	// died whenever a webhook delivery outlasted GitHub's own ~10s
+	// timeout). ReleaseLabel/ReleaseBranchPattern are this deployment's
+	// own configured release-PR detection values (platform.Config.
+	// GitHubReleaseLabel/GitHubReleaseBranchPattern). Nil-safe: a nil
+	// PendingChecks (this package's own handler_test.go, or any other
+	// minimal wiring that doesn't care about this Step) simply skips
+	// this entirely -- see triggerReleaseManifestCheckBestEffort's own
+	// doc comment.
+	PendingChecks        releasereview.PendingEnqueuer
+	ReleaseLabel         string
+	ReleaseBranchPattern string
 }
 
 // NewHandler builds the POST /webhooks/github handler (cmd/control-plane/
@@ -521,6 +546,17 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			}
 			w.WriteHeader(http.StatusInternalServerError)
 			return
+		}
+
+		// Step 50 ("release PR review", §15): only the WINNER (brand-new
+		// session) path ever triggers release detection/the manifest check
+		// -- see triggerReleaseManifestCheckBestEffort's own doc comment
+		// (releasemanifest.go) for the full "why". Runs AFTER the mention
+		// itself is fully processed and best-effort throughout: a failure
+		// here never turns an already-successful mention into a failed
+		// webhook response.
+		if isNew {
+			triggerReleaseManifestCheckBestEffort(ctx, logger, cfg, m.RepoFullName, m.PRNumber, session.ID)
 		}
 
 		logger.Info("github: mention processed",

@@ -1628,6 +1628,72 @@ type Timeouts struct {
 	// comment): a timeout here degrades to "no pre-fetched diff", never a
 	// reason to fail the review session's own turn creation.
 	GitHubPRDiffTimeout time.Duration
+
+	// --- Step 50 standalone addition ("release PR review", §15.2): no
+	// ordering relationship with either invariant chain above (or with any
+	// prior standalone addition), so -- per those additions' own precedent
+	// -- a plain field with a sensible default, not wired into a fake
+	// invariant link.
+
+	// GitHubListMergedBetweenTimeout bounds ONE internal/adapters/outbound/
+	// githubapi.Adapter.ListMergedBetween call -- a caller wraps its own
+	// ctx with this before calling, mirroring GitHubPRDiffTimeout's own
+	// identical "a genuine outbound network call must never run against
+	// an unbounded context" precedent. Distinct from (and MUCH more
+	// generous than) every other GitHub-flavored timeout in this struct:
+	// ListMergedBetween is not one lightweight REST call but a bounded
+	// SEQUENCE of them -- one compare, one revert search, plus up to six
+	// further calls per discovered constituent PR, capped at
+	// githubapi.maxConstituentPRs (100) -- so this budget covers the
+	// WHOLE sequence, never a single request. Not specified in the plan
+	// (this Step postdates it); chosen as 2 minutes: generous enough for
+	// a real release cut bundling dozens of PRs against GitHub's real API
+	// latency, while this check is always best-effort on the caller's own
+	// side (internal/app/releasereview) -- a timeout here degrades to "no
+	// manifest posted for this release PR", never a reason to fail
+	// session creation itself.
+	GitHubListMergedBetweenTimeout time.Duration
+
+	// --- Blocking-finding fix #1 standalone addition ("release PR
+	// review", §15.2): no ordering relationship with either invariant
+	// chain above (or with any prior standalone addition) EXCEPT the one
+	// explicit pairwise check Validate() adds just for this pair below --
+	// per those additions' own precedent, otherwise plain fields with
+	// sensible defaults.
+
+	// ReleaseManifestCheckPumpInterval is how often
+	// internal/app/releasereview.Worker (the background loop that claims
+	// release_manifest_pending rows and runs the actual manifest check --
+	// see migrations/000050_release_manifest_pending.up.sql's own doc
+	// comment for the full "why") polls for rows to claim -- mirrors
+	// OutboxPumpInterval's own ticker-driven shape. Not specified in the
+	// plan (this fix postdates it); chosen as 10s -- a release PR's own
+	// manifest check is not a live notification a human is actively
+	// watching a chat thread for the way an ordinary outbox row is
+	// (OutboxPumpInterval's own 5s reasoning), so this can poll a little
+	// less aggressively without meaningfully delaying a maintainer who
+	// will spend minutes reviewing the release PR regardless.
+	ReleaseManifestCheckPumpInterval time.Duration
+
+	// ReleaseManifestCheckTimeout bounds ONE internal/app/releasereview.
+	// Worker attempt at running the actual manifest check
+	// (internal/app/releasereview.Run) for a single claimed row -- the
+	// SAME call the webhook handler used to make inline, now run on the
+	// Worker's own long-lived loop instead, decoupled from any webhook
+	// request's own context/lifetime (blocking-finding fix #1). MUST
+	// stay comfortably above GitHubListMergedBetweenTimeout (enforced by
+	// Validate() below): Run's own inner context.WithTimeout(ctx,
+	// GitHubListMergedBetweenTimeout) call takes the EARLIER of its own
+	// duration and whatever deadline this outer context already carries
+	// (context.WithTimeout's own documented behavior) -- a
+	// ReleaseManifestCheckTimeout shorter than GitHubListMergedBetweenTimeout
+	// would silently truncate the very budget that field's own doc
+	// comment describes, defeating the point of that generous 2-minute
+	// allowance. Not specified in the plan; chosen as 3 minutes --
+	// GitHubListMergedBetweenTimeout's own 2 minutes plus a full extra
+	// minute of margin for the JSON-marshal/outbox-insert work Run does
+	// after ListMergedBetween itself returns.
+	ReleaseManifestCheckTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1766,6 +1832,11 @@ func DefaultTimeouts() Timeouts {
 		GitHubActorNoticeTTL: 24 * time.Hour, // batch fix/deny-unlinked-github-actors; not specified, chosen -- see field doc comment for why this is a DISTINCT constant from IdentityLinkPromptTTL despite sharing its value
 
 		GitHubPRDiffTimeout: 20 * time.Second, // not specified (Step 46 postdates the plan); chosen, double GitHubGetPRTimeout's own 10s -- generous for a real, possibly-large diff transfer
+
+		GitHubListMergedBetweenTimeout: 2 * time.Minute, // not specified (Step 50 postdates the plan); chosen, generous for the whole bounded call sequence a real release cut makes -- see field doc comment
+
+		ReleaseManifestCheckPumpInterval: 10 * time.Second, // blocking-finding fix #1; not specified, chosen -- see field doc comment
+		ReleaseManifestCheckTimeout:      3 * time.Minute,  // blocking-finding fix #1; not specified, chosen -- GitHubListMergedBetweenTimeout (2min) plus a full extra minute of margin, see field doc comment
 	}
 }
 
@@ -1851,6 +1922,18 @@ func (t Timeouts) Validate() error {
 	// -- see OutboxClaimDuration's own doc comment for the full reasoning.
 	check("OutboxClaimDuration > OutboxDeliveryTimeout",
 		"OutboxClaimDuration", t.OutboxClaimDuration, "OutboxDeliveryTimeout", t.OutboxDeliveryTimeout)
+
+	// Blocking-finding fix #1: ReleaseManifestCheckTimeout must stay at
+	// least MinTimeoutMargin above GitHubListMergedBetweenTimeout, or
+	// internal/app/releasereview.Worker's own outer context.WithTimeout(
+	// ctx, ReleaseManifestCheckTimeout) call would silently cut short
+	// Run's own INNER context.WithTimeout(ctx, GitHubListMergedBetweenTimeout)
+	// call (context.WithTimeout always takes the EARLIER of its own
+	// duration and whatever deadline the parent context already carries)
+	// -- see ReleaseManifestCheckTimeout's own doc comment for the full
+	// reasoning.
+	check("ReleaseManifestCheckTimeout > GitHubListMergedBetweenTimeout",
+		"ReleaseManifestCheckTimeout", t.ReleaseManifestCheckTimeout, "GitHubListMergedBetweenTimeout", t.GitHubListMergedBetweenTimeout)
 
 	return errors.Join(errs...)
 }
