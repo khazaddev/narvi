@@ -1024,9 +1024,17 @@ func (a *Adapter) finalizeOrRecoverFromOverflow(sessionID string, ts *turnState,
 //     to a stray compaction-tail (or retry-tail) event isCompacting would
 //     otherwise still be suppressing, mirroring the FIRST stillLive
 //     branch's own reasoning above exactly.
-//   - stillLive() is still true: proceed exactly as before — clear
-//     compacting, and finalize with an enriched reason only if
-//     postPromptAsync itself failed.
+//   - stillLive() is still true: if postPromptAsync itself failed, finalize
+//     directly with an enriched reason WITHOUT first clearing compacting —
+//     a.finalize's own tryFinalize (turn.go) atomically clears it in the
+//     SAME critical section that commits ts.finalized, exactly mirroring
+//     both stillLive()-false branches above (see the err != nil branch's
+//     own inline comment below for the concrete race this avoids
+//     reopening). Only on the OTHER path — postPromptAsync succeeded — is
+//     compacting cleared explicitly here, since nothing else will: no
+//     finalize call happens on this goroutine at all in that case, and the
+//     retry's own real SSE traffic must be let through the guard from this
+//     point on.
 //   - That re-dispatch succeeds and no Stop landed: nothing further to do
 //     here — the retry's own eventual session.idle (or session.error, if
 //     it also overflows) arrives on the SSE goroutine exactly like any
@@ -1165,14 +1173,57 @@ func (a *Adapter) attemptCompactionRetry(ctx context.Context, sessionID string, 
 		return
 	}
 
-	ts.setCompacting(false)
-
 	if err != nil {
+		// No separate ts.setCompacting(false) call here — mirrors BOTH
+		// stillLive()-false branches above (and this exact pattern in
+		// attemptTransientRetry below): a.finalize's own tryFinalize
+		// (turn.go) atomically clears ts.compacting in the SAME critical
+		// section that commits ts.finalized, so a stray compaction-tail
+		// event dispatched on the SSE-reader goroutine (isCompacting still
+		// suppressing it right up until tryFinalize's own atomic commit)
+		// can never win a race this goroutine's own finalize call should
+		// win instead.
+		//
+		// A CI-only regression this branch used to reintroduce: an EARLIER
+		// version of this function called ts.setCompacting(false)
+		// UNCONDITIONALLY, before this err check, on the (mistaken)
+		// assumption that "after postPromptAsync returns" was the only
+		// ordering constraint §7.2 Finding 3 cared about. That reopened
+		// exactly the window tryFinalize's own doc comment (turn.go)
+		// describes closing: between that unconditional clear and this
+		// a.finalize call below, ts.compacting read false to every OTHER
+		// goroutine while ts.finalized was still false — wide enough for
+		// broadcastCompactionSuccessWave's own tail session.idle
+		// (fake_server_test.go, queued onto a buffered channel by the
+		// /summarize handler and drained independently by the SSE-reader
+		// goroutine, with no happens-before relationship to forceCompaction's
+		// own HTTP response returning — see that comment's own "an in-process
+		// fake server's forceCompaction+postPromptAsync round trip can
+		// complete... before the SSE-reader goroutine has drained every
+		// event this handler just queued" disclaimer) to sail through
+		// dispatchEvent's session.idle case's now-false isCompacting guard
+		// (sse.go), observe ts.errorForOutcome()==nil (clearErrorsForRetry
+		// already ran) and hasText/hasToolCall==false,false (nothing this
+		// turn ever produced), derive "opencode: turn produced no output",
+		// and win tryFinalize against THIS goroutine's own, correctly
+		// enriched, finalize call below — reproduced live as
+		// TestCompactionRetry_RetryPostPromptAsyncFails. This exact hazard
+		// is not a fake-server-only artifact either: forceCompaction's own
+		// doc comment (compact.go) already documents that a REAL OpenCode
+		// server's "the /summarize response only returns after the full
+		// compaction-internal SSE wave has already streamed" ordering is
+		// merely empirically observed, across two independent connections/
+		// goroutines Go's memory model gives no happens-before guarantee
+		// for — so the identical race is genuinely reachable in production,
+		// not just under a test harness's own buffered-channel scheduling.
 		reason := enrichReasonForFailedRecovery(originalOutcome.Reason, fmt.Sprintf("retry postPromptAsync: %v", err))
 		slog.Error("opencode: retry prompt dispatch failed, finalizing with the original overflow error",
 			"sessionID", sessionID, "error", err)
 		a.finalize(ts, turnOutcome{Outcome: originalOutcome.Outcome, Reason: &reason})
+		return
 	}
+
+	ts.setCompacting(false)
 }
 
 // attemptTransientRetry implements the actual recovery work
@@ -1288,14 +1339,30 @@ func (a *Adapter) attemptTransientRetry(ctx context.Context, sessionID string, t
 		return
 	}
 
-	ts.setCompacting(false)
-
 	if err != nil {
+		// No separate ts.setCompacting(false) call here — mirrors
+		// attemptCompactionRetry's own identical fix to its own identical
+		// bug, exactly (see that function's own doc comment on its matching
+		// branch for the full race this closes): a.finalize's own
+		// tryFinalize (turn.go) atomically clears ts.compacting in the SAME
+		// critical section that commits ts.finalized, so a stray event for
+		// this session dispatched on the SSE-reader goroutine while this
+		// goroutine is still between "backoff elapsed, dispatch attempted"
+		// and "finalize claimed" cannot win a race this goroutine's own
+		// finalize call should win instead. This branch used to call
+		// ts.setCompacting(false) unconditionally before this check, which
+		// — exactly like attemptCompactionRetry's own now-fixed sibling
+		// bug — reopened that window for however long it took this
+		// goroutine to build the enriched reason string and reach
+		// a.finalize below.
 		reason := enrichReasonForFailedTransientRetry(originalOutcome.Reason, fmt.Sprintf("retry postPromptAsync: %v", err))
 		slog.Error("opencode: retry prompt dispatch failed, finalizing with the original transient error",
 			"sessionID", sessionID, "error", err)
 		a.finalize(ts, turnOutcome{Outcome: originalOutcome.Outcome, Reason: &reason})
+		return
 	}
+
+	ts.setCompacting(false)
 }
 
 // waitTransientRetryBackoff waits d, honoring ctx cancellation (a.bgCtx,
