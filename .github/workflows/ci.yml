@@ -183,6 +183,14 @@ jobs:
   # cross-group resource sharing the way there was when everything ran
   # inside one job/VM.
   #
+  # NOT currently an invariant across all four groups: branch
+  # ci/experiment-group-parallelism is running an isolated experiment that
+  # loosens group 3 only to -p 2, to see whether PR #133's smaller per-VM
+  # package counts are enough headroom to safely allow some intra-group
+  # concurrency. Groups 1, 2, and 4 are untouched and still -p 1. See that
+  # experiment's own Makefile comment and PR description for status --
+  # don't assume every group below is -p 1 without checking the Makefile.
+  #
   # Groups are bin-packed by measured per-package duration (real green CI
   # run 30875940504, 2026-08-04, the merge of ba24c5d itself onto main):
   # internal/adapters/inbound/httpapi alone is ~508s -- roughly as heavy as

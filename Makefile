@@ -100,8 +100,21 @@ test-integration-group-1:
 test-integration-group-2:
 	go test -tags=integration -race -p 1 $(INTEGRATION_GROUP_2)
 
+# EXPERIMENT (branch ci/experiment-group-parallelism, off ci/parallelize-
+# integration-tests / PR #133): group 3 only, deliberately NOT applied to
+# groups 1/2/4. PR #133's job-matrix split already gives each group its own
+# runner VM with an uncontended Docker daemon, so this group now shares that
+# daemon among only 6 packages instead of the ~73 the original ba24c5d -p 1
+# fix had to guard against. Testing whether that smaller per-VM package
+# count is enough headroom to let two of this group's binaries run
+# concurrently without reproducing the same unexplained testcontainers-go
+# hangs ba24c5d fixed. This needs several independent real-CI repeats
+# before it's trusted -- see this experiment's PR description for the
+# baseline and results. If it doesn't hold up, revert this one line back
+# to -p 1; do NOT propagate -p 2 to the other groups until this one has
+# proven safe on its own.
 test-integration-group-3:
-	go test -tags=integration -race -p 1 $(INTEGRATION_GROUP_3)
+	go test -tags=integration -race -p 2 $(INTEGRATION_GROUP_3)
 
 test-integration-group-4:
 	@tmp="$$(mktemp)"; \
