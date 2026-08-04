@@ -73,10 +73,13 @@ RETURNING *;
 -- NULL" -- called only for an invocation CloseAutomationInvocation just
 -- decided is Failed, in the SAME transaction as
 -- LockAutomationForUpdate/ApplyFailureStrike (queries/automations.sql),
--- guarding the failure-strike CONSEQUENCE against being applied twice
--- even if this invocation's own close-out is somehow re-attempted after a
--- crash between the two (internal/domain/automation/doc.go's own "two
--- independent CAS guards, not one" section).
+-- so the guard and its consequence commit or roll back together
+-- atomically -- guarding the failure-strike CONSEQUENCE against being
+-- applied twice even if this invocation's own close-out is somehow
+-- re-attempted after a crash between CloseAutomationInvocation committing
+-- and this transaction committing (internal/domain/automation/doc.go's own
+-- "Closing an invocation vs. recording its failure-strike consequence"
+-- section).
 UPDATE automation_invocations
 SET failure_counted_at = now()
 WHERE id = $1 AND failure_counted_at IS NULL

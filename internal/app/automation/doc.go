@@ -61,17 +61,96 @@
 //     answered by a single comparison against an injected `now`, with no
 //     cross-tick memory required.
 //
-// # Two independent CAS guards, cascaded through one shared closeout path
+// # Cascaded through one shared closeout path
 //
-// closeout.go's own maybeCloseInvocation/applyStrikeAccounting are the ONE
+// closeout.go's own maybeCloseInvocation/applyFailureStrike are the ONE
 // place every terminalizing write (a genuine turn outcome, via
 // ReconcileOnce, OR an orphan timeout, via SweepOnce) cascades through --
 // never duplicated between the two callers. See internal/domain/
-// automation/doc.go's own "two independent CAS guards, not one" section for
-// why closing an invocation (automation_invocations.status, guarded by its
-// own current status) and recording that closure's failure-strike
-// consequence (automation_invocations.failure_counted_at IS NULL, §3.5's
-// own literal CAS idiom) are two separate guarded steps, not one.
+// automation/doc.go's own "Closing an invocation vs. recording its
+// failure-strike consequence" section for why closing an invocation
+// (automation_invocations.status, guarded by its own current status) and
+// recording that closure's failure-strike consequence
+// (automation_invocations.failure_counted_at IS NULL, §3.5's own literal
+// CAS idiom, now applied atomically together with the automations row lock
+// and the strike write itself, all in ONE transaction -- applyFailureStrike
+// below) are two separate steps, each its own guarded operation -- not
+// collapsed into a single one spanning both.
+//
+// # Known, deferred: closeInvocation's own Close call is not part of that
+// same transaction
+//
+// closeInvocation's own Close call (closeout.go) still runs as its own
+// standalone, pool-auto-committed statement -- it is NOT folded into the
+// SAME transaction applyFailureStrike immediately below it now shares
+// between MarkFailureCounted and LockForUpdate/ApplyFailureStrike. A crash
+// after Close's own status-transition commits (durably 'failed') but
+// before applyFailureStrike's own transaction commits still loses that
+// invocation's own strike identically: Close's own "AND status = 'pending'"
+// guard blocks any retried close-out from ever re-entering once the
+// invocation is already terminal, so nothing re-drives applyFailureStrike
+// for it. This is a genuine, narrower residual gap left deliberately
+// unaddressed by this Step (Close is called from exactly one call site
+// today, so folding it into the same transaction is plausible future work,
+// but doing so here would have widened this Step's own already-large
+// blast radius for a window that is narrow in practice -- Close and
+// applyFailureStrike run back-to-back, milliseconds apart, not indefinitely
+// apart the way the claimed-but-unfanned gap below can be) -- named
+// honestly here, mirroring app/imagebuild/doc.go's own established
+// discipline of naming an accepted gap explicitly rather than leaving it
+// silently unaddressed.
+//
+// # Known, deferred: a claimed-but-unfanned invocation has no recovery sweep
+//
+// claimBatch (fanout.go) commits fanned_out_at for a batch of invocations
+// BEFORE the fan-out loop that actually creates their own runs ever runs
+// (deliberately -- the claim step's own transaction must stay short-lived,
+// never held open across real session-creation work). A crash between that
+// commit and PumpOnce's own subsequent `for _, inv := range claimed`
+// loop actually reaching a given invocation (or reaching it only
+// partway, for one of its own several targets) leaves that invocation
+// permanently fanned_out_at-stamped with fewer runs than total_runs
+// promises -- ListDueForFanOut's own WHERE clause excludes it forever
+// (fanned_out_at is no longer NULL), and no OTHER sweep in this package
+// scans automation_invocations at all: the recovery sweeps §3.5 specifies
+// (sweep.go's own ListOrphanedStarting/ListOrphanedRunning) are scoped to
+// RUNS that already exist, never to an invocation stuck between "claimed"
+// and "actually fanned out". This is a legitimate, already-accepted scope
+// decision (recovery sweeps per §3.5 are specified for runs only), not an
+// oversight -- mirroring app/imagebuild/doc.go's own identical precedent
+// for the analogous gap on its own build-claim path ("a process crash
+// between claiming a row... and recording its outcome leaves that
+// fingerprint permanently stuck in 'building', never retried by this
+// package's own mechanism... not built here"). A future Step could add a
+// staleness sweep here too (a fanned_out_at-stamped invocation whose own
+// run count never reaches total_runs past some bound gets its missing
+// targets re-driven, or is force-closed failed) -- not built in this Step.
+//
+// # Known, residual: paused-automation TOCTOU across a claimed batch
+//
+// ListDueForFanOut's own "AND a.status = 'active'" join condition
+// (queries/automationinvocations.sql) is commit 431e4b3's own "SECOND,
+// independent layer" of defense-in-depth against fanning out a pending
+// invocation whose automation has since been auto-paused -- Step 52's own
+// future trigger evaluator is the FIRST layer (never calling CreateInvocation
+// for a paused automation in the first place). Because claimBatch claims an
+// entire BATCH of due invocations inside one transaction, an automation can
+// still pause mid-batch: some of its own invocations, already claimed
+// (fanned_out_at stamped) and already fanned out into real sessions earlier
+// in that SAME PumpOnce tick, are unaffected by a pause that lands a moment
+// later, in between two invocations of the SAME claimed batch. This residual
+// window is consistent with, not a regression against, what 431e4b3 already
+// claimed to deliver (a second layer narrowing the race, not eliminating
+// every instance of it) -- fanning out a small number of runs for an
+// automation that pauses moments later is an accepted outcome, not a
+// correctness bug (those runs still complete/fail normally, and their own
+// invocation's eventual close-out still applies the normal success/failure
+// accounting). Not fixed here: skipping an already-fanned-out invocation
+// is not a free early-return -- once fanned_out_at is committed it can
+// never be re-listed, so closing it out consistently with an automation
+// that is ALREADY paused by the time it terminalizes (e.g. not counting it
+// as a failure strike against an automation no longer accepting new work)
+// would need its own small design decision, not addressed by this Step.
 //
 // # CreateInvocation -- this Step's own minimal entry point
 //

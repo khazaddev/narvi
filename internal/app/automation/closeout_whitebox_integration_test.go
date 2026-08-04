@@ -185,3 +185,105 @@ func TestCloseInvocation_ConcurrentClosesOnlyOneWinnerCascades(t *testing.T) {
 		t.Fatalf("failure_counted_at not set")
 	}
 }
+
+// TestApplyFailureStrike_FailureBetweenGuardAndStrikeRollsBackBothAtomically
+// is fix #2's own regression test. Before this fix, MarkFailureCounted
+// (the failure_counted_at CAS guard) committed standalone, on the bare
+// pool, BEFORE the separate strike-accounting transaction (pool.Acquire ->
+// conn.Begin -> LockForUpdate -> ApplyFailureStrike -> tx.Commit) ever
+// opened -- so ANY failure in that later transaction left the guard
+// permanently set with NO strike ever recorded, and nothing anywhere reads
+// failure_counted_at to retry or reconcile it.
+//
+// A temporary CHECK constraint on automations.consecutive_failures forces
+// ApplyFailureStrike's own UPDATE (which would set consecutive_failures to
+// exactly 1 for this automation's own first-ever strike,
+// domainautomation.EvaluateFailureStrike's own verdict for
+// current=0/failed=true) to fail deterministically, without needing a
+// fault-injection seam. This proves BOTH halves of the fix: (1) the forced
+// failure leaves failure_counted_at unset (the guard and its consequence
+// rolled back TOGETHER, atomically, exactly like the rest of this
+// transaction), and (2) a subsequent retry -- once the forced failure is
+// lifted -- still wins the (still-unset) guard and records the strike for
+// real, proving the earlier failed attempt did not PERMANENTLY lose it.
+func TestApplyFailureStrike_FailureBetweenGuardAndStrikeRollsBackBothAtomically(t *testing.T) {
+	engine, automations, invocations := newWhiteboxEngine(t)
+	ctx := context.Background()
+	logger := platform.Logger(ctx)
+
+	reposJSON, err := json.Marshal([]domainautomation.Target{{Name: "repo", URL: "https://github.com/acme/repo"}})
+	if err != nil {
+		t.Fatalf("marshal targets: %v", err)
+	}
+
+	autoRow, err := automations.Create(ctx, sqlcgen.CreateAutomationParams{
+		Name: "atomic strike test", Repos: reposJSON, CreatedBy: pgtype.UUID{},
+	})
+	if err != nil {
+		t.Fatalf("create automation: %v", err)
+	}
+
+	invRow, err := invocations.Create(ctx, sqlcgen.CreateAutomationInvocationParams{
+		AutomationID: autoRow.ID, Targets: reposJSON, TotalRuns: 1,
+	})
+	if err != nil {
+		t.Fatalf("create invocation: %v", err)
+	}
+
+	if _, err := engine.pool.Exec(ctx, "ALTER TABLE automations ADD CONSTRAINT test_reject_first_strike CHECK (consecutive_failures <> 1)"); err != nil {
+		t.Fatalf("add test constraint: %v", err)
+	}
+	constraintDropped := false
+	dropConstraint := func() {
+		if constraintDropped {
+			return
+		}
+		if _, err := engine.pool.Exec(context.Background(), "ALTER TABLE automations DROP CONSTRAINT IF EXISTS test_reject_first_strike"); err != nil {
+			t.Errorf("drop test constraint: %v", err)
+		}
+		constraintDropped = true
+	}
+	t.Cleanup(dropConstraint)
+
+	// First attempt: ApplyFailureStrike's own UPDATE is forced to fail --
+	// the whole transaction, MarkFailureCounted included, must roll back.
+	engine.applyFailureStrike(ctx, logger, autoRow.ID, invRow.ID)
+
+	gotAuto, err := automations.Get(ctx, autoRow.ID)
+	if err != nil {
+		t.Fatalf("get automation (after forced failure): %v", err)
+	}
+	if gotAuto.ConsecutiveFailures != 0 {
+		t.Fatalf("consecutive_failures = %d, want 0 -- the forced failure must roll back the whole transaction", gotAuto.ConsecutiveFailures)
+	}
+
+	gotInv, err := invocations.Get(ctx, invRow.ID)
+	if err != nil {
+		t.Fatalf("get invocation (after forced failure): %v", err)
+	}
+	if gotInv.FailureCountedAt.Valid {
+		t.Fatalf("failure_counted_at set even though the strike transaction failed -- the guard and its consequence must commit or roll back together")
+	}
+
+	// Lift the forced failure and retry -- the earlier attempt must NOT
+	// have permanently lost this invocation's own strike.
+	dropConstraint()
+
+	engine.applyFailureStrike(ctx, logger, autoRow.ID, invRow.ID)
+
+	gotAuto, err = automations.Get(ctx, autoRow.ID)
+	if err != nil {
+		t.Fatalf("get automation (after retry): %v", err)
+	}
+	if gotAuto.ConsecutiveFailures != 1 {
+		t.Fatalf("consecutive_failures = %d, want 1 after retry -- the earlier failed attempt must not have permanently lost this invocation's own strike", gotAuto.ConsecutiveFailures)
+	}
+
+	gotInv, err = invocations.Get(ctx, invRow.ID)
+	if err != nil {
+		t.Fatalf("get invocation (after retry): %v", err)
+	}
+	if !gotInv.FailureCountedAt.Valid {
+		t.Fatalf("failure_counted_at still not set after a successful retry")
+	}
+}

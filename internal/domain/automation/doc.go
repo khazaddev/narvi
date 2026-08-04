@@ -40,13 +40,13 @@
 // still be cold-starting -- exactly the condition the "starting >5 min"
 // sweep threshold exists to catch), Running to a turn now Processing.
 //
-// # Two independent CAS guards, not one
+// # Closing an invocation vs. recording its failure-strike consequence
 //
-// Closing an invocation (Pending -> Succeeded/Failed, via Transition) and
-// recording the failure-strike consequence of a FAILED invocation against
-// its own automation's consecutive-failure streak are deliberately two
-// separate guarded operations (app/automation's own closeout.go), never
-// collapsed into one: mirrors internal/app/sessionactor/progressnotify.go's
+// Closing an invocation (Pending -> Succeeded/Failed, via Transition,
+// app/automation's own closeInvocation) and recording a FAILED invocation's
+// failure-strike consequence against its own automation's consecutive-
+// failure streak (applyFailureStrike) are two separate steps, each its own
+// guarded operation: mirrors internal/app/sessionactor/progressnotify.go's
 // own documented "two, independent, both reused rather than invented"
 // double-guard precedent. The invocation's own status transition is guarded
 // by its own current status (the Transition table's usual precondition,
@@ -54,11 +54,44 @@
 // guarded by automation_invocations.failure_counted_at IS NULL (§3.5's own
 // literal CAS idiom, the same UPDATE ... WHERE <nullable-timestamp> IS NULL
 // shape already established by TurnStore.MarkProgressNotified/
-// ApprovePlanIfAwaitingApproval) -- so a crash between the two, followed by
-// a retried close attempt, can never double-count the SAME invocation's
-// failure against the streak twice, even though the invocation's own
-// status is by then already terminal and would otherwise short-circuit a
-// naive single-guard re-check.
+// ApprovePlanIfAwaitingApproval) -- so a crash between closeInvocation
+// committing and a retried close attempt can never double-count the SAME
+// invocation's failure against the streak twice, even though the
+// invocation's own status is by then already terminal and would otherwise
+// short-circuit a naive single-guard re-check.
+//
+// That failure_counted_at guard now runs INSIDE the SAME transaction as
+// AutomationStore's own LockForUpdate/ApplyFailureStrike (app/automation's
+// own closeout.go, applyFailureStrike) -- matching the "MUST run inside the
+// same transaction" comments this package's own store/query layer has
+// always carried (AutomationInvocationStore.WithTx, AutomationStore.WithTx,
+// queries/automationinvocations.sql, queries/automations.sql). An earlier
+// revision of this package's own writeup described the guard as committing
+// STANDALONE, ahead of that transaction, as though that were a third,
+// independently-committing step rather than a bug -- it was a bug: any
+// failure between that standalone commit and the (separate) strike
+// transaction's own commit (LockForUpdate, ApplyFailureStrike, or the
+// commit itself) permanently set the one-way CAS guard with NO strike ever
+// recorded, and nothing anywhere reads failure_counted_at to retry or
+// reconcile it -- that invocation's own failure would silently and
+// permanently never count toward auto-pause. Fusing the guard and its
+// consequence into one atomic transaction closes that gap: either both the
+// guard flip and the strike land together, or neither does, leaving a
+// subsequent retry of applyFailureStrike free to win the still-unset guard
+// and apply the strike for real.
+//
+// A crash between closeInvocation's OWN status-transition commit and this
+// now-atomic strike transaction's own commit remains a SEPARATE, still-open
+// residual gap -- closeInvocation's own Close call is not itself part of
+// the same transaction as the strike accounting below it (see
+// internal/app/automation/doc.go's own "closeInvocation's own Close call is
+// not part of that same transaction" section, mirroring app/imagebuild/
+// doc.go's own analogous claim-crash-gap precedent for why this is left as
+// an accepted, documented gap rather than folded in here).
+// This residual window is narrower than the one just closed above (Close
+// and applyFailureStrike run back-to-back, milliseconds apart, versus the
+// old standalone-guard gap, which could persist indefinitely with no retry
+// path at all), but it is not zero.
 //
 // # EvaluateFailureStrike computes, the CAS-guarded store records
 //

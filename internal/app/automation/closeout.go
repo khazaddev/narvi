@@ -114,24 +114,27 @@ func (e *Engine) closeInvocation(ctx context.Context, logger *slog.Logger, invoc
 // applyFailureStrike is §3.5's own literal CAS idiom in action: "UPDATE
 // ... WHERE failure_counted_at IS NULL" (MarkFailureCounted) guards the
 // failure-strike CONSEQUENCE against being applied twice for the SAME
-// invocation -- a SEPARATE, independent guard from closeInvocation's own
-// status CAS immediately above (internal/domain/automation/doc.go's own
-// "two independent CAS guards, not one" section). Only once this call
-// wins that guard does it proceed to lock the automation row
-// (LockAutomationForUpdate, serializing against any OTHER invocation
-// belonging to the SAME automation that is closing failed concurrently)
-// and apply automation.EvaluateFailureStrike's own verdict.
+// invocation. This guard and its consequence (LockAutomationForUpdate +
+// ApplyFailureStrike) now run in ONE shared transaction -- MarkFailureCounted
+// is called via e.invocations.WithTx(tx), on the SAME tx opened for the
+// lock/apply pair immediately below it, matching the "MUST run inside the
+// same transaction" comments on AutomationInvocationStore.WithTx/
+// AutomationStore.WithTx and this package's own queries/automations.sql,
+// queries/automationinvocations.sql (see internal/domain/automation/doc.go's
+// own writeup for why this guard used to commit standalone, ahead of this
+// transaction, and why that was a real bug rather than a deliberate design:
+// any failure between the old standalone MarkFailureCounted commit and this
+// transaction's own commit permanently set the one-way CAS guard with NO
+// strike ever recorded, and nothing anywhere retries or reconciles
+// failure_counted_at). Only once this call wins that guard does it proceed
+// to lock the automation row (LockAutomationForUpdate, serializing against
+// any OTHER invocation belonging to the SAME automation that is closing
+// failed concurrently) and apply automation.EvaluateFailureStrike's own
+// verdict -- and now, either both the guard flip and the strike land
+// together, or (any failure before this transaction's own commit) neither
+// does, leaving a subsequent retry free to win the guard and apply the
+// strike for real.
 func (e *Engine) applyFailureStrike(ctx context.Context, logger *slog.Logger, automationID, invocationID pgtype.UUID) {
-	if _, err := e.invocations.MarkFailureCounted(ctx, invocationID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			// Already counted -- a concurrent/retried closer lost this
-			// race. Harmless no-op.
-			return
-		}
-		logger.Error("automation: mark failure counted failed", "error", err, "automation_invocation_id", invocationID.String())
-		return
-	}
-
 	conn, err := e.pool.Acquire(ctx)
 	if err != nil {
 		logger.Error("automation: acquire connection for strike accounting failed", "error", err, "automation_id", automationID.String())
@@ -145,6 +148,17 @@ func (e *Engine) applyFailureStrike(ctx context.Context, logger *slog.Logger, au
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := e.invocations.WithTx(tx).MarkFailureCounted(ctx, invocationID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Already counted -- a concurrent/retried closer lost this
+			// race. Harmless no-op; the deferred rollback above discards
+			// this otherwise-empty transaction.
+			return
+		}
+		logger.Error("automation: mark failure counted failed", "error", err, "automation_invocation_id", invocationID.String())
+		return
+	}
 
 	txAutomations := e.automations.WithTx(tx)
 

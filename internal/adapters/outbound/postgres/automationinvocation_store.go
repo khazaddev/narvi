@@ -27,9 +27,17 @@ func NewAutomationInvocationStore(pool *pgxpool.Pool) *AutomationInvocationStore
 // instead of the pool this store was built with -- ListDueForFanOut/
 // ClaimForFanOut MUST run inside the same transaction (mirrors
 // app/imagebuild.Builder.claimBatch's own claim-batch precedent exactly);
-// CloseInvocation/MarkFailureCounted MUST run inside the same transaction
-// as AutomationStore's own LockForUpdate/ApplyFailureStrike when this
-// invocation is closing failed (see this package's own AutomationStore).
+// MarkFailureCounted MUST run inside the same transaction as
+// AutomationStore's own LockForUpdate/ApplyFailureStrike, when this
+// invocation is closing failed (see this package's own AutomationStore),
+// so the failure-strike CAS guard and its consequence commit or roll back
+// together atomically (app/automation's own closeout.go, applyFailureStrike).
+// CloseInvocation is deliberately NOT part of that same transaction --
+// it still runs as its own standalone, pool-auto-committed statement, a
+// known, accepted residual gap (internal/app/automation/doc.go's own
+// "closeInvocation's own Close call is not part of that same transaction"
+// section, mirroring app/imagebuild/doc.go's own analogous claim-crash-gap
+// precedent), not this Step's own scope to close.
 func (s *AutomationInvocationStore) WithTx(tx pgx.Tx) *AutomationInvocationStore {
 	return &AutomationInvocationStore{q: s.q.WithTx(tx)}
 }
