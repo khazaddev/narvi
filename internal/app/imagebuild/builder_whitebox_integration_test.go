@@ -21,139 +21,32 @@ package imagebuild
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
-	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"golang.org/x/sync/errgroup"
 
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/migrations"
 )
 
-// newWhiteboxTestPool duplicates builder_integration_test.go's own
-// newTestPool -- deliberately: that helper is unexported in a DIFFERENT
-// test package (imagebuild_test), so this white-box package (imagebuild)
-// cannot import it, mirroring this codebase's own established "small,
-// deliberately duplicated test helper" precedent (e.g. fakeSourceControl,
-// duplicated from sessionactor's own pushpr_integration_test.go).
+// newWhiteboxTestPool returns this package's own single, shared Postgres
+// pool -- started ONCE for the whole test binary by TestMain
+// (sharedpool_integration_test.go), not freshly per test/container as
+// this function used to do itself. Kept as a thin wrapper under its own
+// original name/signature so this file's own call sites keep compiling
+// unchanged. See sharedpool_integration_test.go's own top doc comment
+// for the full container-reuse story: why this file used to duplicate
+// builder_integration_test.go's own newTestPool at all (a reverse import
+// package imagebuild_test's own unexported helper Go does not allow),
+// and why sharing one container across the whole binary is safe now.
 func newWhiteboxTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	ctx := context.Background()
-
-	// startCtx bounds the container-startup call below via the ambient
-	// context (image pull + Docker daemon round trip + Postgres's own
-	// internal ready-wait) -- kept as defense in depth, but NOT solely
-	// relied upon any more: CI run 30834918806 showed this exact bound
-	// (added after CI run 30831633470's own ContainerStart hang) itself
-	// fail to actually cut the call off when the hang recurred one layer
-	// deeper, inside testcontainers-go's own wait.(*LogStrategy).
-	// WaitUntilReady -- the goroutine dump showed it looping on a 100ms
-	// poll for the FULL 10-minute panic window, never once observing
-	// ctx.Done(), despite this same context chain being correctly wired
-	// all the way through (confirmed directly: reproducing an
-	// impossible-to-satisfy wait condition locally against this exact
-	// call DOES correctly time out via this same context mechanism, at
-	// testcontainers' own hardcoded 60s deadline -- so the mechanism is
-	// sound in isolation, but evidently not dependable against whatever a
-	// genuinely stalled CI-runner Docker daemon does to it in practice).
-	//
-	// Rather than keep chasing exactly why context cancellation isn't
-	// always honored deep inside a third-party library under conditions
-	// this dev machine cannot reproduce, the startup call now ALSO runs on
-	// its own goroutine (via errgroup.Group.Go -- no naked `go` statement,
-	// §11) raced against an independent, plain time.After watchdog:
-	// whichever of "the call returned" or "the watchdog fired" happens
-	// first decides the outcome, with no dependency on any context
-	// cancellation actually being honored by anything downstream. If the
-	// watchdog wins, the goroutine is deliberately abandoned (leaked, not
-	// joined) rather than blocking this test's own cleanup on a call that
-	// has already demonstrated it can ignore its own cancellation signal.
-	startCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	const containerStartWatchdog = 2*time.Minute + 15*time.Second
-	type containerStartResult struct {
-		container *tcpostgres.PostgresContainer
-		err       error
-	}
-	startCh := make(chan containerStartResult, 1)
-	var startGroup errgroup.Group
-	startGroup.Go(func() error {
-		container, err := tcpostgres.Run(startCtx, "postgres:17-alpine",
-			tcpostgres.WithDatabase("narvi_test"),
-			tcpostgres.WithUsername("narvi"),
-			tcpostgres.WithPassword("narvi"),
-			tcpostgres.BasicWaitStrategies(),
-		)
-		startCh <- containerStartResult{container: container, err: err}
-		return nil
-	})
-
-	var container *tcpostgres.PostgresContainer
-	var err error
-	select {
-	case res := <-startCh:
-		container, err = res.container, res.err
-		if err != nil {
-			t.Fatalf("start postgres container: %v", err)
-		}
-	case <-time.After(containerStartWatchdog):
-		t.Fatalf("start postgres container: tcpostgres.Run did not return within %s -- Docker daemon likely "+
-			"stalled without honoring context cancellation (see this function's own doc comment)", containerStartWatchdog)
-	}
-	t.Cleanup(func() {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			t.Errorf("terminate container: %v", err)
-		}
-	})
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("connection string: %v", err)
-	}
-
-	migrateDB, err := sql.Open("pgx", connStr)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = migrateDB.Close() })
-
-	dbDriver, err := migratepg.WithInstance(migrateDB, &migratepg.Config{})
-	if err != nil {
-		t.Fatalf("migratepg.WithInstance: %v", err)
-	}
-	srcDriver, err := iofs.New(migrations.FS, ".")
-	if err != nil {
-		t.Fatalf("iofs.New: %v", err)
-	}
-	m, err := migrate.NewWithInstance("iofs", srcDriver, "pgx", dbDriver)
-	if err != nil {
-		t.Fatalf("migrate.NewWithInstance: %v", err)
-	}
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		t.Fatalf("migrate up: %v", err)
-	}
-
-	pool, err := narvipg.NewPool(ctx, connStr)
-	if err != nil {
-		t.Fatalf("NewPool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	return pool
+	return IntegrationTestPool(t)
 }
 
 // whiteboxFakeSourceControl is a minimal test-only ports.SourceControl,
