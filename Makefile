@@ -62,11 +62,23 @@ test-integration:
 # uncontended Docker daemon) instead of one `test-integration` on a single
 # runner, to claw back the wall-clock `-p 1` gave up above WITHOUT
 # reintroducing the same-host container contention that caused the hangs
-# -p 1 fixed in the first place: -p 1 stays exactly as-is *within* each
-# group below, only the four groups themselves run in parallel, on isolated
-# hosts. See ci.yml's own comment on the `test-integration` job for the
-# bin-packing rationale, the timing data it's based on, and how these four
-# groups were chosen.
+# -p 1 fixed in the first place. See ci.yml's own comment on the
+# `test-integration` job for the bin-packing rationale, the timing data
+# it's based on, and how these four groups were chosen.
+#
+# Groups 2-4 run at -p 2 (group 1 is httpapi alone -- a single package, so
+# -p has no effect there, left at -p 1). This was verified, not assumed:
+# group 3 alone ran 5 independent real CI repeats at -p 2 (4m56s-5m13s,
+# vs. a 7m32s -p 1 baseline -- a consistent ~33% improvement) with zero
+# hang recurrence before this was extended to groups 2 and 4 as well.
+# Groups 2 and 4 were not individually put through that same 5-repeat
+# verification -- the extension rests on group 3's result plus the same
+# per-VM isolation PR #133's own job-matrix split already provides (no
+# cross-group Docker daemon contention, only WITHIN-group contention is
+# still possible at -p 2). If a hang symptom (a "test timed out after
+# 10m0s" panic) resurfaces on group 2 or 4 specifically, that's a real
+# signal this extension went too far for those groups' own package mix --
+# drop that one group back to -p 1 rather than reverting all of them.
 #
 # Groups 1-3 are deliberately short, explicit package lists -- the handful
 # of packages heavy enough to matter for balancing. Group 4 is everything
@@ -98,17 +110,17 @@ test-integration-group-1:
 	go test -tags=integration -race -p 1 $(INTEGRATION_GROUP_1)
 
 test-integration-group-2:
-	go test -tags=integration -race -p 1 $(INTEGRATION_GROUP_2)
+	go test -tags=integration -race -p 2 $(INTEGRATION_GROUP_2)
 
 test-integration-group-3:
-	go test -tags=integration -race -p 1 $(INTEGRATION_GROUP_3)
+	go test -tags=integration -race -p 2 $(INTEGRATION_GROUP_3)
 
 test-integration-group-4:
 	@tmp="$$(mktemp)"; \
 	printf '%s\n' $(INTEGRATION_GROUP_1) $(INTEGRATION_GROUP_2) $(INTEGRATION_GROUP_3) > "$$tmp"; \
 	pkgs="$$(go list -tags=integration ./... | grep -vxF -f "$$tmp")"; \
 	rm -f "$$tmp"; \
-	go test -tags=integration -race -p 1 $$pkgs
+	go test -tags=integration -race -p 2 $$pkgs
 
 # dev is a LOCAL DEV convenience only (docker-compose.dev.yml), distinct
 # from the self-host production story (§12.1: "one binary + Postgres") —

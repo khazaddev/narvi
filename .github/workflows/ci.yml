@@ -175,13 +175,13 @@ jobs:
   # wall-clock ba24c5d's `-p 1` added, WITHOUT reintroducing the host-Docker
   # contention `-p 1` was fixing (see that commit's own Makefile doc comment
   # for the full incident history: three real CI hangs, three different
-  # testcontainers-go internal call sites, one shared root cause). -p 1
-  # stays exactly as-is *within* each group's own `go test` invocation
-  # below (see Makefile's test-integration-group-N targets) -- only the
-  # four groups now run as separate GITHUB ACTIONS JOBS, each on its own
-  # runner VM with its own, uncontended Docker daemon, so there is no
-  # cross-group resource sharing the way there was when everything ran
-  # inside one job/VM.
+  # testcontainers-go internal call sites, one shared root cause). Each
+  # group now runs as its own GITHUB ACTIONS JOB, each on its own runner
+  # VM with its own, uncontended Docker daemon, so there is no cross-group
+  # resource sharing the way there was when everything ran inside one
+  # job/VM -- see Makefile's own comment above the test-integration-
+  # group-N targets for the WITHIN-group -p value each group actually
+  # runs at (verified per group, not uniform across all four).
   #
   # Groups are bin-packed by measured per-package duration (real green CI
   # run 30875940504, 2026-08-04, the merge of ba24c5d itself onto main):
