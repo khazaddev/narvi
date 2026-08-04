@@ -1,0 +1,37 @@
+-- Queries backing internal/adapters/outbound/postgres.
+-- ReleaseManifestPendingStore (blocking-finding fix #1, "release PR
+-- review", §15.2) -- see migrations/000050_release_manifest_pending.up.sql's
+-- own doc comment for the table's full design and the "why" behind this
+-- fix.
+
+-- name: CreateReleaseManifestPending :one
+-- Written by internal/adapters/inbound/github's own webhook handler,
+-- inline, immediately before its own fast ack -- deliberately as cheap as
+-- a single INSERT (see the table's own doc comment for why the ACTUAL
+-- check work never runs on this same request path).
+INSERT INTO release_manifest_pending (session_id, owner, repo, pr_number, base_ref, head_ref, correlation_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING *;
+
+-- name: ClaimDueReleaseManifestPending :many
+-- internal/app/releasereview.Worker's own poll query: atomically claims
+-- up to $1 rows, oldest-first, by DELETING them in the SAME statement a
+-- SELECT ... FOR UPDATE SKIP LOCKED subquery identifies -- a single round
+-- trip, no separate explicit transaction required (a plain DELETE is
+-- already atomic). Claiming a row this way IS this table's one and only
+-- "attempt" -- there is no revisit, no retry, no backoff (see the
+-- table's own doc comment for why releasereview.Run itself has no
+-- failure signal to record one against). FOR UPDATE SKIP LOCKED still
+-- matters even though this is a DELETE, not an in-place claim UPDATE: it
+-- is what lets two concurrent pods' own Worker.PumpOnce calls each claim
+-- a DISJOINT batch instead of blocking on (or double-claiming) the same
+-- row -- mirrors ListDuePendingOutboxEntries' own identical multi-pod
+-- reasoning (queries/outbox.sql).
+DELETE FROM release_manifest_pending
+WHERE id IN (
+    SELECT id FROM release_manifest_pending
+    ORDER BY created_at
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING *;

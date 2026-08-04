@@ -168,22 +168,27 @@ type Config struct {
 	RepoSettings  *postgres.RepoSettingsStore
 	AuditLog      *postgres.AuditLogStore
 
-	// SourceControl/Outbox/ReleaseLabel/ReleaseBranchPattern (Step 50,
-	// "release PR review", §15) back triggerReleaseManifestCheckBestEffort
-	// (releasemanifest.go): SourceControl is the SAME *githubapi.Adapter
-	// instance PullRequests/Comments above already wire (it satisfies
-	// internal/app/releasereview.MergedPRLister directly, needing no
-	// adapter-side change beyond what this Step already adds); Outbox is
-	// where the manifest check's own outbox row is enqueued.
-	// ReleaseLabel/ReleaseBranchPattern are this deployment's own
-	// configured release-PR detection values (platform.Config.
+	// PendingChecks/ReleaseLabel/ReleaseBranchPattern (Step 50, "release
+	// PR review", §15; PendingChecks itself is blocking-finding fix #1)
+	// back triggerReleaseManifestCheckBestEffort (releasemanifest.go):
+	// PendingChecks is where a detected release PR's own manifest-check
+	// request is durably enqueued (internal/app/releasereview.Enqueue) --
+	// a single, fast, cheap INSERT into release_manifest_pending; the
+	// ACTUAL check (ListMergedBetween, up to ~80+ sequential GitHub API
+	// calls) is run LATER, by a separate internal/app/releasereview.Worker
+	// background loop, never inline on this webhook request's own
+	// context -- see migrations/000050_release_manifest_pending.up.sql's
+	// own doc comment for the full "why" (this fixes a real bug: the
+	// check used to run synchronously here, and silently, permanently
+	// died whenever a webhook delivery outlasted GitHub's own ~10s
+	// timeout). ReleaseLabel/ReleaseBranchPattern are this deployment's
+	// own configured release-PR detection values (platform.Config.
 	// GitHubReleaseLabel/GitHubReleaseBranchPattern). Nil-safe: a nil
-	// SourceControl or Outbox (this package's own handler_test.go, or any
-	// other minimal wiring that doesn't care about this Step) simply
-	// skips this entirely -- see triggerReleaseManifestCheckBestEffort's
-	// own doc comment.
-	SourceControl        releasereview.MergedPRLister
-	Outbox               releasereview.OutboxEnqueuer
+	// PendingChecks (this package's own handler_test.go, or any other
+	// minimal wiring that doesn't care about this Step) simply skips
+	// this entirely -- see triggerReleaseManifestCheckBestEffort's own
+	// doc comment.
+	PendingChecks        releasereview.PendingEnqueuer
 	ReleaseLabel         string
 	ReleaseBranchPattern string
 }
