@@ -9,7 +9,6 @@
 package linear_test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -309,9 +308,17 @@ func TestWebhookHandler_Prompted_LogsSessionAndTurnID(t *testing.T) {
 		t.Fatalf("mark fixture turn completed: %v", err)
 	}
 
-	var logBuf bytes.Buffer
+	// syncLogBuffer (webhook_integration_test.go), not a bare bytes.Buffer:
+	// this test's own reply below creates a turn, which fires the SAME
+	// fire-and-forget GetOrSpawn+EnsureDispatched dispatch trigger every
+	// turn-creation call site uses -- the session's Actor can still be
+	// mid-flight on its own background goroutine, logging through this
+	// SAME redirected default logger, while this test's own goroutine
+	// reads logOutput below. See syncLogBuffer's own doc comment for the
+	// full race (caught by -race in CI run 30887614911, this exact test).
+	logBuf := &syncLogBuffer{}
 	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 
 	promptedBody := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, replierID, "please continue")

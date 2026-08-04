@@ -198,9 +198,19 @@ func TestWebhookHandler_Prompted_RevisePrefix_NonEmptyFeedback_LogsPlanModeTrueO
 		t.Fatalf("seed awaiting_approval plan: %v", err)
 	}
 
-	var logBuf strings.Builder
+	// syncLogBuffer (webhook_integration_test.go), not a bare
+	// strings.Builder: this test's own reply below creates a plan-mode
+	// turn, which fires the SAME fire-and-forget GetOrSpawn+EnsureDispatched
+	// dispatch trigger every turn-creation call site uses -- the session's
+	// Actor can still be mid-flight on its own background goroutine,
+	// logging through this SAME redirected default logger, while this
+	// test's own goroutine reads logOutput below. See syncLogBuffer's own
+	// doc comment for the full race (an identical instance of the one
+	// caught by -race in CI run 30887614911, in this package's own
+	// TestWebhookHandler_Prompted_LogsSessionAndTurnID).
+	logBuf := &syncLogBuffer{}
 	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 
 	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, replierID, "revise: drop the retry logic")
@@ -272,9 +282,18 @@ func TestWebhookHandler_Prompted_RevisePrefix_EmptyFeedback_LogsAtInfoNotWarn(t 
 		t.Fatalf("seed awaiting_approval plan: %v", err)
 	}
 
-	var logBuf strings.Builder
+	// syncLogBuffer (webhook_integration_test.go), not a bare
+	// strings.Builder -- this specific reply hits the emptyReviseFeedback
+	// early-return branch (webhook.go), which never reaches CreateTurnCore
+	// so no Actor is spawned for THIS call, but this file's sibling test
+	// just above (identical capture pattern, one webhook call away) does
+	// race exactly the way syncLogBuffer's own doc comment describes; kept
+	// consistent here too rather than leaving a second, currently-dormant
+	// instance of the same unsafe-shared-writer pattern in this file for a
+	// future edit to wake back up.
+	logBuf := &syncLogBuffer{}
 	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 
 	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, replierID, "revise:")
