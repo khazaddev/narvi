@@ -120,7 +120,7 @@ func TestSentinelAutoFixNotifier_SpawnsChildSessionAndUpdatesStores(t *testing.T
 	sentinelFixes := narvipg.NewSentinelFixStore(pool)
 	reviewFindings := narvipg.NewReviewFindingStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestSentinelAutoFixNotifier_ResolveBranchSHAFails_NeverSpawnsChildSession(t
 	sentinelFixes := narvipg.NewSentinelFixStore(pool)
 	reviewFindings := narvipg.NewReviewFindingStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestSentinelAutoFixNotifier_CreateBranchFails_NeverSpawnsChildSession(t *te
 	sentinelFixes := narvipg.NewSentinelFixStore(pool)
 	reviewFindings := narvipg.NewReviewFindingStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

@@ -88,7 +88,13 @@ func TestCreatePR_4xxMapsToRealError(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"message": "A pull request already exists for acme:narvi/session-123.",
+			// Deliberately NOT an "already exists" message -- that fixture
+			// now collides with CreatePR's own idempotency path (see
+			// TestCreatePR_AlreadyExists_* below). This is a genuinely
+			// non-idempotent validation failure, so this test keeps
+			// exercising real 4xx-to-CreatePRError mapping instead of the
+			// recovery path.
+			"message": "Validation Failed: head and base branches must be different.",
 		})
 	}))
 	defer server.Close()
@@ -116,6 +122,115 @@ func TestCreatePR_4xxMapsToRealError(t *testing.T) {
 	}
 	if prErr.Message == "" {
 		t.Error("CreatePRError.Message is empty, want GitHub's own error message")
+	}
+}
+
+// TestCreatePR_AlreadyExists_RecoversExistingOpenPR proves CreatePR's own
+// idempotency path: a 422 "already exists" response is followed by a real
+// GET /pulls?head=...&base=...&state=open lookup, and the matching PR's own
+// Number/URL are returned with a nil error -- never the original 422.
+func TestCreatePR_AlreadyExists_RecoversExistingOpenPR(t *testing.T) {
+	t.Parallel()
+
+	var gotListPath string
+	var gotQuery url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/pulls":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"message": "A pull request already exists for acme:narvi/session-123.",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls":
+			gotListPath = r.URL.Path
+			gotQuery = r.URL.Query()
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"number": 77, "html_url": "https://github.com/acme/widgets/pull/77"},
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	ref, err := adapter.CreatePR(context.Background(), ports.CreatePRSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Head:  "narvi/session-123",
+		Base:  "main",
+		Title: "Narvi: do the thing",
+		Token: "gho_realtoken",
+	})
+	if err != nil {
+		t.Fatalf("CreatePR() error = %v, want nil (recovered from the already-exists 422)", err)
+	}
+	if ref.Number != 77 || ref.URL != "https://github.com/acme/widgets/pull/77" {
+		t.Errorf("CreatePR() = %+v, want the recovered PR's own Number/URL", ref)
+	}
+	if gotListPath == "" {
+		t.Fatal("no GET /pulls lookup was ever made")
+	}
+	if got := gotQuery.Get("head"); got != "acme:narvi/session-123" {
+		t.Errorf("lookup head query = %q, want %q", got, "acme:narvi/session-123")
+	}
+	if got := gotQuery.Get("base"); got != "main" {
+		t.Errorf("lookup base query = %q, want %q", got, "main")
+	}
+	if got := gotQuery.Get("state"); got != "open" {
+		t.Errorf("lookup state query = %q, want %q", got, "open")
+	}
+}
+
+// TestCreatePR_AlreadyExists_LookupFails_ReturnsOriginalError proves that
+// when the recovery lookup itself finds nothing, CreatePR falls back to the
+// ORIGINAL CreatePRError (status + message), never a different/wrapped
+// lookup error -- a caller must never see this idempotency path make things
+// worse than the pre-existing behavior.
+func TestCreatePR_AlreadyExists_LookupFails_ReturnsOriginalError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"message": "A pull request already exists for acme:narvi/session-123.",
+			})
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode([]map[string]any{}) // no matching open PR
+		}
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, err := adapter.CreatePR(context.Background(), ports.CreatePRSpec{
+		Owner: "acme",
+		Repo:  "widgets",
+		Head:  "narvi/session-123",
+		Base:  "main",
+		Title: "Narvi: do the thing",
+		Token: "gho_realtoken",
+	})
+	if err == nil {
+		t.Fatal("CreatePR() error = nil, want the original CreatePRError when the lookup finds nothing")
+	}
+
+	var prErr *githubapi.CreatePRError
+	if !asCreatePRError(err, &prErr) {
+		t.Fatalf("CreatePR() error = %v (%T), want *githubapi.CreatePRError (the ORIGINAL error, not a lookup error)", err, err)
+	}
+	if prErr.Status != http.StatusUnprocessableEntity {
+		t.Errorf("CreatePRError.Status = %d, want %d (the original status)", prErr.Status, http.StatusUnprocessableEntity)
+	}
+	if !strings.Contains(strings.ToLower(prErr.Message), "already exists") {
+		t.Errorf("CreatePRError.Message = %q, want it to still contain GitHub's original message", prErr.Message)
 	}
 }
 

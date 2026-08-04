@@ -4,12 +4,13 @@
 //
 // # Why this package exists
 //
-// internal/adapters/inbound/httpapi already owns one provenance_tag value
-// (scopedEnvironmentProvenanceTag, create.go, "scoped_environment") as an
-// unexported constant, since it is the only package that ever needed to
-// read or write it -- until this Step. Step 48's own sentinel-auto-fix
-// flow needs a SECOND, distinct provenance_tag value ("sentinel_auto_fix")
-// checked from THREE places that cannot import each other:
+// internal/adapters/inbound/httpapi originally owned the ONE
+// provenance_tag value this package started with (scopedEnvironmentProvenanceTag,
+// create.go, "scoped_environment") as an unexported constant, since it was
+// the only package that ever needed to read or write it -- until Step 48
+// below. Step 48's own sentinel-auto-fix flow needed a SECOND, distinct
+// provenance_tag value ("sentinel_auto_fix") checked from THREE places
+// that cannot import each other:
 // internal/app/sessionactor (dispatch.go, to select the OpenCode
 // capability-restricted agent; pushpr.go, to route a fix session's own PR
 // creation through the amendment-mandated bypass of resolvePRBaseBranch,
@@ -27,7 +28,48 @@
 // it) and NOT internal/domain/environment (provenance_tag values are not
 // all environment-scoping-related -- SentinelAutoFix has nothing to do
 // with path-scoping/mock-config).
+//
+// Step 49 ("handoff-readiness sentinel", §14.4) adds ScopedEnvironment
+// below -- the SAME "scoped_environment" value httpapi/create.go already
+// wrote under its own private name, now promoted here (create.go's own
+// constant is retired in favor of this one, never left as a second,
+// independently-maintained copy of the same string) because a FOURTH
+// place now needs to read it and cannot import httpapi:
+// internal/app/sessionactor's own handoff-sentinel orchestration
+// (handoffsentinel.go), invoked from pushpr.go's createPRBestEffort right
+// after a scoped session's PR is created -- httpapi already cannot be
+// imported from sessionactor (github/coalesce.go's own identical
+// import-cycle constraint, SentinelAutoFix's doc comment above), and
+// sessionactor is exactly where §14.1 says this check belongs: "sessions
+// created under a scoped Environment carry a provenance tag... so the
+// label automation and the handoff sentinel (§14.4) can act on it without
+// re-deriving intent."
 package provenance
+
+// ScopedEnvironment is the sessions.provenance_tag value a session created
+// under a path_scope'd Environment carries (§14.1) -- set once, at
+// session-creation time, whenever environment.RequiresProvenanceTag
+// reports true for that Environment (httpapi/create.go's own
+// buildSessionInsertParams). Two independent things key off this exact
+// value:
+//
+//  1. §14.1's own label-automation intent (not built by any Step so far).
+//  2. §14.4's own handoff-readiness sentinel (Step 49): sessionactor's own
+//     runHandoffSentinelBestEffort (handoffsentinel.go) checks this tag on
+//     the session that just created a PR before doing ANY further work --
+//     an ordinary (nil-tagged) session's PR is completely untouched, no
+//     extra API calls, no label, no comment.
+const ScopedEnvironment = "scoped_environment"
+
+// IsScopedEnvironment reports whether tag (a session's own, possibly-nil
+// sessions.provenance_tag, sqlcgen.Session.ProvenanceTag's own *string
+// shape) names a session created under a scoped (path_scope'd)
+// Environment. A nil tag (every ordinary, unscoped session) is never
+// mistaken for one -- mirrors IsSentinelAutoFix's own identical
+// discipline below.
+func IsScopedEnvironment(tag *string) bool {
+	return tag != nil && *tag == ScopedEnvironment
+}
 
 // SentinelAutoFix is the sessions.provenance_tag value a sentinel-auto-fix
 // child session (§17.2) is created with, set once, at spawn time

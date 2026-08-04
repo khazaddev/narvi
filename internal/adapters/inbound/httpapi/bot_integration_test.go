@@ -159,7 +159,7 @@ func TestCreateSessionForBot_CreatesNullCreatorSession(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestCreateSessionForBot_ValidationFailureSurfacesAsError(t *testing.T) {
 	turns := narvipg.NewTurnStore(pool)
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestCreateTurnForBot_EnqueuesTurnOnExistingSession(t *testing.T) {
 	environments := narvipg.NewEnvironmentStore(pool)
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestCreateTurnForBot_WritesAuditLogRowWithActor(t *testing.T) {
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 	users := narvipg.NewUserStore(pool)
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestCreateTurnForBot_PlanAwaitingApproval_PreservesSentinel(t *testing.T) {
 	environments := narvipg.NewEnvironmentStore(pool)
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
