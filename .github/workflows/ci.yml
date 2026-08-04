@@ -83,6 +83,14 @@ jobs:
             echo "$warned advisory scope warning(s) above — this job never fails the build."
           fi
 
+  # ci runs everything that's cheap and needs no Docker: vet, both linters,
+  # the plain (non-integration) unit test suite, and the contracts
+  # codegen-drift/typecheck check. test-integration (below) depends on this
+  # job passing before it spends any matrix-runner/Docker time, preserving
+  # the previous single-job behavior where a vet/lint/test failure stopped
+  # the job before integration tests or contracts-check ever ran -- it just
+  # now fails a few minutes faster, since contracts-check no longer waits
+  # behind test-integration's own ~30 minutes to run.
   ci:
     runs-on: ubuntu-latest
     steps:
@@ -135,6 +143,11 @@ jobs:
       # global installs (no project package.json to record the approval
       # against, npm/cli#9457) -- the actual fix for a one-off `-g`
       # install is the --allow-scripts=<pkg> flag.
+      #
+      # Needed here too (not just in test-integration below): a handful of
+      # opencode/opencodeproc test files spawn a real `opencode serve`
+      # process with no `integration` build-tag guard, so they also run
+      # under plain `make test`.
       - name: Install OpenCode
         # Deliberate pin (§7 "Pin the OpenCode version"): bump only via a
         # dedicated future PR once a newer version has itself been validated,
@@ -155,8 +168,74 @@ jobs:
       - name: Test
         run: make test
 
-      - name: Test (integration)
-        run: make test-integration
-
       - name: Contracts (schema codegen drift + TS typecheck)
         run: make contracts-check
+
+  # test-integration restores job-level parallelism for the ~30 minutes of
+  # wall-clock ba24c5d's `-p 1` added, WITHOUT reintroducing the host-Docker
+  # contention `-p 1` was fixing (see that commit's own Makefile doc comment
+  # for the full incident history: three real CI hangs, three different
+  # testcontainers-go internal call sites, one shared root cause). -p 1
+  # stays exactly as-is *within* each group's own `go test` invocation
+  # below (see Makefile's test-integration-group-N targets) -- only the
+  # four groups now run as separate GITHUB ACTIONS JOBS, each on its own
+  # runner VM with its own, uncontended Docker daemon, so there is no
+  # cross-group resource sharing the way there was when everything ran
+  # inside one job/VM.
+  #
+  # Groups are bin-packed by measured per-package duration (real green CI
+  # run 30875940504, 2026-08-04, the merge of ba24c5d itself onto main):
+  # internal/adapters/inbound/httpapi alone is ~508s -- roughly as heavy as
+  # everything else in the repo COMBINED (~1270s across the other ~70
+  # packages), because it spins up its own throwaway Postgres container
+  # per test function (~170 of them, no reuse) -- so it gets its own group,
+  # and the rest are bin-packed (longest-processing-time greedy) into three
+  # more groups of ~420s each. That caps the matrix at 4 legs, each roughly
+  # comparable to httpapi's own ~508s floor: adding a 5th+ leg to shave the
+  # other three groups down further wouldn't shorten the matrix's overall
+  # wall-clock (still bottlenecked by httpapi's own single-package ~508s),
+  # it would just multiply GitHub Actions' fixed per-leg overhead (checkout
+  # + Go setup + OpenCode install, ~30-45s each) for no benefit -- see this
+  # PR's own description for the full timing table this was based on.
+  #
+  # The exact package groupings live in the Makefile (test-integration-
+  # group-1..4), not here, so there's one source of truth for "which
+  # packages are in which group" -- see the Makefile's own comment above
+  # those targets for how group 4 (the catch-all for everything not
+  # explicitly bin-packed into 1-3) is computed, so a newly added package
+  # is never silently skipped.
+  test-integration:
+    needs: ci
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      # See the "ci" job's own "Install OpenCode" step for the full
+      # rationale (Step 17 §7, the --allow-scripts requirement, the pinned
+      # version). Duplicated here rather than shared because each matrix
+      # leg is a fully independent runner VM -- this group doesn't need
+      # contracts/'s npm dependencies (that's contracts-check only, which
+      # stays in the "ci" job), just the opencode binary itself for
+      # whichever of groups 2/3/4 exercises the opencode/opencodeproc
+      # packages.
+      - name: Install OpenCode
+        run: npm install -g --allow-scripts=opencode-ai opencode-ai@1.17.15
+
+      - name: Test (integration, group ${{ matrix.group }})
+        run: make test-integration-group-${{ matrix.group }}
