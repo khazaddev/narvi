@@ -5,10 +5,12 @@ package automation_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -621,5 +623,127 @@ func TestPumpOnce_SkipsFanOutForAPausedAutomation(t *testing.T) {
 	runs = f.listRunsForInvocation(t, inv.ID)
 	if len(runs) != 1 {
 		t.Fatalf("got %d runs after resume, want 1", len(runs))
+	}
+}
+
+// TestPumpOnce_RunsCreateFailureRecordsFailedRunNotStrandedInvocation is
+// fix #1's own regression test: createRunAndSession's own runs.Create
+// failure branch (fanout.go) used to bare-return with no run row recorded
+// at all for that target -- since total_runs is fixed at len(targets) when
+// the invocation is created (invocationenqueue.go), a target with NO run
+// row, terminal or otherwise, means EvaluateInvocationOutcome's own
+// "terminalRuns >= totalRuns" check can never reach true, stranding the
+// WHOLE invocation in 'pending' forever (no sweep anywhere scans pending
+// invocations for this).
+//
+// A temporary CHECK constraint forbidding status='starting' forces every
+// createRunAndSession attempt's own primary insert (which always uses
+// status='starting') to fail deterministically, without needing a fault-
+// injection seam -- while still permitting createFailedRun's own fallback
+// insert (status='failed') straight through, letting this test observe
+// exactly the "Create failed -> createFailedRun records a failed run"
+// recovery path fix #1 adds.
+func TestPumpOnce_RunsCreateFailureRecordsFailedRunNotStrandedInvocation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	if _, err := f.pool.Exec(ctx, "ALTER TABLE automation_runs ADD CONSTRAINT test_reject_starting CHECK (status <> 'starting')"); err != nil {
+		t.Fatalf("add test constraint: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := f.pool.Exec(context.Background(), "ALTER TABLE automation_runs DROP CONSTRAINT IF EXISTS test_reject_starting"); err != nil {
+			t.Errorf("drop test constraint: %v", err)
+		}
+	})
+
+	auto, targets := f.createAutomation(t, "runs.Create failure test", 2)
+	inv := f.createInvocation(t, auto.ID, targets)
+
+	if err := f.engine.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	runs := f.listRunsForInvocation(t, inv.ID)
+	if len(runs) != 2 {
+		t.Fatalf("got %d automation_runs rows, want 2 -- every target must still get exactly one recorded run even when the primary insert fails", len(runs))
+	}
+	for _, run := range runs {
+		if run.Status != sqlcgen.AutomationRunStatusFailed {
+			t.Errorf("run %s status = %s, want failed (recorded via the createFailedRun fallback)", run.ID.String(), run.Status)
+		}
+		if run.SessionID.Valid {
+			t.Errorf("run %s has a linked session, want none -- its own tx (session+turn included) was rolled back when the primary insert failed", run.ID.String())
+		}
+	}
+
+	gotInv, err := f.invocations.Get(ctx, inv.ID)
+	if err != nil {
+		t.Fatalf("get invocation: %v", err)
+	}
+	if gotInv.Status != sqlcgen.AutomationInvocationStatusFailed {
+		t.Fatalf("invocation status = %s, want failed -- it must NOT be stranded pending forever", gotInv.Status)
+	}
+	if !gotInv.ClosedAt.Valid {
+		t.Fatalf("invocation closed_at not set")
+	}
+	if !gotInv.FailureCountedAt.Valid {
+		t.Fatalf("failure_counted_at not set for a failed invocation")
+	}
+
+	gotAuto, err := f.automations.Get(ctx, auto.ID)
+	if err != nil {
+		t.Fatalf("get automation: %v", err)
+	}
+	if gotAuto.ConsecutiveFailures != 1 {
+		t.Fatalf("consecutive_failures = %d, want 1", gotAuto.ConsecutiveFailures)
+	}
+}
+
+// TestAutomationRunStore_CreateIfAbsent_DuplicateTargetIsANoOp proves the
+// idempotent fallback fix #1's commit-failure branch relies on:
+// automation_runs_invocation_target_uniq (migrations/000054) plus
+// CreateAutomationRunIfAbsent's own "ON CONFLICT ... DO NOTHING" makes a
+// second insert for the SAME (invocation_id, target) a safe no-op --
+// exactly the scenario an ambiguous tx.Commit failure (the earlier
+// transaction actually succeeded server-side despite the client observing
+// an error) produces when createFailedRun retries.
+func TestAutomationRunStore_CreateIfAbsent_DuplicateTargetIsANoOp(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	auto, targets := f.createAutomation(t, "duplicate target no-op test", 1)
+	inv := f.createInvocation(t, auto.ID, targets)
+
+	targetJSON, err := json.Marshal([]domainautomation.Target{targets[0]})
+	if err != nil {
+		t.Fatalf("marshal target: %v", err)
+	}
+
+	first, err := f.runs.CreateIfAbsent(ctx, sqlcgen.CreateAutomationRunParams{
+		InvocationID: inv.ID,
+		AutomationID: auto.ID,
+		Target:       targetJSON,
+		Status:       sqlcgen.AutomationRunStatusFailed,
+	})
+	if err != nil {
+		t.Fatalf("first CreateIfAbsent: %v", err)
+	}
+
+	_, err = f.runs.CreateIfAbsent(ctx, sqlcgen.CreateAutomationRunParams{
+		InvocationID: inv.ID,
+		AutomationID: auto.ID,
+		Target:       targetJSON,
+		Status:       sqlcgen.AutomationRunStatusFailed,
+	})
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("second CreateIfAbsent error = %v, want pgx.ErrNoRows (a safe no-op for an already-recorded target)", err)
+	}
+
+	runs := f.listRunsForInvocation(t, inv.ID)
+	if len(runs) != 1 {
+		t.Fatalf("got %d automation_runs rows for this target, want exactly 1 -- the duplicate insert must be a no-op, not a second row", len(runs))
+	}
+	if runs[0].ID != first.ID {
+		t.Fatalf("existing row's own ID changed -- the duplicate insert must not have touched it")
 	}
 }

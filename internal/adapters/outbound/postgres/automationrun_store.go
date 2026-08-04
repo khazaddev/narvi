@@ -40,6 +40,16 @@ func (s *AutomationRunStore) Create(ctx context.Context, arg sqlcgen.CreateAutom
 	return s.q.CreateAutomationRun(ctx, arg)
 }
 
+// CreateIfAbsent inserts a brand-new automation_runs row for arg's own
+// (invocation_id, target), UNLESS a row for that exact pair already
+// exists ("ON CONFLICT ... DO NOTHING", automation_runs_invocation_target_
+// uniq, migrations/000054) -- pgx.ErrNoRows means one already does (see
+// CreateAutomationRunIfAbsent's own generated doc comment for the
+// ambiguous-commit hazard this backs).
+func (s *AutomationRunStore) CreateIfAbsent(ctx context.Context, arg sqlcgen.CreateAutomationRunParams) (sqlcgen.AutomationRun, error) {
+	return s.q.CreateAutomationRunIfAbsent(ctx, sqlcgen.CreateAutomationRunIfAbsentParams(arg))
+}
+
 // Get fetches the automation_runs row for id, or pgx.ErrNoRows if none
 // exists.
 func (s *AutomationRunStore) Get(ctx context.Context, id pgtype.UUID) (sqlcgen.AutomationRun, error) {

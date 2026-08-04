@@ -13,6 +13,25 @@ INSERT INTO automation_runs (invocation_id, automation_id, target, session_id, s
 VALUES ($1, $2, $3, sqlc.narg('session_id'), $4)
 RETURNING *;
 
+-- name: CreateAutomationRunIfAbsent :one
+-- The IDEMPOTENT counterpart to CreateAutomationRun immediately above --
+-- app/automation's own createFailedRun (fanout.go) uses this one
+-- exclusively, never the plain INSERT, because createFailedRun is also
+-- the recovery path for createRunAndSession's own AMBIGUOUS tx.Commit
+-- failure (Postgres may have committed server-side despite the client
+-- observing an error, so a run row for this exact target may already
+-- exist). "ON CONFLICT (invocation_id, (target::text)) DO NOTHING",
+-- backed by automation_runs_invocation_target_uniq (migrations/000054),
+-- makes retrying safe: RETURNING then yields zero rows -- surfaced to the
+-- caller as pgx.ErrNoRows, the SAME "lost the race, harmless no-op" idiom
+-- every other CAS-guarded write in this package already treats
+-- identically (this file's own ListInFlightRuns/TerminalizeAutomationRun
+-- doc comments).
+INSERT INTO automation_runs (invocation_id, automation_id, target, session_id, status)
+VALUES ($1, $2, $3, sqlc.narg('session_id'), $4)
+ON CONFLICT (invocation_id, (target::text)) DO NOTHING
+RETURNING *;
+
 -- name: GetAutomationRun :one
 SELECT * FROM automation_runs
 WHERE id = $1;

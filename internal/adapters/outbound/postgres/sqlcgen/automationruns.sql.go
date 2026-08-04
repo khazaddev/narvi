@@ -83,6 +83,58 @@ func (q *Queries) CreateAutomationRun(ctx context.Context, arg CreateAutomationR
 	return i, err
 }
 
+const createAutomationRunIfAbsent = `-- name: CreateAutomationRunIfAbsent :one
+INSERT INTO automation_runs (invocation_id, automation_id, target, session_id, status)
+VALUES ($1, $2, $3, $5, $4)
+ON CONFLICT (invocation_id, (target::text)) DO NOTHING
+RETURNING id, invocation_id, automation_id, target, session_id, status, started_at, running_at, completed_at, created_at
+`
+
+type CreateAutomationRunIfAbsentParams struct {
+	InvocationID pgtype.UUID         `json:"invocation_id"`
+	AutomationID pgtype.UUID         `json:"automation_id"`
+	Target       []byte              `json:"target"`
+	Status       AutomationRunStatus `json:"status"`
+	SessionID    pgtype.UUID         `json:"session_id"`
+}
+
+// The IDEMPOTENT counterpart to CreateAutomationRun immediately above --
+// app/automation's own createFailedRun (fanout.go) uses this one
+// exclusively, never the plain INSERT, because createFailedRun is also
+// the recovery path for createRunAndSession's own AMBIGUOUS tx.Commit
+// failure (Postgres may have committed server-side despite the client
+// observing an error, so a run row for this exact target may already
+// exist). "ON CONFLICT (invocation_id, (target::text)) DO NOTHING",
+// backed by automation_runs_invocation_target_uniq (migrations/000054),
+// makes retrying safe: RETURNING then yields zero rows -- surfaced to the
+// caller as pgx.ErrNoRows, the SAME "lost the race, harmless no-op" idiom
+// every other CAS-guarded write in this package already treats
+// identically (this file's own ListInFlightRuns/TerminalizeAutomationRun
+// doc comments).
+func (q *Queries) CreateAutomationRunIfAbsent(ctx context.Context, arg CreateAutomationRunIfAbsentParams) (AutomationRun, error) {
+	row := q.db.QueryRow(ctx, createAutomationRunIfAbsent,
+		arg.InvocationID,
+		arg.AutomationID,
+		arg.Target,
+		arg.Status,
+		arg.SessionID,
+	)
+	var i AutomationRun
+	err := row.Scan(
+		&i.ID,
+		&i.InvocationID,
+		&i.AutomationID,
+		&i.Target,
+		&i.SessionID,
+		&i.Status,
+		&i.StartedAt,
+		&i.RunningAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getAutomationRun = `-- name: GetAutomationRun :one
 SELECT id, invocation_id, automation_id, target, session_id, status, started_at, running_at, completed_at, created_at FROM automation_runs
 WHERE id = $1

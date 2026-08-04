@@ -2,9 +2,11 @@ package automation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
@@ -193,11 +195,37 @@ func (e *Engine) createRunAndSession(ctx context.Context, logger *slog.Logger, i
 		Status:       sqlcgen.AutomationRunStatusStarting,
 	}); err != nil {
 		logger.Error("automation: create run row failed", "error", err, "target", target.Name)
+		// The deferred rollback above is guaranteed to fire (committed is
+		// still false) -- this whole transaction, session/turn included, is
+		// definitely undone, so this target has NO run row at all yet.
+		// Unlike the tx.Commit branch below, there is nothing ambiguous
+		// here: falling through to createFailedRun's own pool-backed insert
+		// (outside this now-dead tx) is correct and complete, exactly like
+		// the pool.Begin/CreateSessionOnTx failure branches above.
+		e.createFailedRun(ctx, logger, inv, target)
 		return
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		logger.Error("automation: commit fan-out tx failed", "error", err, "target", target.Name)
+		// UNLIKE the runs.Create failure branch immediately above, a
+		// tx.Commit error is an AMBIGUOUS Postgres outcome: the server may
+		// have committed this transaction (run row, session, and turn all
+		// durably written) despite this client observing an error -- e.g. a
+		// connection drop after the server processed the COMMIT but before
+		// its acknowledgement made it back. Falling through to
+		// createFailedRun here is still required (recording zero runs for
+		// this target would strand this invocation in 'pending' forever,
+		// exactly like this file's own fanOut doc comment reasons about),
+		// but it must not risk a SECOND row for a target that may already
+		// have one. createFailedRun's own CreateIfAbsent call ("ON CONFLICT
+		// (invocation_id, (target::text)) DO NOTHING", backed by
+		// automation_runs_invocation_target_uniq, migrations/000054) makes
+		// this safe either way: if the earlier commit actually succeeded,
+		// this insert is a silent no-op (the real 'starting' row already
+		// exists); if it didn't, this insert lands for real as the target's
+		// only row, a RunStatusFailed one.
+		e.createFailedRun(ctx, logger, inv, target)
 		return
 	}
 	committed = true
@@ -213,14 +241,39 @@ func (e *Engine) createRunAndSession(ctx context.Context, logger *slog.Logger, i
 }
 
 // createFailedRun records a target this invocation could not even create a
-// session for as a RunStatusFailed run with no linked session (session_id
-// NULL) -- RunTriggerCreateFailed, applied directly at creation (Starting
-// is never observed for this row). Runs OUTSIDE any transaction on the
-// pool directly -- there is nothing left to make atomic with. Cascades to
-// closeout.go's own maybeCloseInvocation exactly like a normal
+// session for (or could not durably confirm a run row for -- see
+// createRunAndSession's own tx.Commit failure branch) as a RunStatusFailed
+// run with no linked session (session_id NULL) -- RunTriggerCreateFailed,
+// applied directly at creation (Starting is never observed for this row).
+// Runs OUTSIDE any transaction, via CreateIfAbsent's own idempotent insert
+// ("ON CONFLICT (invocation_id, (target::text)) DO NOTHING",
+// automation_runs_invocation_target_uniq, migrations/000054) on the pool
+// directly -- there is nothing left to make atomic with.
+//
+// Idempotent, deliberately: three of createRunAndSession's own five
+// failure branches reach here, and for TWO of them (pool.Begin,
+// CreateSessionOnTx) no row for this target could possibly exist yet, so
+// the ON CONFLICT clause is simply never exercised -- but for the THIRD
+// (tx.Commit, an ambiguous Postgres outcome -- the earlier transaction may
+// have actually committed server-side despite the client observing an
+// error) a row MAY already exist. pgx.ErrNoRows here means exactly that:
+// this target's own run was already durably recorded by the commit this
+// call is recovering from, and this call is a harmless no-op -- the SAME
+// "lost the race" outcome every other CAS-guarded write in this package
+// already treats identically. It deliberately does NOT cascade to
+// maybeCloseInvocation in that case: the pre-existing row this lost race
+// against is virtually always a 'starting' row (the tx.Commit branch's own
+// normal, successful outcome), still non-terminal, and will reach
+// maybeCloseInvocation on its own via the normal reconcile/sweep path --
+// calling it here too would be a redundant, harmless-but-pointless extra
+// query, not a correctness issue, but there is no run to report a NEW
+// terminalization for either way.
+//
+// When a row is genuinely and newly created here (the common case), it
+// cascades to closeout.go's own maybeCloseInvocation exactly like a normal
 // terminalization does.
 func (e *Engine) createFailedRun(ctx context.Context, logger *slog.Logger, inv sqlcgen.AutomationInvocation, target domainautomation.Target) {
-	run, err := e.runs.Create(ctx, sqlcgen.CreateAutomationRunParams{
+	run, err := e.runs.CreateIfAbsent(ctx, sqlcgen.CreateAutomationRunParams{
 		InvocationID: inv.ID,
 		AutomationID: inv.AutomationID,
 		Target:       mustMarshalOneTarget(target),
@@ -228,6 +281,14 @@ func (e *Engine) createFailedRun(ctx context.Context, logger *slog.Logger, inv s
 		Status:       sqlcgen.AutomationRunStatusFailed,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Already recorded (this target's own run already exists,
+			// almost certainly a 'starting' row from an ambiguous
+			// tx.Commit that actually succeeded server-side) -- harmless
+			// no-op, see this function's own doc comment.
+			logger.Debug("automation: record failed run: target already has a run row, no-op", "target", target.Name)
+			return
+		}
 		logger.Error("automation: record failed run failed", "error", err, "target", target.Name)
 		return
 	}
