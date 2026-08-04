@@ -90,7 +90,32 @@ func TestMain(m *testing.M) {
 		log.Fatalf("automation: run migrations against shared integration-test container: %v", err)
 	}
 
-	pool, err := narvipg.NewPool(ctx, connStr)
+	// MaxConns is set explicitly to 20, well above pgxpool.ParseConfig's own
+	// default of max(4, runtime.NumCPU()) -- mirroring internal/app/
+	// sessionactor's own identical fix (TestMain, sharedpool_integration_
+	// test.go there) for the EXACT same root cause, reproduced here: CI run
+	// 30954282160 hung the full Go test-binary panic-timeout inside THIS
+	// package's own TestPumpOnce_FansOutOneRunPerTarget, goroutine-dumped
+	// stuck in sessionactor.(*Actor).transact -> pgxpool.(*Pool).Acquire.
+	// Every fanned-out target this engine dispatches calls httpapi.
+	// TriggerDispatch (fanout.go's own createRunAndSession) ->
+	// registry.GetOrSpawn, and Registry.hydrateAndAcquire (sessionactor/
+	// hydrate.go) pins ONE pool connection per live Actor for that Actor's
+	// entire lifetime (holding the session's own Postgres advisory lock) --
+	// never released until the Actor evicts or this test's own t.Cleanup
+	// calls Registry.Shutdown. §3.5's own fan-out cap
+	// (domainautomation.MaxFanOutTargets = 10, see TestPumpOnce_
+	// RespectsMaxFanOutOfTen) means a single PumpOnce tick in this package's
+	// own tests can pin up to 10 Actor connections simultaneously, on top of
+	// whatever transient connections concurrent hydration/store queries
+	// need at the same moment -- on a low-core-count GitHub Actions runner
+	// this pool's previous unset MaxConns silently defaulted to as few as 4,
+	// and hydrateAndAcquire's own r.pool.Acquire(ctx) has no timeout (every
+	// caller here passes context.Background()), so once genuinely out of
+	// connections it blocks forever instead of failing fast. 20 is
+	// comfortably above this package's own worst case (10), independent of
+	// the host's core count.
+	pool, err := narvipg.NewPoolWithMaxConns(ctx, connStr, 20)
 	if err != nil {
 		log.Fatalf("automation: open shared integration-test pool: %v", err)
 	}
