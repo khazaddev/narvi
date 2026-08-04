@@ -137,18 +137,34 @@ func (q *Queries) GetAutomationInvocation(ctx context.Context, id pgtype.UUID) (
 }
 
 const listDueForFanOut = `-- name: ListDueForFanOut :many
-SELECT id, automation_id, status, targets, total_runs, fanned_out_at, failure_counted_at, closed_at, created_at FROM automation_invocations
-WHERE fanned_out_at IS NULL
-ORDER BY created_at
+SELECT ai.id, ai.automation_id, ai.status, ai.targets, ai.total_runs, ai.fanned_out_at, ai.failure_counted_at, ai.closed_at, ai.created_at FROM automation_invocations ai
+JOIN automations a ON a.id = ai.automation_id
+WHERE ai.fanned_out_at IS NULL AND a.status = 'active'
+ORDER BY ai.created_at
 LIMIT $1
-FOR UPDATE SKIP LOCKED
+FOR UPDATE OF ai SKIP LOCKED
 `
 
 // Every invocation not yet claimed for fan-out, oldest first, locked FOR
-// UPDATE SKIP LOCKED -- callers MUST run this inside the same transaction
-// that subsequently calls ClaimAutomationInvocationForFanOut on each
-// returned row, mirroring ListDueImageBuilds/ListDuePendingOutbox's own
-// identical claim-batch precedent exactly.
+// UPDATE SKIP LOCKED (of automation_invocations only -- "FOR UPDATE OF ai"
+// -- the join below reads automations.status but never needs to lock that
+// row) -- callers MUST run this inside the same transaction that
+// subsequently calls ClaimAutomationInvocationForFanOut on each returned
+// row, mirroring ListDueImageBuilds/ListDuePendingOutbox's own identical
+// claim-batch precedent exactly.
+//
+// "AND a.status = 'active'" is this Step's own defense-in-depth against a
+// pending invocation surviving its own automation's auto-pause (§3.5): an
+// invocation already created (e.g. moments before a THIRD consecutive
+// failure elsewhere auto-pauses this same automation) is simply left
+// un-fanned-out -- still visible to this same query on a LATER tick, once
+// either the automation is resumed (Step 52/76's own future surface) or
+// never, if it stays paused -- rather than dispatching real sessions for
+// an automation the engine itself just decided to stop trusting. Step 52's
+// own future trigger evaluator is expected to check this same status
+// before ever calling CreateInvocation in the first place; this is the
+// SECOND, independent layer, for an invocation already queued before that
+// decision landed.
 func (q *Queries) ListDueForFanOut(ctx context.Context, limit int32) ([]AutomationInvocation, error) {
 	rows, err := q.db.Query(ctx, listDueForFanOut, limit)
 	if err != nil {

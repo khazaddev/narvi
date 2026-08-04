@@ -571,3 +571,55 @@ func TestSweep_RunningRunJustUnderThresholdIsNotSwept(t *testing.T) {
 		t.Fatalf("run status = %s, want still running (not yet past the threshold)", got.Status)
 	}
 }
+
+// TestPumpOnce_SkipsFanOutForAPausedAutomation is the defense-in-depth
+// check ListDueForFanOut's own "AND a.status = 'active'" join condition
+// exists for: an invocation created BEFORE its own automation got
+// auto-paused (e.g. by a different, concurrently-closing invocation) must
+// never be fanned out into real sessions while paused -- it stays pending,
+// un-fanned-out, picked up again only once (if ever) the automation is
+// resumed.
+func TestPumpOnce_SkipsFanOutForAPausedAutomation(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	auto, targets := f.createAutomation(t, "paused before fan-out", 1)
+	inv := f.createInvocation(t, auto.ID, targets)
+
+	if _, err := f.pool.Exec(ctx, "UPDATE automations SET status = 'paused' WHERE id = $1", auto.ID); err != nil {
+		t.Fatalf("pause automation: %v", err)
+	}
+
+	if err := f.engine.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	runs := f.listRunsForInvocation(t, inv.ID)
+	if len(runs) != 0 {
+		t.Fatalf("got %d runs, want 0 -- a paused automation's own pending invocation must not be fanned out", len(runs))
+	}
+
+	gotInv, err := f.invocations.Get(ctx, inv.ID)
+	if err != nil {
+		t.Fatalf("get invocation: %v", err)
+	}
+	if gotInv.FannedOutAt.Valid {
+		t.Fatalf("fanned_out_at was set for a paused automation's own invocation")
+	}
+	if gotInv.Status != sqlcgen.AutomationInvocationStatusPending {
+		t.Fatalf("invocation status = %s, want still pending", gotInv.Status)
+	}
+
+	// Resuming the automation makes the SAME invocation eligible again on
+	// the very next tick.
+	if _, err := f.pool.Exec(ctx, "UPDATE automations SET status = 'active' WHERE id = $1", auto.ID); err != nil {
+		t.Fatalf("resume automation: %v", err)
+	}
+	if err := f.engine.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce (after resume): %v", err)
+	}
+	runs = f.listRunsForInvocation(t, inv.ID)
+	if len(runs) != 1 {
+		t.Fatalf("got %d runs after resume, want 1", len(runs))
+	}
+}
