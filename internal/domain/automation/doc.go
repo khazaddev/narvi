@@ -1,4 +1,73 @@
-// Package automation will hold the automation → invocation → runs domain
-// model, including CAS failure-strike accounting — implemented in PR-46
-// (§3.5).
+// Package automation holds the automation → invocation → run(s) domain
+// model (Step 51, "automations: engine", §3.5): "automation → invocation →
+// run(s) (one run per target, fan-out ≤10). At-most-one failure strike per
+// invocation via CAS (UPDATE ... WHERE failure_counted_at IS NULL).
+// Auto-pause after 3 consecutive failed invocations. Recovery sweeps:
+// orphaned starting runs >5 min, running >90 min."
+//
+// No I/O, no time.Now(), no randomness (§11) -- every input a decision
+// function here needs (counts, states, "now") is supplied by the caller
+// (internal/app/automation). This mirrors internal/domain/imagebuild's own
+// split exactly (EvaluateBackoff/ImageBuildStreakThreshold there; the
+// analogous EvaluateFailureStrike/AutoPauseThreshold here) -- in fact
+// domain/imagebuild.ImageBuildStreakThreshold's own doc comment already
+// names this package's own "3" explicitly, as the same established
+// constant this codebase already uses twice (sandbox.
+// CircuitBreakerThreshold, ImageBuildStreakThreshold) before this package
+// existed for real.
+//
+// # Three machines, three transition tables
+//
+// Automation (automation.go): Active ⇄ Paused -- the auto-pause/resume
+// lifecycle a maintainer/admin eventually toggles (mockups.html's own
+// Automations view: "auto-paused chip + Resume").
+//
+// Invocation (invocation.go): Pending -> Succeeded | Failed -- closed
+// exactly once, when every one of its fanned-out runs has reached a
+// terminal state. Mirrors internal/domain/plan.Status's own shape (one
+// non-terminal state, terminal states with no outgoing edge) more closely
+// than turn's six-state machine, since an invocation has no interesting
+// internal progress of its own -- only "still waiting on its runs" vs.
+// "decided".
+//
+// Run (run.go): Starting -> Running -> Succeeded | Failed -- named to
+// match §3.5's own sweep vocabulary exactly ("orphaned starting runs...
+// running..."). DeriveRunStatus derives a run's own status from its linked
+// session's turn history, the SAME "derive an aggregate status from a
+// child summary slice" shape internal/domain/session.DeriveStatus already
+// establishes for a session's own turns -- Starting corresponds to no
+// turn having reached Processing yet (matches a run whose sandbox may
+// still be cold-starting -- exactly the condition the "starting >5 min"
+// sweep threshold exists to catch), Running to a turn now Processing.
+//
+// # Two independent CAS guards, not one
+//
+// Closing an invocation (Pending -> Succeeded/Failed, via Transition) and
+// recording the failure-strike consequence of a FAILED invocation against
+// its own automation's consecutive-failure streak are deliberately two
+// separate guarded operations (app/automation's own closeout.go), never
+// collapsed into one: mirrors internal/app/sessionactor/progressnotify.go's
+// own documented "two, independent, both reused rather than invented"
+// double-guard precedent. The invocation's own status transition is guarded
+// by its own current status (the Transition table's usual precondition,
+// exactly like turn/plan/sandbox); the strike accounting is SEPARATELY
+// guarded by automation_invocations.failure_counted_at IS NULL (§3.5's own
+// literal CAS idiom, the same UPDATE ... WHERE <nullable-timestamp> IS NULL
+// shape already established by TurnStore.MarkProgressNotified/
+// ApprovePlanIfAwaitingApproval) -- so a crash between the two, followed by
+// a retried close attempt, can never double-count the SAME invocation's
+// failure against the streak twice, even though the invocation's own
+// status is by then already terminal and would otherwise short-circuit a
+// naive single-guard re-check.
+//
+// # EvaluateFailureStrike computes, the CAS-guarded store records
+//
+// EvaluateFailureStrike (strike.go) is a pure decision, mirroring
+// domain/imagebuild.EvaluateBackoff/domain/sandbox.EvaluateCircuitBreaker's
+// own shape exactly: given the CURRENT consecutive-failure count and
+// whether the invocation that just closed failed, it returns the new count
+// and whether that crosses AutoPauseThreshold (3). It does not itself
+// count anything, or decide whether THIS particular failure has already
+// been counted -- that is the CAS's job, entirely in app/automation's own
+// impure layer, per this package's own "no I/O" boundary (§11).
 package automation

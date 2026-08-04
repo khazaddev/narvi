@@ -40,6 +40,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
+	"github.com/khazaddev/narvi/internal/app/automation"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
@@ -214,6 +215,16 @@ func serve() error {
 	environmentStore := postgres.NewEnvironmentStore(pool)
 	imageBuildStore := postgres.NewImageBuildStore(pool)
 
+	// automationStore/automationInvocationStore/automationRunStore are
+	// Step 51's ("automations: engine", §3.5) own three tables -- see
+	// internal/app/automation's own doc.go for the full engine writeup.
+	// Constructed here, alongside every other core store, so the engine
+	// below (and any future Step 52 trigger-evaluation caller) can share
+	// them rather than each constructing its own copy.
+	automationStore := postgres.NewAutomationStore(pool)
+	automationInvocationStore := postgres.NewAutomationInvocationStore(pool)
+	automationRunStore := postgres.NewAutomationRunStore(pool)
+
 	// planStore/participantStore are Step 37's ("plan mode, web", §8.1)
 	// own additions, backing the two new approve/reject REST endpoints
 	// below (internal/adapters/inbound/httpapi/planapprove.go).
@@ -351,6 +362,23 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("construct image builder: %w", err)
 	}
+
+	// automationEngine is Step 51's ("automations: engine", §3.5) own
+	// process-wide background automation engine, run below via the
+	// errgroup exactly once per process -- constructed from the SAME
+	// sessionStore/turnStore/environmentStore/auditLogStore/registry/pool
+	// already built above for everything else, mirroring builder's/recon's
+	// own construction immediately above exactly. See internal/app/
+	// automation's own doc.go for what it does and why. registry is the
+	// SAME *sessionactor.Registry every other CreateSessionOnTx caller in
+	// this file already threads through (e.g. the GitHub/Slack/Linear
+	// ingress Deps below) -- a run's own session dispatch reuses that
+	// identical TriggerDispatch path, never a second one.
+	automationEngine := automation.NewEngine(
+		automationStore, automationInvocationStore, automationRunStore,
+		sessionStore, turnStore, environmentStore, auditLogStore,
+		pool, registry, cfg.Timeouts,
+	)
 
 	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
 	// OAuth login, backend-issued session cookies, and route middleware --
@@ -996,6 +1024,20 @@ func serve() error {
 	group.Go(func() error {
 		if err := releaseManifestWorker.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("release manifest check worker: %w", err)
+		}
+		return nil
+	})
+
+	// Step 51 ("automations: engine", §3.5): started/shut down through
+	// this SAME errgroup as every other background loop above -- no naked
+	// goroutine (§11) -- with the identical context.Canceled carve-out
+	// every other background loop already establishes for normal
+	// shutdown. Engine.Run itself fans out its own three ticker loops
+	// (fan-out, reconcile, sweep) via a further, internal errgroup -- see
+	// internal/app/automation's own doc.go.
+	group.Go(func() error {
+		if err := automationEngine.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("automation engine: %w", err)
 		}
 		return nil
 	})

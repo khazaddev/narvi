@@ -1,0 +1,77 @@
+package postgres
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+)
+
+// AutomationInvocationStore is a thin, pass-through wrapper around the
+// sqlc-generated automation_invocations queries (Step 51, "automations:
+// engine", §3.5).
+type AutomationInvocationStore struct {
+	q *sqlcgen.Queries
+}
+
+// NewAutomationInvocationStore builds an AutomationInvocationStore backed
+// by pool.
+func NewAutomationInvocationStore(pool *pgxpool.Pool) *AutomationInvocationStore {
+	return &AutomationInvocationStore{q: sqlcgen.New(pool)}
+}
+
+// WithTx returns an AutomationInvocationStore whose queries run on tx
+// instead of the pool this store was built with -- ListDueForFanOut/
+// ClaimForFanOut MUST run inside the same transaction (mirrors
+// app/imagebuild.Builder.claimBatch's own claim-batch precedent exactly);
+// CloseInvocation/MarkFailureCounted MUST run inside the same transaction
+// as AutomationStore's own LockForUpdate/ApplyFailureStrike when this
+// invocation is closing failed (see this package's own AutomationStore).
+func (s *AutomationInvocationStore) WithTx(tx pgx.Tx) *AutomationInvocationStore {
+	return &AutomationInvocationStore{q: s.q.WithTx(tx)}
+}
+
+// Create inserts a brand-new, 'pending' automation_invocations row --
+// mirrors internal/app/releasereview.Enqueue's own "fast, cheap, durable
+// hand-off" shape. Callers MUST have already validated targets via
+// automation.ValidateTargets.
+func (s *AutomationInvocationStore) Create(ctx context.Context, arg sqlcgen.CreateAutomationInvocationParams) (sqlcgen.AutomationInvocation, error) {
+	return s.q.CreateAutomationInvocation(ctx, arg)
+}
+
+// Get fetches the automation_invocations row for id, or pgx.ErrNoRows if
+// none exists.
+func (s *AutomationInvocationStore) Get(ctx context.Context, id pgtype.UUID) (sqlcgen.AutomationInvocation, error) {
+	return s.q.GetAutomationInvocation(ctx, id)
+}
+
+// ListDueForFanOut returns up to limit invocations not yet claimed for
+// fan-out, locked FOR UPDATE SKIP LOCKED -- callers MUST run this inside
+// the same transaction that subsequently calls ClaimForFanOut on each
+// returned row.
+func (s *AutomationInvocationStore) ListDueForFanOut(ctx context.Context, limit int32) ([]sqlcgen.AutomationInvocation, error) {
+	return s.q.ListDueForFanOut(ctx, limit)
+}
+
+// ClaimForFanOut flips id's own fanned_out_at CAS guard -- pgx.ErrNoRows
+// means a concurrent claimant already won it.
+func (s *AutomationInvocationStore) ClaimForFanOut(ctx context.Context, id pgtype.UUID) (sqlcgen.AutomationInvocation, error) {
+	return s.q.ClaimAutomationInvocationForFanOut(ctx, id)
+}
+
+// Close applies internal/domain/automation.InvocationTransition's own
+// verdict -- pgx.ErrNoRows means this invocation is already closed (a
+// concurrent closer won the race, or a defensive re-run).
+func (s *AutomationInvocationStore) Close(ctx context.Context, arg sqlcgen.CloseAutomationInvocationParams) (sqlcgen.AutomationInvocation, error) {
+	return s.q.CloseAutomationInvocation(ctx, arg)
+}
+
+// MarkFailureCounted flips id's own failure_counted_at CAS guard (§3.5's
+// own literal idiom) -- pgx.ErrNoRows means this invocation's failure has
+// already been counted once (a concurrent/retried closer lost the race).
+func (s *AutomationInvocationStore) MarkFailureCounted(ctx context.Context, id pgtype.UUID) (sqlcgen.AutomationInvocation, error) {
+	return s.q.MarkAutomationInvocationFailureCounted(ctx, id)
+}

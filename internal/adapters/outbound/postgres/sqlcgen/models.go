@@ -54,6 +54,135 @@ func (ns NullArtifactType) Value() (driver.Value, error) {
 	return string(ns.ArtifactType), nil
 }
 
+type AutomationInvocationStatus string
+
+const (
+	AutomationInvocationStatusPending   AutomationInvocationStatus = "pending"
+	AutomationInvocationStatusSucceeded AutomationInvocationStatus = "succeeded"
+	AutomationInvocationStatusFailed    AutomationInvocationStatus = "failed"
+)
+
+func (e *AutomationInvocationStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AutomationInvocationStatus(s)
+	case string:
+		*e = AutomationInvocationStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AutomationInvocationStatus: %T", src)
+	}
+	return nil
+}
+
+type NullAutomationInvocationStatus struct {
+	AutomationInvocationStatus AutomationInvocationStatus `json:"automation_invocation_status"`
+	Valid                      bool                       `json:"valid"` // Valid is true if AutomationInvocationStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAutomationInvocationStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.AutomationInvocationStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AutomationInvocationStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAutomationInvocationStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AutomationInvocationStatus), nil
+}
+
+type AutomationRunStatus string
+
+const (
+	AutomationRunStatusStarting  AutomationRunStatus = "starting"
+	AutomationRunStatusRunning   AutomationRunStatus = "running"
+	AutomationRunStatusSucceeded AutomationRunStatus = "succeeded"
+	AutomationRunStatusFailed    AutomationRunStatus = "failed"
+)
+
+func (e *AutomationRunStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AutomationRunStatus(s)
+	case string:
+		*e = AutomationRunStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AutomationRunStatus: %T", src)
+	}
+	return nil
+}
+
+type NullAutomationRunStatus struct {
+	AutomationRunStatus AutomationRunStatus `json:"automation_run_status"`
+	Valid               bool                `json:"valid"` // Valid is true if AutomationRunStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAutomationRunStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.AutomationRunStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AutomationRunStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAutomationRunStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AutomationRunStatus), nil
+}
+
+type AutomationStatus string
+
+const (
+	AutomationStatusActive AutomationStatus = "active"
+	AutomationStatusPaused AutomationStatus = "paused"
+)
+
+func (e *AutomationStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AutomationStatus(s)
+	case string:
+		*e = AutomationStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AutomationStatus: %T", src)
+	}
+	return nil
+}
+
+type NullAutomationStatus struct {
+	AutomationStatus AutomationStatus `json:"automation_status"`
+	Valid            bool             `json:"valid"` // Valid is true if AutomationStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAutomationStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.AutomationStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AutomationStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAutomationStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AutomationStatus), nil
+}
+
 type IdentityLinkedVia string
 
 const (
@@ -562,6 +691,43 @@ type AuditLog struct {
 	DetailJson    []byte             `json:"detail_json"`
 	CorrelationID *string            `json:"correlation_id"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
+type Automation struct {
+	ID                  pgtype.UUID        `json:"id"`
+	Name                string             `json:"name"`
+	Prompt              *string            `json:"prompt"`
+	Repos               []byte             `json:"repos"`
+	Status              AutomationStatus   `json:"status"`
+	ConsecutiveFailures int32              `json:"consecutive_failures"`
+	CreatedBy           pgtype.UUID        `json:"created_by"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+}
+
+type AutomationInvocation struct {
+	ID               pgtype.UUID                `json:"id"`
+	AutomationID     pgtype.UUID                `json:"automation_id"`
+	Status           AutomationInvocationStatus `json:"status"`
+	Targets          []byte                     `json:"targets"`
+	TotalRuns        int32                      `json:"total_runs"`
+	FannedOutAt      pgtype.Timestamptz         `json:"fanned_out_at"`
+	FailureCountedAt pgtype.Timestamptz         `json:"failure_counted_at"`
+	ClosedAt         pgtype.Timestamptz         `json:"closed_at"`
+	CreatedAt        pgtype.Timestamptz         `json:"created_at"`
+}
+
+type AutomationRun struct {
+	ID           pgtype.UUID         `json:"id"`
+	InvocationID pgtype.UUID         `json:"invocation_id"`
+	AutomationID pgtype.UUID         `json:"automation_id"`
+	Target       []byte              `json:"target"`
+	SessionID    pgtype.UUID         `json:"session_id"`
+	Status       AutomationRunStatus `json:"status"`
+	StartedAt    pgtype.Timestamptz  `json:"started_at"`
+	RunningAt    pgtype.Timestamptz  `json:"running_at"`
+	CompletedAt  pgtype.Timestamptz  `json:"completed_at"`
+	CreatedAt    pgtype.Timestamptz  `json:"created_at"`
 }
 
 type ContractDriftSnapshot struct {

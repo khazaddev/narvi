@@ -1694,6 +1694,61 @@ type Timeouts struct {
 	// minute of margin for the JSON-marshal/outbox-insert work Run does
 	// after ListMergedBetween itself returns.
 	ReleaseManifestCheckTimeout time.Duration
+
+	// --- Step 51 standalone addition ("automations: engine", §3.5): the
+	// two sweep thresholds are explicit in the plan ("orphaned starting
+	// runs >5 min, running >90 min"); the two poll intervals are not, and
+	// -- per every prior pump-interval addition's own precedent
+	// (ReconcilerInterval/ImageBuildPumpInterval/OutboxPumpInterval) --
+	// are plain fields with a sensible default, wired into ONE new
+	// invariant check each below (mirroring ReconcilerInterval's own
+	// pairwise link with ReconcilerOrphanConfirmationPeriod exactly): the
+	// sweep must poll comfortably more often than the shortest threshold
+	// it is responsible for confirming, or a run that just crosses
+	// AutomationRunStartingOrphanThreshold could sit unswept for far
+	// longer than that threshold's own name implies.
+
+	// AutomationEnginePumpInterval is how often internal/app/automation.
+	// Engine's own main loop polls for pending invocations to fan out and
+	// in-flight runs to reconcile against their linked sessions' turn
+	// history -- mirrors ReconcilerInterval/ImageBuildPumpInterval's own
+	// ticker-driven shape. Not specified in the plan; chosen as 60s,
+	// matching ReconcilerInterval's own cadence -- an automation's own run
+	// is not a live chat a human is actively watching (OutboxPumpInterval's
+	// own 5s reasoning does not apply here), so this can poll a good deal
+	// less aggressively without meaningfully delaying a fire-and-forget
+	// background job.
+	AutomationEnginePumpInterval time.Duration
+
+	// AutomationSweepInterval is how often internal/app/automation.Engine's
+	// own recovery-sweep loop polls for orphaned runs (§3.5's own two
+	// sweep thresholds, immediately below) -- mirrors
+	// ReconcilerOrphanConfirmationPeriod's own debounce-poll shape, just
+	// applied to a threshold read directly off a persisted timestamp
+	// rather than an in-memory first-seen map (app/automation's own sweep
+	// needs no cross-tick debounce state the way app/reconciler's orphan
+	// confirmation does -- a run's own started_at/running_at is already
+	// durable, so "has this been true continuously" is answered by a
+	// single comparison against `now`, not by remembering what a PRIOR
+	// tick observed). Not specified in the plan; chosen as 60s, matching
+	// AutomationEnginePumpInterval's own cadence -- comfortably below
+	// AutomationRunStartingOrphanThreshold (5 min) with wide margin
+	// (enforced by Validate() below), so a run that just crosses either
+	// threshold is reaped within roughly one tick, not many.
+	AutomationSweepInterval time.Duration
+
+	// AutomationRunStartingOrphanThreshold is §3.5's own explicit sweep
+	// threshold: "orphaned starting runs >5 min" -- a run whose own
+	// started_at is older than this, with automation.DeriveRunStatus still
+	// reporting RunStatusStarting, is swept to RunStatusFailed via
+	// automation.RunTriggerOrphanTimeout. §3.5, explicit.
+	AutomationRunStartingOrphanThreshold time.Duration
+
+	// AutomationRunRunningOrphanThreshold is §3.5's own explicit sweep
+	// threshold: "running >90 min" -- a run whose own running_at is older
+	// than this, with automation.DeriveRunStatus still reporting
+	// RunStatusRunning, is swept the same way. §3.5, explicit.
+	AutomationRunRunningOrphanThreshold time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1837,6 +1892,11 @@ func DefaultTimeouts() Timeouts {
 
 		ReleaseManifestCheckPumpInterval: 10 * time.Second, // blocking-finding fix #1; not specified, chosen -- see field doc comment
 		ReleaseManifestCheckTimeout:      3 * time.Minute,  // blocking-finding fix #1; not specified, chosen -- GitHubListMergedBetweenTimeout (2min) plus a full extra minute of margin, see field doc comment
+
+		AutomationEnginePumpInterval:         60 * time.Second, // Step 51; not specified, chosen, matches ReconcilerInterval's own cadence
+		AutomationSweepInterval:              60 * time.Second, // Step 51; not specified, chosen, matches AutomationEnginePumpInterval's own cadence
+		AutomationRunStartingOrphanThreshold: 5 * time.Minute,  // §3.5, explicit ("orphaned starting runs >5 min")
+		AutomationRunRunningOrphanThreshold:  90 * time.Minute, // §3.5, explicit ("running >90 min")
 	}
 }
 
@@ -1934,6 +1994,19 @@ func (t Timeouts) Validate() error {
 	// reasoning.
 	check("ReleaseManifestCheckTimeout > GitHubListMergedBetweenTimeout",
 		"ReleaseManifestCheckTimeout", t.ReleaseManifestCheckTimeout, "GitHubListMergedBetweenTimeout", t.GitHubListMergedBetweenTimeout)
+
+	// Step 51 ("automations: engine", §3.5): AutomationSweepInterval must
+	// stay at least MinTimeoutMargin below EACH of the two orphan
+	// thresholds it polls for, or a run that just crosses one could sit
+	// unswept for much longer than that threshold's own name implies --
+	// mirrors ReconcilerInterval/ReconcilerOrphanConfirmationPeriod's own
+	// identical pairwise reasoning, just stated as two links (one per
+	// threshold) instead of one, since the two thresholds are
+	// independently configurable.
+	check("AutomationRunStartingOrphanThreshold > AutomationSweepInterval",
+		"AutomationRunStartingOrphanThreshold", t.AutomationRunStartingOrphanThreshold, "AutomationSweepInterval", t.AutomationSweepInterval)
+	check("AutomationRunRunningOrphanThreshold > AutomationSweepInterval",
+		"AutomationRunRunningOrphanThreshold", t.AutomationRunRunningOrphanThreshold, "AutomationSweepInterval", t.AutomationSweepInterval)
 
 	return errors.Join(errs...)
 }
