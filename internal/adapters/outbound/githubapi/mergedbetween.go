@@ -273,7 +273,18 @@ func (a *Adapter) branchRequiresApprovingReview(ctx context.Context, owner, repo
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return false
 	}
-	return parsed.RequiredPullRequestReviews != nil
+	// Blocking-finding fix #3: RequiredPullRequestReviews != nil ALONE is
+	// not enough -- GitHub sets that sub-object whenever "Require a pull
+	// request before merging" is enabled, REGARDLESS of whether "Require
+	// approvals" is also checked; a repo with the former on and the
+	// latter off (a valid, common config) reports
+	// RequiredApprovingReviewCount == 0, which means this branch does
+	// NOT actually require an approving review at all. Reading only the
+	// non-nil check misread that config as "requires review", falsely
+	// flagging every PR merged there as an admin override -- exactly the
+	// POSITIVE confirmation this function's own doc comment says
+	// MergedViaAdminOverride must never be asserted without.
+	return parsed.RequiredPullRequestReviews != nil && parsed.RequiredPullRequestReviews.RequiredApprovingReviewCount > 0
 }
 
 // combinedStatusResponse is the subset of GitHub's real GET
@@ -483,11 +494,17 @@ func (a *Adapter) fetchHadManualConflictResolution(ctx context.Context, owner, r
 // Number is this revert candidate's OWN pull request number -- needed to
 // fetch ITS OWN review state (fetchHasApprovingReview), a second call
 // this adapter only ever makes for an item that already matched the
-// revert-title convention (extractRevertedTitle), never for the whole
-// search page.
+// revert-title convention (extractRevertedTitle) or the revert-body
+// reference (extractRevertedPRNumber), never for the whole search page.
+// Body is the revert PR's own full description -- GitHub's Search API
+// returns the SAME full issue/PR resource shape a direct GET would (not
+// a stripped-down search-only shape), so this needs no second call; see
+// extractRevertedPRNumber's own doc comment for what this adapter looks
+// for in it.
 type searchIssueItemResponse struct {
 	Number   int     `json:"number"`
 	Title    string  `json:"title"`
+	Body     string  `json:"body"`
 	ClosedAt *string `json:"closed_at"`
 }
 
@@ -497,11 +514,60 @@ type searchIssuesResponse struct {
 	Items []searchIssueItemResponse `json:"items"`
 }
 
-// revertInfo is what fetchReverts (below) reports finding for one
-// original PR title.
+// revertInfo is what fetchReverts (below) reports finding for one revert
+// candidate.
 type revertInfo struct {
-	revertedAt time.Time
-	reviewed   bool
+	revertedAt  time.Time
+	reviewState ports.RevertReviewState
+}
+
+// revertsQualifiedRE/revertsBareRE match GitHub's own auto-generated
+// "Reverts owner/repo#N" cross-reference, written verbatim into a revert
+// PR's own body by both GitHub's web UI "Revert pull request" button flow
+// and the `gh pr revert`-equivalent flow -- the SAME positive identity
+// link GitHub's own UI renders as a "Reverts owner/repo#N" timeline
+// cross-reference for the ORIGINAL PR, distinct from an ordinary
+// "Fixes #N"/"Closes #N" issue-closing keyword. revertsQualifiedRE
+// matches the fully-qualified form GitHub always writes
+// ("Reverts acme/widgets#142"); revertsBareRE is a defensive fallback for
+// a same-repo-only short form ("Reverts #142"), in case some GitHub
+// surface/version ever emits that instead -- both anchored to the start
+// of a line (multiline mode), since this is always GitHub's own
+// auto-generated line, never buried mid-sentence in the rest of a
+// hand-written body.
+var (
+	revertsQualifiedRE = regexp.MustCompile(`(?im)^Reverts\s+([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)`)
+	revertsBareRE      = regexp.MustCompile(`(?im)^Reverts\s+#(\d+)`)
+)
+
+// extractRevertedPRNumber extracts the ORIGINAL PR number a revert PR's
+// own body positively links back to (blocking-finding fix #2's PRIMARY
+// mechanism -- see this file's own top doc comment / fetchReverts' own
+// doc comment for the false-positive this closes). ok=false when body
+// carries no such reference at all (an older revert PR that predates
+// this convention, one hand-authored through some other tool, or a body
+// a human has since edited to remove it -- fetchReverts falls back to
+// the WEAKER title-only match for exactly this case), or when a
+// fully-qualified reference names a DIFFERENT repo than owner/repo
+// (defensive: this function's one caller only ever wants a revert of
+// THIS repo's own PR #N, never a cross-repo reference some unrelated
+// body happens to contain).
+func extractRevertedPRNumber(owner, repo, body string) (int, bool) {
+	if m := revertsQualifiedRE.FindStringSubmatch(body); m != nil {
+		if !strings.EqualFold(m[1], owner) || !strings.EqualFold(m[2], repo) {
+			return 0, false
+		}
+		if n, err := strconv.Atoi(m[3]); err == nil && n > 0 {
+			return n, true
+		}
+		return 0, false
+	}
+	if m := revertsBareRE.FindStringSubmatch(body); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 // fetchReverts runs ONE Search API query for the whole batch --
@@ -511,55 +577,91 @@ type revertInfo struct {
 // requests/minute, authenticated, vs. 5000/hour for ordinary endpoints
 // -- https://docs.github.com/rest/search/search#rate-limit), and a
 // release PR can easily bundle more constituent PRs than that per-minute
-// budget would allow if this were one search per PR. Every returned
-// item's own title is matched against GitHub's own default revert-PR
-// title convention -- `Revert "<original title>"` -- produced by both
-// GitHub's web UI "Revert" button and the `gh pr revert`-equivalent flow;
-// a PR reverted by some OTHER means (a hand-authored revert PR with a
-// differently-worded title) is a known, accepted miss, exactly like
-// GetPullRequestDiff's own truncation and this file's own rebase-merge
-// gap are.
+// budget would allow if this were one search per PR.
 //
-// The revert PR's OWN review state (fetchHasApprovingReview, reused) is
-// what determines RevertReviewed -- "whether that revert was itself
-// reviewed" (§15.2).
-func (a *Adapter) fetchReverts(ctx context.Context, owner, repo, token string) (map[string]revertInfo, error) {
+// Blocking-finding fix #2: returns TWO lookup maps, byNumber and byTitle.
+// byNumber is the STRONG, unambiguous identity link -- keyed on the
+// ORIGINAL PR number parsed from the revert PR's own body
+// (extractRevertedPRNumber) -- and is what buildMergedPR (below) always
+// prefers: a real PR number can never collide across two unrelated PRs,
+// so a byNumber match is trusted on its own. byTitle is a WEAKER
+// fallback, keyed on the extracted original TITLE alone (extractRevertedTitle,
+// matched against GitHub's own default `Revert "<original title>"` title
+// convention), consulted ONLY when no byNumber match exists (an older
+// revert PR, or one whose body was hand-edited/authored by some other
+// tool that never wrote the "Reverts owner/repo#N" reference at all) --
+// title text alone proves nothing about WHICH PR it reverted (a repeated
+// Conventional-Commits-style title like "chore: bump dependencies" can
+// legitimately recur across many unrelated PRs over a repo's history), so
+// buildMergedPR additionally requires byTitle's own match to postdate the
+// candidate PR's own merge (revert.revertedAt.After(mergedAt)) before
+// ever trusting it -- the cheap, immediate correctness guard this fix's
+// own write-up names, closing the exact false-positive this file used to
+// produce (an unrelated, much older same-titled revert silently clamped
+// into a nonsensical "reverted before it merged" claim).
+//
+// Every item considered here still requires a title match
+// (extractRevertedTitle) before this function spends the extra
+// fetchHasApprovingReview call on it -- GitHub's own title convention
+// remains the cheap, near-universal "is this even a revert PR at all"
+// gate, regardless of whether its body also carries the number
+// reference; this keeps the call count identical to before this fix.
+func (a *Adapter) fetchReverts(ctx context.Context, owner, repo, token string) (byNumber map[int]revertInfo, byTitle map[string]revertInfo, err error) {
 	query := fmt.Sprintf("repo:%s/%s type:pr is:merged in:title Revert", owner, repo)
 	path := fmt.Sprintf("%s/search/issues?q=%s&per_page=%d", a.apiBaseURL, url.QueryEscape(query), maxRevertSearchResults)
 	body, err := a.doGet(ctx, path, token)
 	if err != nil {
-		return nil, fmt.Errorf("githubapi: search revert prs: %w", err)
+		return nil, nil, fmt.Errorf("githubapi: search revert prs: %w", err)
 	}
 	var parsed searchIssuesResponse
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("githubapi: decode revert search results: %w", err)
+		return nil, nil, fmt.Errorf("githubapi: decode revert search results: %w", err)
 	}
 
-	reverts := make(map[string]revertInfo, len(parsed.Items))
+	byNumber = make(map[int]revertInfo)
+	byTitle = make(map[string]revertInfo)
 	for _, item := range parsed.Items {
-		originalTitle, ok := extractRevertedTitle(item.Title)
-		if !ok {
+		originalTitle, titleMatched := extractRevertedTitle(item.Title)
+		if !titleMatched {
 			continue
 		}
+		originalNumber, numberMatched := extractRevertedPRNumber(owner, repo, item.Body)
+
 		var closedAt time.Time
 		if item.ClosedAt != nil {
 			if t, err := time.Parse(time.RFC3339, *item.ClosedAt); err == nil {
 				closedAt = t
 			}
 		}
-		// The revert PR's own review state -- reused fetchHasApprovingReview,
-		// exactly like an ordinary constituent PR's own review state is
-		// determined. Best-effort: a failure here leaves reviewed=false for
-		// THIS revert -- accepted rather than excluding the whole revert
-		// finding, since "was this PR reverted at all" (the PRIMARY fact) is
-		// already confirmed by the title match above; only the SECONDARY
-		// "was the revert itself reviewed" fact degrades on a sub-fetch
-		// failure, mirroring buildMergedPR's own identical CI/files/commits
-		// degrade-one-field discipline rather than excluding the whole PR.
-		reviewed, _ := a.fetchHasApprovingReview(ctx, owner, repo, item.Number, token)
-		reverts[originalTitle] = revertInfo{revertedAt: closedAt, reviewed: reviewed}
+
+		// Blocking-finding fix #4: the revert PR's own review state is a
+		// genuine tri-state, never a plain bool defaulting to "not
+		// reviewed" on a fetch failure -- see ports.RevertReviewState's
+		// own doc comment. A failed fetchHasApprovingReview call here
+		// must NEVER manufacture RevertReviewStateNotReviewed (the ONE
+		// value that ever triggers review.ManifestFindingUnreviewedRevert):
+		// "was this PR reverted at all" (the PRIMARY fact) is already
+		// confirmed by the title/number match above; only the SECONDARY
+		// "was the revert itself reviewed" fact degrades to Unknown on a
+		// sub-fetch failure, mirroring buildMergedPR's own identical
+		// CI/files/commits degrade-one-field discipline rather than
+		// excluding the whole PR or asserting an unconfirmed fact.
+		reviewState := ports.RevertReviewStateUnknown
+		if reviewed, err := a.fetchHasApprovingReview(ctx, owner, repo, item.Number, token); err == nil {
+			if reviewed {
+				reviewState = ports.RevertReviewStateReviewed
+			} else {
+				reviewState = ports.RevertReviewStateNotReviewed
+			}
+		}
+		info := revertInfo{revertedAt: closedAt, reviewState: reviewState}
+
+		if numberMatched {
+			byNumber[originalNumber] = info
+		}
+		byTitle[originalTitle] = info
 	}
-	return reverts, nil
+	return byNumber, byTitle, nil
 }
 
 // revertTitlePrefix and revertTitleSuffix bracket GitHub's own default
@@ -583,33 +685,48 @@ func extractRevertedTitle(title string) (string, bool) {
 	return inner, true
 }
 
-// buildMergedPR assembles one ports.MergedPR for prNumber, or ok=false
-// when GitHub reports it as not actually merged (fetchMergedPRDetail's
-// own doc comment). requiredReviewsByBase is a per-call cache keyed on
-// base branch name -- branchRequiresApprovingReview is fetched at most
-// ONCE per distinct base branch across the whole ListMergedBetween call,
-// never once per PR (every constituent PR of a real release almost
-// always shares the SAME base branch). reverts is fetchReverts' own
-// batch-wide result, looked up by this PR's own title.
+// buildMergedPR assembles one ports.MergedPR for prNumber. requiredReviewsByBase
+// is a per-call cache keyed on base branch name -- branchRequiresApprovingReview
+// is fetched at most ONCE per distinct base branch across the whole
+// ListMergedBetween call, never once per PR (every constituent PR of a
+// real release almost always shares the SAME base branch).
+// revertsByNumber/revertsByTitle are fetchReverts' own batch-wide result
+// -- see that function's own doc comment for how a match is looked up
+// (blocking-finding fix #2: byNumber preferred and trusted outright,
+// byTitle a weaker fallback additionally gated on
+// revert.revertedAt.After(mergedAt)).
 //
-// Sub-fetch failure handling (see this file's own top doc comment for
-// the reasoning): a failure fetching this PR's OWN detail or reviews
-// excludes it from the manifest entirely (ok=false, nil error -- these
-// two facts are central to what this check audits, never guessed at).
-// A failure fetching CI/files/commits degrades that ONE field to its own
-// honest "nothing confirmed" value (CIConclusionUnknown / no path
-// prefixes / HadManualConflictResolution=false) without excluding the
-// PR -- none of those three defaults assert a false fact the way
-// guessing HasApprovingReview would.
-func (a *Adapter) buildMergedPR(ctx context.Context, owner, repo string, prNumber int, token string, requiredReviewsByBase map[string]bool, reverts map[string]revertInfo) (ports.MergedPR, bool) {
-	detail, ok, err := a.fetchMergedPRDetail(ctx, owner, repo, prNumber, token)
-	if err != nil || !ok {
-		return ports.MergedPR{}, false
+// Three-way return, mirroring GetPullRequestDiff's own (content,
+// truncated, err) shape: ok=true is a normal, successful inclusion.
+// ok=false, fetchFailed=false is a CONFIRMED, correct exclusion --
+// GitHub itself reports prNumber as not actually merged
+// (fetchMergedPRDetail's own doc comment) -- never a coverage gap.
+// ok=false, fetchFailed=true is blocking-finding fix #5's own signal: a
+// genuine sub-fetch ERROR (this PR's own detail or review-state call
+// failed) silently dropped a PR this manifest SHOULD have included --
+// ListMergedBetween folds this into its own truncated return so a
+// caller rendering "no issues found" never claims completeness it does
+// not have. Only these two calls (detail, own review state) are central
+// enough to what this check audits to exclude the PR outright on
+// failure; a failure fetching CI/files/commits instead degrades that ONE
+// field to its own honest "nothing confirmed" value (CIConclusionUnknown
+// / no path prefixes / HadManualConflictResolution=false) without
+// excluding the PR OR affecting truncated -- none of those three
+// defaults assert a false fact the way guessing HasApprovingReview would,
+// and a caller already knows CIConclusionUnknown is never treated as a
+// finding on its own (review.CIConclusionUnknown's own doc comment).
+func (a *Adapter) buildMergedPR(ctx context.Context, owner, repo string, prNumber int, token string, requiredReviewsByBase map[string]bool, revertsByNumber map[int]revertInfo, revertsByTitle map[string]revertInfo) (pr ports.MergedPR, ok bool, fetchFailed bool) {
+	detail, wasMerged, err := a.fetchMergedPRDetail(ctx, owner, repo, prNumber, token)
+	if err != nil {
+		return ports.MergedPR{}, false, true
+	}
+	if !wasMerged {
+		return ports.MergedPR{}, false, false
 	}
 
 	hasApproval, err := a.fetchHasApprovingReview(ctx, owner, repo, prNumber, token)
 	if err != nil {
-		return ports.MergedPR{}, false
+		return ports.MergedPR{}, false, true
 	}
 
 	adminOverride := false
@@ -649,7 +766,7 @@ func (a *Adapter) buildMergedPR(ctx context.Context, owner, repo string, prNumbe
 		labels[i] = l.Name
 	}
 
-	merged := ports.MergedPR{
+	result := ports.MergedPR{
 		Number:                      detail.Number,
 		Title:                       detail.Title,
 		HasApprovingReview:          hasApproval,
@@ -661,60 +778,111 @@ func (a *Adapter) buildMergedPR(ctx context.Context, owner, repo string, prNumbe
 		Labels:                      labels,
 	}
 
-	if revert, found := reverts[detail.Title]; found {
-		merged.WasReverted = true
+	// Blocking-finding fix #2: byNumber (the STRONG, positively-linked
+	// identity match -- see fetchReverts' own doc comment) is always
+	// preferred and, once matched, trusted outright: a real PR number
+	// cannot collide across unrelated PRs the way a repeated title can.
+	// byTitle is only ever consulted as a fallback, and even then ONLY
+	// when its own revertedAt genuinely postdates this PR's own mergedAt
+	// -- the cheap, immediate correctness guard this fix's own write-up
+	// names, closing the false-positive a same-titled-but-unrelated,
+	// possibly much OLDER revert used to produce (a nonsensical negative
+	// time delta that then got silently clamped to zero, destroying the
+	// one signal that would have exposed the bad match). A zero/unparsed
+	// mergedAt or revertedAt can never satisfy an After() comparison
+	// against a real timestamp, so a fallback match degrades to "no
+	// match" rather than an unguarded acceptance whenever either
+	// timestamp could not be determined.
+	revert, found := revertsByNumber[prNumber]
+	if !found {
+		var titleMatch revertInfo
+		if titleMatch, found = revertsByTitle[detail.Title]; found {
+			found = !mergedAt.IsZero() && !titleMatch.revertedAt.IsZero() && titleMatch.revertedAt.After(mergedAt)
+		}
+		revert = titleMatch
+	}
+	if found {
+		result.WasReverted = true
 		if !revert.revertedAt.IsZero() {
 			revertedAt := revert.revertedAt
-			merged.RevertedAt = &revertedAt
+			result.RevertedAt = &revertedAt
 		}
 		// The revert PR's own review state was already resolved inside
 		// fetchReverts itself (a second call, made only for a title that
 		// already matched the revert convention) -- see that function's
-		// own doc comment.
-		merged.RevertReviewed = revert.reviewed
+		// own doc comment, and ports.RevertReviewState's own doc comment
+		// for why this is a tri-state (blocking-finding fix #4).
+		result.RevertReviewState = revert.reviewState
 	}
 
-	return merged, true
+	return result, true, false
 }
 
 // ListMergedBetween implements ports.SourceControl (Step 50, "release PR
 // review", §15.2) -- see this file's own top doc comment for the full
 // design (constituent-PR discovery, per-field sourcing, known
 // limitations, and cost).
-func (a *Adapter) ListMergedBetween(ctx context.Context, spec ports.ListMergedBetweenSpec) ([]ports.MergedPR, error) {
+//
+// Blocking-finding fix #5: truncated (the second return, mirroring
+// GetPullRequestDiff's own identical shape) is set whenever this adapter
+// KNOWS the returned merged slice is an incomplete picture of everything
+// actually merged in this range, from any of three independent sources:
+// (1) more candidate PR numbers were discovered than maxConstituentPRs
+// bounds this call to build full detail for; (2) GitHub's own compare API
+// caps len(compare.Commits) at 250 regardless of the range's real size --
+// compare.TotalCommits > len(compare.Commits) means commits (and
+// therefore possibly whole constituent PRs) beyond that cap were never
+// even considered; (3) buildMergedPR's own fetchFailed return -- a
+// genuine sub-fetch error silently dropped an individual PR from the
+// manifest (see that function's own doc comment for exactly which
+// sub-fetches count). A confirmed "not actually merged" exclusion
+// (buildMergedPR's ok=false, fetchFailed=false) is never one of these
+// sources -- that is correct, complete filtering, not a gap.
+func (a *Adapter) ListMergedBetween(ctx context.Context, spec ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	comparePath := fmt.Sprintf("%s/repos/%s/%s/compare/%s...%s",
 		a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo),
 		url.PathEscape(spec.BaseRef), url.PathEscape(spec.HeadRef))
 	body, err := a.doGet(ctx, comparePath, spec.Token)
 	if err != nil {
-		return nil, fmt.Errorf("githubapi: list merged between: compare: %w", err)
+		return nil, false, fmt.Errorf("githubapi: list merged between: compare: %w", err)
 	}
 	var compare compareResponse
 	if err := json.Unmarshal(body, &compare); err != nil {
-		return nil, fmt.Errorf("githubapi: list merged between: decode compare response: %w", err)
+		return nil, false, fmt.Errorf("githubapi: list merged between: decode compare response: %w", err)
 	}
+
+	truncated := compare.TotalCommits > len(compare.Commits)
 
 	candidates := extractCandidatePRNumbers(compare.Commits)
 	if len(candidates) > maxConstituentPRs {
 		candidates = candidates[:maxConstituentPRs]
+		truncated = true
 	}
 
-	reverts, err := a.fetchReverts(ctx, spec.Owner, spec.Repo, spec.Token)
+	revertsByNumber, revertsByTitle, err := a.fetchReverts(ctx, spec.Owner, spec.Repo, spec.Token)
 	if err != nil {
 		// Best-effort: a failed revert search never fails this whole
 		// call -- every PR simply reports WasReverted=false, a known,
 		// accepted limitation (this file's own top doc comment).
-		reverts = map[string]revertInfo{}
+		// Deliberately NOT folded into truncated: it degrades one signal
+		// (WasReverted) on already-included PRs, never drops a PR from
+		// the manifest outright -- see this function's own doc comment
+		// for the three sources truncated actually tracks.
+		revertsByNumber = map[int]revertInfo{}
+		revertsByTitle = map[string]revertInfo{}
 	}
 
 	requiredReviewsByBase := make(map[string]bool)
 	merged := make([]ports.MergedPR, 0, len(candidates))
 	for _, number := range candidates {
-		pr, ok := a.buildMergedPR(ctx, spec.Owner, spec.Repo, number, spec.Token, requiredReviewsByBase, reverts)
+		pr, ok, fetchFailed := a.buildMergedPR(ctx, spec.Owner, spec.Repo, number, spec.Token, requiredReviewsByBase, revertsByNumber, revertsByTitle)
+		if fetchFailed {
+			truncated = true
+		}
 		if !ok {
 			continue
 		}
 		merged = append(merged, pr)
 	}
-	return merged, nil
+	return merged, truncated, nil
 }

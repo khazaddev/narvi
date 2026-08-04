@@ -6,7 +6,7 @@
 // "impure fetch in app, pure decision in domain" split for a comparable
 // review-adjacent, fully-mechanical sentinel.
 //
-// # Where this is called from
+// # Where this is called from (two phases, since blocking-finding fix #1)
 //
 // internal/adapters/inbound/github's own webhook handler, on the WINNER
 // (brand-new session) path only, once internal/domain/intent.DetectRelease
@@ -19,6 +19,21 @@
 // session opened on a release PR is the moment its own existence is
 // first discovered by this system).
 //
+// That handler no longer calls Run (below) directly. Blocking-finding fix
+// #1: Run's own real work (SourceControl.ListMergedBetween) can take up
+// to platform.Timeouts.GitHubListMergedBetweenTimeout (2 minutes, ~80+
+// sequential GitHub API calls for a large release cut) -- far longer than
+// GitHub's own ~10s webhook delivery timeout, so it must never run inline
+// inside the webhook handler's own request/response cycle. The handler
+// instead calls Enqueue (enqueue.go), which does ONE cheap, fast INSERT
+// into release_manifest_pending and returns immediately, before its own
+// ack. Worker (worker.go) is the SEPARATE background loop (started
+// alongside every other background loop in cmd/control-plane/main.go's
+// own errgroup) that later claims that row and calls Run -- entirely
+// decoupled from any webhook request's own context/lifetime. See
+// migrations/000050_release_manifest_pending.up.sql's own doc comment for
+// the full "why" behind this two-phase split.
+//
 // # Why the manifest check needs no idempotency claim of its own
 //
 // Unlike internal/app/sessionactor/handoffsentinel.go (which claims a
@@ -28,8 +43,10 @@
 // package's one real caller only ever runs on session CREATION, and
 // github_pr_sessions' own per-PR atomic claim (Step 32) already
 // guarantees at most one winner ever creates a session for a given PR --
-// so at most one call to Run ever happens per release PR, structurally,
-// with no separate claim table needed.
+// so at most one call to Enqueue (and, transitively, at most one call to
+// Run) ever happens per release PR, structurally, with no separate claim
+// table needed for THAT guarantee (release_manifest_pending exists to
+// decouple WHEN/on whose context Run runs, never to deduplicate it).
 package releasereview
 
 import (
@@ -55,7 +72,7 @@ import (
 // directly, with no adapter-side change beyond what this Step already
 // adds to it.
 type MergedPRLister interface {
-	ListMergedBetween(ctx context.Context, spec ports.ListMergedBetweenSpec) ([]ports.MergedPR, error)
+	ListMergedBetween(ctx context.Context, spec ports.ListMergedBetweenSpec) (merged []ports.MergedPR, truncated bool, err error)
 }
 
 // OutboxEnqueuer is the narrow slice of *postgres.OutboxStore this
@@ -117,7 +134,7 @@ type Input struct {
 // fail an already-successful session creation over.
 func Run(ctx context.Context, logger *slog.Logger, deps Deps, in Input) {
 	listCtx, cancel := context.WithTimeout(ctx, deps.Timeouts.GitHubListMergedBetweenTimeout)
-	merged, err := deps.SourceControl.ListMergedBetween(listCtx, ports.ListMergedBetweenSpec{
+	merged, truncated, err := deps.SourceControl.ListMergedBetween(listCtx, ports.ListMergedBetweenSpec{
 		Owner:   in.Owner,
 		Repo:    in.Repo,
 		BaseRef: in.BaseRef,
@@ -138,12 +155,17 @@ func Run(ctx context.Context, logger *slog.Logger, deps Deps, in Input) {
 
 	findings := review.ComputeReleaseManifestFindings(domainMerged)
 	aggregateReview := review.ShouldRunAggregateReview(domainMerged)
-	body := reviewpost.RenderManifestComment(findings, len(domainMerged), aggregateReview)
+	// Blocking-finding fix #5: truncated (ListMergedBetween's own second
+	// return -- see MergedPRLister's own doc comment) is threaded through
+	// so the rendered comment never claims a completeness guarantee this
+	// port call did not actually give it -- see RenderManifestComment's
+	// own doc comment.
+	body := reviewpost.RenderManifestComment(findings, len(domainMerged), aggregateReview, truncated)
 
 	logger.Info("releasereview: manifest check computed",
 		"owner", in.Owner, "repo", in.Repo, "pr_number", in.PRNumber,
 		"constituent_pr_count", len(domainMerged), "finding_count", len(findings),
-		"aggregate_review_triggered", aggregateReview)
+		"aggregate_review_triggered", aggregateReview, "coverage_truncated", truncated)
 
 	payload, err := json.Marshal(githubapi.ReleaseManifestPayload{
 		Owner:    in.Owner,
@@ -199,7 +221,7 @@ func toDomainMergedPR(m ports.MergedPR) review.MergedPR {
 		MergedViaAdminOverride:      m.MergedViaAdminOverride,
 		CIConclusionAtMergeSHA:      toDomainCIConclusion(m.CIConclusionAtMergeSHA),
 		WasReverted:                 m.WasReverted,
-		RevertReviewed:              m.RevertReviewed,
+		RevertReviewState:           toDomainRevertReviewState(m.RevertReviewState),
 		RevertedAfterMergeSeconds:   revertedAfterSeconds,
 		HadManualConflictResolution: m.HadManualConflictResolution,
 		ChangedPathPrefixes:         m.ChangedPathPrefixes,
@@ -222,5 +244,23 @@ func toDomainCIConclusion(c ports.CIConclusion) review.CIConclusion {
 		return review.CIConclusionFailure
 	default:
 		return review.CIConclusionUnknown
+	}
+}
+
+// toDomainRevertReviewState converts ports.RevertReviewState into
+// review.RevertReviewState -- a direct, exhaustive mapping, mirroring
+// toDomainCIConclusion's own identical shape immediately above (any
+// unrecognized ports.RevertReviewState value -- there should never be
+// one -- maps to review.RevertReviewStateUnknown, never silently to
+// RevertReviewStateNotReviewed, matching that type's own "never asserted
+// without positive confirmation" discipline, blocking-finding fix #4).
+func toDomainRevertReviewState(s ports.RevertReviewState) review.RevertReviewState {
+	switch s {
+	case ports.RevertReviewStateReviewed:
+		return review.RevertReviewStateReviewed
+	case ports.RevertReviewStateNotReviewed:
+		return review.RevertReviewStateNotReviewed
+	default:
+		return review.RevertReviewStateUnknown
 	}
 }

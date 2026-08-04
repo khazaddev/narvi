@@ -49,8 +49,8 @@ type fakeReleaseManifestSourceControl struct {
 	merged []ports.MergedPR
 }
 
-func (f *fakeReleaseManifestSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, error) {
-	return f.merged, nil
+func (f *fakeReleaseManifestSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
+	return f.merged, false, nil
 }
 
 // TestGitHubIntegration_ReleasePRDetected_EnqueuesPendingCheckFast proves

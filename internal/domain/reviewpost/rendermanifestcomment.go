@@ -25,20 +25,40 @@ import (
 // actual composition-focused LLM review pass §15.3 describes from this
 // comment -- see this Step's own PR description for the full reasoning
 // and what is deferred.
-func RenderManifestComment(findings []review.ManifestFinding, constituentPRCount int, aggregateReviewTriggered bool) string {
+//
+// coveragePartial (audit-fix should-fix #5) is whether the caller's own
+// upstream fetch (ports.SourceControl.ListMergedBetween's own truncated
+// return) is KNOWN to have covered less than the full merge range --
+// mirrors GetPullRequestDiff's own truncated -> RenderTurnPrompt
+// precedent exactly: "No compliance issues found" is an unqualified
+// completeness claim ("every constituent PR..."), and posting it
+// verbatim when coverage was silently partial would assert a guarantee
+// this check never actually had. When true and findings is empty, the
+// rendered sentence is qualified to "no issues found among the N PRs
+// checked" instead -- still honest when findings is non-empty (a partial
+// scan that already found something never claimed completeness in the
+// first place, so no separate qualification is needed on that branch).
+func RenderManifestComment(findings []review.ManifestFinding, constituentPRCount int, aggregateReviewTriggered bool, coveragePartial bool) string {
 	var b strings.Builder
 
 	b.WriteString("### Release manifest check\n\n")
 	fmt.Fprintf(&b, "Examined %d constituent pull request(s) merged into this release.\n\n", constituentPRCount)
 
-	if len(findings) == 0 {
+	switch {
+	case len(findings) == 0 && coveragePartial:
+		fmt.Fprintf(&b, "No compliance issues found among the %d PR(s) checked -- coverage was PARTIAL (see note below), so this is not a completeness guarantee.\n\n", constituentPRCount)
+	case len(findings) == 0:
 		b.WriteString("No compliance issues found: every constituent PR carried an approving review, was green at its merge commit, and no revert went unreviewed.\n\n")
-	} else {
+	default:
 		b.WriteString("**Findings:**\n\n")
 		for _, f := range findings {
 			b.WriteString("- " + renderManifestFinding(f) + "\n")
 		}
 		b.WriteString("\n")
+	}
+
+	if coveragePartial {
+		b.WriteString("_Note: this check's own coverage of this release was PARTIAL -- either more constituent PRs were discovered than this check builds full detail for, GitHub's own compare API capped the commit range examined, or at least one constituent PR's own detail could not be fetched and was silently excluded. Findings above (if any) are still accurate for the PRs actually examined, but the absence of a finding is not a guarantee for the PR(s) not covered._\n\n")
 	}
 
 	if aggregateReviewTriggered {

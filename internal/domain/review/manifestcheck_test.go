@@ -135,7 +135,7 @@ func TestComputeReleaseManifestFindings_UnreviewedRevert(t *testing.T) {
 				Number: 160, Title: "feat: risky thing",
 				HasApprovingReview:        true,
 				WasReverted:               true,
-				RevertReviewed:            false,
+				RevertReviewState:         review.RevertReviewStateNotReviewed,
 				RevertedAfterMergeSeconds: int64Ptr(2 * 3600),
 			},
 			wantFindings: 1,
@@ -147,7 +147,7 @@ func TestComputeReleaseManifestFindings_UnreviewedRevert(t *testing.T) {
 				Number: 160, Title: "feat: risky thing",
 				HasApprovingReview: true,
 				WasReverted:        true,
-				RevertReviewed:     false,
+				RevertReviewState:  review.RevertReviewStateNotReviewed,
 			},
 			wantFindings: 1,
 			wantDetail:   "",
@@ -158,7 +158,35 @@ func TestComputeReleaseManifestFindings_UnreviewedRevert(t *testing.T) {
 				Number: 161, Title: "feat: another",
 				HasApprovingReview: true,
 				WasReverted:        true,
-				RevertReviewed:     true,
+				RevertReviewState:  review.RevertReviewStateReviewed,
+			},
+			wantFindings: 0,
+		},
+		{
+			// Audit-fix should-fix #4: a revert whose own review state
+			// could not be determined (the sub-fetch failed) must NEVER
+			// be treated as unreviewed -- mirrors
+			// TestComputeReleaseManifestFindings_RedAtMerge's own
+			// "unknown: no finding" case exactly.
+			name: "reverted, revert review state unknown (failed sub-fetch): no finding",
+			pr: review.MergedPR{
+				Number: 163, Title: "feat: yet another risky thing",
+				HasApprovingReview: true,
+				WasReverted:        true,
+				RevertReviewState:  review.RevertReviewStateUnknown,
+			},
+			wantFindings: 0,
+		},
+		{
+			// The zero value must be treated identically to Unknown,
+			// mirroring CIConclusion's own identical zero-value
+			// convention -- an unset field is exactly as uninformative
+			// as an explicit "unknown".
+			name: "reverted, revert review state zero value: no finding",
+			pr: review.MergedPR{
+				Number: 164, Title: "feat: yet another",
+				HasApprovingReview: true,
+				WasReverted:        true,
 			},
 			wantFindings: 0,
 		},
@@ -207,7 +235,7 @@ func TestComputeReleaseManifestFindings_MultipleFindingsPerPR(t *testing.T) {
 			HasApprovingReview:     false,
 			CIConclusionAtMergeSHA: review.CIConclusionFailure,
 			WasReverted:            true,
-			RevertReviewed:         false,
+			RevertReviewState:      review.RevertReviewStateNotReviewed,
 		},
 		{
 			Number: 2, Title: "b",

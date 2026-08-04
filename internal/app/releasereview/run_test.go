@@ -28,16 +28,17 @@ func discardLogger() *slog.Logger {
 // real HTTP round trip, mirroring internal/app/reviewcontext's own
 // fakeFetcher precedent exactly.
 type fakeMergedPRLister struct {
-	merged  []ports.MergedPR
-	err     error
-	calls   int
-	lastReq ports.ListMergedBetweenSpec
+	merged    []ports.MergedPR
+	truncated bool
+	err       error
+	calls     int
+	lastReq   ports.ListMergedBetweenSpec
 }
 
-func (f *fakeMergedPRLister) ListMergedBetween(_ context.Context, spec ports.ListMergedBetweenSpec) ([]ports.MergedPR, error) {
+func (f *fakeMergedPRLister) ListMergedBetween(_ context.Context, spec ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	f.calls++
 	f.lastReq = spec
-	return f.merged, f.err
+	return f.merged, f.truncated, f.err
 }
 
 // fakeOutboxEnqueuer is a test-only releasereview.OutboxEnqueuer.
@@ -226,7 +227,7 @@ func TestRun_RevertTimingConvertedFromTimestamps(t *testing.T) {
 			MergedAt:           mergedAt,
 			WasReverted:        true,
 			RevertedAt:         &revertedAt,
-			RevertReviewed:     false,
+			RevertReviewState:  ports.RevertReviewStateNotReviewed,
 		},
 	}}
 	outbox := &fakeOutboxEnqueuer{}
@@ -246,5 +247,90 @@ func TestRun_RevertTimingConvertedFromTimestamps(t *testing.T) {
 	}
 	if !strings.Contains(payload.Body, "reverted 2h after merge") {
 		t.Errorf("rendered comment missing the expected '2h' revert timing -- body:\n%s", payload.Body)
+	}
+}
+
+// TestRun_TruncatedCoveragePropagatesToRenderedComment proves audit-fix
+// should-fix #5's own plumbing: ListMergedBetween's own truncated return
+// reaches RenderManifestComment, so a partial-coverage scan never posts
+// the unqualified "No compliance issues found: every constituent PR..."
+// completeness claim.
+func TestRun_TruncatedCoveragePropagatesToRenderedComment(t *testing.T) {
+	t.Parallel()
+
+	lister := &fakeMergedPRLister{
+		merged:    []ports.MergedPR{{Number: 1, Title: "a", HasApprovingReview: true}},
+		truncated: true,
+	}
+	outbox := &fakeOutboxEnqueuer{}
+
+	releasereview.Run(context.Background(), discardLogger(), releasereview.Deps{
+		SourceControl: lister,
+		Outbox:        outbox,
+		Timeouts:      platform.DefaultTimeouts(),
+	}, releasereview.Input{
+		SessionID: testSessionID(t),
+		Owner:     "acme", Repo: "widgets", PRNumber: 1, BaseRef: "main", HeadRef: "release/1.0", Token: "t",
+	})
+
+	var payload githubapi.ReleaseManifestPayload
+	if err := json.Unmarshal(outbox.lastParams.Payload, &payload); err != nil {
+		t.Fatalf("decode outbox payload: %v", err)
+	}
+	if strings.Contains(payload.Body, "No compliance issues found: every constituent PR") {
+		t.Errorf("rendered comment asserts unqualified completeness despite truncated=true -- body:\n%s", payload.Body)
+	}
+	if !strings.Contains(payload.Body, "PARTIAL") {
+		t.Errorf("rendered comment missing the expected partial-coverage note -- body:\n%s", payload.Body)
+	}
+}
+
+// TestRun_RevertReviewStateUnknown_NeverProducesUnreviewedRevertFinding
+// proves audit-fix should-fix #4's own conversion path
+// (toDomainRevertReviewState): a revert whose own review state the port
+// reported as Unknown must never surface as "the revert itself was
+// unreviewed" in the rendered comment.
+func TestRun_RevertReviewStateUnknown_NeverProducesUnreviewedRevertFinding(t *testing.T) {
+	t.Parallel()
+
+	mergedAt := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	revertedAt := mergedAt.Add(2 * time.Hour)
+	lister := &fakeMergedPRLister{merged: []ports.MergedPR{
+		{
+			Number: 160, Title: "risky",
+			HasApprovingReview: true,
+			MergedAt:           mergedAt,
+			WasReverted:        true,
+			RevertedAt:         &revertedAt,
+			RevertReviewState:  ports.RevertReviewStateUnknown,
+		},
+	}}
+	outbox := &fakeOutboxEnqueuer{}
+
+	releasereview.Run(context.Background(), discardLogger(), releasereview.Deps{
+		SourceControl: lister,
+		Outbox:        outbox,
+		Timeouts:      platform.DefaultTimeouts(),
+	}, releasereview.Input{
+		SessionID: testSessionID(t),
+		Owner:     "acme", Repo: "widgets", PRNumber: 1, BaseRef: "main", HeadRef: "release/1.0", Token: "t",
+	})
+
+	var payload githubapi.ReleaseManifestPayload
+	if err := json.Unmarshal(outbox.lastParams.Payload, &payload); err != nil {
+		t.Fatalf("decode outbox payload: %v", err)
+	}
+	// Note: the CLEAN-manifest sentence itself legitimately contains the
+	// bare word "unreviewed" ("...no revert went unreviewed") -- the
+	// finding-specific phrase below is what would actually appear if this
+	// regressed back to asserting an unreviewed revert.
+	if strings.Contains(payload.Body, "the revert itself was unreviewed") {
+		t.Errorf("rendered comment falsely asserts an unreviewed revert from a merely UNKNOWN review state -- body:\n%s", payload.Body)
+	}
+	if strings.Contains(payload.Body, "Findings:") {
+		t.Errorf("rendered comment should report a clean manifest with no Findings section (Unknown review state asserts nothing) -- body:\n%s", payload.Body)
+	}
+	if !strings.Contains(payload.Body, "No compliance issues found") {
+		t.Errorf("rendered comment should report a clean manifest (Unknown review state asserts nothing) -- body:\n%s", payload.Body)
 	}
 }

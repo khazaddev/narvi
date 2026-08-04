@@ -3,6 +3,7 @@ package githubapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -98,7 +99,10 @@ func TestListMergedBetween_FullScenario(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/search/issues":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{
-					{"number": 99, "title": `Revert "Fix thing"`, "closed_at": "2024-01-01T02:00:00Z"},
+					// Body carries GitHub's own auto-generated "Reverts
+					// owner/repo#N" reference -- blocking-finding fix #2's
+					// PRIMARY, positively-linked identity match.
+					{"number": 99, "title": `Revert "Fix thing"`, "body": "Reverts acme/widgets#10", "closed_at": "2024-01-01T02:00:00Z"},
 				},
 			})
 
@@ -111,11 +115,14 @@ func TestListMergedBetween_FullScenario(t *testing.T) {
 
 	adapter := githubapi.New(server.Client(), server.URL)
 
-	merged, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
+	merged, truncated, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
 		Owner: "acme", Repo: "widgets", BaseRef: "main", HeadRef: "release-1.0", Token: "tok",
 	})
 	if err != nil {
 		t.Fatalf("ListMergedBetween() error = %v", err)
+	}
+	if truncated {
+		t.Error("ListMergedBetween() truncated = true, want false (full scenario, nothing capped, no fetch failures)")
 	}
 	if len(merged) != 2 {
 		t.Fatalf("got %d merged PRs, want 2: %+v", len(merged), merged)
@@ -144,8 +151,8 @@ func TestListMergedBetween_FullScenario(t *testing.T) {
 	if !pr10.WasReverted {
 		t.Error("PR 10: WasReverted = false, want true (a matching revert PR was found)")
 	}
-	if pr10.RevertReviewed {
-		t.Error("PR 10: RevertReviewed = true, want false (the revert PR carried no approving review)")
+	if pr10.RevertReviewState != ports.RevertReviewStateNotReviewed {
+		t.Errorf("PR 10: RevertReviewState = %s, want %s (the revert PR carried no approving review)", pr10.RevertReviewState, ports.RevertReviewStateNotReviewed)
 	}
 	wantRevertedAt := time.Date(2024, 1, 1, 2, 0, 0, 0, time.UTC)
 	if pr10.RevertedAt == nil || !pr10.RevertedAt.Equal(wantRevertedAt) {
@@ -205,7 +212,7 @@ func TestListMergedBetween_UnmergedCandidateExcluded(t *testing.T) {
 	defer server.Close()
 
 	adapter := githubapi.New(server.Client(), server.URL)
-	merged, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
+	merged, truncated, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
 		Owner: "acme", Repo: "widgets", BaseRef: "main", HeadRef: "release-1.0", Token: "tok",
 	})
 	if err != nil {
@@ -213,6 +220,9 @@ func TestListMergedBetween_UnmergedCandidateExcluded(t *testing.T) {
 	}
 	if len(merged) != 0 {
 		t.Fatalf("got %d merged PRs, want 0 (the one candidate was never actually merged): %+v", len(merged), merged)
+	}
+	if truncated {
+		t.Error("ListMergedBetween() truncated = true, want false (a CONFIRMED not-merged exclusion is correct filtering, never a coverage gap)")
 	}
 }
 
@@ -229,7 +239,7 @@ func TestListMergedBetween_CompareFailurePropagatesError(t *testing.T) {
 	defer server.Close()
 
 	adapter := githubapi.New(server.Client(), server.URL)
-	_, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
+	_, _, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
 		Owner: "acme", Repo: "widgets", BaseRef: "main", HeadRef: "release-1.0", Token: "tok",
 	})
 	if err == nil {
@@ -263,7 +273,7 @@ func TestListMergedBetween_NoCandidates(t *testing.T) {
 	defer server.Close()
 
 	adapter := githubapi.New(server.Client(), server.URL)
-	merged, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
+	merged, truncated, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
 		Owner: "acme", Repo: "widgets", BaseRef: "main", HeadRef: "release-1.0", Token: "tok",
 	})
 	if err != nil {
@@ -271,5 +281,216 @@ func TestListMergedBetween_NoCandidates(t *testing.T) {
 	}
 	if len(merged) != 0 {
 		t.Fatalf("got %d merged PRs, want 0: %+v", len(merged), merged)
+	}
+	if truncated {
+		t.Error("ListMergedBetween() truncated = true, want false")
+	}
+}
+
+// mergedPRServerFixture mounts every endpoint buildMergedPR unconditionally
+// needs for ONE constituent PR (detail, reviews, branch protection,
+// CI status/check-runs, files, commits) plus the batch-wide revert
+// search -- factored out so the blocking-finding fix #2/#3/#4 regression
+// tests below only need to override the ONE endpoint each is actually
+// about, mirroring TestListMergedBetween_FullScenario's own shape without
+// repeating its full switch statement three more times.
+func mergedPRServerFixture(t *testing.T, prNumber int, prTitle string, mergedAt string, reviews []map[string]any, branchProtection map[string]any, searchItems []map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		prPath := fmt.Sprintf("/repos/acme/widgets/pulls/%d", prNumber)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/compare/main...release-1.0":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"commits": []map[string]any{
+					{"commit": map[string]any{"message": fmt.Sprintf("Merge pull request #%d from acme/widgets/x", prNumber)}},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == prPath:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number": prNumber, "title": prTitle, "merged": true,
+				"merged_at": mergedAt, "merge_commit_sha": "sha",
+				"base":   map[string]any{"ref": "main"},
+				"labels": []map[string]any{},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == prPath+"/reviews":
+			_ = json.NewEncoder(w).Encode(reviews)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/reviews"):
+			// Any OTHER PR's own /reviews call -- e.g. a revert candidate's
+			// own review-state sub-fetch (fetchReverts, gated on its title
+			// matching, independent of whether it ultimately gets accepted)
+			// -- defaults to "no reviews at all"; the specific tests below
+			// that care about a revert's own review state assert on it
+			// directly rather than relying on this generic fallback.
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/branches/main/protection":
+			if branchProtection == nil {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(branchProtection)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/commits/sha/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": "success"})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/check-runs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{}})
+		case r.Method == http.MethodGet && r.URL.Path == prPath+"/files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case r.Method == http.MethodGet && r.URL.Path == prPath+"/commits":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"parents": []map[string]any{{"sha": "p1"}}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/search/issues":
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": searchItems})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+}
+
+// TestListMergedBetween_UnrelatedOlderSameTitledRevertNeverFalselyMatched
+// proves blocking-finding fix #2: a revert-titled search result matching
+// this PR's own title, but that CLOSED BEFORE this PR ever merged (an
+// unrelated, older revert of some OTHER, identically-titled PR -- e.g. a
+// repeated Conventional-Commits title like "chore: bump dependencies"),
+// must NEVER be accepted as THIS PR's own revert. Deliberately carries no
+// body reference at all, so the ONLY way this could match is through the
+// weaker title-only fallback -- exactly the path this fix's own
+// revertedAt.After(mergedAt) guard closes.
+func TestListMergedBetween_UnrelatedOlderSameTitledRevertNeverFalselyMatched(t *testing.T) {
+	t.Parallel()
+
+	server := mergedPRServerFixture(t, 50, "chore: bump dependencies",
+		"2024-06-01T00:00:00Z",
+		[]map[string]any{{"state": "APPROVED"}},
+		nil,
+		[]map[string]any{
+			// An unrelated, MUCH OLDER revert PR of some other PR that
+			// happened to carry the identical generic title -- closed
+			// well BEFORE PR #50 above ever merged. No "body" field at
+			// all -- this item can only ever match via the weaker
+			// title-only fallback.
+			{"number": 7, "title": `Revert "chore: bump dependencies"`, "closed_at": "2023-01-01T00:00:00Z"},
+		},
+	)
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+	merged, _, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
+		Owner: "acme", Repo: "widgets", BaseRef: "main", HeadRef: "release-1.0", Token: "tok",
+	})
+	if err != nil {
+		t.Fatalf("ListMergedBetween() error = %v", err)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("got %d merged PRs, want 1: %+v", len(merged), merged)
+	}
+	if merged[0].WasReverted {
+		t.Errorf("PR #50: WasReverted = true, want false (the only same-titled revert found is OLDER than this PR's own merge -- an unrelated revert of a different PR, not this one)")
+	}
+}
+
+// TestListMergedBetween_RequiredApprovingReviewCountZero_NeverAdminOverride
+// proves blocking-finding fix #3: a branch with "Require a pull request
+// before merging" enabled but "Require approvals" left at 0 (a valid,
+// common GitHub config) must NEVER be misread as requiring review --
+// MergedViaAdminOverride must stay false for a PR merged there without
+// any approving review.
+func TestListMergedBetween_RequiredApprovingReviewCountZero_NeverAdminOverride(t *testing.T) {
+	t.Parallel()
+
+	server := mergedPRServerFixture(t, 60, "fix: thing",
+		"2024-06-01T00:00:00Z",
+		[]map[string]any{}, // no approving review at all
+		map[string]any{"required_pull_request_reviews": map[string]any{"required_approving_review_count": 0}},
+		[]map[string]any{},
+	)
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+	merged, _, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
+		Owner: "acme", Repo: "widgets", BaseRef: "main", HeadRef: "release-1.0", Token: "tok",
+	})
+	if err != nil {
+		t.Fatalf("ListMergedBetween() error = %v", err)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("got %d merged PRs, want 1: %+v", len(merged), merged)
+	}
+	if merged[0].HasApprovingReview {
+		t.Fatal("PR #60: HasApprovingReview = true, want false (test setup: no reviews at all)")
+	}
+	if merged[0].MergedViaAdminOverride {
+		t.Errorf("PR #60: MergedViaAdminOverride = true, want false (required_approving_review_count is 0 -- this branch never required a review at all, so there is nothing to override)")
+	}
+}
+
+// TestListMergedBetween_RevertReviewFetchFails_ReportsUnknownNeverNotReviewed
+// proves blocking-finding fix #4: a transient failure fetching the
+// revert PR's OWN review state must degrade to
+// ports.RevertReviewStateUnknown, never silently manufacture
+// RevertReviewStateNotReviewed (the value that triggers the "unreviewed
+// revert" finding) -- mirrors CIConclusionUnknown's own identical
+// discipline elsewhere in this file.
+func TestListMergedBetween_RevertReviewFetchFails_ReportsUnknownNeverNotReviewed(t *testing.T) {
+	t.Parallel()
+
+	const revertPRNumber = 88
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		revertReviewsPath := fmt.Sprintf("/repos/acme/widgets/pulls/%d/reviews", revertPRNumber)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == revertReviewsPath:
+			// The revert PR's own review-state sub-fetch fails.
+			w.WriteHeader(http.StatusInternalServerError)
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/compare/main...release-1.0":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"commits": []map[string]any{
+					{"commit": map[string]any{"message": "Merge pull request #70 from acme/widgets/x"}},
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/70":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number": 70, "title": "risky change", "merged": true,
+				"merged_at": "2024-06-01T00:00:00Z", "merge_commit_sha": "sha70",
+				"base":   map[string]any{"ref": "main"},
+				"labels": []map[string]any{},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/70/reviews":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"state": "APPROVED"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/commits/sha70/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": "success"})
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/check-runs"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{}})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/70/files":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/70/commits":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"parents": []map[string]any{{"sha": "p1"}}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/search/issues":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"items": []map[string]any{
+					{"number": revertPRNumber, "title": `Revert "risky change"`, "body": "Reverts acme/widgets#70", "closed_at": "2024-06-01T02:00:00Z"},
+				},
+			})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+	merged, _, err := adapter.ListMergedBetween(context.Background(), ports.ListMergedBetweenSpec{
+		Owner: "acme", Repo: "widgets", BaseRef: "main", HeadRef: "release-1.0", Token: "tok",
+	})
+	if err != nil {
+		t.Fatalf("ListMergedBetween() error = %v", err)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("got %d merged PRs, want 1: %+v", len(merged), merged)
+	}
+	if !merged[0].WasReverted {
+		t.Fatal("PR #70: WasReverted = false, want true (the revert was positively identified by PR number -- only its OWN review state fetch failed)")
+	}
+	if merged[0].RevertReviewState != ports.RevertReviewStateUnknown {
+		t.Errorf("PR #70: RevertReviewState = %s, want %s (a failed sub-fetch must never manufacture NotReviewed)", merged[0].RevertReviewState, ports.RevertReviewStateUnknown)
 	}
 }

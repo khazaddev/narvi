@@ -292,6 +292,36 @@ const (
 	CIConclusionUnknown CIConclusion = "unknown"
 )
 
+// RevertReviewState is whether a constituent PR's own revert (WasReverted
+// == true) itself carried an approving review, at the time the port
+// checked -- a plain, port-facing mirror of internal/domain/review.
+// RevertReviewState's own three values, mirroring CIConclusion's own
+// identical "positively confirmed vs. genuinely unknown" shape directly
+// above for the SAME reason: audit-fix (should-fix #4, "release PR
+// review", §15.2) -- a failed sub-fetch of the revert PR's own review
+// state must never silently manufacture RevertReviewStateNotReviewed
+// (the ONE value that ever triggers review.ManifestFindingUnreviewedRevert),
+// the exact same "never assert without positive confirmation" discipline
+// CIConclusionUnknown already establishes for the red-at-merge finding.
+type RevertReviewState string
+
+const (
+	// RevertReviewStateReviewed is a CONFIRMED approving review on the
+	// revert PR itself.
+	RevertReviewStateReviewed RevertReviewState = "reviewed"
+	// RevertReviewStateNotReviewed is a CONFIRMED absence of any
+	// approving review on the revert PR itself -- the only value that
+	// ever produces review.ManifestFindingUnreviewedRevert.
+	RevertReviewStateNotReviewed RevertReviewState = "not_reviewed"
+	// RevertReviewStateUnknown is "the revert PR's own review state could
+	// not be determined" (the sub-fetch itself failed) -- NOT evidence of
+	// an unreviewed revert. The zero value of this type is treated
+	// identically to this value, mirroring CIConclusion's own identical
+	// "unset field is exactly as uninformative as an explicit unknown"
+	// convention.
+	RevertReviewStateUnknown RevertReviewState = "unknown"
+)
+
 // MergedPR is one PR ListMergedBetween reports as merged into a release
 // PR's own head since it diverged from its base (§15.2). Each field
 // mirrors §15.2's own explicit list verbatim: "PR number/title, approving
@@ -326,12 +356,14 @@ type MergedPR struct {
 	MergedAt time.Time
 
 	// WasReverted is whether this PR was later reverted; RevertedAt is
-	// when (nil when WasReverted is false); RevertReviewed is whether
+	// when (nil when WasReverted is false); RevertReviewState is whether
 	// THAT revert itself carried an approving review (meaningless when
-	// WasReverted is false).
-	WasReverted    bool
-	RevertedAt     *time.Time
-	RevertReviewed bool
+	// WasReverted is false) -- see RevertReviewState's own doc comment
+	// for why this is a tri-state, not a plain bool (audit-fix should-fix
+	// #4).
+	WasReverted       bool
+	RevertedAt        *time.Time
+	RevertReviewState RevertReviewState
 
 	// HadManualConflictResolution is whether landing this PR required
 	// manually resolving a merge conflict against its base -- one of
@@ -480,7 +512,19 @@ type SourceControl interface {
 	// retries or trips a circuit breaker on a failure here; the manifest
 	// check (§15.2) this feeds is best-effort and never blocks anything
 	// else in the system on its own success.
-	ListMergedBetween(ctx context.Context, spec ListMergedBetweenSpec) ([]MergedPR, error)
+	//
+	// truncated (audit-fix should-fix #5) reports whether the returned
+	// merged slice is KNOWN to be an incomplete picture of everything
+	// actually merged in this range -- mirrors GetPullRequestDiff's own
+	// identical truncated return exactly, and for the same reason: a
+	// caller rendering "no compliance issues found" from an incomplete
+	// merged slice would be asserting a completeness guarantee this port
+	// never actually gave it. See the githubapi adapter's own
+	// implementation doc comment for every source this can be true from
+	// (the constituent-PR-count cap, GitHub's own compare-API commit-count
+	// cap, and any individual constituent PR silently dropped on its own
+	// sub-fetch failure).
+	ListMergedBetween(ctx context.Context, spec ListMergedBetweenSpec) (merged []MergedPR, truncated bool, err error)
 
 	// CreateBranch creates a new branch ref (refs/heads/spec.Branch)
 	// pointing at spec.SHA (Step 48 confirmed-finding fix, §17.2) --

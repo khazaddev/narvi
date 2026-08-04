@@ -69,6 +69,35 @@ const (
 	CIConclusionUnknown CIConclusion = "unknown"
 )
 
+// RevertReviewState is whether a constituent PR's own revert (WasReverted
+// == true) itself carried an approving review -- a direct, own-package
+// mirror of ports.RevertReviewState (this file's own top doc comment
+// explains why MergedPR itself is never the reused ports type directly;
+// the same reasoning applies here), mirroring CIConclusion's own
+// identical three-value "positively confirmed vs. genuinely unknown"
+// shape for the SAME reason: audit-fix (should-fix #4) -- a revert PR
+// whose own review state could not be determined must never be treated
+// as RevertReviewStateNotReviewed (the ONE value ComputeReleaseManifestFindings
+// below ever produces ManifestFindingUnreviewedRevert for), the exact
+// same discipline CIConclusionUnknown already establishes just above for
+// the red-at-merge finding.
+type RevertReviewState string
+
+const (
+	// RevertReviewStateReviewed is a CONFIRMED approving review on the
+	// revert PR itself.
+	RevertReviewStateReviewed RevertReviewState = "reviewed"
+	// RevertReviewStateNotReviewed is a CONFIRMED absence of any
+	// approving review on the revert PR itself -- the only value that
+	// ever produces ManifestFindingUnreviewedRevert.
+	RevertReviewStateNotReviewed RevertReviewState = "not_reviewed"
+	// RevertReviewStateUnknown is "the revert PR's own review state could
+	// not be determined" -- NOT evidence of an unreviewed revert. The
+	// zero value of this type is treated identically to this value,
+	// mirroring CIConclusion's own identical convention.
+	RevertReviewStateUnknown RevertReviewState = "unknown"
+)
+
 // MergedPR is one constituent PR the manifest check (§15.2) and the
 // aggregate-review decision function (§15.3, aggregatereview.go)
 // examine. See this file's own top doc comment for why this is a
@@ -93,11 +122,13 @@ type MergedPR struct {
 	// that landed -- see CIConclusion's own doc comment.
 	CIConclusionAtMergeSHA CIConclusion
 
-	// WasReverted is whether this PR was later reverted. RevertReviewed
+	// WasReverted is whether this PR was later reverted. RevertReviewState
 	// is whether THAT revert itself carried an approving review --
-	// meaningless when WasReverted is false.
-	WasReverted    bool
-	RevertReviewed bool
+	// meaningless when WasReverted is false. See RevertReviewState's own
+	// doc comment for why this is a tri-state, not a plain bool
+	// (audit-fix should-fix #4).
+	WasReverted       bool
+	RevertReviewState RevertReviewState
 	// RevertedAfterMergeSeconds is how long after this PR's own merge the
 	// revert landed -- nil when WasReverted is false, or the timing
 	// genuinely could not be determined. A plain integer (seconds), never
@@ -220,7 +251,15 @@ func ComputeReleaseManifestFindings(merged []MergedPR) []ManifestFinding {
 			})
 		}
 
-		if pr.WasReverted && !pr.RevertReviewed {
+		// Audit-fix should-fix #4: ONLY a positively confirmed
+		// RevertReviewStateNotReviewed ever produces this finding --
+		// RevertReviewStateUnknown (a failed sub-fetch) and the zero
+		// value both fall through here exactly like CIConclusionUnknown
+		// already falls through the red-at-merge check above, for the
+		// identical reason (this package's own doc comment on that
+		// check: never manufacture a human-facing accusation from a
+		// fetch failure).
+		if pr.WasReverted && pr.RevertReviewState == RevertReviewStateNotReviewed {
 			detail := ""
 			if pr.RevertedAfterMergeSeconds != nil {
 				detail = formatApproxDuration(*pr.RevertedAfterMergeSeconds)

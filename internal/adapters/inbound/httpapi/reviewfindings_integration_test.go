@@ -352,8 +352,8 @@ func (f *applySuggestionFakeSourceControl) RegisterPRStack(context.Context, port
 func (f *applySuggestionFakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
 	return errors.New("not implemented")
 }
-func (f *applySuggestionFakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, error) {
-	return nil, errors.New("not implemented")
+func (f *applySuggestionFakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
+	return nil, false, errors.New("not implemented")
 }
 
 var _ ports.SourceControl = (*applySuggestionFakeSourceControl)(nil)

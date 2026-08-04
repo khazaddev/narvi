@@ -292,8 +292,8 @@ func (f *fakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec
 // ListMergedBetween (Step 50, "release PR review", §15.2) is never
 // reached from this package either -- same "not implemented" precedent
 // as CreateBranch above.
-func (f *fakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, error) {
-	return nil, errors.New("fakeSourceControl: ListMergedBetween not implemented")
+func (f *fakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
+	return nil, false, errors.New("fakeSourceControl: ListMergedBetween not implemented")
 }
 
 // reposJSONForTest builds the sessions.repos JSONB shape (design decision
