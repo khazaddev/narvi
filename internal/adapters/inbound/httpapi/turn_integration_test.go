@@ -354,7 +354,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	auditLog := narvipg.NewAuditLogStore(pool)
 
 	commander := &fakeTurnCommander{}
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

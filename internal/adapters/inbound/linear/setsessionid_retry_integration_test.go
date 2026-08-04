@@ -176,9 +176,21 @@ func TestWebhookHandler_Created_SetSessionIDExhaustsRetries_ClaimsNeverReleased(
 	const deliveryID = "delivery-retry-exhausted-1"
 	body := agentSessionCreatedPayload(agentSessionID, organizationID)
 
-	var logBuf strings.Builder
+	// syncLogBuffer (webhook_integration_test.go), not a bare
+	// strings.Builder: the `created` event below still creates a real
+	// session/turn and dispatches it (this test's own doc comment above:
+	// "the session/turn genuinely exist and are already dispatched") --
+	// the SAME fire-and-forget GetOrSpawn+EnsureDispatched trigger every
+	// turn-creation call site uses, so the session's Actor can still be
+	// mid-flight on its own background goroutine, logging through this
+	// SAME redirected default logger, while this test's own goroutine
+	// reads logBuf.String() below. See syncLogBuffer's own doc comment for
+	// the full race (an identical instance of the one caught by -race in
+	// CI run 30887614911, in this package's own
+	// TestWebhookHandler_Prompted_LogsSessionAndTurnID).
+	logBuf := &syncLogBuffer{}
 	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelError})))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 
 	rec := postWebhook(t, handler, body, deliveryID)

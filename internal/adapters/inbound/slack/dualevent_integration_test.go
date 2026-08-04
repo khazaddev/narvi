@@ -360,7 +360,7 @@ func TestHandler_DualDelivery_FailedFirstAttemptReleasesBothClaimsForRedelivery(
 	brokenPool.Close()
 	brokenSessions := narvipg.NewSessionStore(brokenPool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -645,7 +645,7 @@ func newSlackAckTestRigWithRepo(t *testing.T, pool *pgxpool.Pool, defaultRepoNam
 	threads := narvipg.NewSlackThreadSessionStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

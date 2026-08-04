@@ -209,7 +209,7 @@ Problem this solves: some engine behaviors spawn multiple concurrent sub-agents 
 - The adapter assigns each spawned sub-task a stable `subTaskId` (derived from whatever correlator the engine itself exposes — OpenCode's own nested-task id today; not Narvi's own session concepts, per the note below) and tags every event that sub-task produces with it (§6.1), emitting `sub_task_start`/`sub_task_finish` to bracket its lifetime.
 - **Not a new domain entity.** A sub-task is a presentation/wire-level grouping of events belonging to one turn — not a new Postgres row, and not Narvi's own "child session" (§14.4: a full session with its own sandbox/turns, spawned by automation/sentinel features — a materially heavier mechanism; the naming here is deliberately distinct so the two are never confused). The turn state machine (§3.3) is unaffected: one turn still has exactly one `processing` state no matter how many sub-tasks ran underneath it.
 - **Cost rolls up.** Every `step_finish.cost` (§6.1) is summed into the same turn/session total regardless of which lane — main or any sub-task — produced it; a sub-task's spend is never invisible in the cost breakdown (§12.2 item 1). (Per-model cost attribution when a sub-task runs on a different model than its turn — §12.2 item 6's cost-by-model view — is not designed here; that needs its own `step_finish` model field before it can be claimed, left to whichever future work actually adds it.)
-- Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 69 (session timeline, lane nesting) and Step 70 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
+- Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 73 (session timeline, lane nesting) and Step 74 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
 
 ### 7.2 Context-overflow compaction retry (Step 44)
 
@@ -240,7 +240,7 @@ The adapter already has a *partial* answer for the auto-compaction case: an `Ove
 5. **Enterprise sandbox glue**: cloud credentials via OIDC (provider-agnostic), kubeconfig injection for the target cluster, Docker-in-sandbox, egress proxy, repo/environment/global secrets, OpenCode config storage + injection, toolchain in images (Playwright+Chromium, ripgrep, typescript-language-server).
 6. **Files**: uploads to object storage (S3-compatible) + `download_file` tool in sandbox; failed-upload UX signal.
 7. **Recovery UX**: relaunch-and-resume (conversation id replay), resume-in-place on live sandbox, Slack/Linear retry buttons, warm-on-type (composer keystrokes pre-warm a sandbox; must not create orphan sessions).
-8. **Models**: Anthropic + OpenAI/Codex (ChatGPT OAuth plugin) + reasoning-effort plumbing (per-session and per-message overrides).
+8. **Models**: Anthropic + OpenAI/Codex (ChatGPT OAuth plugin) + Gemini (via OpenCode's own already-present `google`/`google-vertex` providers, no new `AgentRuntime` adapter — §25.2) + reasoning-effort plumbing (per-session and per-message overrides).
 9. **RWX previews**: PR preview links dispatched at latest PR commit.
 10. **Slack/Linear fidelity**: mrkdwn contract both directions; Linear progressive AgentActivity updates; thread↔session mapping.
 11. **Multiplayer**: participants, presence, per-user PR attribution (viewer ≠ reviewer), PR created with the *prompting user's* OAuth token (fallback: bot + manual PR URL).
@@ -344,7 +344,7 @@ Design mockups of the nine views exist (decision inbox/home, session workspace, 
 ### 12.3 UX items to land with the UI
 Boot progress phases instead of spinner; failure reason + resume everywhere (matching the Slack/Linear retry affordance); distinct cancelled/failed/timeout chips; sandbox "what happened" panel (transitions + fingerprint + correlation id).
 
-**Composer send semantics (item 1's composer, Step 70, decision 5) — acceptance criteria, day one:** Enter sends and Shift+Enter inserts a newline, from the very first ship of this composer, never added later — inverting this after users have built muscle memory around one behavior is a change users route around, not adopt, so it is not a follow-up. An IME composition guard is required: confirming an in-progress IME composition (e.g. selecting a candidate while typing Japanese/Chinese/Korean, which itself uses Enter) must never itself send — the guard checks the browser's own composition state, not a heuristic over the text. Exactly ONE shared can-submit predicate drives both the Send button's disabled state and the keydown handler's own send-or-not decision — never two independently-maintained checks, since a button and a key handler silently drifting apart on when submission is allowed is the classic defect this class of UI produces. Touch/mobile gets an explicit decision rather than an unstated gap: out of scope for this ship — the mockups' existing breakpoints (`docs/design/mockups.html`, three `@media (max-width:980px)` rules collapsing `.app`/`.sidebar`/`.rail`, `.settings`/`.setnav`, and `.charts2` to single-column layouts) reflow for narrower viewports but define no touch-specific interaction anywhere, and the composer itself carries no rule inside any of them; a touch-appropriate composer affordance (mobile virtual keyboards make Shift+Enter awkward to reach) is deferred, named here rather than silently left unspecified.
+**Composer send semantics (item 1's composer, Step 74, decision 5) — acceptance criteria, day one:** Enter sends and Shift+Enter inserts a newline, from the very first ship of this composer, never added later — inverting this after users have built muscle memory around one behavior is a change users route around, not adopt, so it is not a follow-up. An IME composition guard is required: confirming an in-progress IME composition (e.g. selecting a candidate while typing Japanese/Chinese/Korean, which itself uses Enter) must never itself send — the guard checks the browser's own composition state, not a heuristic over the text. Exactly ONE shared can-submit predicate drives both the Send button's disabled state and the keydown handler's own send-or-not decision — never two independently-maintained checks, since a button and a key handler silently drifting apart on when submission is allowed is the classic defect this class of UI produces. Touch/mobile gets an explicit decision rather than an unstated gap: out of scope for this ship — the mockups' existing breakpoints (`docs/design/mockups.html`, three `@media (max-width:980px)` rules collapsing `.app`/`.sidebar`/`.rail`, `.settings`/`.setnav`, and `.charts2` to single-column layouts) reflow for narrower viewports but define no touch-specific interaction anywhere, and the composer itself carries no rule inside any of them; a touch-appropriate composer affordance (mobile virtual keyboards make Shift+Enter awkward to reach) is deferred, named here rather than silently left unspecified.
 
 ### 12.4 Sequencing & exit
 Built in phase 7. Definition of done: all nine views built to the mockups + §12.3 items; screenshot-level review against the mockups; `make dist` produces the single self-contained binary.
@@ -603,7 +603,7 @@ Persisted **write-once via a guarded update** (`UPDATE sessions SET intent_decis
 See §9.4. Activating the classifier on a surface (shadow → acting) must never delete the shadow code path, its config, or its telemetry — the same mechanism gets reused for every future model swap, prompt change, or new ingress surface, not just the first one. Skipping the shadow-mode window for a change because "tests already prove equivalence" is not a default; it requires an explicit, documented exception.
 
 ### 18.6 Classification surfaces
-The classifier serves multiple independent categories through the same contract, rubric, and record shape (§18.1-§18.4) — never a parallel classifier per category: review-vs-request and plan-vs-build (Step 36), release-vs-feature (§15.1, Step 50), and — new, Step 60 — `plan_followup` (amend-vs-answer, §23), gated on an existing plan being `awaiting_approval`. An internal-only surface like `plan_followup` is never registered on any public HTTP route — private to `app/`, never wired into `httpapi`/`wshub` — a structural exclusion, not a reviewed convention; any future internal-only classification surface should follow the same rule.
+The classifier serves multiple independent categories through the same contract, rubric, and record shape (§18.1-§18.4) — never a parallel classifier per category: review-vs-request and plan-vs-build (Step 36), release-vs-feature (§15.1, Step 50), and — new, Step 64 — `plan_followup` (amend-vs-answer, §23), gated on an existing plan being `awaiting_approval`. An internal-only surface like `plan_followup` is never registered on any public HTTP route — private to `app/`, never wired into `httpapi`/`wshub` — a structural exclusion, not a reviewed convention; any future internal-only classification surface should follow the same rule.
 
 ### 18.7 Phasing
 Detailed design underlying §8.3 (Step 36, phase 3) and the Settings → Prompt templates screen (§12.2 item 5, phase 7). No prior art exists (anywhere referenced in this document's research) for the DB-backed template storage/versioning/assembled-prompt-preview piece — it is designed from scratch when Step 36 is implemented, using this section's contract, rubric, and record schema as the foundation underneath it.
@@ -725,19 +725,19 @@ Before a non-trivial build-turn action (never a planning turn, §20.3), the turn
 The taxonomy is deliberately biased toward proceeding: default to STRONG only when genuinely warranted, MINOR for everything else worth mentioning, and silence for anything that doesn't rise to either — an epistemic check that flags routine work as a concern trains users to ignore it, defeating the entire mechanism. This bias is stated explicitly in the preamble text itself, not left to the model's own judgment of "how cautious to be."
 
 ### 20.2 The structured signal is not optional
-Unlike a prompt-only self-check (which produces nothing a query can ever answer — "did this actually fire, how often, was it right"), the agent's response to the preamble additionally emits a **structured, typed field** — `EpistemicOutcome`: `none/minor/strong` — persisted on the turn row, in the **same Step** that ships the preamble itself, never as later follow-up work. This is a non-negotiable part of Step 57, not a nice-to-have: without it, the false-alarm-rate question this feature exists to eventually answer (does STRONG fire too often to be useful, too rarely to matter) is simply unmeasurable — exactly the kind of zero-observability gap §5.3's "day one, not later" principle exists to prevent.
+Unlike a prompt-only self-check (which produces nothing a query can ever answer — "did this actually fire, how often, was it right"), the agent's response to the preamble additionally emits a **structured, typed field** — `EpistemicOutcome`: `none/minor/strong` — persisted on the turn row, in the **same Step** that ships the preamble itself, never as later follow-up work. This is a non-negotiable part of Step 61, not a nice-to-have: without it, the false-alarm-rate question this feature exists to eventually answer (does STRONG fire too often to be useful, too rarely to matter) is simply unmeasurable — exactly the kind of zero-observability gap §5.3's "day one, not later" principle exists to prevent.
 
 ### 20.3 Plan-mode turns are excluded
 A turn running under `plan_mode=true` never gets the devil's-advocate preamble — plan mode's own HITL approval step (§8.1) already is the human review of the proposed action before anything executes; injecting a second, independent caution mechanism into a turn a human is about to approve anyway would just be noise duplicating a gate that already exists. The preamble applies only to non-planning build turns.
 
 ### 20.4 Threading and defaults
-The enable/disable flag follows exactly the same threading `plan_mode` already uses: a global `platform.Config` default plus an optional override field on `SessionConfig`/`TurnSpec`, resolved with the same precedence (session override wins when set, global default otherwise) — no new config-resolution mechanism. **Off by default.** The signal is collected purely for analytics while the feature is calibrated (§21's analytics rollups are the natural home for an eventual false-alarm-rate view); there is no UI prominence beyond a subtle indicator surfaced in the review view (§12.2 item 2, Step 71) once shipped.
+The enable/disable flag follows exactly the same threading `plan_mode` already uses: a global `platform.Config` default plus an optional override field on `SessionConfig`/`TurnSpec`, resolved with the same precedence (session override wins when set, global default otherwise) — no new config-resolution mechanism. **Off by default.** The signal is collected purely for analytics while the feature is calibrated (§21's analytics rollups are the natural home for an eventual false-alarm-rate view); there is no UI prominence beyond a subtle indicator surfaced in the review view (§12.2 item 2, Step 75) once shipped.
 
 ### 20.5 Hard-gate is explicitly out of scope
 A hard gate — blocking the turn outright on a STRONG outcome rather than just surfacing it — is not designed here and not scheduled. It becomes a candidate only if and when the structured signal's own telemetry (§20.2) shows STRONG firing on genuine misses at a rate that justifies the cost of interrupting a session outright; until that evidence exists, gating on an unvalidated signal would risk blocking correct work on a false alarm, which is a worse failure than the one this feature exists to catch.
 
 ### 20.6 Phasing
-Step 57, Phase 5. Independent of every other new Phase 5 Step — it extends only the turn prompt-assembly path and the turn row schema.
+Step 61, Phase 5. Independent of every other new Phase 5 Step — it extends only the turn prompt-assembly path and the turn row schema.
 
 ## 21. Review verdict persistence, analytics, digest & automated approval (new capability)
 
@@ -746,7 +746,7 @@ Problem this solves: posted review verdicts (§8.2) leave no durable, queryable 
 ### 21.1 Verdict persistence & analytics read model
 Every posted verdict (§8.2/Step 47's structured `domain/review` type, §8.2/Step 45) appends one row to `review_verdicts` — **append-only, one row per post**, never an update-in-place; the structured type means this is pure storage, never re-parsing anything out of posted comment text (the domain object already exists before it is posted). The latest verdict per PR is a `DISTINCT ON (repo, pr_number) ... ORDER BY created_at DESC` reduction (the same idiom already used for `sandbox_history`, §5.1) — no correlated subquery, no second "current verdict" table to keep in sync by convention.
 
-Every row also carries **`head_sha`**: the commit the verdict was actually produced against — the same SHA the review session's own pre-fetched diff (§8.2/Step 46) was already anchored to, so this is forwarding a value already in hand, not deriving a new one. This table is not yet built (Step 58), so the column costs nothing to add now; deferring it would mean a later migration plus a backfill for which no truth exists — nobody can recover, after the fact, which SHA a historical verdict actually examined. With it, verdict staleness becomes a **queryable fact** rather than an inference: the decision inbox (§16) can show how many commits have landed on a PR since its latest verdict was issued, by comparing this column against the PR's current head. §21.2 below states the auto-approval hazard this independently closes.
+Every row also carries **`head_sha`**: the commit the verdict was actually produced against — the same SHA the review session's own pre-fetched diff (§8.2/Step 46) was already anchored to, so this is forwarding a value already in hand, not deriving a new one. This table is not yet built (Step 62), so the column costs nothing to add now; deferring it would mean a later migration plus a backfill for which no truth exists — nobody can recover, after the fact, which SHA a historical verdict actually examined. With it, verdict staleness becomes a **queryable fact** rather than an inference: the decision inbox (§16) can show how many commits have landed on a PR since its latest verdict was issued, by comparing this column against the PR's current head. §21.2 below states the auto-approval hazard this independently closes.
 
 **Stacked PRs: review scope is the PR's own increment, never the cumulative stack diff.** When a PR carries GitHub's own stack context (§17.6) — today, only ever the origin+sentinel-fix pair §17 registers — a review verdict still covers exactly the diff against **that PR's own** base (its immediate parent in the stack, not the stack's ultimate base), with position, size, and the stack's ultimate base supplied to the review only as context, never as additional diff to verdict over. This falls directly out of `head_sha`'s own design above: a verdict is pinned to one commit of one PR, and a verdict computed over a cumulative multi-PR diff could not be honestly attributed to any single `head_sha`, nor tracked for staleness the same way — a change to a PR below it in the stack would invalidate a cumulative verdict with no mechanism here to detect that and re-trigger it. The accepted residual: a defect that only manifests in composition with the not-yet-merged PR(s) below a given PR in the stack may go unreported at this review level — the same class of gap §15's aggregate-diff review exists to catch for merged, released work, never for an open, in-progress stack.
 
@@ -766,15 +766,15 @@ This section **supersedes** the label-driven auto-approval mechanism §8.2 and �
 
 No per-PR human label is required or consulted for this decision — the LLM's verdict only ever *proposes* `Shippable`; the server recomputes it and checks every criterion above independently, the same "never trust the model's own verdict" discipline §18.1's `FallbackReason` and `domain/sandbox`'s decision functions already apply elsewhere. The existing `review: low risk` label **inverts into an escape hatch**: replaced by `review: needs-human`, which forces a specific PR out of auto-approval regardless of what the criteria say — a maintainer who knows something the criteria can't see still has a lever, just an opt-out one instead of an opt-in gate. (`visual-qa: pass/skip` is unrelated to this change and continues exactly as before.)
 
-**Stage 2 — auto-merge (per-repo toggle, off by default).** Auto-approval alone does not merge anything. While a repo's auto-merge toggle is off (the default, and the state every repo starts in during a calibration period), an auto-approved PR surfaces in the decision inbox (§16.1's `ready_to_merge` row) as "ready to merge (auto)" with a 1-click human confirm — the human step moves from "decide if this is low-risk" to "confirm the machine's decision," a materially cheaper ask, but not a removed one. Every auto-approval outcome — confirmed as-is, or contested (a human overrides/requests changes on a PR the engine approved) — accumulates into a **contradiction-rate read model**: the fraction of auto-approved PRs a human later disagreed with, per repo. An admin arms the auto-merge toggle for a repo only once this data justifies it; the toggle's own settings row displays the reliability stats (§12.2 item 5, Step 73) next to the control, so arming it is an informed decision, not a leap of faith.
+**Stage 2 — auto-merge (per-repo toggle, off by default).** Auto-approval alone does not merge anything. While a repo's auto-merge toggle is off (the default, and the state every repo starts in during a calibration period), an auto-approved PR surfaces in the decision inbox (§16.1's `ready_to_merge` row) as "ready to merge (auto)" with a 1-click human confirm — the human step moves from "decide if this is low-risk" to "confirm the machine's decision," a materially cheaper ask, but not a removed one. Every auto-approval outcome — confirmed as-is, or contested (a human overrides/requests changes on a PR the engine approved) — accumulates into a **contradiction-rate read model**: the fraction of auto-approved PRs a human later disagreed with, per repo. An admin arms the auto-merge toggle for a repo only once this data justifies it; the toggle's own settings row displays the reliability stats (§12.2 item 5, Step 77) next to the control, so arming it is an informed decision, not a leap of faith.
 
-Once armed, auto-merge reuses the decision inbox's **existing** server-side re-validation-at-click contract unchanged (§16.2, Step 56: re-check CI, approval state, `Authorize` before calling the SCM) — merging is simply machine-initiated instead of human-clicked, the same checks either way. This is a deliberate reuse, not a parallel merge path: the inbox's Merge endpoint was already built to never trust its own rendered queue as authority, exactly the property an unattended merge needs.
+Once armed, auto-merge reuses the decision inbox's **existing** server-side re-validation-at-click contract unchanged (§16.2, Step 60: re-check CI, approval state, `Authorize` before calling the SCM) — merging is simply machine-initiated instead of human-clicked, the same checks either way. This is a deliberate reuse, not a parallel merge path: the inbox's Merge endpoint was already built to never trust its own rendered queue as authority, exactly the property an unattended merge needs.
 
 ### 21.3 Deterministic digest
 A daily digest is **entirely deterministic, never LLM-narrated** — it renders from the same `review_verdicts`/analytics read model above via a template, not a model call; a digest is a compliance/status artifact, and a fixed rendering is easier to trust and to test than a fresh narration every day. Scope is **per-repo/per-channel from day one**, reusing the decision inbox's own assignment logic (§16.2's identity-graph-backed provenance) rather than inventing a second, separate repo↔channel association mechanism — a person's digest shows what their own inbox would show, not a global fan-out. Sending is **claim-before-act per (date, channel)**: a `digest_send_state(date, channel)` row plus `SELECT ... FOR UPDATE SKIP LOCKED` (the same idiom §5.1 already uses for PR-mention coalescing) guarantees at-most-one send per channel per day even with concurrent ticks — no separate storage-layer serialization mechanism needed, Postgres already does this.
 
 ### 21.4 Phasing
-Step 58, Phase 5, after Step 45 (verdict shape) and Step 47 (posting path) — designing the verdict schema once, before any of persistence/analytics/digest/auto-approval builds on it, avoids the parallel-reinvention trap a shared schema exists to prevent. UI: Settings → Analytics gains the review-risk section and the per-repo auto-merge toggle with calibration stats (§12.2 items 5-6, Step 73); the decision inbox's `ready_to_merge` row (§16.1, Step 74) gains the "(auto)" 1-click-confirm variant.
+Step 62, Phase 5, after Step 45 (verdict shape) and Step 47 (posting path) — designing the verdict schema once, before any of persistence/analytics/digest/auto-approval builds on it, avoids the parallel-reinvention trap a shared schema exists to prevent. UI: Settings → Analytics gains the review-risk section and the per-repo auto-merge toggle with calibration stats (§12.2 items 5-6, Step 77); the decision inbox's `ready_to_merge` row (§16.1, Step 78) gains the "(auto)" 1-click-confirm variant.
 
 ## 22. Learned false-positive patterns & rebuttal identity (new capability)
 
@@ -797,7 +797,7 @@ Learned patterns are injected into every review pass (first pass and re-review a
 Retire, hit-count, and an audit view for this table **ship in the same Step** as the capture mechanism — never a deferred follow-up. A learned-pattern table with no retirement path only ever grows, accumulating stale or wrong patterns with no mechanism to review or remove them; shipping capture without a lifecycle would create exactly that unreviewable, ever-growing state from day one.
 
 ### 22.5 Phasing
-Step 59, Phase 5, after Step 47 (needs the verdict-posting path new patterns get weighed against) and Step 39 (`Authorize`, RBAC). UI: Settings → Environments gains false-positive pattern view/retire per repo (maintainer+, §12.2 item 5, Step 73); finding cards gain rebuttal history with the content-based finding-identity linkage (§12.2 item 2, Step 71).
+Step 63, Phase 5, after Step 47 (needs the verdict-posting path new patterns get weighed against) and Step 39 (`Authorize`, RBAC). UI: Settings → Environments gains false-positive pattern view/retire per repo (maintainer+, §12.2 item 5, Step 77); finding cards gain rebuttal history with the content-based finding-identity linkage (§12.2 item 2, Step 75).
 
 ## 23. Plan follow-up classification (amend vs answer) (new capability)
 
@@ -816,7 +816,7 @@ When the classifier fails or returns low confidence while a plan is `awaiting_ap
 Like every internal classification surface, `plan_followup` is excluded from public routes **by construction** — private to `app/`, never registered on `httpapi`/`wshub` (§18.6, mirrored here as the second surface to follow this rule; it is not merely a convention to remember but a structural property of where the code lives).
 
 ### 23.5 Phasing
-Step 60, Phase 5, after Step 36 (classifier) and Steps 37-38 (plan mode, the dispatch point this amends). No UI change — the effect is entirely in the dispatch/reply path.
+Step 64, Phase 5, after Step 36 (classifier) and Steps 37-38 (plan mode, the dispatch point this amends). No UI change — the effect is entirely in the dispatch/reply path.
 
 ## 24. Automatic re-review on new commits (new capability)
 
@@ -843,7 +843,7 @@ When `review_retrigger_debounce` fires and reaches the review session's actor (h
 1. Re-reads the per-repo opt-in setting (§24.5) — if it cannot be read, or is off, the timer is simply dropped: no re-review, logged, fail closed.
 2. Reads `github_pr_sessions.pending_head_sha` for this PR and the latest posted verdict for the same PR — the `DISTINCT ON (repo, pr_number) ... ORDER BY created_at DESC` reduction §21.1 already defines — and compares `pending_head_sha` against that verdict's own `head_sha` (§21.1's new column).
 3. If they already match (a race where a manual re-trigger, or an earlier automatic one, already reviewed this exact SHA), there is nothing to do: clear `pending_head_sha`, delete the timer, done.
-4. Otherwise (§24.6's budget check, below), enqueues a new turn on the review session, then clears `pending_head_sha` and deletes the `review_retrigger_debounce` timer — the same re-arm-or-delete contract every named-timer handler in this codebase already follows (`timerfired.go`'s own hard rule: a handler that leaves the claimed timer row untouched lets the claim window expire and silently redelivers the same `TimerFired` command forever). This step cannot literally be the actor calling `httpapi.CreateTurnForBot`, Step 46's own manual re-trigger path: `internal/app/sessionactor` cannot import `internal/adapters/inbound/httpapi` (httpapi already imports sessionactor throughout its bot/create/turn/plan files; the reverse would be a compile-time import cycle), and `createTurnLocked`, the function `CreateTurnForBot` itself wraps, is unexported besides. The actor instead inserts the turn directly via `a.stores.turn.Create` — the same store-level primitive `createTurnLocked` itself calls — inside the transaction this handler already has open, mirroring Step 46's manual path at the storage layer rather than calling through it. Whether the small amount of logic `createTurnLocked` wraps around that insert (the audit-log write, the awaiting-plan gate) needs duplicating here, or is inapplicable to a review session's automatic turn, is Step 61's own implementation decision, not resolved by this plan.
+4. Otherwise (§24.6's budget check, below), enqueues a new turn on the review session, then clears `pending_head_sha` and deletes the `review_retrigger_debounce` timer — the same re-arm-or-delete contract every named-timer handler in this codebase already follows (`timerfired.go`'s own hard rule: a handler that leaves the claimed timer row untouched lets the claim window expire and silently redelivers the same `TimerFired` command forever). This step cannot literally be the actor calling `httpapi.CreateTurnForBot`, Step 46's own manual re-trigger path: `internal/app/sessionactor` cannot import `internal/adapters/inbound/httpapi` (httpapi already imports sessionactor throughout its bot/create/turn/plan files; the reverse would be a compile-time import cycle), and `createTurnLocked`, the function `CreateTurnForBot` itself wraps, is unexported besides. The actor instead inserts the turn directly via `a.stores.turn.Create` — the same store-level primitive `createTurnLocked` itself calls — inside the transaction this handler already has open, mirroring Step 46's manual path at the storage layer rather than calling through it. Whether the small amount of logic `createTurnLocked` wraps around that insert (the audit-log write, the awaiting-plan gate) needs duplicating here, or is inapplicable to a review session's automatic turn, is Step 65's own implementation decision, not resolved by this plan.
 
 Trigger state is therefore a comparison of two Postgres columns (`github_pr_sessions.pending_head_sha` vs. `review_verdicts.head_sha`) — never a label read back off the pull request. §5.1 states why this matters as a general principle: a bot-written label is mutable by anyone with triage rights, forgeable, and a second copy of a fact Postgres already owns; this feature's own trigger state must live where every other piece of durable session state already lives.
 
@@ -859,4 +859,260 @@ An automated fix session (§17, sentinel auto-fix, or any future automation that
 Once the counter reaches the budget, §24.3 step 4's "otherwise" branch stops enqueueing a turn: it still clears `pending_head_sha` (so a later manual re-trigger starts clean) and deletes the `review_retrigger_debounce` timer (the same re-arm-or-delete contract every named-timer handler follows, `timerfired.go`) but does not dispatch. The FIRST time this happens for a given PR, the review session additionally posts one server-side verdict-tool notice (§5.2 — never a raw comment) that automatic re-review has reached its budget and further pushes need the existing manual re-trigger — a one-time event, not repeated on every subsequent debounce firing, so hitting the ceiling is observable without becoming noise. Later `synchronize` events on that same PR keep re-arming the debounce timer exactly as before (a cheap upsert either way); each firing simply finds the budget still exhausted and no-ops without posting a second notice.
 
 ### 24.7 Phasing
-Step 61, Phase 5, after Step 46 (the claim/coalescing primitives this extends with a second, automatic ingress lane) and Step 58 (`review_verdicts.head_sha`, this feature's own trigger-state source) — designing this after both means it reuses primitives that already exist rather than growing them in parallel. Gates nothing else in Phase 6/7. UI: the per-repo opt-in toggle ships in Settings → Analytics alongside the other per-repo automation toggles (§12.2 items 5-6, Step 73).
+Step 65, Phase 5, after Step 46 (the claim/coalescing primitives this extends with a second, automatic ingress lane) and Step 62 (`review_verdicts.head_sha`, this feature's own trigger-state source) — designing this after both means it reuses primitives that already exist rather than growing them in parallel. Gates nothing else in Phase 6/7. UI: the per-repo opt-in toggle ships in Settings → Analytics alongside the other per-repo automation toggles (§12.2 items 5-6, Step 77).
+
+## 25. Configurable workflow engine per lane + visual canvas editor (new capability)
+
+Problem this solves: today each of Narvi's three lanes (review, request/build, plan) is one fixed
+prompt → one model → one turn. There is no way to express, per lane, a configurable sequence of
+steps where each step names its own agent/model, carries its own prompt, and may gate on a human
+approval (HITL) — the concrete motivating case is the request lane: Gemini Pro drafts the spec →
+Claude Opus scaffolds → Claude Sonnet builds → GPT (via Codex) audits, with a bounded auto-fix
+loop after the audit. This section specifies a backend engine exercised by 100% of production
+traffic from day one — the three existing lanes become three non-deletable, `is_built_in` system
+workflows, never a parallel opt-in path — plus a canvas-style visual editor (Phase 7) on top of it.
+
+Decisions already made, not reopened here: full drag-and-drop canvas UI (§25.12); review/request/
+plan become three system workflows an admin may duplicate and customize — globally or per repo,
+never in place — never delete;
+Gemini ships alongside Anthropic/OpenAI in v1 (§8.8/Step 59, amended); the backend engine lands in
+Phase 5 right after the automations work (Steps 51-52), the canvas editor in Phase 7 right after
+Settings (Step 77); a HITL "revise" verdict is always a re-execution of the same step with the
+human's text folded in as an additional instruction — exactly plan mode's own `revise:` handling
+today (§8.1) — never a direct substitution of a structured artifact; and the OpenCode
+credential-injection gap (§25.3) is a blocking prerequisite for this entire chantier, built first,
+not Gemini-specific scope.
+
+### 25.1 Two findings independently verified in the existing code
+
+Per-turn model selection already exists end-to-end, no new plumbing needed: `turns.model_id`
+flows through `dispatch.go`'s `buildPromptPayload` (`Model: target.ModelID`, `dispatch.go:1493`)
+into `sandboxws.Prompt.model`, and the OpenCode adapter's own `resolveModel`
+(`internal/adapters/outbound/opencode/session.go`) does nothing more than `strings.Cut(raw, "/")`
+into provider/model — there is no Narvi-side allowlist of providers or models anywhere on this
+path. It is already a generic passthrough to any `provider/model` string OpenCode itself
+recognizes.
+
+But no credential is injected into the OpenCode process for ANY provider today.
+`internal/sandboxagent/opencodeproc/spawn.go` starts `opencode serve` inheriting sandbox-agent's
+own OS environment verbatim (`Env: supervisor.EnvWithout(boot.SessionConfigEnvVar)` — exactly one
+variable excluded); no `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or Google equivalent is wired
+anywhere in this codebase. This is the actual, provider-agnostic blocking gap — not a
+Gemini-specific cost — and closing it (§25.3) is a prerequisite for per-step model override to do
+anything beyond what the zero-config path (§25.6) already does today.
+
+### 25.2 Provider catalog: RESOLVED for Gemini, verified against the live binary
+
+Amends §8.8/Step 59 ("models"). Verified 2026-08-03 directly against the pinned OpenCode 1.17.15
+binary's own `GET /provider` catalog — a 4.5MB response, deliberately fetched by bypassing `rtk`
+(whose own output-truncation would otherwise silently drop the payload this finding depends on).
+The catalog already lists a `google` provider (`env: GOOGLE_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY,
+GEMINI_API_KEY`) alongside `google-vertex`/`google-vertex-anthropic` (both keyed on
+`GOOGLE_VERTEX_PROJECT`/`GOOGLE_VERTEX_LOCATION`/`GOOGLE_APPLICATION_CREDENTIALS`), with 41 real
+Gemini models each — `gemini-3.5-flash` checked directly: `capabilities.toolcall: true`, a
+1,048,576-token context window, and real cost data (`input: 1.5, output: 9, cache.read: 0.15`). No
+new `AgentRuntime` adapter is needed for Gemini — the small-scenario applies exactly as §7's
+anti-corruption layer already generalizes. The one remaining gap is credential injection (§25.3),
+which blocks every provider today, not Gemini specifically. A new CI contract test is still
+required — mirroring §7's existing pinned-binary contract-test discipline — verifying Gemini's
+actual tool-calling/streaming quality through OpenCode, since every existing contract test is
+Claude-backed and proves nothing transitively about a different provider's behavior.
+
+### 25.3 Provider credential injection (Step 53) — the blocking prerequisite
+
+Generic secret injection into `spawn.go`'s `cmd.Env` for the OpenCode process closes the gap named
+in §25.1 for every provider at once. `ActionManageRepoSecrets`/`ActionManageEnvSecrets`/
+`ActionManageGlobalSecrets` (`internal/domain/authz/authorize.go`) already reserve the RBAC row for
+exactly this class of data — but grepped directly, no secret-storage table exists anywhere in this
+codebase yet (no `secret` column, table, or store outside one unrelated magic-link bearer token,
+`migrations/000036`). This Step is the first one that actually has to build it — the same
+"reserved in the RBAC/design vocabulary, not actually built" gap migration 000045's own comment
+already found and named, for a different mechanism (`parent_session_id`/`spawn_depth`). Scope here
+is deliberately narrow: provider API keys only, mapped provider→env-var name
+(`GOOGLE_API_KEY`/`GOOGLE_GENERATIVE_AI_API_KEY`/`GEMINI_API_KEY` for `google`, `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`), sourced per-repo/per-environment/global exactly like the RBAC matrix already
+anticipates. No SESSION_CONFIG change and no `AgentRuntime`/port change — this is entirely inside
+`sandbox-agent`'s own process-spawn path.
+
+### 25.4 Domain model — `internal/domain/workflow` (Step 54)
+
+Pure, no I/O, same discipline as every other `/internal/domain` package (CLAUDE.md, §11):
+- `Lane` — a closed enum (`review`/`request`/`plan`) and `LaneFor(target, mode)`, a pure mapping
+  over the classifier's own existing vocabulary (`intent.TargetReview`/`TargetRequest`,
+  `intent.ModePlan`/`ModeBuild`, `internal/domain/intent/rubric.go`) — not a new vocabulary
+  invented alongside it.
+- `WorkflowDefinition{ID, Lane, Name, IsBuiltIn, Version, Steps}`, `StepDefinition{ID, Order, Kind,
+  ModelID *string, PromptTemplate, ExecutionScope (same_session|child_session),
+  ConversationContinuity (continue|fresh), HITLBefore/HITLAfter, Edges}`.
+- `StepOutcomeStatus` — a closed 3-value enum (`ok`/`needs_fix`/`blocked`), the same discipline
+  `review.Shippable` already establishes for its own 3-value enum. This is a **distinct axis from
+  `Shippable`** — an edge never conditions on anything but this fixed vocabulary, and `Shippable`
+  (§21.2) is never routed through it (§25.8 states why).
+- `Edge{FromStepID, OnStatus, ToStepID}`: with no explicit edge, `ok` advances to the next step in
+  `Order`; `needs_fix`/`blocked` escalate by default (fail-conservative) — a retry loop must be
+  wired explicitly, never implied.
+- `NextStep(...)` — one pure decision function, the same shape as `turn.Transition`/
+  `plan.Transition`/`sandbox.Transition` (`internal/domain/turn/state.go:167`,
+  `internal/domain/plan/plan.go:118`, `internal/domain/sandbox/state.go:375`).
+
+Why the three built-in workflows are rows, not Go constants: the "duplicate and customize"
+requirement and the canvas editor both need the default to exist in exactly the same shape as a
+custom workflow. All three are seeded `is_built_in = true` directly in the migration. `PUT`/
+`DELETE` on an `is_built_in = true` row is refused unconditionally — a structural invariant, not an
+RBAC rule.
+
+**System template, global binding, and repo override are three distinct concepts, not three rungs
+of one fallback ladder:**
+
+- **System template** — a `WorkflowDefinition` row with `IsBuiltIn = true`. Read-only starting
+  content; never itself a live setting; the only thing "system" means.
+- **Global binding** — a `workflow_bindings` row keyed `(lane, repo_full_name = NULL)`. Exactly one
+  per lane, seeded by the migration to point at that lane's system template — but from that point on
+  it is an ordinary, independently-repointable setting, not a fallback anyone "reaches." Because it
+  is seeded for every lane, this row is **never absent** — there is no "no binding configured" state
+  to fail open or closed on.
+- **Repo override** — a `workflow_bindings` row keyed `(lane, repo_full_name = '<owner>/<repo>')`.
+  Optional, and shadows the global binding for that one repo only.
+
+Resolution: look up `workflow_bindings` for `(lane, repo_full_name)`; if a repo-specific row exists,
+use it; otherwise use the `(lane, NULL)` global row. The global row is guaranteed to exist by the
+seed migration, so this is a two-step lookup with a guaranteed second step, never an "absent row →
+default" fail-open branch — `workflow_bindings` has no row that resolves to nothing.
+
+### 25.5 Circuit breaker — `internal/domain/loopguard` (Step 54)
+
+A second new pure package: `Evaluate(State{AttemptCount}, Config{MaxAttempts}) Decision
+{ShouldProceed, ShouldEscalate}` — no time window. Iteration count is read back via `COUNT(*)` on
+`workflow_step_runs`, never a dedicated counter column — the same "derive it from the rows that
+already exist" discipline `review_verdicts`' own `DISTINCT ON` reduction (§21.1) already applies.
+
+### 25.6 Execution model: turns, sessions, and conversation continuity (Step 55)
+
+By default, every step is an ordinary sequential turn on the SAME `sessions` row, dispatched
+through the existing `createTurnLocked`/`CreateTurnCore` (`internal/adapters/inbound/httpapi/
+turn.go:309,373`) — no new wire command, no `AgentRuntime` change. The "what happens next"
+decision hooks into the sandbox-event handler this codebase already has
+(`internal/app/sessionactor/sandboxevent.go:223`, `handleSandboxEvent`).
+
+A child session is used only when real isolation is needed. `parent_session_id`/`spawn_depth`
+(`migrations/000045_sessions_child_sessions.up.sql`) already exist — but note precisely what that
+migration's own comment says: `spawn_depth` is recorded as observability data, not gated on
+numerically; the actual "no recursion" invariant is enforced via `provenance_tag` (a
+sentinel-auto-fix child session is never itself eligible to trigger another), not a depth-counter
+check. The workflow engine's fix-step child session follows the SAME restriction discipline Step
+48 already established (`SpawnSentinelFixChildSession`), never a numeric-depth mechanism this
+codebase doesn't actually have — and is reserved for the audit-fix loop's fix step alone, never the
+audit step itself.
+
+"Fresh context" is not "a new session": `AgentRuntime.StartTurn` already branches on whether
+`cmd.ConversationId` is nil to start a new OpenCode conversation inside the same sandbox
+(`internal/app/ports/agentruntime.go:79`). A step that must not inherit the full chat history of
+earlier steps uses `ConversationContinuity: fresh` on the SAME session, not a child session.
+
+Typed handoff between steps, never re-parsed free text — the same discipline
+`review.RenderTurnPrompt` already applies (`internal/domain/review/context.go:234`). A new,
+generic step-outcome-posting tool, structurally identical to the existing verdict-posting tool
+(`internal/domain/reviewpost`): `{status: ok|needs_fix|blocked, summary (advisory, never
+re-parsed), structuredPayload: json.RawMessage}`. For the audit step specifically, this schema
+reuses `review.Verdict` + `reviewpost.Finding[]` in full rather than reinventing them.
+
+Concurrency: the common case (same session) hangs off the transaction the session actor already
+has open. A step running in a child session is observed by a DIFFERENT actor than the one owning
+the `WorkflowRun` — exactly the situation `sentinel_fixes`/`review_findings` already solve today,
+via guarded `UPDATE ... WHERE status = X` writes, never the epoch-fencing mechanism.
+
+### 25.7 Per-step model/provider binding
+
+Confirmed by direct code reading: this is already a parameter within one existing call, not a
+second port. `StepDefinition.ModelID` reuses the `provider/model` convention already in place
+(§25.1). No new port, no new Narvi-side registry, for any provider OpenCode itself already
+recognizes. The `LLM` port (`internal/app/ports/llm.go`) is unrelated — it serves only the
+classifier and the review's single-completion calls, never an agentic turn with tool use.
+
+### 25.8 The three built-in workflows, and the override example
+
+- **review**: one step, `ModelID: nil`, prompt = today's unchanged text, no HITL. `Shippable`
+  (§21.2) stays a separate axis, consumed after the step completes by the existing auto-approval
+  machinery — never routed through `StepOutcomeStatus`.
+- **plan**: two steps (plan → build), HITL after step 1 reusing `ApproveKeywords`/`RejectKeywords`/
+  `RevisePrefix` unchanged (`internal/domain/plan/verdict.go`), a `needs_fix → same step` loop
+  explicitly exempted from the circuit breaker.
+- **request**: one step, passthrough, no behavior change.
+
+The Gemini→Opus→Sonnet→Codex example is a non-built-in workflow bound as the **global** Request-lane
+binding (`workflow_bindings` row keyed `(request, NULL)`) — it demonstrates that a global binding is
+a real, repointable setting, not a fourth built-in default. A repo may still shadow it locally: a
+scoped-Environment repo with no backend to audit against can bind a lighter, repo-specific override
+(e.g. a two-step prototype flow with no audit step) via its own `(request, '<repo>')` row, which
+shadows the global one for that repo alone.
+
+### 25.9 HITL gate (Step 56)
+
+Reuses plan mode's own cross-channel delivery mechanism (Slack/Linear/GitHub/web), not its domain
+package: new `NotificationKind` values extending `planslacknotifier.go`/`linearnotifier.go` exactly
+as this codebase's own precedent already does twice (`cmd/control-plane/main.go`'s notifier
+routing map). Three verdicts: approve (continue), reject (end the run), revise (human text →
+always a re-execution of the same step with the text as an extra instruction, never a direct
+substitution of a structured artifact). GitHub: a new deterministic `EditPrefix` keyword, the same
+strict, never-substring matching discipline as `plan.MatchVerdict`/`MatchRevise`
+(`internal/domain/plan/verdict.go:49,121`). Web endpoint: `POST /api/workflow-runs/:runId/steps/
+:stepRunId/decide`, the same shape as `decideplan.go`. Human-revision loops are exempt from the
+circuit breaker, mirroring §24.6's own exemption of manual re-triggers.
+
+The auto-fix loop itself needs no separate loop mechanism: `Edge{audit, needs_fix, fix}`,
+`Edge{fix, ok, audit}` — two ordinary edges `NextStep` already evaluates. `loopguard.Evaluate` is
+consulted only when the `audit → fix` edge is about to re-fire; on escalate,
+`WorkflowRun.Status = needs_review`, one notice (never repeated, like §24.6), stop. This never
+touches or reuses `sentinel_fixes`/`SpawnSentinelFixChildSession` (Step 48) — the fix step here is
+structurally parallel to it, never a caller of it.
+
+### 25.10 Wire contracts
+
+New schema-first entities in `contracts/rest/v1/dtos.schema.json`: `WorkflowDefinition`/
+`WorkflowStepDefinition`/`Edges`, `WorkflowBinding`, `WorkflowRun`/`WorkflowStepRun` (read-only),
+`WorkflowStepDecideRequest`/`Response`. An optional `canvasPosition {x, y}`, opaque server-side. No
+SESSION_CONFIG change, no `AgentRuntime` change.
+
+### 25.11 RBAC
+
+Three new actions, each mirroring an existing row in `internal/domain/authz/authorize.go`:
+- `ActionManageWorkflowDefinitions` — maintainer+ (same row as `ActionManageAutomations`):
+  create/edit an unbound draft.
+- `ActionActivateWorkflowBinding` — admin-only (same row as `ActionActivatePromptTemplate`): bind
+  `(repo, lane)` to a specific definition — `repo` may be a specific repository or the global
+  (org-wide, `repo_full_name = NULL`) scope; the same action gates both.
+- `ActionDecideWorkflowStep` — own/joined-aware (same row as `ActionApprovePlan`).
+
+`is_built_in` immutability is a structural invariant, not an RBAC row (§25.4).
+
+### 25.12 Visual canvas editor (Step 79, Phase 7)
+
+A React Flow-style node/edge canvas for authoring a lane/repo workflow's steps and edges. It must
+validate/constrain what a user can draw against the engine's closed model — ordered steps plus
+3-status edges, no expression language (§25.4) — rejecting an undrawable-by-the-engine graph at
+save time, not silently accepting it. Inline progress display of a running workflow in the session
+view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 73/74) — not
+a separate Step.
+
+### 25.13 Risks and open questions
+
+- **Canvas-vs-engine expressivity mismatch**: the editor is a general node/edge canvas; the
+  runtime supports only ordered steps + a closed 3-status-edge model, no expression language
+  (§25.12).
+- **Per-step cost attribution**: does not exist yet. §7.1 already names the adjacent gap as debt:
+  per-model cost attribution when a sub-task runs on a different model than its turn "is not
+  designed here ... left to whichever future work actually adds it." This chantier inherits, and
+  must close, the equivalent gap at the workflow-step level.
+- **Decision inbox** (§16, Step 60/78) is not extended by this chantier.
+- **`LaneFor` must inherit the classifier's fail-open discipline**: `IsActive` defaults every
+  surface to shadow when unconfigured (§18.5) — `LaneFor` must default the same way rather than
+  block dispatch on an unresolved lane.
+- **Multi-provider streaming/cost/error-taxonomy parity** if Gemini runs through OpenCode is an
+  untested hypothesis, not yet validated end-to-end.
+
+### 25.14 Phasing
+
+Steps 53-56, Phase 5, immediately after Step 52 (automations: triggers & extras) — see the Phase 5
+renumbering note (IMPLEMENTATION_PLAN.md). 53 is a blocking prerequisite for 54-56; 55 is exercised
+by 100% of production traffic from day one. Step 79, Phase 7, immediately before ui finalize (Step
+80) — see the Phase 7 renumbering note.

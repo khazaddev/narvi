@@ -84,7 +84,7 @@ func TestPlanContentText_LongEventHistory_StillFindsCurrentTurnsTokenText(t *tes
 		t.Fatalf("seed plan turn's own token event: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "")
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

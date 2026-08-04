@@ -59,7 +59,7 @@ func newSlackPlanGateTestRig(t *testing.T, pool *pgxpool.Pool, recordingSlackSer
 	outbox := narvipg.NewOutboxStore(pool)
 	linearAgentSessions := narvipg.NewLinearAgentSessionStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "")
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

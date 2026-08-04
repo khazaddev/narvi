@@ -306,6 +306,68 @@ func TestLoadHTTPAddr(t *testing.T) {
 	}
 }
 
+// TestLoadDBPoolMaxConns covers the optional NARVI_DB_POOL_MAX_CONNS:
+// unset defaults to defaultDBPoolMaxConns (20 -- deliberately NOT pgxpool's
+// own CPU-tied default, see dbPoolMaxConnsEnvVarName's own doc comment), an
+// explicit positive integer threads through, and a non-integer or
+// non-positive value fails fast with *platform.InvalidDBPoolMaxConnsError.
+func TestLoadDBPoolMaxConns(t *testing.T) {
+	t.Run("unset defaults to 20", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_DB_POOL_MAX_CONNS", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (this override is optional)", err)
+		}
+		if cfg.DBPoolMaxConns != 20 {
+			t.Errorf("Load().DBPoolMaxConns = %d, want 20", cfg.DBPoolMaxConns)
+		}
+	})
+
+	t.Run("explicit override threads through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_DB_POOL_MAX_CONNS", "50")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.DBPoolMaxConns != 50 {
+			t.Errorf("Load().DBPoolMaxConns = %d, want 50", cfg.DBPoolMaxConns)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		envVal string
+	}{
+		{name: "not an integer", envVal: "not-a-number"},
+		{name: "zero", envVal: "0"},
+		{name: "negative", envVal: "-5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("NARVI_DB_POOL_MAX_CONNS", tc.envVal)
+
+			cfg, err := platform.Load()
+			if err == nil {
+				t.Fatalf("Load() error = nil, want error for NARVI_DB_POOL_MAX_CONNS=%q", tc.envVal)
+			}
+			var poolErr *platform.InvalidDBPoolMaxConnsError
+			if !errors.As(err, &poolErr) {
+				t.Fatalf("Load() error = %v, want *platform.InvalidDBPoolMaxConnsError", err)
+			}
+			if poolErr.Value != tc.envVal {
+				t.Fatalf("InvalidDBPoolMaxConnsError.Value = %q, want %q", poolErr.Value, tc.envVal)
+			}
+			if cfg != nil {
+				t.Fatalf("Load() cfg = %+v, want nil on error", cfg)
+			}
+		})
+	}
+}
+
 // TestLoadHMACSecrets is table-driven over each of the three per-direction
 // HMAC secret env vars, individually unset: Load must fail fast with a
 // *platform.InvalidHMACSecretError naming that exact env var (not a

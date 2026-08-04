@@ -1,11 +1,21 @@
 // This file (outboxenqueue.go) implements Step 35's ("outbox delivery",
 // §5.1) own enqueue-side half: writing exactly one outbox row for a
 // non-'web'-origin session's turn completion, in the SAME transaction as
-// the turn's own terminal state write (pushpr.go's completeProcessingTurn
-// calls enqueueOutboxNotification right after persisting that state
-// change, before its own transact returns) -- §5.1's own explicit
-// requirement: "Outbox pattern for every outbound side effect... written
-// in the same tx as the state change".
+// the turn's own terminal state write -- §5.1's own explicit requirement:
+// "Outbox pattern for every outbound side effect... written in the same tx
+// as the state change".
+//
+// TWO call sites, one per way a turn can reach a terminal state, both
+// calling right after persisting that state change and before their own
+// transact returns:
+//
+//   - pushpr.go's completeProcessingTurn -- a REAL execution_complete
+//     event arrived from the sandbox (complete/fail/cancel alike).
+//   - timerfired.go's handleTurnDeadlineTimer -- turn_deadline expired
+//     with no such event ever arriving (turn.TriggerTimeout). Added later
+//     than the first: Step 35 wired only the real-event path, leaving a
+//     timed-out turn on a Slack/Linear-origin session silent on its
+//     originating channel.
 //
 // The DELIVERY side (claiming these rows, calling the right
 // ports.Notifier, retrying with backoff, dead-lettering) is
@@ -88,7 +98,20 @@ func outcomeText(trig turn.Trigger, failureReason turn.FailureReason) string {
 		return "Turn completed successfully."
 	case turn.TriggerCancel:
 		return "Turn was cancelled."
-	case turn.TriggerFail:
+	case turn.TriggerFail, turn.TriggerTimeout:
+		// TriggerTimeout shares this arm deliberately. It is the
+		// CONTROL-PLANE-INTERNAL failure trigger -- turn_deadline expiring
+		// with no terminal event ever arriving (handleTurnDeadlineTimer,
+		// timerfired.go) -- and lands in the exact same turn.StateFailed as
+		// TriggerFail's own agent-reported failure. Letting it fall through
+		// to the generic default below would tell a Slack/Linear user "Turn
+		// finished." for a turn that actually FAILED. The two remain
+		// distinguishable in the rendered text via failureReason, which
+		// turn.DeriveFailureReason maps to "timeout" here and "failed" for
+		// TriggerFail -- exactly the distinction domain/turn's own trigger
+		// vocabulary exists to preserve (see TriggerTimeout's own doc
+		// comment: "so a genuine agent failure and a deadline expiry are
+		// never confused").
 		if failureReason != "" {
 			return fmt.Sprintf("Turn failed (%s).", failureReason)
 		}
@@ -99,10 +122,10 @@ func outcomeText(trig turn.Trigger, failureReason turn.FailureReason) string {
 }
 
 // enqueueOutboxNotification decides whether sessionRow's turn completion
-// (trig/failureReason, already-validated by completeProcessingTurn's own
-// caller) needs an outbound notification at all, and if so, writes exactly
-// one outbox row for it, inside tx. sessionRow is the SAME row
-// completeProcessingTurn already fetched (a.stores.session.WithTx(tx).Get)
+// (trig/failureReason, already-validated by its caller -- see this file's
+// own top comment for both) needs an outbound notification at all, and if
+// so, writes exactly one outbox row for it, inside tx. sessionRow is the
+// SAME row the caller already fetched (a.stores.session.WithTx(tx).Get)
 // moments ago -- passed in rather than re-fetched here, so this function
 // never issues a redundant second SELECT of the same row inside the same
 // transaction. A 'web'-origin session (sessionRow.SpawnSource ==
