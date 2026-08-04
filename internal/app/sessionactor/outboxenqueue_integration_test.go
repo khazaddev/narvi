@@ -413,7 +413,7 @@ func TestTurnDeadlineTimeout_EnqueuesOutboxNotificationPerOrigin(t *testing.T) {
 				t.Fatalf("move turn to processing: %v", err)
 			}
 
-			r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "")
+			r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "", nil)
 			if err != nil {
 				t.Fatalf("NewRegistry: %v", err)
 			}
