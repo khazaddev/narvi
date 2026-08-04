@@ -34,6 +34,11 @@ import (
 type fakeOpenCodeServer struct {
 	srv *httptest.Server
 
+	// t is held so broadcast can FAIL the test when it cannot deliver,
+	// instead of silently dropping the line -- see broadcast's own doc
+	// comment for the CI failure that motivated this.
+	t *testing.T
+
 	mu             sync.Mutex
 	current        *fakeSSEConn
 	connSeq        int
@@ -121,7 +126,10 @@ type fakeSSEConn struct {
 func newFakeOpenCodeServer(t *testing.T) *fakeOpenCodeServer {
 	t.Helper()
 
-	f := &fakeOpenCodeServer{connected: make(chan int, 64)}
+	f := &fakeOpenCodeServer{
+		t:         t,
+		connected: make(chan int, 64),
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/event", f.handleEvent)
@@ -548,14 +556,66 @@ func (f *fakeOpenCodeServer) abortCallCount() int {
 // sseLine below) to whichever /event connection is CURRENTLY live -- a
 // no-op if none is connected. Callers are expected to have already
 // consumed at least one value from f.connected first.
+// broadcast delivers line on the CURRENT /event connection, waiting for one
+// to exist (and re-waiting if a reconnect races the send) rather than
+// dropping the line when f.current happens to be nil.
+//
+// It used to return silently in that case, and that is exactly how CI lost
+// TestCompactionRetry_SharesOneShotBudgetWithTransientRetry and
+// TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce: the
+// adapter's own SSE reconnect fires mid-test on a loaded runner (the failing
+// runs' logs show "event stream connection lost, reconnecting" in the same
+// second as the failure), so an error-carrying message.updated vanished,
+// only the following session.idle landed, and the turn finalized as
+// completed with a nil reason -- surfacing as a wrong-outcome assertion two
+// layers from its cause, on tests that pass every time locally where no
+// reconnect happens.
+//
+// t.Errorf rather than t.Fatalf: this is reachable from a non-test goroutine,
+// where FailNow is not allowed.
+// broadcastWaitBudget bounds broadcast's own wait for a live connection --
+// deliberately NOT testWait. A single blocked broadcast call must never be
+// able to consume a whole test's entire time budget: several tests share
+// that same testWait window across their own context AND everything they
+// do with it (StartTurn, group.Wait, assertions), so if broadcast silently
+// borrowed all of testWait waiting for a reconnect, it could starve the
+// turn's own ctx into cancelling first -- exactly what happened under
+// `-tags=integration -race` load in CI (TestTransientRetry_
+// RetryAlsoFailsFinalizesFailedExactlyOnce: a broadcast call blocked the
+// full testWait=15s waiting for a connection that legitimately reappeared
+// via the adapter's own reconnect logic, but not before the turn's own
+// 15s ctx expired first -- outcome "cancelled" instead of "failed").
+// A real reconnect completes within testReconnectInterval; this budget is
+// several multiples of that, generous for scheduling jitter under a loaded
+// CI runner without ever approaching testWait itself.
+const broadcastWaitBudget = 4 * testReconnectInterval
+
 func (f *fakeOpenCodeServer) broadcast(line string) {
-	f.mu.Lock()
-	conn := f.current
-	f.mu.Unlock()
-	if conn == nil {
-		return
+	deadline := time.After(broadcastWaitBudget)
+	for {
+		f.mu.Lock()
+		conn := f.current
+		f.mu.Unlock()
+		if conn != nil {
+			select {
+			case conn.send <- line:
+				return
+			case <-conn.close:
+				// A reconnect raced us between reading f.current
+				// and sending; wait for the replacement.
+			case <-deadline:
+				f.t.Errorf("fake server: no live /event connection accepted a broadcast within %s", broadcastWaitBudget)
+				return
+			}
+			continue
+		}
+		select {
+		case <-time.After(time.Millisecond):
+		case <-deadline:
+			f.t.Errorf("fake server: never observed a live /event connection to broadcast on within %s", broadcastWaitBudget)
+			return
+		}
 	}
-	conn.send <- line
 }
 
 // dropConnection force-closes whichever /event connection is currently
@@ -652,29 +712,130 @@ func waitForSawText(t *testing.T, ts *turnState) {
 	t.Fatal("turn never observed the broadcast assistant text part within testWait")
 }
 
-// waitForNotCompacting polls ts.isCompacting() until it reads false, or
-// fails the test after testWait -- a LATER audit's own round-2 Finding 3
-// regression fix: a test that releases a gated retry postPromptAsync call
-// and then immediately broadcasts that retry's own completion events (via
-// f.broadcast, bypassing the real client-side HTTP round trip entirely)
-// must not race attemptCompactionRetry's own ts.setCompacting(false) call
-// (adapter.go, deliberately run only AFTER postPromptAsync returns, §7.2
-// Finding 3) -- broadcasting those events before compacting has actually
-// flipped false would have them silently dropped by dispatchEvent's own
-// isCompacting guard (sse.go), exactly the same hazard
-// TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed
-// deliberately controls via armPromptAsyncGateForCall. Waiting for this
-// deterministically, rather than a sleep, closes that window for good.
-func waitForNotCompacting(t *testing.T, ts *turnState) {
+// waitForNotCompacting polls ts.isCompacting() until it reads false, THEN
+// additionally confirms the adapter's own SSE-reader goroutine has actually
+// DRAINED every event broadcast on f's current connection up to this point
+// (via waitForDrained below) -- not merely that the CLIENT-side
+// postPromptAsync round trip has returned, which is all ts.isCompacting()
+// alone can ever prove -- before returning; fails the test after testWait
+// if either step never completes.
+//
+// The ORIGINAL half (poll ts.isCompacting()) is a LATER audit's own round-2
+// Finding 3 regression fix: a test that releases a gated retry
+// postPromptAsync call and then immediately broadcasts that retry's own
+// completion events (via f.broadcast, bypassing the real client-side HTTP
+// round trip entirely) must not race attemptCompactionRetry's own
+// ts.setCompacting(false) call (adapter.go, deliberately run only AFTER
+// postPromptAsync returns, §7.2 Finding 3) -- broadcasting those events
+// before compacting has actually flipped false would have them silently
+// dropped by dispatchEvent's own isCompacting guard (sse.go), exactly the
+// same hazard TestCompactionRetry_LateCompactionTailEventDuringRetryDispatchIsSuppressed
+// deliberately controls via armPromptAsyncGateForCall.
+//
+// The ADDED second half (waitForDrained) closes a DIFFERENT, previously
+// unrecognized race living in this exact same neighborhood, root-caused via
+// actual local reproduction (GOMAXPROCS capped well below this machine's
+// real core count, PLUS several competing CPU-bound busy loops, `go test
+// -race -p 1 -count=200`) rather than inferred from CI logs alone:
+// attemptCompactionRetry's forceCompaction (adapter.go) and this file's own
+// /summarize handler (broadcastCompactionSuccessWave, above) queue a whole
+// WAVE of compaction-internal SSE traffic onto this connection
+// SYNCHRONOUSLY, strictly BEFORE forceCompaction's own HTTP response is
+// even returned to the caller -- but queuing onto fakeSSEConn.send only
+// proves that wave was ACCEPTED into this connection's own outbound
+// buffer, never that the adapter's own connectAndConsume/dispatchEvent
+// goroutine (an entirely separate goroutine reading that SAME connection)
+// has actually caught up and processed it yet. Under severe CPU/scheduling
+// contention that SSE-reader goroutine can fall far enough behind that
+// ts.compacting flips back to false (postPromptAsync -- a SEPARATE, and
+// against this in-process fake server NEAR-INSTANT, round trip -- returns
+// almost immediately) WHILE the compaction wave's own three events are
+// still sitting undelivered in fakeSSEConn.send: draining them AFTER that
+// clear no longer trips dispatchEvent's own isCompacting guard (sse.go) at
+// all, so the wave's own internal session.idle gets misread as THIS TURN'S
+// real completion (finalizing early via tryFinalize, permanently discarding
+// whatever a test goes on to broadcast next -- there is no replay), and its
+// own internal "text" part -- if drained first -- gets misread as real
+// assistant output (ts.markSawText), changing the resulting bogus premature
+// outcome from Failed/"opencode: turn produced no output" to Completed/nil
+// depending on exactly how far the reader had gotten before the drain
+// barrier below would have caught it. Confirmed to be a genuinely different
+// mechanism than the "event stream connection lost, reconnecting" flake
+// broadcast's own doc comment (above) already hardened against separately
+// (broadcastWaitBudget): every one of the ~200-iteration local repro's own
+// failures reproduced this with ZERO such reconnect log line ever printed.
+//
+// waitForDrained broadcasts one more, deliberately inert sentinel event and
+// waits for IT to be dispatched -- since every event for one session
+// travels over the SAME single persistent connection, drained by the SAME
+// single SSE-reader goroutine strictly in the order broadcast (no
+// reordering across a live, undropped connection), observing the sentinel
+// dispatched proves everything broadcast before it -- including whatever
+// the /summarize handler already queued -- has been dispatched too. This
+// generalizes the same "poll lastActivityTime past a snapshot" proof
+// TestCompactionRetry_StepStartDuringCompactionIsSuppressed/
+// TestCompactionRetry_SessionErrorDuringCompactionIsSuppressed already
+// establish for one specific, manually-checked broadcast into a single
+// barrier baked into THIS function instead -- every existing (and future)
+// caller of waitForNotCompacting gets it for free, closing this whole
+// CLASS of "broadcast a wave, then trust a client-side-only signal that it
+// is now safe to broadcast something else" races by construction, rather
+// than requiring a human to notice and patch each new call site
+// individually the way this package's own four prior rounds of this exact
+// bug already did.
+func waitForNotCompacting(t *testing.T, f *fakeOpenCodeServer, ts *turnState) {
 	t.Helper()
 	deadline := time.Now().Add(testWait)
 	for time.Now().Before(deadline) {
 		if !ts.isCompacting() {
+			waitForDrained(t, f, ts)
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("ts.isCompacting() never became false within testWait")
+}
+
+// waitForDrained proves the adapter's own SSE-reader goroutine has
+// dispatched every event broadcast on f's current connection so far --
+// see waitForNotCompacting's own doc comment for the exact race this
+// closes and why a client-side-only signal like ts.isCompacting() can
+// never prove it on its own. waitForNotCompacting calls this itself once
+// isCompacting() reads false; a compaction-retry test that GATES the
+// retry's own re-dispatch (armPromptAsyncGateForCall) also calls this
+// directly, BEFORE releasing that gate, to prove the compaction-success
+// wave was drained while ts.compacting was still PROVABLY true (see
+// TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce's own
+// doc comment, compactionretry_test.go, for why that ordering is what
+// actually closes the race, not merely detecting it after the fact).
+//
+// Broadcasts a message.updated whose Role is deliberately "user", never
+// "assistant" -- dispatchEvent's own "message.updated" case (sse.go) calls
+// ts.touch() UNCONDITIONALLY as the very first thing it does, before even
+// checking isCompacting(), but only mutates any OTHER tracked field
+// (markAssistantMessageID/setLastAssistantError) when Info.Role ==
+// "assistant" -- so this sentinel is provably a no-op for every other
+// tracked field or wire-visible event (dispatchEvent's "message.updated"
+// case never itself calls ts.emit at all) regardless of ts.isCompacting()
+// at the moment it is actually processed, for "ses_fake", the fake server's
+// own single hardcoded OpenCode session id (handleCreateSession above) --
+// the same id every caller of this helper already registered its own
+// turnState under.
+func waitForDrained(t *testing.T, f *fakeOpenCodeServer, ts *turnState) {
+	t.Helper()
+	before := ts.lastActivityTime()
+	f.broadcast(sseLine(t, "message.updated", messageUpdatedProps{
+		SessionID: "ses_fake",
+		Info:      openCodeMessageInfo{ID: "msg_drain_barrier", Role: "user"},
+	}))
+	deadline := time.Now().Add(testWait)
+	for time.Now().Before(deadline) {
+		if ts.lastActivityTime().After(before) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("waitForDrained: barrier broadcast was never dispatched (ts.lastActivityTime never advanced) within testWait")
 }
 
 // lastExecutionComplete asserts events' own last entry is a

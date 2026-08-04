@@ -667,6 +667,39 @@ func (ts *turnState) stillLive() bool {
 // tryFinalize marks this turn finalized exactly once, reporting whether
 // THIS call was the one that did so (false means some earlier call already
 // finalized it — the caller must not emit anything further).
+//
+// Also atomically clears compacting -- a CI-only regression fix: attemptCompactionRetry/
+// attemptTransientRetry's own "abort during retry" branches (adapter.go) used
+// to call a.finalize (which closes ts.done, the signal StartTurn's own
+// waitForTurn blocks on) FIRST, and only THEN call ts.setCompacting(false) as
+// a separate, later statement on the same goroutine -- deliberately, to make
+// sure THIS goroutine always wins tryFinalize against a stray compaction-tail
+// SSE event before compacting ever reads false to anyone else (see this
+// field's own comment above, and attemptCompactionRetry's now-simplified doc
+// comment, for that original race). But nothing ever synchronized the OTHER
+// goroutine unblocked by close(ts.done) (StartTurn's own caller, e.g. a
+// test's group.Wait()) against that later ts.setCompacting(false) call --
+// close() and the receive it unblocks are a synchronization point in Go's
+// memory model, but ts.compacting is a SEPARATE field guarded by a SEPARATE
+// lock acquisition after finalize already returned, so an observer that woke
+// up because ts.done closed had no guarantee of also observing compacting's
+// new value yet. Under scheduling pressure (confirmed reproducible locally,
+// several-per-thousand-iterations under `go test -race -count=N`, on a
+// CLEAN checkout with none of this branch's own broadcast-wait changes
+// present) that gap let TestCompactionRetry_StopDuringCompactionAbortsRetry
+// observe ts.isCompacting() still true immediately after group.Wait()
+// returned. Folding the compacting clear into the SAME ts.mu critical
+// section that commits ts.finalized closes the gap to zero width: nothing
+// can ever observe ts.finalized (or, transitively, ts.done closed, which
+// this method's only caller -- Adapter.finalize -- never does until AFTER
+// this call returns) without also observing compacting already false. This
+// does not reopen the original stray-event race: dispatchEvent's own
+// isCompacting guards (sse.go) and resolveOverflowAction's own re-check
+// (turn.go) never consult ts.finalized directly, only ts.compacting -- and
+// compacting cannot read false to ANY goroutine until this exact call has
+// already committed ts.finalized true under this same lock, so a stray event
+// that observes compacting==false is guaranteed to find tryFinalize already
+// claimed (a no-op finalize call) exactly as before.
 func (ts *turnState) tryFinalize() bool {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -674,5 +707,6 @@ func (ts *turnState) tryFinalize() bool {
 		return false
 	}
 	ts.finalized = true
+	ts.compacting = false
 	return true
 }
