@@ -120,11 +120,17 @@ func serve() error {
 		}
 	}()
 
-	pool, err := postgres.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := postgres.NewPoolWithMaxConns(ctx, cfg.DatabaseURL, cfg.DBPoolMaxConns)
 	if err != nil {
 		return fmt.Errorf("open postgres pool: %w", err)
 	}
 	defer pool.Close()
+	// Logged at boot, not just documented, so an operator sizing a
+	// deployment (or diagnosing a hang) has the resolved value in hand
+	// without reading source -- see platform.Config.DBPoolMaxConns's own
+	// doc comment for why this number matters independently of host core
+	// count.
+	slog.Info("narvi control-plane: postgres pool configured", "max_conns", pool.Config().MaxConns)
 
 	if err := applyMigrations(cfg.DatabaseURL); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
