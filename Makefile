@@ -30,30 +30,40 @@ test:
 # deliberately, not for correctness but for HOST RESOURCE CONTENTION: every
 # DB-touching package spins up its own throwaway Postgres container via
 # testcontainers-go (each package's own newTestPool/newTestPoolPair helper,
-# ~20 of them repo-wide), and internal/adapters/inbound/httpapi's own
-# integration suite alone spins one up per test function (~170 of them).
+# ~20 of them repo-wide). internal/adapters/inbound/httpapi's own
+# integration suite -- by far the heaviest single-package container churn
+# in the repo, at the time these CI hangs happened -- used to spin one up
+# per test function (~170 of them); it now starts exactly ONE for its
+# whole test binary instead (see internal/adapters/inbound/httpapi/
+# sharedpool_integration_test.go's own top doc comment), which is why
+# group 1 below (httpapi alone) no longer needs the same PEAK-load
+# reasoning this comment originally documented it for -- it is kept at
+# -p 1 anyway simply because -p has no effect on a single package.
 # Three separate CI runs (30831633470, 30834918806, 30838285218 -- see
-# fix/sse-broadcast-race's own commit history) each hung for the full Go
-# 10-minute test-binary panic timeout on a DIFFERENT testcontainers-go
-# internal call (ContainerStart, then wait.(*LogStrategy).WaitUntilReady,
-# then wait.(*HostPortStrategy).WaitUntilReady/Exec) -- three genuinely
-# different code paths, all inside the same third-party library's own
-# Docker-daemon-facing machinery, all in the SAME package (httpapi, by far
-# the heaviest single-package container churn in the repo). A per-call
+# fix/sse-broadcast-race's own commit history), from BEFORE that change,
+# each hung for the full Go 10-minute test-binary panic timeout on a
+# DIFFERENT testcontainers-go internal call (ContainerStart, then
+# wait.(*LogStrategy).WaitUntilReady, then wait.(*HostPortStrategy).
+# WaitUntilReady/Exec) -- three genuinely different code paths, all
+# inside the same third-party library's own Docker-daemon-facing
+# machinery, all in the SAME package (httpapi). A per-call
 # context.WithTimeout and, later, an independent goroutine-plus-watchdog
-# race (see httpapi_integration_test.go's own newTestPool doc comment) were
-# each verified, directly and locally, to correctly bound this exact call
-# in isolation -- yet the SAME construct still failed to cut the call off
-# in real CI. The common thread across all three is HOST-LEVEL contention,
-# not a single fixable call site: by default `go test ./...` runs multiple
-# packages' own test binaries concurrently (bounded by GOMAXPROCS), each
-# spinning up its own container(s) via the SAME Docker daemon on the SAME
-# constrained runner, under -race's own substantial CPU/memory overhead on
-# top -- plausibly severe enough, in aggregate, to make even independent
-# per-process timers unreliable, not just Docker itself slow. -p 1 trades
-# a longer, fully-serialized wall-clock run for dramatically lower PEAK
-# concurrent Docker/host load, directly targeting that shared root cause
-# rather than another per-call timeout mechanism.
+# race (see sharedpool_integration_test.go's own startSharedTestContainer
+# doc comment, formerly httpapi_integration_test.go's own newTestPool)
+# were each verified, directly and locally, to correctly bound this exact
+# call in isolation -- yet the SAME construct still failed to cut the
+# call off in real CI. The common thread across all three is HOST-LEVEL
+# contention, not a single fixable call site: by default `go test ./...`
+# runs multiple packages' own test binaries concurrently (bounded by
+# GOMAXPROCS), each spinning up its own container(s) via the SAME Docker
+# daemon on the SAME constrained runner, under -race's own substantial
+# CPU/memory overhead on top -- plausibly severe enough, in aggregate, to
+# make even independent per-process timers unreliable, not just Docker
+# itself slow. -p 1 trades a longer, fully-serialized wall-clock run for
+# dramatically lower PEAK concurrent Docker/host load, directly targeting
+# that shared root cause rather than another per-call timeout mechanism
+# -- still the right default for the OTHER ~19 packages in this target,
+# even though httpapi's own contribution to that peak is now much smaller.
 test-integration:
 	go test -tags=integration -race -p 1 ./...
 
