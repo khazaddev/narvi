@@ -16,7 +16,6 @@
 package slack_test
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"net/http"
@@ -209,9 +208,17 @@ func TestHandler_RevisePrefix_NonEmptyFeedback_LogsPlanModeTrueOnSuccess(t *test
 	}
 	seedAwaitingApprovalPlanForSlack(ctx, t, rig.plans, sessionID, firstTurns[0].ID)
 
-	var logBuf bytes.Buffer
+	// syncLogBuffer (handler_integration_test.go), not a bare bytes.Buffer:
+	// this test's own reply below creates a plan-mode turn, which fires the
+	// SAME fire-and-forget GetOrSpawn+EnsureDispatched dispatch trigger
+	// every turn-creation call site uses -- the session's Actor can still
+	// be mid-flight on its own background goroutine, logging through this
+	// SAME redirected default logger, while this test's own goroutine
+	// reads logOutput below. See syncLogBuffer's own doc comment for the
+	// full race.
+	logBuf := &syncLogBuffer{}
 	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 
 	replyEnvelope := messageEnvelope("Ev0PLANREVISELOG002", channel, "1700000065.000200", "1700000065.000100", "revise: drop the retry logic")
@@ -286,9 +293,18 @@ func TestHandler_ReplyOnMappedThread_AwaitingPlan_RevisePrefix_EmptyFeedback_Log
 	}
 	seedAwaitingApprovalPlanForSlack(ctx, t, rig.plans, sessionID, firstTurns[0].ID)
 
-	var logBuf bytes.Buffer
+	// syncLogBuffer (handler_integration_test.go), not a bare bytes.Buffer
+	// -- this specific reply hits the emptyReviseFeedback early-return
+	// branch, which never reaches CreateTurnCore so no Actor is spawned for
+	// THIS call, but this file's sibling test just above (identical capture
+	// pattern, one webhook call away) does race exactly the way
+	// syncLogBuffer's own doc comment describes; kept consistent here too
+	// rather than leaving a second, currently-dormant instance of the same
+	// unsafe-shared-writer pattern in this file for a future edit to wake
+	// back up (mirrors linear's own identical precedent, commit 557a4fa).
+	logBuf := &syncLogBuffer{}
 	prevLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prevLogger) })
 
 	replyEnvelope := messageEnvelope("Ev0PLANREVISELOGLVL002", channel, "1700000066.000200", "1700000066.000100", "revise:")

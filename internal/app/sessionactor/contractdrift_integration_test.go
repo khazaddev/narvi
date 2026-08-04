@@ -6,14 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -30,33 +28,26 @@ import (
 // fakeSpawnProvider, fakeSourceControl, sendEnsureDispatched, waitUntil).
 
 // otelReader is the SINGLE ManualReader backing the SINGLE, GLOBAL SDK
-// MeterProvider TestMain (below) registers for this whole test binary --
-// mirrors internal/app/reconciler/reconciler_integration_test.go's own
-// identical TestMain/otelReader precedent exactly (see that file's own doc
-// comment for the full "why exactly once, not once per test" reasoning:
-// otel.SetMeterProvider's own contract only honors the FIRST call in the
-// process). Every NewRegistry call in this file therefore resolves to the
-// exact SAME underlying contract_drift_detected instrument, so its value
-// ACCUMULATES across this whole test binary's lifetime -- each test below
-// reads the counter BEFORE and AFTER its own action and asserts on the
-// DELTA, never an absolute value.
+// MeterProvider TestMain (sharedpool_integration_test.go) registers for
+// this whole test binary -- mirrors internal/app/reconciler/reconciler_
+// integration_test.go's own identical TestMain/otelReader precedent
+// exactly (see that file's own doc comment for the full "why exactly
+// once, not once per test" reasoning: otel.SetMeterProvider's own
+// contract only honors the FIRST call in the process). Every NewRegistry
+// call in this file therefore resolves to the exact SAME underlying
+// contract_drift_detected instrument, so its value ACCUMULATES across
+// this whole test binary's lifetime -- each test below reads the counter
+// BEFORE and AFTER its own action and asserts on the DELTA, never an
+// absolute value.
+//
+// This file used to own TestMain itself (wiring otelReader was its only
+// job); it now lives in sharedpool_integration_test.go, merged with that
+// file's own shared-Postgres-container startup -- Go allows exactly one
+// TestMain per test binary, so once this package needed a shared
+// container too, the two had to combine into one function. otelReader
+// itself stays declared here since readContractDriftDetected (below) is
+// its only reader.
 var otelReader *sdkmetric.ManualReader
-
-// TestMain wires exactly ONE global OTel MeterProvider for this whole
-// package's integration-test binary. If a future sibling _test.go file in
-// this package (also built under the "integration" tag) ever adds its own
-// TestMain, the two will conflict (Go only allows one TestMain per test
-// binary) -- this repo has none today (grepped).
-func TestMain(m *testing.M) {
-	otelReader = sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(otelReader))
-	otel.SetMeterProvider(mp)
-
-	code := m.Run()
-
-	_ = mp.Shutdown(context.Background())
-	os.Exit(code)
-}
 
 // readContractDriftDetected collects reader's current metrics and sums
 // every data point of the narvi/sessionactor meter's own

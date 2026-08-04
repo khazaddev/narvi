@@ -10,30 +10,23 @@
 package slack_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/golang-migrate/migrate/v4"
-	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
-	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
@@ -42,119 +35,76 @@ import (
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
-	"github.com/khazaddev/narvi/migrations"
 )
 
 const testSigningSecret = "test-signing-secret"
 
-// newTestPool spins up a throwaway Postgres container with every
-// embedded migration applied (including migration 000028's own
-// slack_thread_sessions table) and returns a ready *pgxpool.Pool.
+// syncLogBuffer is a mutex-guarded io.Writer + String() capture buffer for
+// tests that redirect slog's own default logger (via slog.SetDefault) to
+// assert on the log lines a handler call emits -- mirrors internal/
+// adapters/inbound/linear's own identical syncLogBuffer precedent exactly
+// (webhook_integration_test.go there, commit 557a4fa,
+// "fix(linear): stop the log-buffer assertion racing the async actor
+// spawn"): one definition, used from every test file in this package that
+// needs it, instead of each file hand-rolling its own capture.
+//
+// A plain bytes.Buffer/strings.Builder here is NOT safe for concurrent
+// use, and a test's own synchronous request-handling goroutine is never
+// the only writer once a reply creates a turn: httpapi.CreateTurnCore
+// fires the SAME GetOrSpawn+EnsureDispatched post-commit dispatch trigger
+// httpapi.TriggerDispatch's own doc comment documents as deliberately
+// fire-and-forget (by design, never awaited by the caller -- GetOrSpawn
+// hydrates fast, but the actual dispatch decision runs entirely on the
+// session's Actor's own background goroutine, started by Registry.
+// GetOrSpawn via errgroup.Group.Go). That goroutine can still be
+// mid-flight -- e.g. logging sessionactor/dispatch.go's own decision Warn
+// line -- writing through this SAME redirected default logger while the
+// test's own goroutine reads back what was captured so far. This is a
+// plain unsynchronized-concurrent-access bug on the underlying writer
+// itself (ordering is not the issue: every log line these tests actually
+// assert on is written synchronously, on the request-handling goroutine,
+// before the handler call returns) -- caught directly here, in this
+// package, by this branch's own -race verification of the container-
+// reuse change (TestHandler_RevisePrefix_NonEmptyFeedback_
+// LogsPlanModeTrueOnSuccess's own "WARNING: DATA RACE", log/slog.
+// (*commonHandler).handle -> bytes.Buffer.Write racing that test's own
+// logBuf.String() read) -- pre-existing and unrelated to container reuse
+// itself (the same race is equally possible against a fresh per-test
+// container; this package's own tests just hadn't been run under -race
+// enough times before to hit it).
+type syncLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// newTestPool returns this package's own single, shared Postgres pool --
+// started ONCE for the whole test binary by TestMain (sharedpool_
+// integration_test.go), not freshly per test/container as this function
+// used to do itself. Kept as a thin wrapper under its own original
+// name/signature so every existing call site in this package's own
+// *_integration_test.go files keeps compiling unchanged. See sharedpool_
+// integration_test.go's own top doc comment for the full container-reuse
+// story: why per-test containers were never a deliberate correctness
+// requirement here, why sharing one is safe against this package's own
+// async sessionactor.Actor background work, and why each test still gets
+// a byte-for-byte-empty (plus restored seed data), freshly-migrated-
+// equivalent database via a t.Cleanup-registered reset rather than a
+// real fresh container.
 func newTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	ctx := context.Background()
-
-	// startCtx bounds the container-startup call below via the ambient
-	// context (image pull + Docker daemon round trip + Postgres's own
-	// internal ready-wait) -- kept as defense in depth, but NOT solely
-	// relied upon any more: CI run 30834918806 showed this exact bound
-	// (added after CI run 30831633470's own ContainerStart hang) itself
-	// fail to actually cut the call off when the hang recurred one layer
-	// deeper, inside testcontainers-go's own wait.(*LogStrategy).
-	// WaitUntilReady -- the goroutine dump showed it looping on a 100ms
-	// poll for the FULL 10-minute panic window, never once observing
-	// ctx.Done(), despite this same context chain being correctly wired
-	// all the way through (confirmed directly: reproducing an
-	// impossible-to-satisfy wait condition locally against this exact
-	// call DOES correctly time out via this same context mechanism, at
-	// testcontainers' own hardcoded 60s deadline -- so the mechanism is
-	// sound in isolation, but evidently not dependable against whatever a
-	// genuinely stalled CI-runner Docker daemon does to it in practice).
-	//
-	// Rather than keep chasing exactly why context cancellation isn't
-	// always honored deep inside a third-party library under conditions
-	// this dev machine cannot reproduce, the startup call now ALSO runs on
-	// its own goroutine (via errgroup.Group.Go -- no naked `go` statement,
-	// §11) raced against an independent, plain time.After watchdog:
-	// whichever of "the call returned" or "the watchdog fired" happens
-	// first decides the outcome, with no dependency on any context
-	// cancellation actually being honored by anything downstream. If the
-	// watchdog wins, the goroutine is deliberately abandoned (leaked, not
-	// joined) rather than blocking this test's own cleanup on a call that
-	// has already demonstrated it can ignore its own cancellation signal.
-	startCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	const containerStartWatchdog = 2*time.Minute + 15*time.Second
-	type containerStartResult struct {
-		container *tcpostgres.PostgresContainer
-		err       error
-	}
-	startCh := make(chan containerStartResult, 1)
-	var startGroup errgroup.Group
-	startGroup.Go(func() error {
-		container, err := tcpostgres.Run(startCtx, "postgres:17-alpine",
-			tcpostgres.WithDatabase("narvi_test"),
-			tcpostgres.WithUsername("narvi"),
-			tcpostgres.WithPassword("narvi"),
-			tcpostgres.BasicWaitStrategies(),
-		)
-		startCh <- containerStartResult{container: container, err: err}
-		return nil
-	})
-
-	var container *tcpostgres.PostgresContainer
-	var err error
-	select {
-	case res := <-startCh:
-		container, err = res.container, res.err
-		if err != nil {
-			t.Fatalf("start postgres container: %v", err)
-		}
-	case <-time.After(containerStartWatchdog):
-		t.Fatalf("start postgres container: tcpostgres.Run did not return within %s -- Docker daemon likely "+
-			"stalled without honoring context cancellation (see this function's own doc comment)", containerStartWatchdog)
-	}
-	t.Cleanup(func() {
-		if err := testcontainers.TerminateContainer(container); err != nil {
-			t.Errorf("terminate container: %v", err)
-		}
-	})
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("connection string: %v", err)
-	}
-
-	migrateDB, err := sql.Open("pgx", connStr)
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = migrateDB.Close() })
-
-	dbDriver, err := migratepg.WithInstance(migrateDB, &migratepg.Config{})
-	if err != nil {
-		t.Fatalf("migratepg.WithInstance: %v", err)
-	}
-	srcDriver, err := iofs.New(migrations.FS, ".")
-	if err != nil {
-		t.Fatalf("iofs.New: %v", err)
-	}
-	m, err := migrate.NewWithInstance("iofs", srcDriver, "pgx", dbDriver)
-	if err != nil {
-		t.Fatalf("migrate.NewWithInstance: %v", err)
-	}
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		t.Fatalf("migrate up: %v", err)
-	}
-
-	pool, err := narvipg.NewPool(ctx, connStr)
-	if err != nil {
-		t.Fatalf("NewPool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-
-	return pool
+	return IntegrationTestPool(t)
 }
 
 // slackTestRig bundles a fully-wired handler plus the stores/registry

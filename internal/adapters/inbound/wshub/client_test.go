@@ -285,7 +285,12 @@ func TestClientHandler_TokenLookupBackendError(t *testing.T) {
 	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
 	ctx := context.Background()
 
-	brokenPool := newTestPool(t)
+	// newDedicatedTestPool, not newTestPool: this test deliberately closes
+	// its own pool below, which would take down the SHARED pool (and every
+	// other test in this binary) if it used the shared one -- see
+	// sharedpool_integration_test.go's own top doc comment ("One
+	// deliberate exception") for the full reasoning.
+	brokenPool := newDedicatedTestPool(t)
 	brokenWSTokens := narvipg.NewWSTokenStore(brokenPool)
 	brokenPool.Close() // any subsequent query now fails with a real, non-ErrNoRows error.
 
