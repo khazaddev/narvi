@@ -1018,11 +1018,12 @@ func (a *Adapter) finalizeOrRecoverFromOverflow(sessionID string, ts *turnState,
 //     the Stop — explicitly a.postAbort it rather than silently let the
 //     cancelled prompt run to completion; a failed postPromptAsync needs
 //     no such abort (OpenCode never accepted it). Either way, finalize as
-//     Cancelled — called BEFORE ts.setCompacting(false), mirroring the
-//     FIRST stillLive branch's own ordering above (finalize first, while
-//     ts.compacting is still true, so this goroutine's own tryFinalize
-//     claim cannot lose to a stray compaction-tail event isCompacting
-//     would otherwise still be suppressing).
+//     Cancelled — a.finalize's own tryFinalize (turn.go) atomically clears
+//     ts.compacting in the SAME critical section that commits
+//     ts.finalized, so this goroutine's own tryFinalize claim cannot lose
+//     to a stray compaction-tail (or retry-tail) event isCompacting would
+//     otherwise still be suppressing, mirroring the FIRST stillLive
+//     branch's own reasoning above exactly.
 //   - stillLive() is still true: proceed exactly as before — clear
 //     compacting, and finalize with an enriched reason only if
 //     postPromptAsync itself failed.
@@ -1079,38 +1080,34 @@ func (a *Adapter) attemptCompactionRetry(ctx context.Context, sessionID string, 
 	compactionErr := a.forceCompaction(ctx, sessionID, model)
 
 	if !ts.stillLive() {
-		// a.finalize is called BEFORE ts.setCompacting(false) here,
-		// deliberately the OPPOSITE order from every other branch below —
-		// mirroring §7.2 Finding 3's own "clear compacting only after the
-		// thing that actually needs it suppressed" reasoning, applied to a
-		// NEW hazard this exact branch introduces: forceCompaction
-		// SUCCEEDING (compactionErr == nil, the common case a Stop lands
-		// during) means the fake/real compaction wave's own tail traffic —
-		// crucially including its own session.idle, on the SAME two
-		// independent connections/goroutines Finding 3's own doc comment
-		// describes — may not have been fully processed by the SSE-reader
-		// goroutine yet. If ts.compacting flipped false BEFORE this call to
-		// a.finalize claims ts.tryFinalize, that stray session.idle would
-		// sail through dispatchEvent's own isCompacting guard (sse.go),
-		// observe the STILL-uncleared original ContextOverflowError
-		// (clearErrorsForRetry is deliberately never reached on this
-		// abort path), and race this goroutine's own finalize call via
-		// finalizeOrRecoverFromOverflow's "already attempted" branch — a
-		// race a.finalize's own tryFinalize idempotency resolves, but not
-		// necessarily in THIS goroutine's favor, wrongly reporting Failed
-		// instead of Cancelled if the stray event wins. Calling a.finalize
-		// FIRST, while ts.compacting is still true, guarantees this
-		// goroutine's own Cancelled outcome claims tryFinalize before any
-		// such stray event can possibly be evaluated (every dispatchEvent
-		// case suppressed by isCompacting still applies at that instant) —
-		// ts.setCompacting(false) afterward is then safe regardless of
-		// scheduling, since ts.finalized already makes tryFinalize a no-op
-		// for anything that arrives late.
+		// No separate ts.setCompacting(false) call here (a CI-only
+		// regression fix: see tryFinalize's own doc comment, turn.go, for
+		// the race this used to leave open when that call was a distinct,
+		// later statement on this goroutine) — a.finalize's own tryFinalize
+		// atomically clears ts.compacting in the SAME critical section that
+		// commits ts.finalized, guarding against the hazard this exact
+		// branch introduces: forceCompaction SUCCEEDING (compactionErr ==
+		// nil, the common case a Stop lands during) means the fake/real
+		// compaction wave's own tail traffic — crucially including its own
+		// session.idle, on the SAME two independent connections/goroutines
+		// Finding 3's own doc comment describes — may not have been fully
+		// processed by the SSE-reader goroutine yet. Were ts.compacting to
+		// read false to some OTHER goroutine before THIS goroutine's own
+		// finalize call has actually claimed tryFinalize, a stray
+		// session.idle could sail through dispatchEvent's own isCompacting
+		// guard (sse.go), observe the STILL-uncleared original
+		// ContextOverflowError (clearErrorsForRetry is deliberately never
+		// reached on this abort path), and race this goroutine's own
+		// finalize call via finalizeOrRecoverFromOverflow's "already
+		// attempted" branch — a race a.finalize's own tryFinalize
+		// idempotency resolves, but not necessarily in THIS goroutine's
+		// favor, wrongly reporting Failed instead of Cancelled if the stray
+		// event won. tryFinalize's own atomic clear closes that window to
+		// zero width.
 		reason := "opencode: turn was stopped or already finalized during compaction, retry aborted"
 		slog.Warn("opencode: turn no longer live after forceCompaction, aborting compaction retry without re-dispatching",
 			"sessionID", sessionID, "forceCompactionErr", compactionErr)
 		a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeCancelled, Reason: &reason})
-		ts.setCompacting(false)
 		return
 	}
 
@@ -1146,13 +1143,15 @@ func (a *Adapter) attemptCompactionRetry(ctx context.Context, sessionID string, 
 		// abort it via a.postAbort rather than silently let the cancelled
 		// prompt run to completion having overridden the user's own Stop. A
 		// failed postPromptAsync needs no such abort: OpenCode never
-		// accepted that call in the first place. Either way, a.finalize is
-		// called BEFORE ts.setCompacting(false), mirroring the FIRST
-		// stillLive branch's own ordering above for the identical reason:
-		// ts.compacting is still true at this point, so this goroutine's
-		// own Cancelled outcome claims tryFinalize before any stray
+		// accepted that call in the first place. Either way, no separate
+		// ts.setCompacting(false) call here -- a.finalize's own tryFinalize
+		// (turn.go) atomically clears ts.compacting in the SAME critical
+		// section that commits ts.finalized, mirroring the FIRST stillLive
+		// branch's own reasoning above exactly: this goroutine's own
+		// Cancelled outcome claims tryFinalize before any stray
 		// compaction-tail (or now, retry-tail) event that isCompacting
-		// would otherwise still be suppressing can possibly race it.
+		// would otherwise still be suppressing can possibly observe
+		// compacting read false.
 		reason := "opencode: turn was stopped while the retry prompt was being (re-)dispatched, aborting"
 		slog.Warn("opencode: turn no longer live after the retry's own postPromptAsync call returned, aborting",
 			"sessionID", sessionID, "postPromptAsyncErr", err)
@@ -1163,7 +1162,6 @@ func (a *Adapter) attemptCompactionRetry(ctx context.Context, sessionID string, 
 			}
 		}
 		a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeCancelled, Reason: &reason})
-		ts.setCompacting(false)
 		return
 	}
 
@@ -1205,14 +1203,15 @@ func (a *Adapter) attemptCompactionRetry(ctx context.Context, sessionID string, 
 //     this turn without its one execution_complete.
 //   - The backoff elapses, but the FIRST ts.stillLive() check is now
 //     false: a Stop landed for this exact turn, or the turn was ALREADY
-//     finalized by some other path — finalize as Cancelled, a.finalize
-//     called BEFORE ts.setCompacting(false), mirroring
-//     attemptCompactionRetry's own identical ordering rationale exactly
-//     (every dispatchEvent case that would otherwise observe a stray event
-//     for this session stays suppressed by isCompacting for as long as
-//     ts.compacting remains true, so claiming tryFinalize first closes the
-//     exact same race attemptCompactionRetry's own first stillLive branch
-//     closes).
+//     finalized by some other path — finalize as Cancelled; no separate
+//     ts.setCompacting(false) call, mirroring attemptCompactionRetry's own
+//     identical reasoning exactly (a.finalize's own tryFinalize, turn.go,
+//     atomically clears ts.compacting in the SAME critical section that
+//     commits ts.finalized, so every dispatchEvent case that would
+//     otherwise observe a stray event for this session stays suppressed by
+//     isCompacting right up until this goroutine's own tryFinalize claim —
+//     closing the exact same race attemptCompactionRetry's own first
+//     stillLive branch closes).
 //   - The backoff elapses and the turn is still live: clear ts's stored
 //     errors (ts.clearErrorsForRetry — CRITICAL, identical reasoning to
 //     attemptCompactionRetry's own use of it: without it, the retry's own
@@ -1226,15 +1225,20 @@ func (a *Adapter) attemptCompactionRetry(ctx context.Context, sessionID string, 
 //     treats it; forcing a resolved model here would silently change this
 //     retry's own request shape relative to the attempt it is retrying.
 //     THEN re-check ts.stillLive() a SECOND time — identical to
-//     attemptCompactionRetry's own round-2 check, and ts.setCompacting(false)
-//     is likewise deliberately not called until after this second check,
-//     for the exact same §7.2 Finding 3 reason: closing the window between
-//     the retried dispatch being accepted and this goroutine's own
-//     tryFinalize claim, during which a stray original-attempt SSE event
-//     could otherwise slip through.
+//     attemptCompactionRetry's own round-2 check, and ts.compacting is
+//     likewise deliberately still true up to and through that second check
+//     (only cleared afterward, on the still-live success path below, or
+//     atomically by a.finalize's own tryFinalize on the abort path), for
+//     the exact same §7.2 Finding 3 reason: closing the window between the
+//     retried dispatch being accepted and this goroutine's own tryFinalize
+//     claim, during which a stray original-attempt SSE event could
+//     otherwise slip through.
 func (a *Adapter) attemptTransientRetry(ctx context.Context, sessionID string, ts *turnState, originalOutcome turnOutcome) {
 	if waitErr := waitTransientRetryBackoff(ctx, a.transientRetryBackoff); waitErr != nil {
-		ts.setCompacting(false)
+		// No separate ts.setCompacting(false) call -- a.finalize's own
+		// tryFinalize (turn.go) atomically clears it. See tryFinalize's own
+		// doc comment for why a distinct, later ts.setCompacting(false) call
+		// on this goroutine is not safe to rely on.
 		reason := enrichReasonForFailedTransientRetry(originalOutcome.Reason, fmt.Sprintf("backoff wait: %v", waitErr))
 		slog.Error("opencode: transient-error retry backoff wait was interrupted, finalizing with the original error",
 			"sessionID", sessionID, "error", waitErr)
@@ -1244,13 +1248,13 @@ func (a *Adapter) attemptTransientRetry(ctx context.Context, sessionID string, t
 
 	if !ts.stillLive() {
 		// Mirrors attemptCompactionRetry's own first stillLive branch
-		// exactly (adapter.go) — a.finalize called BEFORE
-		// ts.setCompacting(false), for the identical reason given there.
+		// exactly (adapter.go) — no separate ts.setCompacting(false) call;
+		// a.finalize's own tryFinalize (turn.go) atomically clears it, for
+		// the identical reason given there.
 		reason := "opencode: turn was stopped or already finalized during the transient-error retry backoff, retry aborted"
 		slog.Warn("opencode: turn no longer live after the transient-error backoff wait, aborting retry without re-dispatching",
 			"sessionID", sessionID)
 		a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeCancelled, Reason: &reason})
-		ts.setCompacting(false)
 		return
 	}
 
@@ -1269,7 +1273,8 @@ func (a *Adapter) attemptTransientRetry(ctx context.Context, sessionID string, t
 		// Round-2 Finding 1, mirrored exactly: re-check stillLive() HERE,
 		// after postPromptAsync has actually returned — see
 		// attemptCompactionRetry's own identical branch for the full race
-		// this closes.
+		// this closes. No separate ts.setCompacting(false) call here either
+		// -- a.finalize's own tryFinalize (turn.go) atomically clears it.
 		reason := "opencode: turn was stopped while the transient-error retry prompt was being (re-)dispatched, aborting"
 		slog.Warn("opencode: turn no longer live after the retry's own postPromptAsync call returned, aborting",
 			"sessionID", sessionID, "postPromptAsyncErr", err)
@@ -1280,7 +1285,6 @@ func (a *Adapter) attemptTransientRetry(ctx context.Context, sessionID string, t
 			}
 		}
 		a.finalize(ts, turnOutcome{Outcome: sandboxws.ExecutionCompleteOutcomeCancelled, Reason: &reason})
-		ts.setCompacting(false)
 		return
 	}
 
