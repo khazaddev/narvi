@@ -19,6 +19,7 @@
 // sessionID/sandboxToken/gen triple Fetch already does. A second,
 // independently-constructed client type would duplicate NewCPClient's own
 // URL-derivation/loopback-scheme-guard logic for zero real benefit.
+
 package credentials
 
 import (

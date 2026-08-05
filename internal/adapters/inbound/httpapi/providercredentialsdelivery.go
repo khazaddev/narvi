@@ -62,6 +62,7 @@
 // tokenencrypt.go's own "never log plaintext, key, or ciphertext"
 // discipline exactly (grepped for in this Step's own diff before
 // reporting done).
+
 package httpapi
 
 import (

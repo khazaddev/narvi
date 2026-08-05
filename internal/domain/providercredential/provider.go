@@ -5,6 +5,8 @@ package providercredential
 // (migrations/000056_provider_credentials.up.sql) verbatim.
 type Provider string
 
+// The 3 recognized Provider values -- see AllProviders below for the same
+// set as a ranged-over slice.
 const (
 	ProviderGoogle    Provider = "google"
 	ProviderAnthropic Provider = "anthropic"

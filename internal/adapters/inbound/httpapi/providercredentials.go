@@ -52,6 +52,7 @@
 // environment than this URL names") is treated identically to "no such
 // row", a plain 404, never a distinguishing error that would confirm the
 // id's existence in a different scope.
+
 package httpapi
 
 import (
@@ -316,6 +317,9 @@ func deleteProviderCredential(
 
 // --- Repo-scoped route group: /api/repos/{owner}/{repo}/provider-credentials ---
 
+// CreateRepoProviderCredential backs POST /api/repos/{owner}/{repo}/
+// provider-credentials -- see this file's own top doc comment for the
+// full route table and RBAC rationale.
 func CreateRepoProviderCredential(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoFullName, ok := repoFullNameFromRoute(r)
@@ -327,6 +331,8 @@ func CreateRepoProviderCredential(store *postgres.ProviderCredentialStore, token
 	}
 }
 
+// ListRepoProviderCredentials backs GET /api/repos/{owner}/{repo}/
+// provider-credentials.
 func ListRepoProviderCredentials(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoFullName, ok := repoFullNameFromRoute(r)
@@ -338,6 +344,8 @@ func ListRepoProviderCredentials(store *postgres.ProviderCredentialStore) http.H
 	}
 }
 
+// UpdateRepoProviderCredentialValue backs PUT /api/repos/{owner}/{repo}/
+// provider-credentials/{credentialID} -- rotates the encrypted value only.
 func UpdateRepoProviderCredentialValue(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoFullName, ok := repoFullNameFromRoute(r)
@@ -349,6 +357,8 @@ func UpdateRepoProviderCredentialValue(store *postgres.ProviderCredentialStore, 
 	}
 }
 
+// DeleteRepoProviderCredential backs DELETE /api/repos/{owner}/{repo}/
+// provider-credentials/{credentialID}.
 func DeleteRepoProviderCredential(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		repoFullName, ok := repoFullNameFromRoute(r)
@@ -362,6 +372,8 @@ func DeleteRepoProviderCredential(store *postgres.ProviderCredentialStore) http.
 
 // --- Environment-scoped route group: /api/environments/{environmentID}/provider-credentials ---
 
+// CreateEnvironmentProviderCredential backs POST /api/environments/
+// {environmentID}/provider-credentials.
 func CreateEnvironmentProviderCredential(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		environmentID, ok := environmentIDFromRoute(w, r)
@@ -372,6 +384,8 @@ func CreateEnvironmentProviderCredential(store *postgres.ProviderCredentialStore
 	}
 }
 
+// ListEnvironmentProviderCredentials backs GET /api/environments/
+// {environmentID}/provider-credentials.
 func ListEnvironmentProviderCredentials(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		environmentID, ok := environmentIDFromRoute(w, r)
@@ -382,6 +396,9 @@ func ListEnvironmentProviderCredentials(store *postgres.ProviderCredentialStore)
 	}
 }
 
+// UpdateEnvironmentProviderCredentialValue backs PUT /api/environments/
+// {environmentID}/provider-credentials/{credentialID} -- rotates the
+// encrypted value only.
 func UpdateEnvironmentProviderCredentialValue(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		environmentID, ok := environmentIDFromRoute(w, r)
@@ -392,6 +409,8 @@ func UpdateEnvironmentProviderCredentialValue(store *postgres.ProviderCredential
 	}
 }
 
+// DeleteEnvironmentProviderCredential backs DELETE /api/environments/
+// {environmentID}/provider-credentials/{credentialID}.
 func DeleteEnvironmentProviderCredential(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		environmentID, ok := environmentIDFromRoute(w, r)
@@ -408,24 +427,30 @@ func DeleteEnvironmentProviderCredential(store *postgres.ProviderCredentialStore
 // from, matching provider_credentials' own CHECK constraint (scope=global
 // requires scope_target_id NULL).
 
+// CreateGlobalProviderCredential backs POST /api/provider-credentials.
 func CreateGlobalProviderCredential(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		createProviderCredential(w, r, store, tokenEncryptionKey, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, nil)
 	}
 }
 
+// ListGlobalProviderCredentials backs GET /api/provider-credentials.
 func ListGlobalProviderCredentials(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		listProviderCredentials(w, r, store, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, nil)
 	}
 }
 
+// UpdateGlobalProviderCredentialValue backs PUT /api/provider-credentials/
+// {credentialID} -- rotates the encrypted value only.
 func UpdateGlobalProviderCredentialValue(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		updateProviderCredentialValue(w, r, store, tokenEncryptionKey, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, nil)
 	}
 }
 
+// DeleteGlobalProviderCredential backs DELETE /api/provider-credentials/
+// {credentialID}.
 func DeleteGlobalProviderCredential(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		deleteProviderCredential(w, r, store, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, nil)
