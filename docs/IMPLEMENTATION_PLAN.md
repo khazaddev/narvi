@@ -154,29 +154,6 @@ renumbering notes, and Phase 7's).
 | 68 | review triage: deterministic light/deep routing | Depth decided in the single review funnel (Step 46's creation/dispatch path), deterministic-first (§18 posture): diff stats (already fetched), changed paths promoted to a structured signal, sensitive globs (migrations/auth/infra-as-code/CI) mapped onto `BlastRadius` tags, top-level-root dispersion, provenance (Narvi vs human + authoring model), Step 62 verdict history (prior `high` → deep), existing risk labels; v1 rules: sensitive glob → deep, >600 lines or ≥3 roots → deep, else light — no LLM tie-break (v2 option only if per-path analytics show a grey zone); output `reviewDepth: light/deep` threaded into session creation, recorded on the §18.4 routing decision record, persisted as `review_path` on the verdict row so cost AND precision are measurable per path; depth drives review model/effort (light = balanced tier, deep = frontier + high effort); per-repo `reviewDepth: {mode, deepPaths}`; ANY triage error fails open to light; §24 re-review re-evaluates on the delta but floors at the PR's previous depth | §26.3 |
 | 69 | review deep path: adversarial counter-review + readout measurement | One sandbox, sub-task fan-out (§7.1 — never N sandboxes, never §14.4 child sessions): read-only `architecture-scribe` (virgin-context arch recap) + read-only adversarial `counter-reviewer` (refutes findings, hunts misses; pinnable to an opposing model family via Step 53's credentials + Step 59's catalog); only findings surviving counter-review are published, inter-agent disagreements rendered as a "Contested points" digest section; typed `CounterReview: done/skipped` schema-required on the deep path, `skipped` floors `Shippable` to `needs_human`; measurement on Step 62's instrument — per-section digest feedback kinds + a maintainer `arch recap wrong: <reason>` command (mirrors Step 63's command: `Authorize`-gated, deterministically routable §5.2, idempotent on comment id); KPIs: digest contestation rate, decision latency per path, cost per path, % PRs approved with zero human inline comments; digest-quality evals join the shadow-precision discipline | §26.4, §26.5 |
 
-**Renumbering note (2026-07-30):** Steps 57-60 above are new, inserted at the end of Phase 5 because they extend the code-review domain (§8.2/Step 45) and plan mode (§8.1/Steps 37-38) directly and gate nothing else in Phase 6/7 — every Step from the former Step 57 ("config/data seeding") onward shifts up by exactly 4: former 57→61 … former 70→74. Additive-shift pattern, same precedent as the Phase 4 insertion note above.
-
-**Renumbering note (2026-07-31):** Step 61 above is new, inserted at the end of Phase 5 because it extends review re-trigger (§8.2/Step 46) and review-verdict persistence (§21/Step 58) directly and gates nothing else in Phase 6/7 — every Step from the former Step 61 ("config/data seeding") onward shifts up by exactly 1: former 61→62 … former 74→75. Same additive-shift pattern as both notes above.
-
-**Amendment note (2026-07-31):** GitHub has since made stacked pull requests a first-class server-side object. Steps 46 and 48 above are amended (no Step renumbering — this is existing behavior made legible to GitHub's own object model, not new scope): Step 46 now also threads a PR's stack position/size/ultimate base into the same inline-context pre-fetch it already builds; Step 48's sentinel auto-fix now also registers the origin+fix pair as a real GitHub stack after both PRs exist, and records the invariant that the fix PR's base is never resolved via the default-branch path. Full design in `docs/TECHNICAL_PLAN.md` §17.2, §17.6, and §21.1's stacked-PR review-scope decision.
-
-**Renumbering note (2026-08-03):** Steps 53-56 above are new, inserted immediately after Step 52
-(automations: triggers & extras) rather than at the end of Phase 5, because the workflow engine
-they build is exercised by 100% of production traffic from day one — the three existing lanes
-become three built-in workflows, not an additive opt-in feature appended after everything else —
-and because Step 53 (credential injection) is a blocking prerequisite the rest of the chantier
-needs, not standalone new scope. Every Step from the former Step 53 ("RWX provider + previews")
-onward shifts up by exactly 4: former 53→57 … former 75→79 (ui finalize; see the Phase 7
-renumbering note below for the one further shift that applies to it). Additive-shift pattern, same
-precedent as the renumbering notes above.
-
-**Renumbering note (2026-08-05):** Steps 66-69 above are new, inserted at the end of Phase 5
-because they restructure the review verdict (§8.2/Steps 45/47) into a merge readout and build
-directly on the verdict-persistence instrument (§21/Step 62) that measures them — every Step from
-the former Step 66 ("config/data seeding") onward shifts up by exactly 4: former 66→70 … former
-80→84 (ui finalize, which must stay last). Additive-shift pattern, same precedent as the notes
-above. Full design in `docs/TECHNICAL_PLAN.md` §26.
-
 **Phase 5 milestone**: code review in shadow on live PRs, verdicts reviewed for precision.
 
 ## Phase 6 — Rollout (4 Steps)
@@ -203,14 +180,6 @@ above. Full design in `docs/TECHNICAL_PLAN.md` §26.
 | 82 | ui decision inbox (home) | Home view: decision queue by section (merge/review/approval/attention), inline actions wired to the Step 60 API, assignment provenance, staleness, repo-only filter (the inbox is inherently user-scoped), median time-to-decision; the sessions list moves to a second tab | decisions 32-34, §16 |
 | 83 | workflow canvas editor | React Flow-style node/edge canvas for authoring a workflow's steps and edges per lane/repo; validates/constrains what a user can draw against the engine's closed model (ordered steps + 3-status edges, no expression language, §25.4) — a drawn graph the engine cannot execute must be rejected at save time, not silently accepted. Inline progress display of a running workflow in the session view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 77/78), not a separate Step | §25.12, §7.1 |
 | 84 | ui finalize | `make dist` single self-contained binary, screenshot review vs mockups, ship | §12.4 |
-
-**Renumbering note (2026-08-03):** One new Step is inserted at the end of Phase 7's table,
-immediately before ui finalize, because the workflow canvas editor (§25.12) needs the engine
-(Steps 54-56) and Settings (Step 77) it visualizes to exist first, and gates nothing else — ui
-finalize must stay the last Step in the plan. It takes the number the former ui finalize held (79,
-after the Phase 5 insertion note above), and the former ui finalize shifts up by exactly 1, to 80.
-(Since 2026-08-05, both numbers shift by a further +4 — canvas 79→83, ui finalize 80→84 — per the
-end-of-Phase-5 renumbering note above.)
 
 ## Sequencing & parallelism
 
