@@ -148,9 +148,45 @@ func OnTurnCompleted(ctx context.Context, workflows *postgres.WorkflowStore, tur
 		return
 	}
 
-	if _, err := workflows.FinishStepRun(ctx, stepRun.ID, stepRunTerminalStatus(trig), string(outcome)); err != nil {
+	finished, err := workflows.FinishStepRun(ctx, stepRun.ID, stepRunTerminalStatus(trig), string(outcome))
+	if err != nil {
 		logger.Error("workflowengine: finish step run failed", "step_run_id", stepRun.ID.String(), "error", err)
 		return
+	}
+
+	// FinishStepRun's own UPDATE ... SET outcome_status = COALESCE(outcome_status, $3)
+	// (queries/workflows.sql) preserves whatever outcome a concurrent call to
+	// the generic step-outcome-posting tool (SetStepRunOutcome --
+	// workflowstepoutcome.go's own store method, writing the SAME column on
+	// the pool, unserialized with this function's own caller-owned
+	// transaction) may have posted onto this row AFTER the lock-free
+	// GetLiveStepRunByTurnID read above. finished.OutcomeStatus is that
+	// authoritative, post-COALESCE value actually now in the row -- which
+	// can differ from the pre-read/implicit-derived `outcome` local computed
+	// above, if such a concurrent post landed in the multi-round-trip window
+	// between that read and this call. NextStep below must be consulted
+	// with THIS value: re-deriving `outcome` from FinishStepRun's own
+	// RETURNING row here -- rather than trusting the earlier, possibly-stale
+	// local -- is what actually closes that read-then-act race (a FOR
+	// UPDATE lock on the earlier read would not help: it would still leave
+	// a window between that lock's release and this call, so it would only
+	// be a second, weaker mitigation for the same problem).
+	if finished.OutcomeStatus == nil {
+		// Should be unreachable: $3 above is always one of the three valid
+		// StepOutcomeStatus values by this point (outcome was already
+		// resolved via IsValidStepOutcomeStatus/implicitOutcome earlier in
+		// this function), so COALESCE(outcome_status, $3) can only resolve
+		// to NULL if that invariant somehow broke. Logged defensively;
+		// falls back to the pre-read value rather than guessing further.
+		logger.Error("workflowengine: finish step run returned nil outcome_status; using pre-read value",
+			"step_run_id", stepRun.ID.String())
+	} else if authoritative := workflow.StepOutcomeStatus(*finished.OutcomeStatus); !workflow.IsValidStepOutcomeStatus(authoritative) {
+		logger.Error("workflowengine: finish step run returned invalid outcome_status; using pre-read value",
+			"step_run_id", stepRun.ID.String(), "outcome_status", string(authoritative))
+	} else if authoritative != outcome {
+		logger.Info("workflowengine: outcome posted concurrently during turn completion; using finish step run's own authoritative value instead of the earlier stale read",
+			"step_run_id", stepRun.ID.String(), "pre_read_outcome", string(outcome), "authoritative_outcome", string(authoritative))
+		outcome = authoritative
 	}
 
 	next, err := workflow.NextStep(def, stepID, outcome)
