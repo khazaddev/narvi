@@ -109,8 +109,10 @@ Phase 4 onward) shifts up by 5 to make room (the Step formerly numbered 40, "dom
 so on through the former Step 65, now Step 70 at the time this note was written — subsequently Step 74, after
 the later insertion of Steps 57-60 at the end of Phase 5, and Step 75 after the still-later insertion of Step 61
 at the same end of Phase 5 — subsequently Step 79, after the later insertion of Steps 53-56 within Phase 5 (the
-workflow-engine chantier), and finally Step 80 after the still-later insertion of one new Phase 7 Step (the
-workflow canvas editor) immediately before it; see that phase's own renumbering notes, and Phase 7's).
+workflow-engine chantier), then Step 80 after the still-later insertion of one new Phase 7 Step (the
+workflow canvas editor) immediately before it, and finally Step 84 after the 2026-08-05 insertion of
+Steps 66-69 (the review merge-readout chantier) at the end of Phase 5; see that phase's own
+renumbering notes, and Phase 7's).
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
@@ -122,7 +124,7 @@ workflow canvas editor) immediately before it; see that phase's own renumbering 
 
 **Phase 4 milestone**: warm-boot staleness window observed within §19.2's predicted 10–40 min range; the new §9.3-class scenarios green; compaction-retry contract test green. Independent of Phase 3's own milestone; Phase 5 Steps may proceed regardless of this phase's status.
 
-## Phase 5 — Code review & automations (21 Steps)
+## Phase 5 — Code review & automations (25 Steps)
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
@@ -147,6 +149,10 @@ workflow canvas editor) immediately before it; see that phase's own renumbering 
 | 63 | review: learned false-positive patterns | Repo-scoped table of maintainer-taught false-positive descriptions, captured via a `false positive: <reason>` command (maintainer+ direct via the existing `Authorize` gate, Step 39 — immediate effect, no propose/validate flow), upserted idempotently keyed on the triggering comment id; injected into every review (first pass and re-review alike) as an advisory, explicitly-untrusted content block ("weigh it, verify independently, do not skip a legitimate finding"); retire, hit-count, and an audit view ship in this same Step — no deferred lifecycle | §22 |
 | 64 | plan mode: follow-up intent classification (amend vs answer) | New `plan_followup` surface on the existing unified intent classifier (§18), single call site gated on "a plan exists and is `awaiting_approval`"; persisted `answer_only` flag on the turn/message row, consulted by the plan-save path (never trusting the sandbox/runtime to self-enforce); on classifier failure or low confidence, fail open to **wait-for-clarification** — nothing dispatched, the plan stays `awaiting_approval`, an honest reply asks the user to approve/reject/clarify, never a silent build-turn dispatch (the interim deterministic gate's own hold-and-clarify behavior, which remains the floor under any failure mode); replaces the interim gate's `revise:`-prefix requirement with real amend-vs-answer classification — the prefix stays as a deterministic override bypassing classification; classifier surface excluded from any public route by construction (private to `app/`, never registered on `httpapi`/`wshub`) | §23 |
 | 65 | review: automatic re-review on new commits | New GitHub `pull_request`/`synchronize` ingress lane, reusing the webhook toolkit's claim/release (Step 31) for delivery dedupe and `github_pr_sessions` (Step 32) for per-PR routing to the existing review session, never a new mapping table; trailing-edge debounce via a new named `session_timers` entry (§2 — re-arming on every push is the SAME upsert idiom the 5 existing named timers already use, so a burst reviews once, at the burst's OWN final head, after a quiet period); trigger state read from `review_verdicts.head_sha` (Step 62) compared against the PR's current head, never a bot-written label; off by default, per-repository opt-in, fails closed if the setting can't be read; never auto-approves anything on its own; a per-PR re-review budget breaks an automated-fix-triggers-automated-review loop, falling back to the existing manual label/button re-trigger once exhausted | §24 |
+| 66 | review digest: verdict as merge readout | Rendered verdict restructured to front-load the merge decision — "What this PR does" (2-4 sentences written from the diff, never copied from the description; the §26.2 adequacy reference and the §16 inbox headline), "Architecture choices" (decision, implicitly-rejected alternative, convention conformance), "Risks to the stack" (`BlastRadius` vocabulary + coupling/deploy risks + reversibility + explicit not-verified limits), findings/coverage/docs-drift demoted to a collapsed appendix; all typed fields on the Step 47 posting payload (`Digest{Summary, ArchDecisions[], StackRisks, UnverifiedLimits}`), never markers re-parsed from markdown (Step 45's invariant); `Summary` required on every review from day one, full digest schema-required on the deep path once Step 68 defines it (reject-don't-repair at the posting endpoint); digest columns ride `review_verdicts` (Step 62) so digest quality is measurable from day one | §26.1 |
+| 67 | review digest: description adequacy + graduated remediation | Typed `DescriptionAdequacy: ok/drift/misleading` + one-line explanation, judged by comparing the diff-derived `Digest.Summary` against title+body (which stay untrusted input, §5.2); a THIRD raise-only floor — `misleading` → `Shippable ≥ needs_human`, composing via the existing `max(rank)` (Step 45's one-pure-function-per-floor pattern), deliberately never inflating `RiskLevel`; remediation graduated by authorship: Narvi-authored PRs may get their **body** rewritten behind a per-repo `descriptionAutofix` flag (default off), original preserved in a collapsed block, delivered via a `SourceControl` port extension + outbox (§5.1) with authorship+flag checks server-side (§5.2); human PRs get a proposed body in the digest only; the title is never rewritten automatically | §26.2 |
+| 68 | review triage: deterministic light/deep routing | Depth decided in the single review funnel (Step 46's creation/dispatch path), deterministic-first (§18 posture): diff stats (already fetched), changed paths promoted to a structured signal, sensitive globs (migrations/auth/infra-as-code/CI) mapped onto `BlastRadius` tags, top-level-root dispersion, provenance (Narvi vs human + authoring model), Step 62 verdict history (prior `high` → deep), existing risk labels; v1 rules: sensitive glob → deep, >600 lines or ≥3 roots → deep, else light — no LLM tie-break (v2 option only if per-path analytics show a grey zone); output `reviewDepth: light/deep` threaded into session creation, recorded on the §18.4 routing decision record, persisted as `review_path` on the verdict row so cost AND precision are measurable per path; depth drives review model/effort (light = balanced tier, deep = frontier + high effort); per-repo `reviewDepth: {mode, deepPaths}`; ANY triage error fails open to light; §24 re-review re-evaluates on the delta but floors at the PR's previous depth | §26.3 |
+| 69 | review deep path: adversarial counter-review + readout measurement | One sandbox, sub-task fan-out (§7.1 — never N sandboxes, never §14.4 child sessions): read-only `architecture-scribe` (virgin-context arch recap) + read-only adversarial `counter-reviewer` (refutes findings, hunts misses; pinnable to an opposing model family via Step 53's credentials + Step 59's catalog); only findings surviving counter-review are published, inter-agent disagreements rendered as a "Contested points" digest section; typed `CounterReview: done/skipped` schema-required on the deep path, `skipped` floors `Shippable` to `needs_human`; measurement on Step 62's instrument — per-section digest feedback kinds + a maintainer `arch recap wrong: <reason>` command (mirrors Step 63's command: `Authorize`-gated, deterministically routable §5.2, idempotent on comment id); KPIs: digest contestation rate, decision latency per path, cost per path, % PRs approved with zero human inline comments; digest-quality evals join the shadow-precision discipline | §26.4, §26.5 |
 
 **Renumbering note (2026-07-30):** Steps 57-60 above are new, inserted at the end of Phase 5 because they extend the code-review domain (§8.2/Step 45) and plan mode (§8.1/Steps 37-38) directly and gate nothing else in Phase 6/7 — every Step from the former Step 57 ("config/data seeding") onward shifts up by exactly 4: former 57→61 … former 70→74. Additive-shift pattern, same precedent as the Phase 4 insertion note above.
 
@@ -164,38 +170,47 @@ onward shifts up by exactly 4: former 53→57 … former 75→79 (ui finalize; s
 renumbering note below for the one further shift that applies to it). Additive-shift pattern, same
 precedent as the renumbering notes above.
 
+**Renumbering note (2026-08-05):** Steps 66-69 above are new, inserted at the end of Phase 5
+because they restructure the review verdict (§8.2/Steps 45/47) into a merge readout and build
+directly on the verdict-persistence instrument (§21/Step 62) that measures them — every Step from
+the former Step 66 ("config/data seeding") onward shifts up by exactly 4: former 66→70 … former
+80→84 (ui finalize, which must stay last). Additive-shift pattern, same precedent as the notes
+above. Full design in `docs/TECHNICAL_PLAN.md` §26.
+
 **Phase 5 milestone**: code review in shadow on live PRs, verdicts reviewed for precision.
 
 ## Phase 6 — Rollout (4 Steps)
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
-| 66 | config/data seeding | Scripts to seed automations, secrets, environments, settings, integrations; participants→users mapping (by GitHub id, default member) | §10-P6, §13.4 |
-| 67 | cohort rollout | Feature-flagged cohort rollout of sessions, documented rollback | §10-P6 |
-| 68 | ops | Dashboards/alerts (false failures, outbox lag, orphans, boot p95), runbooks from the resilience catalog (§9.3) | §5.3 |
-| 69 | launch readiness | Production checklist, SLO alerts wired, on-call runbook; a per-surface user guide (web/Slack/Linear/GitHub) documenting what each surface accepts AND its honest negatives, shipped behavior only — a CI check ties every documented command to the `/contracts` route or classifier routing record (§18.4) that actually implements it, so the guide can never drift into aspirational text | §10-P6 |
+| 70 | config/data seeding | Scripts to seed automations, secrets, environments, settings, integrations; participants→users mapping (by GitHub id, default member) | §10-P6, §13.4 |
+| 71 | cohort rollout | Feature-flagged cohort rollout of sessions, documented rollback | §10-P6 |
+| 72 | ops | Dashboards/alerts (false failures, outbox lag, orphans, boot p95), runbooks from the resilience catalog (§9.3) | §5.3 |
+| 73 | launch readiness | Production checklist, SLO alerts wired, on-call runbook; a per-surface user guide (web/Slack/Linear/GitHub) documenting what each surface accepts AND its honest negatives, shipped behavior only — a CI check ties every documented command to the `/contracts` route or classifier routing record (§18.4) that actually implements it, so the guide can never drift into aspirational text | §10-P6 |
 
 ## Phase 7 — UI (11 Steps, visual spec = nine-view mockups)
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
-| 70 | ui bootstrap | Vite+React+TanStack, `go:embed` + `narvi serve`, light/dark theme tokens from the mockups, front CI | §12.1 |
-| 71 | ui data layer | TS client generated from `/contracts`, WS transport → event-log → reducer | §12.1 |
-| 72 | ui sign-in | GitHub primary, SSO OIDC, identity auto-link panel, allowlist errors | §12.2-7, §13.1 |
-| 73 | ui session: timeline | Sidebar (status chips + session source, My sessions/All filter, boot n/m), typed-event timeline incl. sub-task lane nesting, failure cards + Resume | decisions 1-4, 31, §7.1 |
-| 74 | ui session: composer & rail | Composer (model/effort/plan mode, warm-on-type; Enter sends and Shift+Enter inserts a newline from day one, an IME composition guard so confirming an IME composition never sends, one shared can-submit predicate driving both the Send button and the keydown handler, and an explicit touch/mobile decision, §12.3), sandbox rail (transitions, gen, fingerprint, boot phases, artifacts, cost incl. sub-task roll-up) | decisions 5-6, §7.1, §12.3 |
-| 75 | ui code review + release review | Editable risk-map, sentinels, findings (apply/rebut), history, server-side badge; handoff-readiness sentinel (Step 49) on scoped sessions; **dedicated release-review screen: manifest + trigger banner + composition findings (Step 50)**; false-positive pattern management (view/retire per repo, maintainer+, Step 63); rebuttal history with finding-identity linkage (Step 48); epistemic-check outcome surfaced as a subtle "Heads-up" indicator in the review view when `minor`/`strong` fired (Step 61) | decisions 7-14, §14.4, §15, §20, §21, §22 |
-| 76 | ui plan mode + automations | Versioned plan + multi-channel approval bar; automations health/runs table | decisions 15-20 |
-| 77 | ui settings + analytics | Environments/secrets/templates/members&access (roles, identities, audit); **path-scope + services editor for product Environments**; analytics (KPIs incl. false failures and decision latency, charts); review-risk analytics section (KPI tiles, trend chart, top-risk table) fed by Step 62's read model with explicit "not available yet" states; digest cadence/scope settings per repo; per-repo auto-merge toggle (off by default) with contradiction-rate calibration stats displayed next to it; per-repo automatic re-review opt-in toggle (off by default, §24) | decisions 21-30, §14.1, §14.2, §21, §24 |
-| 78 | ui decision inbox (home) | Home view: decision queue by section (merge/review/approval/attention), inline actions wired to the Step 60 API, assignment provenance, staleness, repo-only filter (the inbox is inherently user-scoped), median time-to-decision; the sessions list moves to a second tab | decisions 32-34, §16 |
-| 79 | workflow canvas editor | React Flow-style node/edge canvas for authoring a workflow's steps and edges per lane/repo; validates/constrains what a user can draw against the engine's closed model (ordered steps + 3-status edges, no expression language, §25.4) — a drawn graph the engine cannot execute must be rejected at save time, not silently accepted. Inline progress display of a running workflow in the session view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 73/74), not a separate Step | §25.12, §7.1 |
-| 80 | ui finalize | `make dist` single self-contained binary, screenshot review vs mockups, ship | §12.4 |
+| 74 | ui bootstrap | Vite+React+TanStack, `go:embed` + `narvi serve`, light/dark theme tokens from the mockups, front CI | §12.1 |
+| 75 | ui data layer | TS client generated from `/contracts`, WS transport → event-log → reducer | §12.1 |
+| 76 | ui sign-in | GitHub primary, SSO OIDC, identity auto-link panel, allowlist errors | §12.2-7, §13.1 |
+| 77 | ui session: timeline | Sidebar (status chips + session source, My sessions/All filter, boot n/m), typed-event timeline incl. sub-task lane nesting, failure cards + Resume | decisions 1-4, 31, §7.1 |
+| 78 | ui session: composer & rail | Composer (model/effort/plan mode, warm-on-type; Enter sends and Shift+Enter inserts a newline from day one, an IME composition guard so confirming an IME composition never sends, one shared can-submit predicate driving both the Send button and the keydown handler, and an explicit touch/mobile decision, §12.3), sandbox rail (transitions, gen, fingerprint, boot phases, artifacts, cost incl. sub-task roll-up) | decisions 5-6, §7.1, §12.3 |
+| 79 | ui code review + release review | **Merge-readout layout (§26): digest sections first ("What this PR does", architecture choices, stack risks, contested points), findings in a collapsed appendix**; editable risk-map, sentinels, findings (apply/rebut), history, server-side badge; handoff-readiness sentinel (Step 49) on scoped sessions; **dedicated release-review screen: manifest + trigger banner + composition findings (Step 50)**; false-positive pattern management (view/retire per repo, maintainer+, Step 63); rebuttal history with finding-identity linkage (Step 48); epistemic-check outcome surfaced as a subtle "Heads-up" indicator in the review view when `minor`/`strong` fired (Step 61) | decisions 7-14, §14.4, §15, §20, §21, §22, §26 |
+| 80 | ui plan mode + automations | Versioned plan + multi-channel approval bar; automations health/runs table | decisions 15-20 |
+| 81 | ui settings + analytics | Environments/secrets/templates/members&access (roles, identities, audit); **path-scope + services editor for product Environments**; analytics (KPIs incl. false failures and decision latency, charts); review-risk analytics section (KPI tiles, trend chart, top-risk table) fed by Step 62's read model with explicit "not available yet" states; digest cadence/scope settings per repo; per-repo auto-merge toggle (off by default) with contradiction-rate calibration stats displayed next to it; per-repo automatic re-review opt-in toggle (off by default, §24) | decisions 21-30, §14.1, §14.2, §21, §24 |
+| 82 | ui decision inbox (home) | Home view: decision queue by section (merge/review/approval/attention), inline actions wired to the Step 60 API, assignment provenance, staleness, repo-only filter (the inbox is inherently user-scoped), median time-to-decision; the sessions list moves to a second tab | decisions 32-34, §16 |
+| 83 | workflow canvas editor | React Flow-style node/edge canvas for authoring a workflow's steps and edges per lane/repo; validates/constrains what a user can draw against the engine's closed model (ordered steps + 3-status edges, no expression language, §25.4) — a drawn graph the engine cannot execute must be rejected at save time, not silently accepted. Inline progress display of a running workflow in the session view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 77/78), not a separate Step | §25.12, §7.1 |
+| 84 | ui finalize | `make dist` single self-contained binary, screenshot review vs mockups, ship | §12.4 |
 
 **Renumbering note (2026-08-03):** One new Step is inserted at the end of Phase 7's table,
 immediately before ui finalize, because the workflow canvas editor (§25.12) needs the engine
 (Steps 54-56) and Settings (Step 77) it visualizes to exist first, and gates nothing else — ui
 finalize must stay the last Step in the plan. It takes the number the former ui finalize held (79,
 after the Phase 5 insertion note above), and the former ui finalize shifts up by exactly 1, to 80.
+(Since 2026-08-05, both numbers shift by a further +4 — canvas 79→83, ui finalize 80→84 — per the
+end-of-Phase-5 renumbering note above.)
 
 ## Sequencing & parallelism
 
@@ -215,10 +230,15 @@ after the Phase 5 insertion note above), and the former ui finalize shifts up by
   (classifier) and 37-38 (plan mode, the dispatch point it amends). 65 depends on 46 (the
   claim/coalescing primitives it extends with a second, automatic ingress lane) and 62
   (`review_verdicts.head_sha`, its trigger-state source) — it adds a parallel path onto Step 46's
-  own primitives, never a mechanism of its own.
-- **Phase 7** can start 70-71 during phase 6 (backend and contracts are frozen by then). 79
-  (workflow canvas editor) depends on 55-56 (the engine and HITL gate it visualizes) and 77
-  (Settings, which it ships alongside); it does not block 80 (ui finalize) beyond ordering.
+  own primitives, never a mechanism of its own. 66 (merge-readout digest) depends on 45/47
+  (verdict shape + posting path) and 62 (persistence — the instrument that measures it); 67
+  depends on 66 (the diff-derived summary is its adequacy reference); 68 is independent of 66-67
+  (depth-based model/effort tiering is valuable alone) but precedes 69, whose deep path must exist
+  to route to; 69 depends on 66 and 68, uses 53's credential injection for cross-family sub-agent
+  pinning, and measures on 62's instrument.
+- **Phase 7** can start 74-75 during phase 6 (backend and contracts are frozen by then). 83
+  (workflow canvas editor) depends on 55-56 (the engine and HITL gate it visualizes) and 81
+  (Settings, which it ships alongside); it does not block 84 (ui finalize) beyond ordering.
 - Go/no-go after Step 21 (~1 month).
 
 ## Verification
