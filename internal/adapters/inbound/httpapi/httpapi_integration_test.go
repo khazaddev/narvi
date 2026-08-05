@@ -41,6 +41,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
+	"github.com/khazaddev/narvi/internal/adapters/inbound/automationwebhook"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -174,6 +175,19 @@ type testRig struct {
 	// ApplySuggestion's happy path overrides this via newTestRig's own
 	// mutate func with a fake implementing ports.SourceControl.
 	sourceControl ports.SourceControl
+
+	// automations (Step 52, "automations: triggers & extras", §8.4) backs
+	// this rig's own /api/automations routes (automations_integration_
+	// test.go).
+	automations *narvipg.AutomationStore
+
+	// automationInvocations backs this rig's own /webhooks/automations/
+	// {automationID} route (mounted below, mirroring cmd/control-plane/
+	// main.go's own identical wiring) -- review-fix addition
+	// (automationwebhooktoken_integration_test.go) so a rotate/revoke test
+	// can drive the REAL inbound webhook handler end to end, not just
+	// assert against AutomationStore.GetByWebhookTokenHash directly.
+	automationInvocations *narvipg.AutomationInvocationStore
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -198,32 +212,34 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	}
 
 	rig := testRig{
-		pool:                pool,
-		sessions:            narvipg.NewSessionStore(pool),
-		turns:               narvipg.NewTurnStore(pool),
-		sandboxes:           narvipg.NewSandboxStore(pool),
-		events:              narvipg.NewEventStore(pool),
-		artifacts:           narvipg.NewArtifactStore(pool),
-		wsTokens:            narvipg.NewWSTokenStore(pool),
-		environments:        narvipg.NewEnvironmentStore(pool),
-		users:               narvipg.NewUserStore(pool),
-		identities:          narvipg.NewIdentityStore(pool),
-		userSessions:        narvipg.NewUserSessionStore(pool),
-		registry:            registry,
-		tokenEncryptionKey:  []byte("01234567890123456789012345678901"), // exactly 32 bytes
-		provider:            &fakeSnapshotProvider{},
-		plans:               narvipg.NewPlanStore(pool),
-		participants:        narvipg.NewParticipantStore(pool),
-		outbox:              narvipg.NewOutboxStore(pool),
-		linearAgentSessions: narvipg.NewLinearAgentSessionStore(pool),
-		auditLog:            narvipg.NewAuditLogStore(pool),
-		linkPrompts:         narvipg.NewIdentityLinkPromptStore(pool),
-		promptTemplates:     narvipg.NewPromptTemplateStore(pool),
-		prSessions:          narvipg.NewGitHubPRSessionStore(pool),
-		repoSettings:        narvipg.NewRepoSettingsStore(pool),
-		botHandle:           "narvi-test-bot",
-		reviewFindings:      narvipg.NewReviewFindingStore(pool),
-		sentinelFixes:       narvipg.NewSentinelFixStore(pool),
+		pool:                  pool,
+		sessions:              narvipg.NewSessionStore(pool),
+		turns:                 narvipg.NewTurnStore(pool),
+		sandboxes:             narvipg.NewSandboxStore(pool),
+		events:                narvipg.NewEventStore(pool),
+		artifacts:             narvipg.NewArtifactStore(pool),
+		wsTokens:              narvipg.NewWSTokenStore(pool),
+		environments:          narvipg.NewEnvironmentStore(pool),
+		users:                 narvipg.NewUserStore(pool),
+		identities:            narvipg.NewIdentityStore(pool),
+		userSessions:          narvipg.NewUserSessionStore(pool),
+		registry:              registry,
+		tokenEncryptionKey:    []byte("01234567890123456789012345678901"), // exactly 32 bytes
+		provider:              &fakeSnapshotProvider{},
+		plans:                 narvipg.NewPlanStore(pool),
+		participants:          narvipg.NewParticipantStore(pool),
+		outbox:                narvipg.NewOutboxStore(pool),
+		linearAgentSessions:   narvipg.NewLinearAgentSessionStore(pool),
+		auditLog:              narvipg.NewAuditLogStore(pool),
+		linkPrompts:           narvipg.NewIdentityLinkPromptStore(pool),
+		promptTemplates:       narvipg.NewPromptTemplateStore(pool),
+		prSessions:            narvipg.NewGitHubPRSessionStore(pool),
+		repoSettings:          narvipg.NewRepoSettingsStore(pool),
+		botHandle:             "narvi-test-bot",
+		reviewFindings:        narvipg.NewReviewFindingStore(pool),
+		sentinelFixes:         narvipg.NewSentinelFixStore(pool),
+		automations:           narvipg.NewAutomationStore(pool),
+		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -301,6 +317,28 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings))
 		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings))
 	})
+	// /api/automations (Step 52, "automations: triggers & extras", §8.4) --
+	// mounted exactly like cmd/control-plane/main.go's own wiring (see
+	// automations.go's own doc comment).
+	router.Route("/api/automations", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateAutomation(rig.automations))
+		r.Get("/", httpapi.ListAutomations(rig.automations))
+		r.Get("/{automationID}", httpapi.GetAutomation(rig.automations))
+		r.Post("/{automationID}/pause", httpapi.PauseAutomation(rig.automations))
+		r.Post("/{automationID}/resume", httpapi.ResumeAutomation(rig.automations))
+		r.Post("/{automationID}/webhook-token", httpapi.RotateAutomationWebhookToken(rig.automations))
+		r.Delete("/{automationID}/webhook-token", httpapi.RevokeAutomationWebhookToken(rig.automations))
+	})
+	// /webhooks/automations/{automationID} -- mounted OUTSIDE auth.Middleware
+	// entirely, exactly like cmd/control-plane/main.go's own real wiring
+	// (see internal/adapters/inbound/automationwebhook's own doc comment).
+	// Review-fix addition: this rig's own rotate/revoke tests
+	// (automationwebhooktoken_integration_test.go) need the REAL inbound
+	// webhook handler mounted to prove a rotated/revoked token actually
+	// stops authenticating against it, not just against the store layer
+	// directly.
+	router.Post("/webhooks/automations/{automationID}", automationwebhook.NewHandler(rig.automations, rig.automationInvocations))
 
 	rig.server = httptest.NewServer(router)
 	t.Cleanup(rig.server.Close)

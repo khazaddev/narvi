@@ -102,6 +102,17 @@ WHERE status = 'starting' AND started_at < $1
 ORDER BY started_at
 LIMIT $2;
 
+-- name: ListRunsForInvocation :many
+-- Backs §8.4's own "artifact_summary populated" -- app/automation's own
+-- closeout.go reads every run of a just-closed invocation (small, ≤
+-- automation.MaxFanOutTargets rows) to name which specific targets failed
+-- (automation.BuildArtifactSummary), reusing app/automation's own
+-- unmarshalTargets (target.go) against each row's own target JSONB rather
+-- than a second, independent JSON decode.
+SELECT * FROM automation_runs
+WHERE invocation_id = $1
+ORDER BY created_at;
+
 -- name: ListOrphanedRunningRuns :many
 -- §3.5's own "running >90 min" sweep -- same shape as
 -- ListOrphanedStartingRuns immediately above, against running_at/its own

@@ -70,10 +70,93 @@ func (s *AutomationStore) ResetConsecutiveFailures(ctx context.Context, id pgtyp
 }
 
 // Resume applies automation.TriggerResume: Paused -> Active, resetting the
-// consecutive-failure streak. No HTTP caller exists yet in this Step (Step
-// 52/76 own the actual "Resume" button) -- reserved so that surface needs
-// no store-layer change to use it. pgx.ErrNoRows means id is not currently
-// Paused (a no-op, not an error the caller should surface as one).
+// consecutive-failure streak. Backs POST /api/automations/{id}/resume
+// (Step 52, §8.4). pgx.ErrNoRows means id is not currently Paused (a
+// no-op, not an error the caller should surface as one).
 func (s *AutomationStore) Resume(ctx context.Context, id pgtype.UUID) (sqlcgen.Automation, error) {
 	return s.q.ResumeAutomation(ctx, id)
+}
+
+// Pause applies automation.TriggerAutoPause via a direct admin action
+// (POST /api/automations/{id}/pause, Step 52, §8.4) -- the manual-pause
+// twin of Resume above; see PauseAutomation's own generated doc comment
+// for why this reuses TriggerAutoPause rather than a dedicated trigger.
+// pgx.ErrNoRows means id is not currently Active (a no-op, not an error
+// the caller should surface as one).
+func (s *AutomationStore) Pause(ctx context.Context, id pgtype.UUID) (sqlcgen.Automation, error) {
+	return s.q.PauseAutomation(ctx, id)
+}
+
+// GetByWebhookTokenHash looks up the automation whose webhook_token_hash
+// matches hash exactly -- backs the webhook trigger's own inbound-auth
+// check (internal/adapters/inbound/automationwebhook's own handler.go).
+// pgx.ErrNoRows means no automation currently carries this hash -- an
+// unrecognized token, OR one that WAS recognized once but has since been
+// rotated (RotateWebhookToken below, which overwrites webhook_token_hash
+// with a fresh hash) or revoked (RevokeWebhookToken, which clears it to
+// NULL entirely) -- either way this lookup can no longer find it, by
+// design (rotate/revoke's own review-fix: httpapi.RotateAutomationWebhookToken/
+// RevokeAutomationWebhookToken).
+func (s *AutomationStore) GetByWebhookTokenHash(ctx context.Context, hash string) (sqlcgen.Automation, error) {
+	return s.q.GetAutomationByWebhookTokenHash(ctx, &hash)
+}
+
+// RotateWebhookToken overwrites id's own webhook_token_hash with hash --
+// backs POST /api/automations/{automationID}/webhook-token (review fix:
+// "webhook token has no rotation/revocation/expiry"). Guarded by "AND
+// trigger_type = 'webhook'": rotating a token on a non-webhook automation
+// (which never had one to begin with) is a no-op, surfaced to the caller
+// as pgx.ErrNoRows exactly like every other guarded single-row UPDATE in
+// this store (Pause/Resume above) rather than a silent success. The OLD
+// hash stops matching GetByWebhookTokenHash the instant this commits --
+// there is no grace period, matching every other bearer-token rotation
+// precedent in this codebase (ws_tokens, sandboxes.token_hash).
+func (s *AutomationStore) RotateWebhookToken(ctx context.Context, id pgtype.UUID, hash string) (sqlcgen.Automation, error) {
+	return s.q.RotateAutomationWebhookToken(ctx, sqlcgen.RotateAutomationWebhookTokenParams{ID: id, WebhookTokenHash: &hash})
+}
+
+// RevokeWebhookToken clears id's own webhook_token_hash to NULL -- backs
+// DELETE /api/automations/{automationID}/webhook-token (review fix, same
+// finding as RotateWebhookToken above). Unconditional (no "AND trigger_type
+// = 'webhook'" guard, unlike RotateWebhookToken): clearing an
+// already-NULL hash on a non-webhook automation is a harmless no-op, not
+// an error worth distinguishing -- the caller (httpapi.
+// RevokeAutomationWebhookToken) already does its own existence check
+// first, exactly like Pause/Resume. Once this commits,
+// GetByWebhookTokenHash can never again match this automation until a
+// subsequent RotateWebhookToken call mints a new one (automationwebhook's
+// own handler.go already 401s on any hash miss -- no handler-side change
+// needed for a revoke to take effect).
+func (s *AutomationStore) RevokeWebhookToken(ctx context.Context, id pgtype.UUID) (sqlcgen.Automation, error) {
+	return s.q.RevokeAutomationWebhookToken(ctx, id)
+}
+
+// List returns every automation matching the given optional creator/status
+// filters (Step 52, §8.4's own "creator/status filters") -- backs GET
+// /api/automations. A zero-value createdBy (Valid: false) or nil status
+// matches every row for that filter.
+func (s *AutomationStore) List(ctx context.Context, createdBy pgtype.UUID, status *sqlcgen.AutomationStatus) ([]sqlcgen.Automation, error) {
+	return s.q.ListAutomations(ctx, sqlcgen.ListAutomationsParams{CreatedBy: createdBy, Status: status})
+}
+
+// ListActiveCronAutomations returns every active, cron-triggered automation
+// -- backs the cron trigger pump's own per-tick scan (app/automation's own
+// triggerpump.go).
+func (s *AutomationStore) ListActiveCronAutomations(ctx context.Context) ([]sqlcgen.Automation, error) {
+	return s.q.ListActiveCronAutomations(ctx)
+}
+
+// ClaimCronFire is the cron trigger pump's own per-automation CAS guard --
+// see ClaimCronFire's own generated doc comment. pgx.ErrNoRows means this
+// automation already fired for the given minute bucket (a concurrent tick
+// or pod won the race first) -- a harmless no-op, not an error.
+func (s *AutomationStore) ClaimCronFire(ctx context.Context, id pgtype.UUID, minuteBucket pgtype.Timestamptz) (sqlcgen.Automation, error) {
+	return s.q.ClaimCronFire(ctx, sqlcgen.ClaimCronFireParams{ID: id, LastCronFiredAt: minuteBucket})
+}
+
+// UpdateLastRun persists §8.4's own "last_run + artifact_summary
+// populated" -- called by app/automation's own closeout.go the moment an
+// invocation's own outcome is decided.
+func (s *AutomationStore) UpdateLastRun(ctx context.Context, arg sqlcgen.UpdateAutomationLastRunParams) (sqlcgen.Automation, error) {
+	return s.q.UpdateAutomationLastRun(ctx, arg)
 }

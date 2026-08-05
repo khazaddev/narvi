@@ -28,6 +28,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/internal/adapters/inbound/auth"
+	"github.com/khazaddev/narvi/internal/adapters/inbound/automationwebhook"
 	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	identitylinkhttp "github.com/khazaddev/narvi/internal/adapters/inbound/identitylink"
@@ -784,6 +785,43 @@ func serve() error {
 		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore))
 		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore))
 	})
+
+	// /api/automations (Step 52, "automations: triggers & extras", §8.4):
+	// the CRUD surface Step 51 ("automations: engine") never built --
+	// automationStore is the SAME instance automationEngine (constructed
+	// above) already uses, never a second, independently-constructed copy.
+	// Create/Pause/Resume/RotateAutomationWebhookToken/
+	// RevokeAutomationWebhookToken are further gated inside each handler
+	// itself via domain/authz.Authorize(actor, authz.ActionManageAutomations,
+	// ...) (admin/maintainer only); Get/List carry no further RBAC beyond
+	// "must be logged in" -- see httpapi/automations.go's own doc comment
+	// for why. The webhook-token rotate/revoke pair (review fix: "webhook
+	// token has no rotation/revocation/expiry") is mounted here, inside
+	// this SAME already-authenticated block, rather than as a separate
+	// top-level route -- it manages a sub-resource of an existing
+	// automation, exactly like pause/resume above.
+	router.Route("/api/automations", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateAutomation(automationStore))
+		r.Get("/", httpapi.ListAutomations(automationStore))
+		r.Get("/{automationID}", httpapi.GetAutomation(automationStore))
+		r.Post("/{automationID}/pause", httpapi.PauseAutomation(automationStore))
+		r.Post("/{automationID}/resume", httpapi.ResumeAutomation(automationStore))
+		r.Post("/{automationID}/webhook-token", httpapi.RotateAutomationWebhookToken(automationStore))
+		r.Delete("/{automationID}/webhook-token", httpapi.RevokeAutomationWebhookToken(automationStore))
+	})
+
+	// /webhooks/automations/{automationID} (Step 52, §8.4's own "webhook-
+	// facing API surface"): deliberately mounted OUTSIDE auth.Middleware
+	// entirely, mirroring /webhooks/linear's own precedent immediately
+	// below -- this is authenticated by a per-automation bearer token
+	// (internal/adapters/inbound/automationwebhook's own doc comment),
+	// never a browser cookie. automationStore/automationInvocationStore
+	// are the SAME instances automationEngine already uses -- see that
+	// package's own doc comment for why this handler lives in its own
+	// adapter package rather than httpapi (an import-cycle constraint,
+	// not a style preference).
+	router.Post("/webhooks/automations/{automationID}", automationwebhook.NewHandler(automationStore, automationInvocationStore))
 
 	// Linear ingress (Step 34, "Linear ingress", §8.10) -- see
 	// internal/adapters/inbound/linear's own doc.go for the full design.

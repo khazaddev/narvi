@@ -21,8 +21,15 @@ type targetJSON struct {
 	Branch *string `json:"branch,omitempty"`
 }
 
-// marshalTargets encodes targets for a JSONB column.
-func marshalTargets(targets []domainautomation.Target) ([]byte, error) {
+// MarshalTargets encodes targets for a JSONB column. Exported (rather than
+// kept package-private, unlike this file's own targetJSON wire struct)
+// specifically so internal/adapters/inbound/automationwebhook -- a NEW
+// inbound package this Step adds, which (unlike internal/adapters/inbound/
+// httpapi) has no import-cycle constraint against this package -- can
+// decode an automation's own repos JSONB into []domainautomation.Target
+// via UnmarshalTargets below without reimplementing this exact wire shape
+// a third time.
+func MarshalTargets(targets []domainautomation.Target) ([]byte, error) {
 	wire := make([]targetJSON, len(targets))
 	for i, t := range targets {
 		wire[i] = targetJSON{Name: t.Name, URL: t.URL}
@@ -38,9 +45,10 @@ func marshalTargets(targets []domainautomation.Target) ([]byte, error) {
 	return raw, nil
 }
 
-// unmarshalTargets decodes a JSONB targets column back into
-// []domainautomation.Target.
-func unmarshalTargets(raw []byte) ([]domainautomation.Target, error) {
+// UnmarshalTargets decodes a JSONB targets/repos column back into
+// []domainautomation.Target -- see MarshalTargets' own doc comment
+// immediately above for why this is exported.
+func UnmarshalTargets(raw []byte) ([]domainautomation.Target, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}

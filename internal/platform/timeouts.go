@@ -1749,6 +1749,59 @@ type Timeouts struct {
 	// than this, with automation.DeriveRunStatus still reporting
 	// RunStatusRunning, is swept the same way. §3.5, explicit.
 	AutomationRunRunningOrphanThreshold time.Duration
+
+	// AutomationCronGranularity is Step 52's own ("automations: triggers &
+	// extras", §8.4) cron-trigger evaluation bucket size: internal/domain/
+	// automation.CronMatches evaluates a schedule against a whole UTC
+	// minute, and internal/app/automation's own trigger pump (triggerpump.go)
+	// truncates `now` to this same duration to compute the CAS-guarded
+	// "already fired for this bucket" key (automations.last_cron_fired_at).
+	// Not a tunable knob the way the pump intervals above are -- it is a
+	// STRUCTURAL constant (a standard 5-field cron schedule's own finest
+	// resolution IS one minute, by definition of the format itself, not a
+	// choice this codebase made) -- but every time.Duration unit literal
+	// in this codebase lives here regardless (§5.4/§11, mechanically
+	// enforced by tools/lint/narvichecks/notimeliteral), so this is that
+	// one literal's own single home, referenced by name everywhere else
+	// rather than written as a bare `time.Minute` a second time.
+	AutomationCronGranularity time.Duration
+
+	// AutomationCronCatchUpWindow is the review-fix companion to
+	// AutomationCronGranularity above (adversarial-review finding: "cron
+	// trigger pump has no catch-up for missed evaluations"): how far back a
+	// control-plane restart or a stalled tick may backfill missed cron
+	// minutes. Before this field existed, EvaluateCronTriggersOnce
+	// (app/automation's own triggerpump.go) compared ONLY the exact current
+	// instant against each schedule (domainautomation.CronMatches) -- a
+	// point-in-time predicate, not a range query -- so any gap between two
+	// consecutive evaluations wider than one AutomationEnginePumpInterval
+	// tick (a routine deploy, a slow tick, a GC pause) silently and
+	// permanently lost that minute's own fire, with no log line and no
+	// retry path. Every other time-driven path in this codebase
+	// (session_timers' fires_at <= now(), outbox's next_attempt_at <=
+	// now(), image_builds' next_retry_at <= now()) is inherently
+	// catch-up-safe after downtime by virtue of being a range/threshold
+	// query -- this field makes cron trigger evaluation the same way:
+	// app/automation's own trigger pump now evaluates the WINDOW
+	// (max(last_cron_fired_at, now-AutomationCronCatchUpWindow), now] via
+	// domainautomation.CronMatchesWithin, firing at most once per tick even
+	// if multiple buckets inside that window matched.
+	//
+	// Deliberately NOT unbounded ("catch up from whenever this automation
+	// last fired, no matter how long ago") -- an automation whose own
+	// engine was down for days should not suddenly fire once for a
+	// schedule that silently accumulated a long backlog; capping the
+	// look-back keeps a legitimately long outage's own catch-up behavior
+	// identical to a short one (fire at most once, for the most recent
+	// missed bucket still inside the window), rather than scaling with
+	// outage length. 10 minutes is chosen as comfortably wider than a
+	// single AutomationEnginePumpInterval tick (60s) plus real-world
+	// restart/rolling-deploy latency, while still being "the same day,
+	// basically immediately" from an operator's own point of view -- not
+	// specified by the plan, so this codebase's own established
+	// "generous, round, clearly-justified default" precedent applies
+	// (ProviderHTTPClientTimeout, OutboxClaimDuration, etc.).
+	AutomationCronCatchUpWindow time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1897,6 +1950,8 @@ func DefaultTimeouts() Timeouts {
 		AutomationSweepInterval:              60 * time.Second, // Step 51; not specified, chosen, matches AutomationEnginePumpInterval's own cadence
 		AutomationRunStartingOrphanThreshold: 5 * time.Minute,  // §3.5, explicit ("orphaned starting runs >5 min")
 		AutomationRunRunningOrphanThreshold:  90 * time.Minute, // §3.5, explicit ("running >90 min")
+		AutomationCronGranularity:            1 * time.Minute,  // Step 52, §8.4; structural, not tunable -- see field doc comment
+		AutomationCronCatchUpWindow:          10 * time.Minute, // Step 52 review fix (missed cron evaluations); not specified, chosen -- see field doc comment
 	}
 }
 
@@ -2007,6 +2062,17 @@ func (t Timeouts) Validate() error {
 		"AutomationRunStartingOrphanThreshold", t.AutomationRunStartingOrphanThreshold, "AutomationSweepInterval", t.AutomationSweepInterval)
 	check("AutomationRunRunningOrphanThreshold > AutomationSweepInterval",
 		"AutomationRunRunningOrphanThreshold", t.AutomationRunRunningOrphanThreshold, "AutomationSweepInterval", t.AutomationSweepInterval)
+
+	// Step 52 review fix ("cron trigger pump has no catch-up for missed
+	// evaluations"): AutomationCronCatchUpWindow must stay at least
+	// MinTimeoutMargin above AutomationEnginePumpInterval (the trigger
+	// pump's own tick cadence), or the catch-up window could be too
+	// narrow to reliably span even ONE missed tick -- the exact gap this
+	// field exists to absorb -- defeating its own purpose. Mirrors every
+	// other pairwise link in this chain: a plain "wider than the interval
+	// it is meant to cover, with margin" statement, nothing more elaborate.
+	check("AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
+		"AutomationCronCatchUpWindow", t.AutomationCronCatchUpWindow, "AutomationEnginePumpInterval", t.AutomationEnginePumpInterval)
 
 	return errors.Join(errs...)
 }

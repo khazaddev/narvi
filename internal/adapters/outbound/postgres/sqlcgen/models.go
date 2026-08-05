@@ -183,6 +183,51 @@ func (ns NullAutomationStatus) Value() (driver.Value, error) {
 	return string(ns.AutomationStatus), nil
 }
 
+type AutomationTriggerType string
+
+const (
+	AutomationTriggerTypeManual  AutomationTriggerType = "manual"
+	AutomationTriggerTypeCron    AutomationTriggerType = "cron"
+	AutomationTriggerTypeGithub  AutomationTriggerType = "github"
+	AutomationTriggerTypeLinear  AutomationTriggerType = "linear"
+	AutomationTriggerTypeWebhook AutomationTriggerType = "webhook"
+)
+
+func (e *AutomationTriggerType) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = AutomationTriggerType(s)
+	case string:
+		*e = AutomationTriggerType(s)
+	default:
+		return fmt.Errorf("unsupported scan type for AutomationTriggerType: %T", src)
+	}
+	return nil
+}
+
+type NullAutomationTriggerType struct {
+	AutomationTriggerType AutomationTriggerType `json:"automation_trigger_type"`
+	Valid                 bool                  `json:"valid"` // Valid is true if AutomationTriggerType is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullAutomationTriggerType) Scan(value interface{}) error {
+	if value == nil {
+		ns.AutomationTriggerType, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.AutomationTriggerType.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullAutomationTriggerType) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.AutomationTriggerType), nil
+}
+
 type IdentityLinkedVia string
 
 const (
@@ -694,15 +739,26 @@ type AuditLog struct {
 }
 
 type Automation struct {
-	ID                  pgtype.UUID        `json:"id"`
-	Name                string             `json:"name"`
-	Prompt              *string            `json:"prompt"`
-	Repos               []byte             `json:"repos"`
-	Status              AutomationStatus   `json:"status"`
-	ConsecutiveFailures int32              `json:"consecutive_failures"`
-	CreatedBy           pgtype.UUID        `json:"created_by"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	ID                    pgtype.UUID                 `json:"id"`
+	Name                  string                      `json:"name"`
+	Prompt                *string                     `json:"prompt"`
+	Repos                 []byte                      `json:"repos"`
+	Status                AutomationStatus            `json:"status"`
+	ConsecutiveFailures   int32                       `json:"consecutive_failures"`
+	CreatedBy             pgtype.UUID                 `json:"created_by"`
+	CreatedAt             pgtype.Timestamptz          `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz          `json:"updated_at"`
+	TriggerType           AutomationTriggerType       `json:"trigger_type"`
+	TriggerConfig         []byte                      `json:"trigger_config"`
+	WebhookTokenHash      *string                     `json:"webhook_token_hash"`
+	LastCronFiredAt       pgtype.Timestamptz          `json:"last_cron_fired_at"`
+	SandboxPathScope      []byte                      `json:"sandbox_path_scope"`
+	SandboxMockConfigured bool                        `json:"sandbox_mock_configured"`
+	SandboxContractsPath  *string                     `json:"sandbox_contracts_path"`
+	EnvVars               []byte                      `json:"env_vars"`
+	LastRunAt             pgtype.Timestamptz          `json:"last_run_at"`
+	LastRunStatus         *AutomationInvocationStatus `json:"last_run_status"`
+	ArtifactSummary       *string                     `json:"artifact_summary"`
 }
 
 type AutomationInvocation struct {

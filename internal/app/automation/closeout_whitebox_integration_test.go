@@ -81,6 +81,7 @@ func TestApplyFailureStrike_ConcurrentAttemptsRecordExactlyOneStrike(t *testing.
 
 	autoRow, err := automations.Create(ctx, sqlcgen.CreateAutomationParams{
 		Name: "cas strike test", Repos: reposJSON, CreatedBy: pgtype.UUID{},
+		TriggerType: sqlcgen.AutomationTriggerTypeManual, TriggerConfig: []byte("{}"), EnvVars: []byte("[]"),
 	})
 	if err != nil {
 		t.Fatalf("create automation: %v", err)
@@ -142,6 +143,7 @@ func TestCloseInvocation_ConcurrentClosesOnlyOneWinnerCascades(t *testing.T) {
 
 	autoRow, err := automations.Create(ctx, sqlcgen.CreateAutomationParams{
 		Name: "cas close test", Repos: reposJSON, CreatedBy: pgtype.UUID{},
+		TriggerType: sqlcgen.AutomationTriggerTypeManual, TriggerConfig: []byte("{}"), EnvVars: []byte("[]"),
 	})
 	if err != nil {
 		t.Fatalf("create automation: %v", err)
@@ -218,6 +220,7 @@ func TestApplyFailureStrike_FailureBetweenGuardAndStrikeRollsBackBothAtomically(
 
 	autoRow, err := automations.Create(ctx, sqlcgen.CreateAutomationParams{
 		Name: "atomic strike test", Repos: reposJSON, CreatedBy: pgtype.UUID{},
+		TriggerType: sqlcgen.AutomationTriggerTypeManual, TriggerConfig: []byte("{}"), EnvVars: []byte("[]"),
 	})
 	if err != nil {
 		t.Fatalf("create automation: %v", err)

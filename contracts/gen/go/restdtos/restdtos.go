@@ -148,6 +148,515 @@ func (j *AuditLogEntry) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One automations row's own REST wire shape (migrations/000051_automations.up.sql,
+// extended by migrations/000055_automations_triggers_and_extras.up.sql, Step 52
+// '§8.4'). Returned by POST/GET/list.
+type Automation struct {
+	// A short, one-sentence, mechanically generated description of the most recently
+	// closed invocation's own outcome
+	// (internal/domain/automation.BuildArtifactSummary). Null until lastRunAt is
+	// first set.
+	ArtifactSummary AutomationArtifactSummary `json:"artifactSummary" yaml:"artifactSummary" mapstructure:"artifactSummary"`
+
+	// ConsecutiveFailures corresponds to the JSON schema field "consecutiveFailures".
+	ConsecutiveFailures int `json:"consecutiveFailures" yaml:"consecutiveFailures" mapstructure:"consecutiveFailures"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Null for a system-attributed automation with no direct human creator.
+	CreatedBy AutomationCreatedBy `json:"createdBy" yaml:"createdBy" mapstructure:"createdBy"`
+
+	// EnvVars corresponds to the JSON schema field "envVars".
+	EnvVars []AutomationEnvVarElem `json:"envVars" yaml:"envVars" mapstructure:"envVars"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Null until this automation's first invocation ever closes.
+	LastRunAt AutomationLastRunAt `json:"lastRunAt" yaml:"lastRunAt" mapstructure:"lastRunAt"`
+
+	// The most recently CLOSED invocation's own outcome -- matches Postgres
+	// automation_invocation_status, excluding 'pending' (a closed invocation is never
+	// pending). Null until lastRunAt is first set.
+	LastRunStatus *AutomationLastRunStatus `json:"lastRunStatus" yaml:"lastRunStatus" mapstructure:"lastRunStatus"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Prompt corresponds to the JSON schema field "prompt".
+	Prompt AutomationPrompt `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
+
+	// Same shape as CreateSessionRequest.repos -- the set of repos this automation's
+	// own runs fan out against.
+	Repos []AutomationReposElem `json:"repos" yaml:"repos" mapstructure:"repos"`
+
+	// Meaningful only when sandboxMockConfigured is true; null means the default
+	// "contracts/api".
+	SandboxContractsPath AutomationSandboxContractsPath `json:"sandboxContractsPath" yaml:"sandboxContractsPath" mapstructure:"sandboxContractsPath"`
+
+	// SandboxMockConfigured corresponds to the JSON schema field
+	// "sandboxMockConfigured".
+	SandboxMockConfigured bool `json:"sandboxMockConfigured" yaml:"sandboxMockConfigured" mapstructure:"sandboxMockConfigured"`
+
+	// §8.4's own 'sandboxSettings honored on automation sessions' -- same
+	// shape/semantics as CreateSessionRequest.pathScope, applied to every run this
+	// automation fans out.
+	SandboxPathScope *AutomationSandboxPathScope `json:"sandboxPathScope" yaml:"sandboxPathScope" mapstructure:"sandboxPathScope"`
+
+	// Matches Postgres automation_status exactly.
+	Status AutomationStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// Opaque, type-specific trigger configuration -- see this schema's own top-level
+	// description for why this is not a discriminated union. {} for triggerType
+	// manual/webhook; {"schedule": "<5-field cron expr>"} for cron; {"event": ...,
+	// "action": ..., "label": ...} for github (action/label optional); {"eventType":
+	// ..., "action": ..., "teamKey": ...} for linear (action/teamKey optional).
+	TriggerConfig json.RawMessage `json:"triggerConfig" yaml:"triggerConfig" mapstructure:"triggerConfig"`
+
+	// Matches Postgres automation_trigger_type exactly. 'manual' means this
+	// automation fires only via a direct, out-of-band invocation (no automatic
+	// trigger of its own).
+	TriggerType AutomationTriggerType `json:"triggerType" yaml:"triggerType" mapstructure:"triggerType"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+}
+
+// A short, one-sentence, mechanically generated description of the most recently
+// closed invocation's own outcome
+// (internal/domain/automation.BuildArtifactSummary). Null until lastRunAt is first
+// set.
+type AutomationArtifactSummary *string
+
+// Null for a system-attributed automation with no direct human creator.
+type AutomationCreatedBy *string
+
+// One entry of an automation's own env_vars (Step 52, §8.4's own 'per-automation
+// env vars') -- plain, non-secret configuration only
+// (internal/domain/automation.EnvVar). See internal/domain/automation/doc.go's own
+// writeup for why per-automation SECRETS are a deliberately different, unbuilt
+// thing (deferred to Step 53).
+type AutomationEnvVarElem struct {
+	// A POSIX shell/environment-variable-legal identifier
+	// (internal/domain/automation.ValidateEnvVars) -- letters/digits/underscore, not
+	// starting with a digit.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// An empty string is a legitimate value.
+	Value string `json:"value" yaml:"value" mapstructure:"value"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationEnvVarElem) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in AutomationEnvVarElem: required")
+	}
+	if _, ok := raw["value"]; raw != nil && !ok {
+		return fmt.Errorf("field value in AutomationEnvVarElem: required")
+	}
+	type Plain AutomationEnvVarElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	*j = AutomationEnvVarElem(plain)
+	return nil
+}
+
+// Null until this automation's first invocation ever closes.
+type AutomationLastRunAt *time.Time
+
+type AutomationLastRunStatus struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *AutomationLastRunStatus) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_AutomationLastRunStatus = []interface{}{
+	"succeeded",
+	"failed",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationLastRunStatus) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AutomationLastRunStatus {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AutomationLastRunStatus, v.Value)
+	}
+	*j = AutomationLastRunStatus(v)
+	return nil
+}
+
+type AutomationPrompt *string
+
+// Same shape as CreateSessionRequest's own inline repos item (name/url/branch) --
+// a REAL top-level $def here (unlike CreateSessionRequest.repos' own inline item
+// schema, which go-jsonschema cannot be $ref'd across sibling $defs) so
+// Automation/CreateAutomationRequest can both reference it directly.
+type AutomationReposElem struct {
+	// Null means create runs from the repo's default base branch.
+	Branch AutomationReposElemBranch `json:"branch" yaml:"branch" mapstructure:"branch"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Url corresponds to the JSON schema field "url".
+	Url string `json:"url" yaml:"url" mapstructure:"url"`
+}
+
+// Null means create runs from the repo's default base branch.
+type AutomationReposElemBranch *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationReposElem) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["branch"]; raw != nil && !ok {
+		return fmt.Errorf("field branch in AutomationReposElem: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in AutomationReposElem: required")
+	}
+	if _, ok := raw["url"]; raw != nil && !ok {
+		return fmt.Errorf("field url in AutomationReposElem: required")
+	}
+	type Plain AutomationReposElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = AutomationReposElem(plain)
+	return nil
+}
+
+// Meaningful only when sandboxMockConfigured is true; null means the default
+// "contracts/api".
+type AutomationSandboxContractsPath *string
+
+// §8.4's own 'sandboxSettings honored on automation sessions' -- same
+// shape/semantics as CreateSessionRequest.pathScope, applied to every run this
+// automation fans out.
+type AutomationSandboxPathScope []string
+
+type AutomationStatus string
+
+const AutomationStatusActive AutomationStatus = "active"
+const AutomationStatusPaused AutomationStatus = "paused"
+
+var enumValues_AutomationStatus = []interface{}{
+	"active",
+	"paused",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AutomationStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AutomationStatus, v)
+	}
+	*j = AutomationStatus(v)
+	return nil
+}
+
+type AutomationTriggerType string
+
+const AutomationTriggerTypeCron AutomationTriggerType = "cron"
+const AutomationTriggerTypeGithub AutomationTriggerType = "github"
+const AutomationTriggerTypeLinear AutomationTriggerType = "linear"
+const AutomationTriggerTypeManual AutomationTriggerType = "manual"
+const AutomationTriggerTypeWebhook AutomationTriggerType = "webhook"
+
+var enumValues_AutomationTriggerType = []interface{}{
+	"manual",
+	"cron",
+	"github",
+	"linear",
+	"webhook",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AutomationTriggerType) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AutomationTriggerType {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AutomationTriggerType, v)
+	}
+	*j = AutomationTriggerType(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *Automation) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["artifactSummary"]; raw != nil && !ok {
+		return fmt.Errorf("field artifactSummary in Automation: required")
+	}
+	if _, ok := raw["consecutiveFailures"]; raw != nil && !ok {
+		return fmt.Errorf("field consecutiveFailures in Automation: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in Automation: required")
+	}
+	if _, ok := raw["createdBy"]; raw != nil && !ok {
+		return fmt.Errorf("field createdBy in Automation: required")
+	}
+	if _, ok := raw["envVars"]; raw != nil && !ok {
+		return fmt.Errorf("field envVars in Automation: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in Automation: required")
+	}
+	if _, ok := raw["lastRunAt"]; raw != nil && !ok {
+		return fmt.Errorf("field lastRunAt in Automation: required")
+	}
+	if _, ok := raw["lastRunStatus"]; raw != nil && !ok {
+		return fmt.Errorf("field lastRunStatus in Automation: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in Automation: required")
+	}
+	if _, ok := raw["prompt"]; raw != nil && !ok {
+		return fmt.Errorf("field prompt in Automation: required")
+	}
+	if _, ok := raw["repos"]; raw != nil && !ok {
+		return fmt.Errorf("field repos in Automation: required")
+	}
+	if _, ok := raw["sandboxContractsPath"]; raw != nil && !ok {
+		return fmt.Errorf("field sandboxContractsPath in Automation: required")
+	}
+	if _, ok := raw["sandboxMockConfigured"]; raw != nil && !ok {
+		return fmt.Errorf("field sandboxMockConfigured in Automation: required")
+	}
+	if _, ok := raw["sandboxPathScope"]; raw != nil && !ok {
+		return fmt.Errorf("field sandboxPathScope in Automation: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in Automation: required")
+	}
+	if _, ok := raw["triggerConfig"]; raw != nil && !ok {
+		return fmt.Errorf("field triggerConfig in Automation: required")
+	}
+	if _, ok := raw["triggerType"]; raw != nil && !ok {
+		return fmt.Errorf("field triggerType in Automation: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in Automation: required")
+	}
+	type Plain Automation
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 0 > plain.ConsecutiveFailures {
+		return fmt.Errorf("field %s: must be >= %v", "consecutiveFailures", 0)
+	}
+	if plain.Repos != nil && len(plain.Repos) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "repos", 1)
+	}
+	*j = Automation(plain)
+	return nil
+}
+
+// POST /api/automations's own request body (Step 52, §8.4). Admin/maintainer only
+// (authz.ActionManageAutomations).
+type CreateAutomationRequest struct {
+	// Optional -- absent/empty means no per-automation env vars.
+	EnvVars []AutomationEnvVarElem `json:"envVars,omitempty,omitzero" yaml:"envVars,omitempty" mapstructure:"envVars,omitempty"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Prompt corresponds to the JSON schema field "prompt".
+	Prompt CreateAutomationRequestPrompt `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
+
+	// Repos corresponds to the JSON schema field "repos".
+	Repos []AutomationReposElem `json:"repos" yaml:"repos" mapstructure:"repos"`
+
+	// Optional, like CreateSessionRequest.mockConfig -- presence (even as {}) means
+	// mock_configured=true for every run this automation fans out.
+	SandboxMockConfig *CreateAutomationRequestSandboxMockConfig `json:"sandboxMockConfig,omitempty,omitzero" yaml:"sandboxMockConfig,omitempty" mapstructure:"sandboxMockConfig,omitempty"`
+
+	// Optional, like CreateSessionRequest.pathScope -- absent/null means unscoped.
+	SandboxPathScope *CreateAutomationRequestSandboxPathScope `json:"sandboxPathScope,omitempty,omitzero" yaml:"sandboxPathScope,omitempty" mapstructure:"sandboxPathScope,omitempty"`
+
+	// Required sub-fields depend on triggerType -- see Automation.triggerConfig's own
+	// doc comment. Absent/{} is only valid for triggerType manual/webhook.
+	TriggerConfig *json.RawMessage `json:"triggerConfig,omitempty,omitzero" yaml:"triggerConfig,omitempty" mapstructure:"triggerConfig,omitempty"`
+
+	// TriggerType corresponds to the JSON schema field "triggerType".
+	TriggerType CreateAutomationRequestTriggerType `json:"triggerType" yaml:"triggerType" mapstructure:"triggerType"`
+}
+
+type CreateAutomationRequestPrompt *string
+
+// Optional, like CreateSessionRequest.mockConfig -- presence (even as {}) means
+// mock_configured=true for every run this automation fans out.
+type CreateAutomationRequestSandboxMockConfig struct {
+	// ContractsPath corresponds to the JSON schema field "contractsPath".
+	ContractsPath CreateAutomationRequestSandboxMockConfigContractsPath `json:"contractsPath,omitempty,omitzero" yaml:"contractsPath,omitempty" mapstructure:"contractsPath,omitempty"`
+}
+
+type CreateAutomationRequestSandboxMockConfigContractsPath *string
+
+// Optional, like CreateSessionRequest.pathScope -- absent/null means unscoped.
+type CreateAutomationRequestSandboxPathScope []string
+
+type CreateAutomationRequestTriggerType string
+
+const CreateAutomationRequestTriggerTypeCron CreateAutomationRequestTriggerType = "cron"
+const CreateAutomationRequestTriggerTypeGithub CreateAutomationRequestTriggerType = "github"
+const CreateAutomationRequestTriggerTypeLinear CreateAutomationRequestTriggerType = "linear"
+const CreateAutomationRequestTriggerTypeManual CreateAutomationRequestTriggerType = "manual"
+const CreateAutomationRequestTriggerTypeWebhook CreateAutomationRequestTriggerType = "webhook"
+
+var enumValues_CreateAutomationRequestTriggerType = []interface{}{
+	"manual",
+	"cron",
+	"github",
+	"linear",
+	"webhook",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateAutomationRequestTriggerType) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CreateAutomationRequestTriggerType {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CreateAutomationRequestTriggerType, v)
+	}
+	*j = CreateAutomationRequestTriggerType(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateAutomationRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in CreateAutomationRequest: required")
+	}
+	if _, ok := raw["prompt"]; raw != nil && !ok {
+		return fmt.Errorf("field prompt in CreateAutomationRequest: required")
+	}
+	if _, ok := raw["repos"]; raw != nil && !ok {
+		return fmt.Errorf("field repos in CreateAutomationRequest: required")
+	}
+	if _, ok := raw["triggerType"]; raw != nil && !ok {
+		return fmt.Errorf("field triggerType in CreateAutomationRequest: required")
+	}
+	type Plain CreateAutomationRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if plain.Repos != nil && len(plain.Repos) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "repos", 1)
+	}
+	*j = CreateAutomationRequest(plain)
+	return nil
+}
+
+// 201 response body for POST /api/automations.
+type CreateAutomationResponse struct {
+	// Automation corresponds to the JSON schema field "automation".
+	Automation Automation `json:"automation" yaml:"automation" mapstructure:"automation"`
+
+	// The PLAINTEXT inbound-webhook bearer token, set iff triggerType is 'webhook' --
+	// returned ONLY this once (mirrors WSTokenResponse's own identical 'hashed at
+	// rest, plaintext returned exactly once' convention,
+	// platform.HashToken/GenerateToken); null for every other triggerType.
+	WebhookToken CreateAutomationResponseWebhookToken `json:"webhookToken" yaml:"webhookToken" mapstructure:"webhookToken"`
+}
+
+// The PLAINTEXT inbound-webhook bearer token, set iff triggerType is 'webhook' --
+// returned ONLY this once (mirrors WSTokenResponse's own identical 'hashed at
+// rest, plaintext returned exactly once' convention,
+// platform.HashToken/GenerateToken); null for every other triggerType.
+type CreateAutomationResponseWebhookToken *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateAutomationResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["automation"]; raw != nil && !ok {
+		return fmt.Errorf("field automation in CreateAutomationResponse: required")
+	}
+	if _, ok := raw["webhookToken"]; raw != nil && !ok {
+		return fmt.Errorf("field webhookToken in CreateAutomationResponse: required")
+	}
+	type Plain CreateAutomationResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = CreateAutomationResponse(plain)
+	return nil
+}
+
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
@@ -721,6 +1230,33 @@ func (j *ListAuditLogResponse) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ListAuditLogResponse(plain)
+	return nil
+}
+
+// GET /api/automations's own response body (Step 52, §8.4's own 'creator/status
+// filters', applied as ?createdBy=<uuid|me>&status=<active|paused> query params).
+// Unbounded (no pagination), matching ListMembersResponse's own identical
+// precedent.
+type ListAutomationsResponse struct {
+	// Automations corresponds to the JSON schema field "automations".
+	Automations []Automation `json:"automations" yaml:"automations" mapstructure:"automations"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListAutomationsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["automations"]; raw != nil && !ok {
+		return fmt.Errorf("field automations in ListAutomationsResponse: required")
+	}
+	type Plain ListAutomationsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListAutomationsResponse(plain)
 	return nil
 }
 
@@ -1938,6 +2474,44 @@ func (j *ReviewFinding) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ReviewFinding(plain)
+	return nil
+}
+
+// 200 response body for POST /api/automations/{automationID}/webhook-token (review
+// fix: 'webhook token has no rotation/revocation/expiry'). Same 'hashed at rest,
+// plaintext returned exactly once' convention as
+// CreateAutomationResponse.webhookToken -- unlike that field, webhookToken here is
+// never null: this route only ever succeeds for a triggerType 'webhook'
+// automation, and a successful rotation always mints and returns a real fresh
+// token.
+type RotateAutomationWebhookTokenResponse struct {
+	// Automation corresponds to the JSON schema field "automation".
+	Automation Automation `json:"automation" yaml:"automation" mapstructure:"automation"`
+
+	// The PLAINTEXT, freshly rotated inbound-webhook bearer token -- returned ONLY
+	// this once. The OLD token is invalidated immediately: its own hash no longer
+	// matches any automation, with no grace period.
+	WebhookToken string `json:"webhookToken" yaml:"webhookToken" mapstructure:"webhookToken"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *RotateAutomationWebhookTokenResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["automation"]; raw != nil && !ok {
+		return fmt.Errorf("field automation in RotateAutomationWebhookTokenResponse: required")
+	}
+	if _, ok := raw["webhookToken"]; raw != nil && !ok {
+		return fmt.Errorf("field webhookToken in RotateAutomationWebhookTokenResponse: required")
+	}
+	type Plain RotateAutomationWebhookTokenResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = RotateAutomationWebhookTokenResponse(plain)
 	return nil
 }
 

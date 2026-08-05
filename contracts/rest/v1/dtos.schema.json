@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://narvi.dev/contracts/rest/v1/dtos.schema.json",
   "title": "RestDtos",
-  "description": "REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, and ws-token are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/automations/uploads DTOs are deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26/27; automations: PR-46/47; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). This schema also models the 8 members/audit-log shapes for §13.2/§13.3's own members API (Identity, Member, PendingLinkPrompt, ListMembersResponse, AuditLogEntry, ListAuditLogResponse, UpdateMemberRoleRequest, LinkMemberIdentityRequest) — promoted here as a pure migration off hand-written Go structs in internal/adapters/inbound/httpapi/members.go (see contracts/README.md's own 'Members/audit-log DTOs' section). It also models the 3 plan-mode shapes for GET/POST /api/sessions/:id/plans... (Plan, ListPlansResponse, PlanActionResponse) — audit-fix batch, closing findings M3 (a GET .../plans discoverability gap Step 37 left open) and L14/L16 (promoting planapprove.go's own hand-written planActionResponse now that this same area has a real DTO-consuming sibling endpoint). All of these shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly (plan-mode's own status enum instead matches migrations/000034_plan_mode.up.sql's plan_status).",
+  "description": "REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, ws-token, and (as of Step 52) automations are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/uploads DTOs are still deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26/27; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). This schema also models the 8 members/audit-log shapes for §13.2/§13.3's own members API (Identity, Member, PendingLinkPrompt, ListMembersResponse, AuditLogEntry, ListAuditLogResponse, UpdateMemberRoleRequest, LinkMemberIdentityRequest) — promoted here as a pure migration off hand-written Go structs in internal/adapters/inbound/httpapi/members.go (see contracts/README.md's own 'Members/audit-log DTOs' section). It also models the 3 plan-mode shapes for GET/POST /api/sessions/:id/plans... (Plan, ListPlansResponse, PlanActionResponse) — audit-fix batch, closing findings M3 (a GET .../plans discoverability gap Step 37 left open) and L14/L16 (promoting planapprove.go's own hand-written planActionResponse now that this same area has a real DTO-consuming sibling endpoint). Step 52 ('automations: triggers & extras', §8.4) adds Automation/CreateAutomationRequest/CreateAutomationResponse/ListAutomationsResponse: the REST surface over migrations/000051_automations.up.sql + 000055_automations_triggers_and_extras.up.sql. triggerConfig is deliberately modeled as an opaque JSON object (mirroring AuditLogEntry.detail's own 'opaque raw-JSON passthrough' precedent immediately below), not a discriminated union keyed on triggerType -- its actual required sub-fields differ per trigger type (schedule for cron; event/action/label for github; eventType/action/teamKey for linear; empty for manual/webhook) and are validated at the application layer (internal/domain/automation's own ValidateCronTriggerConfig/ValidateGitHubTriggerConfig/ValidateLinearTriggerConfig), the same 'closed vocabulary enforced in Go, not in the schema' convention UpdateMemberRoleRequest.role/LinkMemberIdentityRequest.provider already establish. All of these shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly (plan-mode's own status enum instead matches migrations/000034_plan_mode.up.sql's plan_status; automation's own status/triggerType/lastRunStatus enums match migrations/000051_automations.up.sql/000055_automations_triggers_and_extras.up.sql/000052_automation_invocations.up.sql respectively).",
   "$defs": {
     "Session": {
       "type": "object",
@@ -492,6 +492,169 @@
       "properties": {
         "blockOnHighRisk": { "type": "boolean" },
         "sentinelAutofixEnabled": { "type": "boolean", "default": false }
+      }
+    },
+    "AutomationReposElem": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Same shape as CreateSessionRequest's own inline repos item (name/url/branch) -- a REAL top-level $def here (unlike CreateSessionRequest.repos' own inline item schema, which go-jsonschema cannot be $ref'd across sibling $defs) so Automation/CreateAutomationRequest can both reference it directly.",
+      "required": ["name", "url", "branch"],
+      "properties": {
+        "name": { "type": "string" },
+        "url": { "type": "string" },
+        "branch": { "type": ["string", "null"], "description": "Null means create runs from the repo's default base branch." }
+      }
+    },
+    "AutomationEnvVarElem": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One entry of an automation's own env_vars (Step 52, §8.4's own 'per-automation env vars') -- plain, non-secret configuration only (internal/domain/automation.EnvVar). See internal/domain/automation/doc.go's own writeup for why per-automation SECRETS are a deliberately different, unbuilt thing (deferred to Step 53).",
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "A POSIX shell/environment-variable-legal identifier (internal/domain/automation.ValidateEnvVars) -- letters/digits/underscore, not starting with a digit." },
+        "value": { "type": "string", "description": "An empty string is a legitimate value." }
+      }
+    },
+    "Automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One automations row's own REST wire shape (migrations/000051_automations.up.sql, extended by migrations/000055_automations_triggers_and_extras.up.sql, Step 52 '§8.4'). Returned by POST/GET/list.",
+      "required": ["id", "name", "prompt", "repos", "status", "consecutiveFailures", "createdBy", "createdAt", "updatedAt", "triggerType", "triggerConfig", "sandboxPathScope", "sandboxMockConfigured", "sandboxContractsPath", "envVars", "lastRunAt", "lastRunStatus", "artifactSummary"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string" },
+        "prompt": { "type": ["string", "null"] },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Same shape as CreateSessionRequest.repos -- the set of repos this automation's own runs fan out against.",
+          "items": { "$ref": "#/$defs/AutomationReposElem" }
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "paused"],
+          "description": "Matches Postgres automation_status exactly."
+        },
+        "consecutiveFailures": { "type": "integer", "minimum": 0 },
+        "createdBy": { "type": ["string", "null"], "format": "uuid", "description": "Null for a system-attributed automation with no direct human creator." },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "triggerType": {
+          "type": "string",
+          "enum": ["manual", "cron", "github", "linear", "webhook"],
+          "description": "Matches Postgres automation_trigger_type exactly. 'manual' means this automation fires only via a direct, out-of-band invocation (no automatic trigger of its own)."
+        },
+        "triggerConfig": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Opaque, type-specific trigger configuration -- see this schema's own top-level description for why this is not a discriminated union. {} for triggerType manual/webhook; {\"schedule\": \"<5-field cron expr>\"} for cron; {\"event\": ..., \"action\": ..., \"label\": ...} for github (action/label optional); {\"eventType\": ..., \"action\": ..., \"teamKey\": ...} for linear (action/teamKey optional).",
+          "goJSONSchema": {
+            "type": "json.RawMessage",
+            "imports": ["encoding/json"]
+          }
+        },
+        "sandboxPathScope": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "§8.4's own 'sandboxSettings honored on automation sessions' -- same shape/semantics as CreateSessionRequest.pathScope, applied to every run this automation fans out."
+        },
+        "sandboxMockConfigured": { "type": "boolean" },
+        "sandboxContractsPath": { "type": ["string", "null"], "description": "Meaningful only when sandboxMockConfigured is true; null means the default \"contracts/api\"." },
+        "envVars": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AutomationEnvVarElem" }
+        },
+        "lastRunAt": { "type": ["string", "null"], "format": "date-time", "description": "Null until this automation's first invocation ever closes." },
+        "lastRunStatus": {
+          "type": ["string", "null"],
+          "enum": ["succeeded", "failed", null],
+          "description": "The most recently CLOSED invocation's own outcome -- matches Postgres automation_invocation_status, excluding 'pending' (a closed invocation is never pending). Null until lastRunAt is first set."
+        },
+        "artifactSummary": { "type": ["string", "null"], "description": "A short, one-sentence, mechanically generated description of the most recently closed invocation's own outcome (internal/domain/automation.BuildArtifactSummary). Null until lastRunAt is first set." }
+      }
+    },
+    "CreateAutomationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "POST /api/automations's own request body (Step 52, §8.4). Admin/maintainer only (authz.ActionManageAutomations).",
+      "required": ["name", "prompt", "repos", "triggerType"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "prompt": { "type": ["string", "null"] },
+        "repos": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/AutomationReposElem" }
+        },
+        "triggerType": {
+          "type": "string",
+          "enum": ["manual", "cron", "github", "linear", "webhook"]
+        },
+        "triggerConfig": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Required sub-fields depend on triggerType -- see Automation.triggerConfig's own doc comment. Absent/{} is only valid for triggerType manual/webhook.",
+          "goJSONSchema": {
+            "type": "json.RawMessage",
+            "imports": ["encoding/json"]
+          }
+        },
+        "sandboxPathScope": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "description": "Optional, like CreateSessionRequest.pathScope -- absent/null means unscoped."
+        },
+        "sandboxMockConfig": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "description": "Optional, like CreateSessionRequest.mockConfig -- presence (even as {}) means mock_configured=true for every run this automation fans out.",
+          "properties": {
+            "contractsPath": { "type": ["string", "null"] }
+          }
+        },
+        "envVars": {
+          "type": "array",
+          "description": "Optional -- absent/empty means no per-automation env vars.",
+          "items": { "$ref": "#/$defs/AutomationEnvVarElem" }
+        }
+      }
+    },
+    "CreateAutomationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "201 response body for POST /api/automations.",
+      "required": ["automation", "webhookToken"],
+      "properties": {
+        "automation": { "$ref": "#/$defs/Automation" },
+        "webhookToken": {
+          "type": ["string", "null"],
+          "description": "The PLAINTEXT inbound-webhook bearer token, set iff triggerType is 'webhook' -- returned ONLY this once (mirrors WSTokenResponse's own identical 'hashed at rest, plaintext returned exactly once' convention, platform.HashToken/GenerateToken); null for every other triggerType."
+        }
+      }
+    },
+    "RotateAutomationWebhookTokenResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "200 response body for POST /api/automations/{automationID}/webhook-token (review fix: 'webhook token has no rotation/revocation/expiry'). Same 'hashed at rest, plaintext returned exactly once' convention as CreateAutomationResponse.webhookToken -- unlike that field, webhookToken here is never null: this route only ever succeeds for a triggerType 'webhook' automation, and a successful rotation always mints and returns a real fresh token.",
+      "required": ["automation", "webhookToken"],
+      "properties": {
+        "automation": { "$ref": "#/$defs/Automation" },
+        "webhookToken": {
+          "type": "string",
+          "description": "The PLAINTEXT, freshly rotated inbound-webhook bearer token -- returned ONLY this once. The OLD token is invalidated immediately: its own hash no longer matches any automation, with no grace period."
+        }
+      }
+    },
+    "ListAutomationsResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "GET /api/automations's own response body (Step 52, §8.4's own 'creator/status filters', applied as ?createdBy=<uuid|me>&status=<active|paused> query params). Unbounded (no pagination), matching ListMembersResponse's own identical precedent.",
+      "required": ["automations"],
+      "properties": {
+        "automations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Automation" }
+        }
       }
     }
   }
