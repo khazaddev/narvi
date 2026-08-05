@@ -125,6 +125,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/workflowengine"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -558,7 +559,7 @@ func (a *Actor) planReenqueueOrRespawn(
 // sandboxRow's own current gen (the SAME UpdateTurnStatus query
 // tryPlanDispatch uses, passing target's own CURRENT status back
 // unchanged -- never Transition's output, since none was computed).
-// Builds the SAME buildPromptPayload tryPlanDispatch uses, which
+// Builds the SAME BuildPromptPayload tryPlanDispatch uses, which
 // automatically carries sessionRow.OpencodeConversationID (§3.3) -- so
 // the re-enqueued turn resumes the SAME OpenCode conversation with no
 // special-cased "resume" logic needed here at all.
@@ -592,7 +593,7 @@ func (a *Actor) tryPlanReenqueue(
 		return nil, fmt.Errorf("sessionactor: stamp dispatched_sandbox_gen for reenqueue: %w", err)
 	}
 
-	payload, err := buildPromptPayload(a.sessionID.String(), sessionRow, sandboxRow, target)
+	payload, err := BuildPromptPayload(a.sessionID.String(), sessionRow, sandboxRow, target)
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: build prompt payload (reenqueue): %w", err)
 	}
@@ -1361,7 +1362,7 @@ func (a *Actor) tryPlanDispatch(
 		return nil, err
 	}
 
-	payload, err := buildPromptPayload(a.sessionID.String(), sessionRow, sandboxRow, target)
+	payload, err := BuildPromptPayload(a.sessionID.String(), sessionRow, sandboxRow, target)
 	if err != nil {
 		return nil, fmt.Errorf("sessionactor: build prompt payload: %w", err)
 	}
@@ -1457,6 +1458,14 @@ func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, send
 			return fmt.Errorf("sessionactor: update turn status: %w", err)
 		}
 
+		// Step 55 ("workflow execution engine", §25.6): this turn just
+		// reached a real terminal state because its prompt never even
+		// reached the sandbox -- see OnTurnCompleted's own doc comment for
+		// why this, pushpr.go's completeProcessingTurn, and
+		// timerfired.go's handleTurnDeadlineTimer all three need this same
+		// hook.
+		workflowengine.OnTurnCompleted(ctx, a.stores.workflow.WithTx(tx), turnID, turn.TriggerTimeout)
+
 		if turn.RequiresSyntheticExecutionComplete(turn.TriggerTimeout) {
 			if err := a.appendEvent(ctx, tx, "execution_complete", map[string]any{
 				"turn_id":   turnID.String(),
@@ -1475,11 +1484,25 @@ func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, send
 	})
 }
 
-// buildPromptPayload marshals a real, schema-valid sandboxws.Prompt for
+// BuildPromptPayload marshals a real, schema-valid sandboxws.Prompt for
 // turnID (§3.3: "the turn records the OpenCode conversation id at turn
 // start... so follow-up prompts on a fresh sandbox resume the same
 // conversation").
-func buildPromptPayload(sessionID string, sessionRow sqlcgen.Session, sandboxRow sqlcgen.Sandbox, target sqlcgen.Turn) (json.RawMessage, error) {
+//
+// Exported (Step 55, "workflow execution engine", §25.6) specifically so
+// internal/adapters/inbound/httpapi's own characterization test
+// (turncore_characterization_integration_test.go) can call the EXACT same
+// function real dispatch uses to build the wire payload from a turn row,
+// for BOTH a turn built via today's engine-mediated createTurnLocked and a
+// hand-constructed turn simulating the pre-Step-55 direct-dispatch shape
+// -- proving the two produce byte-identical sandboxws.Prompt JSON is the
+// whole point of that test, so it must call the real function, never a
+// re-derived approximation of it. Mirrors CreateSessionCore/CreateTurnCore's
+// own precedent of exporting specifically to let a caller/test across a
+// package boundary reach the real, single implementation (see turn.go's
+// own doc comments) -- a pure rename, no behavior change: both call sites
+// below are unaffected other than the name.
+func BuildPromptPayload(sessionID string, sessionRow sqlcgen.Session, sandboxRow sqlcgen.Sandbox, target sqlcgen.Turn) (json.RawMessage, error) {
 	prompt := sandboxws.Prompt{
 		Type:      "prompt",
 		MessageId: uuid.NewString(),

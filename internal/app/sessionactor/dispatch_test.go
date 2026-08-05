@@ -33,7 +33,7 @@ func TestHashSandboxToken_DeterministicAndDistinct(t *testing.T) {
 	}
 }
 
-// TestBuildPromptPayload proves buildPromptPayload marshals a real,
+// TestBuildPromptPayload proves BuildPromptPayload marshals a real,
 // schema-required-field-complete sandboxws.Prompt: ConversationId nil for
 // a session with no prior conversation, or the session's own recorded
 // value when present; Text/Model/PlanMode taken from the turn; ScmName/
@@ -55,9 +55,9 @@ func TestBuildPromptPayload(t *testing.T) {
 		sessionRow := sqlcgen.Session{OpencodeConversationID: nil}
 		turn := sqlcgen.Turn{ID: turnID, Prompt: &prompt, ModelID: &model, PlanMode: true}
 
-		raw, err := buildPromptPayload("session-1", sessionRow, sandboxRow, turn)
+		raw, err := BuildPromptPayload("session-1", sessionRow, sandboxRow, turn)
 		if err != nil {
-			t.Fatalf("buildPromptPayload() error = %v, want nil", err)
+			t.Fatalf("BuildPromptPayload() error = %v, want nil", err)
 		}
 
 		var got sandboxws.Prompt
@@ -103,9 +103,9 @@ func TestBuildPromptPayload(t *testing.T) {
 		sessionRow := sqlcgen.Session{OpencodeConversationID: &conversationID}
 		turn := sqlcgen.Turn{ID: turnID, Prompt: &prompt}
 
-		raw, err := buildPromptPayload("session-2", sessionRow, sandboxRow, turn)
+		raw, err := BuildPromptPayload("session-2", sessionRow, sandboxRow, turn)
 		if err != nil {
-			t.Fatalf("buildPromptPayload() error = %v, want nil", err)
+			t.Fatalf("BuildPromptPayload() error = %v, want nil", err)
 		}
 
 		var got sandboxws.Prompt
@@ -123,9 +123,9 @@ func TestBuildPromptPayload(t *testing.T) {
 		sessionRow := sqlcgen.Session{}
 		turn := sqlcgen.Turn{ID: turnID}
 
-		raw, err := buildPromptPayload("session-3", sessionRow, sandboxRow, turn)
+		raw, err := BuildPromptPayload("session-3", sessionRow, sandboxRow, turn)
 		if err != nil {
-			t.Fatalf("buildPromptPayload() error = %v, want nil", err)
+			t.Fatalf("BuildPromptPayload() error = %v, want nil", err)
 		}
 		var got sandboxws.Prompt
 		if err := json.Unmarshal(raw, &got); err != nil {

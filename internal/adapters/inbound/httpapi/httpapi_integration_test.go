@@ -195,6 +195,16 @@ type testRig struct {
 	// sandbox-facing delivery route (providercredentialsdelivery_
 	// integration_test.go).
 	providerCredentials *narvipg.ProviderCredentialStore
+
+	// workflows (Step 55, "workflow execution engine", §25.6) backs this
+	// rig's own generic step-outcome-posting-tool route
+	// (workflowstepoutcome_integration_test.go) -- the SAME store instance
+	// createTurnLocked's own tests (turncore_integration_test.go,
+	// workflowengine_characterization_integration_test.go) construct
+	// independently via postgres.NewWorkflowStore(pool) directly (that
+	// production code path constructs its own fresh instance from pool
+	// too, see turn.go's own doc comment for why).
+	workflows *narvipg.WorkflowStore
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -248,6 +258,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		automations:           narvipg.NewAutomationStore(pool),
 		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
 		providerCredentials:   narvipg.NewProviderCredentialStore(pool),
+		workflows:             narvipg.NewWorkflowStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -317,6 +328,11 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// the SAME way -- see reviewverdict.go's own doc comment.
 	router.Post("/sessions/{sessionID}/review/verdict",
 		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.botHandle))
+	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6)
+	// is mounted the SAME way -- see workflowstepoutcome.go's own doc
+	// comment.
+	router.Post("/sessions/{sessionID}/workflow/step-outcome",
+		httpapi.PostWorkflowStepOutcome(rig.sandboxes, rig.workflows))
 	// /api/repos/{owner}/{repo}/settings (Step 47) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
 	// (see reposettings.go's own doc comment).

@@ -488,6 +488,38 @@ export interface PostReviewVerdictResponse {
   findingIdentityHashes?: string[];
 }
 /**
+ * Request body for POST /sessions/:id/workflow/step-outcome (Step 55, 'workflow execution engine', §25.6) -- the generic step-outcome-posting tool, mirroring PostReviewVerdictRequest's own sandbox-bearer-authenticated-endpoint shape (see reviewverdict.go's doc comment for the full 'why an HTTP endpoint, not a genuine OpenCode/LLM tool-call' reasoning, which applies identically here) but structurally generic rather than review-specific -- internal/domain/reviewpost's existing verdict-posting shape is what this mirrors structurally, per §25.6. Posts onto whichever workflow_step_runs attempt is CURRENTLY the calling session's own live (status='running') one; the caller names no run/step ids at all -- the endpoint resolves that itself from the sandbox-authenticated session id alone.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PostWorkflowStepOutcomeRequest".
+ */
+export interface PostWorkflowStepOutcomeRequest {
+  /**
+   * Matches Postgres workflow_step_outcome_status exactly (internal/domain/workflow.StepOutcomeStatus) -- the ONLY vocabulary an Edge may condition on (§25.4), a DISTINCT axis from review.Shippable (§25.8): never routed through it, never inferred from it.
+   */
+  status: 'ok' | 'needs_fix' | 'blocked';
+  /**
+   * The agent's own free-text narrative explaining the outcome -- advisory only, required, never re-parsed back out as structured data once posted (§25.6, the same discipline PostReviewVerdictRequest.summary already establishes).
+   */
+  summary: string;
+  /**
+   * Optional opaque per-step typed handoff data (§25.6's structuredPayload -- e.g. a future audit step's own review.Verdict + reviewpost.Finding[] payload, out of this Step's own scope). Stored verbatim (workflow_step_runs.outcome_payload JSONB) for whichever later step reads it back -- never interpreted or re-parsed here. Modeled as an opaque raw-JSON passthrough (goJSONSchema -> encoding/json.RawMessage), mirroring AuditLogEntry.detail's own identical precedent, so the stored byte stream round-trips exactly. Absent means this outcome carries no structured handoff data at all.
+   */
+  structuredPayload?: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * 201 response body for POST /sessions/:id/workflow/step-outcome (Step 55, §25.6) -- confirms which attempt/run actually recorded the posted outcome.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "PostWorkflowStepOutcomeResponse".
+ */
+export interface PostWorkflowStepOutcomeResponse {
+  stepRunId: string;
+  workflowRunId: string;
+}
+/**
  * GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: future Steps (58's auto-merge toggle, 61's automatic-re-review opt-in) are each expected to add a further boolean property here, never a bespoke DTO of their own.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema

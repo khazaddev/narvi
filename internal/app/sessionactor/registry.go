@@ -119,6 +119,15 @@ type storeBundle struct {
 	// in the SAME transaction as its own outbox enqueue, exactly mirroring
 	// sentinelFix's own claim-before-outbox-enqueue precedent above.
 	handoffSentinelRuns *postgres.HandoffSentinelStore
+
+	// workflow is Step 55's ("workflow execution engine", §25.6) own
+	// addition: pushpr.go's completeProcessingTurn, timerfired.go's
+	// handleTurnDeadlineTimer, and dispatch.go's failDispatchedTurn each
+	// call internal/app/workflowengine.OnTurnCompleted with this store
+	// (WithTx'd onto their own already-open transact) the moment a turn
+	// reaches a real terminal state -- see that package's own doc.go for
+	// why all three call sites matter, not just the first.
+	workflow *postgres.WorkflowStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
@@ -143,6 +152,7 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		sentinelFix:         postgres.NewSentinelFixStore(pool),
 		reviewFinding:       postgres.NewReviewFindingStore(pool),
 		handoffSentinelRuns: postgres.NewHandoffSentinelStore(pool),
+		workflow:            postgres.NewWorkflowStore(pool),
 	}
 }
 
