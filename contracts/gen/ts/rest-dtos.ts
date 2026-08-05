@@ -7,7 +7,7 @@
  */
 
 /**
- * REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, ws-token, and (as of Step 52) automations are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/uploads DTOs are still deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26/27; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). This schema also models the 8 members/audit-log shapes for §13.2/§13.3's own members API (Identity, Member, PendingLinkPrompt, ListMembersResponse, AuditLogEntry, ListAuditLogResponse, UpdateMemberRoleRequest, LinkMemberIdentityRequest) — promoted here as a pure migration off hand-written Go structs in internal/adapters/inbound/httpapi/members.go (see contracts/README.md's own 'Members/audit-log DTOs' section). It also models the 3 plan-mode shapes for GET/POST /api/sessions/:id/plans... (Plan, ListPlansResponse, PlanActionResponse) — audit-fix batch, closing findings M3 (a GET .../plans discoverability gap Step 37 left open) and L14/L16 (promoting planapprove.go's own hand-written planActionResponse now that this same area has a real DTO-consuming sibling endpoint). Step 52 ('automations: triggers & extras', §8.4) adds Automation/CreateAutomationRequest/CreateAutomationResponse/ListAutomationsResponse: the REST surface over migrations/000051_automations.up.sql + 000055_automations_triggers_and_extras.up.sql. triggerConfig is deliberately modeled as an opaque JSON object (mirroring AuditLogEntry.detail's own 'opaque raw-JSON passthrough' precedent immediately below), not a discriminated union keyed on triggerType -- its actual required sub-fields differ per trigger type (schedule for cron; event/action/label for github; eventType/action/teamKey for linear; empty for manual/webhook) and are validated at the application layer (internal/domain/automation's own ValidateCronTriggerConfig/ValidateGitHubTriggerConfig/ValidateLinearTriggerConfig), the same 'closed vocabulary enforced in Go, not in the schema' convention UpdateMemberRoleRequest.role/LinkMemberIdentityRequest.provider already establish. All of these shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly (plan-mode's own status enum instead matches migrations/000034_plan_mode.up.sql's plan_status; automation's own status/triggerType/lastRunStatus enums match migrations/000051_automations.up.sql/000055_automations_triggers_and_extras.up.sql/000052_automation_invocations.up.sql respectively). Step 53 ('provider credential injection', §25.1/§25.3) adds ProviderCredential/CreateProviderCredentialRequest/UpdateProviderCredentialRequest/ListProviderCredentialsResponse: the REST surface over this codebase's first secret-storage table (migrations/000056_provider_credentials.up.sql). ProviderCredential is deliberately write-only for its own underlying secret value -- the credential itself is accepted on create/update (CreateProviderCredentialRequest.value/UpdateProviderCredentialRequest.value) but NEVER appears in any response shape; ProviderCredential.maskedValue is a fixed, non-secret placeholder proving a value is configured, not a partial reveal of it.
+ * REST DTOs (§6.3). SCOPE NOTE: §6.3 names the full BFF-facing route surface (sessions, events, artifacts, secrets, environments, automations, uploads, ws-token) but only sessions, events, artifacts, ws-token, and (as of Step 52) automations are specified in enough field-level detail anywhere in the technical plan to schema honestly today (Step 19's own plan row: 'REST endpoints the UI needs (create/get/events/artifacts)'). Secrets/environments/uploads DTOs are still deliberately NOT modeled here — they belong to the PRs that define those features (environments: PR-10/26/27; uploads: PR-49). This is a scope decision, not an oversight (see contracts/README.md). This schema also models the 8 members/audit-log shapes for §13.2/§13.3's own members API (Identity, Member, PendingLinkPrompt, ListMembersResponse, AuditLogEntry, ListAuditLogResponse, UpdateMemberRoleRequest, LinkMemberIdentityRequest) — promoted here as a pure migration off hand-written Go structs in internal/adapters/inbound/httpapi/members.go (see contracts/README.md's own 'Members/audit-log DTOs' section). It also models the 3 plan-mode shapes for GET/POST /api/sessions/:id/plans... (Plan, ListPlansResponse, PlanActionResponse) — audit-fix batch, closing findings M3 (a GET .../plans discoverability gap Step 37 left open) and L14/L16 (promoting planapprove.go's own hand-written planActionResponse now that this same area has a real DTO-consuming sibling endpoint). Step 52 ('automations: triggers & extras', §8.4) adds Automation/CreateAutomationRequest/CreateAutomationResponse/ListAutomationsResponse: the REST surface over migrations/000051_automations.up.sql + 000055_automations_triggers_and_extras.up.sql. triggerConfig is deliberately modeled as an opaque JSON object (mirroring AuditLogEntry.detail's own 'opaque raw-JSON passthrough' precedent immediately below), not a discriminated union keyed on triggerType -- its actual required sub-fields differ per trigger type (schedule for cron; event/action/label for github; eventType/action/teamKey for linear; empty for manual/webhook) and are validated at the application layer (internal/domain/automation's own ValidateCronTriggerConfig/ValidateGitHubTriggerConfig/ValidateLinearTriggerConfig), the same 'closed vocabulary enforced in Go, not in the schema' convention UpdateMemberRoleRequest.role/LinkMemberIdentityRequest.provider already establish. All of these shapes are independent named payloads, not a discriminated union, so there is deliberately no top-level oneOf. Field nullability convention: 'nullable' means a required key whose value may be JSON null. Enums here MUST match the Postgres enums in migrations/000004_sessions.up.sql exactly (plan-mode's own status enum instead matches migrations/000034_plan_mode.up.sql's plan_status; automation's own status/triggerType/lastRunStatus enums match migrations/000051_automations.up.sql/000055_automations_triggers_and_extras.up.sql/000052_automation_invocations.up.sql respectively). Step 53 ('provider credential injection', §25.1/§25.3) adds ProviderCredential/CreateProviderCredentialRequest/UpdateProviderCredentialRequest/ListProviderCredentialsResponse: the REST surface over this codebase's first secret-storage table (migrations/000056_provider_credentials.up.sql). ProviderCredential is deliberately write-only for its own underlying secret value -- the credential itself is accepted on create/update (CreateProviderCredentialRequest.value/UpdateProviderCredentialRequest.value) but NEVER appears in any response shape; ProviderCredential.maskedValue is a fixed, non-secret placeholder proving a value is configured, not a partial reveal of it. Step 54 ('domain/workflow + loopguard + schema', §25.4/§25.10) adds the workflow-engine DTO set over migrations/000057_workflows.up.sql: WorkflowDefinition/WorkflowStepDefinition/WorkflowEdge (the authorable graph -- WorkflowDefinition doubles as the eventual editing surface's PUT body, always the full desired state per UpdateRepoSettingsRequest's own 'never a partial patch' convention, and a PUT/DELETE against an isBuiltIn=true definition is refused unconditionally, a structural invariant, not an RBAC row -- §25.4), WorkflowBinding (which definition+version a (lane, repoFullName) resolves to; repoFullName null = the global binding, seeded per lane and never absent), the read-only WorkflowRun/WorkflowStepRun execution ledger, and WorkflowStepDecideRequest/Response (the §25.9 HITL verdict, same response shape as PlanActionResponse). All workflow enums match the Postgres workflow_* enums in migrations/000057 exactly. NO HTTP handler consumes any of these yet -- Step 54 is dark (schema/contracts/RBAC only); Steps 55-56 mount the first routes.
  */
 export interface RestDtos {
   [k: string]: unknown;
@@ -737,4 +737,213 @@ export interface UpdateProviderCredentialRequest {
  */
 export interface ListProviderCredentialsResponse {
   providerCredentials: ProviderCredential[];
+}
+/**
+ * One explicit (from step, outcome) -> to step routing rule (Step 54, §25.10's 'Edges' entity; one workflow_edges row). Named WorkflowEdge rather than the plan's bare 'Edges'/'Edge': restdtos is a flat namespace and an unprefixed generated 'Edge' type would be needlessly generic -- AutomationReposElem's own entity-prefixed-helper precedent. onStatus is the ONLY thing an edge may condition on (§25.4): the closed 3-value step-outcome vocabulary, a DISTINCT axis from review's Shippable (which is never routed through it). With no explicit edge, 'ok' advances to the next step in order and 'needs_fix'/'blocked' escalate -- fail-conservative; a retry loop is always wired explicitly (internal/domain/workflow.NextStep owns these semantics).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "WorkflowEdge".
+ */
+export interface WorkflowEdge {
+  fromStepId: string;
+  /**
+   * Matches Postgres workflow_step_outcome_status exactly.
+   */
+  onStatus: 'ok' | 'needs_fix' | 'blocked';
+  /**
+   * May equal fromStepId (a wired same-step retry loop) or an earlier step (a backward loop, e.g. §25.9's fix -> audit edge).
+   */
+  toStepId: string;
+}
+/**
+ * One workflow_step_definitions row plus its outgoing edges (Step 54, §25.10). order is 1-based and unique per definition, not required contiguous. modelId null means inherit exactly what the session would use today (turns.model_id/sessions.build_model_id -- §25.8's zero-config proof); non-null is the same opaque 'provider/model' passthrough convention modelId fields already use (§25.1/§25.7, no Narvi-side allowlist). promptTemplate uses the established '{{variable_name}}' placeholder syntax (§18.6); '{{prompt}}' is the caller's own text.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "WorkflowStepDefinition".
+ */
+export interface WorkflowStepDefinition {
+  id: string;
+  order: number;
+  /**
+   * Matches Postgres workflow_step_kind exactly -- a single-value closed enum as of Step 54 (every §25.8 shape is an ordinary agent turn); modeled as an enum, not a literal, so a later phase can add a kind without a shape change.
+   */
+  kind: 'agent';
+  modelId: string | null;
+  promptTemplate: string;
+  /**
+   * Matches Postgres workflow_execution_scope exactly (§25.6: child_session is reserved for steps needing real isolation; same_session is the default and what every built-in step uses).
+   */
+  executionScope: 'same_session' | 'child_session';
+  /**
+   * Matches Postgres workflow_conversation_continuity exactly (§25.6: fresh is a new OpenCode conversation on the SAME session, never a child session).
+   */
+  conversationContinuity: 'continue' | 'fresh';
+  hitlBefore: boolean;
+  hitlAfter: boolean;
+  /**
+   * This step's own explicit outgoing edges -- empty means pure default routing (§25.4). At most one edge per onStatus value (workflow_edges_from_status_uniq).
+   */
+  edges: WorkflowEdge[];
+  /**
+   * §25.10's optional canvas-layout attachment: this step's node position on the visual editor's canvas (Step 79, §25.12). OPAQUE server-side -- stored verbatim (workflow_step_definitions.canvas_position JSONB), round-tripped, never interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has ever been saved for this step (true for every built-in and every API-authored definition until a canvas first saves one).
+   */
+  canvasPosition?: {
+    x: number;
+    y: number;
+  } | null;
+}
+/**
+ * One workflow_definitions row plus its ordered steps (Step 54, §25.10; mirrors internal/domain/workflow.Definition). Doubles as the eventual editing surface's PUT body -- always the full, current desired state (steps and edges included), never a partial patch, matching UpdateRepoSettingsRequest's own convention -- but NO handler consumes it yet (Step 54 is dark). isBuiltIn marks one of the three seeded system templates; a PUT/DELETE against an isBuiltIn=true definition is refused unconditionally, even for an admin -- a structural invariant (§25.4), not an RBAC row, enforced by the store/handler layer Steps 55-56 add. version is a 1-based edit counter (provenance a binding/run pins), not a versioned-content archive.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "WorkflowDefinition".
+ */
+export interface WorkflowDefinition {
+  id: string;
+  /**
+   * Matches Postgres workflow_lane exactly -- the closed 3-value Lane enum (§25.4, internal/domain/workflow.Lane).
+   */
+  lane: 'review' | 'request' | 'plan';
+  /**
+   * Unique per lane (workflow_definitions_lane_name_uniq).
+   */
+  name: string;
+  isBuiltIn: boolean;
+  version: number;
+  /**
+   * Every step, in order. A definition with zero steps is not executable and is rejected (internal/domain/workflow.ValidateDefinition).
+   *
+   * @minItems 1
+   */
+  steps: [WorkflowStepDefinition, ...WorkflowStepDefinition[]];
+  createdAt: string;
+  updatedAt: string;
+}
+/**
+ * One workflow_bindings row (Step 54, §25.10): which definition, at which version, a (lane, repoFullName) pair resolves to. repoFullName null is the GLOBAL binding for that lane -- §25.4: exactly one per lane, seeded by migration 000057 to point at the lane's system template, and from then on an ordinary, independently-repointable setting that is NEVER absent (so resolution is repo row if present, else the guaranteed global row -- never an 'absent row -> default' branch). A non-null repoFullName ('owner/repo', repo_settings.repo_full_name's exact shape) is a repo override shadowing the global binding for that one repo only. Activation is admin-only (authz.ActionActivateWorkflowBinding, §25.11) -- the same single action gates both scopes.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "WorkflowBinding".
+ */
+export interface WorkflowBinding {
+  id: string;
+  /**
+   * Matches Postgres workflow_lane exactly. Always equals the bound definition's own lane -- structurally guaranteed (workflow_bindings_definition_lane_fk).
+   */
+  lane: 'review' | 'request' | 'plan';
+  repoFullName: string | null;
+  workflowDefinitionId: string;
+  /**
+   * The definition's version at binding/activation time -- provenance for 'what was active when', alongside WorkflowRun's own start-time pin.
+   */
+  definitionVersion: number;
+  createdAt: string;
+  updatedAt: string;
+}
+/**
+ * One workflow_runs row (Step 54, §25.10) -- READ-ONLY on the wire: runs are created and advanced exclusively by the execution engine (Step 55, §25.6), never via any request DTO. lane/workflowDefinitionId/definitionVersion are pinned at start time as provenance. 'needs_review' is §25.9's escalation parking state (circuit breaker tripped, or an unrouted needs_fix/blocked outcome): non-terminal, one notice, waiting on a human decision.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "WorkflowRun".
+ */
+export interface WorkflowRun {
+  id: string;
+  sessionId: string;
+  /**
+   * Matches Postgres workflow_lane exactly.
+   */
+  lane: 'review' | 'request' | 'plan';
+  workflowDefinitionId: string;
+  definitionVersion: number;
+  /**
+   * Matches Postgres workflow_run_status exactly. The owning transition table ships with Step 55's engine (§11: every state transition through the machine's table) -- the vocabulary is fixed here so the wire contract never has to change under it.
+   */
+  status: 'running' | 'needs_review' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+  /**
+   * Null while the run is non-terminal. goJSONSchema forces the literal *time.Time for the same named-pointer-type UnmarshalJSON reason Plan.decidedAt documents in full.
+   */
+  finishedAt: string | null;
+}
+/**
+ * One workflow_step_runs row (Step 54, §25.10) -- READ-ONLY on the wire, one row per ATTEMPT of one step within a run (a retry/revise re-execution is a NEW row, never an update-in-place -- §25.5's COUNT(*) iteration read depends on exactly that). Deliberately omits two persisted columns, mirroring Plan's own documented omissions: outcome_payload (the §25.6 typed step-to-step handoff, internal plumbing the engine consumes -- never re-parsed presentation data) and decision_text (write-side input, carried by WorkflowStepDecideRequest.text and folded into the NEXT attempt's re-execution).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "WorkflowStepRun".
+ */
+export interface WorkflowStepRun {
+  id: string;
+  workflowRunId: string;
+  stepDefinitionId: string;
+  /**
+   * The ordinary turn this attempt dispatched as (§25.6: 'every step is an ordinary sequential turn'). Null while an awaiting_decision (hitlBefore-gated) attempt exists before any turn does.
+   */
+  turnId: string | null;
+  /**
+   * Matches Postgres workflow_step_run_status exactly. Same dark-vocabulary note as WorkflowRun.status: the owning transition table is Step 55's.
+   */
+  status: 'awaiting_decision' | 'running' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * Matches Postgres workflow_step_outcome_status exactly. Null until this attempt's own typed outcome is posted (§25.6).
+   */
+  outcomeStatus: 'ok' | 'needs_fix' | 'blocked' | null;
+  /**
+   * The posted outcome's advisory free-text summary -- never re-parsed as structured data once posted (§25.6), same discipline as PostReviewVerdictRequest.summary.
+   */
+  outcomeSummary: string | null;
+  /**
+   * Matches Postgres workflow_step_decision exactly. Null unless a HITL verdict has been rendered on this attempt (§25.9).
+   */
+  decision: 'approve' | 'reject' | 'revise' | null;
+  /**
+   * Null until a HITL verdict is recorded -- mirrors Plan.decidedAt exactly, goJSONSchema *time.Time included (see that field's own doc comment for the full named-pointer-type reason).
+   */
+  decidedAt: string | null;
+  /**
+   * The user who decided this attempt's HITL verdict. Null until decided, or for a decision attributed to no direct human user -- mirrors Plan.decidedBy.
+   */
+  decidedBy: string | null;
+  createdAt: string;
+  /**
+   * Null while this attempt is live (running/awaiting_decision).
+   */
+  finishedAt: string | null;
+}
+/**
+ * Request body for POST /api/workflow-runs/:runId/steps/:stepRunId/decide (§25.9/§25.10) -- the same shape discipline as decideplan.go's approve/reject. NO handler is registered for this route yet: Step 54 ships the contract only (dark); Step 56 mounts the endpoint, gated by authz.ActionDecideWorkflowStep (own/joined-aware, same row as plan approval, §25.11). verdict is a schema-level enum (matching Postgres workflow_step_decision exactly) because the vocabulary is a closed domain enum, the same modeling choice as PostReviewVerdictRequest.riskLevel -- not the deliberately-unconstrained UpdateMemberRoleRequest.role shape.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "WorkflowStepDecideRequest".
+ */
+export interface WorkflowStepDecideRequest {
+  /**
+   * approve continues the run; reject ends it; revise ALWAYS re-executes the same step with text folded in as an additional instruction -- never a direct substitution of a structured artifact (§25.9, mirroring plan mode's own 'revise:' handling). Human-revision loops are exempt from the circuit breaker (§25.9).
+   */
+  verdict: 'approve' | 'reject' | 'revise';
+  /**
+   * The human's instruction. Required non-empty for verdict 'revise' (enforced at the application layer by Step 56's handler, which owns the specific 400 message); optional context for 'reject'; ignored for 'approve'.
+   */
+  text: string | null;
+}
+/**
+ * 200 response body for the decide endpoint (§25.9/§25.10) -- mirrors PlanActionResponse's own minimal confirm-what-happened shape: the decided attempt, the run's resulting status, and the follow-up turn if the verdict dispatched one.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "WorkflowStepDecideResponse".
+ */
+export interface WorkflowStepDecideResponse {
+  stepRunId: string;
+  /**
+   * The decided attempt's own status after this call -- the full workflow_step_run_status enum for forward-compatibility, matching PlanActionResponse.status's own precedent.
+   */
+  stepRunStatus: 'awaiting_decision' | 'running' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * The owning run's status after this call -- e.g. 'failed' after a winning reject ends the run, 'running' after an approve/revise continues it.
+   */
+  runStatus: 'running' | 'needs_review' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * The newly enqueued turn's id when this verdict dispatched one (an approve advancing to the next step, a revise re-executing the same step); null when it did not (a reject) -- mirrors PlanActionResponse.turnId.
+   */
+  turnId: string | null;
 }

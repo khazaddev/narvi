@@ -37,6 +37,16 @@ const (
 	// plan-mode plan (§8.1) — admin/maintainer on any session's plan,
 	// member only on one they created or joined.
 	ActionApprovePlan Action = "approve_plan"
+	// ActionDecideWorkflowStep is rendering an approve/reject/revise
+	// verdict on a workflow run's HITL-gated step (§25.9/§25.11 — Step
+	// 54) — own/joined-aware, the SAME row shape as ActionApprovePlan
+	// above by §25.11's explicit instruction ("same row as
+	// ActionApprovePlan"): admin/maintainer on any run, member only on a
+	// session they created or joined. No caller exists yet — the decide
+	// endpoint (POST /api/workflow-runs/:runId/steps/:stepRunId/decide)
+	// is Step 56's; reserved here so that Step's call site needs no
+	// shape change, exactly like every other reserved Action below.
+	ActionDecideWorkflowStep Action = "decide_workflow_step"
 
 	// -- Row 3: "Stop/resume ANY session; approve ANY plan" — admin,
 	// maintainer only. Deliberately no member own/joined carve-out here,
@@ -71,6 +81,18 @@ const (
 	ActionManageRepoSecrets Action = "manage_repo_secrets"
 	// ActionManageEnvSecrets covers per-environment secret management.
 	ActionManageEnvSecrets Action = "manage_env_secrets"
+	// ActionManageWorkflowDefinitions covers creating/editing/deleting a
+	// CUSTOM workflow definition — an unbound draft (§25.11 — Step 54),
+	// maintainer+ in this SAME row as ActionManageAutomations by
+	// §25.11's explicit instruction. Deliberately NOT the action that
+	// makes a definition live anywhere (that is
+	// ActionActivateWorkflowBinding, admin-only, row 6) — and NOT the
+	// gate on built-in definitions at all: PUT/DELETE on an is_built_in
+	// row is refused unconditionally, even for an admin, as a
+	// STRUCTURAL invariant (§25.4), never an RBAC verdict this matrix
+	// could express. No caller exists yet — Steps 55-56 own the first
+	// handlers.
+	ActionManageWorkflowDefinitions Action = "manage_workflow_definitions"
 
 	// -- Row 5: "Edit review verdicts; re-trigger reviews; label-driven
 	// auto-approve config" — admin, maintainer only. No caller exists yet
@@ -128,6 +150,17 @@ const (
 	// (§13.3's own parenthetical on that row), never a per-PR human
 	// judgment call the way row 5's actions are.
 	ActionConfigureBlockOnHighRisk Action = "configure_block_on_high_risk"
+	// ActionActivateWorkflowBinding covers binding a (repo, lane) — or
+	// the global (org-wide, repo_full_name = NULL) scope; the SAME
+	// action gates both, per §25.11 — to a specific workflow definition
+	// (workflow_bindings, migrations/000057_workflows.up.sql). Admin
+	// only, in this SAME row as ActionActivatePromptTemplate by
+	// §25.11's explicit instruction — activation changes what runs on
+	// 100% of a lane's production traffic (§25.6), a system-posture
+	// change like template activation, not a per-draft authoring step
+	// like row 4's ActionManageWorkflowDefinitions. No caller exists
+	// yet (Step 54 is dark; Steps 55-56 own the first handlers).
+	ActionActivateWorkflowBinding Action = "activate_workflow_binding"
 )
 
 // AllActions is every recognized Action, in this file's own declaration
@@ -139,12 +172,14 @@ var AllActions = []Action{
 	ActionCreateSession,
 	ActionPromptSession,
 	ActionApprovePlan,
+	ActionDecideWorkflowStep,
 	ActionStopSession,
 	ActionResumeSession,
 	ActionManageAutomations,
 	ActionManageEnvironments,
 	ActionManageRepoSecrets,
 	ActionManageEnvSecrets,
+	ActionManageWorkflowDefinitions,
 	ActionEditReviewVerdict,
 	ActionRetriggerReview,
 	ActionConfigureAutoApprove,
@@ -154,4 +189,5 @@ var AllActions = []Action{
 	ActionManageMembers,
 	ActionToggleSentinelAutoFix,
 	ActionConfigureBlockOnHighRisk,
+	ActionActivateWorkflowBinding,
 }
