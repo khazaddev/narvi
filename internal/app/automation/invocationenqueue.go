@@ -27,7 +27,7 @@ func CreateInvocation(ctx context.Context, invocations InvocationCreator, automa
 		return sqlcgen.AutomationInvocation{}, fmt.Errorf("automation: create invocation: %w", err)
 	}
 
-	targetsJSON, err := marshalTargets(targets)
+	targetsJSON, err := MarshalTargets(targets)
 	if err != nil {
 		return sqlcgen.AutomationInvocation{}, fmt.Errorf("automation: create invocation: %w", err)
 	}

@@ -174,6 +174,11 @@ type testRig struct {
 	// ApplySuggestion's happy path overrides this via newTestRig's own
 	// mutate func with a fake implementing ports.SourceControl.
 	sourceControl ports.SourceControl
+
+	// automations (Step 52, "automations: triggers & extras", §8.4) backs
+	// this rig's own /api/automations routes (automations_integration_
+	// test.go).
+	automations *narvipg.AutomationStore
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -224,6 +229,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		botHandle:           "narvi-test-bot",
 		reviewFindings:      narvipg.NewReviewFindingStore(pool),
 		sentinelFixes:       narvipg.NewSentinelFixStore(pool),
+		automations:         narvipg.NewAutomationStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -300,6 +306,17 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings))
 		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings))
+	})
+	// /api/automations (Step 52, "automations: triggers & extras", §8.4) --
+	// mounted exactly like cmd/control-plane/main.go's own wiring (see
+	// automations.go's own doc comment).
+	router.Route("/api/automations", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateAutomation(rig.automations))
+		r.Get("/", httpapi.ListAutomations(rig.automations))
+		r.Get("/{automationID}", httpapi.GetAutomation(rig.automations))
+		r.Post("/{automationID}/pause", httpapi.PauseAutomation(rig.automations))
+		r.Post("/{automationID}/resume", httpapi.ResumeAutomation(rig.automations))
 	})
 
 	rig.server = httptest.NewServer(router)

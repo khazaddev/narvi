@@ -299,6 +299,49 @@ func (q *Queries) ListOrphanedStartingRuns(ctx context.Context, arg ListOrphaned
 	return items, nil
 }
 
+const listRunsForInvocation = `-- name: ListRunsForInvocation :many
+SELECT id, invocation_id, automation_id, target, session_id, status, started_at, running_at, completed_at, created_at FROM automation_runs
+WHERE invocation_id = $1
+ORDER BY created_at
+`
+
+// Backs §8.4's own "artifact_summary populated" -- app/automation's own
+// closeout.go reads every run of a just-closed invocation (small, ≤
+// automation.MaxFanOutTargets rows) to name which specific targets failed
+// (automation.BuildArtifactSummary), reusing app/automation's own
+// unmarshalTargets (target.go) against each row's own target JSONB rather
+// than a second, independent JSON decode.
+func (q *Queries) ListRunsForInvocation(ctx context.Context, invocationID pgtype.UUID) ([]AutomationRun, error) {
+	rows, err := q.db.Query(ctx, listRunsForInvocation, invocationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AutomationRun
+	for rows.Next() {
+		var i AutomationRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.InvocationID,
+			&i.AutomationID,
+			&i.Target,
+			&i.SessionID,
+			&i.Status,
+			&i.StartedAt,
+			&i.RunningAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const promoteAutomationRunToRunning = `-- name: PromoteAutomationRunToRunning :one
 UPDATE automation_runs
 SET status = 'running',

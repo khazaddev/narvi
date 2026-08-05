@@ -25,13 +25,14 @@ import (
 // testFixture bundles every store/engine a test in this file needs, built
 // once per test against the shared pool (automation.IntegrationTestPool).
 type testFixture struct {
-	pool        *pgxpool.Pool
-	automations *narvipg.AutomationStore
-	invocations *narvipg.AutomationInvocationStore
-	runs        *narvipg.AutomationRunStore
-	sessions    *narvipg.SessionStore
-	turns       *narvipg.TurnStore
-	engine      *automation.Engine
+	pool         *pgxpool.Pool
+	automations  *narvipg.AutomationStore
+	invocations  *narvipg.AutomationInvocationStore
+	runs         *narvipg.AutomationRunStore
+	sessions     *narvipg.SessionStore
+	turns        *narvipg.TurnStore
+	environments *narvipg.EnvironmentStore
+	engine       *automation.Engine
 }
 
 func newFixture(t *testing.T) *testFixture {
@@ -63,7 +64,7 @@ func newFixture(t *testing.T) *testFixture {
 
 	return &testFixture{
 		pool: pool, automations: automations, invocations: invocations, runs: runs,
-		sessions: sessions, turns: turns, engine: engine,
+		sessions: sessions, turns: turns, environments: environments, engine: engine,
 	}
 }
 
@@ -89,6 +90,18 @@ func (f *testFixture) createAutomation(t *testing.T, name string, numTargets int
 	prompt := "do the thing"
 	row, err := f.automations.Create(ctx, sqlcgen.CreateAutomationParams{
 		Name: name, Prompt: &prompt, Repos: reposJSON, CreatedBy: pgtype.UUID{},
+		// TriggerType/TriggerConfig/EnvVars (Step 52, "automations: triggers
+		// & extras", §8.4) are all NOT NULL columns as of migrations/
+		// 000055_automations_triggers_and_extras.up.sql -- 'manual'/'{}'/'[]'
+		// here mean exactly what they mean everywhere else in this Step:
+		// this automation fires only via this file's own direct
+		// CreateInvocation calls, with no trigger config or env vars of its
+		// own. Every OTHER new column (webhook_token_hash, sandbox_*) is
+		// left at its Go zero value, which is also its own column's exact
+		// nullable/false default.
+		TriggerType:   sqlcgen.AutomationTriggerTypeManual,
+		TriggerConfig: []byte("{}"),
+		EnvVars:       []byte("[]"),
 	})
 	if err != nil {
 		t.Fatalf("create automation: %v", err)

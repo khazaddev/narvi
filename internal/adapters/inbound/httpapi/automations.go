@@ -1,0 +1,586 @@
+// This file (automations.go) implements Step 52's own ("automations:
+// triggers & extras", §8.4) REST CRUD surface over automations
+// (migrations/000051_automations.up.sql, extended by migrations/
+// 000055_automations_triggers_and_extras.up.sql) -- Step 51 ("automations:
+// engine") shipped the fan-out/reconcile/sweep engine ENGINE-ONLY, with no
+// HTTP surface at all (verified directly: no automations.go existed in
+// this package before this Step) -- invocationenqueue.go's own doc comment
+// already anticipated this: "Step 52's own future trigger evaluator is
+// expected to call [CreateInvocation] unchanged once it exists."
+//
+// Five routes, all mounted behind auth.Middleware (cmd/control-plane/
+// main.go) like every other browser-facing REST route in this package:
+//
+//   - POST   /api/automations                 CreateAutomation
+//   - GET    /api/automations                 ListAutomations (§8.4's own
+//     "creator/status filters", ?createdBy=me|<uuid>&status=active|paused)
+//   - GET    /api/automations/{automationID}   GetAutomation
+//   - POST   /api/automations/{automationID}/pause   PauseAutomation
+//   - POST   /api/automations/{automationID}/resume  ResumeAutomation
+//
+// Create/Pause/Resume are gated by authz.ActionManageAutomations
+// (admin/maintainer only, internal/domain/authz/authorize.go's own
+// already-reserved row) -- Get/List are NOT further gated beyond "must be
+// logged in": mockups.html's own Automations view ("My automations ▾ /
+// All statuses ▾" toolbar) shows every signed-in user browsing automations
+// read-only, mirroring ListPlans' own "no extra RBAC for a plain read"
+// precedent rather than ListMembers' own admin-only gate (members are a
+// workspace-wide identity/role listing, a materially more sensitive
+// surface than an automation's own name/repos/trigger).
+
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/domain/authz"
+	domainautomation "github.com/khazaddev/narvi/internal/domain/automation"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/platform"
+)
+
+// parseAutomationID parses chi's own "automationID" URL path param as a
+// UUID -- mirrors parseSessionID's own identical shape (helpers.go).
+func parseAutomationID(w http.ResponseWriter, r *http.Request) (pgtype.UUID, bool) {
+	raw := chi.URLParam(r, "automationID")
+	var id pgtype.UUID
+	if err := id.Scan(raw); err != nil {
+		writeError(w, http.StatusBadRequest, "malformed automation id")
+		return pgtype.UUID{}, false
+	}
+	return id, true
+}
+
+// automationToDTO converts a stored sqlcgen.Automation row into its REST
+// wire shape (restdtos.Automation) -- mirrors sessionToDTO's own identical
+// "explicit conversions for enum/nullability-representation mismatches"
+// shape (session.go). webhook_token_hash is deliberately NEVER surfaced
+// here (a bearer credential, returned in plaintext exactly once, at
+// creation, mirroring MintWSToken's own identical convention) -- this
+// function has no field for it at all.
+func automationToDTO(a sqlcgen.Automation) restdtos.Automation {
+	var prompt *string
+	if a.Prompt != nil {
+		prompt = a.Prompt
+	}
+
+	var createdBy *string
+	if a.CreatedBy.Valid {
+		str := a.CreatedBy.String()
+		createdBy = &str
+	}
+
+	var repos []restdtos.AutomationReposElem
+	_ = json.Unmarshal(a.Repos, &repos)
+
+	var pathScope *restdtos.AutomationSandboxPathScope
+	if len(a.SandboxPathScope) > 0 {
+		var patterns []string
+		if err := json.Unmarshal(a.SandboxPathScope, &patterns); err == nil && len(patterns) > 0 {
+			ps := restdtos.AutomationSandboxPathScope(patterns)
+			pathScope = &ps
+		}
+	}
+
+	var envVars []restdtos.AutomationEnvVarElem
+	if len(a.EnvVars) > 0 {
+		_ = json.Unmarshal(a.EnvVars, &envVars)
+	}
+	if envVars == nil {
+		envVars = []restdtos.AutomationEnvVarElem{}
+	}
+
+	// AutomationLastRunAt is ITSELF a named *time.Time (go-jsonschema's own
+	// generated shape for a nullable, non-enum date-time field, distinct
+	// from the wrapped-struct shape nullable ENUMS like LastRunStatus get
+	// below) -- so its own zero value (nil) already means "never run yet",
+	// with no extra pointer-to-pointer indirection needed.
+	var lastRunAt restdtos.AutomationLastRunAt
+	if a.LastRunAt.Valid {
+		t := a.LastRunAt.Time
+		lastRunAt = restdtos.AutomationLastRunAt(&t)
+	}
+
+	var lastRunStatus *restdtos.AutomationLastRunStatus
+	if a.LastRunStatus != nil {
+		lastRunStatus = &restdtos.AutomationLastRunStatus{Value: string(*a.LastRunStatus)}
+	}
+
+	return restdtos.Automation{
+		Id:                    a.ID.String(),
+		Name:                  a.Name,
+		Prompt:                prompt,
+		Repos:                 repos,
+		Status:                restdtos.AutomationStatus(a.Status),
+		ConsecutiveFailures:   int(a.ConsecutiveFailures),
+		CreatedBy:             createdBy,
+		CreatedAt:             a.CreatedAt.Time,
+		UpdatedAt:             a.UpdatedAt.Time,
+		TriggerType:           restdtos.AutomationTriggerType(a.TriggerType),
+		TriggerConfig:         json.RawMessage(a.TriggerConfig),
+		SandboxPathScope:      pathScope,
+		SandboxMockConfigured: a.SandboxMockConfigured,
+		SandboxContractsPath:  a.SandboxContractsPath,
+		EnvVars:               envVars,
+		LastRunAt:             lastRunAt,
+		LastRunStatus:         lastRunStatus,
+		ArtifactSummary:       a.ArtifactSummary,
+	}
+}
+
+// CreateAutomation backs POST /api/automations (Step 52, §8.4). 403 if the
+// caller fails authz.ActionManageAutomations; 400 for a malformed request
+// body or any validation failure (repos, trigger config, sandbox
+// settings, env vars); 201 with restdtos.CreateAutomationResponse
+// otherwise -- carrying the plaintext webhook token exactly once, iff
+// triggerType is "webhook" (mirrors MintWSToken's own identical
+// "hashed at rest, plaintext returned exactly once" convention).
+func CreateAutomation(automations *postgres.AutomationStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionManageAutomations, authz.Resource{}) {
+			return
+		}
+		userID, ok := authenticatedUserID(w, r)
+		if !ok {
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		var req restdtos.CreateAutomationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "malformed request body")
+			return
+		}
+
+		if req.Name == "" {
+			writeError(w, http.StatusBadRequest, "name must not be empty")
+			return
+		}
+
+		reposJSON, targets, verr := validateAutomationRepos(req.Repos)
+		if verr != "" {
+			writeError(w, http.StatusBadRequest, verr)
+			return
+		}
+		if err := domainautomation.ValidateTargets(targets); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("repos: %s", err))
+			return
+		}
+
+		triggerType := domainautomation.TriggerType(req.TriggerType)
+		if err := domainautomation.ValidateTriggerType(triggerType); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		triggerConfigJSON, err := buildTriggerConfig(triggerType, req.TriggerConfig)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("triggerConfig: %s", err))
+			return
+		}
+
+		settings := domainautomation.SandboxSettings{}
+		if req.SandboxPathScope != nil {
+			settings.PathScope = []string(*req.SandboxPathScope)
+		}
+		if req.SandboxMockConfig != nil {
+			settings.MockConfigured = true
+			if req.SandboxMockConfig.ContractsPath != nil {
+				settings.ContractsPath = *req.SandboxMockConfig.ContractsPath
+			}
+		}
+		if err := domainautomation.ValidateSandboxSettings(settings); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("sandbox settings: %s", err))
+			return
+		}
+
+		envVars := make([]domainautomation.EnvVar, len(req.EnvVars))
+		for i, v := range req.EnvVars {
+			envVars[i] = domainautomation.EnvVar{Name: v.Name, Value: v.Value}
+		}
+		if err := domainautomation.ValidateEnvVars(envVars); err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("envVars: %s", err))
+			return
+		}
+		envVarsWire := req.EnvVars
+		if envVarsWire == nil {
+			envVarsWire = []restdtos.AutomationEnvVarElem{}
+		}
+		envVarsJSON, err := json.Marshal(envVarsWire)
+		if err != nil {
+			logger.Error("httpapi: marshal automation env vars failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		var sandboxPathScopeJSON []byte
+		if len(settings.PathScope) > 0 {
+			sandboxPathScopeJSON, err = json.Marshal(settings.PathScope)
+			if err != nil {
+				logger.Error("httpapi: marshal automation sandbox path scope failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+		}
+		var sandboxContractsPath *string
+		if settings.MockConfigured {
+			cp := settings.ContractsPath
+			sandboxContractsPath = &cp
+		}
+
+		var webhookToken *string
+		var webhookTokenHash *string
+		if triggerType == domainautomation.TriggerTypeWebhook {
+			token, terr := platform.GenerateToken()
+			if terr != nil {
+				logger.Error("httpapi: generate automation webhook token failed", "error", terr)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			hash := platform.HashToken(token)
+			webhookToken = &token
+			webhookTokenHash = &hash
+		}
+
+		var promptCol *string
+		if req.Prompt != nil {
+			promptCol = req.Prompt
+		}
+
+		created, err := automations.Create(ctx, sqlcgen.CreateAutomationParams{
+			Name:                  req.Name,
+			Prompt:                promptCol,
+			Repos:                 reposJSON,
+			CreatedBy:             userID,
+			TriggerType:           sqlcgen.AutomationTriggerType(triggerType),
+			TriggerConfig:         triggerConfigJSON,
+			WebhookTokenHash:      webhookTokenHash,
+			SandboxPathScope:      sandboxPathScopeJSON,
+			SandboxMockConfigured: settings.MockConfigured,
+			SandboxContractsPath:  sandboxContractsPath,
+			EnvVars:               envVarsJSON,
+		})
+		if err != nil {
+			logger.Error("httpapi: create automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusCreated, restdtos.CreateAutomationResponse{
+			Automation:   automationToDTO(created),
+			WebhookToken: webhookToken,
+		})
+	}
+}
+
+// validateAutomationRepos validates every repo's Name/Url/Branch (the SAME
+// reposource.ValidateRepoName/ValidateRepoURL/ValidateBranch checks
+// validateCreateSessionRequest already applies to CreateSessionRequest.
+// repos, create.go) and marshals them for the automations.repos JSONB
+// column, returning the domainautomation.Target slice too (so the caller
+// can additionally run domainautomation.ValidateTargets' own fan-out-cap
+// check without a second conversion pass). Returns a non-empty message
+// (never wrapped as an error type, matching this file's own inline
+// writeError-at-call-site style) on the first problem found.
+func validateAutomationRepos(repos []restdtos.AutomationReposElem) ([]byte, []domainautomation.Target, string) {
+	if len(repos) < 1 {
+		return nil, nil, "repos must be non-empty"
+	}
+
+	targets := make([]domainautomation.Target, len(repos))
+	for i, repo := range repos {
+		if err := reposource.ValidateRepoName(repo.Name); err != nil {
+			return nil, nil, fmt.Sprintf("repos[%d].name: %s", i, err)
+		}
+		if err := reposource.ValidateRepoURL(repo.Url); err != nil {
+			return nil, nil, fmt.Sprintf("repos[%d].url: %s", i, err)
+		}
+		branch := ""
+		if repo.Branch != nil {
+			if err := reposource.ValidateBranch(*repo.Branch); err != nil {
+				return nil, nil, fmt.Sprintf("repos[%d].branch: %s", i, err)
+			}
+			branch = *repo.Branch
+		}
+		targets[i] = domainautomation.Target{Name: repo.Name, URL: repo.Url, Branch: branch}
+	}
+
+	reposJSON, err := json.Marshal(repos)
+	if err != nil {
+		return nil, nil, "internal error marshaling repos"
+	}
+	return reposJSON, targets, ""
+}
+
+// cronTriggerConfigWire/githubTriggerConfigWire/linearTriggerConfigWire are
+// this handler's OWN small, private wire structs for decoding+
+// re-marshaling a request's own triggerConfig into a CANONICAL shape
+// (only the fields this codebase recognizes, never arbitrary
+// caller-supplied extra keys passed through verbatim) -- deliberately NOT
+// shared with internal/app/automation's own (separate, decode-only)
+// cronTriggerConfigJSON: app/automation already imports this package
+// (fanout.go, for CreateSessionOnTx), so this package importing IT back
+// would be an import cycle. Each copy is small (~3 fields) and one-way
+// (this package only ever WRITES trigger_config; app/automation's trigger
+// pump only ever READS the one shape it cares about, cron) -- see
+// internal/app/automation/triggerpump.go's own identical doc comment on
+// this same constraint.
+type cronTriggerConfigWire struct {
+	Schedule string `json:"schedule"`
+}
+type githubTriggerConfigWire struct {
+	Event  string `json:"event"`
+	Action string `json:"action,omitempty"`
+	Label  string `json:"label,omitempty"`
+}
+type linearTriggerConfigWire struct {
+	EventType string `json:"eventType"`
+	Action    string `json:"action,omitempty"`
+	TeamKey   string `json:"teamKey,omitempty"`
+}
+
+// buildTriggerConfig decodes raw (the request's own, possibly-absent,
+// opaque triggerConfig object) against whichever shape triggerType
+// implies, validates it via internal/domain/automation's own
+// ValidateCronTriggerConfig/ValidateGitHubTriggerConfig/
+// ValidateLinearTriggerConfig, and re-marshals a CANONICAL JSON object
+// (only the recognized fields) for storage -- never the caller's own raw
+// bytes verbatim, so an extra/unexpected key in the request body is
+// silently dropped rather than persisted. manual/webhook always store
+// "{}", ignoring raw entirely (neither trigger type has any config of its
+// own -- webhook's own "condition" is authentication, handled by a
+// dedicated column, never trigger_config).
+func buildTriggerConfig(triggerType domainautomation.TriggerType, raw *json.RawMessage) ([]byte, error) {
+	switch triggerType {
+	case domainautomation.TriggerTypeManual, domainautomation.TriggerTypeWebhook:
+		return []byte("{}"), nil
+
+	case domainautomation.TriggerTypeCron:
+		var wire cronTriggerConfigWire
+		if raw != nil {
+			if err := json.Unmarshal(*raw, &wire); err != nil {
+				return nil, errors.New("malformed cron trigger config")
+			}
+		}
+		cfg := domainautomation.CronTriggerConfig{Schedule: wire.Schedule}
+		if err := domainautomation.ValidateCronTriggerConfig(cfg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(cronTriggerConfigWire{Schedule: cfg.Schedule})
+
+	case domainautomation.TriggerTypeGitHub:
+		var wire githubTriggerConfigWire
+		if raw != nil {
+			if err := json.Unmarshal(*raw, &wire); err != nil {
+				return nil, errors.New("malformed github trigger config")
+			}
+		}
+		cfg := domainautomation.GitHubTriggerConfig{Event: wire.Event, Action: wire.Action, Label: wire.Label}
+		if err := domainautomation.ValidateGitHubTriggerConfig(cfg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(githubTriggerConfigWire{Event: cfg.Event, Action: cfg.Action, Label: cfg.Label})
+
+	case domainautomation.TriggerTypeLinear:
+		var wire linearTriggerConfigWire
+		if raw != nil {
+			if err := json.Unmarshal(*raw, &wire); err != nil {
+				return nil, errors.New("malformed linear trigger config")
+			}
+		}
+		cfg := domainautomation.LinearTriggerConfig{EventType: wire.EventType, Action: wire.Action, TeamKey: wire.TeamKey}
+		if err := domainautomation.ValidateLinearTriggerConfig(cfg); err != nil {
+			return nil, err
+		}
+		return json.Marshal(linearTriggerConfigWire{EventType: cfg.EventType, Action: cfg.Action, TeamKey: cfg.TeamKey})
+
+	default:
+		// Unreachable: the caller already ran ValidateTriggerType before
+		// this function is ever called.
+		return []byte("{}"), nil
+	}
+}
+
+// GetAutomation backs GET /api/automations/{automationID} -- 404 if the
+// automation doesn't exist; 200 with restdtos.Automation otherwise. No
+// extra RBAC beyond "must be logged in" -- see this file's own top doc
+// comment for why.
+func GetAutomation(automations *postgres.AutomationStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		id, ok := parseAutomationID(w, r)
+		if !ok {
+			return
+		}
+
+		a, err := automations.Get(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "automation not found")
+				return
+			}
+			logger.Error("httpapi: get automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, automationToDTO(a))
+	}
+}
+
+// ListAutomations backs GET /api/automations (Step 52, §8.4's own
+// "creator/status filters"): two independent, optional query params --
+// ?createdBy=me|<uuid> and ?status=active|paused. "me" resolves to the
+// authenticated caller's own id (mockups.html's own "My automations ▾"
+// toolbar filter); an explicit UUID filters to that creator instead
+// (visible to anyone -- this list itself carries no per-row RBAC, see this
+// file's own top doc comment); either query param absent means "no
+// filter" for that dimension. An unrecognized status value is a 400, not
+// a silently-ignored filter.
+func ListAutomations(automations *postgres.AutomationStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		var createdBy pgtype.UUID
+		if raw := r.URL.Query().Get("createdBy"); raw != "" {
+			if raw == "me" {
+				userID, ok := authenticatedUserID(w, r)
+				if !ok {
+					return
+				}
+				createdBy = userID
+			} else if err := createdBy.Scan(raw); err != nil {
+				writeError(w, http.StatusBadRequest, "malformed createdBy filter")
+				return
+			}
+		}
+
+		var status *sqlcgen.AutomationStatus
+		if raw := r.URL.Query().Get("status"); raw != "" {
+			switch raw {
+			case string(sqlcgen.AutomationStatusActive), string(sqlcgen.AutomationStatusPaused):
+				s := sqlcgen.AutomationStatus(raw)
+				status = &s
+			default:
+				writeError(w, http.StatusBadRequest, "unrecognized status filter")
+				return
+			}
+		}
+
+		rows, err := automations.List(ctx, createdBy, status)
+		if err != nil {
+			logger.Error("httpapi: list automations failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		wire := make([]restdtos.Automation, len(rows))
+		for i, row := range rows {
+			wire[i] = automationToDTO(row)
+		}
+		writeJSON(w, http.StatusOK, restdtos.ListAutomationsResponse{Automations: wire})
+	}
+}
+
+// PauseAutomation backs POST /api/automations/{automationID}/pause -- the
+// direct-admin-action twin of ResumeAutomation below (internal/domain/
+// automation.TriggerAutoPause applied via PauseAutomation, queries/
+// automations.sql, rather than the auto-pause path). 403 if the caller
+// fails authz.ActionManageAutomations; 404 if the automation doesn't exist
+// OR is already paused (PauseAutomation's own "AND status = 'active'"
+// guard makes both cases indistinguishable from a plain row lookup, so
+// this handler does a separate existence check first to give a genuine
+// "not found" a distinct message from "already paused").
+func PauseAutomation(automations *postgres.AutomationStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionManageAutomations, authz.Resource{}) {
+			return
+		}
+		id, ok := parseAutomationID(w, r)
+		if !ok {
+			return
+		}
+
+		if _, err := automations.Get(ctx, id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "automation not found")
+				return
+			}
+			logger.Error("httpapi: get automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		a, err := automations.Pause(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusConflict, "automation is not active")
+				return
+			}
+			logger.Error("httpapi: pause automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, automationToDTO(a))
+	}
+}
+
+// ResumeAutomation backs POST /api/automations/{automationID}/resume --
+// applies internal/domain/automation.TriggerResume. Same existence-check-
+// then-CAS shape as PauseAutomation immediately above.
+func ResumeAutomation(automations *postgres.AutomationStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionManageAutomations, authz.Resource{}) {
+			return
+		}
+		id, ok := parseAutomationID(w, r)
+		if !ok {
+			return
+		}
+
+		if _, err := automations.Get(ctx, id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "automation not found")
+				return
+			}
+			logger.Error("httpapi: get automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		a, err := automations.Resume(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusConflict, "automation is not paused")
+				return
+			}
+			logger.Error("httpapi: resume automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, automationToDTO(a))
+	}
+}

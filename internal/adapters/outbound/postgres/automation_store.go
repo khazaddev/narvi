@@ -70,10 +70,58 @@ func (s *AutomationStore) ResetConsecutiveFailures(ctx context.Context, id pgtyp
 }
 
 // Resume applies automation.TriggerResume: Paused -> Active, resetting the
-// consecutive-failure streak. No HTTP caller exists yet in this Step (Step
-// 52/76 own the actual "Resume" button) -- reserved so that surface needs
-// no store-layer change to use it. pgx.ErrNoRows means id is not currently
-// Paused (a no-op, not an error the caller should surface as one).
+// consecutive-failure streak. Backs POST /api/automations/{id}/resume
+// (Step 52, §8.4). pgx.ErrNoRows means id is not currently Paused (a
+// no-op, not an error the caller should surface as one).
 func (s *AutomationStore) Resume(ctx context.Context, id pgtype.UUID) (sqlcgen.Automation, error) {
 	return s.q.ResumeAutomation(ctx, id)
+}
+
+// Pause applies automation.TriggerAutoPause via a direct admin action
+// (POST /api/automations/{id}/pause, Step 52, §8.4) -- the manual-pause
+// twin of Resume above; see PauseAutomation's own generated doc comment
+// for why this reuses TriggerAutoPause rather than a dedicated trigger.
+// pgx.ErrNoRows means id is not currently Active (a no-op, not an error
+// the caller should surface as one).
+func (s *AutomationStore) Pause(ctx context.Context, id pgtype.UUID) (sqlcgen.Automation, error) {
+	return s.q.PauseAutomation(ctx, id)
+}
+
+// GetByWebhookTokenHash looks up the automation whose webhook_token_hash
+// matches hash exactly -- backs the webhook trigger's own inbound-auth
+// check (internal/adapters/inbound/httpapi's own automationwebhook.go).
+// pgx.ErrNoRows means no automation currently carries this hash (an
+// unrecognized or revoked token).
+func (s *AutomationStore) GetByWebhookTokenHash(ctx context.Context, hash string) (sqlcgen.Automation, error) {
+	return s.q.GetAutomationByWebhookTokenHash(ctx, &hash)
+}
+
+// List returns every automation matching the given optional creator/status
+// filters (Step 52, §8.4's own "creator/status filters") -- backs GET
+// /api/automations. A zero-value createdBy (Valid: false) or nil status
+// matches every row for that filter.
+func (s *AutomationStore) List(ctx context.Context, createdBy pgtype.UUID, status *sqlcgen.AutomationStatus) ([]sqlcgen.Automation, error) {
+	return s.q.ListAutomations(ctx, sqlcgen.ListAutomationsParams{CreatedBy: createdBy, Status: status})
+}
+
+// ListActiveCronAutomations returns every active, cron-triggered automation
+// -- backs the cron trigger pump's own per-tick scan (app/automation's own
+// triggerpump.go).
+func (s *AutomationStore) ListActiveCronAutomations(ctx context.Context) ([]sqlcgen.Automation, error) {
+	return s.q.ListActiveCronAutomations(ctx)
+}
+
+// ClaimCronFire is the cron trigger pump's own per-automation CAS guard --
+// see ClaimCronFire's own generated doc comment. pgx.ErrNoRows means this
+// automation already fired for the given minute bucket (a concurrent tick
+// or pod won the race first) -- a harmless no-op, not an error.
+func (s *AutomationStore) ClaimCronFire(ctx context.Context, id pgtype.UUID, minuteBucket pgtype.Timestamptz) (sqlcgen.Automation, error) {
+	return s.q.ClaimCronFire(ctx, sqlcgen.ClaimCronFireParams{ID: id, LastCronFiredAt: minuteBucket})
+}
+
+// UpdateLastRun persists §8.4's own "last_run + artifact_summary
+// populated" -- called by app/automation's own closeout.go the moment an
+// invocation's own outcome is decided.
+func (s *AutomationStore) UpdateLastRun(ctx context.Context, arg sqlcgen.UpdateAutomationLastRunParams) (sqlcgen.Automation, error) {
+	return s.q.UpdateAutomationLastRun(ctx, arg)
 }

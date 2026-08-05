@@ -1749,6 +1749,22 @@ type Timeouts struct {
 	// than this, with automation.DeriveRunStatus still reporting
 	// RunStatusRunning, is swept the same way. §3.5, explicit.
 	AutomationRunRunningOrphanThreshold time.Duration
+
+	// AutomationCronGranularity is Step 52's own ("automations: triggers &
+	// extras", §8.4) cron-trigger evaluation bucket size: internal/domain/
+	// automation.CronMatches evaluates a schedule against a whole UTC
+	// minute, and internal/app/automation's own trigger pump (triggerpump.go)
+	// truncates `now` to this same duration to compute the CAS-guarded
+	// "already fired for this bucket" key (automations.last_cron_fired_at).
+	// Not a tunable knob the way the pump intervals above are -- it is a
+	// STRUCTURAL constant (a standard 5-field cron schedule's own finest
+	// resolution IS one minute, by definition of the format itself, not a
+	// choice this codebase made) -- but every time.Duration unit literal
+	// in this codebase lives here regardless (§5.4/§11, mechanically
+	// enforced by tools/lint/narvichecks/notimeliteral), so this is that
+	// one literal's own single home, referenced by name everywhere else
+	// rather than written as a bare `time.Minute` a second time.
+	AutomationCronGranularity time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1897,6 +1913,7 @@ func DefaultTimeouts() Timeouts {
 		AutomationSweepInterval:              60 * time.Second, // Step 51; not specified, chosen, matches AutomationEnginePumpInterval's own cadence
 		AutomationRunStartingOrphanThreshold: 5 * time.Minute,  // §3.5, explicit ("orphaned starting runs >5 min")
 		AutomationRunRunningOrphanThreshold:  90 * time.Minute, // §3.5, explicit ("running >90 min")
+		AutomationCronGranularity:            1 * time.Minute,  // Step 52, §8.4; structural, not tunable -- see field doc comment
 	}
 }
 

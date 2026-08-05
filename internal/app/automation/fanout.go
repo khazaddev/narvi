@@ -89,7 +89,7 @@ func (e *Engine) claimBatch(ctx context.Context) ([]sqlcgen.AutomationInvocation
 func (e *Engine) fanOut(ctx context.Context, inv sqlcgen.AutomationInvocation) {
 	logger := platform.Logger(ctx).With("automation_invocation_id", inv.ID.String(), "automation_id", inv.AutomationID.String())
 
-	targets, err := unmarshalTargets(inv.Targets)
+	targets, err := UnmarshalTargets(inv.Targets)
 	if err != nil {
 		logger.Error("automation: decode invocation targets failed; closing this invocation as failed with no runs", "error", err)
 		// Every target this invocation was supposed to fan out is now
@@ -101,7 +101,7 @@ func (e *Engine) fanOut(ctx context.Context, inv sqlcgen.AutomationInvocation) {
 		// against, so this invocation is closed directly, bypassing the
 		// normal per-run accounting -- a defensive path that should be
 		// unreachable in practice (targets is only ever written by this
-		// package's own marshalTargets).
+		// package's own MarshalTargets).
 		e.closeInvocation(ctx, logger, inv.ID, inv.AutomationID, true)
 		return
 	}
@@ -167,9 +167,20 @@ func (e *Engine) createRunAndSession(ctx context.Context, logger *slog.Logger, i
 			targetToReposElem(target),
 		},
 	}
+
+	// §8.4 ("automations: triggers & extras"): sandboxSettings honored on
+	// automation sessions -- before this Step, this request never set
+	// PathScope/MockConfig at all, so an automation-created session always
+	// ignored whatever sandbox scoping a maintainer configured on the
+	// automation itself, even though an ordinary web session honors it via
+	// this SAME CreateSessionOnTx call. applySandboxSettings logs (but does
+	// not fail this run over) a decode error on the automation's own
+	// persisted columns -- malformed sandbox settings must not block an
+	// otherwise-healthy run from being created at all.
+	applySandboxSettings(logger, &req, automationRow)
+
 	if automationRow.Prompt != nil {
-		prompt := *automationRow.Prompt
-		req.Prompt = &prompt
+		req.Prompt = buildRunPrompt(logger, automationRow)
 	}
 	title := fmt.Sprintf("Automation: %s", automationRow.Name)
 	req.Title = &title
@@ -302,7 +313,7 @@ func (e *Engine) createFailedRun(ctx context.Context, logger *slog.Logger, inv s
 // identical "cannot happen for a plain map[string]string" reasoning for
 // its own builtRepoSHAsJSON marshal.
 func mustMarshalOneTarget(target domainautomation.Target) []byte {
-	raw, err := marshalTargets([]domainautomation.Target{target})
+	raw, err := MarshalTargets([]domainautomation.Target{target})
 	if err != nil {
 		// Unreachable in practice (see doc comment) -- but never panics: a
 		// malformed target is recorded as an empty JSON array rather than

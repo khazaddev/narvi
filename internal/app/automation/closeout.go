@@ -92,7 +92,7 @@ func (e *Engine) closeInvocation(ctx context.Context, logger *slog.Logger, invoc
 		toStatus = sqlcgen.AutomationInvocationStatusFailed
 	}
 
-	_, err := e.invocations.Close(ctx, sqlcgen.CloseAutomationInvocationParams{ID: invocationID, Status: toStatus})
+	closedInv, err := e.invocations.Close(ctx, sqlcgen.CloseAutomationInvocationParams{ID: invocationID, Status: toStatus})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return
@@ -100,6 +100,17 @@ func (e *Engine) closeInvocation(ctx context.Context, logger *slog.Logger, invoc
 		logger.Error("automation: close invocation failed", "error", err, "automation_invocation_id", invocationID.String())
 		return
 	}
+
+	// §8.4 ("automations: triggers & extras"): "last_run + artifact_summary
+	// populated" -- only the WINNER of the CAS above (the caller that just
+	// actually closed this invocation, never a loser that saw
+	// pgx.ErrNoRows above) ever records this, so a concurrent
+	// reconcile-tick/sweep-tick race on the SAME invocation can never write
+	// this twice. Runs on a best-effort basis: a failure here is logged but
+	// never un-does the invocation close-out itself (the SAME "this is
+	// enrichment, not the source of truth" posture ResetConsecutiveFailures'
+	// own error handling immediately below already establishes).
+	e.recordLastRun(ctx, logger, closedInv, toStatus)
 
 	if !failed {
 		if _, err := e.automations.ResetConsecutiveFailures(ctx, automationID); err != nil {
@@ -109,6 +120,49 @@ func (e *Engine) closeInvocation(ctx context.Context, logger *slog.Logger, invoc
 	}
 
 	e.applyFailureStrike(ctx, logger, automationID, invocationID)
+}
+
+// recordLastRun computes and persists §8.4's own "last_run +
+// artifact_summary" onto closedInv's own parent automation, the moment
+// closeInvocation's own CAS is won for closedInv. Reads back every run of
+// closedInv (small, ≤ domainautomation.MaxFanOutTargets rows) to name which
+// specific targets failed (domainautomation.BuildArtifactSummary) -- a
+// second, cheap query, but the ONLY way to get the actual target NAMES
+// this summary names: CountTerminalForInvocation (maybeCloseInvocation,
+// above) only ever returns counts, never which targets they belong to.
+func (e *Engine) recordLastRun(ctx context.Context, logger *slog.Logger, closedInv sqlcgen.AutomationInvocation, status sqlcgen.AutomationInvocationStatus) {
+	runs, err := e.runs.ListForInvocation(ctx, closedInv.ID)
+	if err != nil {
+		logger.Error("automation: list runs for invocation failed; last_run/artifact_summary not updated", "error", err, "automation_invocation_id", closedInv.ID.String())
+		return
+	}
+
+	total := len(runs)
+	failedCount := 0
+	var failedNames []string
+	for _, run := range runs {
+		if run.Status != sqlcgen.AutomationRunStatusFailed {
+			continue
+		}
+		failedCount++
+		targets, terr := UnmarshalTargets(run.Target)
+		if terr != nil || len(targets) == 0 {
+			logger.Warn("automation: decode failed run's own target failed; artifact_summary will name it as unknown", "error", terr, "automation_run_id", run.ID.String())
+			continue
+		}
+		failedNames = append(failedNames, targets[0].Name)
+	}
+
+	summary := domainautomation.BuildArtifactSummary(total, failedCount, failedNames)
+
+	if _, err := e.automations.UpdateLastRun(ctx, sqlcgen.UpdateAutomationLastRunParams{
+		ID:              closedInv.AutomationID,
+		LastRunAt:       closedInv.ClosedAt,
+		LastRunStatus:   &status,
+		ArtifactSummary: &summary,
+	}); err != nil {
+		logger.Error("automation: update automation last_run failed", "error", err, "automation_id", closedInv.AutomationID.String())
+	}
 }
 
 // applyFailureStrike is §3.5's own literal CAS idiom in action: "UPDATE

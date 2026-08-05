@@ -103,4 +103,99 @@
 // count anything, or decide whether THIS particular failure has already
 // been counted -- that is the CAS's job, entirely in app/automation's own
 // impure layer, per this package's own "no I/O" boundary (§11).
+//
+// # Step 52 ("automations: triggers & extras", §8.4): what this package adds
+//
+// Five new files, each a small, independent, pure addition -- none of them
+// touch the three transition tables above, since none of this Step's own
+// scope is a NEW state or a NEW edge in any of the three machines already
+// documented above:
+//
+//   - trigger.go: TriggerType (manual/cron/github/linear/webhook) plus one
+//     validated Config shape per type. A single trigger_type/trigger_config
+//     column pair on automations (migrations/
+//     000055_automations_triggers_and_extras.up.sql), not an
+//     automation_triggers side table -- mockups.html's own Automations view
+//     shows exactly one trigger per automation row, confirming this shape
+//     rather than guessing it. GitHub/Linear's own condition (event/action/
+//     label or event/action/team filter) is fully modeled AND validated
+//     here (MatchesGitHubTrigger/MatchesLinearTrigger) -- but live dispatch,
+//     wiring a call to either matcher into the existing, already-merged
+//     GitHub/Linear webhook ingress handlers (internal/adapters/inbound/
+//     github/handler.go, internal/adapters/inbound/linear/webhook.go), is
+//     NOT done in this Step. Verified directly: GitHub's own handler is
+//     entirely tuned to @mention detection (parseMention) plus one
+//     PR-closed merge-gate special case, never a generic "any repo event"
+//     dispatch point; Linear's own handler explicitly ignores every webhook
+//     category other than AgentSessionEvent ("linear: ignoring non-
+//     AgentSessionEvent webhook category"). Deciding which event categories
+//     a generic automation trigger should even be subscribed to/dispatched
+//     through is a real, separate design question neither handler answers
+//     today -- a genuine architectural fork this Step resolves
+//     conservatively (model + validate the condition fully now; leave live
+//     ingress wiring, a small and clearly-scoped follow-up once that
+//     subscription question is answered, for later) rather than guessing at
+//     an answer and reshaping either large, sensitive, already-tested file.
+//   - cron.go: a small, honest, fully-tested 5-field cron matcher
+//     (CronMatches/ValidateCronExpr) -- standard vixie-cron field
+//     vocabulary (minute hour day-of-month month day-of-week; *, N, A-B,
+//     */N, A-B/N, comma lists), deliberately not a byte-for-byte
+//     reimplementation of every dialect quirk (no seconds field, no
+//     "@daily" macros, no day-of-month/day-of-week OR-instead-of-AND
+//     special case). Pure: the caller (app/automation's own new trigger
+//     pump) supplies `now`, exactly like IsOrphaned already does for the
+//     recovery sweep.
+//   - sandboxsettings.go: SandboxSettings, the exact same path_scope/
+//     mock_configured/contracts_path attributes environment.Environment
+//     already carries for an ordinary session, namespaced onto an
+//     automation directly (no standalone, reusable Environment-by-id
+//     entity exists anywhere in this codebase yet to reference instead).
+//     ValidateSandboxSettings reuses environment.ValidatePathScope/
+//     ValidateContractsPath directly, never a second, independently-
+//     maintained copy of either check.
+//   - envvar.go: EnvVar, §8.4's own "per-automation env vars" -- PLAIN,
+//     non-secret configuration only (see this section's own trailing
+//     paragraph below for why per-automation SECRETS are a different,
+//     deliberately unbuilt thing).
+//   - summary.go: BuildArtifactSummary, a deterministic, MECHANICALLY
+//     generated one-line sentence over already-persisted, typed
+//     invocation-outcome data (target names, succeeded/failed counts) --
+//     §8.4's own "artifact_summary populated". Deliberately NOT a
+//     model-authored narrative posted through a new agent-facing tool:
+//     internal/domain/reviewpost.Summary is this codebase's own
+//     established precedent for THAT shape (a required free-text field
+//     on a structured verdict-posting tool call review sessions already
+//     run at the end of every session) -- but an arbitrary automation's
+//     own turn has no equivalent tool call today, and building one
+//     (a new OpenCode-facing tool plus a server-side posting endpoint,
+//     mirroring Step 47/48's own review-verdict machinery) would be a
+//     materially larger, separate feature. Reusing already-persisted
+//     counts/names honestly closes mockups.html's own named gap ("the
+//     column exists in the UI but the backend never fills it") without
+//     inventing that larger mechanism here.
+//
+// # Per-automation secrets: deferred to Step 53, deliberately not built here
+//
+// §8.4 also lists "per-automation secrets" -- NOT implemented in this
+// Step, by direct, explicit decision, and named here rather than silently
+// dropped (mirroring this codebase's own established discipline of
+// documenting an accepted gap explicitly, e.g. app/imagebuild/doc.go's own
+// claimed-but-unbuilt sweep, and this package's sibling app/automation/
+// doc.go's own "Known, deferred" sections immediately above). Grepped
+// directly, twice, before writing this: no `CREATE TABLE ... secret`
+// anywhere under migrations/, and no `SecretStore` type anywhere under
+// internal/ -- generic secret storage does not exist ANYWHERE in this
+// codebase yet. docs/IMPLEMENTATION_PLAN.md's own Step 53 row ("provider
+// credential injection", §25.1/§25.3) is explicit that Step 53 is "the
+// first Step that actually builds" secret storage, scoped initially to
+// provider API keys mapped provider->env-var name. Building an ad-hoc,
+// one-off secrets mechanism here -- before that generic design lands --
+// would either conflict with it or be thrown away once it does. EnvVar
+// (envvar.go, immediately above) is the deliberate, honest contrast: PLAIN,
+// non-confidential per-automation configuration, which carries no such
+// risk and is fully implemented in this Step. Once Step 53 lands generic
+// secret storage, a small, focused follow-up is expected to extend it to
+// automations, alongside the repo/environment/global scopes mockups.html's
+// own Settings view already shows resolving in that order ("automation →
+// environment → repo → global, this value wins").
 package automation

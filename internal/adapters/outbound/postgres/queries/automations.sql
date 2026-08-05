@@ -1,18 +1,110 @@
--- Queries backing AutomationStore (Step 51, "automations: engine", §3.5),
--- migrations/000051_automations.up.sql.
+-- Queries backing AutomationStore (Step 51, "automations: engine", §3.5;
+-- Step 52, "automations: triggers & extras", §8.4), migrations/
+-- 000051_automations.up.sql, migrations/
+-- 000055_automations_triggers_and_extras.up.sql.
 
 -- name: CreateAutomation :one
--- No caller exists yet in this Step (no HTTP surface for creating/
--- configuring automations -- Step 52/76 own that, per this Step's own
--- scope note); used directly by this package's own integration tests, and
--- ready for Step 52's own admin CRUD endpoint to call unchanged.
-INSERT INTO automations (name, prompt, repos, created_by)
-VALUES ($1, $2, $3, $4)
+-- Step 52's own real caller: httpapi.CreateAutomation (POST
+-- /api/automations). trigger_type/trigger_config/webhook_token_hash back
+-- this Step's own condition builder; sandbox_path_scope/
+-- sandbox_mock_configured/sandbox_contracts_path back §8.4's own
+-- "sandboxSettings honored on automation sessions"; env_vars back
+-- §8.4's own "per-automation env vars" (plain config, never a secret --
+-- see internal/domain/automation/doc.go's own deferral writeup).
+INSERT INTO automations (
+    name, prompt, repos, created_by,
+    trigger_type, trigger_config, webhook_token_hash,
+    sandbox_path_scope, sandbox_mock_configured, sandbox_contracts_path,
+    env_vars
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
 
 -- name: GetAutomation :one
 SELECT * FROM automations
 WHERE id = $1;
+
+-- name: GetAutomationByWebhookTokenHash :one
+-- Backs the webhook trigger's own inbound-auth lookup (internal/adapters/
+-- inbound/httpapi's own automationwebhook.go): the presented bearer token
+-- is hashed (platform.HashToken, the SAME convention ws_tokens.token_hash
+-- already establishes) and looked up directly -- never a table scan
+-- comparing a plaintext token against every row, and never comparing an
+-- unhashed value against webhook_token_hash.
+SELECT * FROM automations
+WHERE webhook_token_hash = $1;
+
+-- name: ListAutomations :many
+-- Backs GET /api/automations (Step 52, §8.4's own "creator/status
+-- filters"). Both filters are OPTIONAL and independent -- sqlc.narg's own
+-- "IS NULL OR" idiom means an absent (nil) filter matches every row, a
+-- present one narrows -- so this single query serves "all automations",
+-- "my automations" (createdBy set), "only paused" (status set), or both
+-- combined, with no dynamic SQL string-building on the Go side. Unbounded
+-- (no pagination), matching this codebase's own established "expected to
+-- stay small" precedent for a workspace-wide list (ListMembers's own
+-- identical shape).
+SELECT * FROM automations
+WHERE (sqlc.narg('created_by')::uuid IS NULL OR created_by = sqlc.narg('created_by'))
+  AND (sqlc.narg('status')::automation_status IS NULL OR status = sqlc.narg('status'))
+ORDER BY created_at DESC;
+
+-- name: ListActiveCronAutomations :many
+-- Backs the cron trigger pump's own per-tick scan (app/automation's own
+-- new triggerpump.go) -- every active, cron-triggered automation, oldest
+-- last_cron_fired_at first (NULLS FIRST: an automation that has never
+-- fired at all is always evaluated before one that has, on a tie, though
+-- in practice each row is evaluated every tick regardless of this
+-- ordering -- this just keeps output deterministic for tests).
+SELECT * FROM automations
+WHERE trigger_type = 'cron' AND status = 'active'
+ORDER BY last_cron_fired_at ASC NULLS FIRST;
+
+-- name: ClaimCronFire :one
+-- The CAS half of the cron trigger pump's own per-automation fire guard:
+-- "UPDATE ... WHERE last_cron_fired_at IS NULL OR last_cron_fired_at <
+-- <this minute's own start>" -- guards against firing the SAME scheduled
+-- minute twice (a slow previous tick, clock jitter, a second pod's own
+-- concurrent pump), while still allowing every LATER minute's own match to
+-- fire again -- unlike automation_invocations.fanned_out_at's one-way
+-- NULL-to-non-NULL flip, this guard is a recurring per-minute bucket, not
+-- a permanent latch. $2 is the current UTC minute's own truncated start
+-- instant, used both as the new last_cron_fired_at value and as the
+-- guard's own comparison point.
+UPDATE automations
+SET last_cron_fired_at = $2
+WHERE id = $1 AND (last_cron_fired_at IS NULL OR last_cron_fired_at < $2)
+RETURNING *;
+
+-- name: UpdateAutomationLastRun :one
+-- Backs §8.4's own "last_run + artifact_summary populated" -- called by
+-- app/automation's own closeout.go, the SAME closeInvocation call site
+-- that already resets/increments consecutive_failures, the moment an
+-- invocation's own outcome is decided. last_run_status reuses
+-- automation_invocation_status verbatim (never a new, parallel taxonomy).
+UPDATE automations
+SET last_run_at = $2,
+    last_run_status = $3,
+    artifact_summary = $4,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: PauseAutomation :one
+-- The manual-admin twin of ResumeAutomation below: backs internal/domain/
+-- automation.TriggerAutoPause applied by a direct admin action (POST
+-- /api/automations/{id}/pause) rather than the auto-pause path -- automation.
+-- go's own doc comment on TriggerAutoPause already anticipates exactly
+-- this reuse ("Transition supports the edge regardless, since pausing and
+-- auto-pausing land on the identical Status either way"). Guarded by "AND
+-- status = 'active'" so a non-active automation's own pause attempt
+-- affects zero rows, mirroring ResumeAutomation's own identical "AND
+-- status = 'paused'" guard.
+UPDATE automations
+SET status = 'paused',
+    updated_at = now()
+WHERE id = $1 AND status = 'active'
+RETURNING *;
 
 -- name: LockAutomationForUpdate :one
 -- Row-level lock backing the failure-strike accounting step

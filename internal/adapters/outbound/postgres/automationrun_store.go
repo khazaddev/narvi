@@ -85,6 +85,13 @@ func (s *AutomationRunStore) CountTerminalForInvocation(ctx context.Context, inv
 	return s.q.CountTerminalRunsForInvocation(ctx, invocationID)
 }
 
+// ListForInvocation returns every run of invocationID, oldest first --
+// backs §8.4's own "artifact_summary populated" (app/automation's own
+// closeout.go).
+func (s *AutomationRunStore) ListForInvocation(ctx context.Context, invocationID pgtype.UUID) ([]sqlcgen.AutomationRun, error) {
+	return s.q.ListRunsForInvocation(ctx, invocationID)
+}
+
 // ListOrphanedStarting returns up to limit runs still 'starting' whose own
 // started_at predates cutoff -- §3.5's own "orphaned starting runs >5
 // min" sweep (app/automation's own SweepOnce). cutoff is computed ONCE per
