@@ -657,6 +657,80 @@ func (j *CreateAutomationResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// POST request body for all 3 provider-credentials route groups
+// (repo/environment/global -- see ProviderCredential's own doc comment for why
+// scope/scopeTarget are never body fields). Gated by
+// authz.ActionManageRepoSecrets/ActionManageEnvSecrets/ActionManageGlobalSecrets
+// respectively (admin+maintainer for repo/environment, admin-only for global,
+// §13.3's own already-reserved matrix rows). A duplicate (scope, scopeTarget,
+// provider) is rejected 409 -- rotate the existing credential via PUT instead of
+// creating a second row for it.
+type CreateProviderCredentialRequest struct {
+	// Provider corresponds to the JSON schema field "provider".
+	Provider CreateProviderCredentialRequestProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
+
+	// The plaintext credential value -- encrypted at rest (platform.EncryptToken,
+	// AES-256-GCM) immediately server-side, never logged, never echoed back in any
+	// response.
+	Value string `json:"value" yaml:"value" mapstructure:"value"`
+}
+
+type CreateProviderCredentialRequestProvider string
+
+const CreateProviderCredentialRequestProviderAnthropic CreateProviderCredentialRequestProvider = "anthropic"
+const CreateProviderCredentialRequestProviderGoogle CreateProviderCredentialRequestProvider = "google"
+const CreateProviderCredentialRequestProviderOpenai CreateProviderCredentialRequestProvider = "openai"
+
+var enumValues_CreateProviderCredentialRequestProvider = []interface{}{
+	"google",
+	"anthropic",
+	"openai",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateProviderCredentialRequestProvider) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CreateProviderCredentialRequestProvider {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CreateProviderCredentialRequestProvider, v)
+	}
+	*j = CreateProviderCredentialRequestProvider(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["provider"]; raw != nil && !ok {
+		return fmt.Errorf("field provider in CreateProviderCredentialRequest: required")
+	}
+	if _, ok := raw["value"]; raw != nil && !ok {
+		return fmt.Errorf("field value in CreateProviderCredentialRequest: required")
+	}
+	type Plain CreateProviderCredentialRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Value)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "value", 1)
+	}
+	*j = CreateProviderCredentialRequest(plain)
+	return nil
+}
+
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
@@ -1320,6 +1394,34 @@ func (j *ListPlansResponse) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ListPlansResponse(plain)
+	return nil
+}
+
+// GET response body for all 3 provider-credentials route groups -- every row at
+// that one (scope, scopeTarget) pair, one per configured provider. Unbounded (no
+// pagination, matching ListAutomationsResponse's own identical precedent) --
+// bounded in practice to at most 3 rows (one per Provider) per (scope,
+// scopeTarget).
+type ListProviderCredentialsResponse struct {
+	// ProviderCredentials corresponds to the JSON schema field "providerCredentials".
+	ProviderCredentials []ProviderCredential `json:"providerCredentials" yaml:"providerCredentials" mapstructure:"providerCredentials"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListProviderCredentialsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["providerCredentials"]; raw != nil && !ok {
+		return fmt.Errorf("field providerCredentials in ListProviderCredentialsResponse: required")
+	}
+	type Plain ListProviderCredentialsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListProviderCredentialsResponse(plain)
 	return nil
 }
 
@@ -2248,6 +2350,145 @@ func (j *PostedFinding) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One provider_credentials row's own REST wire shape (Step 53, §25.1/§25.3,
+// migrations/000056_provider_credentials.up.sql). Returned by the create/get/list
+// routes mounted at /api/repos/{owner}/{repo}/provider-credentials,
+// /api/environments/{environmentID}/provider-credentials, and
+// /api/provider-credentials (global) -- scope/scopeTarget are always implied by
+// WHICH of the 3 route groups a request hit, never accepted as a separate request
+// field, so there is no risk of a caller's URL and body disagreeing about scope.
+// The underlying secret value is NEVER included here -- see maskedValue.
+type ProviderCredential struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// A FIXED, non-secret placeholder (never a partial reveal of the real value,
+	// never derived from it) proving a credential is configured for this (scope,
+	// scopeTarget, provider) -- the real value is write-only from this API's own
+	// perspective and is never returned by any route, ever.
+	MaskedValue string `json:"maskedValue" yaml:"maskedValue" mapstructure:"maskedValue"`
+
+	// Matches Postgres provider_credential_provider exactly.
+	Provider ProviderCredentialProvider `json:"provider" yaml:"provider" mapstructure:"provider"`
+
+	// Matches Postgres provider_credential_scope exactly.
+	Scope ProviderCredentialScope `json:"scope" yaml:"scope" mapstructure:"scope"`
+
+	// The repo_full_name ('owner/repo') for scope=repo, the environments.id
+	// (stringified) for scope=environment, or null for scope=global.
+	ScopeTarget ProviderCredentialScopeTarget `json:"scopeTarget" yaml:"scopeTarget" mapstructure:"scopeTarget"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+}
+
+type ProviderCredentialProvider string
+
+const ProviderCredentialProviderAnthropic ProviderCredentialProvider = "anthropic"
+const ProviderCredentialProviderGoogle ProviderCredentialProvider = "google"
+const ProviderCredentialProviderOpenai ProviderCredentialProvider = "openai"
+
+var enumValues_ProviderCredentialProvider = []interface{}{
+	"google",
+	"anthropic",
+	"openai",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ProviderCredentialProvider) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ProviderCredentialProvider {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ProviderCredentialProvider, v)
+	}
+	*j = ProviderCredentialProvider(v)
+	return nil
+}
+
+type ProviderCredentialScope string
+
+const ProviderCredentialScopeEnvironment ProviderCredentialScope = "environment"
+const ProviderCredentialScopeGlobal ProviderCredentialScope = "global"
+const ProviderCredentialScopeRepo ProviderCredentialScope = "repo"
+
+// The repo_full_name ('owner/repo') for scope=repo, the environments.id
+// (stringified) for scope=environment, or null for scope=global.
+type ProviderCredentialScopeTarget *string
+
+var enumValues_ProviderCredentialScope = []interface{}{
+	"repo",
+	"environment",
+	"global",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ProviderCredentialScope) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ProviderCredentialScope {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ProviderCredentialScope, v)
+	}
+	*j = ProviderCredentialScope(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ProviderCredential) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in ProviderCredential: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in ProviderCredential: required")
+	}
+	if _, ok := raw["maskedValue"]; raw != nil && !ok {
+		return fmt.Errorf("field maskedValue in ProviderCredential: required")
+	}
+	if _, ok := raw["provider"]; raw != nil && !ok {
+		return fmt.Errorf("field provider in ProviderCredential: required")
+	}
+	if _, ok := raw["scope"]; raw != nil && !ok {
+		return fmt.Errorf("field scope in ProviderCredential: required")
+	}
+	if _, ok := raw["scopeTarget"]; raw != nil && !ok {
+		return fmt.Errorf("field scopeTarget in ProviderCredential: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in ProviderCredential: required")
+	}
+	type Plain ProviderCredential
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ProviderCredential(plain)
+	return nil
+}
+
 // Request body for POST /api/sessions/:id/review/findings/:identityHash/rebut
 // (Step 48, §22.1) -- maintainer+ only (authz.ActionEditReviewVerdict).
 type RebutFindingRequest struct {
@@ -2731,6 +2972,38 @@ func (j *UpdateMemberRoleRequest) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = UpdateMemberRoleRequest(plain)
+	return nil
+}
+
+// PUT request body for /{scope-route}/provider-credentials/{id} -- rotates ONLY
+// the encrypted value. scope/scopeTarget/provider are immutable once a row is
+// created (delete-then-create if a different scope/target/provider is actually
+// wanted) -- this DTO deliberately carries no fields for any of the three.
+type UpdateProviderCredentialRequest struct {
+	// The new plaintext credential value, replacing the old one -- same
+	// encrypt-immediately, never-logged, never-echoed handling as
+	// CreateProviderCredentialRequest.value.
+	Value string `json:"value" yaml:"value" mapstructure:"value"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["value"]; raw != nil && !ok {
+		return fmt.Errorf("field value in UpdateProviderCredentialRequest: required")
+	}
+	type Plain UpdateProviderCredentialRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Value)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "value", 1)
+	}
+	*j = UpdateProviderCredentialRequest(plain)
 	return nil
 }
 

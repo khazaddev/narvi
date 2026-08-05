@@ -288,6 +288,11 @@ func serve() error {
 	// tool's own blockOnHighRisk read (reviewverdict.go) -- one store,
 	// shared, never a second independently-constructed copy.
 	repoSettingsStore := postgres.NewRepoSettingsStore(pool)
+	// providerCredentialStore (Step 53, "provider credential injection",
+	// §25.1/§25.3) backs the 3 scoped management CRUD route groups below
+	// AND the sandbox-facing delivery endpoint (providercredentialsdelivery.go)
+	// -- one store, shared, never a second independently-constructed copy.
+	providerCredentialStore := postgres.NewProviderCredentialStore(pool)
 	// reviewFindingStore/sentinelFixStore (Step 48, "sentinels +
 	// suggestions", §17/§22.1) back the verdict-posting tool's own
 	// per-finding upsert + sentinel-auto-fix claim (reviewverdict.go), the
@@ -445,6 +450,15 @@ func serve() error {
 	// creator's own personal OAuth token.
 	router.Post("/sessions/{sessionID}/scm-credentials",
 		httpapi.ScmCredentials(sessionStore, sandboxStore, identityStore, userStore, githubPRSessionStore, cfg.GitHubBotToken, cfg.TokenEncryptionKey, cfg.Timeouts))
+
+	// provider-credentials (Step 53, "provider credential injection",
+	// §25.1/§25.3): deliberately mounted OUTSIDE /api/sessions and outside
+	// auth.Middleware entirely, mirroring scm-credentials immediately above
+	// exactly (see httpapi/providercredentialsdelivery.go's own doc
+	// comment) -- another sandbox-bearer-token-authenticated route, not a
+	// browser-facing one.
+	router.Post("/sessions/{sessionID}/provider-credentials",
+		httpapi.ProviderCredentialsDelivery(sessionStore, sandboxStore, providerCredentialStore, cfg.TokenEncryptionKey))
 
 	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.
@@ -784,6 +798,41 @@ func serve() error {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore))
 		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore))
+	})
+
+	// /api/repos/{owner}/{repo}/provider-credentials,
+	// /api/environments/{environmentID}/provider-credentials,
+	// /api/provider-credentials (Step 53, "provider credential injection",
+	// §25.1/§25.3): the 3 scope-partitioned CRUD route groups over
+	// provider_credentials -- see httpapi/providercredentials.go's own doc
+	// comment for the full route table and RBAC-per-scope rationale. Each
+	// handler renders its own §13.3 verdict via domain/authz.Authorize
+	// (ActionManageRepoSecrets/ActionManageEnvSecrets/
+	// ActionManageGlobalSecrets respectively) -- mounted behind
+	// auth.Middleware like every other browser-facing REST route in this
+	// package (unlike provider-credentials' OWN sandbox-facing sibling
+	// above, this is an admin/maintainer configuring a secret, not the
+	// sandbox agent fetching one).
+	router.Route("/api/repos/{owner}/{repo}/provider-credentials", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateRepoProviderCredential(providerCredentialStore, cfg.TokenEncryptionKey))
+		r.Get("/", httpapi.ListRepoProviderCredentials(providerCredentialStore))
+		r.Put("/{credentialID}", httpapi.UpdateRepoProviderCredentialValue(providerCredentialStore, cfg.TokenEncryptionKey))
+		r.Delete("/{credentialID}", httpapi.DeleteRepoProviderCredential(providerCredentialStore))
+	})
+	router.Route("/api/environments/{environmentID}/provider-credentials", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateEnvironmentProviderCredential(providerCredentialStore, cfg.TokenEncryptionKey))
+		r.Get("/", httpapi.ListEnvironmentProviderCredentials(providerCredentialStore))
+		r.Put("/{credentialID}", httpapi.UpdateEnvironmentProviderCredentialValue(providerCredentialStore, cfg.TokenEncryptionKey))
+		r.Delete("/{credentialID}", httpapi.DeleteEnvironmentProviderCredential(providerCredentialStore))
+	})
+	router.Route("/api/provider-credentials", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.CreateGlobalProviderCredential(providerCredentialStore, cfg.TokenEncryptionKey))
+		r.Get("/", httpapi.ListGlobalProviderCredentials(providerCredentialStore))
+		r.Put("/{credentialID}", httpapi.UpdateGlobalProviderCredentialValue(providerCredentialStore, cfg.TokenEncryptionKey))
+		r.Delete("/{credentialID}", httpapi.DeleteGlobalProviderCredential(providerCredentialStore))
 	})
 
 	// /api/automations (Step 52, "automations: triggers & extras", §8.4):

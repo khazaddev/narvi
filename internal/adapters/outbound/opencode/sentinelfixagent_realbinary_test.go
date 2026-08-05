@@ -45,7 +45,7 @@ func TestSentinelFixAgent_RegistersAgainstRealPinnedBinary(t *testing.T) {
 		_ = sup.StopAll(stopCtx, testReadinessPollInterval)
 	})
 
-	result, err := opencodeproc.Spawn(ctx, sup, dir, testReadinessTimeout, testReadinessPollInterval)
+	result, err := opencodeproc.Spawn(ctx, sup, dir, nil, testReadinessTimeout, testReadinessPollInterval)
 	if err != nil {
 		t.Fatalf("opencodeproc.Spawn() error = %v (is the real opencode binary on PATH?)", err)
 	}

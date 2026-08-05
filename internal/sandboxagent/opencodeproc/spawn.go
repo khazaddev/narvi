@@ -44,16 +44,33 @@ type Result struct {
 // own OS working directory, waits for it to report healthy, and returns
 // its base URL plus a best-effort version string. See doc.go for the full
 // rationale of each step.
+//
+// providerCredentialEnv (Step 53, "provider credential injection",
+// §25.1/§25.3) is zero or more already-built "NAME=VALUE" entries --
+// mapped from a resolved provider credential onto its own OpenCode env-var
+// name(s), via internal/domain/providercredential.EnvVarNames -- appended
+// to the base env AFTER supervisor.EnvWithout, so an explicit, resolved
+// credential always wins over anything already ambient in sandbox-agent's
+// own OS environment (a later entry for the SAME key overrides an earlier
+// one in exec.Cmd's own documented Env semantics). Nil/empty is the
+// overwhelming common case (no provider credential configured at any scope
+// for this session) and changes NOTHING about this function's own
+// pre-Step-53 behavior -- every existing call site keeps compiling and
+// behaving identically by simply passing nil.
 func Spawn(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
 	workDir string,
+	providerCredentialEnv []string,
 	readinessTimeout, readinessPollInterval time.Duration,
 ) (Result, error) {
 	port, err := freePort()
 	if err != nil {
 		return Result{}, fmt.Errorf("opencodeproc: allocate ephemeral port: %w", err)
 	}
+
+	env := supervisor.EnvWithout(boot.SessionConfigEnvVar)
+	env = append(env, providerCredentialEnv...)
 
 	proc, err := sup.Spawn(supervisor.Spec{
 		Path: "opencode",
@@ -63,8 +80,11 @@ func Spawn(
 		// legitimate use for NARVI_SESSION_CONFIG (the sandbox's own
 		// plaintext bearer token, among other things) -- excluding it here
 		// closes a real env leak while leaving everything else opencode
-		// might legitimately need (PATH, HOME, ...) untouched.
-		Env: supervisor.EnvWithout(boot.SessionConfigEnvVar),
+		// might legitimately need (PATH, HOME, ...) untouched. Any
+		// resolved provider credential env vars (providerCredentialEnv,
+		// this func's own doc comment) are layered on top of that same
+		// filtered base.
+		Env: env,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("opencodeproc: spawn opencode serve: %w", err)

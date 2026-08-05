@@ -188,6 +188,13 @@ type testRig struct {
 	// can drive the REAL inbound webhook handler end to end, not just
 	// assert against AutomationStore.GetByWebhookTokenHash directly.
 	automationInvocations *narvipg.AutomationInvocationStore
+
+	// providerCredentials (Step 53, "provider credential injection",
+	// §25.1/§25.3) backs this rig's own 3 scoped provider-credentials CRUD
+	// route groups (providercredentials_integration_test.go) and the
+	// sandbox-facing delivery route (providercredentialsdelivery_
+	// integration_test.go).
+	providerCredentials *narvipg.ProviderCredentialStore
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -240,6 +247,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		sentinelFixes:         narvipg.NewSentinelFixStore(pool),
 		automations:           narvipg.NewAutomationStore(pool),
 		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
+		providerCredentials:   narvipg.NewProviderCredentialStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -317,6 +325,37 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings))
 		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings))
 	})
+	// /api/repos/{owner}/{repo}/provider-credentials,
+	// /api/environments/{environmentID}/provider-credentials,
+	// /api/provider-credentials (Step 53, "provider credential injection",
+	// §25.1/§25.3) -- mounted exactly like cmd/control-plane/main.go's own
+	// wiring (see providercredentials.go's own doc comment).
+	router.Route("/api/repos/{owner}/{repo}/provider-credentials", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateRepoProviderCredential(rig.providerCredentials, rig.tokenEncryptionKey))
+		r.Get("/", httpapi.ListRepoProviderCredentials(rig.providerCredentials))
+		r.Put("/{credentialID}", httpapi.UpdateRepoProviderCredentialValue(rig.providerCredentials, rig.tokenEncryptionKey))
+		r.Delete("/{credentialID}", httpapi.DeleteRepoProviderCredential(rig.providerCredentials))
+	})
+	router.Route("/api/environments/{environmentID}/provider-credentials", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateEnvironmentProviderCredential(rig.providerCredentials, rig.tokenEncryptionKey))
+		r.Get("/", httpapi.ListEnvironmentProviderCredentials(rig.providerCredentials))
+		r.Put("/{credentialID}", httpapi.UpdateEnvironmentProviderCredentialValue(rig.providerCredentials, rig.tokenEncryptionKey))
+		r.Delete("/{credentialID}", httpapi.DeleteEnvironmentProviderCredential(rig.providerCredentials))
+	})
+	router.Route("/api/provider-credentials", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/", httpapi.CreateGlobalProviderCredential(rig.providerCredentials, rig.tokenEncryptionKey))
+		r.Get("/", httpapi.ListGlobalProviderCredentials(rig.providerCredentials))
+		r.Put("/{credentialID}", httpapi.UpdateGlobalProviderCredentialValue(rig.providerCredentials, rig.tokenEncryptionKey))
+		r.Delete("/{credentialID}", httpapi.DeleteGlobalProviderCredential(rig.providerCredentials))
+	})
+	// provider-credentials delivery (Step 53) is mounted the SAME way as
+	// scm-credentials -- see providercredentialsdelivery.go's own doc
+	// comment.
+	router.Post("/sessions/{sessionID}/provider-credentials",
+		httpapi.ProviderCredentialsDelivery(rig.sessions, rig.sandboxes, rig.providerCredentials, rig.tokenEncryptionKey))
 	// /api/automations (Step 52, "automations: triggers & extras", §8.4) --
 	// mounted exactly like cmd/control-plane/main.go's own wiring (see
 	// automations.go's own doc comment).

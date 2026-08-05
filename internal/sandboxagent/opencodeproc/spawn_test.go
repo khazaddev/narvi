@@ -51,7 +51,7 @@ func TestSpawn_RealBinary(t *testing.T) {
 		_ = sup.StopAll(stopCtx, 5*time.Second)
 	})
 
-	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), 150*time.Second, 250*time.Millisecond)
+	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, 150*time.Second, 250*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Spawn() error = %v, want nil (real opencode binary should be on PATH)", err)
 	}
@@ -92,7 +92,7 @@ func TestSpawn_BadBinaryPath(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), 30*time.Second, 250*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, 30*time.Second, 250*time.Millisecond)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -136,7 +136,7 @@ func TestSpawn_EnvExcludesSessionConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), 5*time.Second, 50*time.Millisecond)
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, 5*time.Second, 50*time.Millisecond)
 	if err == nil {
 		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
 	}
@@ -157,5 +157,101 @@ func TestSpawn_EnvExcludesSessionConfig(t *testing.T) {
 	}
 	if lines[2] != "HOME_PRESENT" {
 		t.Errorf("HOME as seen by the spawned process = %q, want it present", lines[2])
+	}
+}
+
+// TestSpawn_ProviderCredentialEnvAppended proves Step 53's own
+// ("provider credential injection", §25.1/§25.3) providerCredentialEnv
+// parameter actually reaches the spawned opencode process's own
+// environment -- the ACTUAL injection point this Step exists to build.
+// Mirrors TestSpawn_EnvExcludesSessionConfig's own fake-script-probe
+// technique exactly, extended to also probe an env var this test supplies
+// via providerCredentialEnv.
+func TestSpawn_ProviderCredentialEnvAppended(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids combining the two.
+	binDir := t.TempDir()
+	probeFile := filepath.Join(t.TempDir(), "probe")
+
+	script := "#!/bin/sh\n" +
+		`printf '%s\n' "${ANTHROPIC_API_KEY:-ABSENT}" > "$PROBE_FILE"` + "\n" +
+		`printf '%s\n' "${GOOGLE_API_KEY:-ABSENT}" >> "$PROBE_FILE"` + "\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	t.Setenv("PATH", binDir)
+	t.Setenv("PROBE_FILE", probeFile)
+
+	sup := supervisor.New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	providerCredentialEnv := []string{"ANTHROPIC_API_KEY=sk-resolved-anthropic-key"}
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), providerCredentialEnv, 5*time.Second, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("probe file = %q, want 2 lines", got)
+	}
+	if lines[0] != "sk-resolved-anthropic-key" {
+		t.Errorf("ANTHROPIC_API_KEY as seen by the spawned process = %q, want %q", lines[0], "sk-resolved-anthropic-key")
+	}
+	if lines[1] != "ABSENT" {
+		t.Errorf("GOOGLE_API_KEY as seen by the spawned process = %q, want %q (never set when not passed in providerCredentialEnv)", lines[1], "ABSENT")
+	}
+}
+
+// TestSpawn_NilProviderCredentialEnv_UnchangedBehavior proves nil (the
+// overwhelming common case -- no provider credential configured for this
+// session at any scope) behaves EXACTLY like this function did before
+// Step 53: PATH/HOME still present, NARVI_SESSION_CONFIG still absent --
+// this parameter's own absence changes nothing.
+func TestSpawn_NilProviderCredentialEnv_UnchangedBehavior(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids combining the two.
+	binDir := t.TempDir()
+	probeFile := filepath.Join(t.TempDir(), "probe")
+
+	script := "#!/bin/sh\n" +
+		`printf '%s\n' "${NARVI_SESSION_CONFIG:-ABSENT}" > "$PROBE_FILE"` + "\n" +
+		`if [ -n "$PATH" ]; then printf 'PATH_PRESENT\n' >> "$PROBE_FILE"; else printf 'PATH_ABSENT\n' >> "$PROBE_FILE"; fi` + "\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "opencode"), []byte(script), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	t.Setenv("PATH", binDir)
+	t.Setenv("PROBE_FILE", probeFile)
+	t.Setenv("NARVI_SESSION_CONFIG", "marker-should-not-reach-child")
+
+	sup := supervisor.New()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, 5*time.Second, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("Spawn() error = nil, want an error (the fake opencode script exits 1 before ever becoming healthy)")
+	}
+
+	got, readErr := os.ReadFile(probeFile)
+	if readErr != nil {
+		t.Fatalf("read probe file: %v", readErr)
+	}
+	lines := strings.Split(strings.TrimSpace(string(got)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("probe file = %q, want 2 lines", got)
+	}
+	if lines[0] != "ABSENT" {
+		t.Errorf("NARVI_SESSION_CONFIG as seen by the spawned process = %q, want %q", lines[0], "ABSENT")
+	}
+	if lines[1] != "PATH_PRESENT" {
+		t.Errorf("PATH as seen by the spawned process = %q, want it present", lines[1])
 	}
 }

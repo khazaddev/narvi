@@ -323,6 +323,25 @@ type Timeouts struct {
 	// ExpiresAt is treated as already stale, never handed back as-is.
 	CredentialExpiryBuffer time.Duration
 
+	// ProviderCredentialFetchTimeout (Step 53, "provider credential
+	// injection", §25.1/§25.3) bounds a single call to CP's
+	// /sessions/{id}/provider-credentials delivery endpoint
+	// (internal/sandboxagent/credentials.CPClient.FetchProviderCredentials),
+	// made once at `opencode serve` spawn time
+	// (internal/sandboxagent/opencodeproc.Spawn's own caller,
+	// cmd/sandbox-agent/main.go). Not specified in the plan; chosen the
+	// SAME as CredentialFetchTimeout's own 10s ("a lightweight mint call,
+	// not a large data transfer") -- this call resolves and decrypts at
+	// most 3 rows server-side, comparably lightweight. Deliberately its
+	// own field, not a reuse of CredentialFetchTimeout: the two calls hit
+	// different CP endpoints for a different secret class, and Step 53's
+	// own "in-memory-only fetch, no disk cache" design (unlike the SCM
+	// credential-helper's own flock'd disk cache) means this timeout has
+	// no CredentialExpiryBuffer-shaped sibling of its own -- a failed
+	// fetch here is a one-shot, best-effort miss at spawn time, not a
+	// stale-cache question.
+	ProviderCredentialFetchTimeout time.Duration
+
 	// --- Step 16 standalone additions: no ordering relationship with
 	// either invariant chain above (or with any prior Step's standalone
 	// additions), so — per those additions' own precedent — plain fields
@@ -1846,6 +1865,8 @@ func DefaultTimeouts() Timeouts {
 		RepoCloneTimeout:       5 * time.Minute,  // not specified; chosen generously (large repos)
 		CredentialFetchTimeout: 10 * time.Second, // not specified; chosen (lightweight mint call)
 		CredentialExpiryBuffer: 5 * time.Minute,  // §5.2, explicit
+
+		ProviderCredentialFetchTimeout: 10 * time.Second, // not specified; chosen, matching CredentialFetchTimeout's own reasoning
 
 		SandboxWSHeartbeatInterval:   30 * time.Second, // §6.1, explicit
 		SandboxWSDialTimeout:         15 * time.Second, // not specified; chosen

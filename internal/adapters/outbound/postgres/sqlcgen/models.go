@@ -446,6 +446,92 @@ func (ns NullPlanStatus) Value() (driver.Value, error) {
 	return string(ns.PlanStatus), nil
 }
 
+type ProviderCredentialProvider string
+
+const (
+	ProviderCredentialProviderGoogle    ProviderCredentialProvider = "google"
+	ProviderCredentialProviderAnthropic ProviderCredentialProvider = "anthropic"
+	ProviderCredentialProviderOpenai    ProviderCredentialProvider = "openai"
+)
+
+func (e *ProviderCredentialProvider) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ProviderCredentialProvider(s)
+	case string:
+		*e = ProviderCredentialProvider(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ProviderCredentialProvider: %T", src)
+	}
+	return nil
+}
+
+type NullProviderCredentialProvider struct {
+	ProviderCredentialProvider ProviderCredentialProvider `json:"provider_credential_provider"`
+	Valid                      bool                       `json:"valid"` // Valid is true if ProviderCredentialProvider is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullProviderCredentialProvider) Scan(value interface{}) error {
+	if value == nil {
+		ns.ProviderCredentialProvider, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ProviderCredentialProvider.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullProviderCredentialProvider) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ProviderCredentialProvider), nil
+}
+
+type ProviderCredentialScope string
+
+const (
+	ProviderCredentialScopeRepo        ProviderCredentialScope = "repo"
+	ProviderCredentialScopeEnvironment ProviderCredentialScope = "environment"
+	ProviderCredentialScopeGlobal      ProviderCredentialScope = "global"
+)
+
+func (e *ProviderCredentialScope) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ProviderCredentialScope(s)
+	case string:
+		*e = ProviderCredentialScope(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ProviderCredentialScope: %T", src)
+	}
+	return nil
+}
+
+type NullProviderCredentialScope struct {
+	ProviderCredentialScope ProviderCredentialScope `json:"provider_credential_scope"`
+	Valid                   bool                    `json:"valid"` // Valid is true if ProviderCredentialScope is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullProviderCredentialScope) Scan(value interface{}) error {
+	if value == nil {
+		ns.ProviderCredentialScope, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ProviderCredentialScope.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullProviderCredentialScope) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ProviderCredentialScope), nil
+}
+
 type SandboxStatus string
 
 const (
@@ -930,6 +1016,16 @@ type PromptTemplate struct {
 	Name      string             `json:"name"`
 	Template  string             `json:"template"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ProviderCredential struct {
+	ID             pgtype.UUID                `json:"id"`
+	Scope          ProviderCredentialScope    `json:"scope"`
+	ScopeTargetID  *string                    `json:"scope_target_id"`
+	Provider       ProviderCredentialProvider `json:"provider"`
+	ValueEncrypted []byte                     `json:"value_encrypted"`
+	CreatedAt      pgtype.Timestamptz         `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz         `json:"updated_at"`
 }
 
 type ReleaseManifestPending struct {
