@@ -8,7 +8,7 @@
 // already anticipated this: "Step 52's own future trigger evaluator is
 // expected to call [CreateInvocation] unchanged once it exists."
 //
-// Five routes, all mounted behind auth.Middleware (cmd/control-plane/
+// Seven routes, all mounted behind auth.Middleware (cmd/control-plane/
 // main.go) like every other browser-facing REST route in this package:
 //
 //   - POST   /api/automations                 CreateAutomation
@@ -17,8 +17,11 @@
 //   - GET    /api/automations/{automationID}   GetAutomation
 //   - POST   /api/automations/{automationID}/pause   PauseAutomation
 //   - POST   /api/automations/{automationID}/resume  ResumeAutomation
+//   - POST   /api/automations/{automationID}/webhook-token    RotateAutomationWebhookToken
+//   - DELETE /api/automations/{automationID}/webhook-token    RevokeAutomationWebhookToken
 //
-// Create/Pause/Resume are gated by authz.ActionManageAutomations
+// Create/Pause/Resume/RotateAutomationWebhookToken/
+// RevokeAutomationWebhookToken are gated by authz.ActionManageAutomations
 // (admin/maintainer only, internal/domain/authz/authorize.go's own
 // already-reserved row) -- Get/List are NOT further gated beyond "must be
 // logged in": mockups.html's own Automations view ("My automations ▾ /
@@ -27,6 +30,21 @@
 // precedent rather than ListMembers' own admin-only gate (members are a
 // workspace-wide identity/role listing, a materially more sensitive
 // surface than an automation's own name/repos/trigger).
+//
+// # Webhook token rotate/revoke (review fix)
+//
+// The webhook bearer token minted at CreateAutomation time (below) used to
+// be permanent and non-rotatable -- the first such token in this codebase
+// (every other bearer-token precedent, ws_tokens.token_hash/
+// sandboxes.token_hash, is expiring/rotatable). RotateAutomationWebhookToken
+// mints a brand-new token exactly the same way CreateAutomation does
+// (platform.GenerateToken()/HashToken()) and overwrites webhook_token_hash
+// outright, invalidating the old token immediately, no grace period.
+// RevokeAutomationWebhookToken clears webhook_token_hash to NULL --
+// automationwebhook's own handler.go (internal/adapters/inbound/
+// automationwebhook) already 401s on ANY hash miss, so revoking needs no
+// handler-side change at all for the revoke to take effect; it is a pure
+// data change.
 
 package httpapi
 
@@ -577,6 +595,125 @@ func ResumeAutomation(automations *postgres.AutomationStore) http.HandlerFunc {
 				return
 			}
 			logger.Error("httpapi: resume automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, automationToDTO(a))
+	}
+}
+
+// RotateAutomationWebhookToken backs POST /api/automations/{automationID}/
+// webhook-token (review fix: "webhook token has no rotation/revocation/
+// expiry") -- mints a brand-new plaintext webhook bearer token exactly the
+// same way CreateAutomation does (platform.GenerateToken()/HashToken()) and
+// overwrites the automation's own webhook_token_hash outright, so the OLD
+// token stops authenticating immediately, with no grace period (mirrors
+// MintWSToken's own "hashed at rest, plaintext returned exactly once"
+// convention). 403 if the caller fails authz.ActionManageAutomations
+// (SAME gate CreateAutomation applies); 404 if the automation doesn't
+// exist (a separate existence check first, mirroring PauseAutomation's
+// own identical "distinct 404 vs 409" shape); 409 if the automation's own
+// triggerType is not "webhook" (this mechanism only ever exists for a
+// webhook-triggered automation -- rotating a token that could never have
+// existed in the first place is a conflict, not a silent success); 200
+// with restdtos.RotateAutomationWebhookTokenResponse otherwise.
+func RotateAutomationWebhookToken(automations *postgres.AutomationStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionManageAutomations, authz.Resource{}) {
+			return
+		}
+		id, ok := parseAutomationID(w, r)
+		if !ok {
+			return
+		}
+
+		existing, err := automations.Get(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "automation not found")
+				return
+			}
+			logger.Error("httpapi: get automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if existing.TriggerType != sqlcgen.AutomationTriggerTypeWebhook {
+			writeError(w, http.StatusConflict, "automation is not webhook-triggered")
+			return
+		}
+
+		token, terr := platform.GenerateToken()
+		if terr != nil {
+			logger.Error("httpapi: generate automation webhook token failed", "error", terr)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		hash := platform.HashToken(token)
+
+		a, err := automations.RotateWebhookToken(ctx, id, hash)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				// Lost a race against a concurrent change to this
+				// automation's own trigger_type between the Get above and
+				// this guarded UPDATE (trigger_type is otherwise immutable
+				// once created -- no code path in this codebase changes it
+				// today, so this is defensive, not a live concern) --
+				// treated identically to the pre-check above.
+				writeError(w, http.StatusConflict, "automation is not webhook-triggered")
+				return
+			}
+			logger.Error("httpapi: rotate automation webhook token failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		writeJSON(w, http.StatusOK, restdtos.RotateAutomationWebhookTokenResponse{
+			Automation:   automationToDTO(a),
+			WebhookToken: token,
+		})
+	}
+}
+
+// RevokeAutomationWebhookToken backs DELETE /api/automations/
+// {automationID}/webhook-token (review fix, same finding as
+// RotateAutomationWebhookToken above) -- clears the automation's own
+// webhook_token_hash to NULL. After this commits, automationwebhook's own
+// handler.go (internal/adapters/inbound/automationwebhook) already 401s on
+// ANY hash miss, permanently, until a subsequent RotateAutomationWebhookToken
+// mints a new one -- no handler-side change needed for the revoke to take
+// effect. 403 if the caller fails authz.ActionManageAutomations; 404 if the
+// automation doesn't exist; 200 with the updated restdtos.Automation
+// otherwise (no plaintext token to ever return here, unlike rotate/create).
+func RevokeAutomationWebhookToken(automations *postgres.AutomationStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionManageAutomations, authz.Resource{}) {
+			return
+		}
+		id, ok := parseAutomationID(w, r)
+		if !ok {
+			return
+		}
+
+		if _, err := automations.Get(ctx, id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusNotFound, "automation not found")
+				return
+			}
+			logger.Error("httpapi: get automation failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		a, err := automations.RevokeWebhookToken(ctx, id)
+		if err != nil {
+			logger.Error("httpapi: revoke automation webhook token failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}

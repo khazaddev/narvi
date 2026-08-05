@@ -142,6 +142,45 @@ SET consecutive_failures = 0,
     updated_at = now()
 WHERE id = $1 AND consecutive_failures <> 0;
 
+-- name: RotateAutomationWebhookToken :one
+-- Review fix ("webhook token has no rotation/revocation/expiry"): backs
+-- POST /api/automations/{automationID}/webhook-token. Mints a FRESH
+-- webhook_token_hash (the caller has already generated a new plaintext
+-- token via platform.GenerateToken()/HashToken(), the SAME mint step
+-- CreateAutomation itself already runs) and overwrites the old one
+-- outright -- the old hash stops matching GetAutomationByWebhookTokenHash
+-- the instant this commits, with no grace period. Guarded by "AND
+-- trigger_type = 'webhook'" so rotating a token on a non-webhook
+-- automation (which never had a webhook_token_hash to begin with) affects
+-- zero rows rather than silently writing a hash column that
+-- GetAutomationByWebhookTokenHash's own trigger_type check
+-- (automationwebhook/handler.go) would never actually honor anyway.
+UPDATE automations
+SET webhook_token_hash = $2,
+    updated_at = now()
+WHERE id = $1 AND trigger_type = 'webhook'
+RETURNING *;
+
+-- name: RevokeAutomationWebhookToken :one
+-- Review fix, same finding as RotateAutomationWebhookToken above -- backs
+-- DELETE /api/automations/{automationID}/webhook-token. Clears
+-- webhook_token_hash to NULL unconditionally (no trigger_type guard,
+-- unlike rotate): clearing an already-NULL hash on a non-webhook
+-- automation is a harmless no-op, and the caller (httpapi.
+-- RevokeAutomationWebhookToken) already runs its own existence check
+-- first, mirroring Pause/Resume's identical "existence check, then a
+-- guarded/unconditional single-row UPDATE" shape. Once this commits, the
+-- automation has NO webhook_token_hash at all -- every future call to its
+-- own inbound webhook endpoint 401s (GetAutomationByWebhookTokenHash
+-- simply never matches a NULL-hash row, since that lookup only ever
+-- searches by a hashed VALUE, never by presence/absence) until a
+-- subsequent RotateAutomationWebhookToken mints a new one.
+UPDATE automations
+SET webhook_token_hash = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
 -- name: ResumeAutomation :one
 -- Backs automation.TriggerResume (internal/domain/automation) -- no HTTP
 -- caller exists yet in this Step (Step 52/76 own the actual "Resume"

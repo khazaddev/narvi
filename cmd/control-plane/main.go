@@ -790,10 +790,16 @@ func serve() error {
 	// the CRUD surface Step 51 ("automations: engine") never built --
 	// automationStore is the SAME instance automationEngine (constructed
 	// above) already uses, never a second, independently-constructed copy.
-	// Create/Pause/Resume are further gated inside each handler itself via
-	// domain/authz.Authorize(actor, authz.ActionManageAutomations, ...)
-	// (admin/maintainer only); Get/List carry no further RBAC beyond "must
-	// be logged in" -- see httpapi/automations.go's own doc comment for why.
+	// Create/Pause/Resume/RotateAutomationWebhookToken/
+	// RevokeAutomationWebhookToken are further gated inside each handler
+	// itself via domain/authz.Authorize(actor, authz.ActionManageAutomations,
+	// ...) (admin/maintainer only); Get/List carry no further RBAC beyond
+	// "must be logged in" -- see httpapi/automations.go's own doc comment
+	// for why. The webhook-token rotate/revoke pair (review fix: "webhook
+	// token has no rotation/revocation/expiry") is mounted here, inside
+	// this SAME already-authenticated block, rather than as a separate
+	// top-level route -- it manages a sub-resource of an existing
+	// automation, exactly like pause/resume above.
 	router.Route("/api/automations", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Post("/", httpapi.CreateAutomation(automationStore))
@@ -801,6 +807,8 @@ func serve() error {
 		r.Get("/{automationID}", httpapi.GetAutomation(automationStore))
 		r.Post("/{automationID}/pause", httpapi.PauseAutomation(automationStore))
 		r.Post("/{automationID}/resume", httpapi.ResumeAutomation(automationStore))
+		r.Post("/{automationID}/webhook-token", httpapi.RotateAutomationWebhookToken(automationStore))
+		r.Delete("/{automationID}/webhook-token", httpapi.RevokeAutomationWebhookToken(automationStore))
 	})
 
 	// /webhooks/automations/{automationID} (Step 52, §8.4's own "webhook-

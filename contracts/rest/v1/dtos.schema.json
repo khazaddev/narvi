@@ -632,6 +632,19 @@
         }
       }
     },
+    "RotateAutomationWebhookTokenResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "200 response body for POST /api/automations/{automationID}/webhook-token (review fix: 'webhook token has no rotation/revocation/expiry'). Same 'hashed at rest, plaintext returned exactly once' convention as CreateAutomationResponse.webhookToken -- unlike that field, webhookToken here is never null: this route only ever succeeds for a triggerType 'webhook' automation, and a successful rotation always mints and returns a real fresh token.",
+      "required": ["automation", "webhookToken"],
+      "properties": {
+        "automation": { "$ref": "#/$defs/Automation" },
+        "webhookToken": {
+          "type": "string",
+          "description": "The PLAINTEXT, freshly rotated inbound-webhook bearer token -- returned ONLY this once. The OLD token is invalidated immediately: its own hash no longer matches any automation, with no grace period."
+        }
+      }
+    },
     "ListAutomationsResponse": {
       "type": "object",
       "additionalProperties": false,

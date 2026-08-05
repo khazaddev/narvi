@@ -522,6 +522,108 @@ func (q *Queries) ResumeAutomation(ctx context.Context, id pgtype.UUID) (Automat
 	return i, err
 }
 
+const revokeAutomationWebhookToken = `-- name: RevokeAutomationWebhookToken :one
+UPDATE automations
+SET webhook_token_hash = NULL,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, prompt, repos, status, consecutive_failures, created_by, created_at, updated_at, trigger_type, trigger_config, webhook_token_hash, last_cron_fired_at, sandbox_path_scope, sandbox_mock_configured, sandbox_contracts_path, env_vars, last_run_at, last_run_status, artifact_summary
+`
+
+// Review fix, same finding as RotateAutomationWebhookToken above -- backs
+// DELETE /api/automations/{automationID}/webhook-token. Clears
+// webhook_token_hash to NULL unconditionally (no trigger_type guard,
+// unlike rotate): clearing an already-NULL hash on a non-webhook
+// automation is a harmless no-op, and the caller (httpapi.
+// RevokeAutomationWebhookToken) already runs its own existence check
+// first, mirroring Pause/Resume's identical "existence check, then a
+// guarded/unconditional single-row UPDATE" shape. Once this commits, the
+// automation has NO webhook_token_hash at all -- every future call to its
+// own inbound webhook endpoint 401s (GetAutomationByWebhookTokenHash
+// simply never matches a NULL-hash row, since that lookup only ever
+// searches by a hashed VALUE, never by presence/absence) until a
+// subsequent RotateAutomationWebhookToken mints a new one.
+func (q *Queries) RevokeAutomationWebhookToken(ctx context.Context, id pgtype.UUID) (Automation, error) {
+	row := q.db.QueryRow(ctx, revokeAutomationWebhookToken, id)
+	var i Automation
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Prompt,
+		&i.Repos,
+		&i.Status,
+		&i.ConsecutiveFailures,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TriggerType,
+		&i.TriggerConfig,
+		&i.WebhookTokenHash,
+		&i.LastCronFiredAt,
+		&i.SandboxPathScope,
+		&i.SandboxMockConfigured,
+		&i.SandboxContractsPath,
+		&i.EnvVars,
+		&i.LastRunAt,
+		&i.LastRunStatus,
+		&i.ArtifactSummary,
+	)
+	return i, err
+}
+
+const rotateAutomationWebhookToken = `-- name: RotateAutomationWebhookToken :one
+UPDATE automations
+SET webhook_token_hash = $2,
+    updated_at = now()
+WHERE id = $1 AND trigger_type = 'webhook'
+RETURNING id, name, prompt, repos, status, consecutive_failures, created_by, created_at, updated_at, trigger_type, trigger_config, webhook_token_hash, last_cron_fired_at, sandbox_path_scope, sandbox_mock_configured, sandbox_contracts_path, env_vars, last_run_at, last_run_status, artifact_summary
+`
+
+type RotateAutomationWebhookTokenParams struct {
+	ID               pgtype.UUID `json:"id"`
+	WebhookTokenHash *string     `json:"webhook_token_hash"`
+}
+
+// Review fix ("webhook token has no rotation/revocation/expiry"): backs
+// POST /api/automations/{automationID}/webhook-token. Mints a FRESH
+// webhook_token_hash (the caller has already generated a new plaintext
+// token via platform.GenerateToken()/HashToken(), the SAME mint step
+// CreateAutomation itself already runs) and overwrites the old one
+// outright -- the old hash stops matching GetAutomationByWebhookTokenHash
+// the instant this commits, with no grace period. Guarded by "AND
+// trigger_type = 'webhook'" so rotating a token on a non-webhook
+// automation (which never had a webhook_token_hash to begin with) affects
+// zero rows rather than silently writing a hash column that
+// GetAutomationByWebhookTokenHash's own trigger_type check
+// (automationwebhook/handler.go) would never actually honor anyway.
+func (q *Queries) RotateAutomationWebhookToken(ctx context.Context, arg RotateAutomationWebhookTokenParams) (Automation, error) {
+	row := q.db.QueryRow(ctx, rotateAutomationWebhookToken, arg.ID, arg.WebhookTokenHash)
+	var i Automation
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Prompt,
+		&i.Repos,
+		&i.Status,
+		&i.ConsecutiveFailures,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TriggerType,
+		&i.TriggerConfig,
+		&i.WebhookTokenHash,
+		&i.LastCronFiredAt,
+		&i.SandboxPathScope,
+		&i.SandboxMockConfigured,
+		&i.SandboxContractsPath,
+		&i.EnvVars,
+		&i.LastRunAt,
+		&i.LastRunStatus,
+		&i.ArtifactSummary,
+	)
+	return i, err
+}
+
 const updateAutomationLastRun = `-- name: UpdateAutomationLastRun :one
 UPDATE automations
 SET last_run_at = $2,

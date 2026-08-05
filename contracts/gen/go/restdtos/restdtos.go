@@ -2477,6 +2477,44 @@ func (j *ReviewFinding) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// 200 response body for POST /api/automations/{automationID}/webhook-token (review
+// fix: 'webhook token has no rotation/revocation/expiry'). Same 'hashed at rest,
+// plaintext returned exactly once' convention as
+// CreateAutomationResponse.webhookToken -- unlike that field, webhookToken here is
+// never null: this route only ever succeeds for a triggerType 'webhook'
+// automation, and a successful rotation always mints and returns a real fresh
+// token.
+type RotateAutomationWebhookTokenResponse struct {
+	// Automation corresponds to the JSON schema field "automation".
+	Automation Automation `json:"automation" yaml:"automation" mapstructure:"automation"`
+
+	// The PLAINTEXT, freshly rotated inbound-webhook bearer token -- returned ONLY
+	// this once. The OLD token is invalidated immediately: its own hash no longer
+	// matches any automation, with no grace period.
+	WebhookToken string `json:"webhookToken" yaml:"webhookToken" mapstructure:"webhookToken"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *RotateAutomationWebhookTokenResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["automation"]; raw != nil && !ok {
+		return fmt.Errorf("field automation in RotateAutomationWebhookTokenResponse: required")
+	}
+	if _, ok := raw["webhookToken"]; raw != nil && !ok {
+		return fmt.Errorf("field webhookToken in RotateAutomationWebhookTokenResponse: required")
+	}
+	type Plain RotateAutomationWebhookTokenResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = RotateAutomationWebhookTokenResponse(plain)
+	return nil
+}
+
 // Mirrors the sessions table (migrations/000004_sessions.up.sql).
 // status/failureReason/spawnSource enums match
 // session_status/session_failure_reason/session_spawn_source exactly.

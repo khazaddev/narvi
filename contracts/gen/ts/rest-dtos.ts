@@ -656,6 +656,19 @@ export interface CreateAutomationResponse {
   webhookToken: string | null;
 }
 /**
+ * 200 response body for POST /api/automations/{automationID}/webhook-token (review fix: 'webhook token has no rotation/revocation/expiry'). Same 'hashed at rest, plaintext returned exactly once' convention as CreateAutomationResponse.webhookToken -- unlike that field, webhookToken here is never null: this route only ever succeeds for a triggerType 'webhook' automation, and a successful rotation always mints and returns a real fresh token.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "RotateAutomationWebhookTokenResponse".
+ */
+export interface RotateAutomationWebhookTokenResponse {
+  automation: Automation;
+  /**
+   * The PLAINTEXT, freshly rotated inbound-webhook bearer token -- returned ONLY this once. The OLD token is invalidated immediately: its own hash no longer matches any automation, with no grace period.
+   */
+  webhookToken: string;
+}
+/**
  * GET /api/automations's own response body (Step 52, §8.4's own 'creator/status filters', applied as ?createdBy=<uuid|me>&status=<active|paused> query params). Unbounded (no pagination), matching ListMembersResponse's own identical precedent.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
