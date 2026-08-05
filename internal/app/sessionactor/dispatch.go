@@ -1491,8 +1491,8 @@ func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, send
 //
 // Exported (Step 55, "workflow execution engine", §25.6) specifically so
 // internal/adapters/inbound/httpapi's own characterization test
-// (turncore_characterization_integration_test.go) can call the EXACT same
-// function real dispatch uses to build the wire payload from a turn row,
+// (workflowengine_characterization_integration_test.go) can call the EXACT
+// same function real dispatch uses to build the wire payload from a turn row,
 // for BOTH a turn built via today's engine-mediated createTurnLocked and a
 // hand-constructed turn simulating the pre-Step-55 direct-dispatch shape
 // -- proving the two produce byte-identical sandboxws.Prompt JSON is the
