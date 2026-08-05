@@ -91,6 +91,19 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"viewer cannot approve any plan", authz.RoleViewer, authz.ActionApprovePlan, false, false},
 		{"viewer cannot approve even an owned/joined plan", authz.RoleViewer, authz.ActionApprovePlan, true, false},
 
+		// Row 2d (Step 54, §25.11): decide a workflow run's HITL step --
+		// own/joined-aware, the SAME shape as approve-plan above by
+		// §25.11's explicit "same row as ActionApprovePlan": admin/
+		// maintainer on ANY run, member ONLY on own/joined, viewer never.
+		{"admin decides any workflow step", authz.RoleAdmin, authz.ActionDecideWorkflowStep, false, true},
+		{"admin decides owned workflow step", authz.RoleAdmin, authz.ActionDecideWorkflowStep, true, true},
+		{"maintainer decides any workflow step", authz.RoleMaintainer, authz.ActionDecideWorkflowStep, false, true},
+		{"maintainer decides owned workflow step", authz.RoleMaintainer, authz.ActionDecideWorkflowStep, true, true},
+		{"member decides workflow step on own/joined session", authz.RoleMember, authz.ActionDecideWorkflowStep, true, true},
+		{"member cannot decide a workflow step on a session they neither own nor joined", authz.RoleMember, authz.ActionDecideWorkflowStep, false, false},
+		{"viewer cannot decide any workflow step", authz.RoleViewer, authz.ActionDecideWorkflowStep, false, false},
+		{"viewer cannot decide even an owned/joined workflow step", authz.RoleViewer, authz.ActionDecideWorkflowStep, true, false},
+
 		// Row 3a: stop/resume ANY session -- admin/maintainer ONLY. No
 		// member own/joined escape hatch at all, unlike prompt/approve
 		// above -- asserted with ownedOrJoined=true too, to prove the
@@ -125,6 +138,15 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer manages env secrets", authz.RoleMaintainer, authz.ActionManageEnvSecrets, false, true},
 		{"member cannot manage env secrets", authz.RoleMember, authz.ActionManageEnvSecrets, false, false},
 		{"viewer cannot manage env secrets", authz.RoleViewer, authz.ActionManageEnvSecrets, false, false},
+		// Step 54 (§25.11): workflow-definition authoring sits in this
+		// SAME maintainer+ row as ActionManageAutomations -- no
+		// own/joined carve-out (asserted with ownedOrJoined=true for
+		// member to prove it genuinely does not exist here).
+		{"admin manages workflow definitions", authz.RoleAdmin, authz.ActionManageWorkflowDefinitions, false, true},
+		{"maintainer manages workflow definitions", authz.RoleMaintainer, authz.ActionManageWorkflowDefinitions, false, true},
+		{"member cannot manage workflow definitions", authz.RoleMember, authz.ActionManageWorkflowDefinitions, false, false},
+		{"member cannot manage workflow definitions even if ownedOrJoined", authz.RoleMember, authz.ActionManageWorkflowDefinitions, true, false},
+		{"viewer cannot manage workflow definitions", authz.RoleViewer, authz.ActionManageWorkflowDefinitions, false, false},
 
 		// Row 5: review verdicts/re-trigger/auto-approve config --
 		// admin/maintainer only.
@@ -163,6 +185,15 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot toggle sentinel auto-fix", authz.RoleMaintainer, authz.ActionToggleSentinelAutoFix, false, false},
 		{"member cannot toggle sentinel auto-fix", authz.RoleMember, authz.ActionToggleSentinelAutoFix, false, false},
 		{"viewer cannot toggle sentinel auto-fix", authz.RoleViewer, authz.ActionToggleSentinelAutoFix, false, false},
+		// Step 54 (§25.11): workflow-binding activation is admin ONLY,
+		// in this SAME row as ActionActivatePromptTemplate -- not even
+		// maintainer, and no own/joined escape hatch (asserted with
+		// ownedOrJoined=true to prove it).
+		{"admin activates workflow binding", authz.RoleAdmin, authz.ActionActivateWorkflowBinding, false, true},
+		{"maintainer cannot activate workflow binding", authz.RoleMaintainer, authz.ActionActivateWorkflowBinding, false, false},
+		{"maintainer cannot activate workflow binding even if ownedOrJoined", authz.RoleMaintainer, authz.ActionActivateWorkflowBinding, true, false},
+		{"member cannot activate workflow binding", authz.RoleMember, authz.ActionActivateWorkflowBinding, false, false},
+		{"viewer cannot activate workflow binding", authz.RoleViewer, authz.ActionActivateWorkflowBinding, false, false},
 	}
 
 	for _, tc := range tests {

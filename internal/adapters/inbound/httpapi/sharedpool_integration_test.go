@@ -297,8 +297,10 @@ func runMigrations(connStr string) error {
 // out of sync with the schema -- CASCADE lets one statement handle every
 // FK relationship among them regardless of order); and restoreStatements,
 // one `INSERT INTO t SELECT * FROM __seed_snapshot_t` for every table
-// that already had at least one row at this point (today, exactly
-// prompt_templates -- see this file's own top doc comment) -- each
+// that already had at least one row at this point (prompt_templates,
+// migrations/000033, plus Step 54's FK-dependent workflow seed rows,
+// migrations/000057), restored in FK-dependency order
+// (orderTablesForSeedRestore, below) -- each
 // backed by a literal `CREATE TABLE __seed_snapshot_t AS TABLE t` copy
 // taken here, once, of that pristine post-migration data. schema_
 // migrations (golang-migrate's own bookkeeping table) is deliberately
@@ -334,22 +336,108 @@ func prepareDatabaseReset(ctx context.Context, pool *pgxpool.Pool) error {
 	}
 	truncateStatement = fmt.Sprintf("TRUNCATE TABLE %s RESTART IDENTITY CASCADE", strings.Join(quoted, ", "))
 
+	restoreOrder, err := orderTablesForSeedRestore(ctx, pool, tables)
+	if err != nil {
+		return err
+	}
+
 	restoreStatements = nil
-	for i, name := range tables {
+	for _, name := range restoreOrder {
+		quotedName := pgx.Identifier{name}.Sanitize()
 		var hasRows bool
-		if err := pool.QueryRow(ctx, fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s LIMIT 1)", quoted[i])).Scan(&hasRows); err != nil {
+		if err := pool.QueryRow(ctx, fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s LIMIT 1)", quotedName)).Scan(&hasRows); err != nil {
 			return fmt.Errorf("check %s for seed rows: %w", name, err)
 		}
 		if !hasRows {
 			continue
 		}
 		snapshotName := pgx.Identifier{"__seed_snapshot_" + name}.Sanitize()
-		if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE TABLE %s AS TABLE %s", snapshotName, quoted[i])); err != nil {
+		if _, err := pool.Exec(ctx, fmt.Sprintf("CREATE TABLE %s AS TABLE %s", snapshotName, quotedName)); err != nil {
 			return fmt.Errorf("snapshot seed data for %s: %w", name, err)
 		}
-		restoreStatements = append(restoreStatements, fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", quoted[i], snapshotName))
+		restoreStatements = append(restoreStatements, fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", quotedName, snapshotName))
 	}
 	return nil
+}
+
+// orderTablesForSeedRestore returns tables reordered parents-first over
+// pg_constraint's FOREIGN KEY edges (Kahn's algorithm, with the incoming
+// pg_tables name order as the deterministic tie-break), so the
+// seed-restore INSERTs above only ever insert a child row after the
+// parent rows it references already exist. The plain alphabetical order
+// this replaces was only ever correct while prompt_templates (FK-free)
+// was the sole migration-seeded table -- migrations/000057_workflows.
+// up.sql is the first to seed FK-DEPENDENT rows, and workflow_bindings
+// sorts alphabetically BEFORE the workflow_definitions rows it
+// references, so an unordered restore would violate that FK on every
+// reset. Self-referencing FKs are ignored (a table's own rows restore
+// in one statement, whose FK checks run at statement end, so
+// intra-table parents are always visible); a genuine cross-table FK
+// cycle (none exists in this schema) falls back to name order for
+// whatever remains rather than failing the whole suite.
+func orderTablesForSeedRestore(ctx context.Context, pool *pgxpool.Pool, tables []string) ([]string, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT con.conrelid::regclass::text, con.confrelid::regclass::text
+		FROM pg_constraint con
+		WHERE con.contype = 'f'
+		  AND con.connamespace = 'public'::regnamespace
+		  AND con.conrelid <> con.confrelid`)
+	if err != nil {
+		return nil, fmt.Errorf("list foreign-key edges: %w", err)
+	}
+	defer rows.Close()
+
+	inSet := make(map[string]bool, len(tables))
+	for _, name := range tables {
+		inSet[name] = true
+	}
+	parents := make(map[string]map[string]bool, len(tables))
+	for rows.Next() {
+		var child, parent string
+		if err := rows.Scan(&child, &parent); err != nil {
+			return nil, fmt.Errorf("scan foreign-key edge: %w", err)
+		}
+		if !inSet[child] || !inSet[parent] {
+			continue
+		}
+		if parents[child] == nil {
+			parents[child] = make(map[string]bool)
+		}
+		parents[child][parent] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate foreign-key edges: %w", err)
+	}
+
+	ordered := make([]string, 0, len(tables))
+	placed := make(map[string]bool, len(tables))
+	remaining := append([]string(nil), tables...)
+	for len(remaining) > 0 {
+		var deferred []string
+		progressed := false
+		for _, name := range remaining {
+			ready := true
+			for parent := range parents[name] {
+				if !placed[parent] {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				ordered = append(ordered, name)
+				placed[name] = true
+				progressed = true
+			} else {
+				deferred = append(deferred, name)
+			}
+		}
+		if !progressed {
+			ordered = append(ordered, deferred...)
+			break
+		}
+		remaining = deferred
+	}
+	return ordered, nil
 }
 
 // IntegrationTestPool returns this whole test binary's ONE shared

@@ -80,7 +80,9 @@ func roles(rs ...Role) roleSet {
 // unconditionally; allowIfOwned is an ADDITIONAL set of roles permitted
 // only when the caller's own Resource.OwnedOrJoined is true — nil for
 // every action with no own/joined carve-out (which is most of them; only
-// ActionPromptSession/ActionApprovePlan set it, per §13.3 row 2).
+// ActionPromptSession/ActionApprovePlan, per §13.3 row 2, and
+// ActionDecideWorkflowStep, per §25.11's "same row as ActionApprovePlan",
+// set it).
 type actionRule struct {
 	allow        roleSet
 	allowIfOwned roleSet
@@ -108,6 +110,10 @@ var matrix = map[Action]actionRule{
 	ActionCreateSession: {allow: roles(RoleAdmin, RoleMaintainer, RoleMember)},
 	ActionPromptSession: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
 	ActionApprovePlan:   {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
+	// Step 54 (§25.11): deciding a workflow run's HITL-gated step is
+	// own/joined-aware, the SAME row as plan approval by that section's
+	// explicit instruction -- see action.go's own doc comment.
+	ActionDecideWorkflowStep: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
 
 	// Row 3: stop/resume ANY session -- admin/maintainer only, no member
 	// own/joined escape hatch (see action.go's own doc comment on why).
@@ -115,10 +121,14 @@ var matrix = map[Action]actionRule{
 	ActionResumeSession: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 4: automations/environments/repo+env secrets -- admin/maintainer.
-	ActionManageAutomations:  {allow: roles(RoleAdmin, RoleMaintainer)},
-	ActionManageEnvironments: {allow: roles(RoleAdmin, RoleMaintainer)},
-	ActionManageRepoSecrets:  {allow: roles(RoleAdmin, RoleMaintainer)},
-	ActionManageEnvSecrets:   {allow: roles(RoleAdmin, RoleMaintainer)},
+	// Step 54 (§25.11) adds workflow-definition authoring (an unbound
+	// draft) to this SAME row, per that section's explicit "same row as
+	// ActionManageAutomations" instruction.
+	ActionManageAutomations:         {allow: roles(RoleAdmin, RoleMaintainer)},
+	ActionManageEnvironments:        {allow: roles(RoleAdmin, RoleMaintainer)},
+	ActionManageRepoSecrets:         {allow: roles(RoleAdmin, RoleMaintainer)},
+	ActionManageEnvSecrets:          {allow: roles(RoleAdmin, RoleMaintainer)},
+	ActionManageWorkflowDefinitions: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 5: review verdicts/re-trigger/auto-approve config --
 	// admin/maintainer.
@@ -127,13 +137,18 @@ var matrix = map[Action]actionRule{
 	ActionConfigureAutoApprove: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 6: integrations/global secrets/template activation/members &
-	// roles/sentinel toggle/blockOnHighRisk -- admin only.
+	// roles/sentinel toggle/blockOnHighRisk -- admin only. Step 54
+	// (§25.11) adds workflow-binding activation to this SAME row, per
+	// that section's explicit "same row as ActionActivatePromptTemplate"
+	// instruction (see action.go for why activation is a system-posture
+	// change, not row-4 authoring).
 	ActionManageIntegrations:       {allow: roles(RoleAdmin)},
 	ActionManageGlobalSecrets:      {allow: roles(RoleAdmin)},
 	ActionActivatePromptTemplate:   {allow: roles(RoleAdmin)},
 	ActionManageMembers:            {allow: roles(RoleAdmin)},
 	ActionToggleSentinelAutoFix:    {allow: roles(RoleAdmin)},
 	ActionConfigureBlockOnHighRisk: {allow: roles(RoleAdmin)},
+	ActionActivateWorkflowBinding:  {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against

@@ -12,21 +12,25 @@
 //	| Permission                                                 | admin | maintainer | member | viewer |
 //	|------------------------------------------------------------|-------|------------|--------|--------|
 //	| View sessions / analytics                                  |  ✓    |     ✓      |   ✓    | ✓ (ro) |
-//	| Create sessions, prompt, approve plans on own/joined        |  ✓    |     ✓      |   ✓    |   —    |
+//	| Create sessions, prompt, approve plans, decide workflow     |  ✓    |     ✓      |   ✓    |   —    |
+//	  steps (§25.11/Step 54) on own/joined
 //	| Stop/resume ANY session; approve ANY plan                   |  ✓    |     ✓      |   —    |   —    |
-//	| Manage automations, environments, repo/env secrets           |  ✓    |     ✓      |   —    |   —    |
+//	| Manage automations, environments, repo/env secrets,          |  ✓    |     ✓      |   —    |   —    |
+//	  workflow definitions (§25.11/Step 54)
 //	| Edit review verdicts; re-trigger reviews; auto-approve cfg   |  ✓    |     ✓      |   —    |   —    |
 //	| Integrations, global secrets, template activation, members  |  ✓    |     —      |   —    |   —    |
-//	  & roles, sentinel auto-fix toggle, blockOnHighRisk (§8.2/Step 47)
+//	  & roles, sentinel auto-fix toggle, blockOnHighRisk (§8.2/Step 47),
+//	  workflow binding activation (§25.11/Step 54)
 //
 // # Design: one map, not two parallel checks
 //
 // Every row above collapses to exactly one of two shapes: a fixed set of
-// roles allowed unconditionally (allow), plus — for the two actions the
-// spec's own "own/joined" carve-out actually names (approving a plan,
-// prompting/creating a turn on an existing session) — an ADDITIONAL set
-// of roles allowed only when the caller also proves resource.OwnedOrJoined
-// (allowIfOwned). "Stop/resume ANY session" has no own/joined carve-out
+// roles allowed unconditionally (allow), plus — for the three actions an
+// "own/joined" carve-out is actually specified for (approving a plan and
+// prompting/creating a turn on an existing session, §13.3 row 2;
+// deciding a workflow run's HITL step, §25.11's "same row as
+// ActionApprovePlan") — an ADDITIONAL set of roles allowed only when the
+// caller also proves resource.OwnedOrJoined (allowIfOwned). "Stop/resume ANY session" has no own/joined carve-out
 // at all for member — the matrix's own row 3 never mentions a member
 // escape hatch the way row 2 does for create/prompt/approve, so a member
 // who created their own session still cannot stop/resume it; only
@@ -66,5 +70,10 @@
 //     so this package's own shape never has to change out from under
 //     them: a future Step calls Authorize with the right
 //     Action constant and gets the exact matrix row §13.3 already
-//     specifies, with zero changes to this package.
+//     specifies, with zero changes to this package. The three Step 54
+//     workflow actions (ActionManageWorkflowDefinitions,
+//     ActionActivateWorkflowBinding, ActionDecideWorkflowStep — §25.11)
+//     follow the same reserved-name discipline deliberately: Step 54 is
+//     dark (schema/contracts/RBAC only), and Steps 55-56 mount the
+//     first handlers that call Authorize with them.
 package authz

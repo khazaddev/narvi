@@ -804,6 +804,350 @@ func (ns NullUserRole) Value() (driver.Value, error) {
 	return string(ns.UserRole), nil
 }
 
+type WorkflowConversationContinuity string
+
+const (
+	WorkflowConversationContinuityContinue WorkflowConversationContinuity = "continue"
+	WorkflowConversationContinuityFresh    WorkflowConversationContinuity = "fresh"
+)
+
+func (e *WorkflowConversationContinuity) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkflowConversationContinuity(s)
+	case string:
+		*e = WorkflowConversationContinuity(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkflowConversationContinuity: %T", src)
+	}
+	return nil
+}
+
+type NullWorkflowConversationContinuity struct {
+	WorkflowConversationContinuity WorkflowConversationContinuity `json:"workflow_conversation_continuity"`
+	Valid                          bool                           `json:"valid"` // Valid is true if WorkflowConversationContinuity is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkflowConversationContinuity) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkflowConversationContinuity, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkflowConversationContinuity.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkflowConversationContinuity) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkflowConversationContinuity), nil
+}
+
+type WorkflowExecutionScope string
+
+const (
+	WorkflowExecutionScopeSameSession  WorkflowExecutionScope = "same_session"
+	WorkflowExecutionScopeChildSession WorkflowExecutionScope = "child_session"
+)
+
+func (e *WorkflowExecutionScope) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkflowExecutionScope(s)
+	case string:
+		*e = WorkflowExecutionScope(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkflowExecutionScope: %T", src)
+	}
+	return nil
+}
+
+type NullWorkflowExecutionScope struct {
+	WorkflowExecutionScope WorkflowExecutionScope `json:"workflow_execution_scope"`
+	Valid                  bool                   `json:"valid"` // Valid is true if WorkflowExecutionScope is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkflowExecutionScope) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkflowExecutionScope, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkflowExecutionScope.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkflowExecutionScope) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkflowExecutionScope), nil
+}
+
+type WorkflowLane string
+
+const (
+	WorkflowLaneReview  WorkflowLane = "review"
+	WorkflowLaneRequest WorkflowLane = "request"
+	WorkflowLanePlan    WorkflowLane = "plan"
+)
+
+func (e *WorkflowLane) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkflowLane(s)
+	case string:
+		*e = WorkflowLane(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkflowLane: %T", src)
+	}
+	return nil
+}
+
+type NullWorkflowLane struct {
+	WorkflowLane WorkflowLane `json:"workflow_lane"`
+	Valid        bool         `json:"valid"` // Valid is true if WorkflowLane is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkflowLane) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkflowLane, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkflowLane.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkflowLane) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkflowLane), nil
+}
+
+type WorkflowRunStatus string
+
+const (
+	WorkflowRunStatusRunning     WorkflowRunStatus = "running"
+	WorkflowRunStatusNeedsReview WorkflowRunStatus = "needs_review"
+	WorkflowRunStatusCompleted   WorkflowRunStatus = "completed"
+	WorkflowRunStatusFailed      WorkflowRunStatus = "failed"
+	WorkflowRunStatusCancelled   WorkflowRunStatus = "cancelled"
+)
+
+func (e *WorkflowRunStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkflowRunStatus(s)
+	case string:
+		*e = WorkflowRunStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkflowRunStatus: %T", src)
+	}
+	return nil
+}
+
+type NullWorkflowRunStatus struct {
+	WorkflowRunStatus WorkflowRunStatus `json:"workflow_run_status"`
+	Valid             bool              `json:"valid"` // Valid is true if WorkflowRunStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkflowRunStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkflowRunStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkflowRunStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkflowRunStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkflowRunStatus), nil
+}
+
+type WorkflowStepDecision string
+
+const (
+	WorkflowStepDecisionApprove WorkflowStepDecision = "approve"
+	WorkflowStepDecisionReject  WorkflowStepDecision = "reject"
+	WorkflowStepDecisionRevise  WorkflowStepDecision = "revise"
+)
+
+func (e *WorkflowStepDecision) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkflowStepDecision(s)
+	case string:
+		*e = WorkflowStepDecision(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkflowStepDecision: %T", src)
+	}
+	return nil
+}
+
+type NullWorkflowStepDecision struct {
+	WorkflowStepDecision WorkflowStepDecision `json:"workflow_step_decision"`
+	Valid                bool                 `json:"valid"` // Valid is true if WorkflowStepDecision is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkflowStepDecision) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkflowStepDecision, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkflowStepDecision.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkflowStepDecision) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkflowStepDecision), nil
+}
+
+type WorkflowStepKind string
+
+const (
+	WorkflowStepKindAgent WorkflowStepKind = "agent"
+)
+
+func (e *WorkflowStepKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkflowStepKind(s)
+	case string:
+		*e = WorkflowStepKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkflowStepKind: %T", src)
+	}
+	return nil
+}
+
+type NullWorkflowStepKind struct {
+	WorkflowStepKind WorkflowStepKind `json:"workflow_step_kind"`
+	Valid            bool             `json:"valid"` // Valid is true if WorkflowStepKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkflowStepKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkflowStepKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkflowStepKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkflowStepKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkflowStepKind), nil
+}
+
+type WorkflowStepOutcomeStatus string
+
+const (
+	WorkflowStepOutcomeStatusOk       WorkflowStepOutcomeStatus = "ok"
+	WorkflowStepOutcomeStatusNeedsFix WorkflowStepOutcomeStatus = "needs_fix"
+	WorkflowStepOutcomeStatusBlocked  WorkflowStepOutcomeStatus = "blocked"
+)
+
+func (e *WorkflowStepOutcomeStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkflowStepOutcomeStatus(s)
+	case string:
+		*e = WorkflowStepOutcomeStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkflowStepOutcomeStatus: %T", src)
+	}
+	return nil
+}
+
+type NullWorkflowStepOutcomeStatus struct {
+	WorkflowStepOutcomeStatus WorkflowStepOutcomeStatus `json:"workflow_step_outcome_status"`
+	Valid                     bool                      `json:"valid"` // Valid is true if WorkflowStepOutcomeStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkflowStepOutcomeStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkflowStepOutcomeStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkflowStepOutcomeStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkflowStepOutcomeStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkflowStepOutcomeStatus), nil
+}
+
+type WorkflowStepRunStatus string
+
+const (
+	WorkflowStepRunStatusAwaitingDecision WorkflowStepRunStatus = "awaiting_decision"
+	WorkflowStepRunStatusRunning          WorkflowStepRunStatus = "running"
+	WorkflowStepRunStatusCompleted        WorkflowStepRunStatus = "completed"
+	WorkflowStepRunStatusFailed           WorkflowStepRunStatus = "failed"
+	WorkflowStepRunStatusCancelled        WorkflowStepRunStatus = "cancelled"
+)
+
+func (e *WorkflowStepRunStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkflowStepRunStatus(s)
+	case string:
+		*e = WorkflowStepRunStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkflowStepRunStatus: %T", src)
+	}
+	return nil
+}
+
+type NullWorkflowStepRunStatus struct {
+	WorkflowStepRunStatus WorkflowStepRunStatus `json:"workflow_step_run_status"`
+	Valid                 bool                  `json:"valid"` // Valid is true if WorkflowStepRunStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkflowStepRunStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkflowStepRunStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkflowStepRunStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkflowStepRunStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkflowStepRunStatus), nil
+}
+
 type Artifact struct {
 	ID        pgtype.UUID        `json:"id"`
 	SessionID pgtype.UUID        `json:"session_id"`
@@ -1182,6 +1526,81 @@ type WebhookDelivery struct {
 	Provider   string             `json:"provider"`
 	DeliveryID string             `json:"delivery_id"`
 	ReceivedAt pgtype.Timestamptz `json:"received_at"`
+}
+
+type WorkflowBinding struct {
+	ID                   pgtype.UUID        `json:"id"`
+	Lane                 WorkflowLane       `json:"lane"`
+	RepoFullName         *string            `json:"repo_full_name"`
+	WorkflowDefinitionID pgtype.UUID        `json:"workflow_definition_id"`
+	DefinitionVersion    int32              `json:"definition_version"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkflowDefinition struct {
+	ID        pgtype.UUID        `json:"id"`
+	Lane      WorkflowLane       `json:"lane"`
+	Name      string             `json:"name"`
+	IsBuiltIn bool               `json:"is_built_in"`
+	Version   int32              `json:"version"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkflowEdge struct {
+	ID                   pgtype.UUID               `json:"id"`
+	WorkflowDefinitionID pgtype.UUID               `json:"workflow_definition_id"`
+	FromStepID           pgtype.UUID               `json:"from_step_id"`
+	ToStepID             pgtype.UUID               `json:"to_step_id"`
+	OnStatus             WorkflowStepOutcomeStatus `json:"on_status"`
+	CreatedAt            pgtype.Timestamptz        `json:"created_at"`
+}
+
+type WorkflowRun struct {
+	ID                   pgtype.UUID        `json:"id"`
+	SessionID            pgtype.UUID        `json:"session_id"`
+	Lane                 WorkflowLane       `json:"lane"`
+	WorkflowDefinitionID pgtype.UUID        `json:"workflow_definition_id"`
+	DefinitionVersion    int32              `json:"definition_version"`
+	Status               WorkflowRunStatus  `json:"status"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+	FinishedAt           pgtype.Timestamptz `json:"finished_at"`
+}
+
+type WorkflowStepDefinition struct {
+	ID                     pgtype.UUID                    `json:"id"`
+	WorkflowDefinitionID   pgtype.UUID                    `json:"workflow_definition_id"`
+	StepOrder              int32                          `json:"step_order"`
+	Kind                   WorkflowStepKind               `json:"kind"`
+	ModelID                *string                        `json:"model_id"`
+	PromptTemplate         string                         `json:"prompt_template"`
+	ExecutionScope         WorkflowExecutionScope         `json:"execution_scope"`
+	ConversationContinuity WorkflowConversationContinuity `json:"conversation_continuity"`
+	HitlBefore             bool                           `json:"hitl_before"`
+	HitlAfter              bool                           `json:"hitl_after"`
+	CanvasPosition         []byte                         `json:"canvas_position"`
+	CreatedAt              pgtype.Timestamptz             `json:"created_at"`
+	UpdatedAt              pgtype.Timestamptz             `json:"updated_at"`
+}
+
+type WorkflowStepRun struct {
+	ID               pgtype.UUID                `json:"id"`
+	WorkflowRunID    pgtype.UUID                `json:"workflow_run_id"`
+	StepDefinitionID pgtype.UUID                `json:"step_definition_id"`
+	TurnID           pgtype.UUID                `json:"turn_id"`
+	Status           WorkflowStepRunStatus      `json:"status"`
+	OutcomeStatus    *WorkflowStepOutcomeStatus `json:"outcome_status"`
+	OutcomeSummary   *string                    `json:"outcome_summary"`
+	OutcomePayload   []byte                     `json:"outcome_payload"`
+	Decision         *WorkflowStepDecision      `json:"decision"`
+	DecisionText     *string                    `json:"decision_text"`
+	DecidedAt        pgtype.Timestamptz         `json:"decided_at"`
+	DecidedBy        pgtype.UUID                `json:"decided_by"`
+	CreatedAt        pgtype.Timestamptz         `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz         `json:"updated_at"`
+	FinishedAt       pgtype.Timestamptz         `json:"finished_at"`
 }
 
 type WsToken struct {

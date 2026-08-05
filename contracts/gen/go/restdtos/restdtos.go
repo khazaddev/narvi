@@ -3087,3 +3087,1135 @@ func (j *WSTokenResponse) UnmarshalJSON(value []byte) error {
 	*j = WSTokenResponse(plain)
 	return nil
 }
+
+// One workflow_bindings row (Step 54, §25.10): which definition, at which version,
+// a (lane, repoFullName) pair resolves to. repoFullName null is the GLOBAL binding
+// for that lane -- §25.4: exactly one per lane, seeded by migration 000057 to
+// point at the lane's system template, and from then on an ordinary,
+// independently-repointable setting that is NEVER absent (so resolution is repo
+// row if present, else the guaranteed global row -- never an 'absent row ->
+// default' branch). A non-null repoFullName ('owner/repo',
+// repo_settings.repo_full_name's exact shape) is a repo override shadowing the
+// global binding for that one repo only. Activation is admin-only
+// (authz.ActionActivateWorkflowBinding, §25.11) -- the same single action gates
+// both scopes.
+type WorkflowBinding struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// The definition's version at binding/activation time -- provenance for 'what was
+	// active when', alongside WorkflowRun's own start-time pin.
+	DefinitionVersion int `json:"definitionVersion" yaml:"definitionVersion" mapstructure:"definitionVersion"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Matches Postgres workflow_lane exactly. Always equals the bound definition's
+	// own lane -- structurally guaranteed (workflow_bindings_definition_lane_fk).
+	Lane WorkflowBindingLane `json:"lane" yaml:"lane" mapstructure:"lane"`
+
+	// RepoFullName corresponds to the JSON schema field "repoFullName".
+	RepoFullName WorkflowBindingRepoFullName `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+
+	// WorkflowDefinitionId corresponds to the JSON schema field
+	// "workflowDefinitionId".
+	WorkflowDefinitionId string `json:"workflowDefinitionId" yaml:"workflowDefinitionId" mapstructure:"workflowDefinitionId"`
+}
+
+type WorkflowBindingLane string
+
+const WorkflowBindingLanePlan WorkflowBindingLane = "plan"
+const WorkflowBindingLaneRequest WorkflowBindingLane = "request"
+const WorkflowBindingLaneReview WorkflowBindingLane = "review"
+
+var enumValues_WorkflowBindingLane = []interface{}{
+	"review",
+	"request",
+	"plan",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowBindingLane) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowBindingLane {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowBindingLane, v)
+	}
+	*j = WorkflowBindingLane(v)
+	return nil
+}
+
+type WorkflowBindingRepoFullName *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowBinding) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in WorkflowBinding: required")
+	}
+	if _, ok := raw["definitionVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field definitionVersion in WorkflowBinding: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in WorkflowBinding: required")
+	}
+	if _, ok := raw["lane"]; raw != nil && !ok {
+		return fmt.Errorf("field lane in WorkflowBinding: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in WorkflowBinding: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in WorkflowBinding: required")
+	}
+	if _, ok := raw["workflowDefinitionId"]; raw != nil && !ok {
+		return fmt.Errorf("field workflowDefinitionId in WorkflowBinding: required")
+	}
+	type Plain WorkflowBinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 1 > plain.DefinitionVersion {
+		return fmt.Errorf("field %s: must be >= %v", "definitionVersion", 1)
+	}
+	*j = WorkflowBinding(plain)
+	return nil
+}
+
+// One workflow_definitions row plus its ordered steps (Step 54, §25.10; mirrors
+// internal/domain/workflow.Definition). Doubles as the eventual editing surface's
+// PUT body -- always the full, current desired state (steps and edges included),
+// never a partial patch, matching UpdateRepoSettingsRequest's own convention --
+// but NO handler consumes it yet (Step 54 is dark). isBuiltIn marks one of the
+// three seeded system templates; a PUT/DELETE against an isBuiltIn=true definition
+// is refused unconditionally, even for an admin -- a structural invariant (§25.4),
+// not an RBAC row, enforced by the store/handler layer Steps 55-56 add. version is
+// a 1-based edit counter (provenance a binding/run pins), not a versioned-content
+// archive.
+type WorkflowDefinition struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// IsBuiltIn corresponds to the JSON schema field "isBuiltIn".
+	IsBuiltIn bool `json:"isBuiltIn" yaml:"isBuiltIn" mapstructure:"isBuiltIn"`
+
+	// Matches Postgres workflow_lane exactly -- the closed 3-value Lane enum (§25.4,
+	// internal/domain/workflow.Lane).
+	Lane WorkflowDefinitionLane `json:"lane" yaml:"lane" mapstructure:"lane"`
+
+	// Unique per lane (workflow_definitions_lane_name_uniq).
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Every step, in order. A definition with zero steps is not executable and is
+	// rejected (internal/domain/workflow.ValidateDefinition).
+	Steps []WorkflowStepDefinition `json:"steps" yaml:"steps" mapstructure:"steps"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+
+	// Version corresponds to the JSON schema field "version".
+	Version int `json:"version" yaml:"version" mapstructure:"version"`
+}
+
+type WorkflowDefinitionLane string
+
+const WorkflowDefinitionLanePlan WorkflowDefinitionLane = "plan"
+const WorkflowDefinitionLaneRequest WorkflowDefinitionLane = "request"
+const WorkflowDefinitionLaneReview WorkflowDefinitionLane = "review"
+
+var enumValues_WorkflowDefinitionLane = []interface{}{
+	"review",
+	"request",
+	"plan",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowDefinitionLane) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowDefinitionLane {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowDefinitionLane, v)
+	}
+	*j = WorkflowDefinitionLane(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowDefinition) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in WorkflowDefinition: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in WorkflowDefinition: required")
+	}
+	if _, ok := raw["isBuiltIn"]; raw != nil && !ok {
+		return fmt.Errorf("field isBuiltIn in WorkflowDefinition: required")
+	}
+	if _, ok := raw["lane"]; raw != nil && !ok {
+		return fmt.Errorf("field lane in WorkflowDefinition: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in WorkflowDefinition: required")
+	}
+	if _, ok := raw["steps"]; raw != nil && !ok {
+		return fmt.Errorf("field steps in WorkflowDefinition: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in WorkflowDefinition: required")
+	}
+	if _, ok := raw["version"]; raw != nil && !ok {
+		return fmt.Errorf("field version in WorkflowDefinition: required")
+	}
+	type Plain WorkflowDefinition
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if plain.Steps != nil && len(plain.Steps) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "steps", 1)
+	}
+	if 1 > plain.Version {
+		return fmt.Errorf("field %s: must be >= %v", "version", 1)
+	}
+	*j = WorkflowDefinition(plain)
+	return nil
+}
+
+// One explicit (from step, outcome) -> to step routing rule (Step 54, §25.10's
+// 'Edges' entity; one workflow_edges row). Named WorkflowEdge rather than the
+// plan's bare 'Edges'/'Edge': restdtos is a flat namespace and an unprefixed
+// generated 'Edge' type would be needlessly generic -- AutomationReposElem's own
+// entity-prefixed-helper precedent. onStatus is the ONLY thing an edge may
+// condition on (§25.4): the closed 3-value step-outcome vocabulary, a DISTINCT
+// axis from review's Shippable (which is never routed through it). With no
+// explicit edge, 'ok' advances to the next step in order and 'needs_fix'/'blocked'
+// escalate -- fail-conservative; a retry loop is always wired explicitly
+// (internal/domain/workflow.NextStep owns these semantics).
+type WorkflowEdge struct {
+	// FromStepId corresponds to the JSON schema field "fromStepId".
+	FromStepId string `json:"fromStepId" yaml:"fromStepId" mapstructure:"fromStepId"`
+
+	// Matches Postgres workflow_step_outcome_status exactly.
+	OnStatus WorkflowEdgeOnStatus `json:"onStatus" yaml:"onStatus" mapstructure:"onStatus"`
+
+	// May equal fromStepId (a wired same-step retry loop) or an earlier step (a
+	// backward loop, e.g. §25.9's fix -> audit edge).
+	ToStepId string `json:"toStepId" yaml:"toStepId" mapstructure:"toStepId"`
+}
+
+type WorkflowEdgeOnStatus string
+
+const WorkflowEdgeOnStatusBlocked WorkflowEdgeOnStatus = "blocked"
+const WorkflowEdgeOnStatusNeedsFix WorkflowEdgeOnStatus = "needs_fix"
+const WorkflowEdgeOnStatusOk WorkflowEdgeOnStatus = "ok"
+
+var enumValues_WorkflowEdgeOnStatus = []interface{}{
+	"ok",
+	"needs_fix",
+	"blocked",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowEdgeOnStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowEdgeOnStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowEdgeOnStatus, v)
+	}
+	*j = WorkflowEdgeOnStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowEdge) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["fromStepId"]; raw != nil && !ok {
+		return fmt.Errorf("field fromStepId in WorkflowEdge: required")
+	}
+	if _, ok := raw["onStatus"]; raw != nil && !ok {
+		return fmt.Errorf("field onStatus in WorkflowEdge: required")
+	}
+	if _, ok := raw["toStepId"]; raw != nil && !ok {
+		return fmt.Errorf("field toStepId in WorkflowEdge: required")
+	}
+	type Plain WorkflowEdge
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = WorkflowEdge(plain)
+	return nil
+}
+
+// One workflow_runs row (Step 54, §25.10) -- READ-ONLY on the wire: runs are
+// created and advanced exclusively by the execution engine (Step 55, §25.6), never
+// via any request DTO. lane/workflowDefinitionId/definitionVersion are pinned at
+// start time as provenance. 'needs_review' is §25.9's escalation parking state
+// (circuit breaker tripped, or an unrouted needs_fix/blocked outcome):
+// non-terminal, one notice, waiting on a human decision.
+type WorkflowRun struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// DefinitionVersion corresponds to the JSON schema field "definitionVersion".
+	DefinitionVersion int `json:"definitionVersion" yaml:"definitionVersion" mapstructure:"definitionVersion"`
+
+	// Null while the run is non-terminal. goJSONSchema forces the literal *time.Time
+	// for the same named-pointer-type UnmarshalJSON reason Plan.decidedAt documents
+	// in full.
+	FinishedAt *time.Time `json:"finishedAt" yaml:"finishedAt" mapstructure:"finishedAt"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Matches Postgres workflow_lane exactly.
+	Lane WorkflowRunLane `json:"lane" yaml:"lane" mapstructure:"lane"`
+
+	// SessionId corresponds to the JSON schema field "sessionId".
+	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// Matches Postgres workflow_run_status exactly. The owning transition table ships
+	// with Step 55's engine (§11: every state transition through the machine's table)
+	// -- the vocabulary is fixed here so the wire contract never has to change under
+	// it.
+	Status WorkflowRunStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+
+	// WorkflowDefinitionId corresponds to the JSON schema field
+	// "workflowDefinitionId".
+	WorkflowDefinitionId string `json:"workflowDefinitionId" yaml:"workflowDefinitionId" mapstructure:"workflowDefinitionId"`
+}
+
+type WorkflowRunLane string
+
+const WorkflowRunLanePlan WorkflowRunLane = "plan"
+const WorkflowRunLaneRequest WorkflowRunLane = "request"
+const WorkflowRunLaneReview WorkflowRunLane = "review"
+
+var enumValues_WorkflowRunLane = []interface{}{
+	"review",
+	"request",
+	"plan",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowRunLane) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowRunLane {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowRunLane, v)
+	}
+	*j = WorkflowRunLane(v)
+	return nil
+}
+
+type WorkflowRunStatus string
+
+const WorkflowRunStatusCancelled WorkflowRunStatus = "cancelled"
+const WorkflowRunStatusCompleted WorkflowRunStatus = "completed"
+const WorkflowRunStatusFailed WorkflowRunStatus = "failed"
+const WorkflowRunStatusNeedsReview WorkflowRunStatus = "needs_review"
+const WorkflowRunStatusRunning WorkflowRunStatus = "running"
+
+var enumValues_WorkflowRunStatus = []interface{}{
+	"running",
+	"needs_review",
+	"completed",
+	"failed",
+	"cancelled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowRunStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowRunStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowRunStatus, v)
+	}
+	*j = WorkflowRunStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowRun) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in WorkflowRun: required")
+	}
+	if _, ok := raw["definitionVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field definitionVersion in WorkflowRun: required")
+	}
+	if _, ok := raw["finishedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field finishedAt in WorkflowRun: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in WorkflowRun: required")
+	}
+	if _, ok := raw["lane"]; raw != nil && !ok {
+		return fmt.Errorf("field lane in WorkflowRun: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in WorkflowRun: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in WorkflowRun: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in WorkflowRun: required")
+	}
+	if _, ok := raw["workflowDefinitionId"]; raw != nil && !ok {
+		return fmt.Errorf("field workflowDefinitionId in WorkflowRun: required")
+	}
+	type Plain WorkflowRun
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 1 > plain.DefinitionVersion {
+		return fmt.Errorf("field %s: must be >= %v", "definitionVersion", 1)
+	}
+	*j = WorkflowRun(plain)
+	return nil
+}
+
+// Request body for POST /api/workflow-runs/:runId/steps/:stepRunId/decide
+// (§25.9/§25.10) -- the same shape discipline as decideplan.go's approve/reject.
+// NO handler is registered for this route yet: Step 54 ships the contract only
+// (dark); Step 56 mounts the endpoint, gated by authz.ActionDecideWorkflowStep
+// (own/joined-aware, same row as plan approval, §25.11). verdict is a schema-level
+// enum (matching Postgres workflow_step_decision exactly) because the vocabulary
+// is a closed domain enum, the same modeling choice as
+// PostReviewVerdictRequest.riskLevel -- not the deliberately-unconstrained
+// UpdateMemberRoleRequest.role shape.
+type WorkflowStepDecideRequest struct {
+	// The human's instruction. Required non-empty for verdict 'revise' (enforced at
+	// the application layer by Step 56's handler, which owns the specific 400
+	// message); optional context for 'reject'; ignored for 'approve'.
+	Text WorkflowStepDecideRequestText `json:"text" yaml:"text" mapstructure:"text"`
+
+	// approve continues the run; reject ends it; revise ALWAYS re-executes the same
+	// step with text folded in as an additional instruction -- never a direct
+	// substitution of a structured artifact (§25.9, mirroring plan mode's own
+	// 'revise:' handling). Human-revision loops are exempt from the circuit breaker
+	// (§25.9).
+	Verdict WorkflowStepDecideRequestVerdict `json:"verdict" yaml:"verdict" mapstructure:"verdict"`
+}
+
+// The human's instruction. Required non-empty for verdict 'revise' (enforced at
+// the application layer by Step 56's handler, which owns the specific 400
+// message); optional context for 'reject'; ignored for 'approve'.
+type WorkflowStepDecideRequestText *string
+
+type WorkflowStepDecideRequestVerdict string
+
+const WorkflowStepDecideRequestVerdictApprove WorkflowStepDecideRequestVerdict = "approve"
+const WorkflowStepDecideRequestVerdictReject WorkflowStepDecideRequestVerdict = "reject"
+const WorkflowStepDecideRequestVerdictRevise WorkflowStepDecideRequestVerdict = "revise"
+
+var enumValues_WorkflowStepDecideRequestVerdict = []interface{}{
+	"approve",
+	"reject",
+	"revise",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDecideRequestVerdict) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepDecideRequestVerdict {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepDecideRequestVerdict, v)
+	}
+	*j = WorkflowStepDecideRequestVerdict(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDecideRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["text"]; raw != nil && !ok {
+		return fmt.Errorf("field text in WorkflowStepDecideRequest: required")
+	}
+	if _, ok := raw["verdict"]; raw != nil && !ok {
+		return fmt.Errorf("field verdict in WorkflowStepDecideRequest: required")
+	}
+	type Plain WorkflowStepDecideRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = WorkflowStepDecideRequest(plain)
+	return nil
+}
+
+// 200 response body for the decide endpoint (§25.9/§25.10) -- mirrors
+// PlanActionResponse's own minimal confirm-what-happened shape: the decided
+// attempt, the run's resulting status, and the follow-up turn if the verdict
+// dispatched one.
+type WorkflowStepDecideResponse struct {
+	// The owning run's status after this call -- e.g. 'failed' after a winning reject
+	// ends the run, 'running' after an approve/revise continues it.
+	RunStatus WorkflowStepDecideResponseRunStatus `json:"runStatus" yaml:"runStatus" mapstructure:"runStatus"`
+
+	// StepRunId corresponds to the JSON schema field "stepRunId".
+	StepRunId string `json:"stepRunId" yaml:"stepRunId" mapstructure:"stepRunId"`
+
+	// The decided attempt's own status after this call -- the full
+	// workflow_step_run_status enum for forward-compatibility, matching
+	// PlanActionResponse.status's own precedent.
+	StepRunStatus WorkflowStepDecideResponseStepRunStatus `json:"stepRunStatus" yaml:"stepRunStatus" mapstructure:"stepRunStatus"`
+
+	// The newly enqueued turn's id when this verdict dispatched one (an approve
+	// advancing to the next step, a revise re-executing the same step); null when it
+	// did not (a reject) -- mirrors PlanActionResponse.turnId.
+	TurnId WorkflowStepDecideResponseTurnId `json:"turnId" yaml:"turnId" mapstructure:"turnId"`
+}
+
+type WorkflowStepDecideResponseRunStatus string
+
+const WorkflowStepDecideResponseRunStatusCancelled WorkflowStepDecideResponseRunStatus = "cancelled"
+const WorkflowStepDecideResponseRunStatusCompleted WorkflowStepDecideResponseRunStatus = "completed"
+const WorkflowStepDecideResponseRunStatusFailed WorkflowStepDecideResponseRunStatus = "failed"
+const WorkflowStepDecideResponseRunStatusNeedsReview WorkflowStepDecideResponseRunStatus = "needs_review"
+const WorkflowStepDecideResponseRunStatusRunning WorkflowStepDecideResponseRunStatus = "running"
+
+var enumValues_WorkflowStepDecideResponseRunStatus = []interface{}{
+	"running",
+	"needs_review",
+	"completed",
+	"failed",
+	"cancelled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDecideResponseRunStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepDecideResponseRunStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepDecideResponseRunStatus, v)
+	}
+	*j = WorkflowStepDecideResponseRunStatus(v)
+	return nil
+}
+
+type WorkflowStepDecideResponseStepRunStatus string
+
+const WorkflowStepDecideResponseStepRunStatusAwaitingDecision WorkflowStepDecideResponseStepRunStatus = "awaiting_decision"
+const WorkflowStepDecideResponseStepRunStatusCancelled WorkflowStepDecideResponseStepRunStatus = "cancelled"
+const WorkflowStepDecideResponseStepRunStatusCompleted WorkflowStepDecideResponseStepRunStatus = "completed"
+const WorkflowStepDecideResponseStepRunStatusFailed WorkflowStepDecideResponseStepRunStatus = "failed"
+const WorkflowStepDecideResponseStepRunStatusRunning WorkflowStepDecideResponseStepRunStatus = "running"
+
+var enumValues_WorkflowStepDecideResponseStepRunStatus = []interface{}{
+	"awaiting_decision",
+	"running",
+	"completed",
+	"failed",
+	"cancelled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDecideResponseStepRunStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepDecideResponseStepRunStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepDecideResponseStepRunStatus, v)
+	}
+	*j = WorkflowStepDecideResponseStepRunStatus(v)
+	return nil
+}
+
+// The newly enqueued turn's id when this verdict dispatched one (an approve
+// advancing to the next step, a revise re-executing the same step); null when it
+// did not (a reject) -- mirrors PlanActionResponse.turnId.
+type WorkflowStepDecideResponseTurnId *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDecideResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["runStatus"]; raw != nil && !ok {
+		return fmt.Errorf("field runStatus in WorkflowStepDecideResponse: required")
+	}
+	if _, ok := raw["stepRunId"]; raw != nil && !ok {
+		return fmt.Errorf("field stepRunId in WorkflowStepDecideResponse: required")
+	}
+	if _, ok := raw["stepRunStatus"]; raw != nil && !ok {
+		return fmt.Errorf("field stepRunStatus in WorkflowStepDecideResponse: required")
+	}
+	if _, ok := raw["turnId"]; raw != nil && !ok {
+		return fmt.Errorf("field turnId in WorkflowStepDecideResponse: required")
+	}
+	type Plain WorkflowStepDecideResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = WorkflowStepDecideResponse(plain)
+	return nil
+}
+
+// One workflow_step_definitions row plus its outgoing edges (Step 54, §25.10).
+// order is 1-based and unique per definition, not required contiguous. modelId
+// null means inherit exactly what the session would use today
+// (turns.model_id/sessions.build_model_id -- §25.8's zero-config proof); non-null
+// is the same opaque 'provider/model' passthrough convention modelId fields
+// already use (§25.1/§25.7, no Narvi-side allowlist). promptTemplate uses the
+// established '{{variable_name}}' placeholder syntax (§18.6); '{{prompt}}' is the
+// caller's own text.
+type WorkflowStepDefinition struct {
+	// §25.10's optional canvas-layout attachment: this step's node position on the
+	// visual editor's canvas (Step 79, §25.12). OPAQUE server-side -- stored verbatim
+	// (workflow_step_definitions.canvas_position JSONB), round-tripped, never
+	// interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like
+	// CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has
+	// ever been saved for this step (true for every built-in and every API-authored
+	// definition until a canvas first saves one).
+	CanvasPosition *WorkflowStepDefinitionCanvasPosition `json:"canvasPosition,omitempty,omitzero" yaml:"canvasPosition,omitempty" mapstructure:"canvasPosition,omitempty"`
+
+	// Matches Postgres workflow_conversation_continuity exactly (§25.6: fresh is a
+	// new OpenCode conversation on the SAME session, never a child session).
+	ConversationContinuity WorkflowStepDefinitionConversationContinuity `json:"conversationContinuity" yaml:"conversationContinuity" mapstructure:"conversationContinuity"`
+
+	// This step's own explicit outgoing edges -- empty means pure default routing
+	// (§25.4). At most one edge per onStatus value (workflow_edges_from_status_uniq).
+	Edges []WorkflowEdge `json:"edges" yaml:"edges" mapstructure:"edges"`
+
+	// Matches Postgres workflow_execution_scope exactly (§25.6: child_session is
+	// reserved for steps needing real isolation; same_session is the default and what
+	// every built-in step uses).
+	ExecutionScope WorkflowStepDefinitionExecutionScope `json:"executionScope" yaml:"executionScope" mapstructure:"executionScope"`
+
+	// HitlAfter corresponds to the JSON schema field "hitlAfter".
+	HitlAfter bool `json:"hitlAfter" yaml:"hitlAfter" mapstructure:"hitlAfter"`
+
+	// HitlBefore corresponds to the JSON schema field "hitlBefore".
+	HitlBefore bool `json:"hitlBefore" yaml:"hitlBefore" mapstructure:"hitlBefore"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Matches Postgres workflow_step_kind exactly -- a single-value closed enum as of
+	// Step 54 (every §25.8 shape is an ordinary agent turn); modeled as an enum, not
+	// a literal, so a later phase can add a kind without a shape change.
+	Kind WorkflowStepDefinitionKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// ModelId corresponds to the JSON schema field "modelId".
+	ModelId WorkflowStepDefinitionModelId `json:"modelId" yaml:"modelId" mapstructure:"modelId"`
+
+	// Order corresponds to the JSON schema field "order".
+	Order int `json:"order" yaml:"order" mapstructure:"order"`
+
+	// PromptTemplate corresponds to the JSON schema field "promptTemplate".
+	PromptTemplate string `json:"promptTemplate" yaml:"promptTemplate" mapstructure:"promptTemplate"`
+}
+
+// §25.10's optional canvas-layout attachment: this step's node position on the
+// visual editor's canvas (Step 79, §25.12). OPAQUE server-side -- stored verbatim
+// (workflow_step_definitions.canvas_position JSONB), round-tripped, never
+// interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like
+// CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has
+// ever been saved for this step (true for every built-in and every API-authored
+// definition until a canvas first saves one).
+type WorkflowStepDefinitionCanvasPosition struct {
+	// X corresponds to the JSON schema field "x".
+	X float64 `json:"x" yaml:"x" mapstructure:"x"`
+
+	// Y corresponds to the JSON schema field "y".
+	Y float64 `json:"y" yaml:"y" mapstructure:"y"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDefinitionCanvasPosition) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["x"]; raw != nil && !ok {
+		return fmt.Errorf("field x in WorkflowStepDefinitionCanvasPosition: required")
+	}
+	if _, ok := raw["y"]; raw != nil && !ok {
+		return fmt.Errorf("field y in WorkflowStepDefinitionCanvasPosition: required")
+	}
+	type Plain WorkflowStepDefinitionCanvasPosition
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = WorkflowStepDefinitionCanvasPosition(plain)
+	return nil
+}
+
+type WorkflowStepDefinitionConversationContinuity string
+
+const WorkflowStepDefinitionConversationContinuityContinue WorkflowStepDefinitionConversationContinuity = "continue"
+const WorkflowStepDefinitionConversationContinuityFresh WorkflowStepDefinitionConversationContinuity = "fresh"
+
+var enumValues_WorkflowStepDefinitionConversationContinuity = []interface{}{
+	"continue",
+	"fresh",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDefinitionConversationContinuity) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepDefinitionConversationContinuity {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepDefinitionConversationContinuity, v)
+	}
+	*j = WorkflowStepDefinitionConversationContinuity(v)
+	return nil
+}
+
+type WorkflowStepDefinitionExecutionScope string
+
+const WorkflowStepDefinitionExecutionScopeChildSession WorkflowStepDefinitionExecutionScope = "child_session"
+const WorkflowStepDefinitionExecutionScopeSameSession WorkflowStepDefinitionExecutionScope = "same_session"
+
+var enumValues_WorkflowStepDefinitionExecutionScope = []interface{}{
+	"same_session",
+	"child_session",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDefinitionExecutionScope) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepDefinitionExecutionScope {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepDefinitionExecutionScope, v)
+	}
+	*j = WorkflowStepDefinitionExecutionScope(v)
+	return nil
+}
+
+type WorkflowStepDefinitionKind string
+
+const WorkflowStepDefinitionKindAgent WorkflowStepDefinitionKind = "agent"
+
+var enumValues_WorkflowStepDefinitionKind = []interface{}{
+	"agent",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDefinitionKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepDefinitionKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepDefinitionKind, v)
+	}
+	*j = WorkflowStepDefinitionKind(v)
+	return nil
+}
+
+type WorkflowStepDefinitionModelId *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepDefinition) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["conversationContinuity"]; raw != nil && !ok {
+		return fmt.Errorf("field conversationContinuity in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["edges"]; raw != nil && !ok {
+		return fmt.Errorf("field edges in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["executionScope"]; raw != nil && !ok {
+		return fmt.Errorf("field executionScope in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["hitlAfter"]; raw != nil && !ok {
+		return fmt.Errorf("field hitlAfter in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["hitlBefore"]; raw != nil && !ok {
+		return fmt.Errorf("field hitlBefore in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["modelId"]; raw != nil && !ok {
+		return fmt.Errorf("field modelId in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["order"]; raw != nil && !ok {
+		return fmt.Errorf("field order in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["promptTemplate"]; raw != nil && !ok {
+		return fmt.Errorf("field promptTemplate in WorkflowStepDefinition: required")
+	}
+	type Plain WorkflowStepDefinition
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 1 > plain.Order {
+		return fmt.Errorf("field %s: must be >= %v", "order", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PromptTemplate)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "promptTemplate", 1)
+	}
+	*j = WorkflowStepDefinition(plain)
+	return nil
+}
+
+// One workflow_step_runs row (Step 54, §25.10) -- READ-ONLY on the wire, one row
+// per ATTEMPT of one step within a run (a retry/revise re-execution is a NEW row,
+// never an update-in-place -- §25.5's COUNT(*) iteration read depends on exactly
+// that). Deliberately omits two persisted columns, mirroring Plan's own documented
+// omissions: outcome_payload (the §25.6 typed step-to-step handoff, internal
+// plumbing the engine consumes -- never re-parsed presentation data) and
+// decision_text (write-side input, carried by WorkflowStepDecideRequest.text and
+// folded into the NEXT attempt's re-execution).
+type WorkflowStepRun struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Null until a HITL verdict is recorded -- mirrors Plan.decidedAt exactly,
+	// goJSONSchema *time.Time included (see that field's own doc comment for the full
+	// named-pointer-type reason).
+	DecidedAt *time.Time `json:"decidedAt" yaml:"decidedAt" mapstructure:"decidedAt"`
+
+	// The user who decided this attempt's HITL verdict. Null until decided, or for a
+	// decision attributed to no direct human user -- mirrors Plan.decidedBy.
+	DecidedBy WorkflowStepRunDecidedBy `json:"decidedBy" yaml:"decidedBy" mapstructure:"decidedBy"`
+
+	// Matches Postgres workflow_step_decision exactly. Null unless a HITL verdict has
+	// been rendered on this attempt (§25.9).
+	Decision *WorkflowStepRunDecision `json:"decision" yaml:"decision" mapstructure:"decision"`
+
+	// Null while this attempt is live (running/awaiting_decision).
+	FinishedAt *time.Time `json:"finishedAt" yaml:"finishedAt" mapstructure:"finishedAt"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Matches Postgres workflow_step_outcome_status exactly. Null until this
+	// attempt's own typed outcome is posted (§25.6).
+	OutcomeStatus *WorkflowStepRunOutcomeStatus `json:"outcomeStatus" yaml:"outcomeStatus" mapstructure:"outcomeStatus"`
+
+	// The posted outcome's advisory free-text summary -- never re-parsed as
+	// structured data once posted (§25.6), same discipline as
+	// PostReviewVerdictRequest.summary.
+	OutcomeSummary WorkflowStepRunOutcomeSummary `json:"outcomeSummary" yaml:"outcomeSummary" mapstructure:"outcomeSummary"`
+
+	// Matches Postgres workflow_step_run_status exactly. Same dark-vocabulary note as
+	// WorkflowRun.status: the owning transition table is Step 55's.
+	Status WorkflowStepRunStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// StepDefinitionId corresponds to the JSON schema field "stepDefinitionId".
+	StepDefinitionId string `json:"stepDefinitionId" yaml:"stepDefinitionId" mapstructure:"stepDefinitionId"`
+
+	// The ordinary turn this attempt dispatched as (§25.6: 'every step is an ordinary
+	// sequential turn'). Null while an awaiting_decision (hitlBefore-gated) attempt
+	// exists before any turn does.
+	TurnId WorkflowStepRunTurnId `json:"turnId" yaml:"turnId" mapstructure:"turnId"`
+
+	// WorkflowRunId corresponds to the JSON schema field "workflowRunId".
+	WorkflowRunId string `json:"workflowRunId" yaml:"workflowRunId" mapstructure:"workflowRunId"`
+}
+
+// The user who decided this attempt's HITL verdict. Null until decided, or for a
+// decision attributed to no direct human user -- mirrors Plan.decidedBy.
+type WorkflowStepRunDecidedBy *string
+
+type WorkflowStepRunDecision struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *WorkflowStepRunDecision) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_WorkflowStepRunDecision = []interface{}{
+	"approve",
+	"reject",
+	"revise",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepRunDecision) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepRunDecision {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepRunDecision, v.Value)
+	}
+	*j = WorkflowStepRunDecision(v)
+	return nil
+}
+
+type WorkflowStepRunOutcomeStatus struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *WorkflowStepRunOutcomeStatus) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_WorkflowStepRunOutcomeStatus = []interface{}{
+	"ok",
+	"needs_fix",
+	"blocked",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepRunOutcomeStatus) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepRunOutcomeStatus {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepRunOutcomeStatus, v.Value)
+	}
+	*j = WorkflowStepRunOutcomeStatus(v)
+	return nil
+}
+
+// The posted outcome's advisory free-text summary -- never re-parsed as structured
+// data once posted (§25.6), same discipline as PostReviewVerdictRequest.summary.
+type WorkflowStepRunOutcomeSummary *string
+
+type WorkflowStepRunStatus string
+
+const WorkflowStepRunStatusAwaitingDecision WorkflowStepRunStatus = "awaiting_decision"
+const WorkflowStepRunStatusCancelled WorkflowStepRunStatus = "cancelled"
+const WorkflowStepRunStatusCompleted WorkflowStepRunStatus = "completed"
+const WorkflowStepRunStatusFailed WorkflowStepRunStatus = "failed"
+const WorkflowStepRunStatusRunning WorkflowStepRunStatus = "running"
+
+var enumValues_WorkflowStepRunStatus = []interface{}{
+	"awaiting_decision",
+	"running",
+	"completed",
+	"failed",
+	"cancelled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepRunStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_WorkflowStepRunStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkflowStepRunStatus, v)
+	}
+	*j = WorkflowStepRunStatus(v)
+	return nil
+}
+
+// The ordinary turn this attempt dispatched as (§25.6: 'every step is an ordinary
+// sequential turn'). Null while an awaiting_decision (hitlBefore-gated) attempt
+// exists before any turn does.
+type WorkflowStepRunTurnId *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *WorkflowStepRun) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in WorkflowStepRun: required")
+	}
+	if _, ok := raw["decidedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field decidedAt in WorkflowStepRun: required")
+	}
+	if _, ok := raw["decidedBy"]; raw != nil && !ok {
+		return fmt.Errorf("field decidedBy in WorkflowStepRun: required")
+	}
+	if _, ok := raw["decision"]; raw != nil && !ok {
+		return fmt.Errorf("field decision in WorkflowStepRun: required")
+	}
+	if _, ok := raw["finishedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field finishedAt in WorkflowStepRun: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in WorkflowStepRun: required")
+	}
+	if _, ok := raw["outcomeStatus"]; raw != nil && !ok {
+		return fmt.Errorf("field outcomeStatus in WorkflowStepRun: required")
+	}
+	if _, ok := raw["outcomeSummary"]; raw != nil && !ok {
+		return fmt.Errorf("field outcomeSummary in WorkflowStepRun: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in WorkflowStepRun: required")
+	}
+	if _, ok := raw["stepDefinitionId"]; raw != nil && !ok {
+		return fmt.Errorf("field stepDefinitionId in WorkflowStepRun: required")
+	}
+	if _, ok := raw["turnId"]; raw != nil && !ok {
+		return fmt.Errorf("field turnId in WorkflowStepRun: required")
+	}
+	if _, ok := raw["workflowRunId"]; raw != nil && !ok {
+		return fmt.Errorf("field workflowRunId in WorkflowStepRun: required")
+	}
+	type Plain WorkflowStepRun
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = WorkflowStepRun(plain)
+	return nil
+}
