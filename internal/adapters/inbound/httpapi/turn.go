@@ -14,6 +14,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/workflowengine"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -456,17 +457,55 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		}
 	}
 
+	// Step 55 ("workflow execution engine", §25.6): resolve which
+	// WorkflowDefinition/StepDefinition governs this new turn, and use its
+	// PromptTemplate/ModelID to build it -- internal/app/workflowengine's
+	// own doc.go documents the full design and its fail-open contract in
+	// detail. workflows is constructed fresh from pool here (rather than
+	// threaded through as a new parameter to this function, like sessions/
+	// turns/plans/auditLog above) specifically so this Step's own diff to
+	// createTurnLocked/CreateTurnCore stays minimal: adding a required
+	// parameter would cascade into every one of this core's own callers
+	// (REST, Slack's addTurn/interactive.go, Linear's webhook.go,
+	// GitHub's bot.go) across three different packages, none of which
+	// otherwise need to change at all for this Step -- a materially larger
+	// diff, in the single riskiest Step so far, for no behavioral benefit
+	// (postgres.NewWorkflowStore is a trivial, side-effect-free wrapper
+	// around the SAME pool/tx every other store here already uses).
+	//
+	// A failure reading the session row here (vanishingly unlikely --
+	// GetActorEpochForUpdate above already just confirmed this exact row
+	// exists and holds its lock for this whole transaction) degrades to
+	// the engine's own safest fallback -- prompt/modelID dispatched
+	// UNCHANGED, exactly as if this Step did not exist -- rather than
+	// failing turn creation over what is fundamentally an engine
+	// bookkeeping concern.
+	effectivePrompt, effectiveModelID := prompt, modelID
+	workflows := postgres.NewWorkflowStore(pool).WithTx(tx)
+	var resolution workflowengine.Resolution
+	if sessionRow, sessErr := sessions.WithTx(tx).Get(ctx, sessionID); sessErr != nil {
+		logger.Warn("httpapi: get session row for workflow engine resolution failed; dispatching unchanged", "error", sessErr)
+	} else {
+		resolution = workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID)
+		effectivePrompt, effectiveModelID = resolution.Prompt, resolution.ModelID
+	}
+
 	created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
 		SessionID: sessionID,
 		Status:    sqlcgen.TurnStatusPending,
-		Prompt:    &prompt,
-		ModelID:   modelID,
+		Prompt:    &effectivePrompt,
+		ModelID:   effectiveModelID,
 		PlanMode:  planMode,
 	})
 	if err != nil {
 		logger.Error("httpapi: create turn failed", "error", err)
 		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
+	// AttachTurn is a no-op unless ResolveStepForNewTurn actually created a
+	// new workflow_step_runs attempt above (Resolution.Tracked) -- see that
+	// function's own doc comment for the (deliberately untracked) cases
+	// this correctly skips.
+	workflowengine.AttachTurn(ctx, workflows, resolution, created.ID)
 
 	if err := recordAuditLog(ctx, auditLog.WithTx(tx), actorUserID, "turn.create", "turn", created.ID.String(), map[string]any{
 		"session_id": sessionID.String(),

@@ -62,6 +62,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/workflowengine"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
 	"github.com/khazaddev/narvi/internal/domain/session"
 	"github.com/khazaddev/narvi/internal/domain/turn"
@@ -427,6 +428,14 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 		}); err != nil {
 			return fmt.Errorf("sessionactor: update turn status: %w", err)
 		}
+
+		// Step 55 ("workflow execution engine", §25.6): this turn just
+		// reached a real terminal state via its own turn_deadline, exactly
+		// like a real execution_complete event would (pushpr.go's
+		// completeProcessingTurn) -- see OnTurnCompleted's own doc comment
+		// for why ALL THREE terminal-state call sites need this hook, not
+		// just that one.
+		workflowengine.OnTurnCompleted(ctx, a.stores.workflow.WithTx(tx), processing.ID, turn.TriggerTimeout)
 
 		// §3.3: "Stop/failure paths emit a synthetic execution_complete
 		// event so clients always see one terminal event per turn" --

@@ -1,0 +1,326 @@
+//go:build integration
+
+package workflowengine_test
+
+import (
+	"context"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/workflowengine"
+	"github.com/khazaddev/narvi/internal/domain/turn"
+)
+
+// The three seeded built-in definition/step ids (migration 000057's own
+// header comment) -- mirrors internal/adapters/outbound/postgres's own
+// workflow_seed_integration_test.go identical constants (unreachable from
+// this external test package).
+const (
+	builtInRequestDefID  = "00000000-0000-4000-8000-000000000002"
+	builtInRequestStepID = "00000000-0000-4000-8000-000000000021"
+	builtInPlanDefID     = "00000000-0000-4000-8000-000000000003"
+	builtInPlanStep1ID   = "00000000-0000-4000-8000-000000000031"
+)
+
+// liveRow bundles the (workflow_run_id, step_run_id, step_definition_id)
+// triple TestOnTurnCompleted's own subtests need after starting a run.
+type liveRow struct {
+	sessionID      pgtype.UUID
+	runID          pgtype.UUID
+	stepRunID      pgtype.UUID
+	stepDefID      pgtype.UUID
+	turnID         pgtype.UUID
+	workflowsStore *postgres.WorkflowStore
+}
+
+// newSession creates a bare session (no repos, no intent_decision --
+// zero-config) directly via SessionStore, exactly like
+// internal/adapters/inbound/httpapi's own turnCoreTestRig.newFixtureSession.
+func newSession(t *testing.T, ctx context.Context, sessions *postgres.SessionStore) sqlcgen.Session {
+	t.Helper()
+	s, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb})
+	if err != nil {
+		t.Fatalf("create fixture session: %v", err)
+	}
+	return s
+}
+
+// startRunAndAttachRealTurn mirrors createTurnLocked's own two-call
+// sequence (ResolveStepForNewTurn, then insert the turn, then AttachTurn)
+// exactly, so OnTurnCompleted's own tests exercise a run/step-run/turn
+// triple shaped exactly like production traffic produces -- returns the
+// resolution's own prompt/modelID too, for callers that want to assert on
+// them directly (the repo-override test).
+func startRunAndAttachRealTurn(t *testing.T, ctx context.Context, sessions *postgres.SessionStore, turns *postgres.TurnStore, workflows *postgres.WorkflowStore, sessionRow sqlcgen.Session, prompt string, modelID *string, planMode bool) (liveRow, workflowengine.Resolution) {
+	t.Helper()
+
+	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID)
+	if !res.Tracked {
+		t.Fatalf("ResolveStepForNewTurn: Tracked = false, want true for a fresh session")
+	}
+
+	created, err := turns.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID: sessionRow.ID,
+		Status:    sqlcgen.TurnStatusProcessing,
+		Prompt:    &res.Prompt,
+		ModelID:   res.ModelID,
+		PlanMode:  planMode,
+	})
+	if err != nil {
+		t.Fatalf("create turn: %v", err)
+	}
+
+	workflowengine.AttachTurn(ctx, workflows, res, created.ID)
+
+	// Re-fetch by the now-attached turn id (GetLiveStepRunByTurnID, the
+	// SAME lookup OnTurnCompleted itself uses) -- res.StepRunID alone has
+	// no direct "fetch by step-run id" method on WorkflowStore, and this
+	// exercises the real reverse lookup path instead of inventing one.
+	stepRun, err := workflows.GetLiveStepRunByTurnID(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get live step run by turn id: %v", err)
+	}
+
+	return liveRow{
+		sessionID:      sessionRow.ID,
+		runID:          stepRun.WorkflowRunID,
+		stepRunID:      stepRun.ID,
+		stepDefID:      stepRun.StepDefinitionID,
+		turnID:         created.ID,
+		workflowsStore: workflows,
+	}, res
+}
+
+func TestResolveStepForNewTurn_ZeroConfigRequestLane_StartsNewRunAndTracksFirstStep(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessions := postgres.NewSessionStore(pool)
+	turns := postgres.NewTurnStore(pool)
+	workflows := postgres.NewWorkflowStore(pool)
+
+	session := newSession(t, ctx, sessions)
+
+	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "hello there", nil)
+	if !res.Tracked {
+		t.Fatal("Tracked = false, want true")
+	}
+	if res.Prompt != "hello there" {
+		t.Errorf("Prompt = %q, want %q (built-in request step is pure passthrough)", res.Prompt, "hello there")
+	}
+	if res.ModelID != nil {
+		t.Errorf("ModelID = %v, want nil (caller passed nil, built-in step ModelID is nil -- inherit)", res.ModelID)
+	}
+
+	runRow, err := workflows.GetRunningRunForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetRunningRunForSession: %v", err)
+	}
+	if string(runRow.Lane) != "request" {
+		t.Errorf("run lane = %q, want %q", runRow.Lane, "request")
+	}
+	if runRow.WorkflowDefinitionID.String() != builtInRequestDefID {
+		t.Errorf("run definition id = %s, want the built-in request definition %s", runRow.WorkflowDefinitionID.String(), builtInRequestDefID)
+	}
+	if string(runRow.Status) != "running" {
+		t.Errorf("run status = %q, want running", runRow.Status)
+	}
+
+	stepRun, err := workflows.GetLiveStepRunForRun(ctx, runRow.ID)
+	if err != nil {
+		t.Fatalf("GetLiveStepRunForRun: %v", err)
+	}
+	if stepRun.StepDefinitionID.String() != builtInRequestStepID {
+		t.Errorf("step-run step id = %s, want the built-in request step %s", stepRun.StepDefinitionID.String(), builtInRequestStepID)
+	}
+	if stepRun.TurnID.Valid {
+		t.Error("step-run turn_id is already set before AttachTurn ran, want NULL")
+	}
+
+	// workflow_step_runs.turn_id is a real FK (REFERENCES turns(id)) -- a
+	// real turn row is required here, not an invented UUID.
+	createdTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID: session.ID,
+		Status:    sqlcgen.TurnStatusPending,
+		Prompt:    &res.Prompt,
+		ModelID:   res.ModelID,
+	})
+	if err != nil {
+		t.Fatalf("create real turn for FK: %v", err)
+	}
+	workflowengine.AttachTurn(ctx, workflows, res, createdTurn.ID)
+
+	stepRun2, err := workflows.GetLiveStepRunForRun(ctx, runRow.ID)
+	if err != nil {
+		t.Fatalf("GetLiveStepRunForRun (after attach): %v", err)
+	}
+	if !stepRun2.TurnID.Valid || stepRun2.TurnID != createdTurn.ID {
+		t.Errorf("step-run turn_id after AttachTurn = %+v, want %+v", stepRun2.TurnID, createdTurn.ID)
+	}
+}
+
+// TestResolveStepForNewTurn_RepoOverrideBinding_UsesOverrideNotGlobal
+// proves §25.7's per-step model/provider binding AND §25.4's repo-override
+// resolution together, in the one scenario this Step's own zero-config
+// characterization test deliberately does NOT cover (a real, non-built-in
+// definition bound to a specific repo): a session naming exactly one repo
+// whose "owner/repo" has its own workflow_bindings row must dispatch
+// through THAT definition's own step -- a non-passthrough PromptTemplate
+// and a non-nil ModelID -- not the global built-in.
+func TestResolveStepForNewTurn_RepoOverrideBinding_UsesOverrideNotGlobal(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessions := postgres.NewSessionStore(pool)
+	workflows := postgres.NewWorkflowStore(pool)
+
+	const (
+		customDefID  = "10000000-0000-4000-8000-000000000001"
+		customStepID = "10000000-0000-4000-8000-000000000002"
+	)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workflow_definitions (id, lane, name, is_built_in, version) VALUES ($1, 'request', 'custom-request', false, 1)`,
+		customDefID); err != nil {
+		t.Fatalf("seed custom definition: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workflow_step_definitions (id, workflow_definition_id, step_order, kind, model_id, prompt_template)
+		VALUES ($1, $2, 1, 'agent', 'openai/gpt-5.5-codex', 'OVERRIDE: {{prompt}}')`,
+		customStepID, customDefID); err != nil {
+		t.Fatalf("seed custom step: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workflow_bindings (lane, repo_full_name, workflow_definition_id, definition_version)
+		VALUES ('request', 'acme/widgets', $1, 1)`, customDefID); err != nil {
+		t.Fatalf("seed repo override binding: %v", err)
+	}
+
+	repos := []byte(`[{"name":"widgets","url":"https://github.com/acme/widgets.git","branch":null}]`)
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb, Repos: repos})
+	if err != nil {
+		t.Fatalf("create session with repos: %v", err)
+	}
+
+	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "fix the bug", nil)
+	if !res.Tracked {
+		t.Fatal("Tracked = false, want true")
+	}
+	if res.Prompt != "OVERRIDE: fix the bug" {
+		t.Errorf("Prompt = %q, want the custom step's own rendered template", res.Prompt)
+	}
+	if res.ModelID == nil || *res.ModelID != "openai/gpt-5.5-codex" {
+		t.Errorf("ModelID = %v, want %q (the custom step's own per-step override, §25.7)", res.ModelID, "openai/gpt-5.5-codex")
+	}
+
+	runRow, err := workflows.GetRunningRunForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetRunningRunForSession: %v", err)
+	}
+	if runRow.WorkflowDefinitionID.String() != customDefID {
+		t.Errorf("run definition id = %s, want the repo-override custom definition %s, not the global built-in", runRow.WorkflowDefinitionID.String(), customDefID)
+	}
+}
+
+// TestResolveStepForNewTurn_MultiRepoSession_FallsBackToGlobalBinding
+// proves repoFullNameFromSessionRepos' own documented ambiguous-multi-repo
+// carve-out end to end: even with a repo-specific override seeded for ONE
+// of a session's two repos, a multi-repo session resolves the GLOBAL
+// binding, never guessing which repo's override should apply.
+func TestResolveStepForNewTurn_MultiRepoSession_FallsBackToGlobalBinding(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessions := postgres.NewSessionStore(pool)
+	workflows := postgres.NewWorkflowStore(pool)
+
+	const customDefID = "10000000-0000-4000-8000-000000000003"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workflow_definitions (id, lane, name, is_built_in, version) VALUES ($1, 'request', 'custom-request-2', false, 1)`,
+		customDefID); err != nil {
+		t.Fatalf("seed custom definition: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workflow_bindings (lane, repo_full_name, workflow_definition_id, definition_version)
+		VALUES ('request', 'acme/widgets', $1, 1)`, customDefID); err != nil {
+		t.Fatalf("seed repo override binding: %v", err)
+	}
+
+	repos := []byte(`[{"name":"widgets","url":"https://github.com/acme/widgets.git","branch":null},{"name":"other","url":"https://github.com/acme/other.git","branch":null}]`)
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb, Repos: repos})
+	if err != nil {
+		t.Fatalf("create session with repos: %v", err)
+	}
+
+	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "do it", nil)
+	if !res.Tracked {
+		t.Fatal("Tracked = false, want true")
+	}
+	if res.Prompt != "do it" {
+		t.Errorf("Prompt = %q, want the caller's own text unchanged (global built-in is passthrough)", res.Prompt)
+	}
+
+	runRow, err := workflows.GetRunningRunForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("GetRunningRunForSession: %v", err)
+	}
+	if runRow.WorkflowDefinitionID.String() != builtInRequestDefID {
+		t.Errorf("run definition id = %s, want the GLOBAL built-in %s (multi-repo session, ambiguous, never guesses)", runRow.WorkflowDefinitionID.String(), builtInRequestDefID)
+	}
+}
+
+// TestResolveStepForNewTurn_LiveAwaitingDecisionStep_ResolvesButDoesNotTrack
+// proves case 2 of ResolveStepForNewTurn's own doc comment: once a run's
+// live step-run is 'awaiting_decision' (the plan lane's own HITLAfter
+// gate), a SECOND call for the same session (simulating a "revise" turn)
+// resolves that SAME step's template/model but creates NO new
+// workflow_step_runs row -- never violating
+// workflow_step_runs_one_live_per_run.
+func TestResolveStepForNewTurn_LiveAwaitingDecisionStep_ResolvesButDoesNotTrack(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	sessions := postgres.NewSessionStore(pool)
+	turns := postgres.NewTurnStore(pool)
+	workflows := postgres.NewWorkflowStore(pool)
+
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if _, err := sessions.UpdateIntentDecisionIfNull(ctx, session.ID,
+		[]byte(`{"target":"request","mode":"plan"}`)); err != nil {
+		t.Fatalf("seed intent_decision: %v", err)
+	}
+	session, err = sessions.Get(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("re-fetch session: %v", err)
+	}
+
+	row, _ := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "draft a plan", nil, true)
+	workflowengine.OnTurnCompleted(ctx, workflows, row.turnID, turn.TriggerComplete)
+
+	stepRun, err := workflows.GetLiveStepRunForRun(ctx, row.runID)
+	if err != nil {
+		t.Fatalf("get live step run after completion: %v", err)
+	}
+	if string(stepRun.Status) != "awaiting_decision" {
+		t.Fatalf("step-run status = %q, want awaiting_decision (test setup assumption)", stepRun.Status)
+	}
+
+	res2 := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "revise: drop the retry", nil)
+	if res2.Tracked {
+		t.Error("Tracked = true, want false (an awaiting_decision live step must not get a second attempt created by this Step's engine)")
+	}
+	if res2.Prompt != "revise: drop the retry" {
+		t.Errorf("Prompt = %q, want the caller's own text unchanged (built-in plan step 1 is passthrough)", res2.Prompt)
+	}
+
+	var liveCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM workflow_step_runs WHERE workflow_run_id = $1 AND status IN ('running','awaiting_decision')`,
+		row.runID.String()).Scan(&liveCount); err != nil {
+		t.Fatalf("count live step-runs: %v", err)
+	}
+	if liveCount != 1 {
+		t.Errorf("live step-run count = %d, want exactly 1 (no second attempt created)", liveCount)
+	}
+}

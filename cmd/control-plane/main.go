@@ -301,6 +301,17 @@ func serve() error {
 	// shared, never a second independently-constructed copy.
 	reviewFindingStore := postgres.NewReviewFindingStore(pool)
 	sentinelFixStore := postgres.NewSentinelFixStore(pool)
+	// workflowStore (Step 55, "workflow execution engine", §25.6) backs
+	// the generic step-outcome-posting tool (workflowstepoutcome.go) --
+	// sessionactor's own Registry constructs its OWN WorkflowStore
+	// internally (newStoreBundle, registry.go), and createTurnLocked
+	// constructs one inline from pool (turn.go's own doc comment explains
+	// why: avoiding a cascading signature change to CreateTurnCore's many
+	// callers) -- this is a THIRD, independent instance, exactly like
+	// sandboxStore/sessionStore above are each already constructed once
+	// per real top-level consumer rather than shared across unrelated
+	// ones.
+	workflowStore := postgres.NewWorkflowStore(pool)
 	// githubActorLinkNoticeStore (batch fix/deny-unlinked-github-actors)
 	// backs the GitHub webhook ingress's own anti-spam dedupe for the
 	// "please sign in" reply posted to an unlinked commenter's denied
@@ -483,6 +494,19 @@ func serve() error {
 	// regex (§5.2).
 	router.Post("/sessions/{sessionID}/review/verdict",
 		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, cfg.GitHubBotHandle))
+
+	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6):
+	// the GENERIC step-outcome-posting tool -- deliberately mounted
+	// OUTSIDE /api/sessions and outside auth.Middleware entirely,
+	// mirroring review/verdict immediately above exactly (see
+	// httpapi/workflowstepoutcome.go's own doc comment). Unlike
+	// review/verdict, no §25.8 built-in workflow's own prompt is wired to
+	// actually call this in this Step -- it exists as real, callable
+	// infrastructure for whichever future non-built-in workflow step
+	// needs it (this Step's own generic engine + tool, never a specific
+	// audit workflow).
+	router.Post("/sessions/{sessionID}/workflow/step-outcome",
+		httpapi.PostWorkflowStepOutcome(sandboxStore, workflowStore))
 
 	// Slack ingress (Step 33, §8.10): deliberately mounted OUTSIDE
 	// /api/sessions and outside auth.Middleware entirely -- Slack itself

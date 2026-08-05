@@ -67,6 +67,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/workflowengine"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/turn"
@@ -238,6 +239,15 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 	if err != nil {
 		return nil, err
 	}
+
+	// Step 55 ("workflow execution engine", §25.6): if processing's own
+	// turn is a live, engine-tracked workflow step attempt, finalize it
+	// (and, unless HITLAfter-gated, consult workflow.NextStep to advance/
+	// complete/escalate the owning run) -- a no-op, logged only, for a
+	// turn this package never tracked (see OnTurnCompleted's own doc
+	// comment). Never returns an error: this is bookkeeping, never allowed
+	// to roll back a turn's own already-persisted completion.
+	workflowengine.OnTurnCompleted(ctx, a.stores.workflow.WithTx(tx), processing.ID, trig)
 
 	// Step 35 ("outbox delivery", §5.1): enqueue exactly one outbox
 	// notification for THIS turn's completion, in the SAME transaction as

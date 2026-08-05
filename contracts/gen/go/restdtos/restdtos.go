@@ -2240,6 +2240,127 @@ func (j *PostReviewVerdictResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Request body for POST /sessions/:id/workflow/step-outcome (Step 55, 'workflow
+// execution engine', §25.6) -- the generic step-outcome-posting tool, mirroring
+// PostReviewVerdictRequest's own sandbox-bearer-authenticated-endpoint shape (see
+// reviewverdict.go's doc comment for the full 'why an HTTP endpoint, not a genuine
+// OpenCode/LLM tool-call' reasoning, which applies identically here) but
+// structurally generic rather than review-specific -- internal/domain/reviewpost's
+// existing verdict-posting shape is what this mirrors structurally, per §25.6.
+// Posts onto whichever workflow_step_runs attempt is CURRENTLY the calling
+// session's own live (status='running') one; the caller names no run/step ids at
+// all -- the endpoint resolves that itself from the sandbox-authenticated session
+// id alone.
+type PostWorkflowStepOutcomeRequest struct {
+	// Matches Postgres workflow_step_outcome_status exactly
+	// (internal/domain/workflow.StepOutcomeStatus) -- the ONLY vocabulary an Edge may
+	// condition on (§25.4), a DISTINCT axis from review.Shippable (§25.8): never
+	// routed through it, never inferred from it.
+	Status PostWorkflowStepOutcomeRequestStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// Optional opaque per-step typed handoff data (§25.6's structuredPayload -- e.g.
+	// a future audit step's own review.Verdict + reviewpost.Finding[] payload, out of
+	// this Step's own scope). Stored verbatim (workflow_step_runs.outcome_payload
+	// JSONB) for whichever later step reads it back -- never interpreted or re-parsed
+	// here. Modeled as an opaque raw-JSON passthrough (goJSONSchema ->
+	// encoding/json.RawMessage), mirroring AuditLogEntry.detail's own identical
+	// precedent, so the stored byte stream round-trips exactly. Absent means this
+	// outcome carries no structured handoff data at all.
+	StructuredPayload *json.RawMessage `json:"structuredPayload,omitempty,omitzero" yaml:"structuredPayload,omitempty" mapstructure:"structuredPayload,omitempty"`
+
+	// The agent's own free-text narrative explaining the outcome -- advisory only,
+	// required, never re-parsed back out as structured data once posted (§25.6, the
+	// same discipline PostReviewVerdictRequest.summary already establishes).
+	Summary string `json:"summary" yaml:"summary" mapstructure:"summary"`
+}
+
+type PostWorkflowStepOutcomeRequestStatus string
+
+const PostWorkflowStepOutcomeRequestStatusBlocked PostWorkflowStepOutcomeRequestStatus = "blocked"
+const PostWorkflowStepOutcomeRequestStatusNeedsFix PostWorkflowStepOutcomeRequestStatus = "needs_fix"
+const PostWorkflowStepOutcomeRequestStatusOk PostWorkflowStepOutcomeRequestStatus = "ok"
+
+var enumValues_PostWorkflowStepOutcomeRequestStatus = []interface{}{
+	"ok",
+	"needs_fix",
+	"blocked",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostWorkflowStepOutcomeRequestStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostWorkflowStepOutcomeRequestStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostWorkflowStepOutcomeRequestStatus, v)
+	}
+	*j = PostWorkflowStepOutcomeRequestStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostWorkflowStepOutcomeRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in PostWorkflowStepOutcomeRequest: required")
+	}
+	if _, ok := raw["summary"]; raw != nil && !ok {
+		return fmt.Errorf("field summary in PostWorkflowStepOutcomeRequest: required")
+	}
+	type Plain PostWorkflowStepOutcomeRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Summary)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "summary", 1)
+	}
+	*j = PostWorkflowStepOutcomeRequest(plain)
+	return nil
+}
+
+// 201 response body for POST /sessions/:id/workflow/step-outcome (Step 55, §25.6)
+// -- confirms which attempt/run actually recorded the posted outcome.
+type PostWorkflowStepOutcomeResponse struct {
+	// StepRunId corresponds to the JSON schema field "stepRunId".
+	StepRunId string `json:"stepRunId" yaml:"stepRunId" mapstructure:"stepRunId"`
+
+	// WorkflowRunId corresponds to the JSON schema field "workflowRunId".
+	WorkflowRunId string `json:"workflowRunId" yaml:"workflowRunId" mapstructure:"workflowRunId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostWorkflowStepOutcomeResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["stepRunId"]; raw != nil && !ok {
+		return fmt.Errorf("field stepRunId in PostWorkflowStepOutcomeResponse: required")
+	}
+	if _, ok := raw["workflowRunId"]; raw != nil && !ok {
+		return fmt.Errorf("field workflowRunId in PostWorkflowStepOutcomeResponse: required")
+	}
+	type Plain PostWorkflowStepOutcomeResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PostWorkflowStepOutcomeResponse(plain)
+	return nil
+}
+
 // One finding's own typed fields, as posted by the verdict-posting tool call (Step
 // 48) -- NEVER carries an identity hash (server-computed,
 // internal/domain/reviewpost.ComputeFindingIdentity, never client-supplied -- the
