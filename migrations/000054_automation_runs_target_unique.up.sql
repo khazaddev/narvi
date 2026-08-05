@@ -1,0 +1,27 @@
+-- automation_runs: at-most-one row per (invocation_id, target) -- the
+-- domain invariant migrations/000053_automation_runs.up.sql's own doc
+-- comment already asserts ("every target names exactly one row,
+-- regardless of outcome") but never enforced at the database level until
+-- now.
+--
+-- UNIQUE INDEX on (invocation_id, (target::text)), not a plain UNIQUE
+-- (invocation_id, target) column constraint: jsonb has no default btree
+-- operator class, so Postgres cannot build a UNIQUE constraint/index
+-- directly against a jsonb column. Casting to text is safe here because
+-- Postgres' own jsonb storage format is already canonical (whitespace-
+-- free, object keys in its own fixed order, never the input's original
+-- order) -- two inserts of the SAME logical target (internal/app/
+-- automation's own marshalTargets, target.go) always produce byte-
+-- identical jsonb, and therefore byte-identical text, regardless of the
+-- field order encoding/json.Marshal happened to emit on either call.
+--
+-- Backs app/automation's own createFailedRun fallback path (fanout.go):
+-- createRunAndSession's own tx.Commit can fail with an AMBIGUOUS outcome
+-- (Postgres may have committed server-side despite the client observing
+-- an error) -- this constraint lets that fallback path safely retry via
+-- CreateAutomationRunIfAbsent's own "ON CONFLICT ... DO NOTHING"
+-- (queries/automationruns.sql) rather than risking a SECOND row for the
+-- same target, which would push CountTerminalRunsForInvocation's own
+-- terminalRuns count past total_runs early and close the invocation while
+-- a real run might still be in flight.
+CREATE UNIQUE INDEX automation_runs_invocation_target_uniq ON automation_runs (invocation_id, (target::text));

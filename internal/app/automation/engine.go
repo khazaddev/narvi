@@ -1,0 +1,148 @@
+package automation
+
+import (
+	"context"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/errgroup"
+
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/platform"
+)
+
+// fanOutBatchSize/reconcileBatchSize/sweepBatchSize bound how many rows a
+// single tick claims/processes -- plain counts, not durations, so
+// (mirroring imagebuild.pumpBatchSize/outboxworker.pumpBatchSize's own
+// identical precedent) each is a Go constant rather than a
+// platform.Timeouts field. fanOutBatchSize is deliberately smaller than
+// the other two: fanning out ONE invocation can itself create up to
+// domainautomation.MaxFanOutTargets (10) real sessions, each a genuine
+// Postgres transaction plus a fire-and-forget sandbox-spawn dispatch --
+// far more per-item work than reconciling or sweeping a single already-
+// existing row, so a smaller batch keeps one tick's own worst-case
+// wall-clock time bounded, mirroring releasereview.pendingBatchSize's own
+// identical "this row's own per-item cost is unusually high" reasoning.
+const (
+	fanOutBatchSize    = 5
+	reconcileBatchSize = 50
+	sweepBatchSize     = 50
+)
+
+// Engine is the process-wide background automation engine (see doc.go for
+// the full writeup). Constructed once per process (NewEngine), then run
+// via its own Run method -- exactly like app/imagebuild.Builder and
+// app/reconciler.Reconciler.
+type Engine struct {
+	automations  *postgres.AutomationStore
+	invocations  *postgres.AutomationInvocationStore
+	runs         *postgres.AutomationRunStore
+	sessions     *postgres.SessionStore
+	turns        *postgres.TurnStore
+	environments *postgres.EnvironmentStore
+	auditLog     *postgres.AuditLogStore
+	pool         *pgxpool.Pool
+	registry     *sessionactor.Registry
+	timeouts     platform.Timeouts
+}
+
+// NewEngine builds an Engine backed by the given stores/pool (pool is
+// needed directly, alongside the stores, for the claim step's own
+// transaction and for opening a fresh per-run transaction during fan-out --
+// mirrors app/imagebuild.NewBuilder's own identical reasoning), registry
+// (the *sessionactor.Registry whose GetOrSpawn/EnsureDispatched
+// httpapi.TriggerDispatch drives, once a run's own session is committed),
+// and timeouts (for AutomationEnginePumpInterval/AutomationSweepInterval/
+// the two orphan thresholds, consulted by Run/PumpOnce/ReconcileOnce/
+// SweepOnce).
+func NewEngine(
+	automations *postgres.AutomationStore,
+	invocations *postgres.AutomationInvocationStore,
+	runs *postgres.AutomationRunStore,
+	sessions *postgres.SessionStore,
+	turns *postgres.TurnStore,
+	environments *postgres.EnvironmentStore,
+	auditLog *postgres.AuditLogStore,
+	pool *pgxpool.Pool,
+	registry *sessionactor.Registry,
+	timeouts platform.Timeouts,
+) *Engine {
+	return &Engine{
+		automations:  automations,
+		invocations:  invocations,
+		runs:         runs,
+		sessions:     sessions,
+		turns:        turns,
+		environments: environments,
+		auditLog:     auditLog,
+		pool:         pool,
+		registry:     registry,
+		timeouts:     timeouts,
+	}
+}
+
+// Run runs the process-wide automation engine until ctx is done: THREE
+// independent ticker loops, fanned out via a zero-value errgroup.Group
+// (never a bare `go` statement, §11; a zero-value Group, NOT
+// errgroup.WithContext, so one loop's own ctx.Err() return can never
+// cancel-race the others -- mirrors app/imagebuild.Builder.Run's own
+// identical two-loop fan-out, scaled to three here). Each tick's own error
+// is logged, never propagated, so one bad tick never kills the other
+// loops. The caller starts this via its own errgroup.Go exactly once per
+// process (cmd/control-plane/main.go).
+func (e *Engine) Run(ctx context.Context) error {
+	var g errgroup.Group
+	g.Go(func() error { return e.runFanOutPump(ctx) })
+	g.Go(func() error { return e.runReconcilePump(ctx) })
+	g.Go(func() error { return e.runSweepPump(ctx) })
+	return g.Wait()
+}
+
+func (e *Engine) runFanOutPump(ctx context.Context) error {
+	ticker := time.NewTicker(e.timeouts.AutomationEnginePumpInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := e.PumpOnce(ctx); err != nil {
+				platform.Logger(ctx).Error("automation: fan-out pump tick failed", "error", err)
+			}
+		}
+	}
+}
+
+func (e *Engine) runReconcilePump(ctx context.Context) error {
+	ticker := time.NewTicker(e.timeouts.AutomationEnginePumpInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := e.ReconcileOnce(ctx); err != nil {
+				platform.Logger(ctx).Error("automation: reconcile pump tick failed", "error", err)
+			}
+		}
+	}
+}
+
+func (e *Engine) runSweepPump(ctx context.Context) error {
+	ticker := time.NewTicker(e.timeouts.AutomationSweepInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if err := e.SweepOnce(ctx); err != nil {
+				platform.Logger(ctx).Error("automation: sweep pump tick failed", "error", err)
+			}
+		}
+	}
+}

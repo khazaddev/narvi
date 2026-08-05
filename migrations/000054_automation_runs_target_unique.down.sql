@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS automation_runs_invocation_target_uniq;
