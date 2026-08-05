@@ -713,7 +713,7 @@ export interface ProviderCredential {
 export interface CreateProviderCredentialRequest {
   provider: 'google' | 'anthropic' | 'openai';
   /**
-   * The plaintext credential value -- encrypted at rest (platform.EncryptToken, AES-256-GCM) immediately server-side, never logged, never echoed back in any response.
+   * The plaintext credential value -- encrypted at rest (platform.EncryptToken, AES-256-GCM) immediately server-side, never logged, never echoed back in any response. Must not contain a NUL byte (U+0000) -- an embedded NUL later breaks os/exec when the resolved value is written into a spawned sandbox's cmd.Env (cmd/sandbox-agent/main.go's own fetchProviderCredentialSpawnEnv); the httpapi handler enforces this same rule server-side regardless of this pattern.
    */
   value: string;
 }
@@ -725,7 +725,7 @@ export interface CreateProviderCredentialRequest {
  */
 export interface UpdateProviderCredentialRequest {
   /**
-   * The new plaintext credential value, replacing the old one -- same encrypt-immediately, never-logged, never-echoed handling as CreateProviderCredentialRequest.value.
+   * The new plaintext credential value, replacing the old one -- same encrypt-immediately, never-logged, never-echoed handling as CreateProviderCredentialRequest.value, and the same NUL-byte (U+0000) exclusion -- see CreateProviderCredentialRequest.value's own description for why.
    */
   value: string;
 }

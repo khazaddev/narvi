@@ -5,6 +5,7 @@ package restdtos
 import "encoding/json"
 import "fmt"
 import "reflect"
+import "regexp"
 import "time"
 import "unicode/utf8"
 
@@ -671,7 +672,10 @@ type CreateProviderCredentialRequest struct {
 
 	// The plaintext credential value -- encrypted at rest (platform.EncryptToken,
 	// AES-256-GCM) immediately server-side, never logged, never echoed back in any
-	// response.
+	// response. Must not contain a NUL byte (U+0000) -- an embedded NUL later breaks
+	// os/exec when the resolved value is written into a spawned sandbox's cmd.Env
+	// (cmd/sandbox-agent/main.go's own fetchProviderCredentialSpawnEnv); the httpapi
+	// handler enforces this same rule server-side regardless of this pattern.
 	Value string `json:"value" yaml:"value" mapstructure:"value"`
 }
 
@@ -723,6 +727,9 @@ func (j *CreateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[^\x00]*$`, string(plain.Value)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Value", `^[^\x00]*$`)
 	}
 	if utf8.RuneCountInString(string(plain.Value)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "value", 1)
@@ -2982,7 +2989,8 @@ func (j *UpdateMemberRoleRequest) UnmarshalJSON(value []byte) error {
 type UpdateProviderCredentialRequest struct {
 	// The new plaintext credential value, replacing the old one -- same
 	// encrypt-immediately, never-logged, never-echoed handling as
-	// CreateProviderCredentialRequest.value.
+	// CreateProviderCredentialRequest.value, and the same NUL-byte (U+0000) exclusion
+	// -- see CreateProviderCredentialRequest.value's own description for why.
 	Value string `json:"value" yaml:"value" mapstructure:"value"`
 }
 
@@ -2999,6 +3007,9 @@ func (j *UpdateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if matched, _ := regexp.MatchString(`^[^\x00]*$`, string(plain.Value)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Value", `^[^\x00]*$`)
 	}
 	if utf8.RuneCountInString(string(plain.Value)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "value", 1)

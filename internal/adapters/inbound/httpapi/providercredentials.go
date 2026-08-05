@@ -60,6 +60,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -78,6 +79,23 @@ import (
 // about it beyond "a value is configured" (which a row's mere existence
 // already implies).
 const maskedProviderCredentialValue = "••••••••"
+
+// containsNULByte reports whether value contains an embedded NUL byte
+// (U+0000). Both create and update write sites reject a NUL-bearing value
+// BEFORE it ever reaches platform.EncryptToken: a value that makes it to
+// encryption/storage would, once resolved, eventually reach
+// cmd/sandbox-agent/main.go's own fetchProviderCredentialSpawnEnv, which
+// builds cmd.Env entries as name+"="+value -- os/exec rejects ANY env
+// entry containing a NUL byte ("exec: environment variable contains NUL")
+// before fork, so a NUL-bearing credential would fail sandbox boot on
+// every spawn/respawn until the row is rotated with a clean value. This
+// deliberately checks ONLY for NUL, not the full range of control
+// characters -- NUL is the one byte that actually breaks os/exec; a
+// broader rejection risks false positives on legitimate API keys that
+// might legitimately contain other, harmless bytes.
+func containsNULByte(value string) bool {
+	return strings.ContainsRune(value, 0)
+}
 
 // parseProviderCredentialID parses chi's own "credentialID" URL path
 // param as a UUID -- mirrors parseAutomationID/parseSessionID's own
@@ -178,6 +196,14 @@ func createProviderCredential(
 		return
 	}
 
+	if containsNULByte(req.Value) {
+		// Never echoes req.Value -- see this file's own top doc comment
+		// and containsNULByte's own doc comment for why this check exists
+		// at all.
+		writeError(w, http.StatusBadRequest, "credential value must not contain a NUL byte")
+		return
+	}
+
 	// Never logs req.Value, at any point, under any circumstance -- see
 	// this file's own top doc comment.
 	encrypted, err := platform.EncryptToken(tokenEncryptionKey, []byte(req.Value))
@@ -259,6 +285,14 @@ func updateProviderCredentialValue(
 	var req restdtos.UpdateProviderCredentialRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+
+	if containsNULByte(req.Value) {
+		// Never echoes req.Value -- see this file's own top doc comment
+		// and containsNULByte's own doc comment for why this check exists
+		// at all.
+		writeError(w, http.StatusBadRequest, "credential value must not contain a NUL byte")
 		return
 	}
 

@@ -379,3 +379,79 @@ func TestCreateProviderCredential_InvalidProvider_BadRequest(t *testing.T) {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
 	}
 }
+
+// --- NUL-byte credential value rejection ---
+//
+// A value containing an embedded NUL byte (\u0000 -- a plausible
+// accident: binary-ish copy-paste artifact, UTF-16 residue, a key read
+// from a file with a stray byte) must be rejected 400 at BOTH write
+// sites, before platform.EncryptToken ever runs -- see containsNULByte's
+// own doc comment (providercredentials.go) for why: an accepted
+// NUL-bearing value would later break os/exec at spawn time
+// (cmd/sandbox-agent/main.go's own fetchProviderCredentialSpawnEnv builds
+// cmd.Env entries as name+"="+value, and os/exec rejects any env entry
+// containing a NUL byte before fork), killing sandbox boot on every
+// respawn until the row is rotated with a clean value. Request bodies
+// below are built as raw, valid JSON literals (never Go's own %q, which
+// emits a \x00 escape -- not valid JSON) so the decoded req.Value
+// genuinely contains a NUL byte, the same way a real client's request
+// would.
+func TestCreateProviderCredential_NULByteValue_BadRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		jsonValue string // a valid JSON string literal that decodes to a Go string containing an embedded NUL byte
+	}{
+		{"NUL in the middle", `"sk-abc\u0000def"`},
+		{"NUL at the start", `"\u0000sk-leading-nul"`},
+		{"NUL at the end", `"sk-trailing-nul\u0000"`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+			_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+			body := []byte(fmt.Sprintf(`{"provider":"anthropic","value":%s}`, tc.jsonValue))
+			status := rig.doJSON(t, http.MethodPost, "/api/repos/acme/nul-byte-create/provider-credentials", body, nil, token)
+			if status != http.StatusBadRequest {
+				t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+// TestUpdateProviderCredentialValue_NULByteValue_BadRequest is
+// TestCreateProviderCredential_NULByteValue_BadRequest's PUT (rotate)
+// counterpart -- also proves the credential's stored value is left
+// genuinely untouched by a rejected rotation attempt.
+func TestUpdateProviderCredentialValue_NULByteValue_BadRequest(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	var created restdtos.ProviderCredential
+	status := rig.doJSON(t, http.MethodPost, "/api/repos/acme/nul-byte-update/provider-credentials",
+		[]byte(`{"provider":"openai","value":"sk-clean-initial"}`), &created, token)
+	if status != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d", status, http.StatusCreated)
+	}
+
+	status = rig.doJSON(t, http.MethodPut, "/api/repos/acme/nul-byte-update/provider-credentials/"+created.Id,
+		[]byte(`{"value":"sk-tainted\u0000value"}`), nil, token)
+	if status != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+
+	stored, err := rig.providerCredentials.Get(ctx, mustParseUUID(t, created.Id))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	decrypted, err := platform.DecryptToken(rig.tokenEncryptionKey, stored.ValueEncrypted)
+	if err != nil {
+		t.Fatalf("DecryptToken: %v", err)
+	}
+	if string(decrypted) != "sk-clean-initial" {
+		t.Errorf("decrypted = %q, want %q (rejected NUL-byte update must not change the stored value)", decrypted, "sk-clean-initial")
+	}
+}

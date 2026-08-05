@@ -699,7 +699,8 @@
         "value": {
           "type": "string",
           "minLength": 1,
-          "description": "The plaintext credential value -- encrypted at rest (platform.EncryptToken, AES-256-GCM) immediately server-side, never logged, never echoed back in any response."
+          "pattern": "^[^\\x00]*$",
+          "description": "The plaintext credential value -- encrypted at rest (platform.EncryptToken, AES-256-GCM) immediately server-side, never logged, never echoed back in any response. Must not contain a NUL byte (U+0000) -- an embedded NUL later breaks os/exec when the resolved value is written into a spawned sandbox's cmd.Env (cmd/sandbox-agent/main.go's own fetchProviderCredentialSpawnEnv); the httpapi handler enforces this same rule server-side regardless of this pattern."
         }
       }
     },
@@ -712,7 +713,8 @@
         "value": {
           "type": "string",
           "minLength": 1,
-          "description": "The new plaintext credential value, replacing the old one -- same encrypt-immediately, never-logged, never-echoed handling as CreateProviderCredentialRequest.value."
+          "pattern": "^[^\\x00]*$",
+          "description": "The new plaintext credential value, replacing the old one -- same encrypt-immediately, never-logged, never-echoed handling as CreateProviderCredentialRequest.value, and the same NUL-byte (U+0000) exclusion -- see CreateProviderCredentialRequest.value's own description for why."
         }
       }
     },
