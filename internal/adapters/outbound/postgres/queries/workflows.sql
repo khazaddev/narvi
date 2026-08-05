@@ -119,6 +119,16 @@ RETURNING *;
 -- name: CompleteWorkflowRun :one
 UPDATE workflow_runs SET status = 'completed', finished_at = now(), updated_at = now() WHERE id = $1 RETURNING *;
 
+-- name: FailWorkflowRun :one
+-- Step 56's own addition (§25.9): a winning HITL reject verdict ends the
+-- run -- mirrors CompleteWorkflowRun's own shape exactly, landing on
+-- 'failed' instead of 'completed' (WorkflowStepDecideResponse.runStatus's
+-- own documented "'failed' after a winning reject ends the run" example).
+-- Terminal (finished_at set), unlike EscalateWorkflowRun's own
+-- 'needs_review' (non-terminal, waiting on a human) -- a reject is itself
+-- the human's own final word, nothing further to wait on.
+UPDATE workflow_runs SET status = 'failed', finished_at = now(), updated_at = now() WHERE id = $1 RETURNING *;
+
 -- name: EscalateWorkflowRun :one
 UPDATE workflow_runs SET status = 'needs_review', updated_at = now() WHERE id = $1 RETURNING *;
 
@@ -126,3 +136,77 @@ UPDATE workflow_runs SET status = 'needs_review', updated_at = now() WHERE id = 
 UPDATE workflow_step_runs
 SET outcome_status = $2, outcome_summary = $3, outcome_payload = $4, updated_at = now()
 WHERE id = $1 AND status = 'running';
+
+-- Step 56 ("workflow HITL gate + circuit breaker", §25.9) own additions
+-- below: the decide endpoint's lookup/guarded-decision queries, the
+-- circuit breaker's own COUNT(*) attempt read (§25.5), and the escalation
+-- notice's one-time claim (migrations/000058_workflow_hitl.up.sql).
+
+-- name: GetWorkflowStepRun :one
+-- Plain lookup by id -- the decide endpoint's own first read (mirrors
+-- plans.Get's identical role in decideplan.go): used both to resolve the
+-- target attempt before deciding it and, after the guarded UPDATE below,
+-- to re-fetch its REAL current state either way (won or already decided),
+-- exactly like DecidePlanOnTx's own plans.Get re-fetch.
+SELECT * FROM workflow_step_runs WHERE id = $1;
+
+-- name: CountWorkflowStepRunsForStepDefinition :one
+-- §25.5's own "iteration count reads COUNT(*) on workflow_step_runs, no
+-- dedicated counter column" -- scoped to ONE run (a count is never summed
+-- across a session's separate runs) and ONE step definition (the step
+-- about to receive a new attempt). The engine consults this ONLY when a
+-- needs_fix edge is about to advance to a step that might already have
+-- prior attempts in THIS run -- see internal/app/workflowengine's own
+-- advance.go for the exact call site and the "count > 0 means a genuine
+-- re-fire" reasoning.
+SELECT COUNT(*) FROM workflow_step_runs WHERE workflow_run_id = $1 AND step_definition_id = $2;
+
+-- DecideWorkflowStepRunApprove/Reject/Revise are three narrow,
+-- single-purpose guarded UPDATEs -- mirroring plans.sql's own
+-- ApprovePlanIfAwaitingApproval/RejectPlanIfAwaitingApproval precedent
+-- (two verdicts, two statements) exactly, extended to three here so which
+-- resulting status/decision applies to which verdict is enforced by WHICH
+-- STATEMENT RUNS, never by a conditional expression a future edit could
+-- silently get wrong (this file's own header comment states this
+-- discipline for MarkWorkflowStepRunAwaitingDecision/FinishWorkflowStepRun
+-- above; the same reasoning applies here). All three share the identical
+-- "AND status = 'awaiting_decision'" guard -- :execrows lets the handler
+-- distinguish "this call won the decision" from "already decided (or a
+-- stale id)" without a separate existence check, exactly like
+-- ApprovePlanIfAwaitingApproval's own :execrows shape. decisionText ($2)
+-- is nullable: NULL for approve (ignored), optional context for reject,
+-- required non-empty for revise (enforced at the application layer, per
+-- WorkflowStepDecideRequest.text's own schema doc comment).
+--
+-- Resulting status: approve/revise both land on 'completed' (the
+-- attempt's own execution genuinely finished either way -- what happens
+-- NEXT, advance vs re-execute, is the decision column's own job, not the
+-- status column's); reject lands on 'failed', mirroring
+-- WorkflowStepDecideResponse.runStatus's own documented "'failed' after a
+-- winning reject ends the run" example -- the owning run's and the
+-- decided attempt's own resulting status agree by construction.
+
+-- name: DecideWorkflowStepRunApprove :execrows
+UPDATE workflow_step_runs
+SET status = 'completed', decision = 'approve', decision_text = $2, decided_at = now(), decided_by = $3, finished_at = now(), updated_at = now()
+WHERE id = $1 AND status = 'awaiting_decision';
+
+-- name: DecideWorkflowStepRunReject :execrows
+UPDATE workflow_step_runs
+SET status = 'failed', decision = 'reject', decision_text = $2, decided_at = now(), decided_by = $3, finished_at = now(), updated_at = now()
+WHERE id = $1 AND status = 'awaiting_decision';
+
+-- name: DecideWorkflowStepRunRevise :execrows
+UPDATE workflow_step_runs
+SET status = 'completed', decision = 'revise', decision_text = $2, decided_at = now(), decided_by = $3, finished_at = now(), updated_at = now()
+WHERE id = $1 AND status = 'awaiting_decision';
+
+-- name: ClaimWorkflowRunEscalationNotice :execrows
+-- The §25.9/§24.6-mirroring "one notice, never repeated" claim
+-- (migrations/000058_workflow_hitl.up.sql's own doc comment): guarded on
+-- needs_review_notified_at IS NULL, so of any number of concurrent/
+-- repeated attempts to escalate the SAME run, exactly one ever claims the
+-- right to enqueue the notice -- :execrows lets the caller tell "I claimed
+-- it, send the notice" (1) from "already claimed/sent by an earlier
+-- escalation" (0) apart, without a separate existence check.
+UPDATE workflow_runs SET needs_review_notified_at = now(), updated_at = now() WHERE id = $1 AND needs_review_notified_at IS NULL;

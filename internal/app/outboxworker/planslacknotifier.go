@@ -54,14 +54,28 @@ func NewPlanSlackNotifier(client *slackapi.Client, plans *postgres.PlanStore) po
 
 // Deliver implements ports.Notifier, dispatching on notification.Kind --
 // the delivery worker only ever routes a row to this notifier under one of
-// the two kinds it was registered for (see this file's own top doc
-// comment), so an unrecognized third kind here is defensive, not expected.
+// the three kinds it is registered for (see this file's own top doc
+// comment), so an unrecognized fourth kind here is defensive, not expected.
+//
+// ports.NotificationKindSlackWorkflowDecision is Step 56's own addition
+// ("workflow HITL gate + circuit breaker", §25.9) -- the SECOND kind this
+// SAME wrapper type gains beyond its original two (mirroring
+// linearNotifier's own identical "a THIRD kind, same wrapper" precedent,
+// linearnotifier.go). Its payload is a plain slackapi.Payload
+// (channel/thread/text), the EXACT shape ports.NotificationKindSlack's own
+// n.client already knows how to Deliver -- so this forwards the
+// notification to n.client.Deliver UNCHANGED rather than duplicating its
+// chat.postMessage call here: n.client.Deliver never inspects n.Kind at
+// all (its own doc comment), so this is not a workaround, it is that
+// method's own documented, general contract.
 func (n *planSlackNotifier) Deliver(ctx context.Context, notification ports.Notification) error {
 	switch notification.Kind {
 	case ports.NotificationKindSlackPlanApproval:
 		return n.deliverApproval(ctx, notification.Payload)
 	case ports.NotificationKindSlackPlanDecided:
 		return n.deliverDecided(ctx, notification.Payload)
+	case ports.NotificationKindSlackWorkflowDecision:
+		return n.client.Deliver(ctx, notification)
 	default:
 		return fmt.Errorf("outboxworker: planSlackNotifier: unrecognized notification kind %q", notification.Kind)
 	}

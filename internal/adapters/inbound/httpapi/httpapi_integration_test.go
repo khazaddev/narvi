@@ -205,6 +205,15 @@ type testRig struct {
 	// production code path constructs its own fresh instance from pool
 	// too, see turn.go's own doc comment for why).
 	workflows *narvipg.WorkflowStore
+
+	// slackThreadSession (Step 56, "workflow HITL gate + circuit breaker",
+	// §25.9) backs this rig's own decide-endpoint route
+	// (decideworkflowstep_integration_test.go) -- notification-destination
+	// resolution for a Slack-origin session, the SAME store
+	// internal/app/sessionactor's own outboxenqueue.go already uses
+	// identically. No existing httpapi route needed this store before this
+	// Step (only sessionactor did), so it is new to this rig.
+	slackThreadSession *narvipg.SlackThreadSessionStore
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -259,6 +268,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
 		providerCredentials:   narvipg.NewProviderCredentialStore(pool),
 		workflows:             narvipg.NewWorkflowStore(pool),
+		slackThreadSession:    narvipg.NewSlackThreadSessionStore(pool),
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -333,6 +343,14 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// comment.
 	router.Post("/sessions/{sessionID}/workflow/step-outcome",
 		httpapi.PostWorkflowStepOutcome(rig.sandboxes, rig.workflows))
+	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide (Step 56, "workflow
+	// HITL gate + circuit breaker", §25.9/§25.10/§25.11) -- mounted behind
+	// auth.Middleware exactly like cmd/control-plane/main.go's own real
+	// wiring (see decideworkflowstep.go's own doc comment).
+	router.Route("/api/workflow-runs", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(rig.pool, rig.sessions, rig.turns, rig.participants, rig.workflows, rig.slackThreadSession, rig.linearAgentSessions, rig.prSessions, rig.outbox, rig.registry))
+	})
 	// /api/repos/{owner}/{repo}/settings (Step 47) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
 	// (see reposettings.go's own doc comment).

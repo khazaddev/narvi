@@ -24,11 +24,12 @@ func TestOnTurnCompleted_SingleStepLane_OkOutcome_CompletesRun(t *testing.T) {
 	sessions := postgres.NewSessionStore(pool)
 	turns := postgres.NewTurnStore(pool)
 	workflows := postgres.NewWorkflowStore(pool)
+	deps := testDeps(pool, turns, workflows)
 
 	session := newSession(t, ctx, sessions)
 	row, _ := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "do the thing", nil, false)
 
-	workflowengine.OnTurnCompleted(ctx, workflows, row.turnID, turn.TriggerComplete)
+	workflowengine.OnTurnCompleted(ctx, deps, session, row.turnID, turn.TriggerComplete)
 
 	var status string
 	var outcome *string
@@ -73,11 +74,12 @@ func TestOnTurnCompleted_SingleStepLane_FailTrigger_EscalatesRun(t *testing.T) {
 	sessions := postgres.NewSessionStore(pool)
 	turns := postgres.NewTurnStore(pool)
 	workflows := postgres.NewWorkflowStore(pool)
+	deps := testDeps(pool, turns, workflows)
 
 	session := newSession(t, ctx, sessions)
 	row, _ := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "do the thing", nil, false)
 
-	workflowengine.OnTurnCompleted(ctx, workflows, row.turnID, turn.TriggerFail)
+	workflowengine.OnTurnCompleted(ctx, deps, session, row.turnID, turn.TriggerFail)
 
 	var status string
 	var outcome *string
@@ -118,6 +120,7 @@ func TestOnTurnCompleted_HITLAfterStep_MarksAwaitingDecision_RunStaysRunning(t *
 	sessions := postgres.NewSessionStore(pool)
 	turns := postgres.NewTurnStore(pool)
 	workflows := postgres.NewWorkflowStore(pool)
+	deps := testDeps(pool, turns, workflows)
 
 	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb})
 	if err != nil {
@@ -139,7 +142,7 @@ func TestOnTurnCompleted_HITLAfterStep_MarksAwaitingDecision_RunStaysRunning(t *
 		t.Fatalf("res.Prompt = %q, want unchanged (test setup assumption)", res.Prompt)
 	}
 
-	workflowengine.OnTurnCompleted(ctx, workflows, row.turnID, turn.TriggerComplete)
+	workflowengine.OnTurnCompleted(ctx, deps, session, row.turnID, turn.TriggerComplete)
 
 	var status string
 	var outcome *string
@@ -181,6 +184,7 @@ func TestOnTurnCompleted_PostedOutcomeTakesPrecedenceOverImplicitDerivation(t *t
 	sessions := postgres.NewSessionStore(pool)
 	turns := postgres.NewTurnStore(pool)
 	workflows := postgres.NewWorkflowStore(pool)
+	deps := testDeps(pool, turns, workflows)
 
 	session := newSession(t, ctx, sessions)
 	row, _ := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "do the thing", nil, false)
@@ -200,7 +204,7 @@ func TestOnTurnCompleted_PostedOutcomeTakesPrecedenceOverImplicitDerivation(t *t
 	// The turn itself now completes normally -- a naive implementation
 	// would derive StepOutcomeOK and overwrite the already-posted
 	// needs_fix; the COALESCE in FinishStepRun must prevent that.
-	workflowengine.OnTurnCompleted(ctx, workflows, row.turnID, turn.TriggerComplete)
+	workflowengine.OnTurnCompleted(ctx, deps, session, row.turnID, turn.TriggerComplete)
 
 	var status string
 	var outcome *string
@@ -240,7 +244,7 @@ func TestOnTurnCompleted_PostedOutcomeTakesPrecedenceOverImplicitDerivation(t *t
 // workflow_step_runs.outcome_status column OnTurnCompleted itself reads via
 // GetLiveStepRunByTurnID near its own top. If that post lands strictly
 // between that read and OnTurnCompleted's later FinishStepRun call --
-// several DB round-trips later (GetRun, loadDefinition's own three reads) --
+// several DB round-trips later (GetRun, LoadDefinition's own three reads) --
 // FinishStepRun's own COALESCE(outcome_status, $3) correctly preserves the
 // posted value IN THE ROW, but the pre-fix code discarded FinishStepRun's
 // own RETURNING row and called workflow.NextStep with the earlier, by-then
@@ -318,7 +322,7 @@ func TestFinishStepRun_ConcurrentPostBetweenReadAndFinish_AuthoritativeOutcomeOv
 		t.Fatalf("FinishStepRun returned OutcomeStatus = %v, want needs_fix (COALESCE must preserve the concurrent post)", finished.OutcomeStatus)
 	}
 
-	// Reassemble the same minimal workflow.Definition loadDefinition would
+	// Reassemble the same minimal workflow.Definition LoadDefinition would
 	// (unexported, so duplicated here rather than reached across the
 	// workflowengine_test package boundary) -- the built-in request lane's
 	// single step, no edges (dispatch_integration_test.go's own

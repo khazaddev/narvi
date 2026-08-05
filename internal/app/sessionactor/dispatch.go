@@ -1458,13 +1458,24 @@ func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, send
 			return fmt.Errorf("sessionactor: update turn status: %w", err)
 		}
 
-		// Step 55 ("workflow execution engine", §25.6): this turn just
-		// reached a real terminal state because its prompt never even
-		// reached the sandbox -- see OnTurnCompleted's own doc comment for
-		// why this, pushpr.go's completeProcessingTurn, and
-		// timerfired.go's handleTurnDeadlineTimer all three need this same
-		// hook.
-		workflowengine.OnTurnCompleted(ctx, a.stores.workflow.WithTx(tx), turnID, turn.TriggerTimeout)
+		// Step 55/56 ("workflow execution engine" / "workflow HITL gate +
+		// circuit breaker", §25.6/§25.9): this turn just reached a real
+		// terminal state because its prompt never even reached the sandbox
+		// -- see OnTurnCompleted's own doc comment for why this, pushpr.go's
+		// completeProcessingTurn, and timerfired.go's handleTurnDeadlineTimer
+		// all three need this same hook.
+		sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
+		if err != nil {
+			return fmt.Errorf("sessionactor: get session: %w", err)
+		}
+		workflowengine.OnTurnCompleted(ctx, workflowengine.Deps{
+			Workflows:           a.stores.workflow.WithTx(tx),
+			Turns:               a.stores.turn.WithTx(tx),
+			SlackThreadSessions: a.stores.slackThreadSession.WithTx(tx),
+			LinearAgentSessions: a.stores.linearAgentSession.WithTx(tx),
+			GitHubPRSessions:    a.stores.githubPRSession.WithTx(tx),
+			Outbox:              a.stores.outbox.WithTx(tx),
+		}, sessionRow, turnID, turn.TriggerTimeout)
 
 		if turn.RequiresSyntheticExecutionComplete(turn.TriggerTimeout) {
 			if err := a.appendEvent(ctx, tx, "execution_complete", map[string]any{

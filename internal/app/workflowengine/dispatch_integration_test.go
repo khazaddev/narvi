@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -34,6 +35,27 @@ type liveRow struct {
 	stepDefID      pgtype.UUID
 	turnID         pgtype.UUID
 	workflowsStore *postgres.WorkflowStore
+}
+
+// testDeps builds a workflowengine.Deps for OnTurnCompleted's own tests
+// (completion_integration_test.go) -- turns/workflows are the SAME
+// instances the calling test already constructed (so bookkeeping reads/
+// writes land through the identical store the test itself asserts
+// against); the notification-destination stores are constructed fresh from
+// pool (cheap, side-effect-free wrappers, mirroring every other
+// *_store.go's own constructor) -- every test session in that file is
+// 'web'-origin (newSession's own fixed SpawnSourceWeb below), so
+// enqueueWorkflowNotice's own top check short-circuits before ever
+// touching any of the three.
+func testDeps(pool *pgxpool.Pool, turns *postgres.TurnStore, workflows *postgres.WorkflowStore) workflowengine.Deps {
+	return workflowengine.Deps{
+		Workflows:           workflows,
+		Turns:               turns,
+		SlackThreadSessions: postgres.NewSlackThreadSessionStore(pool),
+		LinearAgentSessions: postgres.NewLinearAgentSessionStore(pool),
+		GitHubPRSessions:    postgres.NewGitHubPRSessionStore(pool),
+		Outbox:              postgres.NewOutboxStore(pool),
+	}
 }
 
 // newSession creates a bare session (no repos, no intent_decision --
@@ -296,7 +318,7 @@ func TestResolveStepForNewTurn_LiveAwaitingDecisionStep_ResolvesButDoesNotTrack(
 	}
 
 	row, _ := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "draft a plan", nil, true)
-	workflowengine.OnTurnCompleted(ctx, workflows, row.turnID, turn.TriggerComplete)
+	workflowengine.OnTurnCompleted(ctx, testDeps(pool, turns, workflows), session, row.turnID, turn.TriggerComplete)
 
 	stepRun, err := workflows.GetLiveStepRunForRun(ctx, row.runID)
 	if err != nil {

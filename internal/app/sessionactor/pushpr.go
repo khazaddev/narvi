@@ -240,14 +240,24 @@ func (a *Actor) completeProcessingTurn(ctx context.Context, tx pgx.Tx, sandboxRo
 		return nil, err
 	}
 
-	// Step 55 ("workflow execution engine", §25.6): if processing's own
-	// turn is a live, engine-tracked workflow step attempt, finalize it
-	// (and, unless HITLAfter-gated, consult workflow.NextStep to advance/
-	// complete/escalate the owning run) -- a no-op, logged only, for a
-	// turn this package never tracked (see OnTurnCompleted's own doc
-	// comment). Never returns an error: this is bookkeeping, never allowed
-	// to roll back a turn's own already-persisted completion.
-	workflowengine.OnTurnCompleted(ctx, a.stores.workflow.WithTx(tx), processing.ID, trig)
+	// Step 55/56 ("workflow execution engine" / "workflow HITL gate +
+	// circuit breaker", §25.6/§25.9): if processing's own turn is a live,
+	// engine-tracked workflow step attempt, finalize it (and, unless
+	// HITLAfter-gated, consult workflow.NextStep -- via ApplyStepOutcome,
+	// wiring loopguard.Evaluate and dispatching the next attempt's turn as
+	// needed -- to advance/complete/escalate the owning run) -- a no-op,
+	// logged only, for a turn this package never tracked (see
+	// OnTurnCompleted's own doc comment). Never returns an error: this is
+	// bookkeeping, never allowed to roll back a turn's own already-persisted
+	// completion. sessionRow is the SAME row already fetched above.
+	workflowengine.OnTurnCompleted(ctx, workflowengine.Deps{
+		Workflows:           a.stores.workflow.WithTx(tx),
+		Turns:               a.stores.turn.WithTx(tx),
+		SlackThreadSessions: a.stores.slackThreadSession.WithTx(tx),
+		LinearAgentSessions: a.stores.linearAgentSession.WithTx(tx),
+		GitHubPRSessions:    a.stores.githubPRSession.WithTx(tx),
+		Outbox:              a.stores.outbox.WithTx(tx),
+	}, sessionRow, processing.ID, trig)
 
 	// Step 35 ("outbox delivery", §5.1): enqueue exactly one outbox
 	// notification for THIS turn's completion, in the SAME transaction as

@@ -429,13 +429,28 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 			return fmt.Errorf("sessionactor: update turn status: %w", err)
 		}
 
-		// Step 55 ("workflow execution engine", §25.6): this turn just
-		// reached a real terminal state via its own turn_deadline, exactly
-		// like a real execution_complete event would (pushpr.go's
-		// completeProcessingTurn) -- see OnTurnCompleted's own doc comment
-		// for why ALL THREE terminal-state call sites need this hook, not
-		// just that one.
-		workflowengine.OnTurnCompleted(ctx, a.stores.workflow.WithTx(tx), processing.ID, turn.TriggerTimeout)
+		// sessionRow is fetched once here, reused below both by
+		// OnTurnCompleted (Step 55/56) and by enqueueOutboxNotification
+		// (Step 35) further down this same transact.
+		sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
+		if err != nil {
+			return fmt.Errorf("sessionactor: get session: %w", err)
+		}
+
+		// Step 55/56 ("workflow execution engine" / "workflow HITL gate +
+		// circuit breaker", §25.6/§25.9): this turn just reached a real
+		// terminal state via its own turn_deadline, exactly like a real
+		// execution_complete event would (pushpr.go's completeProcessingTurn)
+		// -- see OnTurnCompleted's own doc comment for why ALL THREE
+		// terminal-state call sites need this hook, not just that one.
+		workflowengine.OnTurnCompleted(ctx, workflowengine.Deps{
+			Workflows:           a.stores.workflow.WithTx(tx),
+			Turns:               a.stores.turn.WithTx(tx),
+			SlackThreadSessions: a.stores.slackThreadSession.WithTx(tx),
+			LinearAgentSessions: a.stores.linearAgentSession.WithTx(tx),
+			GitHubPRSessions:    a.stores.githubPRSession.WithTx(tx),
+			Outbox:              a.stores.outbox.WithTx(tx),
+		}, sessionRow, processing.ID, turn.TriggerTimeout)
 
 		// §3.3: "Stop/failure paths emit a synthetic execution_complete
 		// event so clients always see one terminal event per turn" --
@@ -476,11 +491,8 @@ func (a *Actor) handleTurnDeadlineTimer(ctx context.Context) error {
 		// Enqueued inside this handler's own already-open transact, before
 		// the deleteTimer that closes it -- §5.1's "written in the same tx
 		// as the state change" rule, identical to how completeProcessingTurn
-		// enqueues inside handleSandboxEvent's own transact.
-		sessionRow, err := a.stores.session.WithTx(tx).Get(ctx, a.sessionID)
-		if err != nil {
-			return fmt.Errorf("sessionactor: get session: %w", err)
-		}
+		// enqueues inside handleSandboxEvent's own transact. sessionRow is
+		// the SAME row already fetched above.
 		if err := a.enqueueOutboxNotification(ctx, tx, sessionRow, turn.TriggerTimeout, failureReason, processing, nil); err != nil {
 			return err
 		}
