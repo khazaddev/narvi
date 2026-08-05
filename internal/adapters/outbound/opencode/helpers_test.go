@@ -99,7 +99,7 @@ func startServer(t *testing.T) string {
 		_ = sup.StopAll(stopCtx, testReadinessPollInterval)
 	})
 
-	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), testReadinessTimeout, testReadinessPollInterval)
+	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, testReadinessTimeout, testReadinessPollInterval)
 	if err != nil {
 		t.Fatalf("opencodeproc.Spawn() error = %v (is the real opencode binary on PATH?)", err)
 	}

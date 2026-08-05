@@ -118,6 +118,22 @@
 // workspace too -- see runBootSequence's own comment, below, for why a
 // repo_image/snapshot_restore boot needs this every bit as much as a fresh
 // clone does.
+//
+// Step 53 ("provider credential injection", §25.1/§25.3) closes the
+// long-standing gap named in every prior Step's own opencodeproc.Spawn
+// call: no ANTHROPIC_API_KEY/OPENAI_API_KEY/Google-equivalent was ever
+// wired into the spawned `opencode serve` process for ANY provider, even
+// though per-turn model selection has worked end to end since Step 7.
+// fetchProviderCredentialSpawnEnv (below) resolves this session's own
+// repo/environment/global-scoped provider credentials from CP (a NEW
+// sandbox-bearer-authenticated delivery endpoint, mirroring scm-
+// credentials' own security posture exactly) immediately before Spawn,
+// mapping each resolved provider onto its own env-var name(s)
+// (internal/domain/providercredential.EnvVarNames) and appending them to
+// Spawn's own filtered base environment. Deliberately best-effort: the
+// overwhelming common case (nothing configured for this session) resolves
+// to nil, and any fetch failure degrades the SAME way, changing nothing
+// about this binary's own pre-Step-53 behavior.
 package main
 
 import (
@@ -140,6 +156,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/opencode"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/providercredential"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/sandboxboot"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -728,6 +745,71 @@ func shutdownSandboxAgentOTel(shutdown func(context.Context) error, timeout time
 
 // run mirrors cmd/control-plane/main.go's serve() shape: a thin main()
 // dispatches to this testable, error-returning function.
+// fetchProviderCredentialSpawnEnv (Step 53, "provider credential
+// injection", §25.1/§25.3) fetches this session's own resolved provider
+// credentials from CP (POST /sessions/{id}/provider-credentials) and maps
+// each provider name onto its own OpenCode env-var name(s)
+// (internal/domain/providercredential.EnvVarNames), building the
+// "NAME=VALUE" entries opencodeproc.Spawn's own providerCredentialEnv
+// parameter expects. Only ever called when cfg.SessionConfig is non-nil
+// (the caller's own enclosing branch already guarantees this).
+//
+// Deliberately BEST-EFFORT, never fatal to boot: the overwhelming common
+// case is zero credentials configured for a session (today's exact,
+// unchanged behavior -- `opencode serve` simply inherits sandbox-agent's
+// own ambient OS environment, e.g. whatever provider key the sandbox
+// image itself was baked with, exactly as before this Step), and a
+// network hiccup fetching this OPTIONAL, additive override must never
+// turn into a hard boot failure over what is, for most sessions, a no-op
+// anyway. A failure here is logged (Warn, never Error -- this is an
+// expected, tolerated degraded path, not a genuine server malfunction)
+// and returns nil -- Spawn already treats nil identically to "nothing
+// resolved", i.e. exactly today's pre-Step-53 behavior.
+//
+// No disk cache (unlike internal/sandboxagent/credentials.Cache, the SCM
+// credential-helper's own flock'd cache): a provider credential is needed
+// exactly ONCE, at this exact spawn moment, never re-invoked repeatedly
+// outside sandbox-agent's own process lifetime the way a git credential
+// helper is (git itself calls the credential helper on every fetch/push) --
+// there is nothing here for a disk cache to usefully amortize, so an
+// in-memory-only fetch is the simpler, sufficient choice.
+//
+// Never logs any resolved credential VALUE, at any point -- only provider
+// NAMES (never secret material) for observability, matching
+// tokenencrypt.go's own "never log plaintext, key, or ciphertext"
+// discipline exactly.
+func fetchProviderCredentialSpawnEnv(ctx context.Context, cfg boot.Config, timeout time.Duration) []string {
+	client, err := credentials.NewCPClient(cfg.SessionConfig.ControlPlaneWsUrl, timeout)
+	if err != nil {
+		slog.Warn("sandbox-agent: build provider-credentials CP client failed, spawning opencode with no resolved provider credential", "error", err)
+		return nil
+	}
+
+	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resolved, err := client.FetchProviderCredentials(fetchCtx, cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen)
+	if err != nil {
+		slog.Warn("sandbox-agent: fetch provider credentials failed, spawning opencode with no resolved provider credential", "error", err)
+		return nil
+	}
+	if len(resolved) == 0 {
+		return nil
+	}
+
+	providerNames := make([]string, 0, len(resolved))
+	var env []string
+	for provider, value := range resolved {
+		providerNames = append(providerNames, provider)
+		for _, name := range providercredential.EnvVarNames(providercredential.Provider(provider)) {
+			env = append(env, name+"="+value)
+		}
+	}
+	sort.Strings(providerNames)
+	slog.Info("sandbox-agent: resolved provider credentials for opencode spawn", "providers", providerNames)
+	return env
+}
+
 func run() error {
 	// boot.Load() is the earliest possible failure -- before any logging
 	// setup even -- exactly like control-plane's own platform.Load()
@@ -880,7 +962,16 @@ func run() error {
 			}
 		}
 
-		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir,
+		// Step 53 ("provider credential injection", §25.1/§25.3): resolve
+		// this session's own provider credentials (repo/environment/global
+		// scoped, most-specific-wins) BEFORE spawning `opencode serve`,
+		// mapping each onto its own env-var name(s) -- see
+		// fetchProviderCredentialSpawnEnv's own doc comment for why this is
+		// deliberately best-effort (nil on any failure, never fatal to
+		// boot).
+		providerCredentialEnv := fetchProviderCredentialSpawnEnv(ctx, cfg, timeouts.ProviderCredentialFetchTimeout)
+
+		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv,
 			timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
 		if spawnErr != nil {
 			// Best-effort cleanup of whatever sup may already be tracking
