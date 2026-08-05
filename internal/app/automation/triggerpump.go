@@ -45,16 +45,38 @@ func unmarshalCronTriggerConfig(raw []byte) (domainautomation.CronTriggerConfig,
 // EvaluateCronTriggersOnce runs exactly one cron-trigger evaluation tick
 // (§8.4's own "cron path"): lists every active, TriggerTypeCron automation
 // (ListActiveCronAutomations, small -- expected to stay a handful of
-// rows), and for each whose own schedule matches the current UTC minute
-// (domainautomation.CronMatches), attempts to claim this minute's own fire
-// (ClaimCronFire's CAS) and, on winning it, calls CreateInvocation with a
-// fresh snapshot of the automation's own current repos as targets --
-// mirrors invocationenqueue.go's own doc comment: "Step 52's own future
-// trigger evaluator is expected to check this same status before ever
-// calling CreateInvocation" -- ListActiveCronAutomations' own "AND status =
-// 'active'" filter is exactly that check, evaluated fresh every tick (a
-// paused automation simply stops appearing in this list, with no separate
-// gate needed).
+// rows), and for each whose own schedule matched ANY whole-minute bucket
+// since that automation's own last fire (domainautomation.
+// CronMatchesWithin, capped at AutomationCronCatchUpWindow -- see this
+// function's own "review fix" paragraph below), attempts to claim the
+// CURRENT minute bucket (ClaimCronFire's CAS) and, on winning it, calls
+// CreateInvocation with a fresh snapshot of the automation's own current
+// repos as targets -- mirrors invocationenqueue.go's own doc comment:
+// "Step 52's own future trigger evaluator is expected to check this same
+// status before ever calling CreateInvocation" -- ListActiveCronAutomations'
+// own "AND status = 'active'" filter is exactly that check, evaluated fresh
+// every tick (a paused automation simply stops appearing in this list, with
+// no separate gate needed).
+//
+// # Review fix: catch-up window, not a point-in-time check
+//
+// Before this fix, this function compared ONLY the exact current instant
+// against each schedule (domainautomation.CronMatches) -- so a gap between
+// two consecutive evaluations wider than one AutomationEnginePumpInterval
+// tick (a routine control-plane restart, a slow tick, a GC pause) silently
+// and permanently lost that minute's own fire: e.g. a '30 2 * * *' schedule,
+// a restart at 02:30:10, first post-restart evaluation at 02:31:10 --
+// CronMatches('30 2 * * *', 02:31:10) is false, and nothing ever re-examined
+// 02:30 afterward. Every OTHER time-driven path in this codebase
+// (session_timers' fires_at <= now(), outbox's next_attempt_at <= now(),
+// image_builds' next_retry_at <= now()) is inherently catch-up-safe by
+// virtue of being a range/threshold query -- this function now is too: each
+// row's own window runs from max(row.LastCronFiredAt,
+// now-AutomationCronCatchUpWindow) through the current minute bucket
+// (domainautomation.CronMatchesWithin), firing AT MOST ONCE per tick even
+// when multiple buckets inside that window matched (CAS discipline is
+// unchanged -- ClaimCronFire still only ever records the CURRENT bucket as
+// this automation's own last fire, exactly as it always has).
 //
 // Exported (rather than only reachable through Run's own loop) so tests
 // can drive exactly one tick deterministically, matching PumpOnce/
@@ -69,7 +91,7 @@ func unmarshalCronTriggerConfig(raw []byte) (domainautomation.CronTriggerConfig,
 // in this package.
 func (e *Engine) EvaluateCronTriggersOnce(ctx context.Context) error {
 	now := time.Now()
-	minuteBucket := pgtype.Timestamptz{Time: now.Truncate(e.timeouts.AutomationCronGranularity), Valid: true}
+	toBucket := now.Truncate(e.timeouts.AutomationCronGranularity)
 
 	rows, err := e.automations.ListActiveCronAutomations(ctx)
 	if err != nil {
@@ -78,12 +100,21 @@ func (e *Engine) EvaluateCronTriggersOnce(ctx context.Context) error {
 
 	logger := platform.Logger(ctx)
 	for _, row := range rows {
-		e.evaluateCronAutomation(ctx, logger, row, now, minuteBucket)
+		e.evaluateCronAutomation(ctx, logger, row, now, toBucket)
 	}
 	return nil
 }
 
-func (e *Engine) evaluateCronAutomation(ctx context.Context, logger *slog.Logger, row sqlcgen.Automation, now time.Time, minuteBucket pgtype.Timestamptz) {
+// evaluateCronAutomation evaluates ONE automation's own catch-up window,
+// (from, toBucket] -- from is the later of row.LastCronFiredAt (this
+// automation's own last recorded fire, if any) and
+// now-AutomationCronCatchUpWindow (the catch-up ceiling, so a genuinely
+// long-down engine backfills a BOUNDED amount, never an ever-growing one);
+// an automation that has NEVER fired (row.LastCronFiredAt invalid) starts
+// from exactly one granularity bucket back -- the SAME single-bucket window
+// CronMatches alone always evaluated, so a brand-new automation's very
+// first tick behaves identically to before this fix.
+func (e *Engine) evaluateCronAutomation(ctx context.Context, logger *slog.Logger, row sqlcgen.Automation, now time.Time, toBucket time.Time) {
 	logger = logger.With("automation_id", row.ID.String())
 
 	cfg, err := unmarshalCronTriggerConfig(row.TriggerConfig)
@@ -92,7 +123,19 @@ func (e *Engine) evaluateCronAutomation(ctx context.Context, logger *slog.Logger
 		return
 	}
 
-	matched, err := domainautomation.CronMatches(cfg.Schedule, now)
+	from := toBucket.Add(-e.timeouts.AutomationCronGranularity)
+	if row.LastCronFiredAt.Valid {
+		catchUpFloor := now.Add(-e.timeouts.AutomationCronCatchUpWindow)
+		if row.LastCronFiredAt.Time.After(catchUpFloor) {
+			from = row.LastCronFiredAt.Time
+		} else {
+			from = catchUpFloor
+			logger.Warn("automation: cron catch-up window capped a longer gap",
+				"last_cron_fired_at", row.LastCronFiredAt.Time, "catch_up_floor", catchUpFloor)
+		}
+	}
+
+	matched, err := domainautomation.CronMatchesWithin(cfg.Schedule, from, toBucket, e.timeouts.AutomationCronGranularity)
 	if err != nil {
 		logger.Error("automation: evaluate cron schedule failed", "error", err, "schedule", cfg.Schedule)
 		return
@@ -101,6 +144,7 @@ func (e *Engine) evaluateCronAutomation(ctx context.Context, logger *slog.Logger
 		return
 	}
 
+	minuteBucket := pgtype.Timestamptz{Time: toBucket, Valid: true}
 	claimed, err := e.automations.ClaimCronFire(ctx, row.ID, minuteBucket)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

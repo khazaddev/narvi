@@ -162,7 +162,32 @@ func (e *Engine) runSweepPump(ctx context.Context) error {
 // the two answer different questions (how often this loop wakes up, vs.
 // how coarse a "have I already fired this instant" bucket is), even
 // though they happen to share the same 60s/1min order of magnitude today.
+//
+// Review fix (missed cron evaluations): runs EvaluateCronTriggersOnce
+// exactly ONCE, synchronously, immediately, BEFORE ever entering the
+// ticker loop below -- time.NewTicker's own first tick only fires after a
+// full AutomationEnginePumpInterval elapses, so without this a freshly
+// started (or restarted) process would begin with a guaranteed blind
+// window of up to 60s during which nothing evaluates cron triggers at all,
+// on top of whatever gap caused the restart in the first place. This is
+// pure latency-reduction, layered on top of (not a substitute for)
+// EvaluateCronTriggersOnce's own catch-up-window fix (triggerpump.go,
+// AutomationCronCatchUpWindow) -- that fix already makes a late first
+// evaluation CORRECT (it backfills), this makes it PROMPT too.
+//
+// Also logs a warning whenever the observed gap between the START of two
+// consecutive evaluations exceeds AutomationCronGranularity -- so an
+// operator can actually SEE in logs when a tick was skipped/delayed and
+// catch-up kicked in, rather than that only being inferable indirectly
+// from automations.last_cron_fired_at jumping by more than one bucket.
 func (e *Engine) runTriggerPump(ctx context.Context) error {
+	logger := platform.Logger(ctx)
+
+	lastEvalStartedAt := time.Now()
+	if err := e.EvaluateCronTriggersOnce(ctx); err != nil {
+		logger.Error("automation: trigger pump tick failed", "error", err)
+	}
+
 	ticker := time.NewTicker(e.timeouts.AutomationEnginePumpInterval)
 	defer ticker.Stop()
 
@@ -171,8 +196,15 @@ func (e *Engine) runTriggerPump(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			now := time.Now()
+			if gap := now.Sub(lastEvalStartedAt); gap > e.timeouts.AutomationCronGranularity {
+				logger.Warn("automation: trigger pump observed a gap wider than one cron granularity bucket; catch-up window will backfill any missed fire",
+					"gap", gap.String())
+			}
+			lastEvalStartedAt = now
+
 			if err := e.EvaluateCronTriggersOnce(ctx); err != nil {
-				platform.Logger(ctx).Error("automation: trigger pump tick failed", "error", err)
+				logger.Error("automation: trigger pump tick failed", "error", err)
 			}
 		}
 	}

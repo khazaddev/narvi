@@ -106,3 +106,123 @@ func TestCronMatchesConvertsToUTC(t *testing.T) {
 		t.Fatal("expected CronMatches to convert to UTC before comparing, got false")
 	}
 }
+
+// TestCronMatchesWithin is the review-fix companion to TestCronMatches --
+// see CronMatchesWithin's own doc comment (cron.go) for the full "restart/
+// stall gap" motivation. All cases use a 1-minute granularity (the ONLY
+// granularity app/automation's own trigger pump ever passes,
+// platform.Timeouts.AutomationCronGranularity).
+func TestCronMatchesWithin(t *testing.T) {
+	const minute = time.Minute
+	// 2026-08-03 is a Monday.
+	day := func(h, m int) time.Time {
+		return time.Date(2026, time.August, 3, h, m, 0, 0, time.UTC)
+	}
+
+	tests := []struct {
+		name   string
+		expr   string
+		from   time.Time
+		to     time.Time
+		want   bool
+		wantOK bool // false means an error is expected
+	}{
+		{
+			// Parity with CronMatches: a single-bucket window (from = to -
+			// granularity) exercising the exact same one instant CronMatches
+			// alone would have checked.
+			name: "exact single-bucket match parity with CronMatches",
+			expr: "30 2 * * *",
+			from: day(2, 29), to: day(2, 30),
+			want: true, wantOK: true,
+		},
+		{
+			name: "exact single-bucket window with no match",
+			expr: "30 2 * * *",
+			from: day(2, 28), to: day(2, 29),
+			want: false, wantOK: true,
+		},
+		{
+			// A multi-minute gap (a restart/stall) should catch up exactly
+			// the one fire that fell inside it.
+			name: "multi-minute gap catches up one missed fire",
+			expr: "30 2 * * *",
+			from: day(2, 25), to: day(2, 35),
+			want: true, wantOK: true,
+		},
+		{
+			// A gap spanning zero matching minutes.
+			name: "multi-minute gap with zero matching minutes",
+			expr: "50 2 * * *",
+			from: day(2, 25), to: day(2, 35),
+			want: false, wantOK: true,
+		},
+		{
+			// Boundary: `from` is EXCLUSIVE -- a schedule that fires exactly
+			// at `from` is NOT counted (already accounted for by whichever
+			// earlier evaluation set `from` in the first place).
+			name: "from boundary is exclusive",
+			expr: "29 2 * * *",
+			from: day(2, 29), to: day(2, 30),
+			want: false, wantOK: true,
+		},
+		{
+			// Boundary: `to` is INCLUSIVE -- a schedule that fires exactly
+			// at `to` IS counted.
+			name: "to boundary is inclusive",
+			expr: "30 2 * * *",
+			from: day(2, 29), to: day(2, 30),
+			want: true, wantOK: true,
+		},
+		{
+			// A zero-width (or negative) window matches nothing, regardless
+			// of schedule -- from/to are both real bucket boundaries so this
+			// never actually happens in production (the trigger pump always
+			// supplies to > from), but the function itself stays honest
+			// about it rather than panicking or looping forever.
+			name: "empty window never matches",
+			expr: "* * * * *",
+			from: day(2, 30), to: day(2, 30),
+			want: false, wantOK: true,
+		},
+		{
+			name: "invalid schedule still surfaces an error",
+			expr: "not a cron expr",
+			from: day(2, 0), to: day(2, 10),
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := automation.CronMatchesWithin(tt.expr, tt.from, tt.to, minute)
+			if !tt.wantOK {
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("CronMatchesWithin(%q, %v, %v) = %v, want %v", tt.expr, tt.from, tt.to, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCronMatchesWithin_NonPositiveGranularityErrors proves the defensive
+// guard against a zero/negative granularity (never supplied by the real
+// caller, but not silently infinite-looped either).
+func TestCronMatchesWithin_NonPositiveGranularityErrors(t *testing.T) {
+	from := time.Date(2026, time.August, 3, 2, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.August, 3, 2, 10, 0, 0, time.UTC)
+
+	if _, err := automation.CronMatchesWithin("* * * * *", from, to, 0); err == nil {
+		t.Fatal("expected an error for a zero granularity")
+	}
+	if _, err := automation.CronMatchesWithin("* * * * *", from, to, -time.Minute); err == nil {
+		t.Fatal("expected an error for a negative granularity")
+	}
+}

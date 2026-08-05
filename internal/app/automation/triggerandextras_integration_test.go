@@ -14,8 +14,10 @@ package automation_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -141,6 +143,64 @@ func TestEvaluateCronTriggersOnce_NeverFiresTwiceInTheSameMinute(t *testing.T) {
 
 	if got := f.countInvocationsForAutomation(t, auto.ID); got != 1 {
 		t.Fatalf("invocations for automation = %d, want exactly 1 across two ticks in the same minute", got)
+	}
+}
+
+// TestEvaluateCronTriggersOnce_CatchesUpAfterRestartGap is the review-fix
+// regression test for "cron trigger pump has no catch-up for missed
+// evaluations": simulates a control-plane restart/stall gap by forcing
+// last_cron_fired_at 5 minutes stale (comfortably inside
+// AutomationCronCatchUpWindow's own 10-minute default), with a schedule
+// that matches a SPECIFIC minute strictly between that stale fire and now
+// -- one the CURRENT minute itself does NOT match -- so a pass here can
+// only be explained by the catch-up window actually re-examining the
+// missed bucket, never by a coincidental "matches right now" false
+// positive. Asserts the missed minute fires EXACTLY once: a second,
+// immediate tick must not fire again (ClaimCronFire's own CAS discipline,
+// unchanged by this fix).
+func TestEvaluateCronTriggersOnce_CatchesUpAfterRestartGap(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	missed := time.Now().UTC().Add(-2 * time.Minute)
+	schedule := fmt.Sprintf("%d %d * * *", missed.Minute(), missed.Hour())
+
+	auto := f.createCronAutomation(t, "restart gap catch-up", schedule, sqlcgen.AutomationStatusActive)
+
+	staleFiredAt := time.Now().UTC().Add(-5 * time.Minute)
+	if _, err := f.pool.Exec(ctx, "UPDATE automations SET last_cron_fired_at = $1 WHERE id = $2", staleFiredAt, auto.ID); err != nil {
+		t.Fatalf("force stale last_cron_fired_at: %v", err)
+	}
+
+	beforeTick := time.Now().UTC()
+	if err := f.engine.EvaluateCronTriggersOnce(ctx); err != nil {
+		t.Fatalf("EvaluateCronTriggersOnce: %v", err)
+	}
+
+	if got := f.countInvocationsForAutomation(t, auto.ID); got != 1 {
+		t.Fatalf("invocations for automation = %d, want exactly 1 (the missed minute caught up)", got)
+	}
+
+	gotAuto, err := f.automations.Get(ctx, auto.ID)
+	if err != nil {
+		t.Fatalf("get automation: %v", err)
+	}
+	if !gotAuto.LastCronFiredAt.Valid {
+		t.Fatalf("last_cron_fired_at not set after catch-up fire")
+	}
+	// ClaimCronFire always records the CURRENT minute bucket as this
+	// automation's own last fire -- never the historical missed minute --
+	// exactly as it did before this fix.
+	if gotAuto.LastCronFiredAt.Time.Before(beforeTick.Truncate(time.Minute)) {
+		t.Fatalf("last_cron_fired_at = %v, want it advanced to (approximately) the CURRENT minute bucket, not the missed one", gotAuto.LastCronFiredAt.Time)
+	}
+
+	// A second tick, immediately after, must NOT fire again.
+	if err := f.engine.EvaluateCronTriggersOnce(ctx); err != nil {
+		t.Fatalf("EvaluateCronTriggersOnce (second tick): %v", err)
+	}
+	if got := f.countInvocationsForAutomation(t, auto.ID); got != 1 {
+		t.Fatalf("invocations for automation after a second tick = %d, want still 1 (no double-fire)", got)
 	}
 }
 

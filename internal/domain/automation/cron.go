@@ -201,22 +201,94 @@ func CronMatches(expr string, t time.Time) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return matchesParsed(parsed, t), nil
+}
 
+// matchesParsed is CronMatches/CronMatchesWithin's own shared per-instant
+// predicate, factored out so CronMatchesWithin (below) parses expr exactly
+// ONCE and then re-tests it against every candidate bucket in its own
+// window, rather than re-parsing the same expression once per bucket.
+func matchesParsed(parsed [5]map[int]struct{}, t time.Time) bool {
 	u := t.UTC()
 	if _, ok := parsed[0][u.Minute()]; !ok {
-		return false, nil
+		return false
 	}
 	if _, ok := parsed[1][u.Hour()]; !ok {
-		return false, nil
+		return false
 	}
 	if _, ok := parsed[2][u.Day()]; !ok {
-		return false, nil
+		return false
 	}
 	if _, ok := parsed[3][int(u.Month())]; !ok {
-		return false, nil
+		return false
 	}
 	if _, ok := parsed[4][int(u.Weekday())]; !ok {
+		return false
+	}
+	return true
+}
+
+// CronMatchesWithin reports whether expr's own schedule fires during ANY
+// whole `granularity`-sized bucket in the half-open-then-closed window
+// (from, to] -- i.e. from is EXCLUSIVE (a bucket ending exactly at/before
+// from is considered already accounted for by the caller) and to is
+// INCLUSIVE (the bucket containing to is always considered). This is the
+// review-fix companion to CronMatches above: CronMatches alone is a
+// point-in-time predicate ("does this exact instant match"), which silently
+// loses a fire whenever more than one `granularity` elapses between two
+// consecutive evaluations (a control-plane restart, a slow tick, a GC
+// pause) -- app/automation's own trigger pump (triggerpump.go) now widens
+// its own per-automation evaluation window to (max(lastFired, now-
+// catchUpWindow), now], via this function, specifically to close that gap.
+//
+// granularity is threaded through as an explicit parameter, never a bare
+// time.Minute literal here, even though a standard 5-field cron schedule's
+// own finest resolution is always one minute in practice -- every
+// timeout/interval/duration-unit literal lives in platform/timeouts.go
+// (§5.4/§11, mechanically enforced by tools/lint/narvichecks/
+// notimeliteral, which forbids selecting time.Minute etc. ANYWHERE outside
+// internal/platform); app/automation's own trigger pump passes
+// platform.Timeouts.AutomationCronGranularity, the SAME field CronMatches'
+// own caller already truncates `now` by.
+//
+// Iterates whole-bucket candidates rather than every whole minute
+// unconditionally, so a caller-supplied granularity coarser than a minute
+// (not used today, but not assumed away either) still only evaluates one
+// candidate per bucket, matching CronMatches' own "whole bucket" semantics
+// exactly. Bounded: the caller (the trigger pump) is responsible for
+// capping (to - from) via its own catch-up-window ceiling, so this
+// function's own loop is never handed an unbounded range in practice --
+// but it places no ceiling of its own, since that policy choice (how far
+// back a restart may backfill) belongs one layer up, not in this pure
+// domain helper.
+//
+// Pure (no I/O, no time.Now() -- §11), exactly like CronMatches: from/to
+// are both caller-supplied.
+func CronMatchesWithin(expr string, from, to time.Time, granularity time.Duration) (bool, error) {
+	parsed, err := parseCronExpr(expr)
+	if err != nil {
+		return false, err
+	}
+	if granularity <= 0 {
+		return false, errors.New("automation: cron catch-up granularity must be positive")
+	}
+
+	fromUTC := from.UTC()
+	toUTC := to.UTC()
+	if !toUTC.After(fromUTC) {
 		return false, nil
 	}
-	return true, nil
+
+	// The first candidate bucket is one granularity AFTER the bucket
+	// containing `from` -- i.e. `from` itself (and the whole bucket it
+	// falls inside) is excluded, matching this function's own documented
+	// "from exclusive" contract; `to`'s own bucket is always the LAST
+	// candidate, and is included since the loop condition is
+	// "!bucket.After(toUTC)", matching "to inclusive".
+	for bucket := fromUTC.Truncate(granularity).Add(granularity); !bucket.After(toUTC); bucket = bucket.Add(granularity) {
+		if matchesParsed(parsed, bucket) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
