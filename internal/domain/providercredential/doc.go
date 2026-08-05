@@ -4,8 +4,18 @@
 // (provider_credentials, migrations/000056_provider_credentials.up.sql)
 // recognizes, which OpenCode env-var name(s) each provider maps onto, and
 // the "most specific wins" resolution rule that picks exactly one
-// candidate row out of the (at most 3) that can ever apply to one
-// (provider, session) pair.
+// candidate row out of however many can ever apply to one (provider,
+// session) pair. That count is NOT a fixed 3: a session names a LIST of
+// repos (sessions.repos, primary repo always at position 0, §3.4), and
+// migration 000056's own unique index is scoped per-repo
+// ((scope, scope_target_id, provider) WHERE scope_target_id IS NOT NULL)
+// -- nothing prevents every repo in an N-repo session from each having its
+// own repo-scoped row for the same provider. The real bound is N+2 for an
+// N-repo session: N repo-scoped candidates (one per named repo, at most),
+// plus at most 1 environment-scoped and at most 1 global-scoped candidate
+// (both pinned to a single scope_target_id -- this session's own
+// environment_id, or NULL -- so neither can ever have more than one row
+// per provider). 3 is only the N=1 case.
 //
 // No I/O, no time.Now(), no randomness anywhere in this package (CLAUDE.md
 // §11) -- Resolve (resolve.go) is handed an already-fetched, already-

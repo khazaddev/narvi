@@ -372,6 +372,50 @@ func TestProviderCredentialsDelivery_OtherRepo_NotMatched(t *testing.T) {
 	}
 }
 
+// providerCredsTwoRepos names 2 repos, primary-repo at position 0 (§3.4:
+// "position 0 = primary") and secondary-repo at position 1.
+const providerCredsTwoRepos = `[{"name":"primary-repo","url":"https://github.com/acme/primary-repo","branch":null},{"name":"secondary-repo","url":"https://github.com/acme/secondary-repo","branch":null}]`
+
+// TestProviderCredentialsDelivery_MultiRepo_PrimaryRepoCredentialWins is
+// the regression test for this Step's own audit finding: when a session
+// names 2 repos and EACH has its own repo-scoped credential for the SAME
+// provider (legal -- migration 000056's own unique index
+// ((scope, scope_target_id, provider) WHERE scope_target_id IS NOT NULL)
+// is scoped per-repo, so nothing stops 2 repos in one session from each
+// having their own row for the same provider), the PRIMARY repo's own
+// credential (sessions.repos position 0) must win DETERMINISTICALLY, not
+// by incidental Postgres row order for ListProviderCredentialsForResolution
+// (which only ORDER BYs provider, no secondary key). The secondary repo's
+// row is deliberately created FIRST here -- an unfixed, raw-SQL-row-order
+// caller is the caller most likely to surface exactly the wrong row in
+// that case, so this ordering proves the test would have caught the bug,
+// not merely restated the fix (providercredentialsdelivery.go's own
+// repoRank re-sort, ahead of providercredential.Resolve).
+func TestProviderCredentialsDelivery_MultiRepo_PrimaryRepoCredentialWins(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := rig.createSessionWithReposAndEnvironment(ctx, t, providerCredsTwoRepos, false)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	secondaryRepo := "acme/secondary-repo"
+	if _, err := rig.providerCredentials.Create(ctx, sqlcgen.ProviderCredentialScopeRepo, &secondaryRepo, sqlcgen.ProviderCredentialProviderOpenai, encryptForTest(t, rig, "secondary-repo-openai-key")); err != nil {
+		t.Fatalf("create secondary-repo credential: %v", err)
+	}
+	primaryRepo := "acme/primary-repo"
+	if _, err := rig.providerCredentials.Create(ctx, sqlcgen.ProviderCredentialScopeRepo, &primaryRepo, sqlcgen.ProviderCredentialProviderOpenai, encryptForTest(t, rig, "primary-repo-openai-key")); err != nil {
+		t.Fatalf("create primary-repo credential: %v", err)
+	}
+
+	status, got := postProviderCredentials(t, rig, session.ID.String(), "sandbox-bearer-token", "1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if got.Credentials["openai"] != "primary-repo-openai-key" {
+		t.Errorf("Credentials[openai] = %q, want %q (primary repo, sessions.repos position 0, must win deterministically over secondary)",
+			got.Credentials["openai"], "primary-repo-openai-key")
+	}
+}
+
 // encryptForTest is a small local helper -- EncryptToken under rig's own
 // tokenEncryptionKey, failing the test on error.
 func encryptForTest(t *testing.T, rig testRig, plaintext string) []byte {

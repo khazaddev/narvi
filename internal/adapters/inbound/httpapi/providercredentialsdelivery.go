@@ -69,6 +69,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
@@ -208,12 +209,51 @@ func ProviderCredentialsDelivery(
 			return
 		}
 
+		// repoRank maps each of this session's own repo full names to its
+		// position in repoFullNames (already primary-first -- see
+		// sessionRepoFullNames' own doc comment, §3.4 "position 0 =
+		// primary") -- used ONLY below to make the ScopeRepo tie-break
+		// deterministic. ListProviderCredentialsForResolution's own SQL
+		// query (queries/providercredentials.sql) has no secondary ORDER BY
+		// key beyond `provider`, so two same-provider, different-repo rows
+		// come back in whatever order Postgres happens to return them (can
+		// change across a VACUUM, a row rewrite from a value rotation, a
+		// query-plan change, etc.) -- array-position preservation across
+		// `= ANY($1)` is not guaranteed by Postgres either, so this
+		// re-establishes the primary-first order here, in Go, in front of
+		// Resolve, rather than trusting raw row order.
+		repoRank := make(map[string]int, len(repoFullNames))
+		for i, name := range repoFullNames {
+			repoRank[name] = i
+		}
+
 		byProvider := make(map[sqlcgen.ProviderCredentialProvider][]providercredential.Candidate[sqlcgen.ProviderCredential], len(rows))
 		for _, row := range rows {
 			byProvider[row.Provider] = append(byProvider[row.Provider], providercredential.Candidate[sqlcgen.ProviderCredential]{
 				Scope: providercredential.Scope(row.Scope),
 				Value: row,
 			})
+		}
+
+		// Re-sort each provider's own candidate slice so that, within the
+		// ScopeRepo tier, candidates appear in repoFullNames' own
+		// primary-first order rather than raw SQL row order -- Resolve's
+		// own documented contract (resolve.go) is "first candidate in
+		// input order wins" a same-scope tie; this is the one place that
+		// order gets established for real multi-repo session data. Only
+		// ScopeRepo can ever tie this way: scope=global's own
+		// scope_target_id is always NULL, and scope=environment is pinned
+		// to this session's single environment_id, so each provider has at
+		// most 1 global and at most 1 environment candidate here -- both
+		// non-repo scopes get a fixed, before-everything rank (-1) from
+		// repoTieBreakRank, so this sort is a no-op for them either way
+		// (sort.SliceStable preserves their original relative order for
+		// equal keys).
+		for provider, candidates := range byProvider {
+			sort.SliceStable(candidates, func(i, j int) bool {
+				return repoTieBreakRank(candidates[i], repoRank) < repoTieBreakRank(candidates[j], repoRank)
+			})
+			byProvider[provider] = candidates
 		}
 
 		credentials := make(map[string]string, len(byProvider))
@@ -237,4 +277,24 @@ func ProviderCredentialsDelivery(
 
 		writeJSON(w, http.StatusOK, providerCredentialsResponse{Credentials: credentials})
 	}
+}
+
+// repoTieBreakRank returns candidate's own position in repoRank
+// (repoFullNames' primary-first order, §3.4 "position 0 = primary") when
+// candidate is a ScopeRepo row for a repo this session actually names, or
+// -1 otherwise (ScopeEnvironment/ScopeGlobal, or -- defensively -- a
+// ScopeRepo row whose ScopeTargetID somehow isn't among repoFullNames at
+// all) so it sorts before every ranked ScopeRepo candidate and never
+// participates in the repo-vs-repo tie-break this function exists for --
+// see ProviderCredentialsDelivery's own re-sort comment above for why only
+// ScopeRepo can ever have more than one same-provider candidate here.
+func repoTieBreakRank(candidate providercredential.Candidate[sqlcgen.ProviderCredential], repoRank map[string]int) int {
+	if candidate.Scope != providercredential.ScopeRepo || candidate.Value.ScopeTargetID == nil {
+		return -1
+	}
+	rank, ok := repoRank[*candidate.Value.ScopeTargetID]
+	if !ok {
+		return -1
+	}
+	return rank
 }
