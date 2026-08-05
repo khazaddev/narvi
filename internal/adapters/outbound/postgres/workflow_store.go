@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -193,6 +194,16 @@ func (s *WorkflowStore) EscalateRun(ctx context.Context, runID pgtype.UUID) (sql
 	return s.q.EscalateWorkflowRun(ctx, runID)
 }
 
+// FailRun transitions runID to 'failed' and stamps finished_at -- Step 56's
+// own ("workflow HITL gate + circuit breaker", §25.9) consequence of a
+// winning HITL reject verdict: mirrors CompleteRun's own shape exactly,
+// landing on 'failed' instead of 'completed' (a human's reject IS the run's
+// own final word, a terminal outcome like completion, never
+// 'needs_review's "waiting on a human" semantics).
+func (s *WorkflowStore) FailRun(ctx context.Context, runID pgtype.UUID) (sqlcgen.WorkflowRun, error) {
+	return s.q.FailWorkflowRun(ctx, runID)
+}
+
 // SetStepRunOutcome persists the generic step-outcome-posting tool's own
 // typed payload ({status, summary, structuredPayload}, §25.6) onto
 // stepRunID -- guarded to the attempt currently actually 'running' (the
@@ -210,4 +221,72 @@ func (s *WorkflowStore) SetStepRunOutcome(ctx context.Context, stepRunID pgtype.
 		OutcomeSummary: &summary,
 		OutcomePayload: payload,
 	})
+}
+
+// GetStepRun fetches one workflow_step_runs row by id -- Step 56's own
+// ("workflow HITL gate + circuit breaker", §25.9) decide endpoint's first
+// read (mirrors PlanStore.Get's identical role in decideplan.go): resolves
+// the target attempt the caller named (POST /api/workflow-runs/:runId/
+// steps/:stepRunId/decide's own stepRunId) before deciding it, and re-fetches
+// it after the guarded decision UPDATE to learn its REAL current state
+// either way (won or already decided).
+func (s *WorkflowStore) GetStepRun(ctx context.Context, id pgtype.UUID) (sqlcgen.WorkflowStepRun, error) {
+	return s.q.GetWorkflowStepRun(ctx, id)
+}
+
+// CountStepRunsForStepDefinition returns how many workflow_step_runs rows
+// ALREADY exist for stepDefinitionID within runID -- §25.5's own "iteration
+// count reads COUNT(*) on workflow_step_runs, no dedicated counter column",
+// scoped to the ONE run and ONE step definition about to receive a new
+// attempt. The engine (internal/app/workflowengine) consults this ONLY when
+// a needs_fix edge is about to advance to this step, to decide whether
+// loopguard.Evaluate even needs consulting at all: zero means this is the
+// step's first-ever attempt in this run (not a re-fire, proceed directly);
+// more than zero means it is, and the returned count is exactly the
+// loopguard.State.AttemptCount to evaluate against.
+func (s *WorkflowStore) CountStepRunsForStepDefinition(ctx context.Context, runID, stepDefinitionID pgtype.UUID) (int64, error) {
+	return s.q.CountWorkflowStepRunsForStepDefinition(ctx, sqlcgen.CountWorkflowStepRunsForStepDefinitionParams{
+		WorkflowRunID:    runID,
+		StepDefinitionID: stepDefinitionID,
+	})
+}
+
+// DecideStepRun renders verdict (approve/reject/revise) on stepRunID,
+// guarded to the SAME "AND status = 'awaiting_decision'" precondition for
+// all three (Step 56, §25.9) -- mirrors PlanStore's own ApproveIfAwaitingApproval/
+// RejectIfAwaitingApproval :execrows shape exactly: rowsAffected == 0 means
+// this call did NOT win the decision (already decided by an earlier call,
+// or a stale/foreign id), rowsAffected == 1 means it did. decisionText is
+// nil for approve, optional for reject, and the caller's own job to require
+// non-empty for revise (this store applies no such validation itself,
+// mirroring SetStepRunOutcome's own "store persists, callers validate"
+// division of labor). decidedBy mirrors DecidePlanOnTx's own decidedBy
+// convention (an explicitly invalid pgtype.UUID for a not-yet-supported
+// bot/channel-attributed decision -- every current caller of this endpoint
+// is REST, always passing a real authenticated actorUserID).
+func (s *WorkflowStore) DecideStepRun(ctx context.Context, stepRunID pgtype.UUID, verdict string, decisionText *string, decidedBy pgtype.UUID) (int64, error) {
+	switch verdict {
+	case "approve":
+		return s.q.DecideWorkflowStepRunApprove(ctx, sqlcgen.DecideWorkflowStepRunApproveParams{ID: stepRunID, DecisionText: decisionText, DecidedBy: decidedBy})
+	case "reject":
+		return s.q.DecideWorkflowStepRunReject(ctx, sqlcgen.DecideWorkflowStepRunRejectParams{ID: stepRunID, DecisionText: decisionText, DecidedBy: decidedBy})
+	case "revise":
+		return s.q.DecideWorkflowStepRunRevise(ctx, sqlcgen.DecideWorkflowStepRunReviseParams{ID: stepRunID, DecisionText: decisionText, DecidedBy: decidedBy})
+	default:
+		return 0, fmt.Errorf("postgres: unrecognized workflow step decision verdict %q", verdict)
+	}
+}
+
+// ClaimEscalationNotice atomically claims the right to send runID's own
+// ONE-TIME "this run now needs a human's attention" notice (§25.9,
+// mirroring §24.6's own "never repeated" exemption mechanism) -- guarded to
+// "AND needs_review_notified_at IS NULL" (migrations/000058_workflow_hitl.up.sql),
+// so of any number of concurrent or repeated calls against the SAME run,
+// rowsAffected == 1 for exactly one of them (the caller that must actually
+// enqueue the notification) and == 0 for every other (already claimed --
+// send nothing further). Independent of, and always called alongside,
+// EscalateRun -- claiming is idempotent regardless of how many times a run
+// is (redundantly) escalated.
+func (s *WorkflowStore) ClaimEscalationNotice(ctx context.Context, runID pgtype.UUID) (int64, error) {
+	return s.q.ClaimWorkflowRunEscalationNotice(ctx, runID)
 }

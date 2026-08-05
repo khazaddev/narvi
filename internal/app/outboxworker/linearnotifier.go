@@ -57,15 +57,25 @@ func NewLinearNotifier(client *linearapi.Client, installations *postgres.LinearI
 // mirrors planSlackNotifier's own identical dispatch shape
 // (planslacknotifier.go) for "one small wrapper type handling more than
 // one Kind under the same provider". The delivery worker only ever routes
-// a row to this notifier under one of the two kinds it is registered for
+// a row to this notifier under one of the three kinds it is registered for
 // in cmd/control-plane/main.go's own kind->Notifier map, so an
-// unrecognized third kind here is defensive, not expected.
+// unrecognized fourth kind here is defensive, not expected.
+//
+// ports.NotificationKindLinearWorkflowDecision is Step 56's own addition
+// ("workflow HITL gate + circuit breaker", §25.9) -- its payload is a
+// plain linearapi.Payload with Success always true (internal/app/
+// workflowengine's own enqueueWorkflowNotice, notify.go), the EXACT same
+// shape ports.NotificationKindLinear's own deliverOutcome already handles,
+// so this reuses that method verbatim rather than duplicating its
+// CreateResponseActivity call here.
 func (n *linearNotifier) Deliver(ctx context.Context, notification ports.Notification) error {
 	switch notification.Kind {
 	case ports.NotificationKindLinear:
 		return n.deliverOutcome(ctx, notification.Payload)
 	case ports.NotificationKindLinearProgress:
 		return n.deliverProgress(ctx, notification.Payload)
+	case ports.NotificationKindLinearWorkflowDecision:
+		return n.deliverOutcome(ctx, notification.Payload)
 	default:
 		return fmt.Errorf("outboxworker: linearNotifier: unrecognized notification kind %q", notification.Kind)
 	}

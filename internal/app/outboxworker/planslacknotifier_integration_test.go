@@ -262,3 +262,49 @@ func TestPlanSlackNotifier_DeliverApproval_RejectedBetweenEnqueueAndDelivery_Ski
 		t.Errorf("SlackChannelID/SlackMessageTs = %v/%v, want both nil (no post ever happened)", got.SlackChannelID, got.SlackMessageTs)
 	}
 }
+
+// TestPlanSlackNotifier_Deliver_WorkflowDecision_PostsPlainMessage proves
+// Step 56's own addition ("workflow HITL gate + circuit breaker", §25.9):
+// ports.NotificationKindSlackWorkflowDecision forwards to n.client.Deliver
+// UNCHANGED (planslacknotifier.go's own updated Deliver switch) -- a plain
+// slackapi.Payload posts via an ordinary chat.postMessage call, with no
+// plan-specific staleness recheck or persisted message ref (there is no
+// plan involved at all).
+func TestPlanSlackNotifier_Deliver_WorkflowDecision_PostsPlainMessage(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	plans := narvipg.NewPlanStore(pool) // unused by this Kind's own path; a real store is still threaded through, mirroring every other test in this file
+
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "channel": "C123", "ts": "111.222"})
+	}))
+	defer server.Close()
+
+	client := slackapi.New(server.Client(), server.URL, "xoxb-test-token")
+	notifier := outboxworker.NewPlanSlackNotifier(client, plans)
+
+	payload, err := json.Marshal(slackapi.Payload{ChannelID: "C-decision", ThreadTS: "222.333", Text: "a workflow step needs your decision"})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	if err := notifier.Deliver(ctx, ports.Notification{
+		Kind:    ports.NotificationKindSlackWorkflowDecision,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("Deliver() error = %v, want nil", err)
+	}
+
+	if gotBody["channel"] != "C-decision" {
+		t.Errorf("posted channel = %v, want %q", gotBody["channel"], "C-decision")
+	}
+	if gotBody["thread_ts"] != "222.333" {
+		t.Errorf("posted thread_ts = %v, want %q", gotBody["thread_ts"], "222.333")
+	}
+	if gotBody["text"] != "a workflow step needs your decision" {
+		t.Errorf("posted text = %v, want %q", gotBody["text"], "a workflow step needs your decision")
+	}
+}

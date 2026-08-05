@@ -1,0 +1,26 @@
+-- workflow_hitl: Step 56's own ("workflow HITL gate + circuit breaker",
+-- §25.9) single schema addition on top of Step 54's dark workflow_* tables
+-- (migrations/000057_workflows.up.sql). Everything else this Step needs
+-- (workflow_step_decision, workflow_step_runs.decision/decision_text/
+-- decided_at/decided_by, workflow_run_status.needs_review) already exists
+-- from that migration -- this file adds exactly the one column that
+-- migration deliberately did not anticipate: a persisted, guardable flag
+-- recording whether a run's escalation-to-needs_review notice has already
+-- been sent.
+--
+-- needs_review_notified_at mirrors §24.6's own "never repeated" mechanism
+-- (a per-PR re-review budget's one-time notice, proposed there as "a
+-- boolean/timestamp flag preventing a duplicate") -- a nullable
+-- TIMESTAMPTZ, set exactly once via a guarded
+-- "UPDATE ... WHERE needs_review_notified_at IS NULL" (mirrors
+-- plans.decided_at/workflow_step_runs.finished_at's own identical
+-- "null means hasn't happened yet" convention). The engine claims this
+-- column atomically before enqueueing the one notice §25.9 requires --
+-- whether the run reached needs_review via loopguard.Evaluate's own
+-- ShouldEscalate verdict (the circuit breaker tripping on a re-firing
+-- needs_fix edge) or via workflow.NextStep's own plain fail-conservative
+-- default-escalate (an unrouted needs_fix/blocked outcome with no edge at
+-- all) -- both are "a run now needs a human's attention", and both must
+-- notify exactly once, never on a later, redundant escalate attempt
+-- against the same already-escalated run.
+ALTER TABLE workflow_runs ADD COLUMN needs_review_notified_at TIMESTAMPTZ;

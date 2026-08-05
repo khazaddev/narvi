@@ -419,3 +419,53 @@ func TestLinearNotifier_Deliver_Failure_RoutesToErrorActivity(t *testing.T) {
 		t.Errorf("content.type = %q, want %q (payload.Success == false must route to CreateErrorActivity)", got, "error")
 	}
 }
+
+// TestLinearNotifier_Deliver_WorkflowDecision_RoutesToResponseActivity
+// proves Step 56's own addition ("workflow HITL gate + circuit breaker",
+// §25.9): ports.NotificationKindLinearWorkflowDecision reuses deliverOutcome
+// verbatim (linearnotifier.go's own updated Deliver switch) -- a plain
+// linearapi.Payload with Success always true routes to a "response"-typed
+// AgentActivity, using the FRESHLY decrypted access token from the real
+// installation row, exactly like ports.NotificationKindLinear's own
+// identical path.
+func TestLinearNotifier_Deliver_WorkflowDecision_RoutesToResponseActivity(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	const plaintextToken = "real-linear-access-token"
+	ciphertext, err := platform.EncryptToken(linearTokenEncryptionKey, []byte(plaintextToken))
+	if err != nil {
+		t.Fatalf("encrypt token: %v", err)
+	}
+	seedLinearInstallation(ctx, t, pool, "org-workflow-decision", ciphertext)
+
+	var calls []linearActivityRequest
+	server := captureLinearActivityServer(t, &calls)
+	defer server.Close()
+
+	client := linearapi.New(server.Client(), server.URL)
+	installations := narvipg.NewLinearInstallationStore(pool)
+	notifier := outboxworker.NewLinearNotifier(client, installations, linearTokenEncryptionKey)
+
+	err = notifier.Deliver(ctx, ports.Notification{
+		Kind:    ports.NotificationKindLinearWorkflowDecision,
+		Payload: linearPayload(t, "org-workflow-decision", true),
+	})
+	if err != nil {
+		t.Fatalf("Deliver() error = %v, want nil", err)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("linear API calls = %d, want exactly 1", len(calls))
+	}
+	got := calls[0]
+	if got.auth != "Bearer "+plaintextToken {
+		t.Errorf("Authorization = %q, want %q", got.auth, "Bearer "+plaintextToken)
+	}
+	if got.contentType != "response" {
+		t.Errorf("content.type = %q, want %q", got.contentType, "response")
+	}
+	if got.body != "outcome text" {
+		t.Errorf("content.body = %q, want %q", got.body, "outcome text")
+	}
+}

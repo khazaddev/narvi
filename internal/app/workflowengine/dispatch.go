@@ -146,7 +146,7 @@ func startNewRun(ctx context.Context, workflows *postgres.WorkflowStore, session
 		return passthrough(callerPrompt, callerModelID)
 	}
 
-	def, err := loadDefinition(ctx, workflows, binding.WorkflowDefinitionID)
+	def, err := LoadDefinition(ctx, workflows, binding.WorkflowDefinitionID)
 	if err != nil {
 		logger.Warn("workflowengine: load definition failed; passing turn through unchanged",
 			"session_id", sessionRow.ID.String(), "definition_id", binding.WorkflowDefinitionID.String(), "error", err)
@@ -198,7 +198,7 @@ func resolveWithinRunningRun(ctx context.Context, workflows *postgres.WorkflowSt
 		return passthrough(callerPrompt, callerModelID)
 	}
 
-	def, err := loadDefinition(ctx, workflows, runRow.WorkflowDefinitionID)
+	def, err := LoadDefinition(ctx, workflows, runRow.WorkflowDefinitionID)
 	if err != nil {
 		logger.Warn("workflowengine: load definition for running run failed; passing turn through unchanged",
 			"run_id", runRow.ID.String(), "error", err)

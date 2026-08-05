@@ -135,6 +135,45 @@ const (
 	// computes or posts a risk verdict. See internal/app/releasereview
 	// for the ONE place this Kind is ever enqueued.
 	NotificationKindReleaseManifest NotificationKind = "release_manifest"
+
+	// NotificationKindSlackWorkflowDecision is Step 56's own addition
+	// ("workflow HITL gate + circuit breaker", §25.9): a THIRD extension of
+	// planSlackNotifier's own wrapper-per-provider pattern
+	// (planslacknotifier.go, already extended twice: approval+decided) --
+	// posts a single, already-rendered, human-readable notice (internal/app/
+	// workflowengine's own enqueueWorkflowNotice, notify.go) for either of
+	// TWO distinct §25.9 events: a workflow step reaching awaiting_decision
+	// (HITLAfter -- "please decide: approve/reject/revise") or a run
+	// escalating to needs_review (the circuit breaker tripping, or an
+	// unrouted needs_fix/blocked outcome -- "this run now needs your
+	// attention"), never repeated for the SAME escalation (§24.6's own
+	// "never repeated" exemption, mirrored via workflow_runs.
+	// needs_review_notified_at). Deliberately distinct from the plain
+	// NotificationKindSlack (turn-completion outcomes only, enqueued
+	// exclusively by internal/app/sessionactor's own outboxenqueue.go) even
+	// though the wire payload shape is identical (slackapi.Payload, reused
+	// verbatim, no new payload type) -- the SAME "a distinct Kind marks a
+	// distinct triggering semantic even for structurally identical
+	// delivery" precedent NotificationKindHandoffSentinel/
+	// NotificationKindReleaseManifest already established alongside
+	// NotificationKindGitHub.
+	NotificationKindSlackWorkflowDecision NotificationKind = "slack_workflow_decision"
+	// NotificationKindLinearWorkflowDecision is this SAME Step 56 addition's
+	// Linear twin -- a THIRD extension of linearNotifier's own
+	// wrapper-per-provider pattern (linearnotifier.go, already extended
+	// twice: outcome+progress), reusing the plain linearapi.Payload shape
+	// (Success always true) verbatim. See NotificationKindSlackWorkflowDecision's
+	// own doc comment above for the full "why a distinct Kind" reasoning.
+	NotificationKindLinearWorkflowDecision NotificationKind = "linear_workflow_decision"
+	// NotificationKindGitHubWorkflowDecision is this SAME Step 56 addition's
+	// GitHub twin -- reuses the EXISTING githubapi.BotNotifier instance
+	// (cmd/control-plane/main.go), registered under a second Kind:
+	// BotNotifier.Deliver never inspects notification.Kind at all, so this
+	// needs no new githubapi code whatsoever, the most literal possible
+	// "reuse the exact delivery mechanism, don't build a new delivery
+	// path". See NotificationKindSlackWorkflowDecision's own doc comment
+	// above for the full "why a distinct Kind" reasoning.
+	NotificationKindGitHubWorkflowDecision NotificationKind = "github_workflow_decision"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

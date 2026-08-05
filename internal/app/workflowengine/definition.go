@@ -53,13 +53,13 @@ func resolveBinding(ctx context.Context, workflows *postgres.WorkflowStore, lane
 	return binding, nil
 }
 
-// loadDefinition assembles a full domain/workflow.Definition (the
+// LoadDefinition assembles a full domain/workflow.Definition (the
 // definition row plus its ordered steps, each carrying its own outgoing
 // edges) from definitionID -- three plain reads (GetDefinition/
 // ListStepDefinitions/ListEdgesForDefinition), grouped in Go: workflow_edges
 // is a flat table with no per-step grouping of its own, unlike
 // domain/workflow.StepDefinition.Edges.
-func loadDefinition(ctx context.Context, workflows *postgres.WorkflowStore, definitionID pgtype.UUID) (workflow.Definition, error) {
+func LoadDefinition(ctx context.Context, workflows *postgres.WorkflowStore, definitionID pgtype.UUID) (workflow.Definition, error) {
 	def, err := workflows.GetDefinition(ctx, definitionID)
 	if err != nil {
 		return workflow.Definition{}, fmt.Errorf("workflowengine: get definition: %w", err)

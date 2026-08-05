@@ -1558,15 +1558,16 @@ type WorkflowEdge struct {
 }
 
 type WorkflowRun struct {
-	ID                   pgtype.UUID        `json:"id"`
-	SessionID            pgtype.UUID        `json:"session_id"`
-	Lane                 WorkflowLane       `json:"lane"`
-	WorkflowDefinitionID pgtype.UUID        `json:"workflow_definition_id"`
-	DefinitionVersion    int32              `json:"definition_version"`
-	Status               WorkflowRunStatus  `json:"status"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
-	FinishedAt           pgtype.Timestamptz `json:"finished_at"`
+	ID                    pgtype.UUID        `json:"id"`
+	SessionID             pgtype.UUID        `json:"session_id"`
+	Lane                  WorkflowLane       `json:"lane"`
+	WorkflowDefinitionID  pgtype.UUID        `json:"workflow_definition_id"`
+	DefinitionVersion     int32              `json:"definition_version"`
+	Status                WorkflowRunStatus  `json:"status"`
+	CreatedAt             pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+	FinishedAt            pgtype.Timestamptz `json:"finished_at"`
+	NeedsReviewNotifiedAt pgtype.Timestamptz `json:"needs_review_notified_at"`
 }
 
 type WorkflowStepDefinition struct {

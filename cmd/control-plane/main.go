@@ -812,6 +812,19 @@ func serve() error {
 		r.Post("/{sessionID}/review/findings/{identityHash}/apply-suggestion", httpapi.ApplySuggestion(sessionStore, githubPRSessionStore, reviewFindingStore, identityStore, sourceControl, cfg.TokenEncryptionKey, cfg.Timeouts))
 	})
 
+	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide (Step 56, "workflow
+	// HITL gate + circuit breaker", §25.9/§25.10/§25.11): the HITL
+	// approve/reject/revise verdict endpoint -- see httpapi/decideworkflowstep.go's
+	// own doc comment for the full sequencing. slackThreadSessionStore/
+	// linearAgentSessionStore/githubPRSessionStore/outboxStore are the SAME
+	// instances every other caller above already uses -- notification
+	// destination resolution reuses those exact reverse-lookup stores,
+	// never a second, independently-constructed copy.
+	router.Route("/api/workflow-runs", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(pool, sessionStore, turnStore, participantStore, workflowStore, slackThreadSessionStore, linearAgentSessionStore, githubPRSessionStore, outboxStore, registry))
+	})
+
 	// /api/repos/{owner}/{repo}/settings (Step 47, "server-side verdict",
 	// §8.2/§21.2): admin-only read/write of a repo's own blockOnHighRisk
 	// policy flag -- see httpapi/reposettings.go's own doc comment. Mounted
@@ -1020,6 +1033,20 @@ func serve() error {
 		ports.NotificationKindSentinelAutoFix:   sentinelAutoFixNotifier,
 		ports.NotificationKindHandoffSentinel:   handoffNotifier,
 		ports.NotificationKindReleaseManifest:   releaseManifestNotifier,
+		// Step 56 ("workflow HITL gate + circuit breaker", §25.9): a
+		// workflow step awaiting decision, or a run escalating to
+		// needs_review, notifies a human via whichever of these three the
+		// originating session supports (internal/app/workflowengine's own
+		// enqueueWorkflowNotice, notify.go). Slack/Linear reuse the SAME
+		// planSlackNotifier/linearNotifier instances already registered
+		// above, each now handling a THIRD kind (see those types' own
+		// updated Deliver switch); GitHub reuses the SAME githubNotifier
+		// instance too -- BotNotifier.Deliver never inspects notification.
+		// Kind at all, so registering it under a second key needs no new
+		// githubapi code whatsoever.
+		ports.NotificationKindSlackWorkflowDecision:  planSlackNotifier,
+		ports.NotificationKindLinearWorkflowDecision: linearNotifier,
+		ports.NotificationKindGitHubWorkflowDecision: githubNotifier,
 	}, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)
