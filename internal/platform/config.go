@@ -613,6 +613,125 @@ const intentClassifierActiveSurfacesEnvVarName = "NARVI_INTENT_CLASSIFIER_ACTIVE
 // (never a silent substitution) -- see internal/adapters/outbound/llm's
 // own model-recognition table.
 
+// objectStoreEndpointEnvVarName, objectStorePublicEndpointEnvVarName,
+// objectStoreRegionEnvVarName, objectStoreBucketEnvVarName,
+// objectStoreAccessKeyIDEnvVarName, objectStoreSecretAccessKeyEnvVarName,
+// and objectStoreUsePathStyleEnvVarName configure Step 58's ("uploads,
+// blob storage & the in-sandbox download_file tool", §28.7) object-storage
+// block: "The root storage credential exists in exactly one place:
+// platform.Config ... endpoint, region, bucket, access key/secret (or
+// ambient IAM where the deployment provides one), optional
+// PublicEndpoint, path-style toggle for MinIO-style backends."
+//
+// FEATURE-FLAGGED on objectStoreEndpointEnvVarName alone (§28.7: "with no
+// object-storage config present, the mint endpoints return a structured
+// 'uploads not configured' error and nothing else degrades") -- unlike
+// every required secret this file reads elsewhere, an EMPTY endpoint is
+// not a boot-time error, it is the off switch: Config.ObjectStorage stays
+// nil, and every other NARVI_OBJECT_STORE_* var below is read and
+// validated ONLY once a non-empty endpoint turns the feature on (see
+// Load's own object-storage block). This mirrors rwxAccessTokenEnvVarName's
+// own "absent = feature off" precedent immediately above, one level
+// deeper: RWX gates a single optional credential, this gates an entire
+// typed sub-config whose OTHER fields (Region, Bucket) become required
+// only conditionally.
+//
+// objectStoreAccessKeyIDEnvVarName/objectStoreSecretAccessKeyEnvVarName are
+// BOTH optional together: leaving both empty selects the AWS SDK's own
+// default credential chain (env vars, shared config files, or IMDS/IRSA)
+// inside internal/adapters/outbound/objstore -- §28.7's "ambient IAM where
+// the deployment provides one". Setting exactly one without the other is
+// rejected (InvalidObjectStoreCredentialsError) as an almost-certain
+// misconfiguration, never silently treated as "use ambient IAM anyway".
+//
+// objectStorePublicEndpointEnvVarName is optional: §28.7's "Presigning
+// binds the host" -- when set, it is used to SIGN presigned URLs instead
+// of objectStoreEndpointEnvVarName, so a deployment where the control
+// plane reaches storage over an internal address but browsers/sandboxes
+// must reach it over a different public one does not mint signatures that
+// break the moment a client resolves the public host.
+//
+// objectStoreUsePathStyleEnvVarName is optional, default false (virtual-
+// hosted-style addressing, AWS S3's own default) -- MinIO-style backends
+// need this set true (path-style: bucket in the URL path).
+const (
+	objectStoreEndpointEnvVarName        = "NARVI_OBJECT_STORE_ENDPOINT"
+	objectStorePublicEndpointEnvVarName  = "NARVI_OBJECT_STORE_PUBLIC_ENDPOINT"
+	objectStoreRegionEnvVarName          = "NARVI_OBJECT_STORE_REGION"
+	objectStoreBucketEnvVarName          = "NARVI_OBJECT_STORE_BUCKET"
+	objectStoreAccessKeyIDEnvVarName     = "NARVI_OBJECT_STORE_ACCESS_KEY_ID"
+	objectStoreSecretAccessKeyEnvVarName = "NARVI_OBJECT_STORE_SECRET_ACCESS_KEY"
+	objectStoreUsePathStyleEnvVarName    = "NARVI_OBJECT_STORE_USE_PATH_STYLE"
+)
+
+// objectStoreMaxUploadBytesEnvVarName and
+// objectStoreMaxSessionUploadBytesEnvVarName optionally override the two
+// upload caps §28.4 names: "checks the declared size against
+// MaxUploadBytes (propose 100 MiB, per-deployment config) and the
+// session's running total against MaxSessionUploadBytes (propose 1 GiB --
+// SUM(size_bytes) over the session's pending+ready uploads, derived from
+// rows that already exist, never a dedicated counter column)". Both have
+// safe defaults (defaultMaxUploadBytes/defaultMaxSessionUploadBytes below)
+// and are read/validated regardless of whether object storage itself is
+// configured -- they are plain per-deployment tuning knobs, not part of
+// the credential/endpoint block that gates the feature on or off.
+const (
+	objectStoreMaxUploadBytesEnvVarName        = "NARVI_OBJECT_STORE_MAX_UPLOAD_BYTES"
+	objectStoreMaxSessionUploadBytesEnvVarName = "NARVI_OBJECT_STORE_MAX_SESSION_UPLOAD_BYTES"
+)
+
+// defaultMaxUploadBytes and defaultMaxSessionUploadBytes are the byte-size
+// defaults §28.4 proposes explicitly ("100 MiB" / "1 GiB"). Plain byte
+// counts, not durations, so (matching tokenEncryptionKeyByteLength's own
+// precedent immediately below) these are ordinary Go constants rather than
+// platform.Timeouts fields -- §11's grep-test (no time.Duration literal
+// outside platform/timeouts.go) does not apply to a byte count.
+const (
+	defaultMaxUploadBytes        int64 = 100 * 1024 * 1024  // §28.4, explicit ("propose 100 MiB")
+	defaultMaxSessionUploadBytes int64 = 1024 * 1024 * 1024 // §28.4, explicit ("propose 1 GiB")
+)
+
+// InvalidObjectStoreCredentialsError is returned by Load when exactly one
+// of NARVI_OBJECT_STORE_ACCESS_KEY_ID/NARVI_OBJECT_STORE_SECRET_ACCESS_KEY
+// is set. The only two valid states are BOTH set (static credentials) or
+// BOTH empty (ambient IAM, §28.7) -- exactly one being set is almost
+// certainly a copy-paste/typo mistake, never a valid half-configured
+// state, so this is rejected rather than silently falling back to ambient
+// IAM with half a credential pair quietly ignored.
+type InvalidObjectStoreCredentialsError struct{}
+
+func (e *InvalidObjectStoreCredentialsError) Error() string {
+	return fmt.Sprintf(
+		"%s and %s must be set together or both left empty (both empty selects ambient IAM, §28.7) -- exactly one being set is almost certainly a misconfiguration",
+		objectStoreAccessKeyIDEnvVarName, objectStoreSecretAccessKeyEnvVarName,
+	)
+}
+
+// InvalidObjectStoreUsePathStyleError is returned by Load when
+// NARVI_OBJECT_STORE_USE_PATH_STYLE is set to a value strconv.ParseBool
+// does not recognize.
+type InvalidObjectStoreUsePathStyleError struct {
+	Value string
+}
+
+func (e *InvalidObjectStoreUsePathStyleError) Error() string {
+	return fmt.Sprintf("invalid %s=%q: must be a boolean (true/false/1/0/T/F/...)", objectStoreUsePathStyleEnvVarName, e.Value)
+}
+
+// InvalidObjectStoreMaxBytesError is returned by Load when
+// NARVI_OBJECT_STORE_MAX_UPLOAD_BYTES or
+// NARVI_OBJECT_STORE_MAX_SESSION_UPLOAD_BYTES is set to a value that does
+// not parse as a positive integer. EnvVar names which of the two failed --
+// never a single generic "invalid byte limit".
+type InvalidObjectStoreMaxBytesError struct {
+	EnvVar string
+	Value  string
+}
+
+func (e *InvalidObjectStoreMaxBytesError) Error() string {
+	return fmt.Sprintf("invalid %s=%q: must be a positive integer (bytes)", e.EnvVar, e.Value)
+}
+
 // initialAdminEmailsEnvVarName is the env var Load reads for the
 // first-run-seeding initial-admin list (§13.4: "initial admins set by
 // config"). Optional — an empty list simply means every first-time
@@ -863,6 +982,65 @@ type Config struct {
 	// value saying so") -- optional, an empty/unset value means every
 	// surface runs in shadow.
 	IntentClassifierActiveSurfaces []string
+
+	// ObjectStorage is Step 58's ("uploads, blob storage & the in-sandbox
+	// download_file tool", §28.7) typed, boot-validated object-storage
+	// block. Nil means the feature is OFF (the mint endpoints return a
+	// structured "uploads not configured" error and nothing else
+	// degrades) -- see objectStoreEndpointEnvVarName's own doc comment
+	// above for the exact gating rule and every field's env var.
+	ObjectStorage *ObjectStorageConfig
+}
+
+// ObjectStorageConfig is Step 58's typed object-storage configuration
+// (§28.7) -- endpoint, region, bucket, access key/secret (or ambient IAM
+// when both are empty), an optional PublicEndpoint used to sign presigned
+// URLs instead of Endpoint, a path-style toggle for MinIO-style backends,
+// and the two upload byte-size caps §28.4 names. Constructed by Load only
+// when NARVI_OBJECT_STORE_ENDPOINT is non-empty -- see
+// objectStoreEndpointEnvVarName's own doc comment for the full gating
+// rule. internal/adapters/outbound/objstore.New consumes this (via its own
+// Config, constructed from these fields in cmd/control-plane/main.go) to
+// build the real ports.BlobStore adapter.
+type ObjectStorageConfig struct {
+	// Endpoint is the internal/private S3-compatible endpoint the control
+	// plane itself calls directly for Stat/Delete, and the fallback
+	// signing host for PresignPut/PresignGet when PublicEndpoint is empty.
+	Endpoint string
+
+	// PublicEndpoint, when set, is used to SIGN PresignPut/PresignGet URLs
+	// instead of Endpoint (§28.7: "presigning binds the host"). Optional.
+	PublicEndpoint string
+
+	// Region is required by SigV4 signing even against a non-AWS backend
+	// (MinIO accepts any string).
+	Region string
+
+	// Bucket is the single configured bucket per deployment (§28.3: "one
+	// configured bucket per deployment... the tenancy boundary IS the
+	// deployment").
+	Bucket string
+
+	// AccessKeyID/SecretAccessKey are static credentials. Both empty
+	// together selects the AWS SDK's own default credential chain
+	// (ambient IAM, §28.7). Exactly one set without the other is a boot
+	// error (InvalidObjectStoreCredentialsError) -- see
+	// objectStoreAccessKeyIDEnvVarName's own doc comment.
+	AccessKeyID     string
+	SecretAccessKey string
+
+	// UsePathStyle selects path-style addressing (bucket in the URL path)
+	// instead of virtual-hosted-style -- required for MinIO-style
+	// backends. Default false (AWS S3's own default).
+	UsePathStyle bool
+
+	// MaxUploadBytes is the per-file cap (§28.4: "propose 100 MiB").
+	MaxUploadBytes int64
+
+	// MaxSessionUploadBytes is the per-session running-total cap (§28.4:
+	// "propose 1 GiB -- SUM(size_bytes) over the session's pending+ready
+	// uploads").
+	MaxSessionUploadBytes int64
 }
 
 // Load reads process configuration and validates it fail-fast, returning
@@ -1114,6 +1292,80 @@ func Load() (*Config, error) {
 
 	intentClassifierActiveSurfaces := parseCommaSeparatedList(os.Getenv(intentClassifierActiveSurfacesEnvVarName))
 
+	// Object storage (§28.7): feature-flagged on objectStoreEndpointEnvVarName
+	// alone -- see that const's own doc comment for the full gating rule.
+	// Every other NARVI_OBJECT_STORE_* var is read and validated ONLY
+	// inside this branch, so a deploy that never sets an endpoint never
+	// trips a boot error over an unrelated stray/leftover object-store
+	// var.
+	var objectStorage *ObjectStorageConfig
+	objectStoreEndpoint := os.Getenv(objectStoreEndpointEnvVarName)
+	if objectStoreEndpoint != "" {
+		objectStoreRegion := os.Getenv(objectStoreRegionEnvVarName)
+		if objectStoreRegion == "" {
+			errs = append(errs, &MissingRequiredEnvError{EnvVar: objectStoreRegionEnvVarName})
+		}
+
+		objectStoreBucket := os.Getenv(objectStoreBucketEnvVarName)
+		if objectStoreBucket == "" {
+			errs = append(errs, &MissingRequiredEnvError{EnvVar: objectStoreBucketEnvVarName})
+		}
+
+		objectStoreAccessKeyID := os.Getenv(objectStoreAccessKeyIDEnvVarName)
+		objectStoreSecretAccessKey := os.Getenv(objectStoreSecretAccessKeyEnvVarName)
+		if (objectStoreAccessKeyID == "") != (objectStoreSecretAccessKey == "") {
+			errs = append(errs, &InvalidObjectStoreCredentialsError{})
+		}
+
+		objectStoreUsePathStyle := false
+		if raw := os.Getenv(objectStoreUsePathStyleEnvVarName); raw != "" {
+			parsed, parseErr := strconv.ParseBool(raw)
+			if parseErr != nil {
+				errs = append(errs, &InvalidObjectStoreUsePathStyleError{Value: raw})
+			} else {
+				objectStoreUsePathStyle = parsed
+			}
+		}
+
+		// MaxUploadBytes/MaxSessionUploadBytes are read/validated only
+		// inside this same feature-on branch: with uploads off entirely,
+		// a stray/leftover override for either is simply never looked at,
+		// matching this whole block's own "endpoint absent = fully off,
+		// nothing else even inspected" gating rule rather than treating
+		// these two as independently-always-validated knobs.
+		maxUploadBytes := defaultMaxUploadBytes
+		if raw := os.Getenv(objectStoreMaxUploadBytesEnvVarName); raw != "" {
+			parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+			if parseErr != nil || parsed <= 0 {
+				errs = append(errs, &InvalidObjectStoreMaxBytesError{EnvVar: objectStoreMaxUploadBytesEnvVarName, Value: raw})
+			} else {
+				maxUploadBytes = parsed
+			}
+		}
+
+		maxSessionUploadBytes := defaultMaxSessionUploadBytes
+		if raw := os.Getenv(objectStoreMaxSessionUploadBytesEnvVarName); raw != "" {
+			parsed, parseErr := strconv.ParseInt(raw, 10, 64)
+			if parseErr != nil || parsed <= 0 {
+				errs = append(errs, &InvalidObjectStoreMaxBytesError{EnvVar: objectStoreMaxSessionUploadBytesEnvVarName, Value: raw})
+			} else {
+				maxSessionUploadBytes = parsed
+			}
+		}
+
+		objectStorage = &ObjectStorageConfig{
+			Endpoint:              objectStoreEndpoint,
+			PublicEndpoint:        os.Getenv(objectStorePublicEndpointEnvVarName),
+			Region:                objectStoreRegion,
+			Bucket:                objectStoreBucket,
+			AccessKeyID:           objectStoreAccessKeyID,
+			SecretAccessKey:       objectStoreSecretAccessKey,
+			UsePathStyle:          objectStoreUsePathStyle,
+			MaxUploadBytes:        maxUploadBytes,
+			MaxSessionUploadBytes: maxSessionUploadBytes,
+		}
+	}
+
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -1165,5 +1417,7 @@ func Load() (*Config, error) {
 		IntentClassifierModel:    intentClassifierModel,
 
 		IntentClassifierActiveSurfaces: intentClassifierActiveSurfaces,
+
+		ObjectStorage: objectStorage,
 	}, nil
 }

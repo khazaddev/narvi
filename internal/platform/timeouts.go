@@ -1869,6 +1869,59 @@ type Timeouts struct {
 	// the two named authorities clears both), while staying well below
 	// ProviderHardCap's 2-hour ceiling.
 	RWXSandboxInactivityTimeout time.Duration
+
+	// --- Step 58 standalone additions ("uploads, blob storage & the
+	// in-sandbox download_file tool", §28): UploadPresignPutTTL,
+	// UploadPresignGetTTL, and ObjectStoreHTTPClientTimeout have no
+	// ordering relationship with any invariant chain above (or with each
+	// other), so — per the RWX-additions block's own precedent — each is a
+	// plain field with a sensible default, not wired into a fake
+	// invariant link. UploadAbandonmentSweepInterval DOES need a real
+	// pairwise check against UploadPendingSweepAfter (see Validate()
+	// below), mirroring AutomationSweepInterval's own identical
+	// "standalone block, but still gets a real invariant check" precedent.
+
+	// UploadPresignPutTTL is how long a presigned upload PUT URL remains
+	// valid (§28.4: "propose 15 min — generous for the size cap on a slow
+	// link, the same 'chosen generously when the concrete cost is
+	// unknown' convention HookTimeout documents"). Passed to
+	// ports.BlobStore.PresignPut's own PresignPutSpec.TTL by the mint
+	// handler — the objstore adapter holds no timeout literal of its own
+	// (§11's grep-test).
+	UploadPresignPutTTL time.Duration
+
+	// UploadPresignGetTTL is how long a presigned download GET URL
+	// (the download_file tool's own 302 target, §28.5) remains valid.
+	// §28.5: "propose 5 min". Deliberately much shorter than
+	// UploadPresignPutTTL: a GET redirect is followed within the same
+	// curl invocation that requested it, never left open on a slow link
+	// the way an upload PUT might be.
+	UploadPresignGetTTL time.Duration
+
+	// UploadPendingSweepAfter is how old a `pending` upload artifact row
+	// must be before the abandonment sweep marks it `failed(abandoned)`
+	// and outboxes a blob_delete (§28.4: "propose 24 h... a browser that
+	// minted and walked away costs one row and one sweep pass, nothing
+	// more").
+	UploadPendingSweepAfter time.Duration
+
+	// UploadAbandonmentSweepInterval is the sweep's own tick cadence
+	// (§28.4: "its own named interval in platform/timeouts.go, propose
+	// 15 min"), independent of UploadPendingSweepAfter's threshold value
+	// except for the margin Validate() checks below — mirrors
+	// AutomationSweepInterval's own relationship to
+	// AutomationRunStartingOrphanThreshold exactly.
+	UploadAbandonmentSweepInterval time.Duration
+
+	// ObjectStoreHTTPClientTimeout bounds ONE internal/adapters/outbound/
+	// objstore Stat or Delete call (the adapter's only two real network
+	// calls — PresignPut/PresignGet are pure local SigV4 signing with no
+	// network round-trip at all, per blobstore.go's own doc comment, so
+	// neither needs this timeout). Not specified in the plan; chosen as
+	// 10s, matching RepoSHAResolutionTimeout/ContractsFingerprintResolutionTimeout's
+	// own "lightweight call, not a large data transfer" reasoning — Stat
+	// is a HeadObject, Delete a DeleteObject, neither moves object bytes.
+	ObjectStoreHTTPClientTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2024,6 +2077,12 @@ func DefaultTimeouts() Timeouts {
 
 		RWXCLIExecTimeout:           2 * time.Minute,  // Step 57, §4.1.1; not specified (RWX publishes no p99), chosen generously -- see field doc comment
 		RWXSandboxInactivityTimeout: 45 * time.Minute, // Step 57, §4.1.1; not specified, chosen with margin above ActorIdleTTL (30min) -- see field doc comment
+
+		UploadPresignPutTTL:            15 * time.Minute, // Step 58, §28.4, explicit ("propose 15 min")
+		UploadPresignGetTTL:            5 * time.Minute,  // Step 58, §28.5, explicit ("propose 5 min")
+		UploadPendingSweepAfter:        24 * time.Hour,   // Step 58, §28.4, explicit ("propose 24 h")
+		UploadAbandonmentSweepInterval: 15 * time.Minute, // Step 58, §28.4, explicit ("propose 15 min")
+		ObjectStoreHTTPClientTimeout:   10 * time.Second, // Step 58; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
 	}
 }
 
@@ -2157,6 +2216,16 @@ func (t Timeouts) Validate() error {
 	// authorities) is the one checked here.
 	check("RWXSandboxInactivityTimeout > ActorIdleTTL",
 		"RWXSandboxInactivityTimeout", t.RWXSandboxInactivityTimeout, "ActorIdleTTL", t.ActorIdleTTL)
+
+	// Step 58 ("uploads, blob storage & the in-sandbox download_file
+	// tool", §28.4): UploadPendingSweepAfter must stay at least
+	// MinTimeoutMargin above UploadAbandonmentSweepInterval, or a pending
+	// row could cross the abandonment threshold and still sit unswept for
+	// much longer than that threshold's own name implies -- mirrors
+	// AutomationRunStartingOrphanThreshold/AutomationSweepInterval's own
+	// identical pairwise reasoning.
+	check("UploadPendingSweepAfter > UploadAbandonmentSweepInterval",
+		"UploadPendingSweepAfter", t.UploadPendingSweepAfter, "UploadAbandonmentSweepInterval", t.UploadAbandonmentSweepInterval)
 
 	return errors.Join(errs...)
 }
