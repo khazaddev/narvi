@@ -174,7 +174,7 @@ export interface GitSync {
   branch: string;
 }
 /**
- * artifactType MUST match the Postgres artifact_type enum (migrations/000012_artifacts.up.sql) exactly.
+ * artifactType MUST match the Postgres artifact_type enum (migrations/000012_artifacts.up.sql) exactly. status/failureReason (Step 58, §28.6) are additive and OPTIONAL: absent status means "ready" (the same zero-producers-today additive reasoning SnapshotReady.commandMessageId used) -- every pr/preview artifact event emitted before this Step, and every future one that never sets them, stays a valid, unchanged shape. Both fields are CP-SYNTHESIZED ONLY (mirrors GitSync's own "repo" field note above and the general subTaskId-population convention this file's own top-level description states): the sandbox never emits an artifact event for an upload at all -- the control plane already owns the row before any bytes exist, so a sandbox-reported completion would be a second writer over a fact Postgres already owns (§5.1). failureReason MUST match the Postgres artifact_failure_reason enum (migrations/000060_artifacts_upload_lifecycle.up.sql) exactly, and is only ever non-null when status is "failed".
  */
 export interface Artifact {
   type: 'artifact';
@@ -182,10 +182,21 @@ export interface Artifact {
   sessionId: string;
   gen: number;
   artifactType: 'pr' | 'preview' | 'upload';
+  /**
+   * format is deliberately "uri-reference", not the stricter "uri" (Step 58 relaxation -- backward compatible: every absolute URL a plain "uri" ever accepted still validates, so no pr/preview producer's existing behavior changes). pr/preview artifacts always carry an ABSOLUTE external link (a GitHub PR/preview URL); upload artifacts carry the artifacts row's own STABLE, RELATIVE /api/sessions/{id}/uploads/{uploadId}/content path (§28.5: "the artifact row's url column stores this stable /api/... content path, never a presigned URL") -- a relative reference a browser client resolves against its own current origin, which "uri" alone would have rejected.
+   */
   url: string;
   metadata: {
     [k: string]: unknown;
   };
+  /**
+   * Absent means "ready" -- see this definition's own top-level description for the additive/CP-synthesized-only contract.
+   */
+  status?: 'ready' | 'failed';
+  /**
+   * Matches Postgres artifact_failure_reason exactly. Null/absent except when status is "failed".
+   */
+  failureReason?: 'size_exceeded' | 'quota_exceeded' | 'verification_failed' | 'abandoned' | null;
 }
 /**
  * CRITICAL (requires ackId). outcome MUST match the turn_status terminal states (migrations/000005_turns.up.sql).

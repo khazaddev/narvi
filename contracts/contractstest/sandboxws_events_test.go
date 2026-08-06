@@ -483,3 +483,102 @@ func TestSandboxEventsSubTaskId(t *testing.T) {
 		}
 	})
 }
+
+// TestSandboxEventsArtifactStatus is the round-trip test for Step 58's
+// ("uploads, blob storage & the in-sandbox download_file tool", §28.6)
+// own additive schema change: the artifact event gains an OPTIONAL status
+// (absent = "ready") and a nullable failureReason. Absent (every existing
+// pr/preview producer, unchanged) and both real values must validate,
+// mirroring TestSandboxEventsSubTaskId's own "absent/present" pairing
+// immediately above for a different additive field on a different event
+// type.
+func TestSandboxEventsArtifactStatus(t *testing.T) {
+	sch := compileSchema(t, "sandbox-ws/v1/events.schema.json", "")
+
+	t.Run("StatusAbsent_DefaultsToReady", func(t *testing.T) {
+		roundTrip(t, sch, sandboxws.Artifact{
+			Type:         "artifact",
+			MessageId:    "a1",
+			SessionId:    testSessionID,
+			Gen:          1,
+			ArtifactType: sandboxws.ArtifactArtifactTypeUpload,
+			Url:          "/api/sessions/" + testSessionID + "/uploads/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/content",
+			Metadata:     sandboxws.ArtifactMetadata{},
+		})
+	})
+
+	t.Run("StatusReady_Explicit", func(t *testing.T) {
+		ready := sandboxws.ArtifactStatusReady
+		roundTrip(t, sch, sandboxws.Artifact{
+			Type:         "artifact",
+			MessageId:    "a2",
+			SessionId:    testSessionID,
+			Gen:          1,
+			ArtifactType: sandboxws.ArtifactArtifactTypeUpload,
+			Url:          "/api/sessions/" + testSessionID + "/uploads/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/content",
+			Metadata:     sandboxws.ArtifactMetadata{},
+			Status:       &ready,
+		})
+	})
+
+	t.Run("StatusFailed_WithFailureReason", func(t *testing.T) {
+		failed := sandboxws.ArtifactStatusFailed
+		roundTrip(t, sch, sandboxws.Artifact{
+			Type:          "artifact",
+			MessageId:     "a3",
+			SessionId:     testSessionID,
+			Gen:           1,
+			ArtifactType:  sandboxws.ArtifactArtifactTypeUpload,
+			Url:           "/api/sessions/" + testSessionID + "/uploads/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/content",
+			Metadata:      sandboxws.ArtifactMetadata{},
+			Status:        &failed,
+			FailureReason: &sandboxws.ArtifactFailureReason{Value: "verification_failed"},
+		})
+	})
+
+	// Explicit JSON null failureReason (distinct from the key being absent
+	// entirely, which the StatusAbsent/StatusReady subtests above exercise
+	// via omitempty) must also validate.
+	t.Run("Artifact_ExplicitNullFailureReason", func(t *testing.T) {
+		payload := []byte(`{"type":"artifact","messageId":"a4","sessionId":"` + testSessionID + `","gen":1,"artifactType":"upload","url":"https://example.test/x","metadata":{},"status":"ready","failureReason":null}`)
+		if err := validateJSON(t, sch, payload); err != nil {
+			t.Fatalf("expected explicit null failureReason to validate, got: %v", err)
+		}
+	})
+
+	// An unrecognized failureReason value must still be rejected -- this
+	// field is a closed enum matching the Postgres artifact_failure_reason
+	// type exactly, not an open string.
+	t.Run("Artifact_UnknownFailureReasonRejected", func(t *testing.T) {
+		payload := []byte(`{"type":"artifact","messageId":"a5","sessionId":"` + testSessionID + `","gen":1,"artifactType":"upload","url":"https://example.test/x","metadata":{},"status":"failed","failureReason":"not_a_real_reason"}`)
+		if err := validateJSON(t, sch, payload); err == nil {
+			t.Fatal("expected unknown failureReason value to fail validation, got nil error")
+		}
+	})
+
+	// An unrecognized status value must still be rejected too.
+	t.Run("Artifact_UnknownStatusRejected", func(t *testing.T) {
+		payload := []byte(`{"type":"artifact","messageId":"a6","sessionId":"` + testSessionID + `","gen":1,"artifactType":"upload","url":"https://example.test/x","metadata":{},"status":"pending"}`)
+		if err := validateJSON(t, sch, payload); err == nil {
+			t.Fatal("expected status=\"pending\" (a valid Postgres artifact_status value the WIRE event never carries) to fail validation, got nil error")
+		}
+	})
+
+	// pr/preview artifact events emitted before this Step (or by any
+	// future producer that never sets these fields) must stay a valid,
+	// unchanged shape -- the exact fixture the pre-existing "Artifact"
+	// subtest in TestSandboxEventsRoundTrip above already covers; this
+	// assertion just makes the "still valid with neither new field"
+	// property explicit for THIS test's own reviewers.
+	t.Run("PreExistingPRArtifactShapeStillValid", func(t *testing.T) {
+		roundTrip(t, sch, sandboxws.Artifact{
+			Type:         "artifact",
+			MessageId:    "a7",
+			SessionId:    testSessionID,
+			Gen:          1,
+			ArtifactType: sandboxws.ArtifactArtifactTypePr,
+			Url:          "https://github.com/khazaddev/narvi/pull/42",
+			Metadata:     sandboxws.ArtifactMetadata{"number": float64(42)},
+		})
+	})
+}

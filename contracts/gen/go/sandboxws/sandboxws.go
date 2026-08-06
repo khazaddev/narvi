@@ -61,10 +61,26 @@ func (j *Ack) UnmarshalJSON(value []byte) error {
 }
 
 // artifactType MUST match the Postgres artifact_type enum
-// (migrations/000012_artifacts.up.sql) exactly.
+// (migrations/000012_artifacts.up.sql) exactly. status/failureReason (Step 58,
+// §28.6) are additive and OPTIONAL: absent status means "ready" (the same
+// zero-producers-today additive reasoning SnapshotReady.commandMessageId used) --
+// every pr/preview artifact event emitted before this Step, and every future one
+// that never sets them, stays a valid, unchanged shape. Both fields are
+// CP-SYNTHESIZED ONLY (mirrors GitSync's own "repo" field note above and the
+// general subTaskId-population convention this file's own top-level description
+// states): the sandbox never emits an artifact event for an upload at all -- the
+// control plane already owns the row before any bytes exist, so a sandbox-reported
+// completion would be a second writer over a fact Postgres already owns (§5.1).
+// failureReason MUST match the Postgres artifact_failure_reason enum
+// (migrations/000060_artifacts_upload_lifecycle.up.sql) exactly, and is only ever
+// non-null when status is "failed".
 type Artifact struct {
 	// ArtifactType corresponds to the JSON schema field "artifactType".
 	ArtifactType ArtifactArtifactType `json:"artifactType" yaml:"artifactType" mapstructure:"artifactType"`
+
+	// Matches Postgres artifact_failure_reason exactly. Null/absent except when
+	// status is "failed".
+	FailureReason *ArtifactFailureReason `json:"failureReason,omitempty,omitzero" yaml:"failureReason,omitempty" mapstructure:"failureReason,omitempty"`
 
 	// Gen corresponds to the JSON schema field "gen".
 	Gen int `json:"gen" yaml:"gen" mapstructure:"gen"`
@@ -78,10 +94,22 @@ type Artifact struct {
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
+	// Absent means "ready" -- see this definition's own top-level description for the
+	// additive/CP-synthesized-only contract.
+	Status *ArtifactStatus `json:"status,omitempty,omitzero" yaml:"status,omitempty" mapstructure:"status,omitempty"`
+
 	// Type corresponds to the JSON schema field "type".
 	Type string `json:"type" yaml:"type" mapstructure:"type"`
 
-	// Url corresponds to the JSON schema field "url".
+	// format is deliberately "uri-reference", not the stricter "uri" (Step 58
+	// relaxation -- backward compatible: every absolute URL a plain "uri" ever
+	// accepted still validates, so no pr/preview producer's existing behavior
+	// changes). pr/preview artifacts always carry an ABSOLUTE external link (a GitHub
+	// PR/preview URL); upload artifacts carry the artifacts row's own STABLE,
+	// RELATIVE /api/sessions/{id}/uploads/{uploadId}/content path (§28.5: "the
+	// artifact row's url column stores this stable /api/... content path, never a
+	// presigned URL") -- a relative reference a browser client resolves against its
+	// own current origin, which "uri" alone would have rejected.
 	Url string `json:"url" yaml:"url" mapstructure:"url"`
 }
 
@@ -117,7 +145,76 @@ func (j *ArtifactArtifactType) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+type ArtifactFailureReason struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *ArtifactFailureReason) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_ArtifactFailureReason = []interface{}{
+	"size_exceeded",
+	"quota_exceeded",
+	"verification_failed",
+	"abandoned",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ArtifactFailureReason) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ArtifactFailureReason {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ArtifactFailureReason, v.Value)
+	}
+	*j = ArtifactFailureReason(v)
+	return nil
+}
+
 type ArtifactMetadata map[string]interface{}
+
+type ArtifactStatus string
+
+const ArtifactStatusFailed ArtifactStatus = "failed"
+const ArtifactStatusReady ArtifactStatus = "ready"
+
+var enumValues_ArtifactStatus = []interface{}{
+	"ready",
+	"failed",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ArtifactStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ArtifactStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ArtifactStatus, v)
+	}
+	*j = ArtifactStatus(v)
+	return nil
+}
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *Artifact) UnmarshalJSON(value []byte) error {
