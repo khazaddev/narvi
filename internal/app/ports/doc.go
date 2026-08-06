@@ -63,8 +63,18 @@
 // is the never-throw classification port internal/app/intentclassifier
 // implements against LLM.
 //
-// The remaining §4.3 ports — BlobStore, SessionStore/TurnStore/
-// SandboxStore, Outbox, TimerScheduler, Clock — are out of scope for this
-// Step and land in their own later Steps, each adding its own interface
-// file here without touching any existing one.
+// BlobStore (blobstore.go, blobstoreerror.go) is the EIGHTH port, added at
+// Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+// §28): PresignPut/PresignGet/Stat/Delete against S3-compatible object
+// storage, implemented by internal/adapters/outbound/objstore. Mirrors
+// SandboxProvider/ProviderError's own "complete interface + typed
+// {Transient, Code, Op, Err} error" shape exactly (§28.1), with its own
+// BlobOp type (kept distinct from SandboxProvider's Op — see
+// blobstoreerror.go's own doc comment for why) and its own typed
+// not-found sentinel, ErrBlobNotFound.
+//
+// The remaining §4.3 ports — SessionStore/TurnStore/SandboxStore, Outbox,
+// TimerScheduler, Clock — are out of scope for this Step and land in their
+// own later Steps, each adding its own interface file here without
+// touching any existing one.
 package ports
