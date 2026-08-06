@@ -17,6 +17,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/workflowengine"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/turn"
+	domainupload "github.com/khazaddev/narvi/internal/domain/upload"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -149,7 +150,23 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			return
 		}
 
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID, RejectIfOpen)
+		// Step 58 (§28.5): attachmentIds is parsed here, at the REST
+		// boundary, rather than deep inside createTurnLocked's own
+		// transaction -- a malformed uuid string is a client-input
+		// mistake the same 400 turn.go's own other decode failures
+		// already return, not something worth surfacing as a generic
+		// "internal error" from inside a locked transaction.
+		attachmentIDs := make([]pgtype.UUID, 0, len(req.AttachmentIds))
+		for _, raw := range req.AttachmentIds {
+			var id pgtype.UUID
+			if err := id.Scan(raw); err != nil {
+				writeError(w, http.StatusBadRequest, "malformed attachmentIds entry")
+				return
+			}
+			attachmentIDs = append(attachmentIDs, id)
+		}
+
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID, RejectIfOpen, attachmentIDs...)
 		if cerr != nil {
 			logger.Error("httpapi: create turn failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)
@@ -307,7 +324,19 @@ const (
 // still runs no Authorize check (that stays each caller's own job,
 // precisely so a still-unlinked actor's call can keep its existing,
 // documented bot-attribution behavior unchanged).
-func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy) (sqlcgen.Turn, bool, *CreateTurnError) {
+//
+// attachmentIDs (Step 58, §28.5) is a TRAILING VARIADIC parameter,
+// deliberately not a plain slice: mirrors workflows' own "constructed
+// fresh from pool, not threaded as a new parameter" precedent just above
+// in spirit, but for a genuinely caller-supplied value that DOES need a
+// signature change -- a variadic still lets every one of this core's five
+// pre-existing call sites (reviewretrigger.go, linear/webhook.go,
+// slack/turn.go, slack/interactive.go, bot.go's own direct
+// createTurnLocked call) stay completely UNCHANGED (Go allows omitting a
+// trailing variadic entirely), since attachmentIds is a REST-only concept
+// none of them carry -- only CreateTurn's own handler above, the sole
+// caller that ever has any to pass, changed at all.
+func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, attachmentIDs ...pgtype.UUID) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	if _, err := sessions.Get(ctx, sessionID); err != nil {
@@ -318,7 +347,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
-	return createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, policy)
+	return createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, policy, attachmentIDs...)
 }
 
 // createTurnLocked is the genuinely shared core every one of this batch's
@@ -371,7 +400,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // is never forced to wire one up. Every real production caller
 // (cmd/control-plane/main.go) always passes the SAME, real *postgres.
 // PlanStore, so this is never nil outside tests.
-func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy) (sqlcgen.Turn, bool, *CreateTurnError) {
+func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, attachmentIDs ...pgtype.UUID) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	tx, err := pool.Begin(ctx)
@@ -480,6 +509,43 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// UNCHANGED, exactly as if this Step did not exist -- rather than
 	// failing turn creation over what is fundamentally an engine
 	// bookkeeping concern.
+	// Step 58 ("uploads, blob storage & the in-sandbox download_file
+	// tool", §28.5): validate attachmentIDs INSIDE this same locked
+	// transaction -- every id must be a status='ready' upload artifact of
+	// THIS session, else a structured 4xx; a failed or foreign upload can
+	// never silently ride a prompt. artifacts is constructed fresh from
+	// pool here for the SAME reason workflows is below (that block's own
+	// doc comment): attachmentIDs's own variadic signature already keeps
+	// every OTHER caller's diff at zero, and this lookup needs no new
+	// parameter of its own either.
+	var attachmentInfos []domainupload.AttachmentInfo
+	if len(attachmentIDs) > 0 {
+		artifacts := postgres.NewArtifactStore(pool).WithTx(tx)
+		readyRows, err := artifacts.ListReadyUploadsByIDsForSession(ctx, sessionID, attachmentIDs)
+		if err != nil {
+			logger.Error("httpapi: list ready upload artifacts for attachmentIds validation failed", "error", err)
+			return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
+		}
+		byID := make(map[pgtype.UUID]sqlcgen.Artifact, len(readyRows))
+		for _, row := range readyRows {
+			byID[row.ID] = row
+		}
+		attachmentInfos = make([]domainupload.AttachmentInfo, 0, len(attachmentIDs))
+		for _, id := range attachmentIDs {
+			row, ok := byID[id]
+			if !ok {
+				return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusBadRequest, Message: "one or more attachmentIds are unknown, not this session's, or not yet ready"}
+			}
+			attachmentInfos = append(attachmentInfos, domainupload.AttachmentInfo{
+				SessionID:   sessionID.String(),
+				UploadID:    id.String(),
+				Filename:    stringOrEmpty(row.Filename),
+				SizeBytes:   int64OrZero(row.SizeBytes),
+				ContentType: stringOrEmpty(row.ContentType),
+			})
+		}
+	}
+
 	effectivePrompt, effectiveModelID := prompt, modelID
 	workflows := postgres.NewWorkflowStore(pool).WithTx(tx)
 	var resolution workflowengine.Resolution
@@ -489,6 +555,20 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		resolution = workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID)
 		effectivePrompt, effectiveModelID = resolution.Prompt, resolution.ModelID
 	}
+
+	// Step 58 (§28.5): the attachment block (deterministic per-attachment
+	// listing + download_file command) and the unconditional upload-tool
+	// note are appended to the FULLY RESOLVED prompt -- after, never
+	// before, workflowengine's own {{prompt}} template substitution above
+	// -- so neither can end up captured mid-template by some future
+	// custom workflow step whose own PromptTemplate wraps {{prompt}} in
+	// unrelated surrounding text. Unconditional (RenderUploadToolNote):
+	// see that function's own doc comment for why gating it on whether
+	// this deployment has object storage configured was judged not worth
+	// threading a config flag through every one of this core's other
+	// callers for.
+	effectivePrompt += domainupload.RenderAttachmentBlock(attachmentInfos)
+	effectivePrompt += domainupload.RenderUploadToolNote(sessionID.String())
 
 	created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
 		SessionID: sessionID,

@@ -203,6 +203,20 @@ const (
 	// masquerade as a deployment environment). Enqueued alongside
 	// NotificationKindRWXPreviewDispatch above, never independently.
 	NotificationKindGitHubPreviewLink NotificationKind = "github_preview_link"
+
+	// NotificationKindBlobDelete is Step 58's own outbox kind (§28.4):
+	// enqueued whenever confirm's Stat-based verification fails (pending
+	// -> failed) or the abandonment sweep reaps a stale pending row --
+	// either way the object may half-exist in storage, and an external
+	// delete is an outbound side effect that must survive a crash between
+	// the status write and the delete (§5.1), the same reasoning behind
+	// every other outbox kind. Routes to internal/adapters/outbound/
+	// objstore's own small notifier, which calls BlobStore.Delete --
+	// itself idempotent (deleting an already-absent key succeeds), so a
+	// redelivered attempt after a transient failure is always safe to
+	// retry with no dedup logic of its own. Payload is
+	// {"key": "<the blob's own ports.BlobKey, as a plain string>"}.
+	NotificationKindBlobDelete NotificationKind = "blob_delete"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

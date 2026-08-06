@@ -47,6 +47,19 @@ const (
 	// is Step 56's; reserved here so that Step's call site needs no
 	// shape change, exactly like every other reserved Action below.
 	ActionDecideWorkflowStep Action = "decide_workflow_step"
+	// ActionUploadToSession is minting/confirming a file upload against an
+	// EXISTING session (POST /api/sessions/:id/uploads and its own
+	// /complete twin, Step 58, §28.5) — the SAME row shape as
+	// ActionPromptSession by that section's own explicit instruction ("a
+	// new Authorize action mapped to the same §13.3 row as prompting"):
+	// admin/maintainer on any session, member only on one they created or
+	// joined; viewer never uploads (the viewer guard holds, same as
+	// prompting). Downloading an upload (GET .../uploads/:id/content) is
+	// NOT gated by this action at all — that is a READ, gated by session
+	// visibility instead (a viewer may download), mirroring
+	// ListArtifacts/ListEvents' own existing "session exists + logged in,
+	// no separate Authorize call" precedent.
+	ActionUploadToSession Action = "upload_to_session"
 
 	// -- Row 3: "Stop/resume ANY session; approve ANY plan" — admin,
 	// maintainer only. Deliberately no member own/joined carve-out here,
@@ -173,6 +186,7 @@ var AllActions = []Action{
 	ActionPromptSession,
 	ActionApprovePlan,
 	ActionDecideWorkflowStep,
+	ActionUploadToSession,
 	ActionStopSession,
 	ActionResumeSession,
 	ActionManageAutomations,

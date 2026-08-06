@@ -60,13 +60,13 @@ func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) 
 }
 
 const createUploadArtifact = `-- name: CreateUploadArtifact :one
-
-INSERT INTO artifacts (session_id, type, url, status, blob_key, size_bytes, content_type, filename, created_by)
-VALUES ($1, 'upload', $2, 'pending', $3, $4, $5, $6, $7)
+INSERT INTO artifacts (id, session_id, type, url, status, blob_key, size_bytes, content_type, filename, created_by)
+VALUES ($1, $2, 'upload', $3, 'pending', $4, $5, $6, $7, $8)
 RETURNING id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by
 `
 
 type CreateUploadArtifactParams struct {
+	ID          pgtype.UUID `json:"id"`
 	SessionID   pgtype.UUID `json:"session_id"`
 	Url         string      `json:"url"`
 	BlobKey     *string     `json:"blob_key"`
@@ -83,8 +83,17 @@ type CreateUploadArtifactParams struct {
 // any status other than 'pending' by construction, unlike CreateArtifact
 // above (which is used for already-resolved pr/preview rows and takes
 // both as parameters).
+//
+// id is caller-supplied (a fresh uuid.New(), Go-side), not left to the
+// table's own DEFAULT gen_random_uuid(): the mint handler needs the row's
+// own id BEFORE this insert, to build both the object-storage key
+// (internal/domain/upload.BuildBlobKey) and the stable /api/.../content
+// url this same insert's own url column stores -- generating it
+// client-side avoids either a second UPDATE after the fact or ever
+// persisting a row with an empty url/blob_key, even momentarily.
 func (q *Queries) CreateUploadArtifact(ctx context.Context, arg CreateUploadArtifactParams) (Artifact, error) {
 	row := q.db.QueryRow(ctx, createUploadArtifact,
+		arg.ID,
 		arg.SessionID,
 		arg.Url,
 		arg.BlobKey,
