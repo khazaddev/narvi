@@ -1,5 +1,7 @@
 # Narvi
 
+> ⚠️ **Work in progress.** Narvi is under active development and is **not feature-complete**. Large parts of the system described below are still being built. It has **not been security-reviewed for production use** and should not be run against real infrastructure, real credentials, or real user data yet.
+
 **Autonomous coding agents, in isolated sandboxes.**
 
 > *Im Narvi hain echant* — "I, Narvi, made these." Narvi was the craftsman who forged the Doors of Durin. This project builds doors, well made: a clean ports-and-adapters core with swappable edges.
