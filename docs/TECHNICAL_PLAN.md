@@ -259,7 +259,7 @@ Problem this solves: some engine behaviors spawn multiple concurrent sub-agents 
 - The adapter assigns each spawned sub-task a stable `subTaskId` (derived from whatever correlator the engine itself exposes — OpenCode's own nested-task id today; not Narvi's own session concepts, per the note below) and tags every event that sub-task produces with it (§6.1), emitting `sub_task_start`/`sub_task_finish` to bracket its lifetime.
 - **Not a new domain entity.** A sub-task is a presentation/wire-level grouping of events belonging to one turn — not a new Postgres row, and not Narvi's own "child session" (§14.4: a full session with its own sandbox/turns, spawned by automation/sentinel features — a materially heavier mechanism; the naming here is deliberately distinct so the two are never confused). The turn state machine (§3.3) is unaffected: one turn still has exactly one `processing` state no matter how many sub-tasks ran underneath it.
 - **Cost rolls up.** Every `step_finish.cost` (§6.1) is summed into the same turn/session total regardless of which lane — main or any sub-task — produced it; a sub-task's spend is never invisible in the cost breakdown (§12.2 item 1). (Per-model cost attribution when a sub-task runs on a different model than its turn — §12.2 item 6's cost-by-model view — is not designed here; that needs its own `step_finish` model field before it can be claimed, left to whichever future work actually adds it.)
-- Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 77 (session timeline, lane nesting) and Step 78 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
+- Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 80 (session timeline, lane nesting) and Step 81 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
 
 ### 7.2 Context-overflow compaction retry (Step 44)
 
@@ -287,7 +287,7 @@ The adapter already has a *partial* answer for the auto-compaction case: an `Ove
 2. **Code review**: review sessions per PR with session reuse; atomic claim coalescing of concurrent @mentions; risk-map verdict with `review:*` labels — **a structured verdict from day one** (premise state, risk drivers, shippable class — server-computed, never self-reported, never re-parsed from posted text; full design and the automation policy built on it in §21); test-coverage & doc-drift sentinels; **server-side** verdict floor + formal-review gate + verdict-posting tool (raw issue comments blocked, scoped to review sessions); re-trigger via label/button, or automatically on new commits (debounced, off by default per repo, §24); inline diff pre-fetched into context (agent must not need to run `gh pr diff` repeatedly); suggestion safety (apply via validated endpoint); **criteria-driven auto-approval** (`visual-qa: pass/skip` unchanged; `review: low risk` **inverts** into a `review: needs-human` escape hatch — approval itself is deterministic and criteria-driven rather than label-triggered, §21); dedicated review model selection; optional sentinel auto-fix for coverage/doc-drift findings, merge-gated on the origin PR (§17, disabled by default); **review as a merge readout** (§26) — the verdict front-loads a diff-derived summary, the diff's architecture choices, and its risks to the stack, demoting findings to a collapsed appendix; a description-adequacy check with a third raise-only floor and graduated remediation; deterministic light/deep review triage, measurable per path; adversarial counter-review with contested-points surfacing on the deep path.
 3. **Unified intent classifier** (detailed design — see §18): review-vs-request and plan-vs-build across all ingress surfaces; shadow mode (log-only) → active, permanently available, never a one-time launch gate; never-throw contract with an enumerated fallback-reason taxonomy; confidence rubric anchored on textual directness, not model self-reported certainty; DB-backed editable prompt templates with assembled-prompt preview; per-session routing decision records (§18.4).
 4. **Automations**: GitHub/Linear/webhook/cron triggers with condition builder; sandbox settings honored on automation sessions; creator/status filters; `last_run` + `artifact_summary` populated; per-automation env vars/secrets.
-5. **Enterprise sandbox glue**: cloud credentials via OIDC (provider-agnostic), kubeconfig injection for the target cluster, Docker-in-sandbox, egress proxy, repo/environment/global secrets, OpenCode config storage + injection, toolchain in images (Playwright+Chromium, ripgrep, typescript-language-server).
+5. **Enterprise sandbox glue** (full design in §27): cloud credentials via OIDC (provider-agnostic), kubeconfig injection for the target cluster, Docker-in-sandbox, egress proxy, repo/environment/global secrets, OpenCode config storage + injection, toolchain in images (Playwright+Chromium, ripgrep, typescript-language-server).
 6. **Files**: uploads to object storage (S3-compatible) + `download_file` tool in sandbox; failed-upload UX signal.
 7. **Recovery UX**: relaunch-and-resume (conversation id replay), resume-in-place on live sandbox, Slack/Linear retry buttons, warm-on-type (composer keystrokes pre-warm a sandbox; must not create orphan sessions).
 8. **Models**: Anthropic + OpenAI/Codex (ChatGPT OAuth plugin) + Gemini (via OpenCode's own already-present `google`/`google-vertex` providers, no new `AgentRuntime` adapter — §25.2) + reasoning-effort plumbing (per-session and per-message overrides).
@@ -394,7 +394,7 @@ Design mockups of the nine views exist (decision inbox/home, session workspace, 
 ### 12.3 UX items to land with the UI
 Boot progress phases instead of spinner; failure reason + resume everywhere (matching the Slack/Linear retry affordance); distinct cancelled/failed/timeout chips; sandbox "what happened" panel (transitions + fingerprint + correlation id).
 
-**Composer send semantics (item 1's composer, Step 78, decision 5) — acceptance criteria, day one:** Enter sends and Shift+Enter inserts a newline, from the very first ship of this composer, never added later — inverting this after users have built muscle memory around one behavior is a change users route around, not adopt, so it is not a follow-up. An IME composition guard is required: confirming an in-progress IME composition (e.g. selecting a candidate while typing Japanese/Chinese/Korean, which itself uses Enter) must never itself send — the guard checks the browser's own composition state, not a heuristic over the text. Exactly ONE shared can-submit predicate drives both the Send button's disabled state and the keydown handler's own send-or-not decision — never two independently-maintained checks, since a button and a key handler silently drifting apart on when submission is allowed is the classic defect this class of UI produces. Touch/mobile gets an explicit decision rather than an unstated gap: out of scope for this ship — the mockups' existing breakpoints (`docs/design/mockups.html`, three `@media (max-width:980px)` rules collapsing `.app`/`.sidebar`/`.rail`, `.settings`/`.setnav`, and `.charts2` to single-column layouts) reflow for narrower viewports but define no touch-specific interaction anywhere, and the composer itself carries no rule inside any of them; a touch-appropriate composer affordance (mobile virtual keyboards make Shift+Enter awkward to reach) is deferred, named here rather than silently left unspecified.
+**Composer send semantics (item 1's composer, Step 81, decision 5) — acceptance criteria, day one:** Enter sends and Shift+Enter inserts a newline, from the very first ship of this composer, never added later — inverting this after users have built muscle memory around one behavior is a change users route around, not adopt, so it is not a follow-up. An IME composition guard is required: confirming an in-progress IME composition (e.g. selecting a candidate while typing Japanese/Chinese/Korean, which itself uses Enter) must never itself send — the guard checks the browser's own composition state, not a heuristic over the text. Exactly ONE shared can-submit predicate drives both the Send button's disabled state and the keydown handler's own send-or-not decision — never two independently-maintained checks, since a button and a key handler silently drifting apart on when submission is allowed is the classic defect this class of UI produces. Touch/mobile gets an explicit decision rather than an unstated gap: out of scope for this ship — the mockups' existing breakpoints (`docs/design/mockups.html`, three `@media (max-width:980px)` rules collapsing `.app`/`.sidebar`/`.rail`, `.settings`/`.setnav`, and `.charts2` to single-column layouts) reflow for narrower viewports but define no touch-specific interaction anywhere, and the composer itself carries no rule inside any of them; a touch-appropriate composer affordance (mobile virtual keyboards make Shift+Enter awkward to reach) is deferred, named here rather than silently left unspecified.
 
 ### 12.4 Sequencing & exit
 Built in phase 7. Definition of done: all nine views built to the mockups + §12.3 items; screenshot-level review against the mockups; `make dist` produces the single self-contained binary.
@@ -752,7 +752,7 @@ One gap this surfaces, not yet closed: `snapshot_restore` can restore a *scoped*
 
 Narvi has no per-scope, user-configurable environment variable surface today — `SessionConfig` carries no user env map, hooks run with sandbox-agent's own inherited environment minus `NARVI_SESSION_CONFIG` (`supervisor.EnvWithout`, `hooks.go:141`, `env.go:21-37`), and `ImageSpec` carries nothing but `{Base, Repos, RuntimeVersion}`. Nothing here proposes building that surface — it belongs to a separate feature, if and when one is scoped. This is recorded now, before any such surface exists, purely because it interacts directly with this design's own fingerprint invariant:
 
-**Decision rule for whenever such a surface is designed**: user-configurable environment variables must be either (a) session-boot-time injection only, never passed to `BuildImage`, or (b) if build-time parity is genuinely wanted, a canonical digest of the build-time environment must join the fingerprint inputs (§19.1) — never injected into a build silently. The reason is structural, not stylistic: §19.1 keys images on content alone and shares one image across every Environment with the same repo set; a scope-bound env value baked into a shared image without joining the key would leak one scope's configured values into every other same-repo-set Environment's sandbox. A corollary for §19.4: `workspaceMoved` (SHA inequality) is a *complete* rerun predicate only while build inputs stay content-only — a build-affecting input invisible to any SHA (an env var change with no accompanying commit) would create a baked-versus-boot divergence that SHA equality alone could never detect. If build-time env vars are ever added, the §19.1 manifest is the natural carrier: bake an env digest beside `built_repo_shas`, and extend `workspaceMoved` to "SHA moved OR env-digest moved." Separately: the `NARVI_*` env-var namespace (already established — `NARVI_BOOT_MODE`, `NARVI_SESSION_CONFIG` carrying the sandbox's own plaintext bearer token, `boot/config.go:33-40`) must be reserved and excluded before any user-settable env surface ships, the same way `hooks.go:141` already excludes `NARVI_SESSION_CONFIG` from every hook's own environment today.
+**Decision rule for whenever such a surface is designed**: user-configurable environment variables must be either (a) session-boot-time injection only, never passed to `BuildImage`, or (b) if build-time parity is genuinely wanted, a canonical digest of the build-time environment must join the fingerprint inputs (§19.1) — never injected into a build silently. *(2026-08-06: that separate feature is now scoped — §27.1 builds the surface and adopts exactly rule (a), boot-time injection only, with the consequence for secret-requiring `setup.sh` builds named honestly in §27.8; §27.1's own name validation enforces the `NARVI_*` reservation below.)* The reason is structural, not stylistic: §19.1 keys images on content alone and shares one image across every Environment with the same repo set; a scope-bound env value baked into a shared image without joining the key would leak one scope's configured values into every other same-repo-set Environment's sandbox. A corollary for §19.4: `workspaceMoved` (SHA inequality) is a *complete* rerun predicate only while build inputs stay content-only — a build-affecting input invisible to any SHA (an env var change with no accompanying commit) would create a baked-versus-boot divergence that SHA equality alone could never detect. If build-time env vars are ever added, the §19.1 manifest is the natural carrier: bake an env digest beside `built_repo_shas`, and extend `workspaceMoved` to "SHA moved OR env-digest moved." Separately: the `NARVI_*` env-var namespace (already established — `NARVI_BOOT_MODE`, `NARVI_SESSION_CONFIG` carrying the sandbox's own plaintext bearer token, `boot/config.go:33-40`) must be reserved and excluded before any user-settable env surface ships, the same way `hooks.go:141` already excludes `NARVI_SESSION_CONFIG` from every hook's own environment today.
 
 ### 19.9 Phasing
 
@@ -781,7 +781,7 @@ Unlike a prompt-only self-check (which produces nothing a query can ever answer 
 A turn running under `plan_mode=true` never gets the devil's-advocate preamble — plan mode's own HITL approval step (§8.1) already is the human review of the proposed action before anything executes; injecting a second, independent caution mechanism into a turn a human is about to approve anyway would just be noise duplicating a gate that already exists. The preamble applies only to non-planning build turns.
 
 ### 20.4 Threading and defaults
-The enable/disable flag follows exactly the same threading `plan_mode` already uses: a global `platform.Config` default plus an optional override field on `SessionConfig`/`TurnSpec`, resolved with the same precedence (session override wins when set, global default otherwise) — no new config-resolution mechanism. **Off by default.** The signal is collected purely for analytics while the feature is calibrated (§21's analytics rollups are the natural home for an eventual false-alarm-rate view); there is no UI prominence beyond a subtle indicator surfaced in the review view (§12.2 item 2, Step 79) once shipped.
+The enable/disable flag follows exactly the same threading `plan_mode` already uses: a global `platform.Config` default plus an optional override field on `SessionConfig`/`TurnSpec`, resolved with the same precedence (session override wins when set, global default otherwise) — no new config-resolution mechanism. **Off by default.** The signal is collected purely for analytics while the feature is calibrated (§21's analytics rollups are the natural home for an eventual false-alarm-rate view); there is no UI prominence beyond a subtle indicator surfaced in the review view (§12.2 item 2, Step 82) once shipped.
 
 ### 20.5 Hard-gate is explicitly out of scope
 A hard gate — blocking the turn outright on a STRONG outcome rather than just surfacing it — is not designed here and not scheduled. It becomes a candidate only if and when the structured signal's own telemetry (§20.2) shows STRONG firing on genuine misses at a rate that justifies the cost of interrupting a session outright; until that evidence exists, gating on an unvalidated signal would risk blocking correct work on a false alarm, which is a worse failure than the one this feature exists to catch.
@@ -816,7 +816,7 @@ This section **supersedes** the label-driven auto-approval mechanism §8.2 and �
 
 No per-PR human label is required or consulted for this decision — the LLM's verdict only ever *proposes* `Shippable`; the server recomputes it and checks every criterion above independently, the same "never trust the model's own verdict" discipline §18.1's `FallbackReason` and `domain/sandbox`'s decision functions already apply elsewhere. The existing `review: low risk` label **inverts into an escape hatch**: replaced by `review: needs-human`, which forces a specific PR out of auto-approval regardless of what the criteria say — a maintainer who knows something the criteria can't see still has a lever, just an opt-out one instead of an opt-in gate. (`visual-qa: pass/skip` is unrelated to this change and continues exactly as before.)
 
-**Stage 2 — auto-merge (per-repo toggle, off by default).** Auto-approval alone does not merge anything. While a repo's auto-merge toggle is off (the default, and the state every repo starts in during a calibration period), an auto-approved PR surfaces in the decision inbox (§16.1's `ready_to_merge` row) as "ready to merge (auto)" with a 1-click human confirm — the human step moves from "decide if this is low-risk" to "confirm the machine's decision," a materially cheaper ask, but not a removed one. Every auto-approval outcome — confirmed as-is, or contested (a human overrides/requests changes on a PR the engine approved) — accumulates into a **contradiction-rate read model**: the fraction of auto-approved PRs a human later disagreed with, per repo. An admin arms the auto-merge toggle for a repo only once this data justifies it; the toggle's own settings row displays the reliability stats (§12.2 item 5, Step 81) next to the control, so arming it is an informed decision, not a leap of faith.
+**Stage 2 — auto-merge (per-repo toggle, off by default).** Auto-approval alone does not merge anything. While a repo's auto-merge toggle is off (the default, and the state every repo starts in during a calibration period), an auto-approved PR surfaces in the decision inbox (§16.1's `ready_to_merge` row) as "ready to merge (auto)" with a 1-click human confirm — the human step moves from "decide if this is low-risk" to "confirm the machine's decision," a materially cheaper ask, but not a removed one. Every auto-approval outcome — confirmed as-is, or contested (a human overrides/requests changes on a PR the engine approved) — accumulates into a **contradiction-rate read model**: the fraction of auto-approved PRs a human later disagreed with, per repo. An admin arms the auto-merge toggle for a repo only once this data justifies it; the toggle's own settings row displays the reliability stats (§12.2 item 5, Step 84) next to the control, so arming it is an informed decision, not a leap of faith.
 
 Once armed, auto-merge reuses the decision inbox's **existing** server-side re-validation-at-click contract unchanged (§16.2, Step 60: re-check CI, approval state, `Authorize` before calling the SCM) — merging is simply machine-initiated instead of human-clicked, the same checks either way. This is a deliberate reuse, not a parallel merge path: the inbox's Merge endpoint was already built to never trust its own rendered queue as authority, exactly the property an unattended merge needs.
 
@@ -824,7 +824,7 @@ Once armed, auto-merge reuses the decision inbox's **existing** server-side re-v
 A daily digest is **entirely deterministic, never LLM-narrated** — it renders from the same `review_verdicts`/analytics read model above via a template, not a model call; a digest is a compliance/status artifact, and a fixed rendering is easier to trust and to test than a fresh narration every day. Scope is **per-repo/per-channel from day one**, reusing the decision inbox's own assignment logic (§16.2's identity-graph-backed provenance) rather than inventing a second, separate repo↔channel association mechanism — a person's digest shows what their own inbox would show, not a global fan-out. Sending is **claim-before-act per (date, channel)**: a `digest_send_state(date, channel)` row plus `SELECT ... FOR UPDATE SKIP LOCKED` (the same idiom §5.1 already uses for PR-mention coalescing) guarantees at-most-one send per channel per day even with concurrent ticks — no separate storage-layer serialization mechanism needed, Postgres already does this.
 
 ### 21.4 Phasing
-Step 62, Phase 5, after Step 45 (verdict shape) and Step 47 (posting path) — designing the verdict schema once, before any of persistence/analytics/digest/auto-approval builds on it, avoids the parallel-reinvention trap a shared schema exists to prevent. UI: Settings → Analytics gains the review-risk section and the per-repo auto-merge toggle with calibration stats (§12.2 items 5-6, Step 81); the decision inbox's `ready_to_merge` row (§16.1, Step 82) gains the "(auto)" 1-click-confirm variant.
+Step 62, Phase 5, after Step 45 (verdict shape) and Step 47 (posting path) — designing the verdict schema once, before any of persistence/analytics/digest/auto-approval builds on it, avoids the parallel-reinvention trap a shared schema exists to prevent. UI: Settings → Analytics gains the review-risk section and the per-repo auto-merge toggle with calibration stats (§12.2 items 5-6, Step 84); the decision inbox's `ready_to_merge` row (§16.1, Step 85) gains the "(auto)" 1-click-confirm variant.
 
 ## 22. Learned false-positive patterns & rebuttal identity (new capability)
 
@@ -847,7 +847,7 @@ Learned patterns are injected into every review pass (first pass and re-review a
 Retire, hit-count, and an audit view for this table **ship in the same Step** as the capture mechanism — never a deferred follow-up. A learned-pattern table with no retirement path only ever grows, accumulating stale or wrong patterns with no mechanism to review or remove them; shipping capture without a lifecycle would create exactly that unreviewable, ever-growing state from day one.
 
 ### 22.5 Phasing
-Step 63, Phase 5, after Step 47 (needs the verdict-posting path new patterns get weighed against) and Step 39 (`Authorize`, RBAC). UI: Settings → Environments gains false-positive pattern view/retire per repo (maintainer+, §12.2 item 5, Step 81); finding cards gain rebuttal history with the content-based finding-identity linkage (§12.2 item 2, Step 79).
+Step 63, Phase 5, after Step 47 (needs the verdict-posting path new patterns get weighed against) and Step 39 (`Authorize`, RBAC). UI: Settings → Environments gains false-positive pattern view/retire per repo (maintainer+, §12.2 item 5, Step 84); finding cards gain rebuttal history with the content-based finding-identity linkage (§12.2 item 2, Step 82).
 
 ## 23. Plan follow-up classification (amend vs answer) (new capability)
 
@@ -909,7 +909,7 @@ An automated fix session (§17, sentinel auto-fix, or any future automation that
 Once the counter reaches the budget, §24.3 step 4's "otherwise" branch stops enqueueing a turn: it still clears `pending_head_sha` (so a later manual re-trigger starts clean) and deletes the `review_retrigger_debounce` timer (the same re-arm-or-delete contract every named-timer handler follows, `timerfired.go`) but does not dispatch. The FIRST time this happens for a given PR, the review session additionally posts one server-side verdict-tool notice (§5.2 — never a raw comment) that automatic re-review has reached its budget and further pushes need the existing manual re-trigger — a one-time event, not repeated on every subsequent debounce firing, so hitting the ceiling is observable without becoming noise. Later `synchronize` events on that same PR keep re-arming the debounce timer exactly as before (a cheap upsert either way); each firing simply finds the budget still exhausted and no-ops without posting a second notice.
 
 ### 24.7 Phasing
-Step 65, Phase 5, after Step 46 (the claim/coalescing primitives this extends with a second, automatic ingress lane) and Step 62 (`review_verdicts.head_sha`, this feature's own trigger-state source) — designing this after both means it reuses primitives that already exist rather than growing them in parallel. Gates nothing else in Phase 6/7. UI: the per-repo opt-in toggle ships in Settings → Analytics alongside the other per-repo automation toggles (§12.2 items 5-6, Step 81).
+Step 65, Phase 5, after Step 46 (the claim/coalescing primitives this extends with a second, automatic ingress lane) and Step 62 (`review_verdicts.head_sha`, this feature's own trigger-state source) — designing this after both means it reuses primitives that already exist rather than growing them in parallel. Gates nothing else in Phase 6/7. UI: the per-repo opt-in toggle ships in Settings → Analytics alongside the other per-repo automation toggles (§12.2 items 5-6, Step 84).
 
 ## 25. Configurable workflow engine per lane + visual canvas editor (new capability)
 
@@ -927,7 +927,7 @@ plan become three system workflows an admin may duplicate and customize — glob
 never in place — never delete;
 Gemini ships alongside Anthropic/OpenAI in v1 (§8.8/Step 59, amended); the backend engine lands in
 Phase 5 right after the automations work (Steps 51-52), the canvas editor in Phase 7 right after
-Settings (Step 81); a HITL "revise" verdict is always a re-execution of the same step with the
+Settings (Step 84); a HITL "revise" verdict is always a re-execution of the same step with the
 human's text folded in as an additional instruction — exactly plan mode's own `revise:` handling
 today (§8.1) — never a direct substitution of a structured artifact; and the OpenCode
 credential-injection gap (§25.3) is a blocking prerequisite for this entire chantier, built first,
@@ -1135,13 +1135,13 @@ Three new actions, each mirroring an existing row in `internal/domain/authz/auth
 
 `is_built_in` immutability is a structural invariant, not an RBAC row (§25.4).
 
-### 25.12 Visual canvas editor (Step 83, Phase 7)
+### 25.12 Visual canvas editor (Step 86, Phase 7)
 
 A React Flow-style node/edge canvas for authoring a lane/repo workflow's steps and edges. It must
 validate/constrain what a user can draw against the engine's closed model — ordered steps plus
 3-status edges, no expression language (§25.4) — rejecting an undrawable-by-the-engine graph at
 save time, not silently accepting it. Inline progress display of a running workflow in the session
-view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 77/78) — not
+view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 80/81) — not
 a separate Step.
 
 ### 25.13 Risks and open questions
@@ -1164,8 +1164,8 @@ a separate Step.
 
 Steps 53-56, Phase 5, immediately after Step 52 (automations: triggers & extras) — see the Phase 5
 renumbering note (IMPLEMENTATION_PLAN.md). 53 is a blocking prerequisite for 54-56; 55 is exercised
-by 100% of production traffic from day one. Step 83, Phase 7, immediately before ui finalize (Step
-84) — see the Phase 7 renumbering note.
+by 100% of production traffic from day one. Step 86, Phase 7, immediately before ui finalize (Step
+87) — see the Phase 7 renumbering note.
 
 ## 26. Review as a merge readout (new capability)
 
@@ -1345,4 +1345,329 @@ because the deep path must exist to route to; 69 (counter-review + measurement) 
 structure and 68's deep path, and rides Step 62's instrument. 66 extends Step 45's domain type,
 Step 47's posting tool, and Step 62's persistence — hence the whole chantier sits after Steps
 62-65. UI: the review screen's readout layout (digest first, collapsed appendix, contested-points
-block) lands with the existing review view Step (Step 79, Phase 7); no new screen.
+block) lands with the existing review view Step (Step 82, Phase 7); no new screen.
+
+## 27. Enterprise sandbox glue (detailed design)
+
+§8 item 5 names seven capabilities in one line and, until this section, nothing in this plan
+designed any of them — the audit that produced this section found every term in that bullet
+(`kubeconfig`, `Docker-in-sandbox`, `OpenCode config storage`) appearing exactly once in the whole
+document, with no Step citing it. What unifies the seven is that each is a point where a
+**customer's own infrastructure meets the sandbox**: their cloud accounts, their clusters, their
+container tooling, their network policy, their secrets, their agent-engine configuration, their
+browser/toolchain needs. Two already-shipped anchors are reused throughout rather than reinvented:
+
+- **The sandbox-bearer delivery channel.** Secret material never travels through the provider API
+  inside SESSION_CONFIG (the one deliberate exception is the sandbox's own bootstrap bearer token,
+  §5.2) — it is *pulled* by sandbox-agent at boot over the authenticated sandbox→CP channel, with
+  the exact handshake `scmcredentials.go` established and `providercredentialsdelivery.go` (Step
+  53) already mirrors once: bearer-token verification (constant-time hash compare), dead-sandbox
+  410, `X-Sandbox-Gen` fencing 403. Every new delivery endpoint below mirrors it again, in the
+  same order, for the same audit-established reasons.
+- **Step 53's scope/resolution/crypto vocabulary.** `internal/domain/providercredential`'s
+  `Scope`/`Resolve` (already generic over `Candidate[T]`), the partial-unique-index pattern
+  (migration 000056), `platform.EncryptToken`'s AES-256-GCM at rest, and the write-only management
+  API posture are the mechanisms; this section extends their use, never forks a parallel set.
+
+Ordering below is by dependency, not the bullet's own comma order: general secrets first (§27.1),
+because OpenCode config (§27.2), cloud identity (§27.3), and kubeconfig (§27.4) all lean on its
+storage or delivery machinery; the substrate pieces (Docker §27.5, egress §27.6, toolchain §27.7)
+close. §19.8's recorded invariant is honored throughout: nothing in this section ever passes a
+user-configurable value into `BuildImage` — rule (a), boot-time injection only.
+
+### 27.1 Repo/environment/global secrets
+
+**A second table, deliberately — not an extension of `provider_credentials`.** Step 53's table is
+narrow by design: its identity column is a closed Postgres ENUM of three provider names, each
+mapped to fixed env-var name(s) by domain code (`providercredential.EnvVarNames`), consumed by
+exactly one process (the `opencode serve` env, `spawn.go`). A general secret inverts both
+properties: its identity IS a user-chosen env-var name, and its consumers are the whole supervised
+process tree (hooks, `services.yml` services, the agent's own shell). Widening the ENUM-typed
+column into free text would destroy the closed-vocabulary property Step 53's own docs treat as
+load-bearing; so: new table, same idioms.
+
+```
+sandbox_secrets(id, scope sandbox_secret_scope ENUM('automation','environment','repo','global'),
+                scope_target_id TEXT, name TEXT, value_encrypted BYTEA, created_at, updated_at)
+```
+
+- Same shape CHECK and partial-unique-index pair as migration 000056 (`(scope, scope_target_id,
+  name)` where target NOT NULL; `(name)` where NULL); `scope_target_id` meanings identical
+  (repo = `repo_full_name`, environment = `environments.id`), plus `automation` = `automations.id`.
+- **Resolution order: automation → environment → repo → global, most specific wins** — the order
+  §12.2 item 5's Settings mockup already displays and `providercredential`'s own doc.go already
+  verified for its three scopes; `automation` slots in as the most-specific level.
+  `providercredential.Resolve` is reused as-is (it is already generic); only the `scopePriority`
+  table gains the fourth row. The `automation` scope ships in the schema now so the deferred
+  per-automation secrets follow-up (§8.4/Step 52's explicit deferral, `automation/doc.go`) needs
+  no second migration — but its CRUD and consumption wiring remain that follow-up's scope, not
+  this Step's.
+- **Name validation, fail-closed at save time**: POSIX env-var shape; the `NARVI_*` namespace
+  rejected outright (§19.8's reservation — the live namespace is the eight `NARVI_*` vars
+  `boot/config.go:33-40` already defines); the exact names `providercredential.EnvVarNames` covers
+  (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, the three Google names) rejected too, so every env-var
+  name has exactly one owning mechanism and a shadowing conflict between the two tables is
+  unrepresentable.
+- **Encryption, RBAC, management API**: `platform.EncryptToken` at rest; the same three
+  already-reserved actions (`ActionManageRepoSecrets`/`ActionManageEnvSecrets`/
+  `ActionManageGlobalSecrets`) govern this table exactly as they govern `provider_credentials` —
+  one management surface, two tables behind it; write-only from the management API
+  (`providercredentials.go`'s posture), values never returned, never logged.
+- **Delivery**: sibling sandbox-facing endpoint `POST /sessions/{id}/sandbox-secrets` mirroring
+  `providercredentialsdelivery.go`'s handshake verbatim; response is a plain name→plaintext map of
+  RESOLVED winners only, losers never decrypted (Step 53's decrypt-only-the-winner discipline).
+- **Injection**: sandbox-agent fetches once, before the first hook runs, with bounded retry;
+  threads the map into every process it spawns — hooks (through `runRepoHooks`' existing
+  `EnvWithout` seam, `hooks.go:141`), `services.yml` services, and `opencode serve` (appended
+  *before* `providerCredentialEnv`, so the ordering question is moot anyway given the disjoint-name
+  rule above). Degrade policy on fetch failure: **warn and continue** — recorded in the boot log
+  and `AGENTS.md`, never a boot failure — the same reasoning §19.4 already settled for a failed
+  setup rerun: a running agent that can diagnose a missing env var beats a dead sandbox, and
+  "never block a spawn" (§10-P2) holds.
+- **What this mechanism does NOT claim**: in-sandbox secrecy from the agent is a non-goal — the
+  agent is the intended consumer. The real boundaries are: encrypted at rest CP-side; never
+  through the provider API; never written inside any repo working tree (so never committable);
+  never logged. The residual risk that an agent *writes* a secret value into code it then pushes
+  is shared with every secrets mechanism in every CI system; output redaction is possible future
+  work, not claimed here.
+
+### 27.2 OpenCode config storage + injection
+
+What OpenCode config actually is (verified — partly live in this codebase, partly against
+OpenCode's own docs): JSON config (`opencode.json`(c)) merged across an ordered source list,
+later-wins — remote → **global** (`~/.config/opencode/opencode.json`) → **custom**
+(`OPENCODE_CONFIG` env var) → **project** (workspace `opencode.json` — the slot Step 48's
+sentinel-fix agent write already targets and verified loading, `sentinelfixagent.go`) — carrying
+providers/models, MCP servers, agents, permissions, LSP config, and `{env:VAR}`/`{file:path}`
+substitution. That merge order is the entire injection design — Narvi occupies OpenCode's own
+documented slots rather than inventing a merge:
+
+- **Storage**: `opencode_configs(scope ENUM('environment','global'), scope_target_id, document
+  JSONB, timestamps)` — same CHECK/partial-unique-index idioms as §27.1; at most one global row,
+  one per environment. **Plaintext JSONB, deliberately** — this is configuration users read and
+  edit in Settings, not secret material; anything secret belongs in §27.1's table and is
+  referenced from the document via OpenCode's own `{env:VAR}` substitution, which resolves at
+  OpenCode's load time from the process env sandbox-agent already built. Validation at save:
+  parses as a JSON object, bounded size — nothing deeper, because OpenCode's own schema drifts
+  with its version and a Narvi-side copy of it would be a second, staler validator (§7's
+  pinned-binary contract tests are where engine-shape drift is caught).
+- **Injection**: delivered at boot over a sibling sandbox-facing endpoint (same handshake), both
+  scopes at once: sandbox-agent writes the global document to
+  `~/.config/opencode/opencode.json` (OpenCode's global slot; base images must not bake one) and
+  the environment document to a file outside the workspace, setting `OPENCODE_CONFIG` to its path
+  on the `opencode serve` process. OpenCode's own precedence then composes everything correctly
+  with zero Narvi-side merge code: org-global < environment < repo-committed project config < the
+  sentinel-fix capability-restriction write (§17.2/Step 48, which targets the project slot) —
+  i.e. **a customer-authored config can never override the security-relevant agent restriction**,
+  by the engine's own documented ordering, not by a Narvi convention.
+- **RBAC**: global scope admin-only (the §13.3 row that owns integrations/global secrets);
+  environment scope maintainer+ (the row that owns environments/env secrets).
+- **Trust note, stated plainly**: an org-authored OpenCode config can name MCP servers and
+  commands — code execution inside the sandbox. This grants no privilege a repo's own committed
+  `opencode.json` or `setup.sh` does not already have (the sandbox runs untrusted repo code by
+  design); the management surface above is the gate, and it is role-checked server-side like
+  every other state change (§13.3).
+
+### 27.3 Cloud credentials via OIDC (provider-agnostic)
+
+The pattern is the one GitHub Actions standardized for CI↔cloud federation, applied to sandboxes:
+**Narvi's control plane becomes an OIDC identity provider; the customer's cloud IAM is configured
+to trust it; the sandbox exchanges a short-lived Narvi-signed identity token for short-lived cloud
+credentials via the cloud's own STS.** Narvi stores no cloud credential of any kind, ever — the
+customer-side trust policy IS the grant, and revoking it is the customer's own kill switch.
+
+- **Issuer**: CP serves `GET /.well-known/openid-configuration` + a JWKS endpoint on a new
+  `platform.Config` public issuer base URL, validated at boot; the whole capability is off (and
+  binding CRUD refuses, fail-closed) when unset. Signing keys: RS256; private keys generated
+  CP-side and encrypted at rest with `platform.EncryptToken` (`oidc_signing_keys(kid,
+  private_key_encrypted, public_jwk, created_at, retired_at)`); rotation publishes old + new in
+  the JWKS for an overlap window ≥ max token lifetime — the same overlapping-validity discipline
+  §5.2 already applies to sandbox-token rotation.
+- **Claims**: `iss` = the issuer URL; **`sub` = a stable, deterministic, per-Environment value**
+  (`narvi:environment:<environment_id>`), because `sub` is the one claim every cloud can condition
+  on and Azure's federated-credential matching requires an exact, predictable subject string —
+  never anything session-varying in `sub`. Session-varying context (`session_id`, `gen`, repo
+  full names, provenance tag) rides as additional custom claims for clouds whose condition
+  languages can use them (GCP's attribute mapping; AWS condition keys). `aud` = per-binding,
+  customer-set — each cloud documents what it expects (`sts.amazonaws.com` for AWS; the workload
+  identity provider resource name for GCP; `api://AzureADTokenExchange` for Azure). `exp` ≈ 10
+  minutes.
+- **Bindings** — what connects an Environment to a cloud role: `cloud_identity_bindings(scope
+  ENUM('environment','global'), scope_target_id, kind ENUM('aws','gcp','azure','generic'),
+  audience, params JSONB, timestamps)`, at most one per (scope target, kind) in v1. `params` are
+  identifiers, not secrets (AWS: role ARN; GCP: workload-identity-provider resource name +
+  optional service-account email; Azure: client id + tenant id; generic: the env-var name to
+  publish the token path under) — stored plaintext, readable, maintainer+ managed (the §13.3
+  environments row). **Deliberately no repo scope**: a deployment target is an Environment
+  property (§14.1's own model — confirmed, not just assumed), not a repo property.
+- **Minting**: sandbox-agent calls `POST /sessions/{id}/cloud-identity-token {audience}` over the
+  sandbox-bearer channel (same handshake as every delivery endpoint here). CP refuses any audience
+  no binding for this session's Environment (or global fallback) declares — it never mints
+  arbitrary-audience tokens. Minting is logged with `correlation_id` (§5.3) and counted as a
+  metric; `audit_log` records binding CRUD, not each 5-minute refresh (proportionate, or the audit
+  log becomes noise).
+- **In-sandbox consumption — file-based, zero custom tooling**: all three clouds' SDK families
+  natively consume a *file-sourced* OIDC token via standard env vars, so sandbox-agent maintains
+  one token file per binding under a non-workspace path (`/narvi/identity/`, 0700/0600 — never
+  inside any repo tree, so never committable), refreshes each at token half-life (background,
+  same supervisor discipline as everything else it runs), and sets the standard env vars on every
+  spawned process: `AWS_WEB_IDENTITY_TOKEN_FILE` + `AWS_ROLE_ARN` (+ session name) for AWS's
+  `AssumeRoleWithWebIdentity` flow; `GOOGLE_APPLICATION_CREDENTIALS` pointing at a generated
+  external-account credential-config JSON whose `credential_source.file` is the token file, for
+  GCP's STS exchange; `AZURE_FEDERATED_TOKEN_FILE` + `AZURE_CLIENT_ID` + `AZURE_TENANT_ID` for
+  Azure workload identity. The clouds' own client libraries perform the exchange in-sandbox;
+  **Narvi implements no per-cloud exchange code at all** — that is what "provider-agnostic"
+  concretely means here, and why a fourth target (Vault, or any JWT-federating system) is just a
+  `generic` binding, not a CP change.
+- **Boundary**: what a compromised or over-eager sandbox can do cloud-side is exactly what the
+  customer's own trust policy + role grant to that Environment's `sub` — least privilege is the
+  customer's lever; Narvi's job is making `sub` fine-grained, stable, and honest. Lifetime bounds
+  the tail (≤10-min tokens; minting stops at dead-sandbox/410, like every other delivery
+  endpoint); a leaked token is useless against any role whose trust policy names a different
+  `sub`/`aud`.
+
+### 27.4 Kubeconfig injection for the target cluster
+
+"The target cluster" is selected the way §14 already models deployment targets: **per-Environment**
+— `cluster_bindings(environment_id UNIQUE, name, server_url, ca_bundle, auth_kind
+ENUM('cloud','oidc','static'), params JSONB)`, one cluster per Environment in v1 (the bullet's own
+singular). sandbox-agent renders a kubeconfig from the binding at boot, writes it under
+`/narvi/identity/` (never a repo tree), and sets `KUBECONFIG` on every spawned process. Three auth
+rungs, preferring federation over static material:
+
+1. **`cloud`** — EKS/GKE/AKS ride §27.3's already-established identity with zero additional
+   secret: the rendered kubeconfig uses the standard exec credential plugin for that cloud
+   (`aws eks get-token` / `gke-gcloud-auth-plugin` / `kubelogin` in workload-identity mode), each
+   of which consumes exactly the env vars §27.3 already set. Kubernetes' client-go
+   exec-credential mechanism does the rest; the toolchain image (§27.7) carries the three plugins.
+2. **`oidc`** — a self-managed cluster whose kube-apiserver is configured to trust Narvi's own
+   issuer directly (`--oidc-issuer-url` + client-id + claim mappings): the kubeconfig's exec
+   plugin is **sandbox-agent's own subcommand** (`kube-credential`), which fetches a CP-minted
+   token (§27.3's endpoint, `aud` = the cluster's configured client id) and prints a standard
+   `ExecCredential` JSON — the exact same shape as the git-credential-helper subcommand precedent
+   (`runCredentialHelper`, `cmd/sandbox-agent/main.go`): git's helper protocol there, client-go's
+   here. Authorization inside the cluster is the customer's own RBAC binding on the token's
+   claims (recommend a namespace-scoped Role, never cluster-admin — documented, not enforced,
+   since the cluster is the customer's).
+3. **`static`** — an uploaded kubeconfig for clusters with no OIDC path at all, stored as a §27.1
+   secret (the value is the file content; delivered and written to disk by sandbox-agent, never
+   env-var-expanded). Supported honestly as the lowest rung and named as such: long-lived
+   credential material at rest, exactly what the two rungs above exist to avoid.
+
+### 27.5 Docker-in-sandbox
+
+The well-known hard problem, named rather than hand-waved: nested containers need either privilege
+(classic privileged-mode DinD — **rejected outright here**: it is root-equivalent on the host and
+incompatible with §5.2's fail-closed/least-privilege posture), a syscall-emulating or user-ns
+runtime (gVisor, rootless, sysbox — each with real compatibility limits), or a real kernel per
+sandbox (microVM). The decisive architectural fact: **Narvi's sandboxes run on a provider's
+substrate, so the isolation technology is the provider's, and the decision surfaces through the
+existing port, not a new mechanism**:
+
+- **Per-Environment `docker: required` flag** → carried in SESSION_CONFIG and, like `Gen`, also as
+  a top-level `CreateSpec` field (the same deliberate-duplicate-with-`Validate` discipline
+  `createspec.go` already documents — the provider must act on it without parsing the opaque doc).
+  `ports.Capabilities` gains `DockerInSandbox bool`.
+- **Fail-closed, twice**: session creation against an Environment requiring Docker is refused
+  up-front when the configured provider reports no support (clearest possible UX), and the spawn
+  path re-checks at dispatch — a Docker-requiring session is never silently run somewhere the
+  requirement is unenforceable.
+- **Modal concretely** (researched for this section, current as of writing): default Modal
+  sandboxes run on gVisor, where dockerd's overlay2/bridge-networking stack does not run cleanly;
+  Modal's VM runtime option gives the sandbox a real kernel, where Docker/compose/build behave
+  normally. The Modal adapter maps the flag onto that runtime option. The costs are real and
+  named: VM-runtime boot latency vs §19's warm-boot expectations, snapshot-capability parity
+  under a different runtime (see §27.8 — `Capabilities()` is flat today and cannot express
+  per-spawn capability variance), the option's experimental status, and per-sandbox cost.
+- **The anticipated Kubernetes-native provider** (§0): sysbox-class user-ns runtimes are the
+  recommended enablement path, Kata-class microVMs the stronger-isolation alternative —
+  **privileged pods never**, under any configuration this plan ships.
+- **In-sandbox**: when the flag is set, sandbox-agent supervises `dockerd` as one more entry in
+  the same process-supervision table as everything else (§14.2's own "no new supervision code
+  path" rule), with a named `boot_progress` phase; the CLI/engine binaries come from the toolchain
+  image (§27.7) and the daemon simply never starts when the flag is off.
+
+### 27.6 Egress: what §4.1 already covers, and the sandbox-side gap
+
+The bullet's word "egress proxy" is **half-covered**. Fully covered already, needing no new
+design: the control plane's own outbound traffic to the provider API routes through the
+configurable proxy (§4.1; `ModalEgressProxyURL`, `modal/provider.go`'s Transport wiring) — that
+shipped with Step 12. Not covered anywhere until now: the **sandbox's own egress**. Two halves,
+because they are genuinely different guarantees:
+
+- **Cooperative routing** — `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` across the sandbox process
+  tree: this is *pure §27.1* — proxy URLs are secret-shaped (they conventionally carry basic-auth
+  credentials; `modal/errors.go` already redacts them for exactly that reason), so a customer
+  configures them as environment-scoped secrets and every spawned process inherits them. Zero new
+  machinery; named here so nobody builds a parallel mechanism. Explicitly NOT enforcement — any
+  process can ignore env vars.
+- **Enforced policy** — per-Environment `egress_policy {mode: open|allowlist, allowlist}`,
+  carried like the Docker flag (SESSION_CONFIG + top-level `CreateSpec`), **enforced at the
+  provider substrate** (Modal's own sandbox network controls; NetworkPolicy for the anticipated
+  Kubernetes provider), surfaced as `Capabilities.EgressPolicy` and **fail-closed** exactly like
+  §27.5: a policy the configured provider cannot enforce refuses the spawn, never runs
+  unenforced. A non-negotiable allowlist floor is auto-appended server-side — the CP's own
+  WS/API host, the session's git hosts, and nothing less — because a sandbox that cannot reach
+  the control plane or clone its repos is not a security posture, it is a boot failure.
+
+### 27.7 Toolchain in images
+
+Confirmed genuinely mechanical — a content addition to the **base sandbox image**, no new
+architecture. The base image is the `Base` every build and cold boot already starts from
+(`defaultBaseImage`, `dispatch.go:153` — today a placeholder tag; its real build definition is
+where these land), NOT the per-repo-set prebuild pipeline (§19 bakes repos and dependency caches
+*on top of* base; tools belong below). The additions: Playwright + Chromium (installed with its
+OS deps, pinned), `ripgrep`, `typescript-language-server` (+ `typescript`), the Docker CLI/engine
+binaries (daemon dormant unless §27.5's flag is set), and §27.4's three cloud exec-credential
+plugins. Versions pinned and visible via the boot fingerprint's existing image digest (§5.3). The
+one real consideration: Chromium adds on the order of a gigabyte, which prices into image pull
+time — absorbed in practice by §19's shared warm images and already inside what
+`first_connect_budget` is sized for (§5.4). That is the entire design; stating more would be
+manufacturing complexity.
+
+### 27.8 Risks and open questions
+
+- **Public-issuer reachability (§27.3)**: AWS and Azure fetch issuer discovery/JWKS over public
+  HTTPS — a firewalled self-hosted CP cannot federate with them directly. GCP accepts an uploaded
+  JWKS (no public issuer needed). For fully air-gapped deployments the honest answer today is
+  §27.4's `static` rung and §27.1 secrets; a token-exchange relay is out of scope until someone
+  actually needs it.
+- **Key-rotation cadence (§27.3)**: manual, admin-triggered rotation with the overlap window is
+  v1; automatic scheduled rotation is deferred until operational experience says what cadence is
+  right. Clock skew between CP and cloud STS endpoints bounds how short `exp` can safely go.
+- **`sub` granularity (§27.3)**: per-Environment is the designed grain. If a real customer needs
+  per-repo cloud scoping inside one Environment, that collides with Azure's exact-match subject
+  requirement and needs its own design pass — named now, not solved speculatively.
+- **Per-spawn capability variance (§27.5)**: `Capabilities()` is a flat, provider-level report
+  (§4.1); a provider whose snapshot support differs by runtime (Modal gVisor vs VM runtime) cannot
+  express that today. If VM-runtime sandboxes turn out snapshot-incapable, either `Capabilities`
+  grows a per-spec dimension or Docker-requiring sessions document degraded recovery (resume-only,
+  §3.2) — decided at Step 72 implementation time against the provider's real behavior, not
+  guessed here.
+- **Build-time secrets (§27.1, §19.8)**: rule (a) means shared-image builds run `setup.sh` with
+  no user secrets. A `setup.sh` that hard-requires one (private package registry) fails its
+  builds (fatal in `BootModeBuild`) and that Environment degrades to base-image cold boots — where
+  the boot-time rerun DOES have the secrets and succeeds. Correct, but slow. §19.8's rule (b)
+  (env-digest joins the fingerprint) is the designed escape if this bites a real Environment; not
+  built until then.
+- **Enforced-egress granularity (§27.6)**: whether the provider substrate enforces by domain or
+  by CIDR (and how DNS is handled inside the allowlist) is provider-specific and must be verified
+  against the provider's real controls at implementation time — the fail-closed rule above is what
+  keeps this honest either way.
+- **Snapshotting a running dockerd (§27.5)**: daemon/image-store state inside snapshots
+  (§3.2/§8.5's snapshot-restore path) is untested territory; Step 72 must add a §9.3-class
+  scenario for restore-with-docker before claiming it works.
+
+### 27.9 Phasing
+
+Steps 70-72, opening Phase 6 — see the renumbering note (IMPLEMENTATION_PLAN.md). Placed there,
+not in Phase 5, because this is rollout-enabling platform glue, not review/automation scope:
+§10-P6's own first line ("Config setup (automations, secrets, environments, settings,
+integrations)") already presumes these surfaces exist, and the config/data-seeding Step that opens
+the rest of Phase 6 seeds exactly what these Steps build. Step 70 (§27.1 + §27.2) extends Step
+53's mechanisms and needs Step 39's `Authorize`; Step 71 (§27.3 + §27.4) builds on 70's delivery
+family and the `static` rung stores through 70's table; Step 72 (§27.5 + §27.6's enforced half +
+§27.7) is the ports/substrate piece (Steps 12-16's seams, §19's image pipeline adjacency) and can
+run in parallel with 71. UI: no new screens — the Settings view (§12.2 item 5, Step 84) gains the
+secrets table it already mocks plus cloud/cluster bindings, per-Environment Docker/egress
+settings, and the OpenCode config editor.
