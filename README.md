@@ -8,7 +8,7 @@
 
 Narvi runs autonomous coding agents inside isolated cloud sandboxes. A person — or an automation — starts a session from the web, Slack, Linear, or GitHub; Narvi provisions a sandbox, runs the agent against the target repositories, streams the work back in real time, and opens a pull request attributed to the requester. Sessions are durable, recoverable, and multiplayer.
 
-This project was started after running [OpenInspect](https://github.com/ColeMurray/background-agents) in production at [Fountain](https://github.com/onboardiq/background-agents). Narvi draws on that experience, but is an independent project — not a fork or a rewrite of OpenInspect, and shares no code with it.
+This project was started after running [OpenInspect](https://github.com/ColeMurray/background-agents) in production at [Fountain](https://github.com/onboardiq). Narvi draws on that experience, but is an independent project — not a fork or a rewrite of OpenInspect, and shares no code with it.
 
 ## Architecture at a glance
 
