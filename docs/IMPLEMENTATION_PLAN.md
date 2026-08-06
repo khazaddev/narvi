@@ -4,7 +4,7 @@
 
 Narvi's technical specification (autonomous coding agents in sandboxes) is in
 [docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§19), and the nine-view UI design spec is in
-[docs/design/mockups.html](design/mockups.html). This plan breaks the 8 phases (0–7) into **~80 ordered Steps**
+[docs/design/mockups.html](design/mockups.html). This plan breaks the 8 phases (0–7) into **~85 ordered Steps**
 (including Phase 4's own 5 additive Steps, 40-44), each individually shippable and CI-green,
 executable by a developer assisted by coding agents (Sonnet 5).
 Every Step references the technical-plan section that specifies it. Each Step becomes exactly one PR when
@@ -110,9 +110,10 @@ so on through the former Step 65, now Step 70 at the time this note was written 
 the later insertion of Steps 57-60 at the end of Phase 5, and Step 75 after the still-later insertion of Step 61
 at the same end of Phase 5 — subsequently Step 79, after the later insertion of Steps 53-56 within Phase 5 (the
 workflow-engine chantier), then Step 80 after the still-later insertion of one new Phase 7 Step (the
-workflow canvas editor) immediately before it, and finally Step 84 after the 2026-08-05 insertion of
-Steps 66-69 (the review merge-readout chantier) at the end of Phase 5; see that phase's own
-renumbering notes, and Phase 7's).
+workflow canvas editor) immediately before it, then Step 84 after the 2026-08-05 insertion of
+Steps 66-69 (the review merge-readout chantier) at the end of Phase 5, and finally Step 87 after
+the 2026-08-06 insertion of Steps 70-72 (enterprise sandbox glue, §27) at the start of Phase 6; see
+that phase's own renumbering note).
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
@@ -156,30 +157,43 @@ renumbering notes, and Phase 7's).
 
 **Phase 5 milestone**: code review in shadow on live PRs, verdicts reviewed for precision.
 
-## Phase 6 — Rollout (4 Steps)
+## Phase 6 — Rollout (7 Steps)
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
-| 70 | config/data seeding | Scripts to seed automations, secrets, environments, settings, integrations; participants→users mapping (by GitHub id, default member) | §10-P6, §13.4 |
-| 71 | cohort rollout | Feature-flagged cohort rollout of sessions, documented rollback | §10-P6 |
-| 72 | ops | Dashboards/alerts (false failures, outbox lag, orphans, boot p95), runbooks from the resilience catalog (§9.3) | §5.3 |
-| 73 | launch readiness | Production checklist, SLO alerts wired, on-call runbook; a per-surface user guide (web/Slack/Linear/GitHub) documenting what each surface accepts AND its honest negatives, shipped behavior only — a CI check ties every documented command to the `/contracts` route or classifier routing record (§18.4) that actually implements it, so the guide can never drift into aspirational text | §10-P6 |
+| 70 | sandbox secrets & opencode config | General `sandbox_secrets` table (scope ENUM `automation`/`environment`/`repo`/`global` — the `automation` slot is schema-only, its CRUD/consumption stays with the per-automation follow-up Step 52 deferred; resolution automation → environment → repo → global via the SAME generic `providercredential.Resolve`, one new `scopePriority` row), Step 53's idioms reused throughout (partial-unique-index pair, `platform.EncryptToken` at rest, the three already-reserved `ActionManage*Secrets` RBAC actions, write-only management API); name validation fail-closed (POSIX shape, `NARVI_*` and `providercredential.EnvVarNames` names rejected — one owning mechanism per env-var name); delivery via `POST /sessions/{id}/sandbox-secrets` mirroring `providercredentialsdelivery.go`'s handshake verbatim (bearer, dead-sandbox 410, gen 403, decrypt-only-winners); sandbox-agent fetches before the first hook and threads the map into every spawned process (hooks via `hooks.go:141`'s `EnvWithout` seam, services, `opencode serve`), warn-and-continue on fetch failure, NEVER passed to `BuildImage` (§19.8 rule (a)). OpenCode config storage (`opencode_configs`, plaintext JSONB — secrets belong in `sandbox_secrets` via OpenCode's own `{env:VAR}` substitution) + injection into OpenCode's OWN documented config slots: global doc → `~/.config/opencode/opencode.json`, environment doc → `OPENCODE_CONFIG` env var, so the engine's own precedence keeps repo project config and the Step 48 sentinel-fix restriction above every Narvi-injected document | §27.1, §27.2 |
+| 71 | cloud identity: OIDC federation + kubeconfig | CP becomes an OIDC issuer (`/.well-known/openid-configuration` + JWKS on a new validated `platform.Config` public issuer URL — capability off and binding CRUD refusing, fail-closed, when unset); RS256 keys encrypted at rest via `platform.EncryptToken`, rotation = overlapping JWKS publication (§5.2's grace-window discipline); `sub` stable and per-Environment (`narvi:environment:<id>` — Azure's exact-match constraint; session-varying context only in custom claims), `aud` per customer binding, `exp` ≈ 10 min; `cloud_identity_bindings` (environment/global scope, kind aws/gcp/azure/generic, params are identifiers not secrets, deliberately no repo scope) + minting endpoint `POST /sessions/{id}/cloud-identity-token` (same sandbox-bearer handshake; refuses any audience no binding declares); sandbox-agent maintains per-binding token files under `/narvi/identity/` (0700/0600, never a repo tree), half-life refresh, and sets each cloud's STANDARD file-sourced env vars (`AWS_WEB_IDENTITY_TOKEN_FILE`+`AWS_ROLE_ARN`, `GOOGLE_APPLICATION_CREDENTIALS`→external-account JSON, `AZURE_FEDERATED_TOKEN_FILE`+ids) — the clouds' own SDKs do the STS exchange, zero per-cloud Narvi code. Kubeconfig: per-Environment `cluster_bindings` (UNIQUE, v1 = one cluster), rendered at boot with `KUBECONFIG` set; auth rungs cloud (exec plugins riding the same env vars) > oidc (kube-apiserver trusts Narvi's issuer; exec plugin = a new sandbox-agent `kube-credential` subcommand printing `ExecCredential` JSON — the `runCredentialHelper` subcommand precedent exactly) > static (uploaded kubeconfig stored through Step 70's secrets, named as the discouraged lowest rung) | §27.3, §27.4 |
+| 72 ∥ | sandbox substrate: docker, egress policy, toolchain | Per-Environment `docker: required` flag carried in SESSION_CONFIG AND as a top-level `CreateSpec` field (`createspec.go`'s Gen-style deliberate-duplicate-with-`Validate` discipline); `ports.Capabilities` gains `DockerInSandbox`/`EgressPolicy`; fail-closed twice (session creation refused up-front on an unsupporting provider, re-checked at dispatch — never silently unenforced); Modal adapter maps the flag onto its VM-runtime option (default gVisor sandboxes can't run dockerd cleanly; privileged mode rejected outright, §5.2); dockerd supervised as one more entry in the existing supervision table with a named `boot_progress` phase; enforced per-Environment `egress_policy {open|allowlist}` at the provider substrate with a server-appended allowlist floor (CP host + git hosts); cooperative `HTTP(S)_PROXY`/`NO_PROXY` routing is pure Step 70 env plumbing, named to prevent a parallel mechanism; toolchain baked into the BASE image (Playwright+Chromium pinned with OS deps, ripgrep, typescript-language-server, docker CLI/engine dormant-by-default, the three cloud exec-credential plugins), versions visible via the existing boot-fingerprint image digest; new §9.3-class restore-with-docker scenario before snapshot support is claimed | §27.5, §27.6, §27.7 |
+| 73 | config/data seeding | Scripts to seed automations, secrets, environments, settings, integrations; participants→users mapping (by GitHub id, default member) | §10-P6, §13.4 |
+| 74 | cohort rollout | Feature-flagged cohort rollout of sessions, documented rollback | §10-P6 |
+| 75 | ops | Dashboards/alerts (false failures, outbox lag, orphans, boot p95), runbooks from the resilience catalog (§9.3) | §5.3 |
+| 76 | launch readiness | Production checklist, SLO alerts wired, on-call runbook; a per-surface user guide (web/Slack/Linear/GitHub) documenting what each surface accepts AND its honest negatives, shipped behavior only — a CI check ties every documented command to the `/contracts` route or classifier routing record (§18.4) that actually implements it, so the guide can never drift into aspirational text | §10-P6 |
+
+**Renumbering note (2026-08-06):** Steps 70-72 above are new, inserted at the START of Phase 6 rather
+than inside Phase 5, because they are rollout-enabling platform glue, not review/automation scope:
+§10-P6's own first line ("Config setup (automations, secrets, environments, settings, integrations)")
+already presumes these surfaces exist, and the config/data-seeding Step that opens the rest of this
+phase seeds exactly what they build. They deliver the §8 item 5 feature set ("Enterprise sandbox
+glue") — the one §8 bullet no Step had ever cited — designed in `docs/TECHNICAL_PLAN.md` §27. Every
+Step from the former Step 70 ("config/data seeding") onward shifts up by exactly 3: former 70→73 …
+former 84→87 (ui finalize, which must stay last). Additive-shift pattern, same precedent as the
+Phase 4 insertion note above.
 
 ## Phase 7 — UI (11 Steps, visual spec = nine-view mockups)
 
 | Step | Title | Content | Ref. |
 |---|---|---|---|
-| 74 | ui bootstrap | Vite+React+TanStack, `go:embed` + `narvi serve`, light/dark theme tokens from the mockups, front CI | §12.1 |
-| 75 | ui data layer | TS client generated from `/contracts`, WS transport → event-log → reducer | §12.1 |
-| 76 | ui sign-in | GitHub primary, SSO OIDC, identity auto-link panel, allowlist errors | §12.2-7, §13.1 |
-| 77 | ui session: timeline | Sidebar (status chips + session source, My sessions/All filter, boot n/m), typed-event timeline incl. sub-task lane nesting, failure cards + Resume | decisions 1-4, 31, §7.1 |
-| 78 | ui session: composer & rail | Composer (model/effort/plan mode, warm-on-type; Enter sends and Shift+Enter inserts a newline from day one, an IME composition guard so confirming an IME composition never sends, one shared can-submit predicate driving both the Send button and the keydown handler, and an explicit touch/mobile decision, §12.3), sandbox rail (transitions, gen, fingerprint, boot phases, artifacts, cost incl. sub-task roll-up) | decisions 5-6, §7.1, §12.3 |
-| 79 | ui code review + release review | **Merge-readout layout (§26): digest sections first ("What this PR does", architecture choices, stack risks, contested points), findings in a collapsed appendix**; editable risk-map, sentinels, findings (apply/rebut), history, server-side badge; handoff-readiness sentinel (Step 49) on scoped sessions; **dedicated release-review screen: manifest + trigger banner + composition findings (Step 50)**; false-positive pattern management (view/retire per repo, maintainer+, Step 63); rebuttal history with finding-identity linkage (Step 48); epistemic-check outcome surfaced as a subtle "Heads-up" indicator in the review view when `minor`/`strong` fired (Step 61) | decisions 7-14, §14.4, §15, §20, §21, §22, §26 |
-| 80 | ui plan mode + automations | Versioned plan + multi-channel approval bar; automations health/runs table | decisions 15-20 |
-| 81 | ui settings + analytics | Environments/secrets/templates/members&access (roles, identities, audit); **path-scope + services editor for product Environments**; analytics (KPIs incl. false failures and decision latency, charts); review-risk analytics section (KPI tiles, trend chart, top-risk table) fed by Step 62's read model with explicit "not available yet" states; digest cadence/scope settings per repo; per-repo auto-merge toggle (off by default) with contradiction-rate calibration stats displayed next to it; per-repo automatic re-review opt-in toggle (off by default, §24) | decisions 21-30, §14.1, §14.2, §21, §24 |
-| 82 | ui decision inbox (home) | Home view: decision queue by section (merge/review/approval/attention), inline actions wired to the Step 60 API, assignment provenance, staleness, repo-only filter (the inbox is inherently user-scoped), median time-to-decision; the sessions list moves to a second tab | decisions 32-34, §16 |
-| 83 | workflow canvas editor | React Flow-style node/edge canvas for authoring a workflow's steps and edges per lane/repo; validates/constrains what a user can draw against the engine's closed model (ordered steps + 3-status edges, no expression language, §25.4) — a drawn graph the engine cannot execute must be rejected at save time, not silently accepted. Inline progress display of a running workflow in the session view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 77/78), not a separate Step | §25.12, §7.1 |
-| 84 | ui finalize | `make dist` single self-contained binary, screenshot review vs mockups, ship | §12.4 |
+| 77 | ui bootstrap | Vite+React+TanStack, `go:embed` + `narvi serve`, light/dark theme tokens from the mockups, front CI | §12.1 |
+| 78 | ui data layer | TS client generated from `/contracts`, WS transport → event-log → reducer | §12.1 |
+| 79 | ui sign-in | GitHub primary, SSO OIDC, identity auto-link panel, allowlist errors | §12.2-7, §13.1 |
+| 80 | ui session: timeline | Sidebar (status chips + session source, My sessions/All filter, boot n/m), typed-event timeline incl. sub-task lane nesting, failure cards + Resume | decisions 1-4, 31, §7.1 |
+| 81 | ui session: composer & rail | Composer (model/effort/plan mode, warm-on-type; Enter sends and Shift+Enter inserts a newline from day one, an IME composition guard so confirming an IME composition never sends, one shared can-submit predicate driving both the Send button and the keydown handler, and an explicit touch/mobile decision, §12.3), sandbox rail (transitions, gen, fingerprint, boot phases, artifacts, cost incl. sub-task roll-up) | decisions 5-6, §7.1, §12.3 |
+| 82 | ui code review + release review | **Merge-readout layout (§26): digest sections first ("What this PR does", architecture choices, stack risks, contested points), findings in a collapsed appendix**; editable risk-map, sentinels, findings (apply/rebut), history, server-side badge; handoff-readiness sentinel (Step 49) on scoped sessions; **dedicated release-review screen: manifest + trigger banner + composition findings (Step 50)**; false-positive pattern management (view/retire per repo, maintainer+, Step 63); rebuttal history with finding-identity linkage (Step 48); epistemic-check outcome surfaced as a subtle "Heads-up" indicator in the review view when `minor`/`strong` fired (Step 61) | decisions 7-14, §14.4, §15, §20, §21, §22, §26 |
+| 83 | ui plan mode + automations | Versioned plan + multi-channel approval bar; automations health/runs table | decisions 15-20 |
+| 84 | ui settings + analytics | Environments/secrets/templates/members&access (roles, identities, audit); **path-scope + services editor for product Environments**; the §27 enterprise-glue surfaces on the same screens — the secrets table with scope chips + per-target resolution display the mockups already show, cloud identity & cluster bindings, per-Environment docker/egress-policy settings, OpenCode config editor (Steps 70-72); analytics (KPIs incl. false failures and decision latency, charts); review-risk analytics section (KPI tiles, trend chart, top-risk table) fed by Step 62's read model with explicit "not available yet" states; digest cadence/scope settings per repo; per-repo auto-merge toggle (off by default) with contradiction-rate calibration stats displayed next to it; per-repo automatic re-review opt-in toggle (off by default, §24) | decisions 21-30, §14.1, §14.2, §21, §24, §27 |
+| 85 | ui decision inbox (home) | Home view: decision queue by section (merge/review/approval/attention), inline actions wired to the Step 60 API, assignment provenance, staleness, repo-only filter (the inbox is inherently user-scoped), median time-to-decision; the sessions list moves to a second tab | decisions 32-34, §16 |
+| 86 | workflow canvas editor | React Flow-style node/edge canvas for authoring a workflow's steps and edges per lane/repo; validates/constrains what a user can draw against the engine's closed model (ordered steps + 3-status edges, no expression language, §25.4) — a drawn graph the engine cannot execute must be rejected at save time, not silently accepted. Inline progress display of a running workflow in the session view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 80/81), not a separate Step | §25.12, §7.1 |
+| 87 | ui finalize | `make dist` single self-contained binary, screenshot review vs mockups, ship | §12.4 |
 
 ## Sequencing & parallelism
 
@@ -205,9 +219,14 @@ renumbering notes, and Phase 7's).
   (depth-based model/effort tiering is valuable alone) but precedes 69, whose deep path must exist
   to route to; 69 depends on 66 and 68, uses 53's credential injection for cross-family sub-agent
   pinning, and measures on 62's instrument.
-- **Phase 7** can start 74-75 during phase 6 (backend and contracts are frozen by then). 83
-  (workflow canvas editor) depends on 55-56 (the engine and HITL gate it visualizes) and 81
-  (Settings, which it ships alongside); it does not block 84 (ui finalize) beyond ordering.
+- **Phase 6**: 70 (secrets + opencode config) extends Step 53's mechanisms and needs Step 39's
+  `Authorize`; 71 (cloud identity + kubeconfig) builds on 70's delivery family (and its `static`
+  kubeconfig rung stores through 70's table); 72 (docker/egress/toolchain) is the ports/substrate
+  piece (Steps 12-16's seams, §19's image pipeline adjacency) and may run in parallel with 71. 73
+  (config/data seeding) seeds the surfaces 70-72 build, so it follows them.
+- **Phase 7** can start 77-78 during phase 6 (backend and contracts are frozen by then). 86
+  (workflow canvas editor) depends on 55-56 (the engine and HITL gate it visualizes) and 84
+  (Settings, which it ships alongside); it does not block 87 (ui finalize) beyond ordering.
 - Go/no-go after Step 21 (~1 month).
 
 ## Verification
