@@ -1,0 +1,9 @@
+# Keeps the SHA-pinned actions in .github/workflows/*.yml current.
+# Repo Actions policy requires full-SHA pins (sha_pinning_required); Dependabot
+# updates the pin and its trailing version comment together.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
