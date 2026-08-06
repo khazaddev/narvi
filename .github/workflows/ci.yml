@@ -9,7 +9,10 @@ jobs:
   branch-name:
     # Enforces the <type>/<short-kebab-description> branch naming convention
     # documented in CLAUDE.md — only meaningful on pull_request events, since
-    # github.head_ref is empty on push.
+    # github.head_ref is empty on push. Dependabot branches are exempt: their
+    # dependabot/<ecosystem>/<dependency>-<version> scheme is fixed by the bot
+    # (only the separator is configurable), and the convention targets branches
+    # a human or agent names.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -17,6 +20,10 @@ jobs:
         env:
           BRANCH: ${{ github.head_ref }}
         run: |
+          if [[ "$BRANCH" == dependabot/* ]]; then
+            echo "Branch '$BRANCH' is a Dependabot branch — exempt from the naming convention"
+            exit 0
+          fi
           if ! [[ "$BRANCH" =~ ^(feat|fix|docs|chore|refactor|test|perf|ci|build)/[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
             echo "::error::Branch name '$BRANCH' doesn't follow <type>/<short-kebab-description> (see CLAUDE.md). Allowed types: feat, fix, docs, chore, refactor, test, perf, ci, build."
             exit 1
