@@ -26,7 +26,7 @@ Every commit message and PR title follows [Conventional Commits](https://www.con
 - **Scope** — the primary package or directory touched (`platform`, `postgres`, `contracts`, `sandbox`, `turn`, …), matching §1's repo layout naming; omit it if the change is genuinely repo-wide.
 - **Breaking changes** — `!` right after the type/scope (e.g. `feat(contracts)!: …`) or a `BREAKING CHANGE:` footer. Reserve this for changes to an already-merged `/contracts` schema or any other interface other code already depends on — most Steps land behind feature flags before anything consumes them, so this should be rare early on.
 - **Reference the plan's Step number in the body or a footer only** (e.g. `Refs: Step 06`) — never in the type, scope, or description. A Step's number is the plan's own row number, not the GitHub PR number the work becomes (see the note in `docs/IMPLEMENTATION_PLAN.md`'s intro) — writing "Step 06" or "PR-06" in a title invites exactly that confusion.
-- **Branch names**: `<type>/<short-kebab-description>` — same type vocabulary as commits, no Step number (e.g. `feat/contracts-schemas-codegen`, `docs/sentinel-autofix`, `fix/config-log-level-default`). CI-enforced: the `branch-name` job fails a PR whose source branch doesn't match this pattern.
+- **Branch names**: `<type>/<short-kebab-description>` — same type vocabulary as commits, no Step number (e.g. `feat/contracts-schemas-codegen`, `docs/sentinel-autofix`, `fix/config-log-level-default`). CI-enforced: the `branch-name` job fails a PR whose source branch doesn't match this pattern (Dependabot's fixed `dependabot/...` branches are exempt).
 
 ## Sources of truth
 
