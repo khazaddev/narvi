@@ -192,7 +192,7 @@ type AgentRuntime interface {
 
 ### 4.3 Others
 
-`SourceControl` (GitHub + GitLab: createPR, credential minting, push specs), `Notifier` (Slack/Linear/GitHub comment delivery — consumed via outbox only), `IntentClassifier`, `LLM`, `BlobStore`, `SessionStore`/`TurnStore`/`SandboxStore` (sqlc-backed), `Outbox`, `TimerScheduler`, `Clock` (injectable everywhere — no `time.Now()` in domain).
+`SourceControl` (GitHub + GitLab: createPR, credential minting, push specs), `Notifier` (Slack/Linear/GitHub comment delivery — consumed via outbox only), `IntentClassifier`, `LLM`, `BlobStore` (full interface — §28.1), `SessionStore`/`TurnStore`/`SandboxStore` (sqlc-backed), `Outbox`, `TimerScheduler`, `Clock` (injectable everywhere — no `time.Now()` in domain).
 
 ## 5. Cross-cutting invariants
 
@@ -288,7 +288,7 @@ The adapter already has a *partial* answer for the auto-compaction case: an `Ove
 3. **Unified intent classifier** (detailed design — see §18): review-vs-request and plan-vs-build across all ingress surfaces; shadow mode (log-only) → active, permanently available, never a one-time launch gate; never-throw contract with an enumerated fallback-reason taxonomy; confidence rubric anchored on textual directness, not model self-reported certainty; DB-backed editable prompt templates with assembled-prompt preview; per-session routing decision records (§18.4).
 4. **Automations**: GitHub/Linear/webhook/cron triggers with condition builder; sandbox settings honored on automation sessions; creator/status filters; `last_run` + `artifact_summary` populated; per-automation env vars/secrets.
 5. **Enterprise sandbox glue** (full design in §27): cloud credentials via OIDC (provider-agnostic), kubeconfig injection for the target cluster, Docker-in-sandbox, egress proxy, repo/environment/global secrets, OpenCode config storage + injection, toolchain in images (Playwright+Chromium, ripgrep, typescript-language-server).
-6. **Files**: uploads to object storage (S3-compatible) + `download_file` tool in sandbox; failed-upload UX signal.
+6. **Files** (detailed design — see §28): uploads to object storage (S3-compatible) + `download_file` tool in sandbox; failed-upload UX signal.
 7. **Recovery UX**: relaunch-and-resume (conversation id replay), resume-in-place on live sandbox, Slack/Linear retry buttons, warm-on-type (composer keystrokes pre-warm a sandbox; must not create orphan sessions).
 8. **Models**: Anthropic + OpenAI/Codex (ChatGPT OAuth plugin) + Gemini (via OpenCode's own already-present `google`/`google-vertex` providers, no new `AgentRuntime` adapter — §25.2) + reasoning-effort plumbing (per-session and per-message overrides).
 9. **RWX previews**: PR preview links dispatched at latest PR commit (detailed design — adapter §4.1.1, preview-link mechanism §4.1.2).
@@ -1671,3 +1671,311 @@ family and the `static` rung stores through 70's table; Step 72 (§27.5 + §27.6
 run in parallel with 71. UI: no new screens — the Settings view (§12.2 item 5, Step 84) gains the
 secrets table it already mocks plus cloud/cluster bindings, per-Environment Docker/egress
 settings, and the OpenCode config editor.
+
+## 28. Uploads, blob storage & the in-sandbox `download_file` tool (detailed design)
+
+§8.6 states the feature as an exit criterion — "uploads to object storage (S3-compatible) +
+`download_file` tool in sandbox; failed-upload UX signal" — and `BlobStore` appears only in §4.3's
+port list, with no signature and no design anywhere else in this plan; §12.2 item 1's artifacts
+panel and §6.3's `uploads` route name the *surfaces*, not the mechanism. This section fixes the
+port, the transport decision, the key/limit/credential model, and the tool's actual wire protocol,
+so Step 58 doesn't have to invent them under time pressure (§18's own precedent for closing exactly
+this kind of gap).
+
+Two flows, one mechanism. Files move in both directions: a user attaches a file to a prompt (a
+screenshot, a spec, a CSV) for the agent to consume, and the agent produces media the session rail
+must surface — §12.2 item 1's rail already plans "artifacts: PR / preview / uploads", and the
+`artifacts` table has carried an `upload` enum value since Step 04
+(`migrations/000012_artifacts.up.sql`) with, per that store's own doc comment, no producer yet.
+Both directions are the same design: the control plane mints a short-lived presigned URL against
+S3-compatible storage, the bytes move directly between the client (browser or sandbox) and storage,
+and the CP verifies the result after the fact and records it in Postgres.
+
+### 28.1 The `BlobStore` port (complete — no out-of-interface operations)
+
+```go
+type BlobStore interface {
+    PresignPut(ctx, PresignPutSpec) (PresignedURL, error) // Spec: Key, ContentType, ContentLength, TTL
+    PresignGet(ctx, PresignGetSpec) (PresignedURL, error) // Spec: Key, TTL, ResponseFilename
+    Stat(ctx, BlobKey) (BlobInfo, error)                  // BlobInfo: SizeBytes, ETag — confirm-time verification
+    Delete(ctx, BlobKey) error                            // idempotent: deleting an absent key succeeds
+}
+```
+
+Errors are typed `BlobStoreError{Transient bool}` — classification by storage error code / HTTP
+status class, **never** by string-matching messages — the same discipline §4.1 requires of
+`ProviderError`, mirroring `ports/providererror.go`'s shape exactly ({Transient, Code, Op, Err},
+one `Op` constant per method, and an `IsTransient` helper defaulting unclassified errors to
+transient). `Stat` on an absent key returns a typed not-found sentinel (`ErrBlobNotFound`),
+distinct from any transient failure — confirm-time verification (§28.4) branches on it, never on a
+string.
+
+- `BlobKey` is opaque to the adapter: only the CP's own key builder (§28.3) produces one; the
+  adapter never parses or constructs keys.
+- TTLs are passed in by the caller from `platform/timeouts.go` (§5.4) — the adapter holds no
+  timeout literal of its own (§11's grep-test applies).
+- Under SigV4, `PresignPut`/`PresignGet` are local signing operations — pure HMAC over the request
+  descriptor, no network round-trip — so a presign cannot meaningfully fail transiently;
+  `Stat`/`Delete` are real network calls and carry the full transient/permanent classification.
+- `PresignedURL{URL, ExpiresAt, Headers}`: `Headers` are the exact headers the uploader must send
+  (e.g. `Content-Type`) for the signature to verify; mint responses forward them verbatim.
+- Deliberately absent, with reasons: no `Put`/`Get` streaming methods — nothing in this design
+  requires the CP to touch bytes (§28.2), confirm-time verification is metadata-only (`Stat`), and
+  §4.1's "complete" discipline cuts both ways (no speculative surface for a consumer that doesn't
+  exist; a future feature that genuinely needs CP-side reads adds the method with that feature). No
+  multipart-upload surface — the per-file cap (§28.4) sits far below every supported backend's
+  single-PUT limit. No `List` — every object's key embeds the artifact row id that minted it
+  (§28.3), so there is no orphan-blob class a bucket scan would find that the row-driven sweep
+  (§28.4) doesn't already cover.
+
+**Not sqlc-backed, deliberately.** §4.3 groups `SessionStore`/`TurnStore`/`SandboxStore` as
+"(sqlc-backed)"; `BlobStore` is not in that trio and stays out: it is an outbound adapter over the
+S3 HTTP API (`internal/adapters/outbound/objstore` — the package stub already names AWS S3, MinIO,
+R2, GCS), exactly as `githubapi` is an adapter over GitHub's. The split preserves §5.1: object
+storage holds **bytes only**, addressed by keys Postgres owns; every fact *about* an upload
+(status, size, who, when, why it failed) lives on the `artifacts` row, sqlc-backed like every other
+store. Object storage is never a second authority over state — a blob with no row is an orphan to
+reap, never a record.
+
+### 28.2 Transport: presigned URLs — bytes never transit the control plane
+
+The decision the rest of this section hangs on: **the CP mints presigned URLs and the bytes move
+directly between client and storage, in both directions. The CP never proxies a payload.**
+
+The alternative — client POSTs bytes to the CP, the CP streams them to storage — was rejected on
+the codebase's own already-demonstrated posture:
+- §6.1's `artifact` event is the existing precedent for how media reaches clients: **by URL
+  reference, never by value**. No binary payload rides the sandbox WS (its ack buffer is sized for
+  control events — 1000 entries with eviction), and nothing in §6.2/§6.3 contemplates the CP as a
+  byte funnel.
+- Proxying couples the CP's connection/memory footprint and its timeout hierarchy (§5.4) to upload
+  sizes and client link speeds — a max-size upload on a slow link would hold a CP connection open
+  for minutes, competing with the WS/actor hot paths the CP exists to serve, and would need its own
+  size-scaled timeout tier for no compensating benefit.
+- A presigned URL is itself the credential shape §5.2 already prefers (§28.7): scoped to one object
+  and one method, expiring in minutes — minting one is strictly cheaper and strictly safer than
+  terminating the transfer.
+
+What the decision costs, named honestly: (a) the storage endpoint must be **directly reachable from
+browsers and from sandboxes** — a deployment requirement, carried by config (§28.7's
+`PublicEndpoint`), with sandbox-side transfers subject to the same egress-proxy path the sandbox's
+other outbound traffic uses (§8 item 5) — and once §27.6's per-Environment egress allowlist ships,
+the object-storage host joins its server-appended floor (CP host + git hosts + storage host),
+or uploads break exactly and only on allowlisted Environments; (b) the bucket needs a **CORS policy** allowing PUT/GET
+from the web origin — a deployment-doc item alongside the bucket itself; (c) the CP no longer
+observes the transfer — which is exactly why the lifecycle is two-phase (§28.4): the CP verifies
+after the fact instead of watching bytes go by.
+
+### 28.3 One bucket, per-session keys, isolation enforced at mint time
+
+- **One configured bucket per deployment** (`platform.Config`, §28.7). Narvi deployments are
+  single-tenant by construction — the domain has roles and identities but no org/team entity
+  (§12.2 item 1's own note) — so the tenancy boundary IS the deployment: separate deployments,
+  separate buckets and credentials, enforced by each deployment's own IAM policy scoping its
+  credential to its one bucket.
+- **Key convention**: `sessions/{session_id}/uploads/{upload_id}`, where `upload_id` is the
+  artifact row's own UUID. The key carries **zero client-controlled bytes** — no filename, no user
+  text (the filename lives on the row and is applied at download time via
+  `response-content-disposition`, §28.5) — so path traversal, encoding surprises, and collision
+  games are unrepresentable rather than validated away.
+- **Within a deployment, session-level isolation is enforced at mint time by the CP, not by IAM.**
+  Every presigned URL is minted only after the CP has already authorized the caller against that
+  specific session (browser: cookie auth + `Authorize`; sandbox: bearer + gen handshake, §28.5),
+  and only ever for a key under that session's own prefix. S3-compatible stores diverge too much in
+  policy granularity (AWS IAM conditions vs. MinIO policies vs. R2 tokens) for per-prefix IAM to be
+  the load-bearing mechanism across all of them: the deployment credential's bucket scope is the
+  IAM layer's job; the CP — sole holder of that credential and sole minter — is the session
+  boundary. The only storage credential a client ever holds is a single-object, single-method,
+  minutes-lived URL.
+
+### 28.4 Upload lifecycle: mint → transfer → confirm, verified server-side
+
+The `artifacts` table gains upload lifecycle columns (one migration; existing `pr`/`preview` rows
+take the `ready` default — they were only ever recorded after the fact, so `ready` is what they
+always were):
+
+```
+artifact_status ENUM('pending','ready','failed');  status NOT NULL DEFAULT 'ready'
+failure_reason  ENUM('size_exceeded','quota_exceeded','verification_failed','abandoned') NULL
+blob_key TEXT NULL · size_bytes BIGINT NULL · content_type TEXT NULL · filename TEXT NULL
+created_by UUID NULL REFERENCES users(id)  -- NULL = agent-produced (§17.5's no-human-actor allowance)
+```
+
+**Mint** (`POST` — the two auth variants in §28.5): the request declares `{filename, contentType,
+sizeBytes}`. The CP checks the declared size against `MaxUploadBytes` (propose 100 MiB,
+per-deployment config) and the session's running total against `MaxSessionUploadBytes` (propose
+1 GiB — `SUM(size_bytes)` over the session's `pending`+`ready` uploads, derived from rows that
+already exist, never a dedicated counter column, §25.5's own discipline), inserts the `pending`
+artifact row (its `url` already the stable content path, §28.5), and returns `{uploadId, putUrl,
+headers, expiresAt}`. An over-limit request is refused at mint: no row, no URL, a structured 4xx
+naming the limit.
+
+**Transfer**: the client PUTs the bytes to `putUrl` with the returned headers, within
+`UploadPresignPutTTL` (propose 15 min — generous for the size cap on a slow link, the same "chosen
+generously when the concrete cost is unknown" convention `HookTimeout` documents).
+
+**Confirm** (`POST …/uploads/{uploadID}/complete`): the CP `Stat`s the object and verifies the
+object exists, its actual size equals the declared size (the quota math above is only honest if the
+declaration was), and both limits hold **re-checked now** — two mints racing past the session cap
+is closed here, at the authoritative moment; mint-time checks are a fast-fail courtesy,
+confirm-time checks are the enforcement of record, the same never-trust-the-earlier-render posture
+as §16.2's re-validation-at-click. Passing: `pending → ready`, committed in the same transaction as
+an appended session event (§28.6), broadcast only after commit per the `EventBroadcaster`
+contract. Failing: `pending → failed` with the typed `failure_reason`, the same event append, **and
+a `blob_delete` outbox entry** — an external delete is an outbound side effect (§5.1), and
+fire-and-forget would leak the object forever on a crash between the status write and the delete;
+the outbox's retry/dead-letter is exactly the guarantee a cleanup needs. Confirm is idempotent via
+a guarded transition (`UPDATE … WHERE status = 'pending'`, the §25.6 idiom): a retried confirm of
+an already-resolved row returns the recorded outcome, never re-verifies, never double-appends.
+Presigned PUTs pin `Content-Length`/`Content-Type` in the signed headers where the backend honors
+them, but the design never *relies* on that honoring — backend divergence again — which is why
+`Stat`-at-confirm is the check of record.
+
+**Abandonment sweep**: a `pending` row older than `UploadPendingSweepAfter` (propose 24 h) is
+marked `failed(abandoned)` with a `blob_delete` outboxed (the object may half-exist), by the same
+`app/scheduler` recovery-sweep machinery §3.5 already runs, on its own named interval in
+`platform/timeouts.go` (propose 15 min). A browser that minted and walked away costs one row and
+one sweep pass, nothing more.
+
+**Retention is a named non-goal**: `ready` blobs live as long as their session rows do (sessions
+are archived, never hard-deleted, §3.1); a retention/GC policy for archived sessions' media is
+future work, recorded here the way §19.2 records image GC — named now so it gets scheduled
+deliberately instead of discovered as a storage bill.
+
+Ownership of these writes follows the existing split: artifact rows are not actor-owned state
+(§2's single-writer rule covers session/sandbox/turn rows; `pushpr.go` already records PR
+artifacts, and `coalesce.go`'s direct `github_pr_sessions` writes are the accepted precedent for
+non-actor-owned rows, §24.1), so the upload handlers write them directly in their own
+transactions. Whether the event append routes through a small actor command or the same
+direct-write transaction is Step 58's own implementation decision (the §24.3 style of deferral) —
+with the invariant fixed either way: row transition + event append commit atomically; broadcast
+only after commit.
+
+### 28.5 The `download_file` tool: a bearer-authenticated redirect, not a new wire type
+
+**No new WS message types, in either direction.** The sandbox WS contract (§6.1) is untouched: no
+new agent→CP event, no new CP→agent command. The established mechanism for "the agent needs
+something from the CP mid-turn" is a sandbox-bearer REST endpoint — `scm-credentials` (§5.2/Step
+21), `snapshot`, `review/verdict` (Step 47), `provider-credentials` (Step 53) — and in this
+codebase "tool" already *means* exactly that: a CP HTTP endpoint the rendered turn prompt instructs
+the agent to call, with the live URL/bearer/gen substituted into placeholder tokens by
+`sandbox-agent` immediately before the prompt reaches the engine
+(`cmd/sandbox-agent/reviewverdicttoolprompt.go`'s mechanism, reused — never a second substitution
+scheme; no engine plugin/tool registration, no `AgentRuntime` change, §25.6's own "no new wire
+command" posture). RPC-over-the-WS was rejected for the same reasons it wasn't used for verdicts:
+the WS has no request/response correlation (`snapshot_ready` needed `commandMessageId` retrofitted
+for even one-way correlation), and its buffer/ack machinery is sized for control events, not
+transfers.
+
+The endpoint — mounted like its siblings: outside `/api`, outside `auth.Middleware`, sandbox
+bearer + `X-Sandbox-Gen`, with `scm-credentials`' own dead-sandbox/gen handshake:
+
+```
+GET /sessions/{sessionID}/uploads/{uploadID}/content
+  → 302  Location: presigned GET (UploadPresignGetTTL, propose 5 min;
+         response-content-disposition: attachment; filename="<row.filename>")
+  → 404  uploadID unknown, not this session's, or not status='ready'
+  → 403  bad bearer / gen mismatch        → 410  dead sandbox
+```
+
+One redirect makes the whole tool a single command: `curl -fL -H "Authorization: Bearer <token>"
+-o <dest> <url>`. curl does not forward `Authorization` across a cross-host redirect by default, so
+the storage endpoint never sees the sandbox bearer — and the presigned URL never appears in the
+prompt, the transcript, or any persisted event; it exists only inside that one process's redirect
+follow. Forcing `attachment` disposition means user-supplied content is never rendered inline off
+the storage origin (an HTML upload must not become a page someone can be linked to — §5.2's
+untrusted-content posture applied to serving).
+
+**How the agent learns what to fetch**: the prompt-carrying REST DTOs gain optional
+`attachmentIds: []uuid`, validated at the turn-creation chokepoint (`createTurnLocked` — the same
+single shared core §23.2 already gates): every id must be a `status='ready'` upload artifact **of
+this session**, else a structured 4xx — a failed or foreign upload can never silently ride a
+prompt. The turn prompt then carries a deterministic, server-rendered attachment block (the
+`review.RenderTurnPrompt` pattern): per attachment — filename, size, content type, and the exact
+`download_file` command above with its placeholder tokens; `sandbox-agent` substitutes the live
+values. A prompt with no attachments renders no block, and substitution on it is a byte-for-byte
+no-op (`reviewverdicttoolprompt.go`'s own unconditional-substitution reasoning).
+
+**The agent-produced direction** uses the same mint/confirm endpoints in their sandbox-bearer
+variants (`POST /sessions/{sessionID}/uploads` → presigned PUT → `POST …/complete`, same 403/410
+handshake), surfaced to the agent as a compact, deterministic tool note in build-turn prompts (same
+server-side render + substitution; exact phrasing is Step 58's). The browser twins live inside the
+auth-gated `/api` group (`POST /api/sessions/{id}/uploads`, `…/complete`), gated by a new
+`Authorize` action mapped to the same §13.3 row as prompting (member+, own/joined sessions; viewers
+never upload — the viewer guard holds). Browser downloads reuse the content route inside `/api`
+(`GET /api/sessions/{id}/uploads/{uploadID}/content` → 302), gated by session visibility — a
+download is a read, so read-only viewers may. The artifact row's `url` column stores this stable
+`/api/…` content path, **never a presigned URL**: a presigned URL is an ephemeral credential, and
+this codebase persists no live credential anywhere (§11's "tokens are always hashed" posture,
+applied to a different credential shape) — every download mints a fresh one at click time.
+
+Whether the web composer sequences create-session → upload → first prompt, or restricts attachments
+to follow-up prompts, is a Phase 7 UI decision resolved against the mockups (§11); minting requires
+an existing session id, and that constraint is this section's only contribution to the question.
+
+### 28.6 The failed-upload UX signal
+
+§8.6's "failed-upload UX signal" is **persisted status, not a toast**: the artifact row's
+`status`/`failure_reason` (§28.4) is the durable fact, and the signal reaching live clients rides
+the same channel every other session fact already rides — an appended event, broadcast and
+replayable. The wire `artifact` event (§6.1) gains two additive, optional fields: `status:
+ready|failed` (absent = `ready`, so every existing shape stays valid — the same
+zero-producers-today additive reasoning `snapshot_ready.commandMessageId` used) and a nullable
+`failureReason`; `SubscribedPayload.artifacts` elements and the REST artifact DTO carry the same
+two fields, additively there too.
+
+Upload `artifact` events are **CP-synthesized only** (the §3.3 synthetic-`execution_complete`
+precedent; the schema documents the fields as never-populated-by-the-sandbox, §6.1's own
+`subTaskId`-note convention). The sandbox never emits `artifact` for uploads: the CP already owns
+the row before any bytes exist, and a sandbox-reported "I uploaded it" would be a second writer
+over a fact Postgres already owns (§5.1's second-copy principle) — and an agent self-report this
+system never trusts anyway (§21.2's discipline). The agent's confirm call is a *request to verify*:
+the CP's `Stat` is what flips the status, and the confirm response tells the agent honestly whether
+verification passed — so the model can retry once or tell the user — while the row and the event
+already carry the truth regardless of what the model then says.
+
+Rendering invents nothing: the session rail's artifacts panel (§12.2 item 1) shows a `failed`
+upload with a status chip + reason where a `ready` row would show its download link, and the
+timeline shows the same event the broadcast/replay stream already delivered. One signal, two
+already-planned surfaces.
+
+### 28.7 Credential scoping
+
+The same shape §5.2 already fixed for git credentials, applied to storage:
+- **The root storage credential exists in exactly one place**: `platform.Config` (typed,
+  boot-validated, §1) — endpoint, region, bucket, access key/secret (or ambient IAM where the
+  deployment provides one), optional `PublicEndpoint`, path-style toggle for MinIO-style backends.
+  It never appears in `SESSION_CONFIG`, sandbox env, any prompt, or any wire shape — the
+  sandbox-side env-hygiene concern §19.8 tracks has nothing to exclude here because nothing is ever
+  injected.
+- **What a client holds is never that credential** — only a presigned URL: one object, one method,
+  minutes-lived (`UploadPresignPutTTL`/`UploadPresignGetTTL`, resident in `platform/timeouts.go`
+  like every other interval, §5.4). This is the git-credential-helper pattern (§5.2: never
+  long-lived in sandbox, short expiry, tightly scoped) with the mint moved server-side and the
+  scope narrowed from host to single object.
+- **Presigning binds the host**: URLs are signed against `PublicEndpoint` when set — a signature
+  minted against an internal hostname breaks the moment a browser or sandbox resolves the public
+  one (the classic S3-behind-a-proxy failure, named here so the deployment docs name the config).
+- **Dev/CI story**: `docker-compose.dev.yml` gains a MinIO service for `make dev`; the adapter's
+  integration tests run against a MinIO testcontainer (the `postgres:17-alpine` testcontainers
+  precedent), asserting presign/PUT/`Stat`/`Delete` round-trips and the not-found/oversize
+  classifications — §9.2's real-backend contract-test discipline, applied to storage.
+- **Feature-flagged by configuration**: with no object-storage config present, the mint endpoints
+  return a structured "uploads not configured" error and nothing else degrades — the standard
+  incomplete-path flag posture (§10/CLAUDE.md), so Step 58 can land ahead of any deployment
+  actually provisioning a bucket.
+
+### 28.8 Phasing
+
+Step 58, Phase 5, ∥ — independent of every other Phase 5 Step: nothing else consumes uploads, and
+it consumes nothing beyond Step 04's `artifacts` table, Step 21's sandbox-bearer endpoint pattern,
+and Step 47's prompt-placeholder mechanism. One PR: the `BlobStore` port + `objstore` adapter (+
+MinIO integration tests); the artifacts migration; the mint/confirm/content endpoints in both auth
+variants; `attachmentIds` + the rendered attachment block + placeholder substitution; the additive
+`artifact`-event/DTO fields; the abandonment sweep; the `blob_delete` outbox kind; the config +
+timeouts entries. Exit criteria: contract round-trips green including the additive fields; one
+end-to-end integration test per direction (browser-shaped mint→PUT→confirm→download;
+sandbox-shaped mint→PUT→confirm→`artifact` event observed); a failed-verification case proving
+`failed(reason)` + the outboxed delete + the rail-visible event; and the oversized-mint refusal.
+UI consumption is Phase 7 (Step 81's artifacts rail — status chip + reason on upload rows; no new
+view).
