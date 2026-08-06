@@ -182,9 +182,9 @@ func (e *DispatchError) Error() string {
 // "decode best-effort for a human message, but the response body is NEVER
 // embedded verbatim" discipline -- a dispatch request body carries the
 // pushed sha/PR number/session id (ports.Notification's own payload,
-// PreviewDispatchPayload below), not a bearer secret, but the same
-// never-echo-raw-bytes posture costs nothing to keep uniform across every
-// outbound adapter in this codebase.
+// PreviewDispatchPayload, previewnotifier.go), not a bearer secret, but
+// the same never-echo-raw-bytes posture costs nothing to keep uniform
+// across every outbound adapter in this codebase.
 func classifyDispatchErrorResponse(status int, body []byte) *DispatchError {
 	message := "no error body"
 	var parsed dispatchErrorBody
