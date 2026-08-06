@@ -3,8 +3,8 @@
 ## Context
 
 Narvi's technical specification (autonomous coding agents in sandboxes) is in
-[docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§19), and the nine-view UI design spec is in
-[docs/design/mockups.html](design/mockups.html). This plan breaks the 8 phases (0–7) into **~85 ordered Steps**
+[docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§28), and the nine-view UI design spec is in
+[docs/design/mockups.html](design/mockups.html). This plan breaks the 8 phases (0–7) into **~87 ordered Steps**
 (including Phase 4's own 5 additive Steps, 40-44), each individually shippable and CI-green,
 executable by a developer assisted by coding agents (Sonnet 5).
 Every Step references the technical-plan section that specifies it. Each Step becomes exactly one PR when
