@@ -7,9 +7,12 @@ package ports
 //
 // Different providers populate this differently: Modal's ProviderID
 // (internal/adapters/outbound/modal) holds Modal's own sandbox object id;
-// a future provider (RWX, Step 48) implementing this same interface would
-// populate ProviderID with whatever ITS API calls an instance. ports
-// declares no assumption about that string's internal format or
+// RWX (internal/adapters/outbound/rwx, Step 57), the second provider
+// implementing this same interface, populates ProviderID with the
+// deterministic per-(session, gen) identity string its own adapter
+// derives (RWX itself keys a sandbox on branch + config-file path, not a
+// separately-assigned opaque id — see that package's own doc comment).
+// ports declares no assumption about that string's internal format or
 // structure, and no code outside a specific provider adapter may parse
 // it.
 type SandboxRef struct {

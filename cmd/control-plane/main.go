@@ -40,6 +40,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/llm"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/rwx"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/automation"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
@@ -1022,7 +1023,7 @@ func serve() error {
 
 	// outboxStore is constructed earlier, alongside linearAgentSessionStore
 	// -- see that construction site's own doc comment for why.
-	outboxBuilder, err := outboxworker.NewBuilder(outboxStore, pool, map[ports.NotificationKind]ports.Notifier{
+	outboxNotifiers := map[ports.NotificationKind]ports.Notifier{
 		ports.NotificationKindSlack:             slackNotifier,
 		ports.NotificationKindGitHub:            githubNotifier,
 		ports.NotificationKindLinear:            linearNotifier,
@@ -1047,7 +1048,32 @@ func serve() error {
 		ports.NotificationKindSlackWorkflowDecision:  planSlackNotifier,
 		ports.NotificationKindLinearWorkflowDecision: linearNotifier,
 		ports.NotificationKindGitHubWorkflowDecision: githubNotifier,
-	}, cfg.Timeouts)
+	}
+
+	// rwxPreviewNotifier/githubPreviewLinkNotifier (Step 57, "RWX provider
+	// + previews", §4.1.1/§4.1.2) are registered ONLY when cfg.RWXAccessToken
+	// is configured -- see that env var's own doc comment (platform/
+	// config.go) for why this platform-wide credential is optional, unlike
+	// Modal's/GitHub's own mandatory secrets: RWX previews are an
+	// off-by-default, per-repo opt-in feature layered on top of it, and a
+	// deployment that never turns previews on for any repo should not be
+	// forced to configure a real RWX account just to boot. When absent, any
+	// row enqueued for either of these two kinds (which requires a repo
+	// admin to have separately opted in -- an operator misconfiguration,
+	// since the two are meant to be configured together) dead-letters with
+	// a clear, logged "no notifier registered for kind" error rather than
+	// silently vanishing. githubPreviewLinkNotifier reuses the SAME
+	// sourceControl *githubapi.Adapter instance and cfg.GitHubBotToken every
+	// other GitHub-flavored notifier above already uses -- a preview link
+	// is a system-generated fact about a commit, never attributed to any
+	// individual PR author or reviewer.
+	if cfg.RWXAccessToken != "" {
+		rwxDispatchClient := rwx.NewDispatchClient(nil, "", cfg.RWXAccessToken)
+		outboxNotifiers[ports.NotificationKindRWXPreviewDispatch] = rwx.NewPreviewNotifier(rwxDispatchClient)
+		outboxNotifiers[ports.NotificationKindGitHubPreviewLink] = githubapi.NewPreviewLinkNotifier(sourceControl, cfg.GitHubBotToken)
+	}
+
+	outboxBuilder, err := outboxworker.NewBuilder(outboxStore, pool, outboxNotifiers, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)
 	}

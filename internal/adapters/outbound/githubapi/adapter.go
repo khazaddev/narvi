@@ -835,6 +835,54 @@ func (a *Adapter) PostIssueComment(ctx context.Context, owner, repo string, prNu
 	return nil
 }
 
+// createCommitStatusRequest is the body POSTed to
+// /repos/{owner}/{repo}/statuses/{sha} (real GitHub REST API shape --
+// https://docs.github.com/rest/commits/statuses#create-a-commit-status).
+type createCommitStatusRequest struct {
+	State       string `json:"state"`
+	TargetURL   string `json:"target_url,omitempty"`
+	Description string `json:"description,omitempty"`
+	Context     string `json:"context,omitempty"`
+}
+
+// CreateCommitStatus posts a commit status on owner/repo at sha (Step 57,
+// "RWX provider + previews", §4.1.2 point 3): a real POST
+// https://api.github.com/repos/{owner}/{repo}/statuses/{sha} call,
+// authenticated with token as a Bearer token -- like PostIssueComment
+// above, this method is agnostic to whose token it's handed; production
+// wiring (PreviewLinkNotifier, previewlinknotifier.go) authenticates with
+// the SAME static bot credential (platform.Config.GitHubBotToken) every
+// other system-initiated write in this package already uses, since a
+// preview link is a system-generated fact about a commit, never
+// attributed to any individual PR author or reviewer.
+//
+// Redelivery of the SAME (context, sha) pair converges rather than
+// duplicating -- GitHub's own documented commit-status behavior (unlike
+// PostIssueComment, which posts a new, additional comment on every call)
+// -- exactly the property §4.1.2 point 3 calls out as "strictly better
+// here than PostIssueComment... and zero timeline noise per push".
+func (a *Adapter) CreateCommitStatus(ctx context.Context, owner, repo, sha, state, targetURL, description, statusContext, token string) error {
+	reqBody, err := json.Marshal(createCommitStatusRequest{
+		State:       state,
+		TargetURL:   targetURL,
+		Description: description,
+		Context:     statusContext,
+	})
+	if err != nil {
+		return fmt.Errorf("githubapi: encode create-commit-status request: %w", err)
+	}
+
+	// Owner/Repo/sha escaped via url.PathEscape (single opaque segments,
+	// mirroring PostIssueComment's own identical discipline) -- sha is a
+	// commit SHA (or, per GitHub's own docs, technically any ref name);
+	// still escaped defensively even though a real SHA never needs it.
+	path := fmt.Sprintf("%s/repos/%s/%s/statuses/%s", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(sha))
+	if _, err := a.doPost(ctx, path, token, reqBody); err != nil {
+		return fmt.Errorf("githubapi: create commit status: %w", err)
+	}
+	return nil
+}
+
 // ResolveContractsFingerprint implements ports.SourceControl (Step 27,
 // "mocking + contract drift", §14.3): fingerprints spec.Path's directory
 // listing at spec.Ref via a real GET

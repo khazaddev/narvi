@@ -385,10 +385,33 @@ func executionCompleteRaw(t *testing.T, sessionID string, gen int, outcome sandb
 }
 
 // pushCompleteRaw marshals a real, schema-valid sandboxws.PushComplete
-// wire payload naming exactly one pushed repo.
+// wire payload naming exactly one pushed repo, minting a fresh MessageId
+// each call. Most callers never need to control (or later assert against)
+// the MessageId itself, so this is the common case -- see
+// pushCompleteRawWithMessageID below for the one that does.
 func pushCompleteRaw(t *testing.T, sessionID string, gen int, repoName, branch, sha string) json.RawMessage {
 	t.Helper()
-	messageID := uuid.NewString()
+	return pushCompleteRawWithMessageID(t, uuid.NewString(), sessionID, gen, repoName, branch, sha)
+}
+
+// pushCompleteRawWithMessageID is pushCompleteRaw's own explicit-MessageId
+// variant. Needed wherever a test must control the wire MessageId itself
+// -- e.g. proving a wire-level REDELIVERY (the identical MessageId, sent
+// twice) is handled differently from two genuinely distinct pushes
+// (different MessageIds) -- which pushCompleteRaw's own always-mint-a-
+// fresh-uuid behavior cannot express.
+//
+// IMPORTANT: this only controls the value embedded in the marshaled wire
+// bytes (Raw). SandboxEvent.MessageID (command.go) is a SEPARATE field --
+// in production, wshub's own read loop peeks the wire frame to populate it
+// before ever constructing a SandboxEvent, but this test harness has no
+// equivalent peek step. A caller that cares about appendRawEvent's own
+// (session_id, messageID) dedup behavior (actor.go) -- as any test
+// exercising FIX-1's redelivery guard or FIX-4(b)'s two-distinct-pushes
+// guard must -- needs to set SandboxEvent.MessageID to this SAME value
+// itself; sendSandboxEventForTest does not do it automatically.
+func pushCompleteRawWithMessageID(t *testing.T, messageID, sessionID string, gen int, repoName, branch, sha string) json.RawMessage {
+	t.Helper()
 	evt := sandboxws.PushComplete{
 		Type:      "push_complete",
 		MessageId: messageID,

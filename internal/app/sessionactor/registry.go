@@ -128,6 +128,17 @@ type storeBundle struct {
 	// reaches a real terminal state -- see that package's own doc.go for
 	// why all three call sites matter, not just the first.
 	workflow *postgres.WorkflowStore
+
+	// repoSettings is Step 57's ("RWX provider + previews", §4.1.2 point
+	// 1) own addition -- pushpr.go's own enqueuePreviewBestEffort (called
+	// from createPRBestEffort, the ONE enqueue point) reads it, per
+	// pushed repo, to decide whether that repo's RWX preview setting
+	// ({dispatchKey, endpointTemplate, orgSlug}) is present -- a plain,
+	// pool-scoped read (never WithTx: a config lookup gating a LATER
+	// fresh transact, not itself part of any state-writing transaction),
+	// mirroring how createPRBestEffort already reads sessionRow via a
+	// plain a.stores.session.Get before ever opening one.
+	repoSettings *postgres.RepoSettingsStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
@@ -153,6 +164,7 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		reviewFinding:       postgres.NewReviewFindingStore(pool),
 		handoffSentinelRuns: postgres.NewHandoffSentinelStore(pool),
 		workflow:            postgres.NewWorkflowStore(pool),
+		repoSettings:        postgres.NewRepoSettingsStore(pool),
 	}
 }
 

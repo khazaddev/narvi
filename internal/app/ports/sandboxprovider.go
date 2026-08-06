@@ -9,7 +9,7 @@ import "context"
 //
 // Modal (internal/adapters/outbound/modal) implements this interface
 // starting this Step; RWX (internal/adapters/outbound/rwx) implements the
-// SAME interface starting Step 48. Nothing provider-specific may leak
+// SAME interface starting Step 57. Nothing provider-specific may leak
 // into this package or this signature — see doc.go and CLAUDE.md's "don't
 // couple a port to a single adapter."
 type SandboxProvider interface {

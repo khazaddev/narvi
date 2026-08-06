@@ -487,6 +487,14 @@ func (a *Actor) createPRBestEffort(ctx context.Context, raw json.RawMessage) {
 			a.logger.Error("sessionactor: record PR artifact failed", "repo", pushed.Name, "error", err)
 		}
 
+		// Step 57 ("RWX provider + previews", §4.1.2 point 1): best-effort,
+		// never blocks -- a repo with no (or only partially) configured RWX
+		// preview setting returns immediately with no further work (see
+		// that function's own doc comment, previewpr.go). This is the ONE
+		// enqueue point for both new outbox kinds (rwx_preview_dispatch,
+		// github_preview_link), per that section's own design.
+		a.enqueuePreviewBestEffort(ctx, owner, repoName, pushed, ref)
+
 		// Step 49 ("handoff-readiness sentinel", §14.4): best-effort, never
 		// blocks -- an ordinary (non-scoped) session's PR returns
 		// immediately with no further work (handoffsentinel.go's own top

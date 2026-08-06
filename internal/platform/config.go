@@ -444,6 +444,25 @@ const (
 	modalEgressProxyURLEnvVarName = "NARVI_MODAL_EGRESS_PROXY_URL"
 )
 
+// rwxAccessTokenEnvVarName configures the real internal/adapters/outbound/
+// rwx package's Dispatches API notifier construction in cmd/control-plane/
+// main.go (Step 57, §4.1.1/§4.1.2). Unlike modalAuthTokenEnvVarName above,
+// this is OPTIONAL in every stage: RWX preview links are an off-by-default,
+// per-repo opt-in feature layered ON TOP of this platform-wide credential
+// (§4.1.2 point 1: "absent = feature off"; §24.5's posture) — a deployment
+// that never turns RWX previews on for any repo has no reason to be forced
+// to configure a real RWX account just to boot, unlike Modal (the actual
+// sandbox-lifecycle provider every session depends on). When empty,
+// cmd/control-plane/main.go does not construct the rwx Dispatches notifier
+// (or its githubapi commit-status companion) at all — the two new outbox
+// kinds (rwx_preview_dispatch/github_preview_link) simply have no notifier
+// registered in that configuration, so any row enqueued for them (which
+// requires a repo admin to have separately opted in — an operator
+// misconfiguration, since the two are meant to be configured together)
+// dead-letters with a clear, logged "no notifier registered for kind"
+// error rather than silently vanishing.
+const rwxAccessTokenEnvVarName = "NARVI_RWX_ACCESS_TOKEN"
+
 // openCodeRuntimeVersionEnvVarName is the env var Load reads for Step 26's
 // ("image builds", §8.5-note/§10-P2) own RuntimeVersion fingerprint input
 // (domain/imagebuild.Fingerprint's third argument) -- the pinned OpenCode
@@ -774,6 +793,12 @@ type Config struct {
 	// (the default) means a direct connection.
 	ModalEgressProxyURL string
 
+	// RWXAccessToken optionally configures the real internal/adapters/
+	// outbound/rwx package's Dispatches API notifier (Step 57, §4.1.1/
+	// §4.1.2), read from NARVI_RWX_ACCESS_TOKEN. See that env var's own
+	// doc comment above for why this is optional, unlike ModalAuthToken.
+	RWXAccessToken string
+
 	// OpenCodeRuntimeVersion is Step 26's ("image builds") own
 	// RuntimeVersion fingerprint input, read from
 	// NARVI_OPENCODE_RUNTIME_VERSION. Optional: defaults to
@@ -1009,6 +1034,10 @@ func Load() (*Config, error) {
 
 	modalEgressProxyURL := os.Getenv(modalEgressProxyURLEnvVarName)
 
+	// rwxAccessToken is optional -- see its own env-var-name doc comment
+	// above. No MissingRequiredEnvError is ever appended for it.
+	rwxAccessToken := os.Getenv(rwxAccessTokenEnvVarName)
+
 	openCodeRuntimeVersion := os.Getenv(openCodeRuntimeVersionEnvVarName)
 	if openCodeRuntimeVersion == "" {
 		openCodeRuntimeVersion = defaultOpenCodeRuntimeVersion
@@ -1117,6 +1146,7 @@ func Load() (*Config, error) {
 		ModalBaseURL:               modalBaseURL,
 		ModalAuthToken:             modalAuthToken,
 		ModalEgressProxyURL:        modalEgressProxyURL,
+		RWXAccessToken:             rwxAccessToken,
 		OpenCodeRuntimeVersion:     openCodeRuntimeVersion,
 
 		LinearWebhookSecret:     linearWebhookSecret,
