@@ -42,7 +42,7 @@ func TestBlobDeleteNotifier_Deliver_Success(t *testing.T) {
 }
 
 func TestBlobDeleteNotifier_Deliver_PropagatesStoreError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -67,7 +67,7 @@ func TestBlobDeleteNotifier_Deliver_PropagatesStoreError(t *testing.T) {
 // Deliver returns nil rather than an error that would otherwise keep
 // retrying forever.
 func TestBlobDeleteNotifier_Deliver_IdempotentOnAlreadyDeleted(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
@@ -86,7 +86,7 @@ func TestBlobDeleteNotifier_Deliver_IdempotentOnAlreadyDeleted(t *testing.T) {
 
 func TestBlobDeleteNotifier_Deliver_MalformedPayload(t *testing.T) {
 	hit := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hit = true
 		w.WriteHeader(http.StatusNoContent)
 	}))

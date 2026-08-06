@@ -7,6 +7,7 @@
 // transcript, or persisted event (it exists only inside curl's own
 // redirect-follow). response-content-disposition forces `attachment` so
 // user-supplied content is never rendered inline off the storage origin.
+
 package httpapi
 
 import (
@@ -87,7 +88,7 @@ func UploadContent(sandboxes *postgres.SandboxStore, artifacts *postgres.Artifac
 			return
 		}
 
-		redirectToPresignedGet(w, r, ctx, artifacts, blobStore, objCfg, timeouts, sessionID, uploadID)
+		redirectToPresignedGet(ctx, w, r, artifacts, blobStore, objCfg, timeouts, sessionID, uploadID)
 	}
 }
 
@@ -122,14 +123,14 @@ func UploadContentAPI(sessions *postgres.SessionStore, artifacts *postgres.Artif
 			return
 		}
 
-		redirectToPresignedGet(w, r, ctx, artifacts, blobStore, objCfg, timeouts, sessionID, uploadID)
+		redirectToPresignedGet(ctx, w, r, artifacts, blobStore, objCfg, timeouts, sessionID, uploadID)
 	}
 }
 
 // redirectToPresignedGet is the shared tail both handlers above call:
 // resolve the presigned GET URL and 302 to it, or write the appropriate
 // error.
-func redirectToPresignedGet(w http.ResponseWriter, r *http.Request, ctx context.Context, artifacts *postgres.ArtifactStore, blobStore ports.BlobStore, objCfg *platform.ObjectStorageConfig, timeouts platform.Timeouts, sessionID, uploadID pgtype.UUID) {
+func redirectToPresignedGet(ctx context.Context, w http.ResponseWriter, r *http.Request, artifacts *postgres.ArtifactStore, blobStore ports.BlobStore, objCfg *platform.ObjectStorageConfig, timeouts platform.Timeouts, sessionID, uploadID pgtype.UUID) {
 	presigned, uerr := uploadContentCore(ctx, artifacts, blobStore, objCfg, timeouts, sessionID, uploadID)
 	if uerr != nil {
 		writeError(w, uerr.Status, uerr.Message)

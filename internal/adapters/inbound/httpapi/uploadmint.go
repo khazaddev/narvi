@@ -4,6 +4,7 @@
 // MaxUploadBytes/MaxSessionUploadBytes (a fast-fail courtesy -- confirm.go
 // re-checks both, at the authoritative moment), inserts the pending
 // artifact row, and returns a presigned PUT URL.
+
 package httpapi
 
 import (
@@ -46,8 +47,8 @@ type uploadMintRequest struct {
 }
 
 type uploadMintResponse struct {
-	UploadId  string            `json:"uploadId"`
-	PutUrl    string            `json:"putUrl"`
+	UploadID  string            `json:"uploadId"`
+	PutURL    string            `json:"putUrl"`
 	Headers   map[string]string `json:"headers"`
 	ExpiresAt string            `json:"expiresAt"`
 }
@@ -205,12 +206,12 @@ func MintUpload(sandboxes *postgres.SandboxStore, artifacts *postgres.ArtifactSt
 			return
 		}
 
-		writeJSON(w, http.StatusCreated, uploadMintResponse{
-			UploadId:  result.UploadID,
-			PutUrl:    result.PutURL,
-			Headers:   result.Headers,
-			ExpiresAt: result.ExpiresAt,
-		})
+		// uploadMintResponse's fields are identical in name/type/order to
+		// mintUploadResult's (only JSON tags differ, which struct
+		// conversion ignores) -- a direct conversion, not a coincidence:
+		// see uploadMintResponse's own doc comment for why these stay two
+		// independently-declared types despite that.
+		writeJSON(w, http.StatusCreated, uploadMintResponse(result))
 	}
 }
 

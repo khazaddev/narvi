@@ -10,6 +10,7 @@
 // type across them would let a SandboxProvider Op constant type-check as a
 // valid BlobStoreError.Op value (and vice versa) despite meaning nothing
 // there — a mistake purely structural typing would not catch.
+
 package ports
 
 import (

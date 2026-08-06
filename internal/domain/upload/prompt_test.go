@@ -87,7 +87,7 @@ func TestRenderAttachmentBlock_UntrustedFieldsAreDelimited(t *testing.T) {
 	if openIdx == -1 || closeIdx == -1 || filenameIdx == -1 {
 		t.Fatalf("RenderAttachmentBlock(...) = %q, missing expected markers", got)
 	}
-	if !(openIdx < filenameIdx && filenameIdx < closeIdx) {
+	if openIdx >= filenameIdx || filenameIdx >= closeIdx {
 		t.Errorf("RenderAttachmentBlock(...) = %q, want filename rendered strictly between the delimiter tags", got)
 	}
 }

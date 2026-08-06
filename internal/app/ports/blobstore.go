@@ -23,6 +23,7 @@
 // a request locally (PresignPut/PresignGet) or asks the backend a
 // metadata-only question (Stat/Delete); no method here reads or writes
 // object bytes.
+
 package ports
 
 import (

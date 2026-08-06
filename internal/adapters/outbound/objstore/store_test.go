@@ -176,7 +176,7 @@ func TestStatDelete_RequestShape(t *testing.T) {
 // successful Stat/Delete against the real Endpoint server proves the
 // separation rather than merely assuming it.
 func TestStatDelete_NeverUsePublicEndpoint(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("ETag", `"abc123"`)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -201,7 +201,7 @@ func TestStatDelete_NeverUsePublicEndpoint(t *testing.T) {
 // --- Stat: success shape (SizeBytes/ETag, including quote-trimming) ---
 
 func TestStat_Success(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("ETag", `"d41d8cd98f00b204e9800998ecf8427e"`)
 		w.Header().Set("Content-Length", "1234")
 		w.WriteHeader(http.StatusOK)
@@ -250,7 +250,7 @@ func TestStatDelete_Classification(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run("Stat/"+tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tt.status)
 			}))
 			defer srv.Close()
@@ -292,7 +292,7 @@ func TestStatDelete_Classification(t *testing.T) {
 		})
 
 		t.Run("Delete/"+tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tt.status)
 			}))
 			defer srv.Close()
@@ -355,7 +355,7 @@ func TestStatDelete_NeverEmbedRawBody(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run("Stat/"+tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/xml")
 				w.WriteHeader(tt.status)
 				_, _ = w.Write([]byte(tt.body))
@@ -376,7 +376,7 @@ func TestStatDelete_NeverEmbedRawBody(t *testing.T) {
 		})
 
 		t.Run("Delete/"+tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/xml")
 				w.WriteHeader(tt.status)
 				_, _ = w.Write([]byte(tt.body))
@@ -441,7 +441,7 @@ func TestStatDelete_NetworkErrorIsTransient(t *testing.T) {
 
 func TestStatDelete_BoundedByObjectStoreHTTPClientTimeout(t *testing.T) {
 	block := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		<-block // never respond within the test's short client timeout
 	}))
 	defer func() {
