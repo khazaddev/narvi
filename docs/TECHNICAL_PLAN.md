@@ -290,7 +290,7 @@ The adapter already has a *partial* answer for the auto-compaction case: an `Ove
 5. **Enterprise sandbox glue** (full design in §27): cloud credentials via OIDC (provider-agnostic), kubeconfig injection for the target cluster, Docker-in-sandbox, egress proxy, repo/environment/global secrets, OpenCode config storage + injection, toolchain in images (Playwright+Chromium, ripgrep, typescript-language-server).
 6. **Files** (detailed design — see §28): uploads to object storage (S3-compatible) + `download_file` tool in sandbox; failed-upload UX signal.
 7. **Recovery UX**: relaunch-and-resume (conversation id replay), resume-in-place on live sandbox, Slack/Linear retry buttons, warm-on-type (composer keystrokes pre-warm a sandbox; must not create orphan sessions).
-8. **Models**: Anthropic + OpenAI/Codex (ChatGPT OAuth plugin) + Gemini (via OpenCode's own already-present `google`/`google-vertex` providers, no new `AgentRuntime` adapter — §25.2) + reasoning-effort plumbing (per-session and per-message overrides).
+8. **Models**: Anthropic + OpenAI/Codex (ChatGPT-account OAuth — native in the pinned OpenCode binary, no plugin and no new `AgentRuntime` adapter, but NOT env-var-shaped either; full design in §29) + Gemini (via OpenCode's own already-present `google`/`google-vertex` providers, no new `AgentRuntime` adapter — §25.2) + reasoning-effort plumbing (per-session and per-message overrides — §29.8).
 9. **RWX previews**: PR preview links dispatched at latest PR commit (detailed design — adapter §4.1.1, preview-link mechanism §4.1.2).
 10. **Slack/Linear fidelity**: mrkdwn contract both directions; Linear progressive AgentActivity updates; thread↔session mapping.
 11. **Multiplayer**: participants, presence, per-user PR attribution (viewer ≠ reviewer), PR created with the *prompting user's* OAuth token (fallback: bot + manual PR URL).
@@ -1979,3 +1979,332 @@ sandbox-shaped mint→PUT→confirm→`artifact` event observed); a failed-verif
 `failed(reason)` + the outboxed delete + the rail-visible event; and the oversized-mint refusal.
 UI consumption is Phase 7 (Step 81's artifacts rail — status chip + reason on upload rows; no new
 view).
+
+## 29. Codex via ChatGPT-account OAuth + reasoning-effort overrides (Step 59's remaining scope)
+
+Amends §8.8/Step 59's two previously-unelaborated clauses — "OpenAI/Codex (ChatGPT OAuth plugin)"
+and "reasoning-effort plumbing (per-session and per-message overrides)" — exactly as §25.2 already
+amended the same Step's Gemini clause. Every OpenCode-side claim below was verified 2026-08-06
+directly against the pinned OpenCode 1.17.15 binary (same live-verification discipline as §25.2,
+same rtk-bypass caution for large payloads); every OpenAI-side claim is sourced to OpenAI's own
+published Codex authentication docs or to the pinned binary's own embedded implementation of the
+flow, never to memory. This is a per-USER, subscription-tied credential — a materially different
+thing from Step 53's org-level static API keys — and the design's one-sentence verdict up front:
+**small scenario, but not env-var-shaped**: no new `AgentRuntime` adapter, no port change, no
+OpenCode plugin — but the credential travels through OpenCode's own auth-store API
+(`PUT /auth/{providerID}`), not `spawn.go`'s `cmd.Env`, and the control plane gains a small
+link-and-refresh responsibility no static key needed.
+
+### 29.1 Verified: ChatGPT OAuth is native in the pinned binary — §8.8's "plugin" phrasing is stale
+
+`GET /provider/auth` on the pinned 1.17.15 binary — re-verified against a **clean-config**
+instance (empty `XDG_CONFIG_HOME`/`XDG_DATA_HOME`, so no locally-installed plugin could be the
+source), and independently confirmed by reading the flow implementation embedded in the compiled
+binary itself — lists three auth methods for provider `openai`:
+`oauth "ChatGPT Pro/Plus (browser)"`, `oauth "ChatGPT Pro/Plus (headless)"`, and
+`api "Manually enter API Key"`. No plugin exists or is needed; §8.8's original "ChatGPT OAuth
+plugin" wording predates OpenCode absorbing this natively. Three further verified mechanics anchor
+the whole design:
+
+- **`PUT /auth/{providerID}`** (the server API's `auth.set`) accepts a discriminated `Auth` union:
+  `{type: "oauth", access, refresh, expires (epoch ms), accountId?, enterpriseUrl?}` or
+  `{type: "api", key}`. Verified live: returns `true`, persists to that instance's own auth store
+  (`$XDG_DATA_HOME/opencode/auth.json`), and flips the provider into `GET /provider`'s `connected`
+  list. An **empty-string `refresh` is accepted** (verified) — load-bearing for §29.5's
+  single-refresher design. There is **no `GET /auth`** — the auth store is write-only via API.
+- **The flow itself is drivable over the same server API**: `POST
+  /provider/{providerID}/oauth/authorize {method: <index>}` returns `{url, instructions,
+  method: "auto"|"code"}`, and `POST /provider/{providerID}/oauth/callback {method}` — for
+  `"auto"` methods — **blocks as the wait-for-approval poll** (verified: the call held open past a
+  12s client timeout with the device grant unapproved), then persists tokens on success.
+- **What OAuth mode changes inside OpenCode**: with an oauth entry set, `/config/providers` shows
+  `openai` running on a substituted dummy API key (`opencode-oauth-dummy-key`) with the real
+  authentication attached by OpenCode's own oauth loader — i.e. OAuth **takes over the provider**;
+  an `OPENAI_API_KEY` env var delivered alongside would be silently outranked. Narvi therefore
+  delivers exactly ONE credential per provider per sandbox (§29.6), never both kinds, so precedence
+  is decided by Narvi's own resolution order and stays observable — never left to OpenCode
+  internals.
+
+The `openai` catalog entry itself (same `GET /provider` §25.2 used) lists 19 models including the
+Codex line (e.g. `gpt-5.3-codex-spark`) — model selection needs nothing new: the §25.1 generic
+`provider/model` passthrough already covers `openai/...` strings end-to-end.
+
+### 29.2 The real OAuth flow shapes — and why the §13 web-callback pattern is impossible here
+
+Extracted from the pinned binary's own embedded implementation (its compiled-in `openai` auth
+methods), cross-checked against OpenAI's published Codex auth docs:
+
+- **Browser method**: authorization-code + PKCE (S256) against `https://auth.openai.com/oauth/
+  authorize`, client id `app_EMoamEEZ73f0CkXaXp7hrann` (Codex CLI's own public client — OpenCode
+  reuses it, `originator=opencode`), scopes `openid profile email offline_access`, redirect
+  hard-pinned to `http://localhost:1455/auth/callback`, exchanged at `POST /oauth/token`.
+- **Headless method**: a device-authorization flow: `POST https://auth.openai.com/api/accounts/
+  deviceauth/usercode {client_id}` → `{device_auth_id, user_code, interval}`; the human opens
+  `https://auth.openai.com/codex/device` on ANY device and enters the short code; the initiator
+  polls `POST .../api/accounts/deviceauth/token {device_auth_id, user_code}` (403/404 = pending)
+  until it yields `{authorization_code, code_verifier}`, then exchanges at `POST /oauth/token`
+  (`grant_type=authorization_code`, `redirect_uri=https://auth.openai.com/deviceauth/callback`).
+  Matches Codex CLI's own documented `codex login --device-auth` (which OpenAI labels **Beta**).
+- **Token material**: `access_token` (a JWT — 10.0-day `iat→exp` lifetime, verified on a real
+  token), rotating `refresh_token`, `expires_in`, and an `id_token` whose `chatgpt_account_id`
+  claim becomes the `accountId` the Codex backend requires per request.
+- **Refresh**: `POST /oauth/token` (`grant_type=refresh_token`, `refresh_token`, `client_id` —
+  public client, no secret) returns a NEW access token AND a **new refresh token that replaces the
+  old one** (rotation). OpenAI enforces reuse detection — a consumed refresh token replayed later
+  fails (`refresh_token_reused`), and OpenAI's own CI/CD guidance is explicit: one credential file
+  per "serialized workflow stream", never shared "across concurrent jobs or multiple machines",
+  refreshed by a single holder. This constraint shapes §29.5 more than any Narvi-side preference.
+
+**The negative finding, stated plainly**: Narvi cannot mirror §13.1's GitHub-OAuth web-callback
+pattern for this. The authorization-code redirect is pinned to `localhost:1455` for a client id
+Narvi does not own, and OpenAI offers no third-party app registration granting
+ChatGPT-subscription API access — there is no legitimate way to register
+`narvi.example/auth/openai/callback`. The device flow is therefore not merely the convenient
+choice for a server-side product; it is the only viable one.
+
+### 29.3 The link flow: per-user, run from Settings, UI-driven polling, no worker
+
+A ChatGPT Plus/Pro subscription is an individual seat; its token attributes usage (and burns
+quota) personally. So this is a per-user account link — the same *category* as §13.2's
+cross-channel identity links (a person connecting an external account to their Narvi user, once) —
+but deliberately NOT an `identities` row: `identities` is the sign-in/chat identity graph, with
+auto-linking driven by ingress events and a provider enum (`github,slack,linear,google`) that
+§13.2's algorithm actively matches on. A model-provider credential has none of those semantics; it
+belongs with the other model-provider credentials (§29.4).
+
+Flow (all CP-side; the CP implements the four device-flow HTTP calls of §29.2 directly in one
+small outbound adapter — see §29.9 for why not brokered through an OpenCode process):
+
+1. Settings → "Connect ChatGPT account": `POST /api/me/chatgpt-link` calls
+   `deviceauth/usercode`, persists a pending-attempt row — `chatgpt_link_attempts(user_id,
+   device_auth_id, user_code, last_polled_at, expires_at)`, the same short-lived-nonce shape as
+   §13.2's `identity_link_prompts` — and returns `{verificationUrl, userCode, expiresAt}` for the
+   UI to display.
+2. The user opens `auth.openai.com/codex/device` on any device and enters the code. The Settings
+   page polls `GET /api/me/chatgpt-link` while open; each poll performs **at most one** upstream
+   `deviceauth/token` attempt, throttled by the server-provided `interval` via `last_polled_at` —
+   the human sitting on the page IS the polling loop, so there is no background goroutine, no
+   timer, and nothing to leak when the page is abandoned (the attempt row simply expires;
+   multi-pod safe because the state is a row, not memory).
+3. On grant: exchange the code, parse `chatgpt_account_id` from the `id_token`, encrypt and store
+   (§29.4), delete the attempt row, and audit-log the link (§13.3's audit table, same-transaction
+   discipline).
+
+Relink replaces the row (same upsert); unlink deletes it. RBAC in §29.9.
+
+### 29.4 Storage: extend `provider_credentials` with a `user` scope and an `oauth` kind
+
+Decision: **reuse Step 53's `provider_credentials` mechanism, extended — not
+`identities.access_token_encrypted`, and not a new table.** Both existing mechanisms share the
+same crypto (`platform.EncryptToken`, AES-256-GCM — 000056's own comment already cites 000017 as
+its precedent), so the crypto is identical either way; what decides it is everything around the
+row: `provider_credentials` already has the resolution model (`providercredential.Resolve`,
+most-specific-wins), the sandbox-facing delivery endpoint with the full stale-sandbox/gen-fencing
+security posture (`providercredentialsdelivery.go`), and the "write-only from the management API"
+discipline — exactly the machinery this credential needs and `identities` has none of. Schema
+changes (one migration):
+
+- `provider_credential_scope` gains `'user'`; `scope_target_id` = `users.id` stringified (the
+  same stringified-UUID convention the `environment` scope already uses). The existing partial
+  unique index `(scope, scope_target_id, provider)` already covers it: one ChatGPT link per user.
+- New `kind provider_credential_kind ENUM('api_key','oauth') NOT NULL DEFAULT 'api_key'`. For
+  `oauth` rows, `value_encrypted` holds `EncryptToken` ciphertext of a JSON document
+  `{access, refresh, expires_ms, account_id}` — one blob, rewritten atomically on every refresh,
+  never four separately-encrypted columns.
+- New `oauth_expires_at TIMESTAMPTZ` — a **plaintext mirror** of the blob's `expires_ms`, so the
+  refresh pump (§29.5) can index-scan for expiring rows without decrypting anything (an expiry
+  timestamp is not a secret — `user_sessions.expires_at`/`identity_link_prompts.expires_at` are
+  already plaintext); and `oauth_needs_relink BOOLEAN NOT NULL DEFAULT false` (§29.5's terminal
+  refresh-failure marker, surfaced in Settings). A CHECK constraint keeps both NULL/false for
+  `api_key` rows.
+- `providercredential.Scope` gains `ScopeUser` at the head of `scopePriority` (a personally-linked
+  account is more specific than any environment/repo/global org key), `AllScopes`/`IsValidScope`/
+  exhaustive tests updated — a pure domain change. Composes cleanly with §27.1's own `automation`
+  addition to the same map: `user` rows exist only in `provider_credentials` and `automation` rows
+  only in `sandbox_secrets`, so no single candidate set ever contains both and their relative
+  priority is unobservable by construction.
+
+Resolution keys on **`sessions.created_by`**: the delivery query adds user-scope candidates for
+the session creator; `created_by IS NULL` (bot/automation sessions, 000004's own comment) simply
+contributes no user candidate, falling through to the static-key scopes exactly as today. The
+known consequence — in a multiplayer session, every participant's prompts run on the creator's
+seat — is named in §29.10, not silently accepted. v1 creates `user`-scope rows ONLY via the link
+flow (`kind='oauth'`, provider `openai`): a personal static API key at user scope is structurally
+representable but deliberately has no creating endpoint — one less path to reason about.
+
+### 29.5 Refresh: the control plane is the single refresher, pump-only
+
+OpenAI's rotation + reuse-detection (§29.2) plus its own single-holder guidance dictate the shape:
+exactly one logical holder may ever consume a refresh token. In Narvi that holder is the control
+plane — never a sandbox (N concurrent sandboxes for one user would be exactly the "concurrent
+jobs sharing one credential" case OpenAI's docs prohibit, racing each other into
+`refresh_token_reused` lockouts).
+
+- **A background refresh pump** — a small polling worker mirroring `outboxworker`'s own
+  poll-loop shape — periodically claims oauth rows with `oauth_expires_at < now() + margin` via
+  `SELECT ... FOR UPDATE SKIP LOCKED` (the same multi-pod claim-before-act discipline §21.3's
+  digest already uses), refreshes each against `POST /oauth/token`, and atomically rewrites
+  `value_encrypted` + `oauth_expires_at` with the rotated pair. Two new `platform/timeouts.go`
+  entries (§5.4 — no literals elsewhere): `ChatGPTOAuthRefreshMargin` (propose 72h) and
+  `ChatGPTOAuthRefreshPumpInterval` (propose 6h) — both invented generously per `HookTimeout`'s
+  own "chosen generously when the concrete cost is unknown" convention, against the verified
+  10-day access lifetime and OpenAI's own ~8-day staleness refresh in Codex CLI.
+- **Delivery never refreshes.** The delivery endpoint serves what is stored, read-only — a
+  deliberate rejection of lazy refresh-on-use: it would put a third-party auth server on the
+  sandbox-boot critical path and reintroduce the concurrent-refresh race (two sandboxes booting →
+  two refreshes) that the pump's SKIP LOCKED claim exists to make impossible. With the proposed
+  values, a served access token always has ≥ ~66h of validity — beyond any non-pathological
+  sandbox lifetime under §5.4's inactivity bounds; a sandbox that outlives it degrades per §29.6.
+- **Failure taxonomy mirrors §13.2's own rule** ("a provider email-API failure is a retryable
+  error, not an empty identity"): transient refresh failures keep the last stored pair and retry
+  next pump cycle; a terminal `invalid_grant`/`refresh_token_reused` sets
+  `oauth_needs_relink = true` — surfaced on the Settings card as "reconnect your ChatGPT account"
+  — and the row stops being served. No decision-inbox integration (§16 is not extended — the same
+  restraint §25.13 already applies).
+
+### 29.6 Sandbox injection: one `auth.set` call beside Step 53's env append
+
+The delivery response (`providercredentialsdelivery.go`'s invented, documented shape) evolves from
+`provider → plaintext string` to `provider → Auth-union value` mirroring OpenCode's own two shapes
+verbatim: `{"type":"api","key":...}` for static rows (today's behavior, re-labeled) and
+`{"type":"oauth","access":...,"expires":...,"accountId":...}` for a resolved user-scope row — with
+**no refresh token, ever**: sandbox-agent injects `refresh: ""` (verified accepted, §29.1), so a
+sandbox is structurally incapable of consuming the rotating token family. CP and sandbox-agent
+client types reconcile by hand exactly as `scmcredentials.go`'s own doc comment already requires
+for that sibling endpoint. sandbox-agent then splits by kind:
+
+- `api` → `providercredential.EnvVarNames` → `opencodeproc.Spawn`'s `providerCredentialEnv`,
+  byte-for-byte Step 53's existing path.
+- `oauth` → after `Spawn` reports healthy and BEFORE the sandbox reports ready for its first turn:
+  one `PUT /auth/openai` against `Result.BaseURL` carrying `{type:"oauth", access, refresh: "",
+  expires, accountId}` — sequenced inside the spawn/readiness path so a turn can never race an
+  unauthenticated provider. Failure to set it is logged and emitted as a wire `Warning` (the same
+  non-fatal surfacing §7.2 uses for compaction) — never a boot failure, because the credential is
+  delivered independently of whether this session's turns will ever name an `openai/...` model; a
+  turn that does need it then fails typed (`ProviderAuthError` is already a schema-derived member
+  of the adapter's error union, §7.2) into the ordinary §8.7 recovery UX, including the
+  mid-session-expiry edge case above.
+
+No SESSION_CONFIG change, no `AgentRuntime`/port change, no new wire command — the whole
+sandbox-side delta is inside sandbox-agent's existing credential-fetch + spawn path, mirroring
+§25.3's own "entirely inside sandbox-agent" scoping. Two boundaries stated to prevent drift: the
+`ports.LLM` path (classifier/single-completion calls — §25.7 already marks it unrelated) keeps
+using CP-side static config and MUST NOT be pointed at a ChatGPT-subscription token (that token
+authenticates the Codex backend, not the general OpenAI API, and per-user seats are the wrong
+identity for platform-internal classification calls); and §25.2's Gemini design is untouched.
+
+### 29.7 Contract tests and the honest verification gap
+
+Mirroring §25.2/§7.2's pinned-binary discipline, Step 59 adds CI contract cases against the real
+binary, all localhost-only: (1) `GET /provider/auth` still lists an `oauth` method for `openai`
+(label prefixed "ChatGPT"); (2) `PUT /auth/openai` with the oauth shape (including `refresh: ""`)
+returns `true` and flips `openai` into `GET /provider`'s `connected` list; (3) the `/doc` OpenAPI
+still carries `POST /provider/{providerID}/oauth/authorize`/`callback` and the `Auth` union — an
+OpenCode bump that drops or reshapes any of these must fail CI, not production. What CI
+deliberately does NOT do: call `auth.openai.com` (a third-party production service has no place on
+the per-PR path — the unauthenticated `deviceauth/usercode` start call is a good *scheduled*
+canary for §29.2-shape drift, never a PR gate), and no end-to-end ChatGPT-account turn (it
+requires a paid seat plus a human device approval — genuinely un-CI-able). The first real
+verification that a Codex model answers through an OAuth-linked account is therefore a **manual
+milestone inside Step 59, not a CI artifact** — the same honesty §25.13 applies to Gemini's
+untested streaming parity.
+
+### 29.8 Reasoning-effort overrides: the plumbing already half-exists, verified end-to-end
+
+The second unelaborated §8.8 clause. Verified current state: the wire contract already carries the
+field end-to-end — `sandboxws.Prompt.effort` is a required-nullable member of
+`contracts/sandbox-ws/v1/commands.schema.json` ("Reasoning-effort override for this turn; null
+means use the default") — but `BuildPromptPayload` hardcodes `Effort: nil` (`sessionactor/
+dispatch.go`) because no column feeds it, and the OpenCode adapter drops `cmd.Effort` on the
+floor. On the engine side, verified live against the pinned binary: `prompt_async` accepts an
+optional top-level **`variant`** string, and the `GET /provider` catalog declares per-model
+`variants` maps naming each valid value and its provider-native meaning — `openai` models:
+`none/low/medium/high/xhigh` → `reasoningEffort`; `anthropic` models: `low/medium/high/(xhigh/)
+max` → adaptive-`thinking` effort. So effort is the same class of generic passthrough §25.1 proved
+for model, with the identical no-Narvi-side-allowlist discipline: valid values are per-model facts
+owned by OpenCode's catalog (which the composer's already-mocked model/effort selector, §12.2 item
+1, reads); Narvi validates nothing but nullability, and inventing a Narvi enum would drift exactly
+the way a model allowlist would.
+
+Data-model threading, mirroring `model_id`'s own established pair (the same precedent style Step
+61 cites for `plan_mode`):
+
+- `turns.effort TEXT NULL` — per-message: dispatch-time input beside `turns.model_id`
+  (000018's own nullable "null = default" convention, verbatim).
+- `sessions.build_effort TEXT NULL` — per-session: beside `sessions.build_model_id` (000034),
+  copied onto the approval-dispatched build turn exactly as `build_model_id` → `model_id` is
+  today. "Per-session/per-message" thus maps exactly as model already does: session-creation sets
+  the first turn's (and, under plan mode, the build turn's) value; each subsequent message may
+  override per turn. A sticky session-level default column consulted when a turn's value is null
+  is deliberately NOT added — model itself has no such mechanism, and §11's "keep the domain paths
+  single" forbids giving effort a second resolution ladder model doesn't have.
+- Contracts: `CreateSessionRequest`/`CreateTurnRequest` gain required-nullable `effort` (mirroring
+  `modelId`'s convention in both), `CreateSessionRequest` gains optional `buildEffort` (mirroring
+  `buildModelId`'s optional-key convention); `sandbox-ws` needs NO change.
+- Dispatch: `BuildPromptPayload` threads `target.Effort`; the adapter maps a non-nil `cmd.Effort`
+  onto a new `promptAsyncRequest.Variant *string` (`variant,omitempty`) — one field, one mapping
+  line; the §29.7 contract tests additionally assert `/doc` still lists `variant` on
+  `prompt_async` (the same endpoint-existence discipline §7.2 applies to `/summarize`).
+- Workflow engine echo: `workflow_step_definitions` gains a nullable `effort` column with the
+  identical inherit-when-null semantics its `model_id` already has (§25.7/§25.8's zero-config
+  proof extends unchanged) — threaded through the same engine → turn → `BuildPromptPayload` path,
+  no separate mechanism. `plans.plan_effort` provenance (mirroring `plan_model_id`) is consciously
+  omitted — no consumer exists; add it when §21's analytics actually wants it.
+
+### 29.9 RBAC, adapter placement, and the rejected broker alternative
+
+- **Linking is self-service, own-user only**: one new action row, own-aware like
+  `ActionApprovePlan`'s own row (member+; viewers are read-only per §13.3 and cannot link),
+  gating `POST`/`DELETE /api/me/chatgpt-link`. Admin unlink-of-any-user mirrors §13.2's
+  admin force-link precedent (admin row, audit-logged). Step 53's three `ActionManage*Secrets`
+  rows are untouched — they gate org-level scopes, and a user-scope row is never managed through
+  the org CRUD endpoints. Token values remain write-only from every management surface, exactly
+  like Step 53's rows; the sandbox delivery endpoint remains the only reader, unchanged in its
+  security posture.
+- **The device-flow client is one small CP-side outbound adapter** (four HTTP calls: usercode,
+  token-poll, code exchange, refresh — §29.2's shapes). The alternative — brokering the flow
+  through an OpenCode process's own `/provider/openai/oauth/*` endpoints so Narvi never touches
+  `auth.openai.com` directly — was considered and rejected for v1: the CP image does not ship the
+  OpenCode binary (only sandbox images do), so brokering means spawning a sandbox per Settings
+  click (§3.2's heaviest machinery on an interactive path), holding its blocking `callback` call
+  open across the approval wait, and then harvesting tokens OpenCode's API deliberately does not
+  expose for reading (no `GET /auth`, §29.1 — the harvest would be a file read behind the API's
+  back). If §29.2's endpoints drift (§29.10 risk 1), this broker IS the named fallback — the
+  mechanics above are its specification, moved inside a sandbox.
+- Phasing: Step 59, Phase 5 (§10's Phase 5 line already names "model catalog + Codex OAuth");
+  depends on Step 53 (shipped — the store, delivery endpoint, and spawn-env path it extends);
+  independent of Steps 54-56. UI surfaces (Settings link card beside §13.4's linked-identity
+  chips; composer effort selector) land with their existing Phase 7 view Steps, not here.
+
+### 29.10 Risks and open questions
+
+1. **The device-flow endpoints are not a documented stable API.** OpenAI documents the *feature*
+   (`codex login --device-auth`, labeled Beta) but not the endpoints; the shapes come from two
+   independent public implementations (Codex CLI's source; the pinned binary's embedded
+   implementation, extracted and read for this design). They can drift or gain restrictions
+   (client-id allowlisting per originator is conceivable). Contained: drift breaks the LINK flow,
+   loudly, at Settings — never a mid-turn corruption — and the sandbox-brokered fallback is
+   specified (§29.9). The scheduled `usercode` canary (§29.7) exists to catch it before users do.
+2. **Refresh-token absolute lifetime is undocumented.** The pump keeps pairs warm indefinitely in
+   principle; an OpenAI-side policy change (idle-family expiry, seat downgrade, revocation) forces
+   re-links. `oauth_needs_relink` + the Settings surface make that a self-service recovery, not a
+   support ticket.
+3. **Terms-of-service exposure is the user's, structurally.** OpenAI's terms govern personal-seat
+   usage; Narvi keeps the mapping honest — one linked account per user, used only for that user's
+   own sessions' turns, never pooled, never org-shared — which is exactly the per-user scope
+   design. An org that wants pooled OpenAI usage configures a static `OPENAI_API_KEY` at
+   org scopes (Step 53, unchanged).
+4. **Multiplayer quota attribution**: participant prompts in a creator's session consume the
+   creator's seat (§29.4). Accepted v1; the designed-but-unbuilt extension is per-turn
+   re-injection (`PUT /auth` is callable between turns) keyed on the prompting user, if telemetry
+   shows it biting.
+5. **Subscription turns report cost 0** (verified: the Codex models' catalog cost object is all
+   zeros), so §7.1's cost roll-up undercounts ChatGPT-OAuth turns relative to real value consumed
+   — the same cost-attribution debt lineage §25.13 already tracks; a "subscription turn" marker in
+   cost analytics is left to the Step that closes that debt.
+6. **Unknown-`variant` behavior is unverified** (rejecting vs ignoring an invalid effort value
+   would need a live credentialed call to observe) — the composer constrains values to the
+   catalog's per-model `variants`, so only raw API callers can hit it; named, not designed around.
+7. **`accountId` handling on refresh**: the pinned binary preserves stored `accountId` across
+   refreshes rather than re-deriving it each time; the CP refresher does the same. A user
+   switching ChatGPT workspaces re-links — no silent account migration.
