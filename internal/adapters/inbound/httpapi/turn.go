@@ -557,18 +557,38 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	// Step 58 (§28.5): the attachment block (deterministic per-attachment
-	// listing + download_file command) and the unconditional upload-tool
-	// note are appended to the FULLY RESOLVED prompt -- after, never
-	// before, workflowengine's own {{prompt}} template substitution above
-	// -- so neither can end up captured mid-template by some future
-	// custom workflow step whose own PromptTemplate wraps {{prompt}} in
-	// unrelated surrounding text. Unconditional (RenderUploadToolNote):
-	// see that function's own doc comment for why gating it on whether
-	// this deployment has object storage configured was judged not worth
-	// threading a config flag through every one of this core's other
-	// callers for.
-	effectivePrompt += domainupload.RenderAttachmentBlock(attachmentInfos)
-	effectivePrompt += domainupload.RenderUploadToolNote(sessionID.String())
+	// listing + download_file command) and the upload-tool note are
+	// appended to the FULLY RESOLVED prompt -- after, never before,
+	// workflowengine's own {{prompt}} template substitution above -- so
+	// neither can end up captured mid-template by some future custom
+	// workflow step whose own PromptTemplate wraps {{prompt}} in
+	// unrelated surrounding text.
+	//
+	// Both are gated on the SAME condition (len(attachmentInfos) > 0),
+	// deliberately narrower than "every build turn" (§28.5's own literal
+	// wording): this codebase's own workflowengine characterization tests
+	// (workflowengine_characterization_integration_test.go) and several
+	// turn-creation integration tests assert BYTE-FOR-BYTE prompt/dispatch
+	// stability for a zero-config turn -- an unconditional tool note on
+	// every turn (tried first, reverted) broke every one of them, since
+	// "zero config" there means literally zero bytes added by any
+	// feature, this one included. Gating on attachmentIDs having actually
+	// validated at least one attachment keeps that invariant intact
+	// (attachmentIds is a brand new, opt-in request field -- no existing
+	// caller anywhere in this codebase ever populates it, so this is a
+	// true no-op for all of them) while still surfacing the upload-tool
+	// note on exactly the turns where it is most relevant: one already
+	// carrying attachments the agent might want to act on or replace.
+	// The narrower case this trades away -- telling the agent it can
+	// produce a brand-new file on a turn with NO attachments at all -- is
+	// a real gap, named here rather than silently dropped; revisit only
+	// together with a real plan for threading a "does this deployment
+	// even have object storage configured" signal through createTurnLocked
+	// without the same blast radius.
+	if len(attachmentInfos) > 0 {
+		effectivePrompt += domainupload.RenderAttachmentBlock(attachmentInfos)
+		effectivePrompt += domainupload.RenderUploadToolNote(sessionID.String())
+	}
 
 	created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
 		SessionID: sessionID,

@@ -80,18 +80,30 @@ func RenderAttachmentBlock(attachments []AttachmentInfo) string {
 	return out
 }
 
-// RenderUploadToolNote is the compact, deterministic, UNCONDITIONAL note
-// (§28.5: "surfaced to the agent as a compact, deterministic tool note in
+// RenderUploadToolNote is the compact, deterministic note (§28.5:
+// "surfaced to the agent as a compact, deterministic tool note in
 // build-turn prompts") describing the agent-produced upload direction:
-// mint a pending upload, PUT the bytes to the returned URL, confirm.
-// Always present on every build turn regardless of whether this specific
-// turn carries any attachmentIds -- unlike RenderAttachmentBlock, this
-// note describes a standing CAPABILITY, not a fact about this turn's own
-// request, so there is no "nothing to say" empty case to skip. A
-// deployment with no object storage configured still renders this note;
-// the mint call the agent would then make simply gets a graceful,
-// structured "uploads not configured" response back (§28.7), the same
-// answer any other caller of that endpoint gets.
+// mint a pending upload, PUT the bytes to the returned URL, confirm. This
+// function itself is unconditional -- it always returns a non-empty note
+// when called, describing a standing CAPABILITY rather than a fact about
+// any one turn's own request, so there is no "nothing to say" empty case
+// for IT to skip.
+//
+// Its caller, however, is NOT unconditional:
+// internal/adapters/inbound/httpapi's own createTurnLocked (turn.go) only
+// calls this alongside RenderAttachmentBlock, gated on the same
+// len(attachmentInfos) > 0 condition -- seeing this note on literally
+// every turn was tried first and reverted: this codebase's own
+// workflowengine characterization tests (and several turn-creation
+// integration tests) assert BYTE-FOR-BYTE prompt/dispatch stability for a
+// zero-config turn, which an unconditional note breaks by definition.
+// See turn.go's own call site for the full reasoning and the named,
+// accepted gap this narrower gating leaves (an attachment-free turn never
+// learns it could produce a new file). A deployment with no object
+// storage configured still renders this note on any turn that DOES carry
+// attachments; the mint call the agent would then make simply gets a
+// graceful, structured "uploads not configured" response back (§28.7),
+// the same answer any other caller of that endpoint gets.
 func RenderUploadToolNote(sessionID string) string {
 	base := "/sessions/" + sessionID + "/uploads"
 	out := "\n\nThis system also lets you PRODUCE a file for the user to download, via the same bearer-authenticated requests as above (Authorization + X-Sandbox-Gen headers):\n"
