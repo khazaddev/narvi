@@ -11,6 +11,93 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type ArtifactFailureReason string
+
+const (
+	ArtifactFailureReasonSizeExceeded       ArtifactFailureReason = "size_exceeded"
+	ArtifactFailureReasonQuotaExceeded      ArtifactFailureReason = "quota_exceeded"
+	ArtifactFailureReasonVerificationFailed ArtifactFailureReason = "verification_failed"
+	ArtifactFailureReasonAbandoned          ArtifactFailureReason = "abandoned"
+)
+
+func (e *ArtifactFailureReason) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ArtifactFailureReason(s)
+	case string:
+		*e = ArtifactFailureReason(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ArtifactFailureReason: %T", src)
+	}
+	return nil
+}
+
+type NullArtifactFailureReason struct {
+	ArtifactFailureReason ArtifactFailureReason `json:"artifact_failure_reason"`
+	Valid                 bool                  `json:"valid"` // Valid is true if ArtifactFailureReason is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullArtifactFailureReason) Scan(value interface{}) error {
+	if value == nil {
+		ns.ArtifactFailureReason, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ArtifactFailureReason.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullArtifactFailureReason) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ArtifactFailureReason), nil
+}
+
+type ArtifactStatus string
+
+const (
+	ArtifactStatusPending ArtifactStatus = "pending"
+	ArtifactStatusReady   ArtifactStatus = "ready"
+	ArtifactStatusFailed  ArtifactStatus = "failed"
+)
+
+func (e *ArtifactStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ArtifactStatus(s)
+	case string:
+		*e = ArtifactStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ArtifactStatus: %T", src)
+	}
+	return nil
+}
+
+type NullArtifactStatus struct {
+	ArtifactStatus ArtifactStatus `json:"artifact_status"`
+	Valid          bool           `json:"valid"` // Valid is true if ArtifactStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullArtifactStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.ArtifactStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ArtifactStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullArtifactStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ArtifactStatus), nil
+}
+
 type ArtifactType string
 
 const (
@@ -1149,12 +1236,19 @@ func (ns NullWorkflowStepRunStatus) Value() (driver.Value, error) {
 }
 
 type Artifact struct {
-	ID        pgtype.UUID        `json:"id"`
-	SessionID pgtype.UUID        `json:"session_id"`
-	Type      ArtifactType       `json:"type"`
-	Url       string             `json:"url"`
-	Metadata  []byte             `json:"metadata"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID            pgtype.UUID            `json:"id"`
+	SessionID     pgtype.UUID            `json:"session_id"`
+	Type          ArtifactType           `json:"type"`
+	Url           string                 `json:"url"`
+	Metadata      []byte                 `json:"metadata"`
+	CreatedAt     pgtype.Timestamptz     `json:"created_at"`
+	Status        ArtifactStatus         `json:"status"`
+	FailureReason *ArtifactFailureReason `json:"failure_reason"`
+	BlobKey       *string                `json:"blob_key"`
+	SizeBytes     *int64                 `json:"size_bytes"`
+	ContentType   *string                `json:"content_type"`
+	Filename      *string                `json:"filename"`
+	CreatedBy     pgtype.UUID            `json:"created_by"`
 }
 
 type AuditLog struct {
