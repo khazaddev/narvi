@@ -21,7 +21,7 @@ import (
 // row yet (see internal/adapters/outbound/postgres/artifact_store.go's
 // own doc comment) -- this endpoint's happy-path response is an empty
 // array until a later Step (PR creation Step 21+, previews Step 48,
-// uploads Step 49) starts producing rows.
+// uploads Step 58) starts producing rows.
 func ListArtifacts(sessions *postgres.SessionStore, artifacts *postgres.ArtifactStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
