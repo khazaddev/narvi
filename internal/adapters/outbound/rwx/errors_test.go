@@ -92,6 +92,17 @@ func TestClassifyCLIError_NeverEmbedsRawStdoutStderr(t *testing.T) {
 			stdout: []byte(`not json`),
 			stderr: []byte(`fatal: config contains ` + secretToken),
 		},
+		{
+			// S4 hardening: the secret sits INSIDE the envelope's own
+			// "error" field itself -- the one field classifyCLIError
+			// deliberately DOES surface verbatim in the ordinary case (this
+			// file's own top comment) -- padded well past
+			// maxCLIErrorMessageLen so only the length cap (not the
+			// envelope-vs-raw-stdout distinction the other cases above
+			// exercise) is what keeps the secret out of the final message.
+			name:   "secret sits inside the envelope's own error field, past the length cap",
+			stdout: []byte(`{"status":"error","error":"` + strings.Repeat("x", maxCLIErrorMessageLen+100) + secretToken + `"}`),
+		},
 	}
 
 	for _, tt := range tests {
@@ -101,6 +112,29 @@ func TestClassifyCLIError_NeverEmbedsRawStdoutStderr(t *testing.T) {
 				t.Errorf("Error() = %q, must never contain the raw secret token", pe.Error())
 			}
 		})
+	}
+}
+
+// TestClassifyCLIError_CapsEnvelopeMessageLength is S4's own direct
+// regression test for the cap itself, independent of
+// TestClassifyCLIError_NeverEmbedsRawStdoutStderr's own secret-leak-shaped
+// case above: an oversized (but otherwise perfectly ordinary, secret-free)
+// envelope.Error is truncated to maxCLIErrorMessageLen with a visible
+// marker, never embedded verbatim no matter how large the CLI's own
+// `--format json` output claims it is -- a refactor that dropped the cap
+// entirely (rather than merely weakening it) would still fail this test
+// even though it carries no secret to leak.
+func TestClassifyCLIError_CapsEnvelopeMessageLength(t *testing.T) {
+	longMessage := strings.Repeat("a", maxCLIErrorMessageLen+200)
+	stdout := []byte(`{"status":"error","error":"` + longMessage + `"}`)
+
+	pe := classifyCLIError(ports.OpCreateSandbox, 1, stdout, nil, nil)
+
+	if strings.Contains(pe.Error(), longMessage) {
+		t.Error("Error() embeds the full, uncapped envelope message, want it capped")
+	}
+	if !strings.Contains(pe.Error(), "truncated") {
+		t.Errorf("Error() = %q, want a truncation marker once the envelope message exceeds the cap", pe.Error())
 	}
 }
 

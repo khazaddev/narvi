@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/app/ports"
@@ -298,6 +299,55 @@ func TestProvider_CreateSandbox_BuildsArgsAndEnv(t *testing.T) {
 	}
 }
 
+// TestProvider_Env_AllowlistsAmbientEnvironment is FIX-5/S1's own
+// regression test for the env-allowlist security fix (env's own doc
+// comment, provider.go): overrides osEnviron (runner.go's own package var,
+// which exists "purely so tests can override it" -- until now, no test
+// ever did) to inject BOTH an allowlisted sentinel (HTTPS_PROXY) and a
+// non-allowlisted one shaped exactly like a real control-plane secret
+// (NARVI_TOKEN_ENCRYPTION_KEY) into the ambient environment, then proves
+// via runner.lastCall().env that the allowlisted entry survives into the
+// `rwx` CLI subprocess's own environment, the secret-shaped one is
+// completely absent, and RWX_ACCESS_TOKEN/SESSION_CONFIG (this Provider's
+// own two deliberate additions) are still both present.
+func TestProvider_Env_AllowlistsAmbientEnvironment(t *testing.T) {
+	origEnviron := osEnviron
+	osEnviron = func() []string {
+		return []string{
+			"PATH=/usr/bin:/bin",
+			"HTTPS_PROXY=http://proxy.test:3128",
+			"NARVI_TOKEN_ENCRYPTION_KEY=super-secret",
+		}
+	}
+	t.Cleanup(func() { osEnviron = origEnviron })
+
+	runner := &fakeCLIRunner{exitCode: 0}
+	cfg := testConfig()
+	p, err := newWithRunner(cfg, runner)
+	if err != nil {
+		t.Fatalf("newWithRunner() error = %v", err)
+	}
+
+	spec := ports.CreateSpec{Gen: 1, SessionConfig: testSessionConfig("sess-1", 1)}
+	if _, err := p.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("CreateSandbox() error = %v", err)
+	}
+
+	env := runner.lastCall().env
+	if !containsEnvEntry(env, "HTTPS_PROXY", "http://proxy.test:3128") {
+		t.Errorf("env = %v, want it to contain the allowlisted HTTPS_PROXY entry", env)
+	}
+	if _, ok := envValue(env, "NARVI_TOKEN_ENCRYPTION_KEY"); ok {
+		t.Errorf("env = %v, must NEVER contain a non-allowlisted control-plane secret", env)
+	}
+	if !containsEnvEntry(env, rwxAccessTokenEnvVar, cfg.AccessToken) {
+		t.Errorf("env = %v, want it to contain %s=%s", env, rwxAccessTokenEnvVar, cfg.AccessToken)
+	}
+	if _, ok := envValue(env, sessionConfigEnvVar); !ok {
+		t.Errorf("env = %v, want it to contain a %s entry", env, sessionConfigEnvVar)
+	}
+}
+
 func TestProvider_CreateSandbox_NoImage_OmitsBaseFlag(t *testing.T) {
 	runner := &fakeCLIRunner{exitCode: 0}
 	p, err := newWithRunner(testConfig(), runner)
@@ -385,6 +435,23 @@ func TestProvider_CreateSandbox_RejectsGenMismatch(t *testing.T) {
 // TestProvider_CreateSandbox_BoundsSubprocessWithContextDeadline proves
 // every CLI call is bounded by platform.Timeouts.RWXCLIExecTimeout, never
 // left to run against an unbounded context.
+//
+// Strengthened (audit fix, test-quality): the original version of this
+// test only asserted a deadline exists at all, which would still pass even
+// if CreateSandbox were accidentally bound by a completely unrelated
+// timeout. This now pins time.Until(deadline) into
+// (RWXCLIExecTimeout-30s, RWXCLIExecTimeout] -- a generous lower bound (30s
+// is comfortably more than this test's own real, local-process execution
+// latency between context.WithTimeout's own call and this assertion
+// reading it back), never an exact-equality check, which would be flaky
+// against real wall-clock elapsed time. Pinned against
+// platform.DefaultTimeouts() directly (2m), rather than merely "some
+// deadline", specifically to catch a future regression that accidentally
+// swaps in RWXSandboxInactivityTimeout (45m, the CLI's own
+// `--inactivity-timeout` flag VALUE -- wholly unrelated to how long the
+// subprocess invocation itself is allowed to run) -- the two are
+// confusably named but differ by more than 20x, so this bound is
+// non-flaky against that specific mix-up.
 func TestProvider_CreateSandbox_BoundsSubprocessWithContextDeadline(t *testing.T) {
 	runner := &fakeCLIRunner{exitCode: 0}
 	p, err := newWithRunner(testConfig(), runner)
@@ -402,6 +469,84 @@ func TestProvider_CreateSandbox_BoundsSubprocessWithContextDeadline(t *testing.T
 	}
 	if deadline.IsZero() {
 		t.Error("subprocess context deadline is zero")
+	}
+
+	wantTimeout := platform.DefaultTimeouts().RWXCLIExecTimeout
+	lowerBound := wantTimeout - 30*time.Second
+	if remaining := time.Until(deadline); remaining <= lowerBound || remaining > wantTimeout {
+		t.Errorf("time.Until(deadline) = %v, want within (%v, %v] (RWXCLIExecTimeout, not the confusable RWXSandboxInactivityTimeout)",
+			remaining, lowerBound, wantTimeout)
+	}
+}
+
+// TestProvider_CreateSandbox_Error is FIX-3's own regression test: every
+// existing CreateSandbox test until now only ever drove fakeCLIRunner with
+// exitCode: 0 (the happy path) -- mirrors TestProvider_StopSandbox_Error's
+// own identical shape for the sibling method, proving a nonzero exit
+// propagates as a typed *ports.ProviderError and the returned SandboxRef is
+// the zero value, never a partially-populated one a caller might mistake
+// for success.
+func TestProvider_CreateSandbox_Error(t *testing.T) {
+	runner := &fakeCLIRunner{exitCode: 1, stdout: []byte(`{"status":"error","error":"quota exceeded"}`)}
+	p, err := newWithRunner(testConfig(), runner)
+	if err != nil {
+		t.Fatalf("newWithRunner() error = %v", err)
+	}
+
+	ref, err := p.CreateSandbox(context.Background(), ports.CreateSpec{Gen: 1, SessionConfig: testSessionConfig("sess-1", 1)})
+	if err == nil {
+		t.Fatal("CreateSandbox() error = nil, want a ProviderError for a nonzero exit")
+	}
+	if ref != (ports.SandboxRef{}) {
+		t.Errorf("CreateSandbox() ref = %+v, want the zero value on error", ref)
+	}
+
+	var pe *ports.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("CreateSandbox() error = %v, want *ports.ProviderError", err)
+	}
+	if pe.Op != ports.OpCreateSandbox {
+		t.Errorf("error.Op = %q, want %q", pe.Op, ports.OpCreateSandbox)
+	}
+}
+
+// TestProvider_CreateSandbox_ProcessNeverCompleted is FIX-3's own second
+// regression test: exitCode -1 (runner.go's own sentinel for "the process
+// never completed at all" -- a spawn failure, or killed by this call's own
+// context deadline) must propagate as a transient PROCESS_ERROR whose
+// error chain still carries the runner's own underlying cause. Asserted
+// via errors.Is (not just a Code/Transient check) so a future refactor
+// that accidentally drops the %w-wrapped underlying error out of
+// classifyCLIError's PROCESS_ERROR branch fails this test, even though
+// every other field would still look correct.
+func TestProvider_CreateSandbox_ProcessNeverCompleted(t *testing.T) {
+	underlying := errors.New("exec: \"rwx\": executable file not found in $PATH")
+	runner := &fakeCLIRunner{exitCode: -1, err: underlying}
+	p, err := newWithRunner(testConfig(), runner)
+	if err != nil {
+		t.Fatalf("newWithRunner() error = %v", err)
+	}
+
+	ref, err := p.CreateSandbox(context.Background(), ports.CreateSpec{Gen: 1, SessionConfig: testSessionConfig("sess-1", 1)})
+	if err == nil {
+		t.Fatal("CreateSandbox() error = nil, want a ProviderError for a process that never completed")
+	}
+	if ref != (ports.SandboxRef{}) {
+		t.Errorf("CreateSandbox() ref = %+v, want the zero value on error", ref)
+	}
+
+	var pe *ports.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("CreateSandbox() error = %v, want *ports.ProviderError", err)
+	}
+	if !pe.Transient {
+		t.Error("error.Transient = false, want true (a process-level failure is always transient)")
+	}
+	if pe.Code != "PROCESS_ERROR" {
+		t.Errorf("error.Code = %q, want %q", pe.Code, "PROCESS_ERROR")
+	}
+	if !errors.Is(err, underlying) {
+		t.Errorf("error chain does not wrap the runner's own underlying cause (errors.Is failed); CreateSandbox() error = %v", err)
 	}
 }
 
@@ -487,6 +632,34 @@ func TestProvider_List_EmptyOutput(t *testing.T) {
 	}
 	if len(refs) != 0 {
 		t.Errorf("List() = %+v, want empty", refs)
+	}
+}
+
+// TestProvider_List_Error is FIX-3's own regression test for List, mirroring
+// TestProvider_StopSandbox_Error/TestProvider_CreateSandbox_Error's own
+// identical shape: every existing List test until now only ever drove
+// fakeCLIRunner with exitCode: 0.
+func TestProvider_List_Error(t *testing.T) {
+	runner := &fakeCLIRunner{exitCode: 1, stdout: []byte(`{"status":"error","error":"unauthorized"}`)}
+	p, err := newWithRunner(testConfig(), runner)
+	if err != nil {
+		t.Fatalf("newWithRunner() error = %v", err)
+	}
+
+	refs, err := p.List(context.Background())
+	if err == nil {
+		t.Fatal("List() error = nil, want a ProviderError for a nonzero exit")
+	}
+	if refs != nil {
+		t.Errorf("List() refs = %+v, want nil on error", refs)
+	}
+
+	var pe *ports.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("List() error = %v, want *ports.ProviderError", err)
+	}
+	if pe.Op != ports.OpList {
+		t.Errorf("error.Op = %q, want %q", pe.Op, ports.OpList)
 	}
 }
 

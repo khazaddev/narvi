@@ -71,6 +71,36 @@ type cliErrorEnvelope struct {
 	Error  string `json:"error"`
 }
 
+// maxCLIErrorMessageLen caps how much of the CLI's own decoded envelope
+// message (or the plain "no error output"/stderr-omitted fallback string)
+// classifyCLIError ever embeds into a ProviderError's own message --
+// defense in depth alongside this file's own "never embed raw stdout/
+// stderr verbatim" discipline (this file's own top comment): envelope.Error
+// IS a decoded, named field, deliberately surfaced (unlike raw stdout/
+// stderr) because it is the CLI's own honest, human-authored error text in
+// the ordinary case -- but this codebase has no real pinned `rwx` binary to
+// bound that field's own real-world length against (doc.go's own named
+// scope gap), and ProviderError.Error() is logged on every sandbox state
+// transition (§5.3). An unbounded envelope.Error could otherwise blow up a
+// single log line's size, or -- in a pathological case where a buggy or
+// compromised CLI echoes back something enormous, e.g. its own input
+// verbatim -- carry a secret (SESSION_CONFIG's plaintext sandbox bearer
+// token, §5.2) far enough into the string that a naive fixed-prefix reader
+// downstream never notices it is even there. 500 is generous for any
+// legitimate, human-readable CLI error message.
+const maxCLIErrorMessageLen = 500
+
+// capCLIErrorMessage truncates msg to at most maxCLIErrorMessageLen bytes,
+// appending a "(truncated)" marker when it actually cut something short --
+// so a reader of ProviderError.Error() can distinguish a capped message
+// from one that coincidentally ends exactly at the cap.
+func capCLIErrorMessage(msg string) string {
+	if len(msg) <= maxCLIErrorMessageLen {
+		return msg
+	}
+	return msg[:maxCLIErrorMessageLen] + "... (truncated)"
+}
+
 // classifyCLIError builds the ProviderError for a non-zero `rwx` CLI exit.
 // exitCode -1 means the process never completed at all (spawn failure, or
 // killed by this call's own context deadline, runner.go) -- always
@@ -103,6 +133,7 @@ func classifyCLIError(op ports.Op, exitCode int, stdout, stderr []byte, processE
 	} else if len(stderr) > 0 {
 		message = "see subprocess stderr (omitted from this error to avoid leaking echoed request content, e.g. SESSION_CONFIG)"
 	}
+	message = capCLIErrorMessage(message)
 
 	return &ports.ProviderError{
 		// §4.1.3: "unknown -> transient" -- no real exit code has been

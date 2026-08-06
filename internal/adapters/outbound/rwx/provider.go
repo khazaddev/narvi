@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -118,17 +119,92 @@ func (p *Provider) Capabilities() ports.Capabilities {
 	}
 }
 
-// env builds this Provider's own subprocess environment: the ambient
-// environment (PATH/HOME/any ambient HTTPS_PROXY — §4.1.1: "the
-// subprocess inherits proxy env vars... so RWX traffic routes like
-// Modal's"; whether the `rwx` CLI itself actually honors them is §4.1.3's
-// own named, unverified gap) plus RWX_ACCESS_TOKEN, always — sessionConfig
+// rwxSubprocessEnvAllowlist is the fixed, explicit set of ambient
+// environment variable names this Provider's own `rwx` CLI subprocess is
+// permitted to inherit from the CONTROL PLANE's process environment -- see
+// env's own doc comment below for why an ALLOWLIST, rather than the
+// denylist shape internal/sandboxagent/supervisor.EnvWithout established
+// for the sandbox-side gitclone/opencodeproc/boot.runHook call sites, is
+// the correct shape HERE. PATH/HOME/TMPDIR cover the ordinary needs of any
+// real CLI tool; HTTP_PROXY/HTTPS_PROXY/NO_PROXY (plus their lowercase
+// spellings -- many non-Go HTTP clients, unlike Go's own net/http, only
+// ever check the lowercase form) preserve §4.1.1's own "the subprocess
+// inherits proxy env vars... so RWX traffic routes like Modal's"
+// requirement; SSL_CERT_FILE/SSL_CERT_DIR preserve a corporate/dev
+// TLS-interception root CA override for that same proxied traffic. A
+// package-level var (not a const map literal inline in filteredAmbientEnv)
+// purely so it has one obvious, greppable definition site if a future,
+// deliberate widening is ever needed.
+var rwxSubprocessEnvAllowlist = map[string]struct{}{
+	"PATH":   {},
+	"HOME":   {},
+	"TMPDIR": {},
+
+	"HTTP_PROXY":  {},
+	"HTTPS_PROXY": {},
+	"NO_PROXY":    {},
+	"http_proxy":  {},
+	"https_proxy": {},
+	"no_proxy":    {},
+
+	"SSL_CERT_FILE": {},
+	"SSL_CERT_DIR":  {},
+}
+
+// filteredAmbientEnv returns osEnviron() (runner.go's own test-overridable
+// seam), keeping only the entries whose key is in
+// rwxSubprocessEnvAllowlist -- see env's own doc comment for the full
+// rationale.
+func filteredAmbientEnv() []string {
+	full := osEnviron()
+	out := make([]string, 0, len(full))
+	for _, entry := range full {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, allowed := rwxSubprocessEnvAllowlist[key]; allowed {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// env builds this Provider's own subprocess environment: an EXPLICIT
+// ALLOWLIST of the ambient environment (rwxSubprocessEnvAllowlist, via
+// filteredAmbientEnv, above) plus RWX_ACCESS_TOKEN, always — sessionConfig
 // is appended ONLY when non-empty (StopSandbox/List need no
 // SESSION_CONFIG at all; only CreateSandbox does). RWX_ACCESS_TOKEN NEVER
 // travels as argv (§5.2's leak-class discipline) — this is the only place
 // it is ever attached to a subprocess call.
+//
+// Security fix (audit finding): this used to be
+// append(osEnviron(), rwxAccessTokenEnvVar+"="+p.accessToken) — the pinned
+// `rwx` CLI subprocess inherited this CONTROL-PLANE process's ENTIRE
+// environment, including NARVI_TOKEN_ENCRYPTION_KEY, NARVI_DATABASE_URL,
+// and every OAuth/HMAC/bot secret this process holds. The old doc comment
+// here justified full-env inheritance by citing gitclone's own "inherit
+// the ambient environment" precedent (internal/sandboxagent/gitclone) —
+// that precedent does not transfer to this adapter. gitclone (and
+// opencodeproc.Spawn, and boot.runHook) run SANDBOX-side, where the
+// process environment holds at most one narrow platform secret
+// (NARVI_SESSION_CONFIG) — and even that one is explicitly EXCLUDED before
+// spawning anything sandbox-agent does not itself control (a repo's own
+// setup.sh, `opencode serve`, a services.yml command), via
+// supervisor.EnvWithout(SessionConfigEnvVar) — this codebase's own
+// established env-leak-to-child-processes discipline, just expressed as a
+// denylist there because the sandbox-side environment has so little in it
+// worth denying. This adapter instead runs CONTROL-PLANE-side, where the
+// process environment holds literally every platform-wide secret this
+// whole system has. A denylist shaped like EnvWithout would need to name,
+// and keep naming forever as new secrets are added, every single one of
+// them — silently leaking the next one anyone forgets to add. An explicit,
+// closed ALLOWLIST of the small set of ambient values a CLI subprocess
+// plausibly needs inverts that failure mode instead: a future secret added
+// to this process's own environment is safe by default, never forwarded,
+// unless someone deliberately widens rwxSubprocessEnvAllowlist.
 func (p *Provider) env(sessionConfig string) []string {
-	e := append(osEnviron(), rwxAccessTokenEnvVar+"="+p.accessToken)
+	e := append(filteredAmbientEnv(), rwxAccessTokenEnvVar+"="+p.accessToken)
 	if sessionConfig != "" {
 		e = append(e, sessionConfigEnvVar+"="+sessionConfig)
 	}
