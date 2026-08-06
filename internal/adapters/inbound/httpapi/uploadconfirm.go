@@ -225,15 +225,39 @@ func evaluateConfirmOutcome(ctx context.Context, artifacts *postgres.ArtifactSto
 	case statErr == nil && info.SizeBytes != declaredSize:
 		return domainupload.FailureReasonVerificationFailed, nil
 	case statErr != nil && errors.Is(statErr, ports.ErrBlobNotFound):
+		// The ONLY Stat outcome that genuinely PROVES the object is
+		// absent -- a real verification failure, safe to persist as
+		// terminal (MarkUploadFailedIfPending below) and to outbox a
+		// blob_delete for.
 		return domainupload.FailureReasonVerificationFailed, nil
-	case statErr != nil && ports.IsBlobStoreTransient(statErr):
-		logger.Warn("httpapi: stat during confirm failed transiently; leaving upload pending for a later retry", "error", statErr)
-		return "", &uploadError{Status: http.StatusInternalServerError, Message: "verification temporarily unavailable, please retry"}
 	case statErr != nil:
-		// A permanent, non-not-found storage error is still a genuine
-		// verification failure, not a caller-retryable one.
-		logger.Warn("httpapi: stat during confirm failed permanently; marking verification_failed", "error", statErr)
-		return domainupload.FailureReasonVerificationFailed, nil
+		// Every OTHER Stat error -- transient (network blip, 5xx, 429)
+		// OR permanent-but-non-not-found (401/403/409/413/422: a rotated
+		// object-store secret, an IAM/bucket-policy change, SigV4 clock
+		// skew, ...) -- says NOTHING about whether the object's bytes
+		// actually arrived: a 401/403 is just as consistent with "the
+		// upload succeeded and this row should end up ready" as with any
+		// other outcome. Fail-safe direction, always: never destroy a
+		// possibly-intact row/object on an error that doesn't PROVE
+		// absence. Both classes are therefore treated identically here --
+		// leave the row 'pending' and return a retryable 500, exactly
+		// like the transient case always has:
+		//   - a genuinely transient error clears on its own retry;
+		//   - a permanent credential/policy error clears once an
+		//     operator fixes the underlying credential/policy -- and the
+		//     row is STILL 'pending' (not yet the terminal 'failed'
+		//     state confirmUploadCore's own idempotency guard makes
+		//     unrecoverable) at that point, so the very next confirm
+		//     retry Stats again and can still resolve to 'ready'.
+		// Before this fix, the permanent branch alone mapped straight to
+		// verification_failed -- marking a successfully-uploaded row
+		// failed AND outboxing a blob_delete for a possibly-intact
+		// object, destroying good data the moment credentials were
+		// restored. If a Stat error genuinely never clears, the 24h
+		// abandonment sweep (uploadsweep) is the eventual backstop that
+		// reaps the still-pending row.
+		logger.Warn("httpapi: stat during confirm failed; leaving upload pending for a later retry", "error", statErr, "transient", ports.IsBlobStoreTransient(statErr))
+		return "", &uploadError{Status: http.StatusInternalServerError, Message: "verification temporarily unavailable, please retry"}
 	}
 
 	// Stat succeeded and size matches: re-check size/quota NOW, the

@@ -93,6 +93,17 @@ func mintUploadCore(ctx context.Context, artifacts *postgres.ArtifactStore, blob
 	if req.SizeBytes <= 0 {
 		return mintUploadResult{}, &uploadError{Status: http.StatusBadRequest, Message: "sizeBytes must be positive"}
 	}
+	// FIX A (security, layer 1 of 2 -- defense in depth): reject control
+	// characters and an overlong value in EITHER field before a row is
+	// ever created. This is the shared core BOTH auth variants run
+	// through, so both get the identical check -- never duplicated
+	// divergently between them. See domainupload.ValidateUploadMetadata's
+	// own doc comment for the exact vulnerability this closes; prompt.go's
+	// own sanitizeUntrustedField is the SECOND, independent layer, holding
+	// even for a value that somehow bypasses this one.
+	if err := domainupload.ValidateUploadMetadata(req.Filename, req.ContentType); err != nil {
+		return mintUploadResult{}, &uploadError{Status: http.StatusBadRequest, Message: err.Error()}
+	}
 
 	sessionTotal, err := artifacts.SumSessionUploadBytes(ctx, sessionID)
 	if err != nil {
