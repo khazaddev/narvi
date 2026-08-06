@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -886,6 +887,610 @@ func TestCreateTurn_WithPendingNotYetReadyAttachment_Returns400(t *testing.T) {
 	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", turnBody, nil, token)
 	if status != http.StatusBadRequest {
 		t.Fatalf("create turn status = %d, want %d (attachment is still pending, not ready)", status, http.StatusBadRequest)
+	}
+}
+
+// --- FIX E (review-fix coverage addition): the sandbox-bearer content
+// route -- the download_file tool's own ACTUAL endpoint (§28.5) -- had
+// ZERO end-to-end coverage before this batch; getSandboxUploadRedirect
+// existed but was never called by any test. ---
+
+// TestUploadContent_Sandbox_RedirectsToPresignedGetWithAttachmentDisposition
+// wires getSandboxUploadRedirect into a real test, mirroring
+// TestUploadLifecycle_Browser_MintPutConfirmDownload's own tail exactly,
+// for the non-/api route.
+func TestUploadContent_Sandbox_RedirectsToPresignedGetWithAttachmentDisposition(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	content := []byte("hello from the download_file tool's own real endpoint")
+	mintBody := []byte(fmt.Sprintf(`{"filename":"report.txt","contentType":"text/plain","sizeBytes":%d}`, len(content)))
+	var mint sandboxMintResponse
+	status := postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1", mintBody, &mint)
+	if status != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", status, http.StatusCreated)
+	}
+	putBytes(t, mint.PutURL, mint.Headers, content)
+
+	var confirm sandboxConfirmResponse
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token", "1", nil, &confirm)
+	if status != http.StatusOK || confirm.Status != "ready" {
+		t.Fatalf("confirm = (status %d, body %+v), want 200/ready", status, confirm)
+	}
+
+	redirectStatus, location := getSandboxUploadRedirect(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/content", "sandbox-bearer-token", "1")
+	if redirectStatus != http.StatusFound {
+		t.Fatalf("content redirect status = %d, want %d", redirectStatus, http.StatusFound)
+	}
+	if location == "" {
+		t.Fatal("content redirect Location header is empty")
+	}
+
+	resp, err := http.Get(location) //nolint:gosec // test-only, URL is our own fake server's
+	if err != nil {
+		t.Fatalf("GET presigned location: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read presigned response body: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Errorf("downloaded content = %q, want %q", got, content)
+	}
+	if cd := resp.Header.Get("Content-Disposition"); !strings.Contains(cd, "attachment") || !strings.Contains(cd, "report.txt") {
+		t.Errorf("Content-Disposition = %q, want attachment naming report.txt", cd)
+	}
+}
+
+// --- FIX F (review-fix coverage addition): the §28.5 404/403/410 +
+// negative-auth matrix, untested on all six new routes before this batch. ---
+
+// TestUploadContent_Sandbox_NotReady_Returns404 is table-driven over the
+// two non-ready statuses §28.5 collapses to the SAME 404 ("uploadID
+// unknown, not this session's, or not status='ready'").
+func TestUploadContent_Sandbox_NotReady_Returns404(t *testing.T) {
+	tests := []struct {
+		name           string
+		confirmAndFail bool // whether to confirm (and fail verification) before requesting content
+	}{
+		{name: "pending (never confirmed)", confirmAndFail: false},
+		{name: "failed (confirmed, never uploaded)", confirmAndFail: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+
+			session := rig.createSession(ctx, t)
+			createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+			mintBody := []byte(`{"filename":"a.bin","contentType":"application/octet-stream","sizeBytes":10}`)
+			var mint sandboxMintResponse
+			status := postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1", mintBody, &mint)
+			if status != http.StatusCreated {
+				t.Fatalf("mint status = %d, want %d", status, http.StatusCreated)
+			}
+
+			if tc.confirmAndFail {
+				// Never PUT -- Stat observes ErrBlobNotFound, resolving
+				// this row to 'failed'.
+				var confirm sandboxConfirmResponse
+				status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token", "1", nil, &confirm)
+				if status != http.StatusOK || confirm.Status != "failed" {
+					t.Fatalf("confirm = (status %d, body %+v), want 200/failed", status, confirm)
+				}
+			}
+
+			redirectStatus, _ := getSandboxUploadRedirect(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/content", "sandbox-bearer-token", "1")
+			if redirectStatus != http.StatusNotFound {
+				t.Errorf("content status = %d, want %d", redirectStatus, http.StatusNotFound)
+			}
+		})
+	}
+}
+
+// TestUploadContent_ForeignSessionUploadID_Returns404 proves session B's
+// own bearer cannot fetch session A's own ready upload via the content
+// route (path scoped to session B, naming session A's own uploadID) --
+// §28.5: "404 ... not this session's".
+func TestUploadContent_ForeignSessionUploadID_Returns404(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	sessionA := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, sessionA.ID, "sandbox-bearer-token-a")
+	sessionB := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, sessionB.ID, "sandbox-bearer-token-b")
+
+	content := []byte("session A's own file")
+	mintBody := []byte(fmt.Sprintf(`{"filename":"a.txt","contentType":"text/plain","sizeBytes":%d}`, len(content)))
+	var mint sandboxMintResponse
+	status := postSandboxUpload(t, rig, "/sessions/"+sessionA.ID.String()+"/uploads", "sandbox-bearer-token-a", "1", mintBody, &mint)
+	if status != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", status, http.StatusCreated)
+	}
+	putBytes(t, mint.PutURL, mint.Headers, content)
+	var confirm sandboxConfirmResponse
+	status = postSandboxUpload(t, rig, "/sessions/"+sessionA.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token-a", "1", nil, &confirm)
+	if status != http.StatusOK || confirm.Status != "ready" {
+		t.Fatalf("confirm = (status %d, body %+v), want 200/ready", status, confirm)
+	}
+
+	// Session B's own bearer, but the URL and uploadID both name session
+	// A's own upload.
+	redirectStatus, _ := getSandboxUploadRedirect(t, rig, "/sessions/"+sessionB.ID.String()+"/uploads/"+mint.UploadID+"/content", "sandbox-bearer-token-b", "1")
+	if redirectStatus != http.StatusNotFound {
+		t.Errorf("content status = %d, want %d (session B must never fetch session A's own upload)", redirectStatus, http.StatusNotFound)
+	}
+}
+
+// TestSandboxBearerUploadRoutes_DeadSandbox_Returns410 mirrors
+// TestScmCredentials_DeadSandboxStatus's own exact shape
+// (scmcredentials_integration_test.go), for each of the three
+// sandbox-bearer upload routes (§28.5's own dead-sandbox handshake,
+// shared via sandboxBearerAuth, uploadcore.go).
+func TestSandboxBearerUploadRoutes_DeadSandbox_Returns410(t *testing.T) {
+	statuses := []struct {
+		name   string
+		status sqlcgen.SandboxStatus
+	}{
+		{"stopped", sqlcgen.SandboxStatusStopped},
+		{"failed", sqlcgen.SandboxStatusFailed},
+	}
+
+	routes := []struct {
+		name string
+		path string
+	}{
+		{"mint", "/uploads"},
+		{"confirm", "/uploads/00000000-0000-0000-0000-000000000000/complete"},
+		{"content", "/uploads/00000000-0000-0000-0000-000000000000/content"},
+	}
+
+	for _, rt := range routes {
+		for _, tc := range statuses {
+			t.Run(rt.name+"/"+tc.name, func(t *testing.T) {
+				rig := newTestRig(t)
+				ctx := context.Background()
+
+				session := rig.createSession(ctx, t)
+				createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+				moveSandboxStatus(ctx, t, rig, session.ID, tc.status)
+
+				var status int
+				if rt.name == "content" {
+					status, _ = getSandboxUploadRedirect(t, rig, "/sessions/"+session.ID.String()+rt.path, "sandbox-bearer-token", "1")
+				} else {
+					status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+rt.path, "sandbox-bearer-token", "1", []byte(`{"filename":"a","contentType":"text/plain","sizeBytes":1}`), nil)
+				}
+				if status != http.StatusGone {
+					t.Errorf("status = %d, want %d (dead sandbox status %s)", status, http.StatusGone, tc.status)
+				}
+			})
+		}
+	}
+}
+
+// TestSandboxBearerUploadRoutes_BadBearerOrGenMismatch is table-driven
+// over the negative-auth matrix (missing bearer, wrong bearer token, gen
+// mismatch) across all three sandbox-bearer upload routes.
+func TestSandboxBearerUploadRoutes_BadBearerOrGenMismatch(t *testing.T) {
+	routes := []struct {
+		name string
+		path string
+	}{
+		{"mint", "/uploads"},
+		{"confirm", "/uploads/00000000-0000-0000-0000-000000000000/complete"},
+		{"content", "/uploads/00000000-0000-0000-0000-000000000000/content"},
+	}
+
+	for _, rt := range routes {
+		t.Run(rt.name, func(t *testing.T) {
+			rig := newTestRig(t)
+			ctx := context.Background()
+			session := rig.createSession(ctx, t)
+			createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+			call := func(bearer, gen string) int {
+				if rt.name == "content" {
+					status, _ := getSandboxUploadRedirect(t, rig, "/sessions/"+session.ID.String()+rt.path, bearer, gen)
+					return status
+				}
+				return postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+rt.path, bearer, gen, []byte(`{"filename":"a","contentType":"text/plain","sizeBytes":1}`), nil)
+			}
+
+			t.Run("missing bearer", func(t *testing.T) {
+				if got := call("", "1"); got != http.StatusUnauthorized {
+					t.Errorf("status = %d, want %d", got, http.StatusUnauthorized)
+				}
+			})
+			t.Run("wrong bearer token", func(t *testing.T) {
+				if got := call("wrong-token", "1"); got != http.StatusUnauthorized {
+					t.Errorf("status = %d, want %d", got, http.StatusUnauthorized)
+				}
+			})
+			t.Run("gen mismatch", func(t *testing.T) {
+				if got := call("sandbox-bearer-token", "999"); got != http.StatusForbidden {
+					t.Errorf("status = %d, want %d", got, http.StatusForbidden)
+				}
+			})
+		})
+	}
+}
+
+// TestMintUploadAPI_ViewerForbidden_Returns403 proves
+// authz.ActionUploadToSession's own §13.3 row holds at the REST boundary
+// too: a viewer can never mint an upload -- mirrors authorize_test.go's
+// own exhaustive-matrix rows for this action (domain/authz package),
+// proven end to end here at the HTTP layer.
+func TestMintUploadAPI_ViewerForbidden_Returns403(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	_, viewerToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleViewer)
+
+	mintBody := []byte(`{"filename":"a.bin","contentType":"application/octet-stream","sizeBytes":10}`)
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/uploads", mintBody, nil, viewerToken)
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (a viewer must never mint an upload)", status, http.StatusForbidden)
+	}
+}
+
+// --- FIX G (review-fix coverage addition): the statErrOverride hook
+// existed but was never armed by any test, leaving evaluateConfirmOutcome's
+// transient branch, permanent branch, and size-mismatch branch all
+// untested. ---
+
+// TestConfirmUpload_TransientStatError_LeavesPendingAndRetryable arms a
+// transient Stat error and proves the row stays 'pending' with no
+// event/outbox side effect -- the caller gets a retryable 500.
+func TestConfirmUpload_TransientStatError_LeavesPendingAndRetryable(t *testing.T) {
+	fake := newFakeBlobStore(t)
+	rig := newTestRig(t, func(r *testRig) { r.blobStore = fake })
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	mintBody := []byte(`{"filename":"a.bin","contentType":"application/octet-stream","sizeBytes":10}`)
+	var mint sandboxMintResponse
+	status := postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1", mintBody, &mint)
+	if status != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", status, http.StatusCreated)
+	}
+
+	fake.statErrOverride = &ports.BlobStoreError{Transient: true, Code: "http_503", Op: ports.BlobOpStat, Err: errors.New("storage temporarily unavailable")}
+
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token", "1", nil, nil)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("confirm status = %d, want %d (a transient Stat error must be retryable, not a hard failure)", status, http.StatusInternalServerError)
+	}
+
+	var uploadID pgtype.UUID
+	if err := uploadID.Scan(mint.UploadID); err != nil {
+		t.Fatalf("scan upload id: %v", err)
+	}
+	row := artifactRow(ctx, t, rig, uploadID, session.ID)
+	if row.Status != sqlcgen.ArtifactStatusPending {
+		t.Errorf("row.Status = %q, want %q (a transient Stat error must leave the row pending, never failed)", row.Status, sqlcgen.ArtifactStatusPending)
+	}
+
+	events, err := rig.events.ListForSession(ctx, session.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("events = %d, want 0 (a still-pending row must never get a resolution event)", len(events))
+	}
+	var outboxCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1`, session.ID).Scan(&outboxCount); err != nil {
+		t.Fatalf("count outbox rows: %v", err)
+	}
+	if outboxCount != 0 {
+		t.Errorf("outbox rows = %d, want 0 (a still-pending row must never get a blob_delete outboxed)", outboxCount)
+	}
+}
+
+// TestConfirmUpload_PermanentNonNotFoundStatError_LeavesPendingAndCanLaterSucceed
+// is written against FIX C's CORRECTED leave-pending behavior (per this
+// batch's own instructions): a permanent, non-not-found Stat error
+// (401/403/409/413/422 -- e.g. a rotated storage secret or an
+// IAM/bucket-policy change) must leave the row pending and retryable,
+// EXACTLY like a transient one, never mark it failed -- see
+// evaluateConfirmOutcome's own doc comment (uploadconfirm.go) for the full
+// fail-safe reasoning this test pins down. Also proves genuine recovery:
+// once the permanent-looking error clears (a later confirm with no
+// override, against the REAL, already-uploaded object), the row still
+// resolves to ready -- proving the earlier error never destroyed anything.
+func TestConfirmUpload_PermanentNonNotFoundStatError_LeavesPendingAndCanLaterSucceed(t *testing.T) {
+	fake := newFakeBlobStore(t)
+	rig := newTestRig(t, func(r *testRig) { r.blobStore = fake })
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	content := []byte("this upload genuinely succeeded")
+	mintBody := []byte(fmt.Sprintf(`{"filename":"a.bin","contentType":"application/octet-stream","sizeBytes":%d}`, len(content)))
+	var mint sandboxMintResponse
+	status := postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1", mintBody, &mint)
+	if status != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", status, http.StatusCreated)
+	}
+	// The object genuinely, fully arrived -- a rotated credential/policy
+	// error at CONFIRM time says nothing about this.
+	putBytes(t, mint.PutURL, mint.Headers, content)
+
+	var uploadID pgtype.UUID
+	if err := uploadID.Scan(mint.UploadID); err != nil {
+		t.Fatalf("scan upload id: %v", err)
+	}
+
+	fake.statErrOverride = &ports.BlobStoreError{Transient: false, Code: "http_403", Op: ports.BlobOpStat, Err: errors.New("access denied (simulated rotated credential)")}
+
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token", "1", nil, nil)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("confirm status = %d, want %d (a permanent, non-not-found Stat error must be retryable, never a hard verification failure)", status, http.StatusInternalServerError)
+	}
+	row := artifactRow(ctx, t, rig, uploadID, session.ID)
+	if row.Status != sqlcgen.ArtifactStatusPending {
+		t.Fatalf("row.Status = %q, want %q (FIX C: never destroy a possibly-intact row on an error that doesn't prove absence)", row.Status, sqlcgen.ArtifactStatusPending)
+	}
+	var outboxCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1`, session.ID).Scan(&outboxCount); err != nil {
+		t.Fatalf("count outbox rows: %v", err)
+	}
+	if outboxCount != 0 {
+		t.Fatalf("outbox rows = %d, want 0 (must never outbox a blob_delete for a row that was never proven absent)", outboxCount)
+	}
+
+	// "Credentials restored" (no override this time) -- confirm retries
+	// against the REAL, already-uploaded object and genuinely recovers.
+	var confirmAgain sandboxConfirmResponse
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token", "1", nil, &confirmAgain)
+	if status != http.StatusOK || confirmAgain.Status != "ready" {
+		t.Fatalf("retried confirm = (status %d, body %+v), want 200/ready (the row was never wrongly destroyed, so it can still resolve to ready)", status, confirmAgain)
+	}
+	row = artifactRow(ctx, t, rig, uploadID, session.ID)
+	if row.Status != sqlcgen.ArtifactStatusReady {
+		t.Errorf("row.Status after recovery = %q, want %q", row.Status, sqlcgen.ArtifactStatusReady)
+	}
+}
+
+// TestConfirmUpload_SizeMismatch_FailsVerificationAndOutboxesBlobDelete
+// arms a genuine size mismatch (declared 1000 bytes at mint, only 50 PUT)
+// -- evaluateConfirmOutcome's own first branch (statErr == nil &&
+// info.SizeBytes != declaredSize), untested before this batch.
+func TestConfirmUpload_SizeMismatch_FailsVerificationAndOutboxesBlobDelete(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	mintBody := []byte(`{"filename":"a.bin","contentType":"application/octet-stream","sizeBytes":1000}`)
+	var mint sandboxMintResponse
+	status := postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1", mintBody, &mint)
+	if status != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", status, http.StatusCreated)
+	}
+	// A truncated/failed transfer that still leaves SOME object at the
+	// key -- declared 1000, actually only 50.
+	putBytes(t, mint.PutURL, mint.Headers, bytes.Repeat([]byte("x"), 50))
+
+	var confirm sandboxConfirmResponse
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token", "1", nil, &confirm)
+	if status != http.StatusOK {
+		t.Fatalf("confirm status = %d, want %d", status, http.StatusOK)
+	}
+	if confirm.Status != "failed" || confirm.FailureReason == nil || *confirm.FailureReason != "verification_failed" {
+		t.Fatalf("confirm = %+v, want failed/verification_failed", confirm)
+	}
+
+	var uploadID pgtype.UUID
+	if err := uploadID.Scan(mint.UploadID); err != nil {
+		t.Fatalf("scan upload id: %v", err)
+	}
+	row := artifactRow(ctx, t, rig, uploadID, session.ID)
+	if row.Status != sqlcgen.ArtifactStatusFailed || row.FailureReason == nil || *row.FailureReason != sqlcgen.ArtifactFailureReasonVerificationFailed {
+		t.Errorf("row = (status %q, reason %v), want (failed, verification_failed)", row.Status, row.FailureReason)
+	}
+
+	var outboxCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindBlobDelete)).Scan(&outboxCount); err != nil {
+		t.Fatalf("count outbox rows: %v", err)
+	}
+	if outboxCount != 1 {
+		t.Errorf("blob_delete outbox rows = %d, want 1", outboxCount)
+	}
+}
+
+// TestConfirmUpload_ReadyRow_DoubleConfirmIsIdempotent mirrors
+// TestConfirmUpload_VerificationFailed_OutboxesBlobDeleteAndEmitsEvent's
+// own idempotency proof, for the READY path -- only the failed-path retry
+// was tested before this batch (a free defense-in-depth extra: refuted as
+// a defect by the review, but worth the coverage).
+func TestConfirmUpload_ReadyRow_DoubleConfirmIsIdempotent(t *testing.T) {
+	broadcaster := &recordingBroadcaster{}
+	rig := newTestRig(t, func(r *testRig) { r.broadcaster = broadcaster })
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	content := []byte("ready and confirmed twice")
+	mintBody := []byte(fmt.Sprintf(`{"filename":"a.bin","contentType":"application/octet-stream","sizeBytes":%d}`, len(content)))
+	var mint sandboxMintResponse
+	status := postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1", mintBody, &mint)
+	if status != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", status, http.StatusCreated)
+	}
+	putBytes(t, mint.PutURL, mint.Headers, content)
+
+	var confirm sandboxConfirmResponse
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token", "1", nil, &confirm)
+	if status != http.StatusOK || confirm.Status != "ready" {
+		t.Fatalf("confirm = (status %d, body %+v), want 200/ready", status, confirm)
+	}
+
+	var confirmAgain sandboxConfirmResponse
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mint.UploadID+"/complete", "sandbox-bearer-token", "1", nil, &confirmAgain)
+	if status != http.StatusOK || confirmAgain.Status != "ready" {
+		t.Fatalf("retried confirm = (status %d, body %+v), want 200/ready (same recorded outcome)", status, confirmAgain)
+	}
+
+	var uploadID pgtype.UUID
+	if err := uploadID.Scan(mint.UploadID); err != nil {
+		t.Fatalf("scan upload id: %v", err)
+	}
+	row := artifactRow(ctx, t, rig, uploadID, session.ID)
+	if row.Status != sqlcgen.ArtifactStatusReady {
+		t.Errorf("row.Status = %q, want %q", row.Status, sqlcgen.ArtifactStatusReady)
+	}
+
+	events, err := rig.events.ListForSession(ctx, session.ID, 0, 10)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("events after retried confirm = %d, want still 1 (never double-appended)", len(events))
+	}
+	if len(broadcaster.all()) != 1 {
+		t.Errorf("broadcasts after retried confirm = %d, want still 1 (never double-broadcast)", len(broadcaster.all()))
+	}
+}
+
+// --- FIX K (review-fix coverage addition): a foreign-session
+// attachmentId at turn creation was untested (only unknown-uuid and
+// pending-not-ready were). Mutation-verified by the reviewer: deleting
+// the session_id predicate from ListReadyUploadsByIDsForSession survives
+// the whole suite without this test. ---
+
+// TestCreateTurn_ForeignSessionAttachment_Returns400 proves session B
+// cannot attach session A's own genuinely-READY upload via attachmentIds
+// -- §28.5 names this case explicitly ("of THIS session").
+func TestCreateTurn_ForeignSessionAttachment_Returns400(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	ownerA, tokenA := rig.createAuthenticatedUser(ctx, t)
+	sessionA := createSessionForUser(ctx, t, rig, ownerA.ID, nil)
+
+	content := []byte("session A's own file")
+	mintBody := []byte(fmt.Sprintf(`{"filename":"a.txt","contentType":"text/plain","sizeBytes":%d}`, len(content)))
+	var mint restdtos.MintUploadResponse
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+sessionA.ID.String()+"/uploads", mintBody, &mint, tokenA)
+	if status != http.StatusCreated {
+		t.Fatalf("mint status = %d, want %d", status, http.StatusCreated)
+	}
+	putBytes(t, mint.PutUrl, mint.Headers, content)
+	var confirm restdtos.ConfirmUploadResponse
+	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+sessionA.ID.String()+"/uploads/"+mint.UploadId+"/complete", []byte(`{}`), &confirm, tokenA)
+	if status != http.StatusOK || string(confirm.Status) != "ready" {
+		t.Fatalf("confirm = (status %d, body %+v), want 200/ready", status, confirm)
+	}
+
+	ownerB, tokenB := rig.createAuthenticatedUser(ctx, t)
+	sessionB := createSessionForUser(ctx, t, rig, ownerB.ID, nil)
+
+	turnBody := []byte(fmt.Sprintf(`{"prompt":"use it","modelId":null,"planMode":false,"attachmentIds":[%q]}`, mint.UploadId))
+	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+sessionB.ID.String()+"/turns", turnBody, nil, tokenB)
+	if status != http.StatusBadRequest {
+		t.Fatalf("create turn status = %d, want %d (session B must never attach session A's own upload)", status, http.StatusBadRequest)
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, sessionB.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Errorf("turns for session B after rejected create = %d, want 0", len(turns))
+	}
+}
+
+// --- FIX L (review-fix coverage addition): no test proved a failed
+// upload frees session-quota headroom (SumSessionUploadBytes excludes
+// status='failed', backing the documented retry-after-failure path). ---
+
+// TestMintUpload_AfterFailedUpload_QuotaHeadroomIsFreed mints and fails a
+// 1000-byte upload, then proves a second 1000-byte mint is NOT refused:
+// if the failed row's bytes still counted toward the session cap (1500,
+// this rig's own default), 1000+1000 = 2000 > 1500 would wrongly trip
+// quota_exceeded.
+func TestMintUpload_AfterFailedUpload_QuotaHeadroomIsFreed(t *testing.T) {
+	rig := newTestRig(t) // rig.objCfg: MaxUploadBytes=1024, MaxSessionUploadBytes=1500
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	var mintA sandboxMintResponse
+	status := postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1",
+		[]byte(`{"filename":"a.bin","contentType":"application/octet-stream","sizeBytes":1000}`), &mintA)
+	if status != http.StatusCreated {
+		t.Fatalf("mint A status = %d, want %d", status, http.StatusCreated)
+	}
+	// Never PUT -- confirm resolves this to 'failed' (verification_failed).
+	var confirmA sandboxConfirmResponse
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads/"+mintA.UploadID+"/complete", "sandbox-bearer-token", "1", nil, &confirmA)
+	if status != http.StatusOK || confirmA.Status != "failed" {
+		t.Fatalf("confirm A = (status %d, body %+v), want 200/failed", status, confirmA)
+	}
+
+	var mintB sandboxMintResponse
+	status = postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1",
+		[]byte(`{"filename":"b.bin","contentType":"application/octet-stream","sizeBytes":1000}`), &mintB)
+	if status != http.StatusCreated {
+		t.Fatalf("mint B status = %d, want %d (a failed upload's bytes must not count against the session quota)", status, http.StatusCreated)
+	}
+}
+
+// --- FIX M (review-fix coverage addition): §28.7's own nil-config
+// feature-flag path (mint returns a structured 503 "uploads not
+// configured") ran in no test -- this rig's own default objCfg is always
+// non-nil. ---
+
+// TestMintUpload_NoObjectStorageConfigured_Returns503 nils the config via
+// this rig's own existing mutate hook, proving both auth variants answer
+// 503, and that nothing else in this rig degrades (session/turn creation
+// still work fine).
+func TestMintUpload_NoObjectStorageConfigured_Returns503(t *testing.T) {
+	rig := newTestRig(t, func(r *testRig) {
+		r.objCfg = nil
+		r.blobStore = nil
+	})
+	ctx := context.Background()
+
+	session := rig.createSession(ctx, t)
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	mintBody := []byte(`{"filename":"a.bin","contentType":"application/octet-stream","sizeBytes":10}`)
+	status := postSandboxUpload(t, rig, "/sessions/"+session.ID.String()+"/uploads", "sandbox-bearer-token", "1", mintBody, nil)
+	if status != http.StatusServiceUnavailable {
+		t.Errorf("sandbox-bearer mint status = %d, want %d", status, http.StatusServiceUnavailable)
+	}
+
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	sessionAPI := createSessionForUser(ctx, t, rig, owner.ID, nil)
+	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+sessionAPI.ID.String()+"/uploads", mintBody, nil, token)
+	if status != http.StatusServiceUnavailable {
+		t.Errorf("browser mint status = %d, want %d", status, http.StatusServiceUnavailable)
+	}
+
+	// Nothing else degrades: an ordinary, attachment-free turn still
+	// creates fine on this same session.
+	turnBody := []byte(`{"prompt":"do the thing","modelId":null,"planMode":false}`)
+	var turnResp restdtos.CreateTurnResponse
+	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+sessionAPI.ID.String()+"/turns", turnBody, &turnResp, token)
+	if status != http.StatusCreated {
+		t.Errorf("create turn status = %d, want %d (a deployment with no object storage must not degrade unrelated routes)", status, http.StatusCreated)
 	}
 }
 

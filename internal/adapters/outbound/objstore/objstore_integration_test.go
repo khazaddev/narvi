@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"testing"
 	"time"
@@ -211,8 +212,28 @@ func TestStore_MinIORoundTrip(t *testing.T) {
 	if !bytes.Equal(gotBytes, content) {
 		t.Errorf("GET body = %q, want %q (byte-for-byte round trip)", gotBytes, content)
 	}
-	if gotDisposition := getResp.Header.Get("Content-Disposition"); gotDisposition == "" {
-		t.Error("GET response Content-Disposition header is empty, want the forced-download filename")
+	// Tightened assertion (review-fix coverage addition, FIX J): this
+	// test deliberately picks a hostile, quote-bearing wantFilename above
+	// specifically to exercise presign.go's own mime.FormatMediaType
+	// escaping against a REAL backend -- asserting only "non-empty" left
+	// that escaping entirely unverified (wantFilename was write-only).
+	// Decode the REAL header the same way any real HTTP client would
+	// (mime.ParseMediaType), rather than string-matching the raw escaped
+	// form, which would be brittle against Go's own internal choice of
+	// backslash-escaping vs RFC 2231 percent-encoding.
+	gotDisposition := getResp.Header.Get("Content-Disposition")
+	if gotDisposition == "" {
+		t.Fatal("GET response Content-Disposition header is empty, want the forced-download filename")
+	}
+	dispositionType, params, err := mime.ParseMediaType(gotDisposition)
+	if err != nil {
+		t.Fatalf("parse Content-Disposition %q: %v", gotDisposition, err)
+	}
+	if dispositionType != "attachment" {
+		t.Errorf("Content-Disposition type = %q, want %q (§28.5: user-supplied content must never render inline)", dispositionType, "attachment")
+	}
+	if params["filename"] != wantFilename {
+		t.Errorf("Content-Disposition filename = %q, want %q (byte-for-byte round trip of the hostile, quote-bearing filename through the real backend)", params["filename"], wantFilename)
 	}
 
 	// -- Delete, then Stat now reports ErrBlobNotFound. --

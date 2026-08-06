@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -595,6 +596,14 @@ func TestRoutes_RequireAuth(t *testing.T) {
 		{name: "ListPlans", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/plans"},
 		{name: "MintWSToken", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/ws-token"},
 		{name: "CreateTurn", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/turns"},
+		// uploads (Step 58, §28.4/§28.5) -- the three /api-mounted browser
+		// twins, review-fix coverage addition (FIX F): the sandbox-bearer
+		// variants of these same three routes are deliberately mounted
+		// OUTSIDE auth.Middleware entirely (their own bearer+gen handshake
+		// is the auth), so only these /api ones belong in this table.
+		{name: "MintUploadAPI", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/uploads"},
+		{name: "ConfirmUploadAPI", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/uploads/00000000-0000-0000-0000-000000000000/complete"},
+		{name: "UploadContentAPI", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/uploads/00000000-0000-0000-0000-000000000000/content"},
 	}
 
 	for _, tc := range tests {
@@ -1641,6 +1650,62 @@ func TestListArtifacts_HappyPath(t *testing.T) {
 	}
 	if len(got.Artifacts) != 1 {
 		t.Fatalf("len(Artifacts) = %d, want 1", len(got.Artifacts))
+	}
+}
+
+// TestListArtifacts_FailedUploadStatusAndFailureReason is a review-fix
+// coverage addition (FIX I): artifactWireMap (artifacts.go) hand-builds
+// its wire shape as a map[string]interface{} (additionalProperties:true,
+// this schema's own design) rather than a generated, field-checked
+// struct -- a typo'd or accidentally-dropped "status"/"failureReason" key
+// would decode cleanly and silently show a failed upload as ready, with a
+// 404ing download link. Seeds a genuinely 'failed' upload via the REAL
+// production path (CreateUpload + MarkUploadFailedIfPending), never a
+// hand-written INSERT, and asserts both fields land correctly on the REST
+// list response.
+func TestListArtifacts_FailedUploadStatusAndFailureReason(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := rig.createSession(ctx, t)
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	var artifactID pgtype.UUID
+	if err := artifactID.Scan(uuid.New().String()); err != nil {
+		t.Fatalf("scan artifact id: %v", err)
+	}
+	blobKey := "sessions/" + session.ID.String() + "/uploads/" + artifactID.String()
+	size := int64(10)
+	contentType := "application/octet-stream"
+	filename := "never-arrived.bin"
+	if _, err := rig.artifacts.CreateUpload(ctx, sqlcgen.CreateUploadArtifactParams{
+		ID:          artifactID,
+		SessionID:   session.ID,
+		Url:         "/api/sessions/" + session.ID.String() + "/uploads/" + artifactID.String() + "/content",
+		BlobKey:     &blobKey,
+		SizeBytes:   &size,
+		ContentType: &contentType,
+		Filename:    &filename,
+	}); err != nil {
+		t.Fatalf("create upload artifact: %v", err)
+	}
+	if _, err := rig.artifacts.MarkUploadFailedIfPending(ctx, artifactID, session.ID, sqlcgen.ArtifactFailureReasonVerificationFailed); err != nil {
+		t.Fatalf("mark upload artifact failed: %v", err)
+	}
+
+	var got restdtos.ArtifactsResponse
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/artifacts", nil, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if len(got.Artifacts) != 1 {
+		t.Fatalf("len(Artifacts) = %d, want 1", len(got.Artifacts))
+	}
+	elem := got.Artifacts[0]
+	if elem["status"] != "failed" {
+		t.Errorf(`Artifacts[0]["status"] = %v, want "failed"`, elem["status"])
+	}
+	if elem["failureReason"] != "verification_failed" {
+		t.Errorf(`Artifacts[0]["failureReason"] = %v, want "verification_failed"`, elem["failureReason"])
 	}
 }
 
