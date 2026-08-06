@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 
 	"github.com/jackc/pgx/v5"
 
@@ -46,6 +47,24 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// pushedShaPattern matches a full, lowercase, 40-character hex commit sha
+// -- the only shape a real `git push` ever produces pushed.Sha
+// (sandboxws.PushCompleteReposElem.Sha) in. The wire schema itself leaves
+// the field an unconstrained string (contracts/sandbox-ws/v1/events.schema.json's
+// own "sha": {"type": "string"}), so a buggy or compromised sandbox
+// process could send anything at all. Enforced at the ONE point both
+// outbound preview payloads are built from it (security fix,
+// enqueuePreviewBestEffort below): PreviewLinkPayload.SHA is posted to
+// GitHub's CreateCommitStatus by the PLATFORM BOT token
+// (githubapi/previewlinknotifier.go) -- an unvalidated value there is
+// attacker-controlled input reaching a write call authenticated with a
+// credential the pusher never had -- and PreviewDispatchPayload.Ref/HeadSHA
+// become the literal git ref RWX itself builds (rwx/previewnotifier.go).
+// Neither downstream call validates its own input, so this is the only
+// gate; a mismatch is treated exactly like an unconfigured preview setting
+// (best-effort, warn-logged, never fails push handling).
+var pushedShaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // previewSettings is the three-field per-repo RWX preview configuration
 // (§4.1.2 point 1), extracted from a repo_settings row.
@@ -102,7 +121,23 @@ func (a *Actor) enqueuePreviewBestEffort(ctx context.Context, owner, repoName st
 		return
 	}
 
-	friendlyURL := rwx.FriendlyPreviewURL(settings.endpointTemplate, ref.Number, settings.orgSlug)
+	// Security fix: validate pushed.Sha at this boundary, before it can
+	// reach either outbound payload below -- see pushedShaPattern's own
+	// doc comment. Best-effort posture, matching this whole function's
+	// established "log and skip THIS repo's preview" discipline: never
+	// fails push handling itself.
+	if !pushedShaPattern.MatchString(pushed.Sha) {
+		a.logger.Warn("sessionactor: push_complete carried a malformed sha; skipping preview enqueue for this repo",
+			"repo", repoFullName, "sha", pushed.Sha)
+		return
+	}
+
+	friendlyURL, err := rwx.FriendlyPreviewURL(settings.endpointTemplate, ref.Number, settings.orgSlug)
+	if err != nil {
+		a.logger.Warn("sessionactor: rendered rwx preview url failed host-pin validation; skipping preview enqueue for this repo",
+			"repo", repoFullName, "error", err)
+		return
+	}
 
 	dispatchPayload, err := json.Marshal(rwx.PreviewDispatchPayload{
 		DispatchKey: settings.dispatchKey,

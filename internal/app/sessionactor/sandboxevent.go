@@ -235,6 +235,16 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 	// inside it, exactly like pushAfterCommit above: a real network call
 	// must never run while this transact's own row lock is held.
 	var gitSyncReceived bool
+	// eventInserted (audit fix, correctness) hoists appendRawEvent's own
+	// Inserted flag out of the transact closure below, exactly like
+	// pushAfterCommit/gitSyncReceived above -- needed because, unlike the
+	// cmd.Type == "tool_call" case (which consumes the closure-local
+	// `inserted` value directly, a few lines down, still inside the same
+	// transact), the cmd.Type == "push_complete" side effect
+	// (createPRBestEffort) runs in this function's own POST-commit block
+	// below, where the closure-local variable is out of scope. See that
+	// call site's own doc comment for why this flag must gate it.
+	var eventInserted bool
 
 	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		now := time.Now()
@@ -267,11 +277,16 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		// lines down, in the cmd.Type == "tool_call" case, to gate the new
 		// mid-turn Linear progress notification against a wire-level
 		// redelivery of an already-processed tool_call -- see
-		// progressnotify.go's own doc comment.
+		// progressnotify.go's own doc comment. Also captured onto
+		// eventInserted (this function's own outer-scoped copy, above) so
+		// the cmd.Type == "push_complete" post-commit side effect below can
+		// consume the SAME signal for the SAME reason, once this closure
+		// has already returned.
 		inserted, err := a.appendRawEvent(ctx, tx, cmd.Type, cmd.MessageID, cmd.Raw)
 		if err != nil {
 			return err
 		}
+		eventInserted = inserted
 
 		// Step 24 ("two-phase terminalization"): Suspect-recovery-during-
 		// grace -- see this file's own top comment for the full reasoning.
@@ -568,7 +583,32 @@ func (a *Actor) handleSandboxEvent(ctx context.Context, cmd SandboxEvent) error 
 		if pushAfterCommit != nil {
 			a.sendPushBestEffort(a.sessionID.String(), pushAfterCommit)
 		}
-		if cmd.Type == "push_complete" {
+		// Audit fix (correctness): push_complete is an at-least-once wire
+		// event (internal/sandboxagent/wsbridge's own doc.go/buffer.go --
+		// resent verbatim, identical MessageId and identical pushed.Sha,
+		// until acked), so createPRBestEffort must not re-run for a wire
+		// redelivery of a push_complete THIS session already processed --
+		// gated on eventInserted here, exactly mirroring how the
+		// "tool_call" case above (inside the transact) gates
+		// maybeEnqueueLinearProgress on the same underlying signal.
+		// recordPRArtifact's own URL-based dedup already made a
+		// redelivery's CreatePR call a harmless no-op for the "pr"
+		// artifact, but enqueuePreviewBestEffort (previewpr.go) is
+		// deliberately NOT idempotency-guarded the same way -- each
+		// GENUINE push carries a new sha, so a fresh preview row/outbox
+		// pair per push is correct -- which meant a wire-level redelivery
+		// of the SAME push_complete (same MessageId, same Sha) used to
+		// enqueue a SECOND, spurious preview artifact and outbox pair
+		// every time the sandbox connection re-sent it before its ack
+		// landed. eventInserted (false on a redelivery: appendRawEvent's
+		// own (session_id, messageID) upsert already saw this exact
+		// message id, per its own doc comment above) is the correct
+		// discriminator -- a URL-based dedup inside
+		// enqueuePreviewBestEffort would be wrong instead, since a
+		// LEGITIMATE second push reuses the same PR-derived friendly URL
+		// but must still enqueue a fresh preview for its own new sha
+		// (previewpr.go's own top comment; previewurl.go).
+		if cmd.Type == "push_complete" && eventInserted {
 			a.createPRBestEffort(ctx, cmd.Raw)
 		}
 
