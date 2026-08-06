@@ -697,9 +697,12 @@ func TestConfirmUpload_SessionCapRace_SecondConfirmFailsQuotaExceeded(t *testing
 // end-to-end path from a real, confirmed upload to a turn's own persisted
 // prompt: mint+PUT+confirm an upload to 'ready', then create a turn
 // naming it via attachmentIds, and read the turn's own stored prompt back
-// to confirm the deterministic attachment block (and the upload-tool
-// note, gated on the SAME condition, turn.go's own doc comment) was
-// appended.
+// to confirm the deterministic attachment block was appended. This rig's
+// own objCfg is configured by default (newTestRig's own doc comment), so
+// the upload-tool note (FIX D: gated independently, on StorageConfigured,
+// turn.go's own createTurnLocked doc comment) rides along too -- both
+// happen to be present here, for two DIFFERENT reasons (an attachment was
+// named; storage is configured), not because they still share one gate.
 func TestCreateTurn_WithReadyAttachment_RendersAttachmentBlock(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
@@ -749,19 +752,74 @@ func TestCreateTurn_WithReadyAttachment_RendersAttachmentBlock(t *testing.T) {
 	if !strings.Contains(prompt, mint.UploadId) {
 		t.Errorf("turn prompt = %q, want the attachment's own download path naming its uploadId", prompt)
 	}
-	// The upload-tool note rides along too (same gating condition).
+	// The upload-tool note rides along too -- this rig's own objCfg is
+	// configured by default, independently of this turn also naming an
+	// attachment (see this test's own doc comment above).
 	if !strings.Contains(prompt, "PRODUCE a file") {
-		t.Errorf("turn prompt = %q, want the upload-tool note appended alongside the attachment block", prompt)
+		t.Errorf("turn prompt = %q, want the upload-tool note appended (storage is configured in this rig)", prompt)
 	}
 }
 
-// TestCreateTurn_NoAttachments_NoBlockRendered proves the byte-for-byte
-// no-op case (§28.5): a turn with no attachmentIds at all gets neither
-// the attachment block nor the upload-tool note -- the exact invariant
-// this codebase's own workflowengine characterization tests (zero-config
-// turns produce byte-identical prompts) depend on.
-func TestCreateTurn_NoAttachments_NoBlockRendered(t *testing.T) {
-	rig := newTestRig(t)
+// TestCreateTurn_NoAttachments_StorageConfigured_RendersNoteButNoBlock is
+// FIX D's own proof (§28.5, "surfaced to the agent ... in build-turn
+// prompts" -- not gated on that same turn also carrying an attachment):
+// a turn with NO attachmentIds at all still gets the upload-tool note
+// appended, exactly because THIS deployment has object storage configured
+// (newTestRig's own default, non-nil objCfg) -- it just gets no attachment
+// block, since there is nothing to list. Before FIX D, this was a named,
+// accepted gap ("an attachment-free turn never learns it could produce a
+// new file"); this test proves the gap is closed.
+func TestCreateTurn_NoAttachments_StorageConfigured_RendersNoteButNoBlock(t *testing.T) {
+	rig := newTestRig(t) // objCfg configured by default (newTestRig's own doc comment)
+	ctx := context.Background()
+
+	owner, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
+
+	turnBody := []byte(`{"prompt":"do the thing","modelId":null,"planMode":false}`)
+	var turnResp restdtos.CreateTurnResponse
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", turnBody, &turnResp, token)
+	if status != http.StatusCreated {
+		t.Fatalf("create turn status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var turnID pgtype.UUID
+	if err := turnID.Scan(turnResp.Id); err != nil {
+		t.Fatalf("scan turn id: %v", err)
+	}
+	turnRow, err := rig.turns.Get(ctx, turnID)
+	if err != nil {
+		t.Fatalf("get turn row: %v", err)
+	}
+	if turnRow.Prompt == nil {
+		t.Fatal("turn.Prompt is nil")
+	}
+	prompt := *turnRow.Prompt
+	if !strings.HasPrefix(prompt, "do the thing") {
+		t.Errorf("turn.Prompt = %q, want it to still start with the original prompt text", prompt)
+	}
+	if strings.Contains(prompt, "upload_attachments") {
+		t.Errorf("turn.Prompt = %q, want NO attachment block (no attachmentIds were named)", prompt)
+	}
+	if !strings.Contains(prompt, "PRODUCE a file") {
+		t.Errorf("turn.Prompt = %q, want the upload-tool note appended (storage is configured, independent of attachments)", prompt)
+	}
+}
+
+// TestCreateTurn_NoAttachments_StorageNotConfigured_ByteForByteNoOp proves
+// the ORIGINAL byte-for-byte no-op case still holds when this deployment
+// genuinely has no object storage configured at all: neither the
+// attachment block nor the upload-tool note renders -- the exact
+// invariant this codebase's own workflowengine characterization tests
+// (zero-config turns produce byte-identical prompts; CreateTurnCore's
+// direct callers there never pass a CreateTurnOptions at all, so
+// StorageConfigured is unconditionally false for them regardless of THIS
+// rig's own objCfg) depend on.
+func TestCreateTurn_NoAttachments_StorageNotConfigured_ByteForByteNoOp(t *testing.T) {
+	rig := newTestRig(t, func(r *testRig) {
+		r.objCfg = nil
+		r.blobStore = nil
+	})
 	ctx := context.Background()
 
 	owner, token := rig.createAuthenticatedUser(ctx, t)

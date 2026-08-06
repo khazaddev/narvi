@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -107,8 +108,17 @@ func TestCreateTurn_HappyPath(t *testing.T) {
 	if turns[0].Status != sqlcgen.TurnStatusPending {
 		t.Errorf("turn status = %s, want %s", turns[0].Status, sqlcgen.TurnStatusPending)
 	}
-	if turns[0].Prompt == nil || *turns[0].Prompt != "do the thing" {
-		t.Errorf("turn prompt = %v, want %q", turns[0].Prompt, "do the thing")
+	// HasPrefix, not exact equality (FIX D follow-up fix, this batch): this
+	// rig's own default objCfg is configured, so createTurnLocked also
+	// appends the upload-tool note (gated on StorageConfigured, turn.go's
+	// own doc comment) after the caller's own prompt text -- this generic
+	// happy-path test only cares that the ORIGINAL prompt text survives
+	// verbatim at the start, not that nothing else was ever appended
+	// (upload_integration_test.go's own TestCreateTurn_NoAttachments_*
+	// tests are where that exact-byte-count invariant is actually pinned
+	// down, for both the storage-configured and not-configured cases).
+	if turns[0].Prompt == nil || !strings.HasPrefix(*turns[0].Prompt, "do the thing") {
+		t.Errorf("turn prompt = %v, want it to start with %q", turns[0].Prompt, "do the thing")
 	}
 }
 
@@ -363,7 +373,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessions, users))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry, nil))
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)

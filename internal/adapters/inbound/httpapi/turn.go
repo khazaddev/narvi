@@ -87,7 +87,14 @@ func hasOpenTurn(turns []sqlcgen.Turn) bool {
 // Locking the session row first forces a second concurrent request to
 // block until the first's transaction commits (or rolls back), so it
 // re-reads the turns list only after that outcome is visible.
-func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry) http.HandlerFunc {
+//
+// objCfg (FIX D, this batch's own follow-up fix, §28.7) is threaded
+// through ONLY so this handler can populate CreateTurnOptions.
+// StorageConfigured (objCfg != nil, the identical signal mintUploadCore
+// checks) -- never consulted for anything else here; nil is a completely
+// valid, ordinary value (a deployment with no object storage configured
+// at all), never a caller error.
+func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, objCfg *platform.ObjectStorageConfig) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -166,7 +173,10 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			attachmentIDs = append(attachmentIDs, id)
 		}
 
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID, RejectIfOpen, attachmentIDs...)
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID, RejectIfOpen, CreateTurnOptions{
+			AttachmentIDs:     attachmentIDs,
+			StorageConfigured: objCfg != nil,
+		})
 		if cerr != nil {
 			logger.Error("httpapi: create turn failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)
@@ -282,6 +292,42 @@ const (
 	AlwaysQueue
 )
 
+// CreateTurnOptions bundles CreateTurnCore/createTurnLocked's own REST-only,
+// opt-in concerns (Step 58, §28.5) into the ONE trailing variadic parameter
+// a bare "attachmentIDs ...pgtype.UUID" used to occupy alone -- Go permits
+// only one variadic parameter, and it must be last, so a second,
+// independent optional concern (StorageConfigured, added by this batch's
+// own FIX D) cannot be a second variadic; bundling both into one struct
+// behind the SAME single variadic slot keeps every one of this core's
+// other five call sites (reviewretrigger.go, linear/webhook.go,
+// slack/turn.go, slack/interactive.go, bot.go's own direct createTurnLocked
+// call) compiling completely UNCHANGED -- omitting a variadic argument is
+// always valid Go regardless of its element type, exactly as it always has
+// been for the bare []pgtype.UUID this replaces. Only CreateTurn's own REST
+// handler (turn.go, below) ever populates either field.
+type CreateTurnOptions struct {
+	// AttachmentIDs is validated inside createTurnLocked's own locked
+	// transaction exactly as the bare variadic parameter it replaces
+	// always was -- see createTurnLocked's own doc comment.
+	AttachmentIDs []pgtype.UUID
+
+	// StorageConfigured reports whether THIS deployment has object
+	// storage configured (§28.7's own feature flag -- the identical
+	// signal mintUploadCore checks to return "uploads not configured",
+	// objCfg != nil) at the moment this turn is created. Gates
+	// RenderUploadToolNote's own visibility at the render site below,
+	// INDEPENDENT of whether this turn carries any attachments at all
+	// (FIX D, §28.5: "surfaced to the agent ... in build-turn prompts" --
+	// not "only on turns that also happen to attach a file"). Left at its
+	// Go zero value (false) by every caller other than CreateTurn's own
+	// REST handler -- review-retrigger, Slack, Linear, and GitHub-bot
+	// turns therefore NEVER render this note regardless of deployment
+	// config, preserving §28.5's own "build-turn prompts" scoping without
+	// any of those four packages needing to learn anything about object
+	// storage at all.
+	StorageConfigured bool
+}
+
 // CreateTurnCore is everything CreateTurn's own doc comment above
 // describes AFTER decoding the request body: fetch (404), lock (the SAME
 // GetActorEpochForUpdate call, closing the identical check-then-act race
@@ -325,18 +371,20 @@ const (
 // precisely so a still-unlinked actor's call can keep its existing,
 // documented bot-attribution behavior unchanged).
 //
-// attachmentIDs (Step 58, §28.5) is a TRAILING VARIADIC parameter,
-// deliberately not a plain slice: mirrors workflows' own "constructed
-// fresh from pool, not threaded as a new parameter" precedent just above
-// in spirit, but for a genuinely caller-supplied value that DOES need a
-// signature change -- a variadic still lets every one of this core's five
-// pre-existing call sites (reviewretrigger.go, linear/webhook.go,
-// slack/turn.go, slack/interactive.go, bot.go's own direct
-// createTurnLocked call) stay completely UNCHANGED (Go allows omitting a
-// trailing variadic entirely), since attachmentIds is a REST-only concept
-// none of them carry -- only CreateTurn's own handler above, the sole
-// caller that ever has any to pass, changed at all.
-func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, attachmentIDs ...pgtype.UUID) (sqlcgen.Turn, bool, *CreateTurnError) {
+// opts (Step 58, §28.5, extended by this batch's own FIX D) is a TRAILING
+// VARIADIC parameter, deliberately not a plain struct: mirrors workflows'
+// own "constructed fresh from pool, not threaded as a new parameter"
+// precedent just above in spirit, but for genuinely caller-supplied values
+// that DO need a signature change -- see CreateTurnOptions' own doc comment
+// for why bundling AttachmentIDs/StorageConfigured behind one variadic slot
+// (rather than a bare "attachmentIDs ...pgtype.UUID" plus a second, separate
+// parameter) lets every one of this core's five pre-existing call sites
+// (reviewretrigger.go, linear/webhook.go, slack/turn.go,
+// slack/interactive.go, bot.go's own direct createTurnLocked call) stay
+// completely UNCHANGED, since neither concept is anything they carry --
+// only CreateTurn's own handler below, the sole caller that ever has
+// either to pass, changed at all.
+func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	if _, err := sessions.Get(ctx, sessionID); err != nil {
@@ -347,7 +395,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
-	return createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, policy, attachmentIDs...)
+	return createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, policy, opts...)
 }
 
 // createTurnLocked is the genuinely shared core every one of this batch's
@@ -400,8 +448,20 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // is never forced to wire one up. Every real production caller
 // (cmd/control-plane/main.go) always passes the SAME, real *postgres.
 // PlanStore, so this is never nil outside tests.
-func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, attachmentIDs ...pgtype.UUID) (sqlcgen.Turn, bool, *CreateTurnError) {
+func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
+
+	// opts is a trailing variadic (CreateTurnOptions' own doc comment)
+	// carrying at most one element -- every one of this core's five
+	// pre-existing callers omits it entirely, leaving both fields at
+	// their Go zero value (no attachments, storage not "configured" as
+	// far as THIS turn's own rendering is concerned).
+	var attachmentIDs []pgtype.UUID
+	var storageConfigured bool
+	if len(opts) > 0 {
+		attachmentIDs = opts[0].AttachmentIDs
+		storageConfigured = opts[0].StorageConfigured
+	}
 
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -564,29 +624,54 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// workflow step whose own PromptTemplate wraps {{prompt}} in
 	// unrelated surrounding text.
 	//
-	// Both are gated on the SAME condition (len(attachmentInfos) > 0),
-	// deliberately narrower than "every build turn" (§28.5's own literal
-	// wording): this codebase's own workflowengine characterization tests
-	// (workflowengine_characterization_integration_test.go) and several
-	// turn-creation integration tests assert BYTE-FOR-BYTE prompt/dispatch
-	// stability for a zero-config turn -- an unconditional tool note on
-	// every turn (tried first, reverted) broke every one of them, since
-	// "zero config" there means literally zero bytes added by any
-	// feature, this one included. Gating on attachmentIDs having actually
-	// validated at least one attachment keeps that invariant intact
-	// (attachmentIds is a brand new, opt-in request field -- no existing
-	// caller anywhere in this codebase ever populates it, so this is a
-	// true no-op for all of them) while still surfacing the upload-tool
-	// note on exactly the turns where it is most relevant: one already
-	// carrying attachments the agent might want to act on or replace.
-	// The narrower case this trades away -- telling the agent it can
-	// produce a brand-new file on a turn with NO attachments at all -- is
-	// a real gap, named here rather than silently dropped; revisit only
-	// together with a real plan for threading a "does this deployment
-	// even have object storage configured" signal through createTurnLocked
-	// without the same blast radius.
+	// FIX D (design-conformance, this batch's own follow-up fix): the two
+	// blocks are now gated INDEPENDENTLY, not on the same condition --
+	// an earlier version of this comment recorded the note's own
+	// attachment-gating as a named, accepted gap ("telling the agent it
+	// can produce a brand-new file on a turn with NO attachments at all"),
+	// deferred pending "a real plan for threading a ... storage configured
+	// ... signal through createTurnLocked" -- CreateTurnOptions.
+	// StorageConfigured (this batch's own addition) is that plan.
+	//
+	// The attachment block STAYS gated on len(attachmentInfos) > 0 --
+	// correct, unchanged: no attachments, no block, byte-for-byte no-op
+	// preserved for every turn that never names one.
+	//
+	// The upload-tool note is now gated on opts[0].StorageConfigured
+	// instead (§28.7's own feature flag -- the identical signal
+	// mintUploadCore checks to answer "uploads not configured", never a
+	// second, invented config knob), independent of whether THIS turn
+	// happens to carry any attachments -- §28.5's own literal wording is
+	// "surfaced to the agent ... in build-turn prompts", not "only on
+	// turns that also attach a file". This DOES change prompt bytes for a
+	// zero-attachment REST-created (web) turn once a deployment configures
+	// object storage -- workflowengine_characterization_integration_test.go
+	// and upload_integration_test.go's own TestCreateTurn_NoAttachments_*
+	// tests were updated for this Step to match, since the change is
+	// intentional and spec-mandated, not a regression.
+	//
+	// Why this does NOT reopen the byte-for-byte characterization
+	// invariant those tests still protect: StorageConfigured lives on
+	// CreateTurnOptions, this core's own trailing VARIADIC parameter (see
+	// that type's own doc comment) -- every one of this core's five
+	// OTHER callers (reviewretrigger.go's review turns, linear/webhook.go,
+	// slack/turn.go, slack/interactive.go, bot.go's GitHub-bot turns) omits
+	// it entirely, so storageConfigured is unconditionally false for all
+	// of them regardless of deployment config, and the note never renders
+	// on their turns at all -- preserving §28.5's own "build-turn prompts"
+	// scoping (a review/bot/Slack/Linear turn is never a build turn a
+	// human composed with attachments in mind) without any of those four
+	// packages needing to learn anything about object storage. Only
+	// CreateTurn's own REST handler (below) ever sets it, so the
+	// characterization tests (which call CreateTurnCore directly, with no
+	// trailing CreateTurnOptions at all) see storageConfigured == false
+	// and keep their own existing zero-byte-added assertions intact
+	// unconditionally, regardless of whether the TEST RIG's own objCfg
+	// happens to be configured.
 	if len(attachmentInfos) > 0 {
 		effectivePrompt += domainupload.RenderAttachmentBlock(attachmentInfos)
+	}
+	if storageConfigured {
 		effectivePrompt += domainupload.RenderUploadToolNote(sessionID.String())
 	}
 
