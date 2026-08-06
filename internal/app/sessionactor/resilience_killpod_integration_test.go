@@ -173,6 +173,35 @@ func newTestPoolPair(t *testing.T) (poolA, poolB *pgxpool.Pool) {
 // the correct way to simulate "pod A" abruptly disappearing. Fails the
 // test if no such backend is found (a real bug in the test's own setup,
 // not a condition this test is designed to tolerate).
+//
+// Returns only once the kill's EFFECT is actually observable: no granted
+// advisory lock remains in pg_locks. pg_terminate_backend only ever SENDS
+// the termination signal -- it returns true the moment the signal is
+// delivered, without waiting for the target backend to be scheduled,
+// process it, abort, and release its locks (Postgres's own documented
+// semantics), so the lock release is asynchronous with respect to this
+// function's own Exec returning. That gap is normally sub-millisecond,
+// but on a CPU-starved runner the dying backend can go unscheduled for
+// tens of milliseconds -- CI runs 31008526590 and 31009652346 (two
+// unrelated PRs, same day, same test-integration group) each caught
+// exactly that window: TestResilience_ConcurrentPlainSpawnAcrossActors_
+// CreateSandboxCalledAtMostOnce's own single-shot registryB.GetOrSpawn
+// (a deliberately non-blocking, fail-fast pg_try_advisory_lock --
+// registry.go's own documented §2 contract, which must NOT grow retries
+// for a test harness's sake) ran inside it and got
+// ErrSessionActorElsewhere from a backend that was already dead but not
+// yet reaped. A mechanism probe against a deliberately CPU-throttled
+// (0.4-CPU) Postgres reproduced the window at a 3.2% hit rate (16/500,
+// release lag up to 44ms; 0/500 unthrottled). Polling pg_locks here is
+// authoritative, not a heuristic: pg_try_advisory_lock and pg_locks read
+// the same shared lock-manager state, so "no granted advisory lock
+// remains" is exactly the postcondition every call site's own next step
+// already assumes ("this only succeeds because the kill released the
+// advisory lock" -- each caller's own doc comment). This keeps the kill
+// itself every bit as abrupt as before (nothing graceful is added to the
+// dying side); it only makes this helper's return honest about when the
+// simulated `kill -9` has actually COMPLETED -- a real pod B never wins
+// the lock earlier than that either.
 func killAdvisoryLockHolder(ctx context.Context, t *testing.T, adminPool *pgxpool.Pool) {
 	t.Helper()
 
@@ -203,6 +232,26 @@ func killAdvisoryLockHolder(ctx context.Context, t *testing.T, adminPool *pgxpoo
 			t.Fatalf("pg_terminate_backend(%d): %v", pid, err)
 		}
 	}
+
+	// Wait for the terminated backend(s) to have actually released their
+	// advisory locks -- see this helper's own doc comment for why this is
+	// asynchronous, and why pg_locks is the authoritative signal to poll.
+	// The zero-granted-locks postcondition deliberately matches the kill's
+	// own breadth above (every granted advisory lock's holder was just
+	// terminated), and is only meaningful against newTestPoolPair's own
+	// dedicated container (sharedpool_integration_test.go's top doc comment
+	// already documents why this whole helper is never safe against the
+	// shared one). In the common case the first poll already observes zero
+	// (probe p50 lag: ~318µs), so this adds one round trip, not latency.
+	waitUntil(t, 10*time.Second, func() bool {
+		var stillGranted int
+		if err := adminPool.QueryRow(ctx,
+			`SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND granted = true`,
+		).Scan(&stillGranted); err != nil {
+			t.Fatalf("recheck granted advisory locks: %v", err)
+		}
+		return stillGranted == 0
+	})
 }
 
 // TestResilience_KillPodMidTurn_TurnFailsWithReason_NoStuckProcessing is
