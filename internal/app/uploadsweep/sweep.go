@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/objstore"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
@@ -190,9 +191,7 @@ func (s *Sweeper) resolveAbandoned(ctx context.Context, row sqlcgen.Artifact) er
 	if row.BlobKey != nil {
 		blobKey = *row.BlobKey
 	}
-	blobDeletePayload, err := json.Marshal(struct {
-		Key string `json:"key"`
-	}{Key: blobKey})
+	blobDeletePayload, err := json.Marshal(objstore.BlobDeletePayload{Key: blobKey})
 	if err != nil {
 		return fmt.Errorf("marshal blob_delete outbox payload: %w", err)
 	}

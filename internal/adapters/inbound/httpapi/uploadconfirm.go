@@ -30,6 +30,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/objstore"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
@@ -42,17 +43,6 @@ import (
 type confirmOutcome struct {
 	Status        sqlcgen.ArtifactStatus
 	FailureReason *sqlcgen.ArtifactFailureReason
-}
-
-// blobDeleteOutboxPayload is the JSON shape enqueued under
-// ports.NotificationKindBlobDelete (§28.4) -- a plain, locally-declared
-// type (not a shared Go type with the objstore-package Notifier that
-// consumes it): the outbox's own payload column is opaque JSON
-// (ports.Notification.Payload's own doc comment), so producer and
-// consumer only need to agree on the WIRE shape, never a shared Go type
-// across that boundary.
-type blobDeleteOutboxPayload struct {
-	Key string `json:"key"`
 }
 
 // confirmUploadCore is the shared logic both auth variants run after
@@ -188,7 +178,7 @@ func confirmUploadCore(
 	}
 
 	if reason != "" {
-		blobDeletePayload, marshalErr := json.Marshal(blobDeleteOutboxPayload{Key: string(blobKey)})
+		blobDeletePayload, marshalErr := json.Marshal(objstore.BlobDeletePayload{Key: string(blobKey)})
 		if marshalErr != nil {
 			logger.Error("httpapi: marshal blob_delete outbox payload failed", "error", marshalErr)
 			return confirmOutcome{}, &uploadError{Status: http.StatusInternalServerError, Message: "internal error"}

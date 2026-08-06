@@ -157,6 +157,14 @@ test-integration-group-4:
 # setup, same caveat as Modal.
 # Config.Load() still requires every one of these unconditionally in Go —
 # nothing is made "optional in development" there.
+# Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+# §28.7) adds the NARVI_OBJECT_STORE_* block, pointed at
+# docker-compose.dev.yml's own new minio service: the root user/password/
+# bucket here match that file's own MINIO_ROOT_USER/MINIO_ROOT_PASSWORD and
+# the minio-init service's own provisioned bucket name EXACTLY -- unlike
+# every credential above, these are not placeholders, uploads actually
+# work end to end against this local MinIO. NARVI_OBJECT_STORE_USE_PATH_STYLE
+# is required true for MinIO (§28.7's own path-style toggle).
 dev:
 	docker compose -f docker-compose.dev.yml up -d --wait
 	NARVI_STAGE=development \
@@ -184,6 +192,12 @@ dev:
 	NARVI_ANTHROPIC_API_KEY=dev-anthropic-api-key-placeholder \
 	NARVI_INTENT_CLASSIFIER_PROVIDER=anthropic \
 	NARVI_INTENT_CLASSIFIER_MODEL=claude-haiku-4-5 \
+	NARVI_OBJECT_STORE_ENDPOINT=http://localhost:$${NARVI_DEV_MINIO_PORT:-9000} \
+	NARVI_OBJECT_STORE_REGION=us-east-1 \
+	NARVI_OBJECT_STORE_BUCKET=narvi-dev-uploads \
+	NARVI_OBJECT_STORE_ACCESS_KEY_ID=narvi \
+	NARVI_OBJECT_STORE_SECRET_ACCESS_KEY=narvi-dev-secret \
+	NARVI_OBJECT_STORE_USE_PATH_STYLE=true \
 	go run ./cmd/control-plane serve
 
 # contracts-generate regenerates every codegen target under contracts/gen from
