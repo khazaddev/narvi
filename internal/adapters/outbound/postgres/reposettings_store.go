@@ -48,3 +48,21 @@ func (s *RepoSettingsStore) Upsert(ctx context.Context, repoFullName string, blo
 		SentinelAutofixEnabled: sentinelAutofixEnabled,
 	})
 }
+
+// UpsertPreviewSettings idempotently creates-or-updates repoFullName's RWX
+// preview configuration (Step 57, §4.1.2 point 1) -- dispatchKey/
+// endpointTemplate/orgSlug as the new, full current values for those THREE
+// columns only, leaving block_on_high_risk/sentinel_autofix_enabled
+// completely untouched (UpsertRWXPreviewSettings' own generated doc
+// comment). No admin-facing REST route calls this yet (Step 57's own
+// scope is the dispatch/notifier mechanism, not a settings UI) -- today's
+// one real caller is this package's own integration tests, exercising the
+// exact write path a future settings endpoint would use.
+func (s *RepoSettingsStore) UpsertPreviewSettings(ctx context.Context, repoFullName, dispatchKey, endpointTemplate, orgSlug string) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertRWXPreviewSettings(ctx, sqlcgen.UpsertRWXPreviewSettingsParams{
+		RepoFullName:               repoFullName,
+		RwxPreviewDispatchKey:      &dispatchKey,
+		RwxPreviewEndpointTemplate: &endpointTemplate,
+		RwxPreviewOrgSlug:          &orgSlug,
+	})
+}

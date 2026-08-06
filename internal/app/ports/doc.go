@@ -15,10 +15,11 @@
 //
 // SandboxProvider (§4.1) is the first port implemented, at Step 12,
 // against two adapters: internal/adapters/outbound/modal (Step 12, real)
-// and internal/adapters/outbound/rwx (Step 48, still a stub as of this
-// Step — same interface, later implementation). See sandboxprovider.go,
-// capabilities.go, createspec.go, refs.go, and providererror.go for the
-// interface and its supporting value types.
+// and internal/adapters/outbound/rwx (a stub through Step 56; Step 57
+// makes it a real second implementation — same interface, per §4.1.1's
+// design). See sandboxprovider.go, capabilities.go, createspec.go,
+// refs.go, and providererror.go for the interface and its supporting
+// value types.
 //
 // AgentRuntime (§4.2, the OpenCode anti-corruption layer) is the SECOND
 // port, added this Step (17), against internal/adapters/outbound/opencode

@@ -1385,11 +1385,14 @@ type ReleaseManifestPending struct {
 }
 
 type RepoSetting struct {
-	RepoFullName           string             `json:"repo_full_name"`
-	BlockOnHighRisk        bool               `json:"block_on_high_risk"`
-	CreatedAt              pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt              pgtype.Timestamptz `json:"updated_at"`
-	SentinelAutofixEnabled bool               `json:"sentinel_autofix_enabled"`
+	RepoFullName               string             `json:"repo_full_name"`
+	BlockOnHighRisk            bool               `json:"block_on_high_risk"`
+	CreatedAt                  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt                  pgtype.Timestamptz `json:"updated_at"`
+	SentinelAutofixEnabled     bool               `json:"sentinel_autofix_enabled"`
+	RwxPreviewDispatchKey      *string            `json:"rwx_preview_dispatch_key"`
+	RwxPreviewEndpointTemplate *string            `json:"rwx_preview_endpoint_template"`
+	RwxPreviewOrgSlug          *string            `json:"rwx_preview_org_slug"`
 }
 
 type ReviewFinding struct {

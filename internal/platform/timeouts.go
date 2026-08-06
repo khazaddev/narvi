@@ -1821,6 +1821,54 @@ type Timeouts struct {
 	// "generous, round, clearly-justified default" precedent applies
 	// (ProviderHTTPClientTimeout, OutboxClaimDuration, etc.).
 	AutomationCronCatchUpWindow time.Duration
+
+	// --- Step 57 standalone additions ("RWX provider + previews", §4.1.1):
+	// RWXCLIExecTimeout has no ordering relationship with either invariant
+	// chain above (or with any prior standalone addition), so — per those
+	// additions' own precedent — a plain field with a sensible default, not
+	// wired into a fake invariant link. RWXSandboxInactivityTimeout DOES
+	// need its own pairwise check against ActorIdleTTL (see Validate()
+	// below), so it is not a plain standalone addition either — mirroring
+	// ReconcilerOrphanConfirmationPeriod's own identical "named in this
+	// same standalone-additions block, but still gets a real invariant
+	// check" precedent.
+
+	// RWXCLIExecTimeout bounds ONE internal/adapters/outbound/rwx subprocess
+	// invocation of the pinned `rwx` CLI (sandbox `start|exec|stop|reset|
+	// list`, always with `--format json`) — every Provider method that
+	// shells out wraps its own call with this bound, mirroring
+	// RepoCloneTimeout's own "a real subprocess must never run against an
+	// unbounded context" precedent. RWX's own published latency claims
+	// ("spin up in seconds, not minutes") are directional marketing copy,
+	// not an engineering p99 (§4.1.1) — no real pinned binary is reachable
+	// from this codebase's own tests/CI to measure one empirically. Not
+	// specified in the plan; chosen as 2 minutes: comfortably above
+	// SnapshotMintTimeout's own 60s (a lighter, single provider API round
+	// trip) since `rwx sandbox start` provisions an actual VM, while still
+	// far below RepoCloneTimeout's 5m — a generous ceiling for a claimed-fast
+	// operation, not an expected duration; real p99s replace this once
+	// measured against a real account (§4.1.3).
+	RWXCLIExecTimeout time.Duration
+
+	// RWXSandboxInactivityTimeout is the value internal/adapters/outbound/
+	// rwx.Provider.CreateSandbox passes as `rwx sandbox start`'s own
+	// `--inactivity-timeout` flag — deliberately set ABOVE Narvi's own
+	// session-idle authority (§2's ActorIdleTTL, 30 min; and
+	// InactivityTimeout, 10 min, this package's own existing
+	// "ready, non-processing sandbox" stop timer) rather than reused from
+	// either, so NARVI's timers — not RWX's own auto-stop — are what
+	// normally decide a session's idleness first (§4.1.1: "set above
+	// Narvi's own session-idle authority... so Narvi's timers, not RWX's,
+	// decide idleness"). A provider-initiated auto-stop that fires anyway
+	// (e.g. Narvi's own timer pump missed a tick) is an ordinary, expected
+	// entry into §3.2's `stopped` state feeding the resume/recreate lane —
+	// never treated as a failure. Enforced with margin against ActorIdleTTL
+	// by Validate() below. Not specified in the plan; chosen as 45 minutes
+	// — comfortably above ActorIdleTTL's 30-minute ceiling (which already
+	// exceeds InactivityTimeout's own 10 minutes, so clearing the larger of
+	// the two named authorities clears both), while staying well below
+	// ProviderHardCap's 2-hour ceiling.
+	RWXSandboxInactivityTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -1973,6 +2021,9 @@ func DefaultTimeouts() Timeouts {
 		AutomationRunRunningOrphanThreshold:  90 * time.Minute, // §3.5, explicit ("running >90 min")
 		AutomationCronGranularity:            1 * time.Minute,  // Step 52, §8.4; structural, not tunable -- see field doc comment
 		AutomationCronCatchUpWindow:          10 * time.Minute, // Step 52 review fix (missed cron evaluations); not specified, chosen -- see field doc comment
+
+		RWXCLIExecTimeout:           2 * time.Minute,  // Step 57, §4.1.1; not specified (RWX publishes no p99), chosen generously -- see field doc comment
+		RWXSandboxInactivityTimeout: 45 * time.Minute, // Step 57, §4.1.1; not specified, chosen with margin above ActorIdleTTL (30min) -- see field doc comment
 	}
 }
 
@@ -2094,6 +2145,18 @@ func (t Timeouts) Validate() error {
 	// it is meant to cover, with margin" statement, nothing more elaborate.
 	check("AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
 		"AutomationCronCatchUpWindow", t.AutomationCronCatchUpWindow, "AutomationEnginePumpInterval", t.AutomationEnginePumpInterval)
+
+	// Step 57 ("RWX provider + previews", §4.1.1): RWXSandboxInactivityTimeout
+	// must stay at least MinTimeoutMargin above ActorIdleTTL, or RWX's own
+	// `--inactivity-timeout` auto-stop could fire BEFORE Narvi's own
+	// session-idle authority ever gets a chance to decide idleness first —
+	// exactly the inversion §4.1.1 requires this field to avoid ("set
+	// above Narvi's own session-idle authority... so Narvi's timers, not
+	// RWX's, decide idleness"). See RWXSandboxInactivityTimeout's own doc
+	// comment for why ActorIdleTTL (the larger of the two named
+	// authorities) is the one checked here.
+	check("RWXSandboxInactivityTimeout > ActorIdleTTL",
+		"RWXSandboxInactivityTimeout", t.RWXSandboxInactivityTimeout, "ActorIdleTTL", t.ActorIdleTTL)
 
 	return errors.Join(errs...)
 }

@@ -174,6 +174,35 @@ const (
 	// path". See NotificationKindSlackWorkflowDecision's own doc comment
 	// above for the full "why a distinct Kind" reasoning.
 	NotificationKindGitHubWorkflowDecision NotificationKind = "github_workflow_decision"
+
+	// NotificationKindRWXPreviewDispatch is Step 57's ("RWX provider +
+	// previews", §4.1.2 point 2) own addition: routes to
+	// internal/adapters/outbound/rwx's own ports.Notifier implementation,
+	// which POSTs to RWX's real, documented Dispatches API
+	// (https://cloud.rwx.com/mint/api/runs/dispatches) to trigger a
+	// preview-app build at the pushed sha. Enqueued exactly once per
+	// pushed repo whose per-repo preview setting is present
+	// (internal/app/sessionactor/pushpr.go's own createPRBestEffort — the
+	// ONE enqueue point, §4.1.2 point 1), in the SAME fresh transaction as
+	// the companion NotificationKindGitHubPreviewLink row and the
+	// session's first real "preview"-typed artifact row. Delivery is the
+	// fast dispatch POST only — it never waits for RWX's own build to
+	// finish (§4.1.2 point 2: "Delivery is the fast dispatch POST only; it
+	// never waits for the build").
+	NotificationKindRWXPreviewDispatch NotificationKind = "rwx_preview_dispatch"
+
+	// NotificationKindGitHubPreviewLink is Step 57's own companion
+	// addition (§4.1.2 point 3): routes to internal/adapters/outbound/
+	// githubapi's own small notifier, which posts a `narvi/preview` commit
+	// status (via a NEW CreateCommitStatus adapter capability — POST
+	// /repos/{owner}/{repo}/statuses/{sha}) carrying the deterministic
+	// "friendly" RWX preview URL. A commit status, not an issue comment or
+	// a GitHub Deployment (§4.1.2 point 3's own reasoning: redelivery of
+	// the same (context, sha) converges instead of duplicating, and a
+	// preview that can die with RWX's own idle reaper should never
+	// masquerade as a deployment environment). Enqueued alongside
+	// NotificationKindRWXPreviewDispatch above, never independently.
+	NotificationKindGitHubPreviewLink NotificationKind = "github_preview_link"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

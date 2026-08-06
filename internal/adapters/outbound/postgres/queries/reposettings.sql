@@ -23,3 +23,19 @@ VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET block_on_high_risk = EXCLUDED.block_on_high_risk, sentinel_autofix_enabled = EXCLUDED.sentinel_autofix_enabled, updated_at = now()
 RETURNING *;
+
+-- name: UpsertRWXPreviewSettings :one
+-- Step 57 ("RWX provider + previews", §4.1.2 point 1): idempotent
+-- create-or-update of ONLY the three RWX-preview columns (migrations/
+-- 000059_repo_settings_rwx_preview.up.sql), keyed on repo_full_name --
+-- deliberately independent of UpsertRepoSettings above: block_on_high_risk/
+-- sentinel_autofix_enabled are the review domain's own admin-only
+-- booleans; RWX previews are a separately-toggled setting with a
+-- different shape entirely. This upsert touches ONLY these three columns
+-- -- ON CONFLICT leaves whatever the other two already hold (their own
+-- DEFAULT false when this creates a brand-new row) completely untouched.
+INSERT INTO repo_settings (repo_full_name, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET rwx_preview_dispatch_key = EXCLUDED.rwx_preview_dispatch_key, rwx_preview_endpoint_template = EXCLUDED.rwx_preview_endpoint_template, rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug, updated_at = now()
+RETURNING *;

@@ -1371,3 +1371,106 @@ func TestCheckRepoAccess_EscapesOwnerAndRepo(t *testing.T) {
 		t.Errorf("request EscapedPath = %q, want %q (owner/repo must be escaped, not interpolated raw)", gotEscapedPath, want)
 	}
 }
+
+// TestCreateCommitStatus_Success proves CreateCommitStatus (Step 57, "RWX
+// provider + previews", §4.1.2 point 3) posts the right shape to
+// /repos/{owner}/{repo}/statuses/{sha}.
+func TestCreateCommitStatus_Success(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotMethod, gotAuth, gotAccept string
+	var gotBody map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotAccept = r.Header.Get("Accept")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "state": "success"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	err := adapter.CreateCommitStatus(context.Background(), "acme", "widgets", "abc123sha",
+		"success", "https://myapp-pr-7--acme.rwx.run", "Preview deployed via RWX (ephemeral).", "narvi/preview", "bot-token")
+	if err != nil {
+		t.Fatalf("CreateCommitStatus() error = %v, want nil", err)
+	}
+
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/repos/acme/widgets/statuses/abc123sha" {
+		t.Errorf("path = %q, want %q", gotPath, "/repos/acme/widgets/statuses/abc123sha")
+	}
+	if gotAuth != "Bearer bot-token" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer bot-token")
+	}
+	if gotAccept != "application/vnd.github+json" {
+		t.Errorf("Accept = %q, want %q", gotAccept, "application/vnd.github+json")
+	}
+	if gotBody["state"] != "success" {
+		t.Errorf("body[state] = %v, want %q", gotBody["state"], "success")
+	}
+	if gotBody["target_url"] != "https://myapp-pr-7--acme.rwx.run" {
+		t.Errorf("body[target_url] = %v, want the friendly preview URL", gotBody["target_url"])
+	}
+	if gotBody["context"] != "narvi/preview" {
+		t.Errorf("body[context] = %v, want %q", gotBody["context"], "narvi/preview")
+	}
+	if gotBody["description"] != "Preview deployed via RWX (ephemeral)." {
+		t.Errorf("body[description] = %v, want the ephemerality caveat", gotBody["description"])
+	}
+}
+
+// TestCreateCommitStatus_HTTPError proves a non-2xx GitHub response
+// surfaces a real error via doPost's shared error-envelope parsing.
+func TestCreateCommitStatus_HTTPError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Validation Failed"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	err := adapter.CreateCommitStatus(context.Background(), "acme", "widgets", "abc123sha",
+		"success", "https://example.rwx.run", "desc", "narvi/preview", "bot-token")
+	if err == nil {
+		t.Fatal("CreateCommitStatus() error = nil, want non-nil")
+	}
+}
+
+// TestCreateCommitStatus_EscapesOwnerRepoSHA proves owner/repo/sha are each
+// escaped as opaque path segments, mirroring PostIssueComment's own
+// identical discipline.
+func TestCreateCommitStatus_EscapesOwnerRepoSHA(t *testing.T) {
+	t.Parallel()
+
+	var gotEscapedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+	if err := adapter.CreateCommitStatus(context.Background(), "acme/evil", "widgets", "sha#v1",
+		"success", "", "", "narvi/preview", "tok"); err != nil {
+		t.Fatalf("CreateCommitStatus() error = %v", err)
+	}
+
+	want := "/repos/acme%2Fevil/widgets/statuses/sha%23v1"
+	if gotEscapedPath != want {
+		t.Errorf("request EscapedPath = %q, want %q", gotEscapedPath, want)
+	}
+}
