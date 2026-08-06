@@ -322,6 +322,12 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 	// this is the one place those placeholders can actually be resolved. A
 	// no-op for every non-review turn (no placeholders present).
 	cmd.Text = renderVerdictToolPromptText(cmd.Text, h.cfg.SessionConfig)
+	// Step 58 (§28.5): the SAME mechanism, extended for the
+	// download_file/upload tools' own placeholders (internal/domain/
+	// upload's attachment block + upload-tool note, rendered at
+	// turn-creation time by createTurnLocked) -- a no-op for a turn with
+	// none of those placeholders present.
+	cmd.Text = renderUploadToolPromptText(cmd.Text, h.cfg.SessionConfig)
 
 	h.group.Go(func() error {
 		sink := func(event ports.AgentEvent) {

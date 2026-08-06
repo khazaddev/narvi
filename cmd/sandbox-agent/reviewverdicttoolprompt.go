@@ -10,25 +10,41 @@
 // see that package's own doc comment) in place of this turn's real,
 // live, CURRENT-gen URL/bearer/gen.
 //
+// Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+// §28.5) extends this SAME mechanism for a second tool, never a second
+// substitution scheme: internal/domain/upload's own
+// BaseURLPlaceholder/BearerPlaceholder/GenPlaceholder (rendered into a
+// build turn's own attachment block and upload-tool note by
+// internal/adapters/inbound/httpapi's createTurnLocked, at turn-creation
+// time, for the identical "no live sandbox/gen yet" reason review's own
+// placeholders exist) are resolved by renderUploadToolPromptText below,
+// via the SAME controlPlaneHTTPBase derivation reviewVerdictToolURL
+// itself is built on -- BaseURLPlaceholder deliberately expands to
+// scheme://host ONLY (no path): unlike the verdict tool's one fixed path,
+// an attachment block can name an arbitrary number of per-attachment
+// paths, each already baked into the rendered text verbatim (sessionID/
+// uploadID are non-secret, already-known server-generated UUIDs at
+// render time -- see internal/domain/upload/prompt.go's own doc comment).
+//
 // This sandbox-agent process is the ONE place in the whole system where a
 // specific, about-to-run turn's sessionID, SandboxToken, and Gen are all
 // simultaneously and CURRENTLY in scope together -- it already holds all
 // three (cfg.SessionConfig, read from its own NARVI_SESSION_CONFIG at
 // boot) for the sandbox WS handshake and the scm-credentials/
-// snapshot-mint calls it already makes. renderVerdictToolPromptText below
-// substitutes the placeholders for those real, live values immediately
-// before a "prompt" command's own Text is handed to OpenCode
-// (commandHandler.HandlePrompt, main.go) -- never persisted, never
-// logged.
+// snapshot-mint calls it already makes. renderVerdictToolPromptText/
+// renderUploadToolPromptText below substitute their own placeholders for
+// those real, live values immediately before a "prompt" command's own
+// Text is handed to OpenCode (commandHandler.HandlePrompt, main.go) --
+// never persisted, never logged.
 //
-// Deliberately unconditional, with no "is this a review session" flag
-// anywhere on the wire (sandboxws.Prompt, §6.1, carries none, and this
-// file adds none): a prompt with none of the three placeholders -- every
-// non-review turn, since review.RenderTurnPrompt is never called to build
-// one -- is returned byte-for-byte unchanged by strings.ReplaceAll's own
+// Deliberately unconditional, with no "is this a review/upload-carrying
+// turn" flag anywhere on the wire (sandboxws.Prompt, §6.1, carries none,
+// and this file adds none): a prompt with none of a given function's own
+// placeholders -- every turn that function's own producer never rendered
+// -- is returned byte-for-byte unchanged by strings.ReplaceAll's own
 // documented no-op behavior when the substring it is asked to replace is
-// absent. The placeholders' own presence already is the only signal this
-// substitution needs.
+// absent. Each placeholder set's own presence already is the only signal
+// its own substitution needs.
 package main
 
 import (
@@ -41,6 +57,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	domainupload "github.com/khazaddev/narvi/internal/domain/upload"
 )
 
 // renderVerdictToolPromptText substitutes review.VerdictToolURLPlaceholder/
@@ -85,24 +102,60 @@ func renderVerdictToolPromptText(text string, cfg *sessionconfig.SessionConfig) 
 	return text
 }
 
-// reviewVerdictToolURL derives the CP-HTTP POST /sessions/{sessionID}/
-// review/verdict URL from controlPlaneWsUrl (SessionConfig.
-// ControlPlaneWsUrl, a ws(s)://.../sessions/{id}/ws?type=sandbox URL,
-// §6.1) -- mirrors internal/sandboxagent/credentials.NewCPClient's own
-// identical wss->https/ws->http scheme-swap-plus-loopback-guard exactly
-// (that package's own doc comment: "there is no separate REST base URL
-// field in SESSION_CONFIG... this is a documented, reasoned derivation"),
+// renderUploadToolPromptText substitutes internal/domain/upload's own
+// BaseURLPlaceholder/BearerPlaceholder/GenPlaceholder with this sandbox's
+// OWN, live, current-gen values -- see this file's own top doc comment
+// for the full rationale, and internal/domain/upload/prompt.go's own doc
+// comment for why BaseURLPlaceholder is scheme://host ONLY, no path.
+// Mirrors renderVerdictToolPromptText's own structure and error handling
+// exactly (nil cfg / malformed ControlPlaneWsUrl both degrade to
+// "leave placeholders unresolved", never turn-fatal).
+func renderUploadToolPromptText(text string, cfg *sessionconfig.SessionConfig) string {
+	if cfg == nil {
+		return text
+	}
+	if !strings.Contains(text, domainupload.BaseURLPlaceholder) &&
+		!strings.Contains(text, domainupload.BearerPlaceholder) &&
+		!strings.Contains(text, domainupload.GenPlaceholder) {
+		// The common case (a turn with no attachments -- RenderUploadToolNote
+		// is unconditional, so this branch is actually rarer than the
+		// verdict tool's own identical fast path, but kept for symmetry and
+		// to skip the URL derivation below whenever genuinely nothing needs
+		// it, e.g. a plain string field neither renderer ever touches).
+		return text
+	}
+
+	base, err := controlPlaneHTTPBase(cfg.ControlPlaneWsUrl)
+	if err != nil {
+		slog.Warn("sandbox-agent: derive upload-tool base URL failed; leaving prompt placeholders unresolved", "error", err)
+		return text
+	}
+
+	text = strings.ReplaceAll(text, domainupload.BaseURLPlaceholder, base)
+	text = strings.ReplaceAll(text, domainupload.BearerPlaceholder, cfg.SandboxToken)
+	text = strings.ReplaceAll(text, domainupload.GenPlaceholder, strconv.Itoa(cfg.Gen))
+	return text
+}
+
+// controlPlaneHTTPBase derives the scheme://host prefix (no path) from
+// controlPlaneWsURL (SessionConfig.ControlPlaneWsUrl, a
+// ws(s)://.../sessions/{id}/ws?type=sandbox URL, §6.1) -- mirrors
+// internal/sandboxagent/credentials.NewCPClient's own identical
+// wss->https/ws->http scheme-swap-plus-loopback-guard exactly (that
+// package's own doc comment: "there is no separate REST base URL field in
+// SESSION_CONFIG... this is a documented, reasoned derivation"),
 // duplicated here rather than exported cross-package for such a small,
 // one-off derivation -- the same "small, local, dependency-free helper"
 // precedent internal/adapters/inbound/httpapi's own sessionRepoHosts
 // establishes elsewhere in this codebase. The loopback guard matters just
-// as much here as it does in NewCPClient: this URL, bearer token, and gen
-// are about to be embedded verbatim in a review turn's own prompt text,
-// so a plaintext ws:// control plane on anything but loopback would mean
-// this sandbox token travels in the clear the moment the review agent
+// as much here as it does in NewCPClient: this base URL feeds both
+// reviewVerdictToolURL below and renderUploadToolPromptText above, each
+// about to embed it (plus a bearer token) verbatim in a turn's own prompt
+// text, so a plaintext ws:// control plane on anything but loopback would
+// mean this sandbox token travels in the clear the moment the agent
 // actually calls it -- refused here for the identical reason NewCPClient
 // refuses it.
-func reviewVerdictToolURL(controlPlaneWsURL, sessionID string) (string, error) {
+func controlPlaneHTTPBase(controlPlaneWsURL string) (string, error) {
 	parsed, err := url.Parse(controlPlaneWsURL)
 	if err != nil {
 		return "", fmt.Errorf("sandbox-agent: parse control plane ws url %q: %w", controlPlaneWsURL, err)
@@ -121,7 +174,18 @@ func reviewVerdictToolURL(controlPlaneWsURL, sessionID string) (string, error) {
 		return "", fmt.Errorf("sandbox-agent: control plane ws url %q has unrecognized scheme %q, want ws or wss", controlPlaneWsURL, parsed.Scheme)
 	}
 
-	return httpScheme + "://" + parsed.Host + "/sessions/" + url.PathEscape(sessionID) + "/review/verdict", nil
+	return httpScheme + "://" + parsed.Host, nil
+}
+
+// reviewVerdictToolURL derives the CP-HTTP POST /sessions/{sessionID}/
+// review/verdict URL by appending its own fixed path onto
+// controlPlaneHTTPBase's own scheme://host derivation above.
+func reviewVerdictToolURL(controlPlaneWsURL, sessionID string) (string, error) {
+	base, err := controlPlaneHTTPBase(controlPlaneWsURL)
+	if err != nil {
+		return "", err
+	}
+	return base + "/sessions/" + url.PathEscape(sessionID) + "/review/verdict", nil
 }
 
 // isLoopbackHost reports whether hostport's host component (a bare
