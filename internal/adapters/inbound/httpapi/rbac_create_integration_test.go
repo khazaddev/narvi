@@ -47,7 +47,7 @@ func TestCreateSession_Viewer_Returns403(t *testing.T) {
 	ctx := context.Background()
 	viewer, viewerToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleViewer)
 
-	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"planMode":false}`)
+	body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"effort":null,"planMode":false}`)
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, nil, viewerToken)
 	if status != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", status, http.StatusForbidden)
@@ -69,7 +69,7 @@ func TestCreateTurn_Viewer_Returns403(t *testing.T) {
 	_, viewerToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleViewer)
 	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
 
-	body := []byte(`{"prompt": "do the thing", "modelId": null, "planMode": false}`)
+	body := []byte(`{"prompt": "do the thing", "modelId": null,"effort":null, "planMode": false}`)
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, nil, viewerToken)
 	if status != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", status, http.StatusForbidden)
@@ -98,7 +98,7 @@ func TestCreateTurn_NonOwnerNonParticipantMember_Returns403(t *testing.T) {
 	_, outsiderToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMember)
 	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
 
-	body := []byte(`{"prompt": "do the thing", "modelId": null, "planMode": false}`)
+	body := []byte(`{"prompt": "do the thing", "modelId": null,"effort":null, "planMode": false}`)
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, nil, outsiderToken)
 	if status != http.StatusForbidden {
 		t.Errorf("status = %d, want %d", status, http.StatusForbidden)

@@ -35,6 +35,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/slack"
 	"github.com/khazaddev/narvi/internal/adapters/inbound/wshub"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/chatgptoauth"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/llm"
@@ -44,6 +45,8 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/rwx"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/automation"
+	"github.com/khazaddev/narvi/internal/app/chatgptlink"
+	"github.com/khazaddev/narvi/internal/app/chatgptrefresh"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
@@ -333,6 +336,27 @@ func serve() error {
 	// AND the sandbox-facing delivery endpoint (providercredentialsdelivery.go)
 	// -- one store, shared, never a second independently-constructed copy.
 	providerCredentialStore := postgres.NewProviderCredentialStore(pool)
+	// chatGPTLinkAttemptStore/chatGPTDeviceFlow (Step 59, "models: Codex
+	// via ChatGPT-account OAuth", §29.3/§29.5/§29.9) back the self-service
+	// link-flow REST routes (chatgptlink.go) AND the refresh pump
+	// (chatgptrefresh) -- one store/client each, shared, never a second
+	// independently-constructed copy. chatGPTDeviceFlow's own httpClient
+	// deliberately does NOT set http.Client.Timeout -- chatgptoauth.Client
+	// bounds every call itself via a per-call context.WithTimeout wrap
+	// (platform.Timeouts.ChatGPTOAuthHTTPClientTimeout), mirroring
+	// internal/adapters/outbound/opencode's own doJSONTimeout precedent
+	// (see that package's own client.go doc comment).
+	chatGPTLinkAttemptStore := postgres.NewChatGPTLinkAttemptStore(pool)
+	chatGPTDeviceFlow := chatgptoauth.New(http.DefaultClient, chatgptoauth.DefaultBaseURL, cfg.Timeouts.ChatGPTOAuthHTTPClientTimeout)
+	chatGPTLinkDeps := chatgptlink.Deps{
+		Pool:                pool,
+		LinkAttempts:        chatGPTLinkAttemptStore,
+		ProviderCredentials: providerCredentialStore,
+		AuditLog:            auditLogStore,
+		DeviceFlow:          chatGPTDeviceFlow,
+		TokenEncryptionKey:  cfg.TokenEncryptionKey,
+		Timeouts:            cfg.Timeouts,
+	}
 	// reviewFindingStore/sentinelFixStore (Step 48, "sentinels +
 	// suggestions", §17/§22.1) back the verdict-posting tool's own
 	// per-finding upsert + sentinel-auto-fix claim (reviewverdict.go), the
@@ -792,6 +816,22 @@ func serve() error {
 		r.Patch("/{userID}/role", httpapi.UpdateMemberRole(pool, userStore, identityStore, auditLogStore))
 		r.Post("/{userID}/identities", httpapi.LinkMemberIdentity(pool, userStore, identityStore, auditLogStore))
 		r.Delete("/{userID}/identities/{identityID}", httpapi.UnlinkMemberIdentity(pool, identityStore, auditLogStore))
+	})
+
+	// /api/me/chatgpt-link (Step 59, "models: Codex via ChatGPT-account
+	// OAuth", §29.3/§29.9): self-service link/status/unlink -- gated
+	// behind auth.Middleware exactly like /api/members above; each
+	// handler renders the real authz.ActionLinkChatGPTAccount verdict
+	// (own-aware, satisfied unconditionally here since every one of these
+	// three handlers only ever acts on the caller's OWN userID, never a
+	// path parameter naming a different user -- see chatgptlink.go's own
+	// doc comment for why there is no admin "/api/members/{userID}/
+	// chatgpt-link" surface yet).
+	router.Route("/api/me/chatgpt-link", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Post("/", httpapi.StartChatGPTLink(chatGPTLinkDeps))
+		r.Get("/", httpapi.GetChatGPTLinkStatus(chatGPTLinkDeps))
+		r.Delete("/", httpapi.DeleteChatGPTLink(chatGPTLinkDeps))
 	})
 	router.Route("/api/audit-log", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
@@ -1299,6 +1339,22 @@ func serve() error {
 			return nil
 		})
 	}
+
+	// Step 59 ("models: Codex via ChatGPT-account OAuth", §29.5):
+	// chatGPTRefreshPump is the single control-plane refresher for every
+	// linked ChatGPT account -- unconditional (unlike uploadSweeper above,
+	// this needs no optional external dependency to be configured; it is
+	// a plain, always-on ticker that simply finds zero rows to do until a
+	// user actually links an account). Started/shut down through this
+	// SAME errgroup as every other background loop above -- no naked
+	// goroutine (§11) -- with the identical context.Canceled carve-out.
+	chatGPTRefreshPump := chatgptrefresh.NewPump(providerCredentialStore, pool, chatGPTDeviceFlow, cfg.TokenEncryptionKey, cfg.Timeouts)
+	group.Go(func() error {
+		if err := chatGPTRefreshPump.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("chatgpt oauth refresh pump: %w", err)
+		}
+		return nil
+	})
 
 	group.Go(func() error {
 		<-groupCtx.Done()

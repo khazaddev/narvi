@@ -597,7 +597,7 @@ func TestRequestChanges_ViaExistingTurnsEndpoint_SupersedesAndCreatesV2(t *testi
 
 	// Submit the "request changes" turn via the EXISTING /turns endpoint
 	// (turn.go's own CreateTurn, reused as-is -- not a new endpoint).
-	body := []byte(`{"prompt": "keep the env fallback", "modelId": null, "planMode": true}`)
+	body := []byte(`{"prompt": "keep the env fallback", "modelId": null,"effort":null, "planMode": true}`)
 	var createdTurn restdtos.CreateTurnResponse
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, &createdTurn, token)
 	if status != http.StatusCreated {

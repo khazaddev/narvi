@@ -85,7 +85,7 @@ func TestCreateTurn_HappyPath(t *testing.T) {
 	user, token := rig.createAuthenticatedUser(ctx, t)
 	session := createSessionForUser(ctx, t, rig, user.ID, nil)
 
-	body := []byte(`{"prompt": "do the thing", "modelId": null, "planMode": false}`)
+	body := []byte(`{"prompt": "do the thing", "modelId": null,"effort":null, "planMode": false}`)
 	var got restdtos.CreateTurnResponse
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, &got, token)
 	if status != http.StatusCreated {
@@ -139,7 +139,7 @@ func TestCreateTurn_InFlightTurnExists_Returns409(t *testing.T) {
 		t.Fatalf("seed in-flight turn: %v", err)
 	}
 
-	body := []byte(`{"prompt": "relaunch and resume", "modelId": null, "planMode": false}`)
+	body := []byte(`{"prompt": "relaunch and resume", "modelId": null,"effort":null, "planMode": false}`)
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, nil, token)
 	if status != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", status, http.StatusConflict)
@@ -171,7 +171,7 @@ func TestCreateTurn_DispatchedTurnExists_Returns409(t *testing.T) {
 	}
 
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns",
-		[]byte(`{"prompt": "again", "modelId": null, "planMode": false}`), nil, token)
+		[]byte(`{"prompt": "again", "modelId": null,"effort":null, "planMode": false}`), nil, token)
 	if status != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", status, http.StatusConflict)
 	}
@@ -205,7 +205,7 @@ func TestCreateTurn_ConcurrentRequests_OnlyOneSucceeds(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			req, err := http.NewRequest(http.MethodPost, rig.server.URL+"/api/sessions/"+session.ID.String()+"/turns",
-				bytes.NewReader([]byte(`{"prompt": "relaunch and resume", "modelId": null, "planMode": false}`)))
+				bytes.NewReader([]byte(`{"prompt": "relaunch and resume", "modelId": null,"effort":null, "planMode": false}`)))
 			if err != nil {
 				errs[i] = fmt.Errorf("build request: %w", err)
 				return
@@ -269,7 +269,7 @@ func TestCreateTurn_AwaitingPlan_Returns409NothingCreated(t *testing.T) {
 	seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
 
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns",
-		[]byte(`{"prompt": "build it now", "modelId": null, "planMode": false}`), nil, token)
+		[]byte(`{"prompt": "build it now", "modelId": null,"effort":null, "planMode": false}`), nil, token)
 	if status != http.StatusConflict {
 		t.Fatalf("status = %d, want %d", status, http.StatusConflict)
 	}
@@ -296,7 +296,7 @@ func TestCreateTurn_AwaitingPlan_PlanModeTrue_Allowed(t *testing.T) {
 	session := createSessionForUser(ctx, t, rig, user.ID, nil)
 	seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
 
-	body := []byte(`{"prompt": "please also cover the edge case", "modelId": null, "planMode": true}`)
+	body := []byte(`{"prompt": "please also cover the edge case", "modelId": null,"effort":null, "planMode": true}`)
 	var got restdtos.CreateTurnResponse
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, &got, token)
 	if status != http.StatusCreated {
@@ -321,7 +321,7 @@ func TestCreateTurn_UnknownSession_Returns404(t *testing.T) {
 
 	unknownID := "00000000-0000-0000-0000-000000000000"
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+unknownID+"/turns",
-		[]byte(`{"prompt": "do the thing", "modelId": null, "planMode": false}`), nil, token)
+		[]byte(`{"prompt": "do the thing", "modelId": null,"effort":null, "planMode": false}`), nil, token)
 	if status != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", status, http.StatusNotFound)
 	}
@@ -335,7 +335,7 @@ func TestCreateTurn_MalformedID_Returns400(t *testing.T) {
 	_, token := rig.createAuthenticatedUser(ctx, t)
 
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/not-a-uuid/turns",
-		[]byte(`{"prompt": "do the thing", "modelId": null, "planMode": false}`), nil, token)
+		[]byte(`{"prompt": "do the thing", "modelId": null,"effort":null, "planMode": false}`), nil, token)
 	if status != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", status, http.StatusBadRequest)
 	}
@@ -433,7 +433,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 		t.Fatalf("move sandbox to ready: %v", err)
 	}
 
-	body := []byte(`{"prompt": "continue where we left off", "modelId": null, "planMode": false}`)
+	body := []byte(`{"prompt": "continue where we left off", "modelId": null,"effort":null, "planMode": false}`)
 	req, err := http.NewRequest(http.MethodPost, server.URL+"/api/sessions/"+session.ID.String()+"/turns", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build request: %v", err)
