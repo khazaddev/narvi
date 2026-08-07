@@ -135,9 +135,20 @@ RETURNING *;
 -- today (§29.4's own named, accepted "creator's seat" consequence). The
 -- caller (providercredentialsdelivery.go) groups the result by provider
 -- and runs internal/domain/providercredential.Resolve over each group.
+--
+-- The trailing AND (kind <> 'oauth' OR oauth_needs_relink = false) is
+-- Step 59's own addition (§29.5: "a terminal refresh failure ... the row
+-- stops being served"): a needs-relink oauth row is excluded from the
+-- candidate set entirely, so Resolve simply never sees it -- exactly as
+-- if no credential were configured for that provider at that scope,
+-- falling through to whatever OTHER scope might still resolve. A no-op
+-- for every api_key row (oauth_needs_relink is NEVER true for kind <>
+-- 'oauth', enforced by provider_credentials_kind_oauth_shape), so this
+-- changes nothing for Step 53's own existing static-key resolution.
 SELECT * FROM provider_credentials
-WHERE scope = 'global'
+WHERE (scope = 'global'
    OR (scope = 'repo' AND scope_target_id = ANY(sqlc.arg('repo_full_names')::text[]))
    OR (scope = 'environment' AND scope_target_id IS NOT NULL AND scope_target_id = sqlc.narg('environment_id'))
-   OR (scope = 'user' AND scope_target_id IS NOT NULL AND scope_target_id = sqlc.narg('user_id'))
+   OR (scope = 'user' AND scope_target_id IS NOT NULL AND scope_target_id = sqlc.narg('user_id')))
+  AND (kind <> 'oauth' OR oauth_needs_relink = false)
 ORDER BY provider;

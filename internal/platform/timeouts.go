@@ -1922,6 +1922,45 @@ type Timeouts struct {
 	// own "lightweight call, not a large data transfer" reasoning — Stat
 	// is a HeadObject, Delete a DeleteObject, neither moves object bytes.
 	ObjectStoreHTTPClientTimeout time.Duration
+
+	// --- Step 59 standalone additions ("models: Codex via ChatGPT-account
+	// OAuth", §29.5/§29.9): no ordering relationship with either invariant
+	// chain above (or any prior Step's own standalone additions), so —
+	// per those additions' own precedent — plain fields with sensible
+	// defaults, not wired into a fake invariant link.
+
+	// ChatGPTOAuthRefreshMargin is how far ahead of an oauth-kind provider_
+	// credentials row's own oauth_expires_at the refresh pump (§29.5)
+	// starts trying to refresh it — i.e. the pump's own claim query is
+	// "oauth_expires_at < now() + ChatGPTOAuthRefreshMargin". §29.5 gives
+	// this explicitly: "propose 72h ... against the verified 10-day access
+	// lifetime and OpenAI's own ~8-day staleness refresh in Codex CLI" —
+	// generous enough that a served access token always has comfortably
+	// more than ChatGPTOAuthRefreshPumpInterval of validity left even if a
+	// single pump tick is missed.
+	ChatGPTOAuthRefreshMargin time.Duration
+
+	// ChatGPTOAuthRefreshPumpInterval is the refresh pump's own tick
+	// cadence — mirrors OutboxPumpInterval/ReconcilerInterval's own
+	// ticker-loop shape (outboxworker.Builder.Run, internal/app/
+	// reconciler.Reconciler.Run), just far less frequent, since the whole
+	// point of a 72h margin against a 10-day lifetime is that this pump
+	// does not need to run often. §29.5 gives this explicitly: "propose
+	// 6h".
+	ChatGPTOAuthRefreshPumpInterval time.Duration
+
+	// ChatGPTOAuthHTTPClientTimeout bounds every outbound HTTP call this
+	// Step's own new device-flow adapter (internal/adapters/outbound/
+	// chatgptoauth) makes directly to auth.openai.com — the 4 calls §29.2/
+	// §29.9 name (usercode, token-poll, code exchange, refresh). Not
+	// specified in the plan; chosen generously as 15s — a real third-party
+	// OAuth endpoint over the public internet, more generous than this
+	// codebase's own "lightweight internal call" precedents
+	// (RepoSHAResolutionTimeout/ContractsFingerprintResolutionTimeout/
+	// ObjectStoreHTTPClientTimeout, all 10s) since neither this adapter's
+	// own latency nor auth.openai.com's is under Narvi's control the way a
+	// same-datacenter Postgres/internal-service call's is.
+	ChatGPTOAuthHTTPClientTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2083,6 +2122,10 @@ func DefaultTimeouts() Timeouts {
 		UploadPendingSweepAfter:        24 * time.Hour,   // Step 58, §28.4, explicit ("propose 24 h")
 		UploadAbandonmentSweepInterval: 15 * time.Minute, // Step 58, §28.4, explicit ("propose 15 min")
 		ObjectStoreHTTPClientTimeout:   10 * time.Second, // Step 58; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+
+		ChatGPTOAuthRefreshMargin:       72 * time.Hour,   // Step 59, §29.5, explicit ("propose 72h")
+		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // Step 59, §29.5, explicit ("propose 6h")
+		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // Step 59; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
 	}
 }
 

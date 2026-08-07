@@ -12,9 +12,11 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -23,9 +25,34 @@ import (
 // providerCredsResponse mirrors internal/adapters/inbound/httpapi's own
 // (unexported) providerCredentialsResponse for this test's own decode
 // target -- same convention scmCredResponse already establishes in this
-// package for the SCM case.
+// package for the SCM case. credAuthValue mirrors that file's own
+// credentialAuthValue (Step 59, §29.6) -- deliberately independent Go
+// types on each side of the wire, reconciled by hand, exactly like
+// scmcredentials.go's own documented precedent for this sibling endpoint
+// (providercredentialsdelivery.go's own top doc comment).
 type providerCredsResponse struct {
-	Credentials map[string]string `json:"credentials"`
+	Credentials map[string]credAuthValue `json:"credentials"`
+}
+
+type credAuthValue struct {
+	Type      string  `json:"type"`
+	Key       *string `json:"key,omitempty"`
+	Access    *string `json:"access,omitempty"`
+	Expires   *int64  `json:"expires,omitempty"`
+	AccountID *string `json:"accountId,omitempty"`
+}
+
+// apiKey returns v's own Key value for an "api"-typed entry, or "" for
+// anything else (including a genuinely absent map entry, Go's own zero
+// value) -- lets every one of this file's existing assertions (written
+// before Step 59 against a bare map[string]string) keep comparing a plain
+// string, unchanged in spirit, against an api-kind credential's own
+// resolved value.
+func apiKey(v credAuthValue) string {
+	if v.Type != "api" || v.Key == nil {
+		return ""
+	}
+	return *v.Key
 }
 
 // postProviderCredentials posts to the real delivery route with the given
@@ -248,8 +275,8 @@ func TestProviderCredentialsDelivery_GlobalOnly_Resolves(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
-	if got.Credentials["anthropic"] != "global-anthropic-key" {
-		t.Errorf("Credentials[anthropic] = %q, want %q", got.Credentials["anthropic"], "global-anthropic-key")
+	if apiKey(got.Credentials["anthropic"]) != "global-anthropic-key" {
+		t.Errorf("Credentials[anthropic] = %q, want %q", apiKey(got.Credentials["anthropic"]), "global-anthropic-key")
 	}
 }
 
@@ -274,8 +301,8 @@ func TestProviderCredentialsDelivery_RepoBeatsGlobal(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
-	if got.Credentials["openai"] != "repo-openai-key" {
-		t.Errorf("Credentials[openai] = %q, want %q (repo must beat global)", got.Credentials["openai"], "repo-openai-key")
+	if apiKey(got.Credentials["openai"]) != "repo-openai-key" {
+		t.Errorf("Credentials[openai] = %q, want %q (repo must beat global)", apiKey(got.Credentials["openai"]), "repo-openai-key")
 	}
 }
 
@@ -304,8 +331,8 @@ func TestProviderCredentialsDelivery_EnvironmentBeatsRepo(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
-	if got.Credentials["google"] != "env-google-key" {
-		t.Errorf("Credentials[google] = %q, want %q (environment must beat repo)", got.Credentials["google"], "env-google-key")
+	if apiKey(got.Credentials["google"]) != "env-google-key" {
+		t.Errorf("Credentials[google] = %q, want %q (environment must beat repo)", apiKey(got.Credentials["google"]), "env-google-key")
 	}
 }
 
@@ -335,14 +362,14 @@ func TestProviderCredentialsDelivery_MultipleProviders_EachResolvedIndependently
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
-	if got.Credentials["google"] != "env-google-key" {
-		t.Errorf("Credentials[google] = %q, want %q", got.Credentials["google"], "env-google-key")
+	if apiKey(got.Credentials["google"]) != "env-google-key" {
+		t.Errorf("Credentials[google] = %q, want %q", apiKey(got.Credentials["google"]), "env-google-key")
 	}
-	if got.Credentials["anthropic"] != "repo-anthropic-key" {
-		t.Errorf("Credentials[anthropic] = %q, want %q", got.Credentials["anthropic"], "repo-anthropic-key")
+	if apiKey(got.Credentials["anthropic"]) != "repo-anthropic-key" {
+		t.Errorf("Credentials[anthropic] = %q, want %q", apiKey(got.Credentials["anthropic"]), "repo-anthropic-key")
 	}
-	if got.Credentials["openai"] != "global-openai-key" {
-		t.Errorf("Credentials[openai] = %q, want %q", got.Credentials["openai"], "global-openai-key")
+	if apiKey(got.Credentials["openai"]) != "global-openai-key" {
+		t.Errorf("Credentials[openai] = %q, want %q", apiKey(got.Credentials["openai"]), "global-openai-key")
 	}
 	if len(got.Credentials) != 3 {
 		t.Errorf("len(Credentials) = %d, want 3", len(got.Credentials))
@@ -410,9 +437,9 @@ func TestProviderCredentialsDelivery_MultiRepo_PrimaryRepoCredentialWins(t *test
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want %d", status, http.StatusOK)
 	}
-	if got.Credentials["openai"] != "primary-repo-openai-key" {
+	if apiKey(got.Credentials["openai"]) != "primary-repo-openai-key" {
 		t.Errorf("Credentials[openai] = %q, want %q (primary repo, sessions.repos position 0, must win deterministically over secondary)",
-			got.Credentials["openai"], "primary-repo-openai-key")
+			apiKey(got.Credentials["openai"]), "primary-repo-openai-key")
 	}
 }
 
@@ -425,4 +452,141 @@ func encryptForTest(t *testing.T, rig testRig, plaintext string) []byte {
 		t.Fatalf("EncryptToken: %v", err)
 	}
 	return encrypted
+}
+
+// --- Step 59 (§29.4/§29.6): user-scope oauth resolution ---
+
+// TestProviderCredentialsDelivery_UserScopeOAuth_Resolves is this Step's
+// own new-behavior test: a session's own creator has a linked ChatGPT
+// account (a scope=user/kind=oauth provider_credentials row); the delivery
+// response's own "openai" entry must be the "oauth" Auth-union member
+// (§29.6) -- access/expires/accountId populated from the decrypted {access,
+// refresh, expires_ms, account_id} blob -- and, critically, the RAW
+// response body must never contain the word "refresh" at all: §29.5's own
+// "the refresh token NEVER leaves the control plane" rule, verified here
+// at the wire level, not merely by this test's own typed decode target
+// (credAuthValue has no Refresh field to accidentally populate either way
+// -- this raw-body check additionally guards against a FUTURE regression
+// that adds one back).
+func TestProviderCredentialsDelivery_UserScopeOAuth_Resolves(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	user, _ := rig.createAuthenticatedUser(ctx, t)
+
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		CreatedBy:   user.ID,
+		Repos:       []byte(providerCredsRepos),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	blob := []byte(`{"access":"access-token-abc","refresh":"refresh-token-MUST-NEVER-BE-SENT","expires_ms":1234567890123,"account_id":"acct-xyz-789"}`)
+	if _, err := rig.providerCredentials.UpsertOAuth(ctx, user.ID.String(), sqlcgen.ProviderCredentialProviderOpenai, encryptForTest(t, rig, string(blob)), time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatalf("UpsertOAuth: %v", err)
+	}
+
+	status, rawBody := postProviderCredentialsRaw(t, rig, session.ID.String(), "sandbox-bearer-token", "1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if strings.Contains(rawBody, "refresh") {
+		t.Fatalf("raw response body contains \"refresh\" -- the refresh token must NEVER leave the control plane (§29.5): body = %s", rawBody)
+	}
+
+	var got providerCredsResponse
+	if err := json.Unmarshal([]byte(rawBody), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	entry, ok := got.Credentials["openai"]
+	if !ok {
+		t.Fatalf("Credentials[openai] absent, want the oauth entry present")
+	}
+	if entry.Type != "oauth" {
+		t.Errorf("Credentials[openai].Type = %q, want %q", entry.Type, "oauth")
+	}
+	if entry.Access == nil || *entry.Access != "access-token-abc" {
+		t.Errorf("Credentials[openai].Access = %v, want %q", entry.Access, "access-token-abc")
+	}
+	if entry.Expires == nil || *entry.Expires != 1234567890123 {
+		t.Errorf("Credentials[openai].Expires = %v, want %d", entry.Expires, int64(1234567890123))
+	}
+	if entry.AccountID == nil || *entry.AccountID != "acct-xyz-789" {
+		t.Errorf("Credentials[openai].AccountID = %v, want %q", entry.AccountID, "acct-xyz-789")
+	}
+	if entry.Key != nil {
+		t.Errorf("Credentials[openai].Key = %v, want nil (an oauth entry never carries the \"api\" member's own key field)", entry.Key)
+	}
+}
+
+// TestProviderCredentialsDelivery_UserScopeOAuth_NeedsRelinkExcluded
+// proves a needs-relink oauth row (§29.5's own terminal-refresh-failure
+// marker) is excluded from resolution at the full HTTP level -- the
+// provider is simply absent from the response, exactly as if nothing were
+// configured, never a stale/known-bad token served to a sandbox.
+func TestProviderCredentialsDelivery_UserScopeOAuth_NeedsRelinkExcluded(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	user, _ := rig.createAuthenticatedUser(ctx, t)
+	session, err := rig.sessions.Create(ctx, sqlcgen.CreateSessionParams{
+		SpawnSource: sqlcgen.SessionSpawnSourceWeb,
+		CreatedBy:   user.ID,
+		Repos:       []byte(providerCredsRepos),
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
+
+	blob := `{"access":"stale-access","refresh":"stale-refresh","expires_ms":1,"account_id":"acct-xyz-789"}`
+	row, err := rig.providerCredentials.UpsertOAuth(ctx, user.ID.String(), sqlcgen.ProviderCredentialProviderOpenai, encryptForTest(t, rig, blob), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("UpsertOAuth: %v", err)
+	}
+	if _, err := rig.providerCredentials.MarkNeedsRelink(ctx, row.ID); err != nil {
+		t.Fatalf("MarkNeedsRelink: %v", err)
+	}
+
+	status, got := postProviderCredentials(t, rig, session.ID.String(), "sandbox-bearer-token", "1")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if _, present := got.Credentials["openai"]; present {
+		t.Errorf("Credentials[openai] present = %v, want absent (needs-relink row must stop being served)", got.Credentials["openai"])
+	}
+}
+
+// postProviderCredentialsRaw mirrors postProviderCredentials but returns
+// the raw, undecoded response body -- needed for the "the word 'refresh'
+// never appears anywhere in the wire bytes" assertion above, which a typed
+// decode target could never prove (a struct with no Refresh field decodes
+// identically whether or not the SERVER also sent one).
+func postProviderCredentialsRaw(t *testing.T, r testRig, sessionID, bearer, gen string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, r.server.URL+"/sessions/"+sessionID+"/provider-credentials", strings.NewReader(``))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if gen != "" {
+		req.Header.Set("X-Sandbox-Gen", gen)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	return resp.StatusCode, string(body)
 }
