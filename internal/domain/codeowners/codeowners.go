@@ -262,6 +262,32 @@ func (m *Matcher) Match(path string) (Rule, bool) {
 //     (which real CODEOWNERS patterns essentially never contain) is the
 //     correct, conservative behavior for the one documented gitignore
 //     dialect that excludes them.
+//
+// # The "matches this and everything beneath" suffix, and its one exception
+//
+// The trailing "(?:/.*)?$" appended below implements "matches this and
+// everything beneath" (see the bullet above) -- applied uniformly
+// regardless of an explicit trailing slash, EXCEPT when the pattern has
+// no explicit trailing slash AND its own last translated token is a bare,
+// segment-unconstrained "*" (single star, not "**"). That exception
+// exists because appending the suffix is only ever "harmless" (this
+// package's own established reasoning: "a real file path is never itself
+// a prefix of a longer real file path the way a directory name is") when
+// the pattern's own last matched character(s) are a FIXED literal --
+// which pins the match to one exact name, indistinguishable from a file.
+// A bare trailing "*" instead matches ANY run of non-"/" characters with
+// NO further constraint, so "docs/*" without this exception compiles to
+// "^docs/[^/]*(?:/.*)?$", which matches "docs/build-app/troubleshooting.md"
+// by letting "[^/]*" consume the "build-app" DIRECTORY NAME and the
+// suffix consume the rest -- GitHub's own documentation gives this exact
+// path as the canonical NON-match for "docs/*" (§60 review finding C2):
+// a bare trailing "*" stays within the one path segment it is written in,
+// exactly like plain gitignore's own "never crosses a /" rule for "*",
+// with no implicit "everything beneath" extension layered on top merely
+// because nothing follows it in the pattern. A pattern that explicitly
+// ends in "/" (dirOnly) is unaffected -- that trailing slash is itself an
+// explicit, deliberate "this names a directory" signal, never an
+// inference this package is making on the author's behalf.
 func compilePattern(pattern string) *regexp.Regexp {
 	dirOnly := strings.HasSuffix(pattern, "/")
 	core := strings.TrimSuffix(pattern, "/")
@@ -274,10 +300,23 @@ func compilePattern(pattern string) *regexp.Regexp {
 		b.WriteString("(?:.*/)?")
 	}
 	b.WriteString(translatePatternBody(core))
-	_ = dirOnly // dirOnly carries no DIFFERENT behavior today -- see doc comment: the "matches this and everything beneath" suffix below is applied uniformly regardless of a trailing slash, so this flag is retained only for readability/documentation of intent at each call site, not branched on.
-	b.WriteString("(?:/.*)?$")
+	if dirOnly || !endsInBareStar(core) {
+		b.WriteString("(?:/.*)?$")
+	} else {
+		b.WriteString("$")
+	}
 
 	return regexp.MustCompile(b.String())
+}
+
+// endsInBareStar reports whether core -- a pattern with any leading "/"
+// and trailing "/" already stripped by compilePattern -- ends in a single,
+// segment-unconstrained "*" wildcard: a trailing "*" that is not itself
+// the tail of a "**" (compilePattern's own doc comment above explains why
+// this specific shape is the one exception to the "matches this and
+// everything beneath" suffix).
+func endsInBareStar(core string) bool {
+	return strings.HasSuffix(core, "*") && !strings.HasSuffix(core, "**")
 }
 
 // translatePatternBody translates core (a pattern with any leading "/"
