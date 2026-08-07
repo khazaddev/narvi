@@ -118,6 +118,22 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"viewer cannot decide any workflow step", authz.RoleViewer, authz.ActionDecideWorkflowStep, false, false},
 		{"viewer cannot decide even an owned/joined workflow step", authz.RoleViewer, authz.ActionDecideWorkflowStep, true, false},
 
+		// Row 2 (Step 59, §29.9): link/unlink the caller's OWN ChatGPT
+		// account -- the SAME own-aware shape as ActionApprovePlan/
+		// ActionDecideWorkflowStep above ("own-aware like
+		// ActionApprovePlan's own row", action.go's own doc comment):
+		// admin/maintainer unconditionally, member only via the
+		// allowIfOwned carve-out, viewer never. M1 (adversarial review):
+		// this action previously had ZERO rows in this exhaustive matrix.
+		{"admin links chatgpt account", authz.RoleAdmin, authz.ActionLinkChatGPTAccount, false, true},
+		{"admin links chatgpt account (ownedOrJoined irrelevant)", authz.RoleAdmin, authz.ActionLinkChatGPTAccount, true, true},
+		{"maintainer links chatgpt account", authz.RoleMaintainer, authz.ActionLinkChatGPTAccount, false, true},
+		{"maintainer links chatgpt account (ownedOrJoined irrelevant)", authz.RoleMaintainer, authz.ActionLinkChatGPTAccount, true, true},
+		{"member links own chatgpt account", authz.RoleMember, authz.ActionLinkChatGPTAccount, true, true},
+		{"member cannot link chatgpt account without ownedOrJoined", authz.RoleMember, authz.ActionLinkChatGPTAccount, false, false},
+		{"viewer cannot link chatgpt account", authz.RoleViewer, authz.ActionLinkChatGPTAccount, false, false},
+		{"viewer cannot link chatgpt account even if ownedOrJoined", authz.RoleViewer, authz.ActionLinkChatGPTAccount, true, false},
+
 		// Row 3a: stop/resume ANY session -- admin/maintainer ONLY. No
 		// member own/joined escape hatch at all, unlike prompt/approve
 		// above -- asserted with ownedOrJoined=true too, to prove the
@@ -132,6 +148,23 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"member cannot resume a session they do not own", authz.RoleMember, authz.ActionResumeSession, false, false},
 		{"member cannot resume even a session they own/joined", authz.RoleMember, authz.ActionResumeSession, true, false},
 		{"viewer cannot resume any session", authz.RoleViewer, authz.ActionResumeSession, false, false},
+
+		// Row 3 (Step 59, §29.9): view the admin shadow-comparison tooling
+		// (GET /api/admin/shadow-compare) -- the SAME "ANY session,
+		// admin/maintainer ONLY, no member own/joined escape hatch" shape
+		// as ActionStopSession/ActionResumeSession immediately above
+		// (action.go's own doc comment: "this row ... rather than row 1's
+		// 'everyone including viewer' one"). M1 (adversarial review): this
+		// action previously had ZERO rows in this exhaustive matrix -- a
+		// verified escaped mutant adding RoleViewer to its allow set (a
+		// real privilege escalation onto admin-only shadow-compare) passed
+		// the entire repo suite before this addition.
+		{"admin views shadow comparison", authz.RoleAdmin, authz.ActionViewShadowComparison, false, true},
+		{"maintainer views shadow comparison", authz.RoleMaintainer, authz.ActionViewShadowComparison, false, true},
+		{"member cannot view shadow comparison", authz.RoleMember, authz.ActionViewShadowComparison, false, false},
+		{"member cannot view shadow comparison even if ownedOrJoined", authz.RoleMember, authz.ActionViewShadowComparison, true, false},
+		{"viewer cannot view shadow comparison", authz.RoleViewer, authz.ActionViewShadowComparison, false, false},
+		{"viewer cannot view shadow comparison even if ownedOrJoined", authz.RoleViewer, authz.ActionViewShadowComparison, true, false},
 
 		// Row 4: automations/environments/repo+env secrets --
 		// admin/maintainer only.
