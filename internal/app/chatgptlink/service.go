@@ -95,7 +95,17 @@ func StartLink(ctx context.Context, deps Deps, userID pgtype.UUID) (Status, erro
 		return Status{}, fmt.Errorf("chatgptlink: start device auth: %w", err)
 	}
 
-	expiresAt := time.Now().Add(deps.Timeouts.ChatGPTLinkAttemptTTL)
+	// started.ExpiresAt is auth.openai.com's own real, server-provided
+	// expiry for this device code (live-verified by this package's own
+	// usercode canary, chatgptoauth's own doc comment) -- authoritative,
+	// used directly rather than any Narvi-side invented duration. Capped
+	// defensively at ChatGPTLinkAttemptTTL from now: this device code is
+	// meaningless to Narvi past the point its own Settings-page prompt
+	// would be considered stale regardless of what the server claims.
+	expiresAt := started.ExpiresAt
+	if cap := time.Now().Add(deps.Timeouts.ChatGPTLinkAttemptTTL); cap.Before(expiresAt) {
+		expiresAt = cap
+	}
 	created, err := deps.LinkAttempts.Create(ctx, userID, started.DeviceAuthID, started.UserCode, int32(started.Interval/time.Second), expiresAt)
 	if err != nil {
 		return Status{}, fmt.Errorf("chatgptlink: create link attempt: %w", err)

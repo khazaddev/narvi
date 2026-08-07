@@ -29,7 +29,13 @@ func TestStartDeviceAuth(t *testing.T) {
 			if req.ClientID != ClientID {
 				t.Errorf("client_id = %q, want %q", req.ClientID, ClientID)
 			}
-			_ = json.NewEncoder(w).Encode(usercodeResponse{DeviceAuthID: "dev-123", UserCode: "WDJB-MJHT", Interval: 5})
+			// interval is a STRING and expires_at is present -- the real,
+			// live-verified shape (this package's own usercode canary,
+			// usercode_canary_test.go), not §29.2's own original,
+			// incomplete field-type assumption.
+			_ = json.NewEncoder(w).Encode(usercodeResponse{
+				DeviceAuthID: "dev-123", UserCode: "WDJB-MJHT", Interval: "5", ExpiresAt: "2026-08-07T01:48:44.868061+00:00",
+			})
 		}))
 		defer srv.Close()
 
@@ -38,9 +44,41 @@ func TestStartDeviceAuth(t *testing.T) {
 		if err != nil {
 			t.Fatalf("StartDeviceAuth() error = %v, want nil", err)
 		}
-		want := UsercodeResult{DeviceAuthID: "dev-123", UserCode: "WDJB-MJHT", Interval: 5 * time.Second}
-		if got != want {
+		wantExpiresAt, err := time.Parse(time.RFC3339Nano, "2026-08-07T01:48:44.868061+00:00")
+		if err != nil {
+			t.Fatalf("parse want expiresAt: %v", err)
+		}
+		want := UsercodeResult{DeviceAuthID: "dev-123", UserCode: "WDJB-MJHT", Interval: 5 * time.Second, ExpiresAt: wantExpiresAt}
+		if !got.ExpiresAt.Equal(want.ExpiresAt) || got.DeviceAuthID != want.DeviceAuthID || got.UserCode != want.UserCode || got.Interval != want.Interval {
 			t.Errorf("StartDeviceAuth() = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("malformed interval is a real error", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(usercodeResponse{DeviceAuthID: "dev-123", UserCode: "WDJB-MJHT", Interval: "not-a-number", ExpiresAt: "2026-08-07T01:48:44.868061+00:00"})
+		}))
+		defer srv.Close()
+
+		c := New(srv.Client(), srv.URL, testTimeout)
+		if _, err := c.StartDeviceAuth(t.Context()); err == nil {
+			t.Error("StartDeviceAuth() error = nil, want non-nil for a malformed interval")
+		}
+	})
+
+	t.Run("malformed expires_at is a real error", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(usercodeResponse{DeviceAuthID: "dev-123", UserCode: "WDJB-MJHT", Interval: "5", ExpiresAt: "not-a-timestamp"})
+		}))
+		defer srv.Close()
+
+		c := New(srv.Client(), srv.URL, testTimeout)
+		if _, err := c.StartDeviceAuth(t.Context()); err == nil {
+			t.Error("StartDeviceAuth() error = nil, want non-nil for a malformed expires_at")
 		}
 	})
 

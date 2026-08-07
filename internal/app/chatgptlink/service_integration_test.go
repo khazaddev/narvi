@@ -171,8 +171,16 @@ func (f *fakeAuthServer) start(t *testing.T) string {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/accounts/deviceauth/usercode", func(w http.ResponseWriter, r *http.Request) {
 		f.usercodeCalls++
+		// interval is a STRING and expires_at is present -- the real,
+		// live-verified shape (chatgptoauth's own usercode canary), not
+		// §29.2's own original, incomplete field-type assumption. "0" as
+		// the interval string means every PollLink call in these tests is
+		// immediately due (never throttled) unless a test explicitly sets
+		// its own last_polled_at, exactly like this fake's own pre-Step-
+		// 59-fix "interval": 0 behaved.
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"device_auth_id": "dev-123", "user_code": "WDJB-MJHT", "interval": 0,
+			"device_auth_id": "dev-123", "user_code": "WDJB-MJHT", "interval": "0",
+			"expires_at": time.Now().Add(15 * time.Minute).Format(time.RFC3339Nano),
 		})
 	})
 	mux.HandleFunc("/api/accounts/deviceauth/token", func(w http.ResponseWriter, r *http.Request) {

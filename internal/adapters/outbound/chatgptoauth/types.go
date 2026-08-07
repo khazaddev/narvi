@@ -7,15 +7,31 @@ type usercodeRequest struct {
 	ClientID string `json:"client_id"`
 }
 
-// usercodeResponse is that same call's response (§29.2: "{device_auth_id,
-// user_code, interval}").
+// usercodeResponse is that same call's response. §29.2 names the shape as
+// "{device_auth_id, user_code, interval}" but does not state each field's
+// own JSON type; this package's own usercode canary (usercode_canary_
+// test.go, §29.7's own named scheduled canary) made ONE real,
+// unauthenticated call against the live production endpoint during this
+// Step's own implementation and found two corrections to that shape:
+// interval is a STRING (e.g. "5"), not a JSON number, and the response
+// ALSO carries a fourth field, expires_at (an RFC 3339 timestamp) that
+// §29.2's own field list never mentioned at all -- both verified
+// directly, not inferred. expires_at is a genuine, better source of
+// truth for this device code's own real expiry than any Narvi-side
+// invented TTL would be, so StartDeviceAuth (client.go) uses it.
 type usercodeResponse struct {
 	DeviceAuthID string `json:"device_auth_id"`
 	UserCode     string `json:"user_code"`
 	// Interval is the server-provided minimum seconds between poll
 	// attempts (§29.3 point 2: "throttled by the server-provided interval
-	// via last_polled_at").
-	Interval int `json:"interval"`
+	// via last_polled_at") -- a STRING on the wire (verified live), parsed
+	// to a time.Duration by StartDeviceAuth.
+	Interval string `json:"interval"`
+	// ExpiresAt is this device code's own real expiry, RFC 3339 (verified
+	// live: "2026-08-07T01:48:44.868061+00:00") -- NOT part of §29.2's own
+	// original field list; discovered by this package's own usercode
+	// canary.
+	ExpiresAt string `json:"expires_at"`
 }
 
 // deviceTokenRequest is POST /api/accounts/deviceauth/token's request body

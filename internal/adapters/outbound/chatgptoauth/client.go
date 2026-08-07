@@ -103,10 +103,20 @@ type UsercodeResult struct {
 	// attempts.last_polled_at; this package makes no polling decisions of
 	// its own.
 	Interval time.Duration
+	// ExpiresAt is this device code's own real, server-provided expiry --
+	// live-verified via this package's own usercode canary (usercode_
+	// canary_test.go) to be a genuine field on this response, despite
+	// §29.2's own field list never naming it. The caller uses this
+	// directly as chatgpt_link_attempts.expires_at, rather than any
+	// Narvi-side invented TTL.
+	ExpiresAt time.Time
 }
 
 // StartDeviceAuth is call 1 of 4 (§29.2): POST /api/accounts/deviceauth/
-// usercode {client_id}.
+// usercode {client_id}. interval and expires_at arrive as STRINGS on the
+// wire (verified live, not §29.2's own original assumption -- see
+// usercodeResponse's own doc comment) -- both parsed here so every OTHER
+// caller in this codebase works with real Go types, never wire strings.
 func (c *Client) StartDeviceAuth(ctx context.Context) (UsercodeResult, error) {
 	var resp usercodeResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/api/accounts/deviceauth/usercode", usercodeRequest{ClientID: c.clientID}, &resp); err != nil {
@@ -115,10 +125,21 @@ func (c *Client) StartDeviceAuth(ctx context.Context) (UsercodeResult, error) {
 	if resp.DeviceAuthID == "" || resp.UserCode == "" {
 		return UsercodeResult{}, fmt.Errorf("chatgptoauth: start device auth: response carried no device_auth_id/user_code")
 	}
+
+	intervalSeconds, err := strconv.Atoi(resp.Interval)
+	if err != nil {
+		return UsercodeResult{}, fmt.Errorf("chatgptoauth: start device auth: parse interval %q: %w", resp.Interval, err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, resp.ExpiresAt)
+	if err != nil {
+		return UsercodeResult{}, fmt.Errorf("chatgptoauth: start device auth: parse expires_at %q: %w", resp.ExpiresAt, err)
+	}
+
 	return UsercodeResult{
 		DeviceAuthID: resp.DeviceAuthID,
 		UserCode:     resp.UserCode,
-		Interval:     time.Duration(resp.Interval) * time.Second,
+		Interval:     time.Duration(intervalSeconds) * time.Second,
+		ExpiresAt:    expiresAt,
 	}, nil
 }
 

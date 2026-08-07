@@ -20,33 +20,47 @@
 //
 // # Verified vs. inferred
 //
-// Every ENDPOINT PATH and every FIELD NAME below is sourced to §29.2,
-// which was itself extracted from the pinned OpenCode 1.17.15 binary's own
-// embedded implementation of this flow (read directly, not guessed) and
-// cross-checked against OpenAI's published Codex CLI auth docs. What §29.2
-// does NOT state explicitly, and this environment has no real OpenAI
-// credential to verify live (this Step's own hard constraint: "no real
-// ChatGPT/OpenAI/Gemini credentials exist in this environment"), is the
-// exact request/response CONTENT TYPE for two of the four calls:
+// Every ENDPOINT PATH and FIELD NAME below is sourced to §29.2, itself
+// extracted from the pinned OpenCode 1.17.15 binary's own embedded
+// implementation of this flow (read directly, not guessed) and cross-
+// checked against OpenAI's published Codex CLI auth docs.
 //
-//   - usercode/token (the two custom `/api/accounts/deviceauth/*`
-//     endpoints): implemented here as JSON request/response, matching
-//     their own "/api/..." path convention (this codebase's own other
-//     JSON APIs all live under an "/api/..." prefix too) and matching
-//     every field name §29.2 gives being a single flat object with no
-//     indication of form-encoding.
-//   - the standard `/oauth/token` endpoint (both grant types): implemented
-//     here as RFC 6749 §4's own standard `application/x-www-form-
-//     urlencoded` body -- the canonical, near-universal encoding for an
-//     OAuth2 token endpoint, and §29.2 itself frames this exact path as
-//     "Codex CLI's own public client" hitting the ordinary OAuth token
-//     endpoint, not a bespoke OpenAI API.
+// This environment has no real, authenticated OpenAI credential (this
+// Step's own hard constraint), so the actual code-exchange/refresh grant
+// bodies were never exercised live. But §29.2's own device-flow START is
+// deliberately UNAUTHENTICATED (a client only needs its own public
+// client_id) -- so this package's own usercode_canary_test.go (§29.7's
+// named scheduled canary; gated behind the "canary" build tag, never a
+// PR gate) made ONE real, live call against auth.openai.com during this
+// Step's own implementation, and found §29.2's own field list was
+// INCOMPLETE for usercode's response:
 //
-// This is the single largest unverified-shape risk in this Step's own
-// implementation, named here exactly as the hard constraint requires
-// ("if you need a shape §29 does not give you ... stop and report the
-// gap") -- every endpoint PATH and FIELD NAME is real and verified;
-// only the wire ENCODING of the two custom endpoints is this package's
-// own reasoned inference, not a live-verified fact. See this Step's own
-// landing PR description for the same accounting.
+//   - Content type CONFIRMED JSON both ways for the two custom
+//     `/api/accounts/deviceauth/*` endpoints -- the original inference
+//     (matching their own "/api/..." path convention) was correct.
+//   - interval is a STRING on the wire ("5"), not a JSON number as §29.2's
+//     own prose implied -- parsed to time.Duration by StartDeviceAuth.
+//   - The response ALSO carries a fourth field, expires_at (RFC 3339),
+//     never named by §29.2 at all -- this device code's own real,
+//     server-provided expiry, used directly by internal/app/chatgptlink
+//     rather than any Narvi-side invented TTL.
+//   - deviceauth/token's own "pending" response was independently
+//     confirmed too: a real, unapproved (device_auth_id, user_code) pair
+//     returns HTTP 403 with a real OAuth-style error body ({"error":
+//     {"code": "deviceauth_authorization_pending", ...}}) -- matching
+//     §29.2's own "403/404 = pending" finding exactly.
+//
+// Genuinely still UNVERIFIED live (no real human device-approval or valid
+// authorization_code/refresh_token was available to exercise these):
+// deviceauth/token's own GRANTED response shape ({authorization_code,
+// code_verifier}), and the standard /oauth/token endpoint's exact
+// request encoding for both grant types -- implemented here as RFC 6749
+// §4's own standard application/x-www-form-urlencoded body, the
+// canonical encoding for an OAuth2 token endpoint, and §29.2 itself
+// frames this exact path as hitting the ordinary OAuth token endpoint,
+// not a bespoke OpenAI API, but this remains this package's own reasoned
+// inference, not a live-verified fact. Named here exactly as the hard
+// constraint requires ("if you need a shape §29 does not give you ...
+// stop and report the gap") -- see this Step's own landing PR description
+// for the same accounting.
 package chatgptoauth

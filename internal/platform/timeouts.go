@@ -1949,14 +1949,18 @@ type Timeouts struct {
 	// 6h".
 	ChatGPTOAuthRefreshPumpInterval time.Duration
 
-	// ChatGPTLinkAttemptTTL bounds how long a single device-flow link
-	// attempt (chatgpt_link_attempts row) stays valid before a fresh
-	// "Connect ChatGPT account" click is required — §29.2 gives OpenAI's
-	// own usercode response shape ({device_auth_id, user_code, interval})
-	// but names no expiry field on it explicitly; not specified in the
-	// plan, chosen generously as 15m — comfortably enough wall-clock time
-	// for a human to switch devices/tabs and enter a short code, mirroring
-	// this codebase's own "chosen generously when the concrete cost is
+	// ChatGPTLinkAttemptTTL is a DEFENSIVE CAP on how long a single
+	// device-flow link attempt (chatgpt_link_attempts row) stays valid --
+	// NOT the primary source of its expiry. auth.openai.com's own
+	// usercode response carries a real expires_at field (live-verified by
+	// internal/adapters/outbound/chatgptoauth's own usercode canary,
+	// despite §29.2's own original field list never naming it), which
+	// internal/app/chatgptlink.StartLink uses directly as authoritative;
+	// this field only clamps that server-provided value from above, so a
+	// wildly-off or malicious response can never keep an attempt "live"
+	// far longer than a human would plausibly still be mid-flow. Not
+	// specified in the plan; chosen generously as 15m, mirroring this
+	// codebase's own "chosen generously when the concrete cost is
 	// unknown" convention (HookTimeout's own doc comment) and, numerically,
 	// UploadPresignPutTTL's own identical "propose 15 min" figure for an
 	// unrelated but similarly-shaped "how long can a human take" bound.
