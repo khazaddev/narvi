@@ -2041,6 +2041,17 @@ type Timeouts struct {
 	// decisioninbox.IsStale compares a row's own age against. §16.1 gives
 	// the figure directly: 48 hours.
 	DecisionInboxStaleAfter time.Duration
+
+	// DecisionInboxLatencyWindow bounds how far back §16.2's own
+	// decision-latency metric looks for already-decided items -- §21.1's
+	// "explicit active/recent window... never an unbounded scan"
+	// discipline, applied to the metric's own query. It lives here rather
+	// than as a package const beside the metric because this file is
+	// where every duration this project tunes lives, window-shaped ones
+	// included: HMACWindow and CircuitBreakerWindow are both spans of
+	// past time rather than deadlines on a single operation, and the
+	// notimeliteral check treats them all alike.
+	DecisionInboxLatencyWindow time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2208,11 +2219,12 @@ func DefaultTimeouts() Timeouts {
 		ChatGPTLinkAttemptTTL:           15 * time.Minute, // Step 59; not specified, chosen generously (human device-switch time)
 		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // Step 59; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
 
-		GitHubListOpenPRsForUserTimeout: 3 * time.Minute,  // Step 60; not specified, matches ReleaseManifestCheckTimeout's own figure for a comparable bounded-but-many-call operation
-		GitHubResolveCodeOwnersTimeout:  30 * time.Second, // Step 60; not specified, chosen generously (a handful of file/user/team fetches)
-		GitHubMergePRTimeout:            15 * time.Second, // Step 60; not specified, half again GitHubGetPRTimeout's baseline (interactive, human-facing write)
-		DecisionInboxSCMCacheTTL:        2 * time.Minute,  // Step 60, §16.2's own worked example ("as of 2 min ago")
-		DecisionInboxStaleAfter:         48 * time.Hour,   // Step 60, §16.1, explicit ("stale items (>48h, configurable)")
+		GitHubListOpenPRsForUserTimeout: 3 * time.Minute,     // Step 60; not specified, matches ReleaseManifestCheckTimeout's own figure for a comparable bounded-but-many-call operation
+		GitHubResolveCodeOwnersTimeout:  30 * time.Second,    // Step 60; not specified, chosen generously (a handful of file/user/team fetches)
+		GitHubMergePRTimeout:            15 * time.Second,    // Step 60; not specified, half again GitHubGetPRTimeout's baseline (interactive, human-facing write)
+		DecisionInboxSCMCacheTTL:        2 * time.Minute,     // Step 60, §16.2's own worked example ("as of 2 min ago")
+		DecisionInboxStaleAfter:         48 * time.Hour,      // Step 60, §16.1, explicit ("stale items (>48h, configurable)")
+		DecisionInboxLatencyWindow:      30 * 24 * time.Hour, // Step 60, §16.2; not specified, chosen as a month of decision history -- long enough for a stable median, bounded per §21.1
 	}
 }
 

@@ -9,15 +9,6 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/decisioninbox"
 )
 
-// DecisionLatencyWindow bounds how far back Metrics looks for already-
-// decided items -- §21.1's own "explicit active/recent window... never an
-// unbounded scan" discipline, reused here for the identical reason. Not a
-// platform.Timeouts field: it is a DATA WINDOW (how much history to
-// consider), not a timeout/interval on any single operation -- the same
-// distinction platform/timeouts.go's own top comment draws ("every
-// timeout/interval", not every duration-shaped constant in the codebase).
-const DecisionLatencyWindow = 30 * 24 * time.Hour
-
 // maxRecentlyDecidedPlans bounds ListRecentlyDecided's own query --
 // generous for a 30-day window of plan decisions in any realistic
 // deployment, mirroring this codebase's own "bounded from day one"
@@ -40,7 +31,7 @@ const maxRecentlyDecidedPlans = 1000
 // is the natural place to extend this once review_verdicts gives PR-merge
 // latency a durable source too.
 func Metrics(ctx context.Context, deps Deps, now time.Time) (median time.Duration, sampleSize int, ok bool, err error) {
-	since := now.Add(-DecisionLatencyWindow)
+	since := now.Add(-deps.Timeouts.DecisionInboxLatencyWindow)
 	plans, err := deps.Plans.ListRecentlyDecided(ctx, pgtype.Timestamptz{Time: since, Valid: true}, maxRecentlyDecidedPlans)
 	if err != nil {
 		return 0, 0, false, err
