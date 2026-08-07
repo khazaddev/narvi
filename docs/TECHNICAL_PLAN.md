@@ -2298,10 +2298,17 @@ Data-model threading, mirroring `model_id`'s own established pair (the same prec
    creator's seat (§29.4). Accepted v1; the designed-but-unbuilt extension is per-turn
    re-injection (`PUT /auth` is callable between turns) keyed on the prompting user, if telemetry
    shows it biting.
-5. **Subscription turns report cost 0** (verified: the Codex models' catalog cost object is all
-   zeros), so §7.1's cost roll-up undercounts ChatGPT-OAuth turns relative to real value consumed
-   — the same cost-attribution debt lineage §25.13 already tracks; a "subscription turn" marker in
-   cost analytics is left to the Step that closes that debt.
+5. **Subscription turns are mis-costed, but not by the mechanism first assumed.** The original
+   claim here — that the Codex models' catalog cost object is all zeros — was **disproved during
+   Step 59** by querying `GET /provider` directly against the pinned OpenCode 1.17.15 binary: every
+   Codex model carries real, non-zero catalog pricing (e.g. `gpt-5.3-codex-spark`: $1.75/M input,
+   $14/M output). The debt is therefore the inverse of what was written: a ChatGPT-OAuth turn is
+   billed against the user's **subscription seat**, not per-token, so §7.1's cost roll-up
+   **over**counts it at catalog rates rather than reporting zero. Same lineage as the
+   cost-attribution debt §25.13 tracks; a "subscription turn" marker in cost analytics — which must
+   suppress the catalog-rate roll-up, not fill in a missing zero — is left to the Step that closes
+   that debt. (Step 59's own model-catalog snapshot carried the same wrong zeros and was corrected
+   against the pinned binary at the same time.)
 6. **Unknown-`variant` behavior is unverified** (rejecting vs ignoring an invalid effort value
    would need a live credentialed call to observe) — the composer constrains values to the
    catalog's per-model `variants`, so only raw API callers can hit it; named, not designed around.
