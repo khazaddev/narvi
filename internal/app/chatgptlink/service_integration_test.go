@@ -16,6 +16,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -24,6 +25,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/testcontainers/testcontainers-go"
@@ -164,6 +166,16 @@ type fakeAuthServer struct {
 	usercodeCalls   int
 	tokenPollCalls  int
 	tokenPollStatus int // set by the test; 200 = grant, 403 = pending
+
+	// usercodeExpiresAt overrides the usercode endpoint's own "expires_at"
+	// response field -- the zero value keeps the previous default
+	// (now+15m). M3 (adversarial review): parameterized so
+	// TestStartLink_ExpiresAtCappedAtChatGPTLinkAttemptTTL below can drive
+	// StartLink's own min(server expires_at, now+TTL) cap from BOTH
+	// sides -- the un-parameterized default happened to sit exactly AT
+	// ChatGPTLinkAttemptTTL (15m), making the cap comparison's own
+	// outcome an unasserted coin flip.
+	usercodeExpiresAt time.Time
 }
 
 func (f *fakeAuthServer) start(t *testing.T) string {
@@ -178,9 +190,13 @@ func (f *fakeAuthServer) start(t *testing.T) string {
 		// immediately due (never throttled) unless a test explicitly sets
 		// its own last_polled_at, exactly like this fake's own pre-Step-
 		// 59-fix "interval": 0 behaved.
+		expiresAt := f.usercodeExpiresAt
+		if expiresAt.IsZero() {
+			expiresAt = time.Now().Add(15 * time.Minute)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"device_auth_id": "dev-123", "user_code": "WDJB-MJHT", "interval": "0",
-			"expires_at": time.Now().Add(15 * time.Minute).Format(time.RFC3339Nano),
+			"expires_at": expiresAt.Format(time.RFC3339Nano),
 		})
 	})
 	mux.HandleFunc("/api/accounts/deviceauth/token", func(w http.ResponseWriter, _ *http.Request) {
@@ -388,5 +404,192 @@ func TestUnlink_RemovesCredentialAndAttempts(t *testing.T) {
 	// Idempotent: unlinking an already-unlinked user must not error.
 	if err := chatgptlink.Unlink(ctx, deps, user.ID); err != nil {
 		t.Errorf("2nd Unlink() (already unlinked) error = %v, want nil (idempotent)", err)
+	}
+}
+
+// TestStartLink_ExpiresAtCappedAtChatGPTLinkAttemptTTL is M3's own
+// regression test (adversarial review) for StartLink's own
+// min(server-provided expires_at, now+ChatGPTLinkAttemptTTL) cap
+// (service.go). Before this test, the cap was untestable-by-construction:
+// this file's own fakeAuthServer hardcoded "expires_at": now+15m, exactly
+// ChatGPTLinkAttemptTTL's own default value -- so the `expiresAtCap.
+// Before(expiresAt)` comparison's own outcome was a coin flip on wall-clock
+// jitter between the fake's own time.Now() call and StartLink's, and
+// nothing asserted it either way. A hostile or drifting far-future
+// expires_at (there is no background sweep for this table) would create a
+// link attempt that never expires and is reused forever, entirely
+// unnoticed. Drives the cap from BOTH sides via fakeAuthServer's own new
+// usercodeExpiresAt field.
+func TestStartLink_ExpiresAtCappedAtChatGPTLinkAttemptTTL(t *testing.T) {
+	tests := []struct {
+		name            string
+		serverExpiresIn time.Duration
+		wantCapped      bool
+	}{
+		{"server value comfortably below the cap is honored verbatim", 2 * time.Minute, false},
+		{"server value far above the cap is clamped to the TTL", 100 * time.Hour, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTestPool(t)
+			fake := &fakeAuthServer{usercodeExpiresAt: time.Now().Add(tt.serverExpiresIn)}
+			deps := newDeps(pool, fake.start(t))
+			user := createFixtureUser(ctx, t, pool, fmt.Sprintf("cap-test-capped-%v@example.com", tt.wantCapped))
+
+			before := time.Now()
+			status, err := chatgptlink.StartLink(ctx, deps, user.ID)
+			if err != nil {
+				t.Fatalf("StartLink() error = %v, want nil", err)
+			}
+			if status.ExpiresAt == nil {
+				t.Fatal("ExpiresAt is nil, want a real time")
+			}
+
+			ttlCeiling := before.Add(deps.Timeouts.ChatGPTLinkAttemptTTL)
+			serverValue := before.Add(tt.serverExpiresIn)
+			const slack = 10 * time.Second // generous test wall-clock jitter allowance.
+
+			if tt.wantCapped {
+				if status.ExpiresAt.After(ttlCeiling.Add(slack)) {
+					t.Errorf("ExpiresAt = %v, want capped at approximately now+TTL (%v)", status.ExpiresAt, ttlCeiling)
+				}
+				if status.ExpiresAt.After(serverValue.Add(-time.Minute)) {
+					t.Errorf("ExpiresAt = %v, want clamped well BELOW the server's own far-future value %v, not honored verbatim", status.ExpiresAt, serverValue)
+				}
+			} else {
+				if status.ExpiresAt.After(serverValue.Add(slack)) || status.ExpiresAt.Before(serverValue.Add(-slack)) {
+					t.Errorf("ExpiresAt = %v, want honored verbatim, close to the server's own value %v (uncapped -- well under the TTL)", status.ExpiresAt, serverValue)
+				}
+			}
+		})
+	}
+}
+
+// TestStartLink_ExpiredAttemptIsReplacedWithAFreshOne is M3's own
+// regression test (adversarial review) for StartLink's own
+// expired-then-remint branch (service.go: "Expired -- fall through and
+// mint a fresh one"), previously entirely uncovered -- every existing
+// StartLink test seeded either no attempt at all or a still-live one.
+func TestStartLink_ExpiredAttemptIsReplacedWithAFreshOne(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	fake := &fakeAuthServer{}
+	deps := newDeps(pool, fake.start(t))
+	user := createFixtureUser(ctx, t, pool, "expired-remint@example.com")
+
+	expired, err := deps.LinkAttempts.Create(ctx, user.ID, "dev-old", "OLD-STALE-CODE", 0, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("seed expired attempt: %v", err)
+	}
+
+	status, err := chatgptlink.StartLink(ctx, deps, user.ID)
+	if err != nil {
+		t.Fatalf("StartLink() error = %v, want nil", err)
+	}
+	if status.UserCode != "WDJB-MJHT" {
+		t.Errorf("UserCode = %q, want the freshly minted %q, not the expired attempt's own stale code", status.UserCode, "WDJB-MJHT")
+	}
+	if fake.usercodeCalls != 1 {
+		t.Errorf("usercodeCalls = %d, want 1 (a fresh device code must actually be minted for an expired attempt, not silently reused)", fake.usercodeCalls)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM chatgpt_link_attempts WHERE user_id = $1`, user.ID).Scan(&count); err != nil {
+		t.Fatalf("count attempt rows: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("chatgpt_link_attempts row count for this user = %d, want exactly 1 (the expired row must be deleted, never left lingering alongside the fresh one)", count)
+	}
+
+	latest, err := deps.LinkAttempts.GetLatestForUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("GetLatestForUser: %v", err)
+	}
+	if latest.ID == expired.ID {
+		t.Error("the latest attempt row is still the expired one, want a freshly minted replacement")
+	}
+}
+
+// TestPollLink_ExpiredAttemptIsDeletedAndFallsThroughToCredentialState is
+// M3's own regression test (adversarial review) for PollLink's own
+// expired-attempt-cleanup branch (service.go: "An attempt row exists but
+// has expired -> best-effort delete, then [report whatever
+// provider_credentials already says]"), previously entirely uncovered.
+func TestPollLink_ExpiredAttemptIsDeletedAndFallsThroughToCredentialState(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	fake := &fakeAuthServer{tokenPollStatus: http.StatusOK}
+	deps := newDeps(pool, fake.start(t))
+	user := createFixtureUser(ctx, t, pool, "poll-expired@example.com")
+
+	if _, err := deps.LinkAttempts.Create(ctx, user.ID, "dev-old", "OLD-STALE-CODE", 0, time.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("seed expired attempt: %v", err)
+	}
+
+	status, err := chatgptlink.PollLink(ctx, deps, user.ID)
+	if err != nil {
+		t.Fatalf("PollLink() error = %v, want nil", err)
+	}
+	if status.Status != chatgptlink.StatusUnlinked {
+		t.Errorf("Status = %q, want %q (no provider_credentials row exists, and the expired attempt must not itself be treated as still-pending)", status.Status, chatgptlink.StatusUnlinked)
+	}
+	if fake.tokenPollCalls != 0 {
+		t.Errorf("tokenPollCalls = %d, want 0 (an EXPIRED attempt must never be polled upstream at all)", fake.tokenPollCalls)
+	}
+
+	if _, err := deps.LinkAttempts.GetLatestForUser(ctx, user.ID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Errorf("GetLatestForUser after PollLink observed an expired attempt: err = %v, want pgx.ErrNoRows (the expired row must be deleted)", err)
+	}
+}
+
+// TestPollLink_NonPendingUpstreamFailureDegradesToPending is M3's own
+// regression test (adversarial review) for PollLink's own third failure
+// path: PollDeviceToken failing with something OTHER than the pending-
+// shaped 403/404 (service.go's own switch, the `case err != nil:` arm) --
+// logged and degraded to "still pending" for this one call, never a hard
+// error, since the human is mid-flow watching the Settings page and a
+// single transient upstream hiccup must not read as "link failed".
+// Previously entirely uncovered: this file's own fakeAuthServer had only
+// ever been driven with tokenPollStatus 200 or 403.
+func TestPollLink_NonPendingUpstreamFailureDegradesToPending(t *testing.T) {
+	tests := []struct {
+		name       string
+		httpStatus int
+	}{
+		{"upstream 400 degrades to pending, not a hard error", http.StatusBadRequest},
+		{"upstream 500 degrades to pending, not a hard error", http.StatusInternalServerError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			pool := newTestPool(t)
+			fake := &fakeAuthServer{tokenPollStatus: tt.httpStatus}
+			deps := newDeps(pool, fake.start(t))
+			user := createFixtureUser(ctx, t, pool, fmt.Sprintf("nonpending-%d@example.com", tt.httpStatus))
+			if _, err := deps.LinkAttempts.Create(ctx, user.ID, "dev-123", "WDJB-MJHT", 0, time.Now().Add(deps.Timeouts.ChatGPTLinkAttemptTTL)); err != nil {
+				t.Fatalf("create fixture attempt: %v", err)
+			}
+
+			status, err := chatgptlink.PollLink(ctx, deps, user.ID)
+			if err != nil {
+				t.Fatalf("PollLink() error = %v, want nil (a genuine upstream failure must degrade to pending, not fail the whole poll)", err)
+			}
+			if status.Status != chatgptlink.StatusPending {
+				t.Errorf("Status = %q, want %q", status.Status, chatgptlink.StatusPending)
+			}
+			if fake.tokenPollCalls != 1 {
+				t.Errorf("tokenPollCalls = %d, want 1", fake.tokenPollCalls)
+			}
+
+			// The attempt row must still be alive (not deleted) -- a
+			// transient/unexpected upstream failure must not destroy state
+			// the human is still mid-flow on.
+			if _, err := deps.LinkAttempts.GetLatestForUser(ctx, user.ID); err != nil {
+				t.Errorf("GetLatestForUser after a degrade-to-pending poll: err = %v, want the attempt row to still exist", err)
+			}
+		})
 	}
 }
