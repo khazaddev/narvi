@@ -1384,19 +1384,35 @@ type DecisionInboxItem struct {
 	// kind=needs_attention, an auto-paused automation, only.
 	AutomationId DecisionInboxItemAutomationId `json:"automationId" yaml:"automationId" mapstructure:"automationId"`
 
-	// CiGreen corresponds to the JSON schema field "ciGreen".
+	// Set for any PR-shaped row, exactly like repoFullName above (§60 review finding
+	// C4 -- this field, findings, and isHandoff used to be nulled out for the handoff
+	// sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
 	CiGreen DecisionInboxItemCiGreen `json:"ciGreen" yaml:"ciGreen" mapstructure:"ciGreen"`
 
 	// When this row first became a pending decision -- the ranking (§16.1: 'by
-	// decision cost then age') and staleness reference point.
+	// decision cost then age') and staleness reference point. For a PR row this is an
+	// APPROXIMATION (the PR's own GitHub creation time, not the instant it became
+	// assigned/eligible for this specific user) -- see
+	// internal/app/decisioninbox.Item.EnteredQueueAt's own doc comment for why, and
+	// for the direction this approximation errs in (it can only ever UNDER-state how
+	// recently a PR became a decision, so `stale` below can over-fire on an
+	// old-but-recently-assigned PR).
 	EnteredQueueAt time.Time `json:"enteredQueueAt" yaml:"enteredQueueAt" mapstructure:"enteredQueueAt"`
 
 	// Matches Postgres session_failure_reason -- kind=needs_attention, a failed
 	// session, only.
 	FailureReason DecisionInboxItemFailureReason `json:"failureReason" yaml:"failureReason" mapstructure:"failureReason"`
 
-	// Count of still-open (never rebutted/fixed) review findings on this PR.
+	// Count of still-open (never rebutted/fixed) review findings on this PR. Set for
+	// any PR-shaped row -- see ciGreen's own description.
 	Findings DecisionInboxItemFindings `json:"findings" yaml:"findings" mapstructure:"findings"`
+
+	// The PR's own current GitHub review-decision fact -- display only, NEVER what
+	// kind=ready_to_merge's own 'approved' means (§16.1 defines that as auto-approval
+	// by the deterministic eligibility engine, re-checked at merge time by
+	// re-validating CI/risk-label/open-findings/HasChangesRequested, never a human
+	// GitHub review). Set for any PR-shaped row, exactly like ciGreen above.
+	HasApprovingReview DecisionInboxItemHasApprovingReview `json:"hasApprovingReview" yaml:"hasApprovingReview" mapstructure:"hasApprovingReview"`
 
 	// The PR's current head SHA at the moment this response's own scmAsOf snapshot
 	// was taken -- what a Merge click must still match server-side at click time
@@ -1407,7 +1423,10 @@ type DecisionInboxItem struct {
 	HtmlUrl DecisionInboxItemHtmlUrl `json:"htmlUrl" yaml:"htmlUrl" mapstructure:"htmlUrl"`
 
 	// True for a handoff-labeled PR (§14.4) riding kind=awaiting_approval instead of
-	// an ordinary code-review kind.
+	// an ordinary code-review kind. Set (to true or false) for any PR-shaped row --
+	// see ciGreen's own description; this is the field a client checks to tell a
+	// handoff PR apart from a plan awaiting approval within the SAME
+	// kind=awaiting_approval bucket.
 	IsHandoff DecisionInboxItemIsHandoff `json:"isHandoff" yaml:"isHandoff" mapstructure:"isHandoff"`
 
 	// Matches internal/domain/decisioninbox.Kind's own four values exactly (§16.1).
@@ -1432,7 +1451,9 @@ type DecisionInboxItem struct {
 
 	// How this PR reached the user (§16.1: 'a first-class field, not a UI nicety') --
 	// matches internal/domain/decisioninbox.ProvenanceKind's own three values
-	// exactly. kind=ready_to_merge/needs_review only; null otherwise.
+	// exactly. Set for any PR-shaped row, exactly like repoFullName above
+	// (ready_to_merge/needs_review AND the handoff sub-case of awaiting_approval);
+	// null otherwise.
 	ProvenanceKind *DecisionInboxItemProvenanceKind `json:"provenanceKind" yaml:"provenanceKind" mapstructure:"provenanceKind"`
 
 	// The winning CODEOWNERS pattern -- set iff provenanceKind=codeowners (e.g.
@@ -1442,7 +1463,10 @@ type DecisionInboxItem struct {
 	// Set iff provenanceKind=requested_reviewer (e.g. 'acme/payroll-api').
 	ProvenanceRepoFullName DecisionInboxItemProvenanceRepoFullName `json:"provenanceRepoFullName" yaml:"provenanceRepoFullName" mapstructure:"provenanceRepoFullName"`
 
-	// kind=ready_to_merge/needs_review only.
+	// Set for any PR-shaped row -- kind=ready_to_merge/needs_review, AND the handoff
+	// sub-case of kind=awaiting_approval (a PR carrying the handoff label rides
+	// awaiting_approval instead of an ordinary code-review kind, but is still a PR
+	// row); null for a plan/session/automation/outbox row.
 	RepoFullName DecisionInboxItemRepoFullName `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
 
 	// The PR's own current review:*-risk label, or null if never risk-labeled.
@@ -1466,14 +1490,25 @@ type DecisionInboxItemArtifactSummary *string
 // kind=needs_attention, an auto-paused automation, only.
 type DecisionInboxItemAutomationId *string
 
+// Set for any PR-shaped row, exactly like repoFullName above (§60 review finding
+// C4 -- this field, findings, and isHandoff used to be nulled out for the handoff
+// sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
 type DecisionInboxItemCiGreen *bool
 
 // Matches Postgres session_failure_reason -- kind=needs_attention, a failed
 // session, only.
 type DecisionInboxItemFailureReason *string
 
-// Count of still-open (never rebutted/fixed) review findings on this PR.
+// Count of still-open (never rebutted/fixed) review findings on this PR. Set for
+// any PR-shaped row -- see ciGreen's own description.
 type DecisionInboxItemFindings *int
+
+// The PR's own current GitHub review-decision fact -- display only, NEVER what
+// kind=ready_to_merge's own 'approved' means (§16.1 defines that as auto-approval
+// by the deterministic eligibility engine, re-checked at merge time by
+// re-validating CI/risk-label/open-findings/HasChangesRequested, never a human
+// GitHub review). Set for any PR-shaped row, exactly like ciGreen above.
+type DecisionInboxItemHasApprovingReview *bool
 
 // The PR's current head SHA at the moment this response's own scmAsOf snapshot was
 // taken -- what a Merge click must still match server-side at click time (§16.2,
@@ -1483,7 +1518,10 @@ type DecisionInboxItemHeadSha *string
 type DecisionInboxItemHtmlUrl *string
 
 // True for a handoff-labeled PR (§14.4) riding kind=awaiting_approval instead of
-// an ordinary code-review kind.
+// an ordinary code-review kind. Set (to true or false) for any PR-shaped row --
+// see ciGreen's own description; this is the field a client checks to tell a
+// handoff PR apart from a plan awaiting approval within the SAME
+// kind=awaiting_approval bucket.
 type DecisionInboxItemIsHandoff *bool
 
 type DecisionInboxItemKind string
@@ -1577,7 +1615,10 @@ type DecisionInboxItemProvenancePattern *string
 // Set iff provenanceKind=requested_reviewer (e.g. 'acme/payroll-api').
 type DecisionInboxItemProvenanceRepoFullName *string
 
-// kind=ready_to_merge/needs_review only.
+// Set for any PR-shaped row -- kind=ready_to_merge/needs_review, AND the handoff
+// sub-case of kind=awaiting_approval (a PR carrying the handoff label rides
+// awaiting_approval instead of an ordinary code-review kind, but is still a PR
+// row); null for a plan/session/automation/outbox row.
 type DecisionInboxItemRepoFullName *string
 
 // The PR's own current review:*-risk label, or null if never risk-labeled.
@@ -1613,6 +1654,9 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["findings"]; raw != nil && !ok {
 		return fmt.Errorf("field findings in DecisionInboxItem: required")
+	}
+	if _, ok := raw["hasApprovingReview"]; raw != nil && !ok {
+		return fmt.Errorf("field hasApprovingReview in DecisionInboxItem: required")
 	}
 	if _, ok := raw["headSha"]; raw != nil && !ok {
 		return fmt.Errorf("field headSha in DecisionInboxItem: required")
@@ -1940,10 +1984,25 @@ type ListDecisionInboxResponse struct {
 	// When the PR-derived rows (ready_to_merge/needs_review) were actually fetched
 	// from GitHub (§16.2: 'the response carries its as-of timestamp... never
 	// presented as live truth') -- null iff the caller has no linked GitHub identity,
-	// so no SCM read was attempted at all. goJSONSchema forces the literal *time.Time
-	// type -- see Plan.decidedAt's own doc comment for why a named pointer-type
-	// wrapper silently breaks encoding/json here.
+	// so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below (§60
+	// review finding C1): scmAsOf==null alone used to be the ONLY signal here, which
+	// meant a GitHub outage or a revoked token (a read that WAS attempted and failed)
+	// was indistinguishable from never having linked GitHub in the first place -- a
+	// contract-abiding client would render 'no GitHub linked' for what was actually a
+	// transient failure. goJSONSchema forces the literal *time.Time type -- see
+	// Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently
+	// breaks encoding/json here.
 	ScmAsOf *time.Time `json:"scmAsOf" yaml:"scmAsOf" mapstructure:"scmAsOf"`
+
+	// True iff the caller has a linked GitHub identity but the live PR fetch itself
+	// failed (a revoked token, a GitHub incident, a timeout) -- always false when
+	// scmAsOf is non-null (a successful fetch and a failed one are mutually exclusive
+	// within one response), and always false alongside scmAsOf==null when no linked
+	// identity exists at all (§60 review finding C1). A client should render a
+	// distinct 'temporarily unable to load your pull requests, try again shortly'
+	// state here -- never the same 'no GitHub linked' empty state scmAsOf==null with
+	// scmFetchFailed==false means.
+	ScmFetchFailed bool `json:"scmFetchFailed" yaml:"scmFetchFailed" mapstructure:"scmFetchFailed"`
 }
 
 // §16.2's own decision-latency metric -- null iff decisionLatencyComputed is false
@@ -1972,6 +2031,9 @@ func (j *ListDecisionInboxResponse) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["scmAsOf"]; raw != nil && !ok {
 		return fmt.Errorf("field scmAsOf in ListDecisionInboxResponse: required")
+	}
+	if _, ok := raw["scmFetchFailed"]; raw != nil && !ok {
+		return fmt.Errorf("field scmFetchFailed in ListDecisionInboxResponse: required")
 	}
 	type Plain ListDecisionInboxResponse
 	var plain Plain

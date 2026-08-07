@@ -1189,7 +1189,7 @@ export interface DecisionInboxItem {
   kind: 'ready_to_merge' | 'needs_review' | 'awaiting_approval' | 'needs_attention';
   title: string;
   /**
-   * When this row first became a pending decision -- the ranking (§16.1: 'by decision cost then age') and staleness reference point.
+   * When this row first became a pending decision -- the ranking (§16.1: 'by decision cost then age') and staleness reference point. For a PR row this is an APPROXIMATION (the PR's own GitHub creation time, not the instant it became assigned/eligible for this specific user) -- see internal/app/decisioninbox.Item.EnteredQueueAt's own doc comment for why, and for the direction this approximation errs in (it can only ever UNDER-state how recently a PR became a decision, so `stale` below can over-fire on an old-but-recently-assigned PR).
    */
   enteredQueueAt: string;
   /**
@@ -1201,7 +1201,7 @@ export interface DecisionInboxItem {
    */
   stale: boolean;
   /**
-   * kind=ready_to_merge/needs_review only.
+   * Set for any PR-shaped row -- kind=ready_to_merge/needs_review, AND the handoff sub-case of kind=awaiting_approval (a PR carrying the handoff label rides awaiting_approval instead of an ordinary code-review kind, but is still a PR row); null for a plan/session/automation/outbox row.
    */
   repoFullName: string | null;
   prNumber: number | null;
@@ -1211,7 +1211,7 @@ export interface DecisionInboxItem {
    */
   headSha: string | null;
   /**
-   * How this PR reached the user (§16.1: 'a first-class field, not a UI nicety') -- matches internal/domain/decisioninbox.ProvenanceKind's own three values exactly. kind=ready_to_merge/needs_review only; null otherwise.
+   * How this PR reached the user (§16.1: 'a first-class field, not a UI nicety') -- matches internal/domain/decisioninbox.ProvenanceKind's own three values exactly. Set for any PR-shaped row, exactly like repoFullName above (ready_to_merge/needs_review AND the handoff sub-case of awaiting_approval); null otherwise.
    */
   provenanceKind: 'assigned_directly' | 'requested_reviewer' | 'codeowners' | null;
   /**
@@ -1226,15 +1226,22 @@ export interface DecisionInboxItem {
    * The PR's own current review:*-risk label, or null if never risk-labeled.
    */
   riskLabel: string | null;
+  /**
+   * Set for any PR-shaped row, exactly like repoFullName above (§60 review finding C4 -- this field, findings, and isHandoff used to be nulled out for the handoff sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
+   */
   ciGreen: boolean | null;
   /**
-   * Count of still-open (never rebutted/fixed) review findings on this PR.
+   * Count of still-open (never rebutted/fixed) review findings on this PR. Set for any PR-shaped row -- see ciGreen's own description.
    */
   findings: number | null;
   /**
-   * True for a handoff-labeled PR (§14.4) riding kind=awaiting_approval instead of an ordinary code-review kind.
+   * True for a handoff-labeled PR (§14.4) riding kind=awaiting_approval instead of an ordinary code-review kind. Set (to true or false) for any PR-shaped row -- see ciGreen's own description; this is the field a client checks to tell a handoff PR apart from a plan awaiting approval within the SAME kind=awaiting_approval bucket.
    */
   isHandoff: boolean | null;
+  /**
+   * The PR's own current GitHub review-decision fact -- display only, NEVER what kind=ready_to_merge's own 'approved' means (§16.1 defines that as auto-approval by the deterministic eligibility engine, re-checked at merge time by re-validating CI/risk-label/open-findings/HasChangesRequested, never a human GitHub review). Set for any PR-shaped row, exactly like ciGreen above.
+   */
+  hasApprovingReview: boolean | null;
   /**
    * kind=awaiting_approval, a plan (not a handoff PR) only.
    */
@@ -1274,9 +1281,13 @@ export interface ListDecisionInboxResponse {
    */
   items: DecisionInboxItem[];
   /**
-   * When the PR-derived rows (ready_to_merge/needs_review) were actually fetched from GitHub (§16.2: 'the response carries its as-of timestamp... never presented as live truth') -- null iff the caller has no linked GitHub identity, so no SCM read was attempted at all. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
+   * When the PR-derived rows (ready_to_merge/needs_review) were actually fetched from GitHub (§16.2: 'the response carries its as-of timestamp... never presented as live truth') -- null iff the caller has no linked GitHub identity, so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below (§60 review finding C1): scmAsOf==null alone used to be the ONLY signal here, which meant a GitHub outage or a revoked token (a read that WAS attempted and failed) was indistinguishable from never having linked GitHub in the first place -- a contract-abiding client would render 'no GitHub linked' for what was actually a transient failure. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
    */
   scmAsOf: string | null;
+  /**
+   * True iff the caller has a linked GitHub identity but the live PR fetch itself failed (a revoked token, a GitHub incident, a timeout) -- always false when scmAsOf is non-null (a successful fetch and a failed one are mutually exclusive within one response), and always false alongside scmAsOf==null when no linked identity exists at all (§60 review finding C1). A client should render a distinct 'temporarily unable to load your pull requests, try again shortly' state here -- never the same 'no GitHub linked' empty state scmAsOf==null with scmFetchFailed==false means.
+   */
+  scmFetchFailed: boolean;
   /**
    * §16.2's own decision-latency metric -- null iff decisionLatencyComputed is false (§21.1's own 'not yet computed' sentinel, distinct from a real zero: a repo with a real 0-second median and one with no decisions yet in the window must never render identically).
    */

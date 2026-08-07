@@ -676,6 +676,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 		ciGreen := true
 		findings := 0
 		isHandoff := false
+		hasApprovingReview := true
 		roundTrip(t, sch, restdtos.DecisionInboxItem{
 			Kind:                   restdtos.DecisionInboxItemKindReadyToMerge,
 			Title:                  "scheduler: exponential backoff on recovery sweep",
@@ -693,6 +694,53 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 			CiGreen:                &ciGreen,
 			Findings:               &findings,
 			IsHandoff:              &isHandoff,
+			HasApprovingReview:     &hasApprovingReview,
+			PlanId:                 nil,
+			SessionId:              nil,
+			FailureReason:          nil,
+			AutomationId:           nil,
+			ArtifactSummary:        nil,
+			OutboxId:               nil,
+			OutboxKind:             nil,
+			LastError:              nil,
+		})
+	})
+
+	// AwaitingApprovalHandoffPR (§60 review finding C4) covers the OTHER
+	// PR-shaped kind=awaiting_approval sub-case a plain plan row (below)
+	// does not: a handoff-labeled PR rides awaiting_approval instead of
+	// an ordinary code-review kind, but is still a PR row -- ciGreen/
+	// findings/isHandoff/hasApprovingReview (and repoFullName/
+	// provenanceKind/etc.) must all still be populated here, never nulled
+	// out just because Kind isn't ready_to_merge/needs_review.
+	t.Run("AwaitingApprovalHandoffPR", func(t *testing.T) {
+		repo := "acme/widgets"
+		prNumber := 1300
+		htmlURL := "https://github.com/acme/widgets/pull/1300"
+		headSHA := "def456"
+		riskLabel := "review:medium-risk"
+		ciGreen := true
+		findings := 0
+		isHandoff := true
+		hasApprovingReview := false
+		roundTrip(t, sch, restdtos.DecisionInboxItem{
+			Kind:                   restdtos.DecisionInboxItemKindAwaitingApproval,
+			Title:                  "prototype: self-serve export flow",
+			EnteredQueueAt:         enteredQueueAt,
+			AgeSeconds:             3600,
+			Stale:                  false,
+			RepoFullName:           &repo,
+			PrNumber:               &prNumber,
+			HtmlUrl:                &htmlURL,
+			HeadSha:                &headSHA,
+			ProvenanceKind:         &restdtos.DecisionInboxItemProvenanceKind{Value: "assigned_directly"},
+			ProvenanceRepoFullName: nil,
+			ProvenancePattern:      nil,
+			RiskLabel:              &riskLabel,
+			CiGreen:                &ciGreen,
+			Findings:               &findings,
+			IsHandoff:              &isHandoff,
+			HasApprovingReview:     &hasApprovingReview,
 			PlanId:                 nil,
 			SessionId:              nil,
 			FailureReason:          nil,
@@ -724,6 +772,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 			CiGreen:                nil,
 			Findings:               nil,
 			IsHandoff:              nil,
+			HasApprovingReview:     nil,
 			PlanId:                 &planID,
 			SessionId:              &sessionID,
 			FailureReason:          nil,
@@ -755,6 +804,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 			CiGreen:                nil,
 			Findings:               nil,
 			IsHandoff:              nil,
+			HasApprovingReview:     nil,
 			PlanId:                 nil,
 			SessionId:              &sessionID,
 			FailureReason:          &failureReason,
@@ -787,6 +837,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 			CiGreen:                nil,
 			Findings:               nil,
 			IsHandoff:              nil,
+			HasApprovingReview:     nil,
 			PlanId:                 nil,
 			SessionId:              nil,
 			FailureReason:          nil,
@@ -813,6 +864,7 @@ func TestListDecisionInboxResponseRoundTrip(t *testing.T) {
 		roundTrip(t, sch, restdtos.ListDecisionInboxResponse{
 			Items:                        []restdtos.DecisionInboxItem{},
 			ScmAsOf:                      &scmAsOf,
+			ScmFetchFailed:               false,
 			DecisionLatencyMedianSeconds: &median,
 			DecisionLatencySampleSize:    12,
 			DecisionLatencyComputed:      true,
@@ -823,6 +875,24 @@ func TestListDecisionInboxResponseRoundTrip(t *testing.T) {
 		roundTrip(t, sch, restdtos.ListDecisionInboxResponse{
 			Items:                        []restdtos.DecisionInboxItem{},
 			ScmAsOf:                      nil,
+			ScmFetchFailed:               false,
+			DecisionLatencyMedianSeconds: nil,
+			DecisionLatencySampleSize:    0,
+			DecisionLatencyComputed:      false,
+		})
+	})
+
+	// GitHubLinkedButFetchFailed (§60 review finding C1) is the THIRD
+	// state scmAsOf==null alone could not previously distinguish: a
+	// linked identity exists, but the live PR fetch itself failed (a
+	// revoked token, a GitHub incident, a timeout) -- scmAsOf stays null
+	// (no successful fetch instant exists), but scmFetchFailed=true tells
+	// a client this was an outage, never "no GitHub linked".
+	t.Run("GitHubLinkedButFetchFailed", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.ListDecisionInboxResponse{
+			Items:                        []restdtos.DecisionInboxItem{},
+			ScmAsOf:                      nil,
+			ScmFetchFailed:               true,
 			DecisionLatencyMedianSeconds: nil,
 			DecisionLatencySampleSize:    0,
 			DecisionLatencyComputed:      false,
