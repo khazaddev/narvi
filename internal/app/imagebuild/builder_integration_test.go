@@ -133,6 +133,21 @@ func (f *fakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedB
 	return nil, false, errors.New("fakeSourceControl: ListMergedBetween not implemented")
 }
 
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// read model + API", §16.2) are never reached from this package -- same
+// "not implemented" precedent as ListMergedBetween above.
+func (f *fakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, error) {
+	return nil, errors.New("fakeSourceControl: ListOpenPRsForUser not implemented")
+}
+
+func (f *fakeSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
+	return nil, errors.New("fakeSourceControl: ResolveCodeOwners not implemented")
+}
+
+func (f *fakeSourceControl) MergePR(context.Context, ports.MergePRSpec) (string, error) {
+	return "", errors.New("fakeSourceControl: MergePR not implemented")
+}
+
 func (f *fakeSourceControl) shaCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -971,9 +971,20 @@ func (a *Adapter) GetFileContent(ctx context.Context, spec ports.GetFileContentS
 	// Owner/Repo as opaque path segments, Path segment-by-segment
 	// (review_findings.file_path is a real, multi-segment repo-relative
 	// path), Ref as a query value.
+	return a.fetchFileContent(ctx, spec.Owner, spec.Repo, spec.Path, spec.Ref, spec.Token)
+}
+
+// fetchFileContent is GetFileContent's own real implementation, factored
+// out so a SECOND caller can reuse it without duplicating the base64-
+// decode step: resolvecodeowners.go's own CODEOWNERS-file fetch (Step 60,
+// §16.2) needs the IDENTICAL "GET the Contents API, 404 is a legitimate
+// non-error exists=false, base64-decode on success" sequence this method
+// already established for GetFileContent (Step 48), just for a
+// candidate-location loop instead of one caller-supplied path.
+func (a *Adapter) fetchFileContent(ctx context.Context, owner, repo, path, ref, token string) (content, sha string, exists bool, err error) {
 	contentsPath := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s",
-		a.apiBaseURL, url.PathEscape(spec.Owner), url.PathEscape(spec.Repo), escapePathSegments(spec.Path), url.QueryEscape(spec.Ref))
-	body, err := a.doGet(ctx, contentsPath, spec.Token)
+		a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), escapePathSegments(path), url.QueryEscape(ref))
+	body, err := a.doGet(ctx, contentsPath, token)
 	if err != nil {
 		var apiErr *APIError
 		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {

@@ -112,6 +112,21 @@ func (f *fakeSentinelAutoFixSourceControl) lastCreateBranchSpec() ports.CreateBr
 	return f.createBranchCalls[len(f.createBranchCalls)-1]
 }
 
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// read model + API", §16.2) are never reached from this package -- same
+// "not implemented" precedent as RegisterPRStack/ListMergedBetween above.
+func (f *fakeSentinelAutoFixSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, error) {
+	return nil, errors.New("fakeSentinelAutoFixSourceControl: ListOpenPRsForUser not implemented")
+}
+
+func (f *fakeSentinelAutoFixSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
+	return nil, errors.New("fakeSentinelAutoFixSourceControl: ResolveCodeOwners not implemented")
+}
+
+func (f *fakeSentinelAutoFixSourceControl) MergePR(context.Context, ports.MergePRSpec) (string, error) {
+	return "", errors.New("fakeSentinelAutoFixSourceControl: MergePR not implemented")
+}
+
 // TestSentinelAutoFixNotifier_SpawnsChildSessionAndUpdatesStores proves
 // the notifier's own real Deliver: a real child session is spawned
 // (httpapi.SpawnChildSession), sentinel_fixes.fix_child_session_id is

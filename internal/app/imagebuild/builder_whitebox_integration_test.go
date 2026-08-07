@@ -108,6 +108,21 @@ func (f *whiteboxFakeSourceControl) ListMergedBetween(context.Context, ports.Lis
 	return nil, false, errors.New("whiteboxFakeSourceControl: ListMergedBetween not implemented")
 }
 
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// read model + API", §16.2) are never reached from this package -- same
+// "not implemented" precedent as the methods above.
+func (f *whiteboxFakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, error) {
+	return nil, errors.New("whiteboxFakeSourceControl: ListOpenPRsForUser not implemented")
+}
+
+func (f *whiteboxFakeSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
+	return nil, errors.New("whiteboxFakeSourceControl: ResolveCodeOwners not implemented")
+}
+
+func (f *whiteboxFakeSourceControl) MergePR(context.Context, ports.MergePRSpec) (string, error) {
+	return "", errors.New("whiteboxFakeSourceControl: MergePR not implemented")
+}
+
 // whiteboxFakeBuildProvider is a minimal test-only ports.SandboxProvider,
 // duplicated from builder_integration_test.go's own fakeBuildProvider for
 // the identical cross-package reason.

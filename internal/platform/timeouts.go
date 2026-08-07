@@ -1978,6 +1978,69 @@ type Timeouts struct {
 	// own latency nor auth.openai.com's is under Narvi's control the way a
 	// same-datacenter Postgres/internal-service call's is.
 	ChatGPTOAuthHTTPClientTimeout time.Duration
+
+	// --- Step 60 ("decision inbox: read model + API", §16) standalone
+	// additions: no ordering relationship with any invariant chain above,
+	// matching every other standalone addition's own precedent.
+
+	// GitHubListOpenPRsForUserTimeout bounds ONE internal/adapters/
+	// outbound/githubapi.Adapter.ListOpenPRsForUser call, from the app-
+	// layer decision-inbox aggregator (§16.2) -- this is the SAME
+	// "wrap the whole multi-call port method in one outer
+	// context.WithTimeout at its one real call site" shape
+	// GitHubListMergedBetweenTimeout already establishes for
+	// ListMergedBetween (run.go's own listCtx), not a NEW pattern.
+	// ListOpenPRsForUser's own worst case (this file's own top doc
+	// comment, listopenprs.go) is comparable to or worse than
+	// ListMergedBetween's (up to maxOpenPRsForUser candidate PRs, each
+	// costing up to five further calls, versus ListMergedBetween's own
+	// maxConstituentPRs bound) -- chosen as 3 minutes, matching
+	// ReleaseManifestCheckTimeout's own identical figure for the same
+	// class of "bounded but potentially many-call" outbound operation.
+	GitHubListOpenPRsForUserTimeout time.Duration
+
+	// GitHubResolveCodeOwnersTimeout bounds ONE ResolveCodeOwners call --
+	// a materially CHEAPER operation than ListOpenPRsForUser above (up to
+	// three candidate-location file fetches, plus one lookup per DISTINCT
+	// owner/team actually named on a matching CODEOWNERS line -- typically
+	// a handful, never per-changed-file) -- chosen as 30s, matching
+	// GitHubPRDiffTimeout's own "double the lightweight-call baseline"
+	// reasoning for an outbound sequence a bit heavier than a single GET
+	// but nowhere near ListOpenPRsForUser's own worst case.
+	GitHubResolveCodeOwnersTimeout time.Duration
+
+	// GitHubMergePRTimeout bounds ONE MergePR call -- a single PUT, but to
+	// an endpoint GitHub's own docs note can itself take a moment to
+	// perform the merge server-side (unlike a plain metadata GET/POST);
+	// chosen as 15s, half again GitHubGetPRTimeout's own 10s "lightweight
+	// call" baseline rather than reusing it outright, since this call
+	// both writes and is on this Step's own interactive, human-facing
+	// path (§16.2's Merge endpoint) where a too-short timeout would
+	// misreport a slow-but-succeeding merge as a failure.
+	GitHubMergePRTimeout time.Duration
+
+	// DecisionInboxSCMCacheTTL is §16.2's own "SCM data is cached with a
+	// short TTL, and the response carries its as-of timestamp" -- shared
+	// by every SCM-derived read the decision-inbox aggregator caches
+	// (ListOpenPRsForUser's own result set, and each distinct
+	// ResolveCodeOwners lookup), keyed independently per call (see
+	// internal/app/decisioninbox's own cache). Not specified numerically
+	// in the plan beyond its own worked example -- §16.2's own prose
+	// gives "as of 2 min ago" as its illustrative staleness figure, which
+	// this field's default reproduces exactly rather than picking an
+	// unrelated round number: short enough that a human looking at their
+	// own inbox is never staring at meaningfully stale CI/review state,
+	// long enough that opening the inbox twice in quick succession (or
+	// two people loading it moments apart) does not repeat this Step's
+	// own genuinely expensive multi-call SCM fetch (this file's own
+	// GitHubListOpenPRsForUserTimeout doc comment) on every single load.
+	DecisionInboxSCMCacheTTL time.Duration
+
+	// DecisionInboxStaleAfter is §16.1's own "stale items (>48h,
+	// configurable) visually flagged" -- the threshold internal/domain/
+	// decisioninbox.IsStale compares a row's own age against. §16.1 gives
+	// the figure directly: 48 hours.
+	DecisionInboxStaleAfter time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2144,6 +2207,12 @@ func DefaultTimeouts() Timeouts {
 		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // Step 59, §29.5, explicit ("propose 6h")
 		ChatGPTLinkAttemptTTL:           15 * time.Minute, // Step 59; not specified, chosen generously (human device-switch time)
 		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // Step 59; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
+
+		GitHubListOpenPRsForUserTimeout: 3 * time.Minute,  // Step 60; not specified, matches ReleaseManifestCheckTimeout's own figure for a comparable bounded-but-many-call operation
+		GitHubResolveCodeOwnersTimeout:  30 * time.Second, // Step 60; not specified, chosen generously (a handful of file/user/team fetches)
+		GitHubMergePRTimeout:            15 * time.Second, // Step 60; not specified, half again GitHubGetPRTimeout's baseline (interactive, human-facing write)
+		DecisionInboxSCMCacheTTL:        2 * time.Minute,  // Step 60, §16.2's own worked example ("as of 2 min ago")
+		DecisionInboxStaleAfter:         48 * time.Hour,   // Step 60, §16.1, explicit ("stale items (>48h, configurable)")
 	}
 }
 
