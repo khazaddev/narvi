@@ -20,9 +20,13 @@ import (
 //
 // Every assertion below was independently, manually verified live against
 // this exact pinned binary during this Step's own implementation research
-// (a clean-config instance, empty XDG_CONFIG_HOME/XDG_DATA_HOME) before
-// being encoded here as a permanent, checked-in regression test -- these
-// are not hopeful guesses about the binary's behavior.
+// before being encoded here as a permanent, checked-in regression test --
+// these are not hopeful guesses about the binary's behavior. Each test
+// below runs against a clean-config instance: startServer (helpers_test.go)
+// spawns it with its own isolated, per-test XDG_CONFIG_HOME/XDG_DATA_HOME
+// (a fresh t.TempDir(), not this machine's or CI runner's real one), so
+// TestChatGPTOAuth_RealBinary_SetAuthFlipsConnected's own real credential
+// write below can never leak into the shared real OpenCode auth store.
 
 // TestChatGPTOAuth_RealBinary_ProviderAuthListsOAuthForOpenAI is §29.7
 // case 1: GET /provider/auth still lists an oauth method for openai,

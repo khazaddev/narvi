@@ -78,6 +78,23 @@ const (
 // internal/sandboxagent/opencodeproc, the EXACT same code path
 // cmd/sandbox-agent/main.go itself uses — for the duration of one test,
 // returning its base URL. Stopped automatically via t.Cleanup.
+//
+// The spawned process is handed its OWN isolated XDG_DATA_HOME/
+// XDG_CONFIG_HOME (a fresh t.TempDir(), never the real
+// ~/.local/share/opencode or whatever $XDG_DATA_HOME the test BINARY
+// itself happens to have inherited) so it can never read from, or write
+// into, the developer's or a CI runner's real OpenCode auth store. This
+// is not just tidiness: a test that writes a real credential through this
+// package's own SetOAuthAuth (PUT /auth/<provider>, e.g.
+// TestChatGPTOAuth_RealBinary_SetAuthFlipsConnected) has OpenCode itself
+// persist that write to its configured auth store. Without this
+// isolation that store is the SHARED real one, and realProviderConfigured
+// (below) treats its mere existence as "a provider is configured" --
+// silently flipping every TestRealTurn_* in this package from skip to a
+// real, doomed-to-fail run against that bogus credential for the rest of
+// the test binary. Applied once here (the one spawn helper every
+// real-binary test in this package goes through) rather than per-test, so
+// no real-binary test can regress this by omission.
 func startServer(t *testing.T) string {
 	t.Helper()
 
@@ -99,7 +116,13 @@ func startServer(t *testing.T) string {
 		_ = sup.StopAll(stopCtx, testReadinessPollInterval)
 	})
 
-	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), nil, testReadinessTimeout, testReadinessPollInterval)
+	isolatedHome := t.TempDir()
+	isolatedEnv := []string{
+		"XDG_DATA_HOME=" + filepath.Join(isolatedHome, "data"),
+		"XDG_CONFIG_HOME=" + filepath.Join(isolatedHome, "config"),
+	}
+
+	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), isolatedEnv, testReadinessTimeout, testReadinessPollInterval)
 	if err != nil {
 		t.Fatalf("opencodeproc.Spawn() error = %v (is the real opencode binary on PATH?)", err)
 	}
