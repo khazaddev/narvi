@@ -98,6 +98,32 @@ func TestMatch_LastPatternWins(t *testing.T) {
 	}
 }
 
+func TestMatch_LastPatternWins_BroadPatternLast(t *testing.T) {
+	t.Parallel()
+
+	// The NARROWER, more specific pattern appears FIRST here and the
+	// BROADER catch-all appears LAST -- the opposite fixture ordering from
+	// TestMatch_LastPatternWins above (and every other fixture in this
+	// file), which happens to be broad-first/narrow-last throughout. That
+	// shared ordering means a bugged "most-specific/longest-pattern-wins"
+	// implementation would satisfy every OTHER test in this file by
+	// coincidence alone -- Match must pick the LAST matching rule in FILE
+	// order, never the most specific one, and this is the one fixture
+	// shape that actually pins that (§60 review finding T8, pairs with
+	// C2's own compilePattern fix immediately above).
+	rules := codeowners.Parse(`/apps/web/legacy/ @legacy-owner
+* @global-owner
+`)
+
+	got, found := codeowners.Compile(rules).Match("apps/web/legacy/old.ts")
+	if !found {
+		t.Fatal("Match() found = false, want true")
+	}
+	if got.Pattern != "*" {
+		t.Errorf("Match().Pattern = %q, want %q (the LAST matching rule, even though an EARLIER rule is more specific)", got.Pattern, "*")
+	}
+}
+
 func TestMatch_EmptyOwnersStillWins(t *testing.T) {
 	t.Parallel()
 
@@ -159,6 +185,21 @@ func TestMatch_PatternSyntax(t *testing.T) {
 		{"double-star middle matches zero segments", "a/**/b", "a/b", true},
 		{"double-star middle matches multiple segments", "a/**/b", "a/x/y/b", true},
 		{"catch-all star matches everything", "*", "any/deep/path.txt", true},
+		// §60 review finding C2: a bare trailing "*" must stay within the
+		// one path segment it is written in -- GitHub's own documentation
+		// gives "docs/build-app/troubleshooting.md" as the canonical
+		// NON-match for "docs/*" (a nested file one directory deeper than
+		// the pattern's own single wildcard segment).
+		{"bare trailing star matches a direct child", "docs/*", "docs/readme.md", true},
+		{"bare trailing star does not cross into a nested directory", "docs/*", "docs/build-app/troubleshooting.md", false},
+		// An explicit trailing slash after the star is a DELIBERATE
+		// directory-pattern signal (dirOnly), unlike the bare-star case
+		// immediately above -- it still gets the "everything beneath"
+		// allowance.
+		{"trailing slash after a star still matches everything beneath", "docs/*/", "docs/build-app/troubleshooting.md", true},
+		// A trailing "**" already means "everything beneath" via its own
+		// ".*" translation -- unaffected by the bare-single-star exception.
+		{"trailing double-star still matches everything beneath", "docs/**", "docs/build-app/troubleshooting.md", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

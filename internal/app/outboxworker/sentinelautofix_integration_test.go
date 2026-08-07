@@ -115,8 +115,8 @@ func (f *fakeSentinelAutoFixSourceControl) lastCreateBranchSpec() ports.CreateBr
 // ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
 // read model + API", §16.2) are never reached from this package -- same
 // "not implemented" precedent as RegisterPRStack/ListMergedBetween above.
-func (f *fakeSentinelAutoFixSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, error) {
-	return nil, errors.New("fakeSentinelAutoFixSourceControl: ListOpenPRsForUser not implemented")
+func (f *fakeSentinelAutoFixSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
+	return nil, false, errors.New("fakeSentinelAutoFixSourceControl: ListOpenPRsForUser not implemented")
 }
 
 func (f *fakeSentinelAutoFixSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {

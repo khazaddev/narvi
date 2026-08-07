@@ -299,8 +299,8 @@ func (f *fakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedB
 // ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
 // read model + API", §16.2) are never reached from this package -- same
 // "not implemented" precedent as ListMergedBetween above.
-func (f *fakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, error) {
-	return nil, errors.New("fakeSourceControl: ListOpenPRsForUser not implemented")
+func (f *fakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
+	return nil, false, errors.New("fakeSourceControl: ListOpenPRsForUser not implemented")
 }
 
 func (f *fakeSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {

@@ -50,6 +50,7 @@ type decisionInboxTestRig struct {
 	identities   *narvipg.IdentityStore
 	sessions     *narvipg.SessionStore
 	artifacts    *narvipg.ArtifactStore
+	auditLog     *narvipg.AuditLogStore
 	server       *httptest.Server
 }
 
@@ -64,12 +65,20 @@ type fakeMergeSourceControl struct {
 	mergeSHA   string
 	mergeErr   error
 	mergeCalls []ports.MergePRSpec
+
+	// listOpenPRsCalls counts every ListOpenPRsForUser call this fake
+	// receives -- §60 review finding A5's own regression guard: a viewer,
+	// unconditionally denied ActionMergePR, must be rejected at the cheap
+	// role-only pre-check BEFORE the expensive live SCM re-validation ever
+	// calls this method at all.
+	listOpenPRsCalls int
 }
 
 var _ ports.SourceControl = (*fakeMergeSourceControl)(nil)
 
-func (f *fakeMergeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, error) {
-	return f.openPRs, nil
+func (f *fakeMergeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
+	f.listOpenPRsCalls++
+	return f.openPRs, false, nil
 }
 func (f *fakeMergeSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
 	return nil, nil
@@ -147,7 +156,7 @@ func newDecisionInboxTestRig(t *testing.T, sourceControl ports.SourceControl) *d
 
 	return &decisionInboxTestRig{
 		pool: pool, users: users, userSessions: userSessions, identities: identities,
-		sessions: sessions, artifacts: artifacts, server: server,
+		sessions: sessions, artifacts: artifacts, auditLog: auditLog, server: server,
 	}
 }
 
@@ -352,5 +361,187 @@ func TestMergePullRequest_NotPlatformAuthored(t *testing.T) {
 	}
 	if len(fakeSCM.mergeCalls) != 0 {
 		t.Errorf("MergePR called %d times, want 0", len(fakeSCM.mergeCalls))
+	}
+}
+
+// TestMergePullRequest_Viewer_Returns403 proves authz.Authorize
+// (ActionMergePR) actually gates this endpoint end to end (§60 review
+// finding T2, CRITICAL/security) -- every OTHER merge test in this file
+// authenticates as Member, so a deleted/bypassed RBAC gate would pass the
+// whole suite; §16.2's own "Viewer role sees the queue read-only" would
+// have no executable guard at all. Mirrors this repo's own established
+// TestApprovePlan_Viewer_NotOwnerOrParticipant_Returns403 convention
+// (planapprove_integration_test.go), which the merge endpoint uniquely
+// lacked.
+//
+// Also proves §60 review finding A5's own regression guard in the same
+// request: a viewer must be rejected by the cheap, role-only authz
+// pre-check BEFORE the expensive live SCM re-validation ever runs --
+// ListOpenPRsForUser must never be called at all for a role
+// unconditionally denied ActionMergePR.
+func TestMergePullRequest_Viewer_Returns403(t *testing.T) {
+	const htmlURL = "https://github.com/acme/widgets/pull/1206"
+	fakeSCM := &fakeMergeSourceControl{
+		openPRs: []ports.OpenPR{
+			{
+				Owner: "acme", Repo: "widgets", Number: 1206, Title: "viewer attempt", HTMLURL: htmlURL,
+				HeadSHA: "headsha1206", Assignees: []ports.PRPerson{{ExternalID: "9003", Login: "octocat"}},
+				CIConclusion: ports.CIConclusionSuccess, Labels: []string{"review:low-risk"},
+			},
+		},
+	}
+	rig := newDecisionInboxTestRig(t, fakeSCM)
+	ctx := context.Background()
+
+	viewer, token := rig.createAuthenticatedUser(ctx, t, sqlcgen.UserRoleViewer)
+	rig.linkGitHub(ctx, t, viewer.ID, "9003")
+	rig.markPlatformAuthored(ctx, t, viewer.ID, htmlURL)
+
+	body, err := json.Marshal(restdtos.MergePullRequestRequest{RepoFullName: "acme/widgets", PrNumber: 1206})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	status := rig.doJSON(t, http.MethodPost, "/api/decision-inbox/merge", body, nil, token)
+	if status != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", status, http.StatusForbidden)
+	}
+	if len(fakeSCM.mergeCalls) != 0 {
+		t.Errorf("MergePR called %d times, want 0 -- a viewer must never reach the actual merge call", len(fakeSCM.mergeCalls))
+	}
+	if fakeSCM.listOpenPRsCalls != 0 {
+		t.Errorf("ListOpenPRsForUser called %d times, want 0 (§60 review finding A5: a viewer must be rejected by the cheap role-only pre-check BEFORE the expensive live SCM re-validation ever runs)", fakeSCM.listOpenPRsCalls)
+	}
+}
+
+// TestMergePullRequest_MergePRErrorStatusMapping covers the merge
+// handler's own ports.MergePRError status mapping end to end (§60 review
+// finding T5): 405 (not currently mergeable) and 409 (the PR changed
+// since it was last checked -- GitHub's own optimistic-concurrency
+// signal, exactly the HeadSHA-moved race this endpoint's own re-
+// validation exists to catch) both map to 409; any OTHER GitHub status
+// maps to 502. fakeMergeSourceControl.mergeErr was declared and read by
+// production code but set by NO test before this one -- this whole
+// switch was unexercised. Also asserts NO audit_log row is ever written
+// on a failed merge (auditlog.Record is only ever reached after a
+// SUCCESSFUL SourceControl.MergePR call in the handler's own sequence),
+// especially for the 409 case, where a naive implementation might be
+// tempted to log "attempted" regardless.
+func TestMergePullRequest_MergePRErrorStatusMapping(t *testing.T) {
+	const htmlURL = "https://github.com/acme/widgets/pull/5001"
+	const repoFullName = "acme/widgets"
+	const prNumber = 5001
+	fakeSCM := &fakeMergeSourceControl{
+		openPRs: []ports.OpenPR{
+			{
+				Owner: "acme", Repo: "widgets", Number: prNumber, Title: "status mapping", HTMLURL: htmlURL,
+				HeadSHA: "headsha5001", Assignees: []ports.PRPerson{{ExternalID: "9004", Login: "octocat"}},
+				CIConclusion: ports.CIConclusionSuccess, Labels: []string{"review:low-risk"},
+			},
+		},
+	}
+	rig := newDecisionInboxTestRig(t, fakeSCM)
+	ctx := context.Background()
+
+	user, token := rig.createAuthenticatedUser(ctx, t, sqlcgen.UserRoleMember)
+	rig.linkGitHub(ctx, t, user.ID, "9004")
+	rig.markPlatformAuthored(ctx, t, user.ID, htmlURL)
+
+	body, err := json.Marshal(restdtos.MergePullRequestRequest{RepoFullName: repoFullName, PrNumber: prNumber})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		mergeErr   error
+		wantStatus int
+	}{
+		{"NotMergeable405MapsTo409", &ports.MergePRError{Status: http.StatusMethodNotAllowed, Message: "not mergeable"}, http.StatusConflict},
+		{"HeadSHAMoved409MapsTo409", &ports.MergePRError{Status: http.StatusConflict, Message: "sha mismatch"}, http.StatusConflict},
+		{"OtherGitHubStatusMapsTo502", &ports.MergePRError{Status: http.StatusInternalServerError, Message: "github had a bad day"}, http.StatusBadGateway},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeSCM.mergeErr = tc.mergeErr
+			fakeSCM.mergeCalls = nil
+
+			status := rig.doJSON(t, http.MethodPost, "/api/decision-inbox/merge", body, nil, token)
+			if status != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", status, tc.wantStatus)
+			}
+			if len(fakeSCM.mergeCalls) != 1 {
+				t.Fatalf("MergePR called %d times, want 1", len(fakeSCM.mergeCalls))
+			}
+
+			entries, err := rig.auditLog.List(ctx, 100, 0)
+			if err != nil {
+				t.Fatalf("list audit log: %v", err)
+			}
+			wantResourceID := fmt.Sprintf("%s#%d", repoFullName, prNumber)
+			for _, e := range entries {
+				if e.ResourceID == wantResourceID {
+					t.Errorf("audit log row written for a FAILED merge (%+v), want none", e)
+				}
+			}
+		})
+	}
+}
+
+// TestListDecisionInbox_HandoffPR_FieldsPopulated is the DTO-mapping half
+// of §60 review finding C4 (the domain-Item half is covered separately in
+// aggregate_integration_test.go's TestBuild_PRLabelVariations): a
+// handoff-labeled PR's ciGreen/findings/isHandoff/hasApprovingReview must
+// all render non-null over the wire even though it rides
+// kind=awaiting_approval instead of an ordinary ready_to_merge/
+// needs_review kind -- decisionInboxItemToDTO's own gate used to be keyed
+// on Kind, which nulled exactly these fields for exactly this row.
+func TestListDecisionInbox_HandoffPR_FieldsPopulated(t *testing.T) {
+	const htmlURL = "https://github.com/acme/widgets/pull/1300"
+	fakeSCM := &fakeMergeSourceControl{
+		openPRs: []ports.OpenPR{
+			{
+				Owner: "acme", Repo: "widgets", Number: 1300, Title: "prototype: handoff", HTMLURL: htmlURL,
+				HeadSHA: "headsha1300", Assignees: []ports.PRPerson{{ExternalID: "9005", Login: "octocat"}},
+				CIConclusion: ports.CIConclusionSuccess, Labels: []string{"review:low-risk", "handoff"},
+			},
+		},
+	}
+	rig := newDecisionInboxTestRig(t, fakeSCM)
+	ctx := context.Background()
+
+	user, token := rig.createAuthenticatedUser(ctx, t, sqlcgen.UserRoleMember)
+	rig.linkGitHub(ctx, t, user.ID, "9005")
+
+	var got restdtos.ListDecisionInboxResponse
+	status := rig.doJSON(t, http.MethodGet, "/api/decision-inbox", nil, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	var row *restdtos.DecisionInboxItem
+	for i := range got.Items {
+		if got.Items[i].PrNumber != nil && *got.Items[i].PrNumber == 1300 {
+			row = &got.Items[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("PR #1300 missing from the response entirely: %+v", got.Items)
+	}
+	if row.Kind != restdtos.DecisionInboxItemKindAwaitingApproval {
+		t.Errorf("Kind = %q, want awaiting_approval", row.Kind)
+	}
+	if row.IsHandoff == nil || !*row.IsHandoff {
+		t.Errorf("IsHandoff = %v, want a non-nil pointer to true", row.IsHandoff)
+	}
+	if row.CiGreen == nil || !*row.CiGreen {
+		t.Errorf("CiGreen = %v, want a non-nil pointer to true", row.CiGreen)
+	}
+	if row.Findings == nil {
+		t.Error("Findings = nil, want a non-nil pointer (even if the count is 0)")
+	}
+	if row.HasApprovingReview == nil {
+		t.Error("HasApprovingReview = nil, want a non-nil pointer (even if false)")
 	}
 }

@@ -101,11 +101,14 @@ func TestListOpenPRsForUser_FullScenario(t *testing.T) {
 
 	adapter := githubapi.New(server.Client(), server.URL)
 
-	prs, err := adapter.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{
+	prs, truncated, err := adapter.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{
 		GitHubExternalID: "9001", Token: "tok",
 	})
 	if err != nil {
 		t.Fatalf("ListOpenPRsForUser() error = %v, want nil", err)
+	}
+	if truncated {
+		t.Error("truncated = true, want false (both discovery queries succeeded)")
 	}
 	if len(prs) != 2 {
 		t.Fatalf("ListOpenPRsForUser() returned %d PRs, want 2 (deduplicated): %+v", len(prs), prs)
@@ -186,11 +189,121 @@ func TestListOpenPRsForUser_OneQueryFailingDoesNotBlankTheOther(t *testing.T) {
 
 	adapter := githubapi.New(server.Client(), server.URL)
 
-	prs, err := adapter.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1", Token: "tok"})
+	prs, truncated, err := adapter.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1", Token: "tok"})
 	if err != nil {
 		t.Fatalf("ListOpenPRsForUser() error = %v, want nil (one query failing is best-effort)", err)
 	}
 	if len(prs) != 1 || prs[0].Number != 5 {
 		t.Errorf("ListOpenPRsForUser() = %+v, want exactly PR #5 from the surviving query", prs)
+	}
+	// §60 review finding C1: the surviving query's own result is still
+	// returned in full (never blanked out), but truncated must still be
+	// true -- this result is a known-incomplete picture (the assignee:
+	// query's own failure means any PR only discoverable THAT way is
+	// silently missing), which a caller must not cache/present as
+	// confirmed-complete.
+	if !truncated {
+		t.Error("truncated = false, want true (the assignee: query failed)")
+	}
+}
+
+// TestListOpenPRsForUser_QueuedOrCancelledCheckIsNotGreen proves
+// fetchCIConclusionLive's own STRICT departure from fetchCIConclusion's
+// lenient "any confirmed success, no confirmed failure" rule (§60 review
+// finding A2): a live, pre-merge read must never report CIConclusionSuccess
+// while a required check is still queued/in_progress (Conclusion == nil)
+// or was cancelled -- "some check finished green" must never stand in for
+// "the whole suite is green" while other checks are still outstanding.
+func TestListOpenPRsForUser_QueuedOrCancelledCheckIsNotGreen(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		checkRuns []map[string]any
+		want      ports.CIConclusion
+	}{
+		{
+			name: "one success, one still queued",
+			checkRuns: []map[string]any{
+				{"conclusion": "success"},
+				{"conclusion": nil},
+			},
+			want: ports.CIConclusionUnknown,
+		},
+		{
+			name: "one success, one cancelled",
+			checkRuns: []map[string]any{
+				{"conclusion": "success"},
+				{"conclusion": "cancelled"},
+			},
+			want: ports.CIConclusionUnknown,
+		},
+		{
+			name: "one failure, one still queued -- failure wins",
+			checkRuns: []map[string]any{
+				{"conclusion": "failure"},
+				{"conclusion": nil},
+			},
+			want: ports.CIConclusionFailure,
+		},
+		{
+			name: "every check concluded success",
+			checkRuns: []map[string]any{
+				{"conclusion": "success"},
+				{"conclusion": "neutral"},
+			},
+			want: ports.CIConclusionSuccess,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.URL.Path == "/user/1":
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "login": "octocat"})
+				case r.URL.Path == "/search/issues" && strings.Contains(r.URL.Query().Get("q"), "assignee:octocat"):
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"items": []map[string]any{{"number": 5, "repository_url": "https://api.github.com/repos/acme/widgets"}},
+					})
+				case r.URL.Path == "/search/issues" && strings.Contains(r.URL.Query().Get("q"), "review-requested:octocat"):
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{}})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"number": 5, "title": "x", "html_url": "u", "head": map[string]any{"sha": "s"}, "base": map[string]any{"ref": "main"},
+					})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5/reviews":
+					_ = json.NewEncoder(w).Encode([]map[string]any{})
+				case r.URL.Path == "/repos/acme/widgets/commits/s/status":
+					// No legacy combined-status signal at all -- this test
+					// isolates the Checks API surface.
+					w.WriteHeader(http.StatusNotFound)
+				case r.URL.Path == "/repos/acme/widgets/commits/s/check-runs":
+					_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": tc.checkRuns})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5/files":
+					_ = json.NewEncoder(w).Encode([]map[string]any{})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			adapter := githubapi.New(server.Client(), server.URL)
+
+			prs, _, err := adapter.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1", Token: "tok"})
+			if err != nil {
+				t.Fatalf("ListOpenPRsForUser() error = %v, want nil", err)
+			}
+			if len(prs) != 1 {
+				t.Fatalf("ListOpenPRsForUser() returned %d PRs, want 1", len(prs))
+			}
+			if prs[0].CIConclusion != tc.want {
+				t.Errorf("CIConclusion = %v, want %v", prs[0].CIConclusion, tc.want)
+			}
+		})
 	}
 }

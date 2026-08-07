@@ -128,8 +128,8 @@ type fakeDecisionInboxSourceControl struct {
 
 var _ ports.SourceControl = (*fakeDecisionInboxSourceControl)(nil)
 
-func (f *fakeDecisionInboxSourceControl) ListOpenPRsForUser(_ context.Context, spec ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, error) {
-	return f.openPRsByExternalID[spec.GitHubExternalID], nil
+func (f *fakeDecisionInboxSourceControl) ListOpenPRsForUser(_ context.Context, spec ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
+	return f.openPRsByExternalID[spec.GitHubExternalID], false, nil
 }
 
 // ResolveCodeOwners always reports no match -- this test's own scenario
@@ -492,5 +492,242 @@ func TestBuild_NoLinkedGitHubIdentity(t *testing.T) {
 		if it.PRNumber != 0 {
 			t.Errorf("unexpected PR item %+v with no linked GitHub identity", it)
 		}
+	}
+}
+
+// TestBuild_PlanOwnershipScoping proves buildPlanItems' own per-user
+// scoping actually excludes/includes the right rows (§60 review finding
+// B2) -- ListAwaitingApprovalPlans is DELIBERATELY unscoped by user
+// (plans.sql's own doc comment: "this Step's own read model resolves
+// per-user ELIGIBILITY at the app layer, not in this query"), so
+// row.SessionCreatedBy==actor / participants.Exists is the ONLY per-user
+// scoping over a deployment-wide plan scan -- a hardcoded
+// ownedOrJoined := true would pass every OTHER existing test (every
+// fixture elsewhere in this file is actor-owned).
+func TestBuild_PlanOwnershipScoping(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	users := narvipg.NewUserStore(pool)
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	plans := narvipg.NewPlanStore(pool)
+	participants := narvipg.NewParticipantStore(pool)
+
+	actor, err := users.Create(ctx, sqlcgen.CreateUserParams{PrimaryEmail: "b2-actor@example.com", DisplayName: "Actor", Role: sqlcgen.UserRoleMember})
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+
+	// Foreign-owned: a plan on a session created by a DIFFERENT user, with
+	// actor neither its creator nor a participant -- must be EXCLUDED.
+	foreignOwner, err := users.Create(ctx, sqlcgen.CreateUserParams{PrimaryEmail: "b2-foreign-owner@example.com", DisplayName: "Foreign Owner", Role: sqlcgen.UserRoleMember})
+	if err != nil {
+		t.Fatalf("create foreign owner: %v", err)
+	}
+	foreignSession, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{Title: strPtr("Not the actor's own session"), SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: foreignOwner.ID})
+	if err != nil {
+		t.Fatalf("create foreign session: %v", err)
+	}
+	foreignTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: foreignSession.ID, Status: sqlcgen.TurnStatusCompleted})
+	if err != nil {
+		t.Fatalf("create foreign turn: %v", err)
+	}
+	foreignPlan, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: foreignSession.ID, TurnID: foreignTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval})
+	if err != nil {
+		t.Fatalf("create foreign plan: %v", err)
+	}
+
+	// Participant-joined: a plan on a session created by YET ANOTHER user,
+	// but actor has a real participants row on that session -- must be
+	// INCLUDED, exercising the "joined" half of ownedOrJoined that the
+	// foreign-owned case above never touches.
+	joinedOwner, err := users.Create(ctx, sqlcgen.CreateUserParams{PrimaryEmail: "b2-joined-owner@example.com", DisplayName: "Joined Session Owner", Role: sqlcgen.UserRoleMember})
+	if err != nil {
+		t.Fatalf("create joined-session owner: %v", err)
+	}
+	joinedSession, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{Title: strPtr("Actor joined this one"), SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: joinedOwner.ID})
+	if err != nil {
+		t.Fatalf("create joined session: %v", err)
+	}
+	joinedTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: joinedSession.ID, Status: sqlcgen.TurnStatusCompleted})
+	if err != nil {
+		t.Fatalf("create joined-session turn: %v", err)
+	}
+	joinedPlan, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: joinedSession.ID, TurnID: joinedTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval})
+	if err != nil {
+		t.Fatalf("create joined-session plan: %v", err)
+	}
+	// No ParticipantStore.Create exists (participants.sql's own doc
+	// comment: "nothing populates participants yet -- a distinct,
+	// not-yet-scoped concern") -- raw SQL insert, exactly the row shape a
+	// future Step's own writer would produce.
+	if _, err := pool.Exec(ctx, `INSERT INTO participants (session_id, user_id) VALUES ($1, $2)`, joinedSession.ID, actor.ID); err != nil {
+		t.Fatalf("insert participants row: %v", err)
+	}
+	// Sanity-check the fixture itself: Exists must now report true,
+	// otherwise this test would trivially pass for the wrong reason.
+	if exists, err := participants.Exists(ctx, joinedSession.ID, actor.ID); err != nil || !exists {
+		t.Fatalf("participants.Exists() = (%v, %v), want (true, nil) -- fixture setup is broken", exists, err)
+	}
+
+	deps := decisioninbox.Deps{
+		Plans: plans, Sessions: sessions, Participants: participants,
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
+		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
+		SCMCache:           decisioninbox.NewSCMCache(&fakeDecisionInboxSourceControl{}, platform.DefaultTimeouts()),
+		TokenEncryptionKey: []byte("01234567890123456789012345678901"),
+		Timeouts:           platform.DefaultTimeouts(),
+	}
+
+	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
+	if err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
+	}
+
+	var foundForeign, foundJoined bool
+	for _, it := range result.Items {
+		switch it.PlanID {
+		case foreignPlan.ID.String():
+			foundForeign = true
+		case joinedPlan.ID.String():
+			foundJoined = true
+		}
+	}
+	if foundForeign {
+		t.Error("the foreign-owned plan (neither created by nor joined by the actor) is present in the actor's own inbox, want excluded")
+	}
+	if !foundJoined {
+		t.Error("the participant-joined plan is missing from the actor's own inbox, want included (actor is a real participant on its session)")
+	}
+}
+
+// TestBuild_PRLabelVariations covers two read-path PR classifications
+// with no prior coverage (§60 review finding T4/T6):
+//   - a PR carrying BOTH review:low-risk and review:needs-human must land
+//     needs_review, never ready_to_merge (the needs-human escape hatch,
+//     tested here alongside an otherwise-fully-eligible risk label so a
+//     deleted needs-human check would be the ONLY thing making this test
+//     fail).
+//   - a handoff-labeled PR must land awaiting_approval AND still carry
+//     its PR-shaped fields (CIGreen/Findings/IsHandoff) populated on the
+//     domain Item itself -- the read-model half of §60 review finding
+//     C4 (the DTO-mapping half is covered separately in httpapi's own
+//     decisioninbox_integration_test.go).
+func TestBuild_PRLabelVariations(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	users := narvipg.NewUserStore(pool)
+	identities := narvipg.NewIdentityStore(pool)
+
+	actor, err := users.Create(ctx, sqlcgen.CreateUserParams{PrimaryEmail: "t4t6-actor@example.com", DisplayName: "Actor", Role: sqlcgen.UserRoleMember})
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+
+	const actorGitHubExternalID = "2001"
+	tokenKey := []byte("01234567890123456789012345678901")
+	encryptedToken, err := platform.EncryptToken(tokenKey, []byte("fake-gh-token"))
+	if err != nil {
+		t.Fatalf("encrypt token: %v", err)
+	}
+	if _, err := identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID: actor.ID, Provider: sqlcgen.IdentityProviderGithub, ExternalID: actorGitHubExternalID,
+		EmailVerified: true, LinkedVia: sqlcgen.IdentityLinkedViaAutoEmail, AccessTokenEncrypted: encryptedToken,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	const needsHumanPRURL = "https://github.com/acme/widgets/pull/20"
+	fakeSCM := &fakeDecisionInboxSourceControl{
+		openPRsByExternalID: map[string][]ports.OpenPR{
+			actorGitHubExternalID: {
+				// PR #20: needs-human ALONGSIDE low-risk, otherwise
+				// IDENTICAL in shape to TestBuild_FullScenario's own
+				// ready_to_merge PR #10 (platform-authored, CI green,
+				// low-risk, directly assigned) -- needs-human must be the
+				// ONLY thing keeping this PR out of ready_to_merge, so
+				// this fixture deliberately marks it platform-authored
+				// too (below): a deleted/bypassed needs-human check would
+				// otherwise still correctly land this PR in needs_review
+				// for the WRONG reason (not platform-authored), letting
+				// the mutation survive undetected.
+				{
+					Owner: "acme", Repo: "widgets", Number: 20, Title: "needs-human + low-risk",
+					HTMLURL: needsHumanPRURL, HeadSHA: "sha20",
+					Assignees:    []ports.PRPerson{{ExternalID: actorGitHubExternalID, Login: "actor"}},
+					CIConclusion: ports.CIConclusionSuccess,
+					Labels:       []string{"review:low-risk", "review:needs-human"},
+					CreatedAt:    time.Now(),
+				},
+				// PR #21: handoff-labeled -- must ride awaiting_approval,
+				// never needs_review/ready_to_merge, while still carrying
+				// its own PR-shaped fields.
+				{
+					Owner: "acme", Repo: "widgets", Number: 21, Title: "prototype: handoff to engineering",
+					HTMLURL: "https://github.com/acme/widgets/pull/21", HeadSHA: "sha21",
+					Assignees:    []ports.PRPerson{{ExternalID: actorGitHubExternalID, Login: "actor"}},
+					CIConclusion: ports.CIConclusionSuccess,
+					Labels:       []string{"review:low-risk", "handoff"},
+					CreatedAt:    time.Now(),
+				},
+			},
+		},
+	}
+
+	artifacts := narvipg.NewArtifactStore(pool)
+	platformSession, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceGithub, CreatedBy: actor.ID})
+	if err != nil {
+		t.Fatalf("create platform session: %v", err)
+	}
+	if _, err := artifacts.Create(ctx, sqlcgen.CreateArtifactParams{
+		SessionID: platformSession.ID, Type: sqlcgen.ArtifactTypePr, Url: needsHumanPRURL, Metadata: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("mark PR #20 platform-authored: %v", err)
+	}
+
+	deps := decisioninbox.Deps{
+		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
+		Artifacts: artifacts, Identities: identities,
+		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
+		TokenEncryptionKey: tokenKey,
+		Timeouts:           platform.DefaultTimeouts(),
+	}
+
+	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
+	if err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
+	}
+
+	needsHumanPR := findItemByPR(result.Items, 20)
+	if needsHumanPR == nil {
+		t.Fatal("PR #20 missing from the inbox entirely")
+	}
+	if needsHumanPR.Kind != decisioninboxdomain.KindNeedsReview {
+		t.Errorf("PR #20 (needs-human + low-risk) Kind = %s, want needs_review (needs-human must force it out of ready_to_merge)", needsHumanPR.Kind)
+	}
+
+	handoffPR := findItemByPR(result.Items, 21)
+	if handoffPR == nil {
+		t.Fatal("PR #21 missing from the inbox entirely")
+	}
+	if handoffPR.Kind != decisioninboxdomain.KindAwaitingApproval {
+		t.Errorf("PR #21 (handoff) Kind = %s, want awaiting_approval", handoffPR.Kind)
+	}
+	if !handoffPR.IsHandoff {
+		t.Error("PR #21 (handoff) IsHandoff = false, want true")
+	}
+	if !handoffPR.CIGreen {
+		t.Error("PR #21 (handoff) CIGreen = false, want true -- PR-shaped fields must still populate for a handoff row (§60 review finding C4's read-path half)")
+	}
+	if handoffPR.Findings != 0 {
+		t.Errorf("PR #21 (handoff) Findings = %d, want 0", handoffPR.Findings)
+	}
+	if handoffPR.RepoFullName != "acme/widgets" {
+		t.Errorf("PR #21 (handoff) RepoFullName = %q, want acme/widgets -- must still populate even though Kind is awaiting_approval", handoffPR.RepoFullName)
 	}
 }
