@@ -72,12 +72,27 @@ func createUserWithRole(ctx context.Context, t *testing.T, r testRig, role sqlcg
 // optionally with buildModelID set -- this file's own tests need a real
 // owner to exercise canActOnPlan's "own session" branch, and a real
 // build_model_id to prove ApprovePlan's new turn actually carries it.
-func createSessionForUser(ctx context.Context, t *testing.T, r testRig, ownerID pgtype.UUID, buildModelID *string) sqlcgen.Session {
+//
+// buildEffort (H2 fix, §29.8) is a trailing, variadic *string -- mirroring
+// this codebase's own established idiom for adding one new optional value
+// to a widely-called constructor without touching every existing call site
+// (e.g. internal/adapters/outbound/opencode.New's own trailing
+// `capabilityRestricted ...bool`, adapter.go). Every one of this helper's
+// ~50 pre-existing callers omits it entirely and keeps compiling and
+// behaving identically (sessions.build_effort left NULL); only
+// TestApprovePlan_Owner_HappyPath (this file, proving H2's own fix) passes
+// one explicitly.
+func createSessionForUser(ctx context.Context, t *testing.T, r testRig, ownerID pgtype.UUID, buildModelID *string, buildEffort ...*string) sqlcgen.Session {
 	t.Helper()
+	var effort *string
+	if len(buildEffort) > 0 {
+		effort = buildEffort[0]
+	}
 	row, err := r.sessions.Create(ctx, sqlcgen.CreateSessionParams{
 		SpawnSource:  sqlcgen.SessionSpawnSourceWeb,
 		CreatedBy:    ownerID,
 		BuildModelID: buildModelID,
+		BuildEffort:  effort,
 	})
 	if err != nil {
 		t.Fatalf("create test session for user: %v", err)
@@ -127,7 +142,8 @@ func TestApprovePlan_Owner_HappyPath(t *testing.T) {
 	owner, token := rig.createAuthenticatedUser(ctx, t)
 
 	buildModel := "anthropic/claude-sonnet-5"
-	session := createSessionForUser(ctx, t, rig, owner.ID, &buildModel)
+	buildEffort := "high"
+	session := createSessionForUser(ctx, t, rig, owner.ID, &buildModel, &buildEffort)
 	plan := seedAwaitingApprovalPlan(ctx, t, rig, session.ID, 1)
 
 	var got planActionResponseForTest
@@ -186,6 +202,14 @@ func TestApprovePlan_Owner_HappyPath(t *testing.T) {
 	}
 	if implTurn.ModelID == nil || *implTurn.ModelID != buildModel {
 		t.Errorf("new turn ModelID = %v, want %q (the session's own build_model_id)", implTurn.ModelID, buildModel)
+	}
+	// H2 (adversarial review, §29.8): sessions.build_effort must land on
+	// this turn's own effort exactly like build_model_id -> ModelID does
+	// immediately above -- before the fix, decideplan.go's own
+	// CreateTurnParams literal omitted Effort entirely, so this turn's
+	// effort was always NULL regardless of the session's build_effort.
+	if implTurn.Effort == nil || *implTurn.Effort != buildEffort {
+		t.Errorf("new turn Effort = %v, want %q (the session's own build_effort)", implTurn.Effort, buildEffort)
 	}
 	if implTurn.Prompt == nil || *implTurn.Prompt == "" {
 		t.Error("new turn Prompt is nil/empty, want the fixed implementation prompt")

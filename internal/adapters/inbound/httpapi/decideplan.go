@@ -307,7 +307,19 @@ func DecidePlanOnTx(
 			Status:    sqlcgen.TurnStatusPending,
 			Prompt:    &prompt,
 			ModelID:   sessionRow.BuildModelID,
-			PlanMode:  false,
+			// H2 (adversarial review, §29.8): sessions.build_effort must be
+			// copied onto this approval-dispatched implementation turn
+			// exactly as build_model_id -> model_id already is on the line
+			// above (migration 000063's own doc comment) -- mirroring
+			// workflowengine/advance.go's own dispatchNextAttempt, which
+			// already does this (Effort: res.Effort, itself resolved from
+			// sessionRow.BuildEffort). Before this fix, this was the ONE
+			// dispatch path that dropped it, making build_effort write-only
+			// on a plain (non-workflow) plan-mode session -- §29.8 forbids a
+			// dispatch-time session-level fallback for a NULL turn effort,
+			// so there was no rescue.
+			Effort:   sessionRow.BuildEffort,
+			PlanMode: false,
 		})
 		if err != nil {
 			return DecidePlanOutcome{}, fmt.Errorf("httpapi: create implementation turn: %w", err)
