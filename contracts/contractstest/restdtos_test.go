@@ -655,3 +655,198 @@ func TestConfirmUploadResponseRoundTrip(t *testing.T) {
 		})
 	})
 }
+
+// TestDecisionInboxItemRoundTrip (Step 60, §16) covers all four kinds --
+// each exercising a DIFFERENT subset of the object's many kind-conditional
+// nullable fields, so an accidental omitempty on any one of them (this
+// object has more required-but-nullable fields than any other DTO in this
+// schema) would fail loudly rather than only in whichever kind's own test
+// case happens to leave that field non-null.
+func TestDecisionInboxItemRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/DecisionInboxItem")
+
+	enteredQueueAt := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+
+	t.Run("ReadyToMerge", func(t *testing.T) {
+		repo := "acme/widgets"
+		prNumber := 1204
+		htmlURL := "https://github.com/acme/widgets/pull/1204"
+		headSHA := "abc123"
+		riskLabel := "review:low-risk"
+		ciGreen := true
+		findings := 0
+		isHandoff := false
+		roundTrip(t, sch, restdtos.DecisionInboxItem{
+			Kind:                   restdtos.DecisionInboxItemKindReadyToMerge,
+			Title:                  "scheduler: exponential backoff on recovery sweep",
+			EnteredQueueAt:         enteredQueueAt,
+			AgeSeconds:             7200,
+			Stale:                  false,
+			RepoFullName:           &repo,
+			PrNumber:               &prNumber,
+			HtmlUrl:                &htmlURL,
+			HeadSha:                &headSHA,
+			ProvenanceKind:         &restdtos.DecisionInboxItemProvenanceKind{Value: "codeowners"},
+			ProvenanceRepoFullName: nil,
+			ProvenancePattern:      strPtr("internal/app/scheduler/**"),
+			RiskLabel:              &riskLabel,
+			CiGreen:                &ciGreen,
+			Findings:               &findings,
+			IsHandoff:              &isHandoff,
+			PlanId:                 nil,
+			SessionId:              nil,
+			FailureReason:          nil,
+			AutomationId:           nil,
+			ArtifactSummary:        nil,
+			OutboxId:               nil,
+			OutboxKind:             nil,
+			LastError:              nil,
+		})
+	})
+
+	t.Run("AwaitingApprovalPlan", func(t *testing.T) {
+		planID := testSessionID
+		sessionID := testSessionID
+		roundTrip(t, sch, restdtos.DecisionInboxItem{
+			Kind:                   restdtos.DecisionInboxItemKindAwaitingApproval,
+			Title:                  "Migrate secrets to per-automation scope",
+			EnteredQueueAt:         enteredQueueAt,
+			AgeSeconds:             1200,
+			Stale:                  false,
+			RepoFullName:           nil,
+			PrNumber:               nil,
+			HtmlUrl:                nil,
+			HeadSha:                nil,
+			ProvenanceKind:         nil,
+			ProvenanceRepoFullName: nil,
+			ProvenancePattern:      nil,
+			RiskLabel:              nil,
+			CiGreen:                nil,
+			Findings:               nil,
+			IsHandoff:              nil,
+			PlanId:                 &planID,
+			SessionId:              &sessionID,
+			FailureReason:          nil,
+			AutomationId:           nil,
+			ArtifactSummary:        nil,
+			OutboxId:               nil,
+			OutboxKind:             nil,
+			LastError:              nil,
+		})
+	})
+
+	t.Run("NeedsAttentionFailedSession", func(t *testing.T) {
+		sessionID := testSessionID
+		failureReason := "timeout"
+		roundTrip(t, sch, restdtos.DecisionInboxItem{
+			Kind:                   restdtos.DecisionInboxItemKindNeedsAttention,
+			Title:                  "Add e2e coverage for plan mode",
+			EnteredQueueAt:         enteredQueueAt,
+			AgeSeconds:             10800,
+			Stale:                  false,
+			RepoFullName:           nil,
+			PrNumber:               nil,
+			HtmlUrl:                nil,
+			HeadSha:                nil,
+			ProvenanceKind:         nil,
+			ProvenanceRepoFullName: nil,
+			ProvenancePattern:      nil,
+			RiskLabel:              nil,
+			CiGreen:                nil,
+			Findings:               nil,
+			IsHandoff:              nil,
+			PlanId:                 nil,
+			SessionId:              &sessionID,
+			FailureReason:          &failureReason,
+			AutomationId:           nil,
+			ArtifactSummary:        nil,
+			OutboxId:               nil,
+			OutboxKind:             nil,
+			LastError:              nil,
+		})
+	})
+
+	t.Run("NeedsAttentionDeadLetterOutbox", func(t *testing.T) {
+		outboxID := testSessionID
+		outboxKind := "slack_plan_approval"
+		lastError := "notifier: permanent failure"
+		roundTrip(t, sch, restdtos.DecisionInboxItem{
+			Kind:                   restdtos.DecisionInboxItemKindNeedsAttention,
+			Title:                  "outbox delivery: slack_plan_approval",
+			EnteredQueueAt:         enteredQueueAt,
+			AgeSeconds:             300,
+			Stale:                  true,
+			RepoFullName:           nil,
+			PrNumber:               nil,
+			HtmlUrl:                nil,
+			HeadSha:                nil,
+			ProvenanceKind:         nil,
+			ProvenanceRepoFullName: nil,
+			ProvenancePattern:      nil,
+			RiskLabel:              nil,
+			CiGreen:                nil,
+			Findings:               nil,
+			IsHandoff:              nil,
+			PlanId:                 nil,
+			SessionId:              nil,
+			FailureReason:          nil,
+			AutomationId:           nil,
+			ArtifactSummary:        nil,
+			OutboxId:               &outboxID,
+			OutboxKind:             &outboxKind,
+			LastError:              &lastError,
+		})
+	})
+}
+
+// TestListDecisionInboxResponseRoundTrip covers both the "actor has a
+// linked GitHub identity" (scmAsOf/decisionLatency populated) and "no
+// linked identity, no decisions yet" (both explicit-null) cases -- the
+// SAME "not yet computed sentinel, distinct from a real zero" discipline
+// ConfirmUploadResponse's own round-trip test above already calls out.
+func TestListDecisionInboxResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ListDecisionInboxResponse")
+
+	t.Run("Populated", func(t *testing.T) {
+		scmAsOf := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+		median := 11520.0 // 3.2h in seconds
+		roundTrip(t, sch, restdtos.ListDecisionInboxResponse{
+			Items:                        []restdtos.DecisionInboxItem{},
+			ScmAsOf:                      &scmAsOf,
+			DecisionLatencyMedianSeconds: &median,
+			DecisionLatencySampleSize:    12,
+			DecisionLatencyComputed:      true,
+		})
+	})
+
+	t.Run("NoGitHubIdentityNoDecisionsYet", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.ListDecisionInboxResponse{
+			Items:                        []restdtos.DecisionInboxItem{},
+			ScmAsOf:                      nil,
+			DecisionLatencyMedianSeconds: nil,
+			DecisionLatencySampleSize:    0,
+			DecisionLatencyComputed:      false,
+		})
+	})
+}
+
+func TestMergePullRequestRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/MergePullRequestRequest")
+
+	roundTrip(t, sch, restdtos.MergePullRequestRequest{
+		RepoFullName: "acme/widgets",
+		PrNumber:     1204,
+	})
+}
+
+func TestMergePullRequestResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/MergePullRequestResponse")
+
+	roundTrip(t, sch, restdtos.MergePullRequestResponse{
+		Merged:         true,
+		MergeCommitSha: "merged-sha-123",
+		Message:        "Pull Request successfully merged",
+	})
+}
+
+func strPtr(s string) *string { return &s }
