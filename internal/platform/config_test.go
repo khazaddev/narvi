@@ -1014,3 +1014,206 @@ func TestLoadGitHubReReviewLabel(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadObjectStorageConfig covers Step 58's ("uploads, blob storage &
+// the in-sandbox download_file tool", §28.7) object-storage block --
+// feature-flagged on NARVI_OBJECT_STORE_ENDPOINT alone, with Region/Bucket
+// becoming required only once an endpoint is set, and every other
+// NARVI_OBJECT_STORE_* var left unvalidated entirely while the feature is
+// off.
+func TestLoadObjectStorageConfig(t *testing.T) {
+	t.Run("unset endpoint leaves the feature off, no error", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OBJECT_STORE_ENDPOINT", "")
+		// Deliberately leave a stray, otherwise-invalid override set --
+		// proves it is never even inspected while the feature is off.
+		t.Setenv("NARVI_OBJECT_STORE_MAX_UPLOAD_BYTES", "not-a-number")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (uploads are optional; a stray override must not be validated while the endpoint is unset)", err)
+		}
+		if cfg.ObjectStorage != nil {
+			t.Errorf("Load().ObjectStorage = %+v, want nil when NARVI_OBJECT_STORE_ENDPOINT is unset", cfg.ObjectStorage)
+		}
+	})
+
+	t.Run("endpoint set without region fails", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OBJECT_STORE_ENDPOINT", "http://localhost:9000")
+		t.Setenv("NARVI_OBJECT_STORE_REGION", "")
+		t.Setenv("NARVI_OBJECT_STORE_BUCKET", "narvi-uploads")
+
+		cfg, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error (region required once endpoint is set)")
+		}
+		var missErr *platform.MissingRequiredEnvError
+		if !errors.As(err, &missErr) {
+			t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+		}
+		if missErr.EnvVar != "NARVI_OBJECT_STORE_REGION" {
+			t.Errorf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, "NARVI_OBJECT_STORE_REGION")
+		}
+		if cfg != nil {
+			t.Fatalf("Load() cfg = %+v, want nil on error", cfg)
+		}
+	})
+
+	t.Run("endpoint set without bucket fails", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OBJECT_STORE_ENDPOINT", "http://localhost:9000")
+		t.Setenv("NARVI_OBJECT_STORE_REGION", "us-east-1")
+		t.Setenv("NARVI_OBJECT_STORE_BUCKET", "")
+
+		_, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error (bucket required once endpoint is set)")
+		}
+		var missErr *platform.MissingRequiredEnvError
+		if !errors.As(err, &missErr) {
+			t.Fatalf("Load() error = %v, want *platform.MissingRequiredEnvError", err)
+		}
+		if missErr.EnvVar != "NARVI_OBJECT_STORE_BUCKET" {
+			t.Errorf("MissingRequiredEnvError.EnvVar = %q, want %q", missErr.EnvVar, "NARVI_OBJECT_STORE_BUCKET")
+		}
+	})
+
+	t.Run("endpoint, region, bucket set, no credentials selects ambient IAM", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OBJECT_STORE_ENDPOINT", "http://localhost:9000")
+		t.Setenv("NARVI_OBJECT_STORE_REGION", "us-east-1")
+		t.Setenv("NARVI_OBJECT_STORE_BUCKET", "narvi-uploads")
+		t.Setenv("NARVI_OBJECT_STORE_ACCESS_KEY_ID", "")
+		t.Setenv("NARVI_OBJECT_STORE_SECRET_ACCESS_KEY", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (both credentials empty selects ambient IAM, §28.7)", err)
+		}
+		if cfg.ObjectStorage == nil {
+			t.Fatal("Load().ObjectStorage = nil, want non-nil once endpoint/region/bucket are set")
+		}
+		if cfg.ObjectStorage.AccessKeyID != "" || cfg.ObjectStorage.SecretAccessKey != "" {
+			t.Errorf("Load().ObjectStorage credentials = (%q, %q), want both empty", cfg.ObjectStorage.AccessKeyID, cfg.ObjectStorage.SecretAccessKey)
+		}
+		if cfg.ObjectStorage.MaxUploadBytes != 100*1024*1024 {
+			t.Errorf("Load().ObjectStorage.MaxUploadBytes = %d, want the 100 MiB default", cfg.ObjectStorage.MaxUploadBytes)
+		}
+		if cfg.ObjectStorage.MaxSessionUploadBytes != 1024*1024*1024 {
+			t.Errorf("Load().ObjectStorage.MaxSessionUploadBytes = %d, want the 1 GiB default", cfg.ObjectStorage.MaxSessionUploadBytes)
+		}
+		if cfg.ObjectStorage.UsePathStyle {
+			t.Errorf("Load().ObjectStorage.UsePathStyle = true, want false (default)")
+		}
+	})
+
+	t.Run("exactly one of access key / secret set fails", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OBJECT_STORE_ENDPOINT", "http://localhost:9000")
+		t.Setenv("NARVI_OBJECT_STORE_REGION", "us-east-1")
+		t.Setenv("NARVI_OBJECT_STORE_BUCKET", "narvi-uploads")
+		t.Setenv("NARVI_OBJECT_STORE_ACCESS_KEY_ID", "only-the-id")
+		t.Setenv("NARVI_OBJECT_STORE_SECRET_ACCESS_KEY", "")
+
+		_, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error (exactly one of access key/secret set is a misconfiguration)")
+		}
+		var credErr *platform.InvalidObjectStoreCredentialsError
+		if !errors.As(err, &credErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidObjectStoreCredentialsError", err)
+		}
+	})
+
+	t.Run("full static credentials, public endpoint, path style, and byte overrides all carry through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OBJECT_STORE_ENDPOINT", "http://minio.internal:9000")
+		t.Setenv("NARVI_OBJECT_STORE_PUBLIC_ENDPOINT", "https://uploads.example.test")
+		t.Setenv("NARVI_OBJECT_STORE_REGION", "us-east-1")
+		t.Setenv("NARVI_OBJECT_STORE_BUCKET", "narvi-uploads")
+		t.Setenv("NARVI_OBJECT_STORE_ACCESS_KEY_ID", "test-access-key")
+		t.Setenv("NARVI_OBJECT_STORE_SECRET_ACCESS_KEY", "test-secret-key")
+		t.Setenv("NARVI_OBJECT_STORE_USE_PATH_STYLE", "true")
+		t.Setenv("NARVI_OBJECT_STORE_MAX_UPLOAD_BYTES", "12345")
+		t.Setenv("NARVI_OBJECT_STORE_MAX_SESSION_UPLOAD_BYTES", "67890")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		want := &platform.ObjectStorageConfig{
+			Endpoint:              "http://minio.internal:9000",
+			PublicEndpoint:        "https://uploads.example.test",
+			Region:                "us-east-1",
+			Bucket:                "narvi-uploads",
+			AccessKeyID:           "test-access-key",
+			SecretAccessKey:       "test-secret-key",
+			UsePathStyle:          true,
+			MaxUploadBytes:        12345,
+			MaxSessionUploadBytes: 67890,
+		}
+		if *cfg.ObjectStorage != *want {
+			t.Errorf("Load().ObjectStorage = %+v, want %+v", cfg.ObjectStorage, want)
+		}
+	})
+
+	t.Run("invalid use-path-style value fails", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OBJECT_STORE_ENDPOINT", "http://localhost:9000")
+		t.Setenv("NARVI_OBJECT_STORE_REGION", "us-east-1")
+		t.Setenv("NARVI_OBJECT_STORE_BUCKET", "narvi-uploads")
+		t.Setenv("NARVI_OBJECT_STORE_USE_PATH_STYLE", "not-a-bool")
+
+		_, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error")
+		}
+		var pathErr *platform.InvalidObjectStoreUsePathStyleError
+		if !errors.As(err, &pathErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidObjectStoreUsePathStyleError", err)
+		}
+	})
+
+	t.Run("invalid max bytes overrides fail, both reported", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_OBJECT_STORE_ENDPOINT", "http://localhost:9000")
+		t.Setenv("NARVI_OBJECT_STORE_REGION", "us-east-1")
+		t.Setenv("NARVI_OBJECT_STORE_BUCKET", "narvi-uploads")
+		t.Setenv("NARVI_OBJECT_STORE_MAX_UPLOAD_BYTES", "0")
+		t.Setenv("NARVI_OBJECT_STORE_MAX_SESSION_UPLOAD_BYTES", "-5")
+
+		_, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error")
+		}
+		var maxErr *platform.InvalidObjectStoreMaxBytesError
+		count := 0
+		for _, e := range flattenJoinedErrors(err) {
+			if errors.As(e, &maxErr) {
+				count++
+			}
+		}
+		if count != 2 {
+			t.Errorf("got %d *InvalidObjectStoreMaxBytesError, want 2 (one per bad override)", count)
+		}
+	})
+}
+
+// flattenJoinedErrors recursively unwraps an errors.Join tree into a flat
+// slice, so a test can count how many of a specific error type appear
+// anywhere in it regardless of join nesting.
+func flattenJoinedErrors(err error) []error {
+	if err == nil {
+		return nil
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return []error{err}
+	}
+	var out []error
+	for _, e := range joined.Unwrap() {
+		out = append(out, flattenJoinedErrors(e)...)
+	}
+	return out
+}

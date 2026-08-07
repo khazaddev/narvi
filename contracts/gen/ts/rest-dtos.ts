@@ -122,6 +122,10 @@ export interface CreateTurnRequest {
    */
   modelId: string | null;
   planMode: boolean;
+  /**
+   * Optional (Step 58, 'uploads, blob storage & the in-sandbox download_file tool', §28.5). Genuinely OPTIONAL -- may be absent from the request body entirely, matching CreateSessionRequest.pathScope's own precedent, never merely an empty array. Each id must name a status='ready' upload artifact of THIS session -- validated at the turn-creation chokepoint; any unknown, foreign, or not-yet-ready id is refused with a structured 4xx before any turn is created. Absent (or an empty array) means no attachment block is rendered into the turn's own prompt -- a byte-for-byte no-op, not a degraded case.
+   */
+  attachmentIds?: string[];
 }
 /**
  * 201 response body for POST /api/sessions/:id/turns: the newly created turn's own id/status only -- callers already have the full session state via GET /api/sessions/:id or the WS stream, so this endpoint's own job is confirming the enqueue, not re-describing the whole session.
@@ -162,7 +166,7 @@ export interface EventsResponse {
   nextCursor: string | null;
 }
 /**
- * GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list is expected to stay small.
+ * GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list is expected to stay small. Each element's own status/failureReason fields (Step 58, §28.6) are additive here too, loosely typed like every element in this array already was -- see MintUploadResponse/ConfirmUploadResponse below for the strictly-typed upload-specific shapes this schema DOES pin.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "ArtifactsResponse".
@@ -171,6 +175,47 @@ export interface ArtifactsResponse {
   artifacts: {
     [k: string]: unknown;
   }[];
+}
+/**
+ * POST /api/sessions/:id/uploads (Step 58, §28.4/§28.5): declares the file about to be uploaded. The control plane checks sizeBytes against MaxUploadBytes/MaxSessionUploadBytes and returns a presigned PUT URL; an over-limit request is refused with a structured 4xx and no artifact row is created. The sandbox-bearer twin of this same mint (POST /sessions/{sessionID}/uploads, outside /api and outside auth.Middleware) accepts an IDENTICAL JSON body shape but is deliberately not itself modeled here: contracts/rest is this codebase's browser-facing (/api) surface only -- every other sandbox-bearer endpoint (scm-credentials, snapshot, review/verdict, provider-credentials) has always used a plain, un-schema'd Go struct instead of a contracts/rest definition, and this endpoint follows that same established precedent.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "MintUploadRequest".
+ */
+export interface MintUploadRequest {
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+}
+/**
+ * 201 response to MintUploadRequest (§28.4): a presigned PUT URL, its own expiry, and the exact headers the uploader must send with the PUT for the signature to verify (ports.PresignedURL.Headers, forwarded verbatim -- e.g. Content-Type).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "MintUploadResponse".
+ */
+export interface MintUploadResponse {
+  uploadId: string;
+  putUrl: string;
+  headers: {
+    [k: string]: string;
+  };
+  expiresAt: string;
+}
+/**
+ * Response to POST /api/sessions/:id/uploads/:uploadId/complete (§28.4/§28.6): tells the caller the RECORDED outcome -- the artifacts row and its broadcast/persisted event are the durable truth regardless of what this response says (§28.6: 'the confirm response tells the agent honestly whether verification passed... while the row and the event already carry the truth regardless'). Idempotent: a retried confirm of an already-resolved row returns this SAME recorded outcome, never re-verifies, never double-appends.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ConfirmUploadResponse".
+ */
+export interface ConfirmUploadResponse {
+  /**
+   * Matches Postgres artifact_status exactly, restricted to the two terminal outcomes confirm itself can ever report (never 'pending').
+   */
+  status: 'ready' | 'failed';
+  /**
+   * Matches Postgres artifact_failure_reason exactly. Null when status is 'ready'.
+   */
+  failureReason: 'size_exceeded' | 'quota_exceeded' | 'verification_failed' | 'abandoned' | null;
 }
 /**
  * One linked-identity row's own REST wire shape (§13.2/§13.3 members API) -- returned both standalone (POST/DELETE .../identities) and nested inside Member.identities. provider/linkedVia enums match the Postgres identity_provider/identity_linked_via enums (migrations/000003_identities.up.sql) exactly.

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -214,6 +215,27 @@ type testRig struct {
 	// identically. No existing httpapi route needed this store before this
 	// Step (only sessionactor did), so it is new to this rig.
 	slackThreadSession *narvipg.SlackThreadSessionStore
+
+	// blobStore/objCfg (Step 58, "uploads, blob storage & the in-sandbox
+	// download_file tool", §28) back this rig's own mint/confirm/content
+	// routes, both auth variants (upload_integration_test.go). blobStore
+	// defaults to a fresh *fakeBlobStore per rig (upload_integration_test.go's
+	// own in-memory, httptest.Server-backed ports.BlobStore -- real
+	// S3/MinIO behavior is covered separately, exhaustively, by
+	// internal/adapters/outbound/objstore's own unit/integration tests;
+	// this rig only needs to exercise the UPLOAD LIFECYCLE'S own logic).
+	// objCfg defaults to small, deliberately test-friendly byte limits so
+	// oversize/quota tests don't need to move real megabytes.
+	blobStore ports.BlobStore
+	objCfg    *platform.ObjectStorageConfig
+
+	// broadcaster defaults to nil (ConfirmUpload/ConfirmUploadAPI's own
+	// nil-safe contract -- ports.EventBroadcaster's doc comment) -- a test
+	// that wants to assert a broadcast happened overrides this via
+	// newTestRig's own mutate func with a *recordingBroadcaster
+	// (upload_integration_test.go), mirroring diffFetcher/sourceControl's
+	// own identical "nil by default, override via mutate" precedent above.
+	broadcaster ports.EventBroadcaster
 }
 
 // newTestRig builds the default rig. mutate (variadic so every EXISTING
@@ -269,6 +291,18 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		providerCredentials:   narvipg.NewProviderCredentialStore(pool),
 		workflows:             narvipg.NewWorkflowStore(pool),
 		slackThreadSession:    narvipg.NewSlackThreadSessionStore(pool),
+		blobStore:             newFakeBlobStore(t),
+		// MaxSessionUploadBytes is deliberately LESS than 2x MaxUploadBytes:
+		// two individually-within-per-file-cap uploads (each <=
+		// MaxUploadBytes) can still combine to exceed the session cap --
+		// exactly the scenario upload_integration_test.go's own
+		// TestConfirmUpload_SessionCapRace_SecondConfirmFailsQuotaExceeded
+		// needs to construct (a session cap >= 2x the per-file cap would
+		// make that scenario mathematically unreachable).
+		objCfg: &platform.ObjectStorageConfig{
+			MaxUploadBytes:        1024,
+			MaxSessionUploadBytes: 1500,
+		},
 	}
 	t.Cleanup(func() { _ = rig.registry.Shutdown() })
 
@@ -283,8 +317,15 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/{sessionID}", httpapi.GetSession(rig.sessions))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
+		// uploads (Step 58, "uploads, blob storage & the in-sandbox
+		// download_file tool", §28.4/§28.5) -- mounted exactly like
+		// cmd/control-plane/main.go's own wiring (see uploadmint.go/
+		// uploadconfirm.go/uploadcontent.go's own doc comments).
+		r.Post("/{sessionID}/uploads", httpapi.MintUploadAPI(rig.sessions, rig.participants, rig.artifacts, rig.blobStore, rig.objCfg, platform.DefaultTimeouts()))
+		r.Post("/{sessionID}/uploads/{uploadID}/complete", httpapi.ConfirmUploadAPI(rig.sessions, rig.participants, rig.pool, rig.artifacts, rig.events, rig.outbox, rig.sandboxes, rig.broadcaster, rig.blobStore, rig.objCfg))
+		r.Get("/{sessionID}/uploads/{uploadID}/content", httpapi.UploadContentAPI(rig.sessions, rig.artifacts, rig.blobStore, rig.objCfg, platform.DefaultTimeouts()))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.auditLog, rig.registry))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.auditLog, rig.registry, rig.objCfg))
 		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry))
 		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog))
 		// Audit-fix batch (completeness/discoverability, M3) -- see
@@ -343,6 +384,15 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// comment.
 	router.Post("/sessions/{sessionID}/workflow/step-outcome",
 		httpapi.PostWorkflowStepOutcome(rig.sandboxes, rig.workflows))
+	// uploads mint/confirm/content (Step 58, §28.4/§28.5) sandbox-bearer
+	// variants are mounted the SAME way -- see uploadmint.go/
+	// uploadconfirm.go/uploadcontent.go's own doc comments.
+	router.Post("/sessions/{sessionID}/uploads",
+		httpapi.MintUpload(rig.sandboxes, rig.artifacts, rig.blobStore, rig.objCfg, platform.DefaultTimeouts()))
+	router.Post("/sessions/{sessionID}/uploads/{uploadID}/complete",
+		httpapi.ConfirmUpload(rig.sandboxes, rig.pool, rig.artifacts, rig.events, rig.outbox, rig.broadcaster, rig.blobStore, rig.objCfg))
+	router.Get("/sessions/{sessionID}/uploads/{uploadID}/content",
+		httpapi.UploadContent(rig.sandboxes, rig.artifacts, rig.blobStore, rig.objCfg, platform.DefaultTimeouts()))
 	// /api/workflow-runs/{runId}/steps/{stepRunId}/decide (Step 56, "workflow
 	// HITL gate + circuit breaker", §25.9/§25.10/§25.11) -- mounted behind
 	// auth.Middleware exactly like cmd/control-plane/main.go's own real
@@ -546,6 +596,14 @@ func TestRoutes_RequireAuth(t *testing.T) {
 		{name: "ListPlans", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/plans"},
 		{name: "MintWSToken", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/ws-token"},
 		{name: "CreateTurn", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/turns"},
+		// uploads (Step 58, §28.4/§28.5) -- the three /api-mounted browser
+		// twins, review-fix coverage addition (FIX F): the sandbox-bearer
+		// variants of these same three routes are deliberately mounted
+		// OUTSIDE auth.Middleware entirely (their own bearer+gen handshake
+		// is the auth), so only these /api ones belong in this table.
+		{name: "MintUploadAPI", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/uploads"},
+		{name: "ConfirmUploadAPI", method: http.MethodPost, path: "/api/sessions/" + session.ID.String() + "/uploads/00000000-0000-0000-0000-000000000000/complete"},
+		{name: "UploadContentAPI", method: http.MethodGet, path: "/api/sessions/" + session.ID.String() + "/uploads/00000000-0000-0000-0000-000000000000/content"},
 	}
 
 	for _, tc := range tests {
@@ -1592,6 +1650,62 @@ func TestListArtifacts_HappyPath(t *testing.T) {
 	}
 	if len(got.Artifacts) != 1 {
 		t.Fatalf("len(Artifacts) = %d, want 1", len(got.Artifacts))
+	}
+}
+
+// TestListArtifacts_FailedUploadStatusAndFailureReason is a review-fix
+// coverage addition (FIX I): artifactWireMap (artifacts.go) hand-builds
+// its wire shape as a map[string]interface{} (additionalProperties:true,
+// this schema's own design) rather than a generated, field-checked
+// struct -- a typo'd or accidentally-dropped "status"/"failureReason" key
+// would decode cleanly and silently show a failed upload as ready, with a
+// 404ing download link. Seeds a genuinely 'failed' upload via the REAL
+// production path (CreateUpload + MarkUploadFailedIfPending), never a
+// hand-written INSERT, and asserts both fields land correctly on the REST
+// list response.
+func TestListArtifacts_FailedUploadStatusAndFailureReason(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := rig.createSession(ctx, t)
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	var artifactID pgtype.UUID
+	if err := artifactID.Scan(uuid.New().String()); err != nil {
+		t.Fatalf("scan artifact id: %v", err)
+	}
+	blobKey := "sessions/" + session.ID.String() + "/uploads/" + artifactID.String()
+	size := int64(10)
+	contentType := "application/octet-stream"
+	filename := "never-arrived.bin"
+	if _, err := rig.artifacts.CreateUpload(ctx, sqlcgen.CreateUploadArtifactParams{
+		ID:          artifactID,
+		SessionID:   session.ID,
+		Url:         "/api/sessions/" + session.ID.String() + "/uploads/" + artifactID.String() + "/content",
+		BlobKey:     &blobKey,
+		SizeBytes:   &size,
+		ContentType: &contentType,
+		Filename:    &filename,
+	}); err != nil {
+		t.Fatalf("create upload artifact: %v", err)
+	}
+	if _, err := rig.artifacts.MarkUploadFailedIfPending(ctx, artifactID, session.ID, sqlcgen.ArtifactFailureReasonVerificationFailed); err != nil {
+		t.Fatalf("mark upload artifact failed: %v", err)
+	}
+
+	var got restdtos.ArtifactsResponse
+	status := rig.doJSON(t, http.MethodGet, "/api/sessions/"+session.ID.String()+"/artifacts", nil, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+	if len(got.Artifacts) != 1 {
+		t.Fatalf("len(Artifacts) = %d, want 1", len(got.Artifacts))
+	}
+	elem := got.Artifacts[0]
+	if elem["status"] != "failed" {
+		t.Errorf(`Artifacts[0]["status"] = %v, want "failed"`, elem["status"])
+	}
+	if elem["failureReason"] != "verification_failed" {
+		t.Errorf(`Artifacts[0]["failureReason"] = %v, want "verification_failed"`, elem["failureReason"])
 	}
 }
 

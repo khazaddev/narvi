@@ -80,6 +80,20 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"viewer cannot prompt any session", authz.RoleViewer, authz.ActionPromptSession, false, false},
 		{"viewer cannot prompt even an owned/joined session", authz.RoleViewer, authz.ActionPromptSession, true, false},
 
+		// Row 2b (Step 58, §28.5): upload to a session -- the SAME §13.3
+		// row as prompting (ActionPromptSession above): admin/maintainer
+		// on ANY session; member ONLY on own/joined; viewer never,
+		// regardless (review-fix coverage addition, FIX F -- this action
+		// previously had ZERO rows in this exhaustive matrix).
+		{"admin uploads to any session", authz.RoleAdmin, authz.ActionUploadToSession, false, true},
+		{"admin uploads to owned session", authz.RoleAdmin, authz.ActionUploadToSession, true, true},
+		{"maintainer uploads to any session", authz.RoleMaintainer, authz.ActionUploadToSession, false, true},
+		{"maintainer uploads to owned session", authz.RoleMaintainer, authz.ActionUploadToSession, true, true},
+		{"member uploads to owned/joined session", authz.RoleMember, authz.ActionUploadToSession, true, true},
+		{"member cannot upload to a session they neither own nor joined", authz.RoleMember, authz.ActionUploadToSession, false, false},
+		{"viewer cannot upload to any session", authz.RoleViewer, authz.ActionUploadToSession, false, false},
+		{"viewer cannot upload even to an owned/joined session", authz.RoleViewer, authz.ActionUploadToSession, true, false},
+
 		// Row 2c/Row 3b: approve a plan -- admin/maintainer approve ANY
 		// plan; member ONLY on own/joined; viewer never.
 		{"admin approves any plan", authz.RoleAdmin, authz.ActionApprovePlan, false, true},

@@ -39,6 +39,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/llm"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/modal"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/objstore"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/rwx"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
@@ -51,6 +52,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/reconciler"
 	"github.com/khazaddev/narvi/internal/app/releasereview"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/app/uploadsweep"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
 )
@@ -261,6 +263,43 @@ func serve() error {
 	// never folded into outboxStore/outboxworker itself.
 	releaseManifestPendingStore := postgres.NewReleaseManifestPendingStore(pool)
 	linearAgentSessionStore := postgres.NewLinearAgentSessionStore(pool)
+
+	// blobStore/uploadSweeper (Step 58, "uploads, blob storage & the
+	// in-sandbox download_file tool", §28.7) are constructed ONLY when
+	// cfg.ObjectStorage is non-nil -- mirrors cfg.RWXAccessToken's own
+	// "absent = feature off" precedent below, one level deeper: with no
+	// object-storage config present, blobStore stays a nil
+	// ports.BlobStore, and every upload mint endpoint (route registration
+	// below) returns its own structured "uploads not configured" error
+	// rather than failing to boot. Constructed here, early, rather than
+	// down where RWX's own optional adapter lives: unlike RWX (needed only
+	// by the outbox notifier map), blobStore is threaded into the upload
+	// routes registered further down in this same function, so it must
+	// exist before that point.
+	var blobStore ports.BlobStore
+	var objStore *objstore.Store
+	var uploadSweeper *uploadsweep.Sweeper
+	if cfg.ObjectStorage != nil {
+		objStore, err = objstore.New(objstore.Config{
+			Endpoint:        cfg.ObjectStorage.Endpoint,
+			PublicEndpoint:  cfg.ObjectStorage.PublicEndpoint,
+			Region:          cfg.ObjectStorage.Region,
+			Bucket:          cfg.ObjectStorage.Bucket,
+			AccessKeyID:     cfg.ObjectStorage.AccessKeyID,
+			SecretAccessKey: cfg.ObjectStorage.SecretAccessKey,
+			UsePathStyle:    cfg.ObjectStorage.UsePathStyle,
+			Timeouts:        cfg.Timeouts,
+		})
+		if err != nil {
+			return fmt.Errorf("construct object storage adapter: %w", err)
+		}
+		blobStore = objStore
+
+		uploadSweeper, err = uploadsweep.NewSweeper(pool, artifactStore, eventStore, outboxStore, sandboxStore, hub, cfg.Timeouts)
+		if err != nil {
+			return fmt.Errorf("construct upload abandonment sweeper: %w", err)
+		}
+	}
 
 	// slackNotifier/planSlackNotifier are constructed here (rather than
 	// down where the outbox delivery worker block lives below) because the
@@ -508,6 +547,22 @@ func serve() error {
 	// audit workflow).
 	router.Post("/sessions/{sessionID}/workflow/step-outcome",
 		httpapi.PostWorkflowStepOutcome(sandboxStore, workflowStore))
+
+	// uploads mint/confirm/content (Step 58, "uploads, blob storage & the
+	// in-sandbox download_file tool", §28.4/§28.5): deliberately mounted
+	// OUTSIDE /api/sessions and outside auth.Middleware entirely, mirroring
+	// scm-credentials/snapshot-mint/review-verdict/workflow-step-outcome
+	// immediately above exactly -- the download_file tool's and the
+	// agent-produced-upload direction's own sandbox-bearer endpoints.
+	// blobStore/objectStorage may be nil (cfg.ObjectStorage absent, feature
+	// off) -- each handler's own core returns a structured "uploads not
+	// configured" error in that case rather than failing to boot.
+	router.Post("/sessions/{sessionID}/uploads",
+		httpapi.MintUpload(sandboxStore, artifactStore, blobStore, cfg.ObjectStorage, cfg.Timeouts))
+	router.Post("/sessions/{sessionID}/uploads/{uploadID}/complete",
+		httpapi.ConfirmUpload(sandboxStore, pool, artifactStore, eventStore, outboxStore, hub, blobStore, cfg.ObjectStorage))
+	router.Get("/sessions/{sessionID}/uploads/{uploadID}/content",
+		httpapi.UploadContent(sandboxStore, artifactStore, blobStore, cfg.ObjectStorage, cfg.Timeouts))
 
 	// Slack ingress (Step 33, §8.10): deliberately mounted OUTSIDE
 	// /api/sessions and outside auth.Middleware entirely -- Slack itself
@@ -778,11 +833,22 @@ func serve() error {
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
+		// uploads (Step 58, "uploads, blob storage & the in-sandbox
+		// download_file tool", §28.4/§28.5): the browser twins of the
+		// sandbox-bearer mint/confirm/content endpoints registered outside
+		// /api above. mint/confirm are gated by authz.ActionUploadToSession
+		// (the same §13.3 row as prompting, checked inside each handler);
+		// content/download is gated by session visibility only (a download
+		// is a read, so a read-only viewer may) -- mirrors ListArtifacts/
+		// ListEvents immediately above, no separate Authorize call.
+		r.Post("/{sessionID}/uploads", httpapi.MintUploadAPI(sessionStore, participantStore, artifactStore, blobStore, cfg.ObjectStorage, cfg.Timeouts))
+		r.Post("/{sessionID}/uploads/{uploadID}/complete", httpapi.ConfirmUploadAPI(sessionStore, participantStore, pool, artifactStore, eventStore, outboxStore, sandboxStore, hub, blobStore, cfg.ObjectStorage))
+		r.Get("/{sessionID}/uploads/{uploadID}/content", httpapi.UploadContentAPI(sessionStore, artifactStore, blobStore, cfg.ObjectStorage, cfg.Timeouts))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(sessionStore, wsTokenStore, cfg.Timeouts))
 		// turns (Step 28, "turn recovery", §8.7): the relaunch-and-resume
 		// REST API -- enqueues a new turn on an existing session, 409 if
 		// one is already in flight. See httpapi/turn.go's own doc comment.
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, planStore, participantStore, auditLogStore, registry))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, planStore, participantStore, auditLogStore, registry, cfg.ObjectStorage))
 		// plans (Step 37, "plan mode, web", §8.1/§12.2 item 3): the
 		// approve/reject HITL actions -- see httpapi/planapprove.go's own
 		// doc comment for the full sequencing. outboxStore/
@@ -1073,6 +1139,19 @@ func serve() error {
 		outboxNotifiers[ports.NotificationKindGitHubPreviewLink] = githubapi.NewPreviewLinkNotifier(sourceControl, cfg.GitHubBotToken)
 	}
 
+	// blob_delete (Step 58, §28.4) is registered ONLY when blobStore is
+	// configured -- mirrors the RWX block immediately above exactly. When
+	// absent, a blob_delete row (which can only ever be enqueued by
+	// confirmUploadCore/uploadsweep, both of which are themselves
+	// unreachable/inert without cfg.ObjectStorage) dead-letters with the
+	// same clear, logged "no notifier registered for kind" error every
+	// other unconfigured kind gets -- not a real-world case, since nothing
+	// produces this kind's rows without the SAME config this notifier
+	// itself requires, but handled identically rather than specially.
+	if objStore != nil {
+		outboxNotifiers[ports.NotificationKindBlobDelete] = objstore.NewBlobDeleteNotifier(objStore)
+	}
+
 	outboxBuilder, err := outboxworker.NewBuilder(outboxStore, pool, outboxNotifiers, cfg.Timeouts)
 	if err != nil {
 		return fmt.Errorf("construct outbox delivery worker: %w", err)
@@ -1205,6 +1284,21 @@ func serve() error {
 		}
 		return nil
 	})
+
+	// Step 58 ("uploads, blob storage & the in-sandbox download_file
+	// tool", §28.4): uploadSweeper is nil when cfg.ObjectStorage is absent
+	// (feature off) -- started/shut down through this SAME errgroup as
+	// every other background loop above -- no naked goroutine (§11) --
+	// with the identical context.Canceled carve-out every other
+	// background loop already establishes for normal shutdown.
+	if uploadSweeper != nil {
+		group.Go(func() error {
+			if err := uploadSweeper.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+				return fmt.Errorf("upload abandonment sweeper: %w", err)
+			}
+			return nil
+		})
+	}
 
 	group.Go(func() error {
 		<-groupCtx.Done()

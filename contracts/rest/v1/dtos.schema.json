@@ -90,7 +90,12 @@
       "properties": {
         "prompt": { "type": "string", "description": "The turn's prompt text. Unlike CreateSessionRequest.prompt, this is required and non-null: this request's entire purpose is enqueuing one new turn, so there is no 'no turn' case to support here." },
         "modelId": { "type": ["string", "null"], "description": "Null means use the default model catalog entry -- same convention as CreateSessionRequest.modelId." },
-        "planMode": { "type": "boolean", "default": false }
+        "planMode": { "type": "boolean", "default": false },
+        "attachmentIds": {
+          "type": "array",
+          "items": { "type": "string", "format": "uuid" },
+          "description": "Optional (Step 58, 'uploads, blob storage & the in-sandbox download_file tool', §28.5). Genuinely OPTIONAL -- may be absent from the request body entirely, matching CreateSessionRequest.pathScope's own precedent, never merely an empty array. Each id must name a status='ready' upload artifact of THIS session -- validated at the turn-creation chokepoint; any unknown, foreign, or not-yet-ready id is refused with a structured 4xx before any turn is created. Absent (or an empty array) means no attachment block is rendered into the turn's own prompt -- a byte-for-byte no-op, not a degraded case."
+        }
       }
     },
     "CreateTurnResponse": {
@@ -133,13 +138,46 @@
     "ArtifactsResponse": {
       "type": "object",
       "additionalProperties": false,
-      "description": "GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list is expected to stay small.",
+      "description": "GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list is expected to stay small. Each element's own status/failureReason fields (Step 58, §28.6) are additive here too, loosely typed like every element in this array already was -- see MintUploadResponse/ConfirmUploadResponse below for the strictly-typed upload-specific shapes this schema DOES pin.",
       "required": ["artifacts"],
       "properties": {
         "artifacts": {
           "type": "array",
           "items": { "type": "object", "additionalProperties": true }
         }
+      }
+    },
+    "MintUploadRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "POST /api/sessions/:id/uploads (Step 58, §28.4/§28.5): declares the file about to be uploaded. The control plane checks sizeBytes against MaxUploadBytes/MaxSessionUploadBytes and returns a presigned PUT URL; an over-limit request is refused with a structured 4xx and no artifact row is created. The sandbox-bearer twin of this same mint (POST /sessions/{sessionID}/uploads, outside /api and outside auth.Middleware) accepts an IDENTICAL JSON body shape but is deliberately not itself modeled here: contracts/rest is this codebase's browser-facing (/api) surface only -- every other sandbox-bearer endpoint (scm-credentials, snapshot, review/verdict, provider-credentials) has always used a plain, un-schema'd Go struct instead of a contracts/rest definition, and this endpoint follows that same established precedent.",
+      "required": ["filename", "contentType", "sizeBytes"],
+      "properties": {
+        "filename": { "type": "string" },
+        "contentType": { "type": "string" },
+        "sizeBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "MintUploadResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "201 response to MintUploadRequest (§28.4): a presigned PUT URL, its own expiry, and the exact headers the uploader must send with the PUT for the signature to verify (ports.PresignedURL.Headers, forwarded verbatim -- e.g. Content-Type).",
+      "required": ["uploadId", "putUrl", "headers", "expiresAt"],
+      "properties": {
+        "uploadId": { "type": "string", "format": "uuid" },
+        "putUrl": { "type": "string", "format": "uri" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "ConfirmUploadResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Response to POST /api/sessions/:id/uploads/:uploadId/complete (§28.4/§28.6): tells the caller the RECORDED outcome -- the artifacts row and its broadcast/persisted event are the durable truth regardless of what this response says (§28.6: 'the confirm response tells the agent honestly whether verification passed... while the row and the event already carry the truth regardless'). Idempotent: a retried confirm of an already-resolved row returns this SAME recorded outcome, never re-verifies, never double-appends.",
+      "required": ["status", "failureReason"],
+      "properties": {
+        "status": { "type": "string", "enum": ["ready", "failed"], "description": "Matches Postgres artifact_status exactly, restricted to the two terminal outcomes confirm itself can ever report (never 'pending')." },
+        "failureReason": { "type": ["string", "null"], "enum": ["size_exceeded", "quota_exceeded", "verification_failed", "abandoned", null], "description": "Matches Postgres artifact_failure_reason exactly. Null when status is 'ready'." }
       }
     },
     "Identity": {

@@ -114,6 +114,10 @@ var matrix = map[Action]actionRule{
 	// own/joined-aware, the SAME row as plan approval by that section's
 	// explicit instruction -- see action.go's own doc comment.
 	ActionDecideWorkflowStep: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
+	// Step 58 (§28.5): uploading to a session is own/joined-aware, the
+	// SAME row as prompting by that section's own explicit instruction --
+	// see action.go's own doc comment.
+	ActionUploadToSession: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
 
 	// Row 3: stop/resume ANY session -- admin/maintainer only, no member
 	// own/joined escape hatch (see action.go's own doc comment on why).

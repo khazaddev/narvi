@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/sync/errgroup"
 
@@ -375,6 +377,85 @@ func TestClientHandler_ValidHandshakeSubscribes(t *testing.T) {
 		if _, ok := payload.State[key]; !ok {
 			t.Errorf("State missing key %q", key)
 		}
+	}
+}
+
+// TestClientHandler_SubscribeReplaysFailedUploadStatusAndFailureReason is
+// a review-fix coverage addition (FIX I): artifactWireMap (client.go)
+// hand-builds its wire shape as a map[string]interface{}
+// (additionalProperties:true, this schema's own design) rather than a
+// generated, field-checked struct -- a typo'd or accidentally-dropped
+// "status"/"failureReason" key would decode cleanly and silently show a
+// reconnecting client a failed upload as ready, with a 404ing download
+// link. Seeds a genuinely 'failed' upload via the REAL production path
+// (CreateUpload + MarkUploadFailedIfPending, never a hand-written INSERT)
+// and asserts both fields land correctly on the subscribe-time REPLAY
+// payload -- httpapi's own TestListArtifacts_FailedUploadStatusAndFailureReason
+// (httpapi_integration_test.go) is this test's own REST-side twin.
+func TestClientHandler_SubscribeReplaysFailedUploadStatusAndFailureReason(t *testing.T) {
+	rig, sessionRow := newClientTestRig(t, platform.DefaultTimeouts())
+	ctx := context.Background()
+	token := createTestWSToken(ctx, t, rig.pool, sessionRow.ID, time.Now().Add(24*time.Hour))
+
+	id := uuid.New()
+	var artifactID pgtype.UUID
+	if err := artifactID.Scan(id.String()); err != nil {
+		t.Fatalf("scan artifact id: %v", err)
+	}
+	blobKey := "sessions/" + sessionRow.ID.String() + "/uploads/" + id.String()
+	size := int64(10)
+	contentType := "application/octet-stream"
+	filename := "never-arrived.bin"
+	if _, err := rig.artifacts.CreateUpload(ctx, sqlcgen.CreateUploadArtifactParams{
+		ID:          artifactID,
+		SessionID:   sessionRow.ID,
+		Url:         "/api/sessions/" + sessionRow.ID.String() + "/uploads/" + id.String() + "/content",
+		BlobKey:     &blobKey,
+		SizeBytes:   &size,
+		ContentType: &contentType,
+		Filename:    &filename,
+	}); err != nil {
+		t.Fatalf("create upload artifact: %v", err)
+	}
+	if _, err := rig.artifacts.MarkUploadFailedIfPending(ctx, artifactID, sessionRow.ID, sqlcgen.ArtifactFailureReasonVerificationFailed); err != nil {
+		t.Fatalf("mark upload artifact failed: %v", err)
+	}
+
+	conn, _, err := websocket.Dial(ctx, rig.wsURL+"/sessions/"+sessionRow.ID.String()+"/ws?type=client", nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+
+	req := clientws.SubscribeRequest{Token: token, ClientId: "test-client"}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal subscribe request: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, raw); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, data, err := conn.Read(readCtx)
+	if err != nil {
+		t.Fatalf("Read subscribed reply: %v", err)
+	}
+
+	var payload clientws.SubscribedPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unmarshal SubscribedPayload: %v (%s)", err, data)
+	}
+	if len(payload.Artifacts) != 1 {
+		t.Fatalf("len(Artifacts) = %d, want 1", len(payload.Artifacts))
+	}
+	elem := payload.Artifacts[0]
+	if elem["status"] != "failed" {
+		t.Errorf(`Artifacts[0]["status"] = %v, want "failed"`, elem["status"])
+	}
+	if elem["failureReason"] != "verification_failed" {
+		t.Errorf(`Artifacts[0]["failureReason"] = %v, want "verification_failed"`, elem["failureReason"])
 	}
 }
 

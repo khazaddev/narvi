@@ -43,7 +43,10 @@ func (j *ApplySuggestionResponse) UnmarshalJSON(value []byte) error {
 }
 
 // GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list
-// is expected to stay small.
+// is expected to stay small. Each element's own status/failureReason fields (Step
+// 58, §28.6) are additive here too, loosely typed like every element in this array
+// already was -- see MintUploadResponse/ConfirmUploadResponse below for the
+// strictly-typed upload-specific shapes this schema DOES pin.
 type ArtifactsResponse struct {
 	// Artifacts corresponds to the JSON schema field "artifacts".
 	Artifacts []ArtifactsResponseArtifactsElem `json:"artifacts" yaml:"artifacts" mapstructure:"artifacts"`
@@ -503,6 +506,112 @@ func (j *Automation) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s length: must be >= %d", "repos", 1)
 	}
 	*j = Automation(plain)
+	return nil
+}
+
+// Response to POST /api/sessions/:id/uploads/:uploadId/complete (§28.4/§28.6):
+// tells the caller the RECORDED outcome -- the artifacts row and its
+// broadcast/persisted event are the durable truth regardless of what this response
+// says (§28.6: 'the confirm response tells the agent honestly whether verification
+// passed... while the row and the event already carry the truth regardless').
+// Idempotent: a retried confirm of an already-resolved row returns this SAME
+// recorded outcome, never re-verifies, never double-appends.
+type ConfirmUploadResponse struct {
+	// Matches Postgres artifact_failure_reason exactly. Null when status is 'ready'.
+	FailureReason *ConfirmUploadResponseFailureReason `json:"failureReason" yaml:"failureReason" mapstructure:"failureReason"`
+
+	// Matches Postgres artifact_status exactly, restricted to the two terminal
+	// outcomes confirm itself can ever report (never 'pending').
+	Status ConfirmUploadResponseStatus `json:"status" yaml:"status" mapstructure:"status"`
+}
+
+type ConfirmUploadResponseFailureReason struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *ConfirmUploadResponseFailureReason) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_ConfirmUploadResponseFailureReason = []interface{}{
+	"size_exceeded",
+	"quota_exceeded",
+	"verification_failed",
+	"abandoned",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ConfirmUploadResponseFailureReason) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ConfirmUploadResponseFailureReason {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ConfirmUploadResponseFailureReason, v.Value)
+	}
+	*j = ConfirmUploadResponseFailureReason(v)
+	return nil
+}
+
+type ConfirmUploadResponseStatus string
+
+const ConfirmUploadResponseStatusFailed ConfirmUploadResponseStatus = "failed"
+const ConfirmUploadResponseStatusReady ConfirmUploadResponseStatus = "ready"
+
+var enumValues_ConfirmUploadResponseStatus = []interface{}{
+	"ready",
+	"failed",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ConfirmUploadResponseStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ConfirmUploadResponseStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ConfirmUploadResponseStatus, v)
+	}
+	*j = ConfirmUploadResponseStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ConfirmUploadResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["failureReason"]; raw != nil && !ok {
+		return fmt.Errorf("field failureReason in ConfirmUploadResponse: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in ConfirmUploadResponse: required")
+	}
+	type Plain ConfirmUploadResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ConfirmUploadResponse(plain)
 	return nil
 }
 
@@ -981,6 +1090,16 @@ func (j *CreateSessionRequest) UnmarshalJSON(value []byte) error {
 // dispatch logic, so a new turn on a session that already has one continues that
 // same OpenCode conversation with no separate request field needed.
 type CreateTurnRequest struct {
+	// Optional (Step 58, 'uploads, blob storage & the in-sandbox download_file tool',
+	// §28.5). Genuinely OPTIONAL -- may be absent from the request body entirely,
+	// matching CreateSessionRequest.pathScope's own precedent, never merely an empty
+	// array. Each id must name a status='ready' upload artifact of THIS session --
+	// validated at the turn-creation chokepoint; any unknown, foreign, or
+	// not-yet-ready id is refused with a structured 4xx before any turn is created.
+	// Absent (or an empty array) means no attachment block is rendered into the
+	// turn's own prompt -- a byte-for-byte no-op, not a degraded case.
+	AttachmentIds []string `json:"attachmentIds,omitempty,omitzero" yaml:"attachmentIds,omitempty" mapstructure:"attachmentIds,omitempty"`
+
 	// Null means use the default model catalog entry -- same convention as
 	// CreateSessionRequest.modelId.
 	ModelId CreateTurnRequestModelId `json:"modelId" yaml:"modelId" mapstructure:"modelId"`
@@ -1527,6 +1646,102 @@ func (j *Member) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = Member(plain)
+	return nil
+}
+
+// POST /api/sessions/:id/uploads (Step 58, §28.4/§28.5): declares the file about
+// to be uploaded. The control plane checks sizeBytes against
+// MaxUploadBytes/MaxSessionUploadBytes and returns a presigned PUT URL; an
+// over-limit request is refused with a structured 4xx and no artifact row is
+// created. The sandbox-bearer twin of this same mint (POST
+// /sessions/{sessionID}/uploads, outside /api and outside auth.Middleware) accepts
+// an IDENTICAL JSON body shape but is deliberately not itself modeled here:
+// contracts/rest is this codebase's browser-facing (/api) surface only -- every
+// other sandbox-bearer endpoint (scm-credentials, snapshot, review/verdict,
+// provider-credentials) has always used a plain, un-schema'd Go struct instead of
+// a contracts/rest definition, and this endpoint follows that same established
+// precedent.
+type MintUploadRequest struct {
+	// ContentType corresponds to the JSON schema field "contentType".
+	ContentType string `json:"contentType" yaml:"contentType" mapstructure:"contentType"`
+
+	// Filename corresponds to the JSON schema field "filename".
+	Filename string `json:"filename" yaml:"filename" mapstructure:"filename"`
+
+	// SizeBytes corresponds to the JSON schema field "sizeBytes".
+	SizeBytes int `json:"sizeBytes" yaml:"sizeBytes" mapstructure:"sizeBytes"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *MintUploadRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["contentType"]; raw != nil && !ok {
+		return fmt.Errorf("field contentType in MintUploadRequest: required")
+	}
+	if _, ok := raw["filename"]; raw != nil && !ok {
+		return fmt.Errorf("field filename in MintUploadRequest: required")
+	}
+	if _, ok := raw["sizeBytes"]; raw != nil && !ok {
+		return fmt.Errorf("field sizeBytes in MintUploadRequest: required")
+	}
+	type Plain MintUploadRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 0 > plain.SizeBytes {
+		return fmt.Errorf("field %s: must be >= %v", "sizeBytes", 0)
+	}
+	*j = MintUploadRequest(plain)
+	return nil
+}
+
+// 201 response to MintUploadRequest (§28.4): a presigned PUT URL, its own expiry,
+// and the exact headers the uploader must send with the PUT for the signature to
+// verify (ports.PresignedURL.Headers, forwarded verbatim -- e.g. Content-Type).
+type MintUploadResponse struct {
+	// ExpiresAt corresponds to the JSON schema field "expiresAt".
+	ExpiresAt time.Time `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
+
+	// Headers corresponds to the JSON schema field "headers".
+	Headers MintUploadResponseHeaders `json:"headers" yaml:"headers" mapstructure:"headers"`
+
+	// PutUrl corresponds to the JSON schema field "putUrl".
+	PutUrl string `json:"putUrl" yaml:"putUrl" mapstructure:"putUrl"`
+
+	// UploadId corresponds to the JSON schema field "uploadId".
+	UploadId string `json:"uploadId" yaml:"uploadId" mapstructure:"uploadId"`
+}
+
+type MintUploadResponseHeaders map[string]string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *MintUploadResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["expiresAt"]; raw != nil && !ok {
+		return fmt.Errorf("field expiresAt in MintUploadResponse: required")
+	}
+	if _, ok := raw["headers"]; raw != nil && !ok {
+		return fmt.Errorf("field headers in MintUploadResponse: required")
+	}
+	if _, ok := raw["putUrl"]; raw != nil && !ok {
+		return fmt.Errorf("field putUrl in MintUploadResponse: required")
+	}
+	if _, ok := raw["uploadId"]; raw != nil && !ok {
+		return fmt.Errorf("field uploadId in MintUploadResponse: required")
+	}
+	type Plain MintUploadResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = MintUploadResponse(plain)
 	return nil
 }
 

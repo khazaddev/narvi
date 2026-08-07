@@ -112,10 +112,14 @@ func TestCreateTurnRequestRoundTrip(t *testing.T) {
 	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateTurnRequest")
 
 	modelID := "claude-sonnet-5"
+	// AttachmentIds populated (Step 58, §28.5; review-fix coverage
+	// addition, FIX H) -- this field had zero round-trip coverage before
+	// this batch anywhere in this file.
 	roundTrip(t, sch, restdtos.CreateTurnRequest{
-		Prompt:   "continue where we left off",
-		ModelId:  &modelID,
-		PlanMode: true,
+		Prompt:        "continue where we left off",
+		ModelId:       &modelID,
+		PlanMode:      true,
+		AttachmentIds: []string{testUploadID},
 	})
 }
 
@@ -418,6 +422,60 @@ func TestPlanActionResponseRoundTrip(t *testing.T) {
 			PlanId: testSessionID,
 			Status: restdtos.PlanActionResponseStatusRejected,
 			TurnId: nil,
+		})
+	})
+}
+
+// TestMintUploadRequestRoundTrip covers Step 58's (§28.4/§28.5) upload-mint
+// request DTO -- review-fix coverage addition (FIX H): this file had ZERO
+// round-trip coverage for any of the three upload DTOs before this batch.
+func TestMintUploadRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/MintUploadRequest")
+
+	roundTrip(t, sch, restdtos.MintUploadRequest{
+		Filename:    "spec.pdf",
+		ContentType: "application/pdf",
+		SizeBytes:   4096,
+	})
+}
+
+// TestMintUploadResponseRoundTrip covers the 201 response to a mint
+// request: a presigned PUT URL, its own expiry, and the exact headers the
+// uploader must send (§28.4).
+func TestMintUploadResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/MintUploadResponse")
+
+	expiresAt := time.Date(2026, 7, 15, 9, 15, 0, 0, time.UTC)
+	roundTrip(t, sch, restdtos.MintUploadResponse{
+		UploadId:  testUploadID,
+		PutUrl:    "https://objstore.example.com/bucket/sessions/" + testSessionID + "/uploads/" + testUploadID,
+		Headers:   restdtos.MintUploadResponseHeaders{"Content-Type": "application/pdf"},
+		ExpiresAt: expiresAt,
+	})
+}
+
+// TestConfirmUploadResponseRoundTrip covers both terminal outcomes confirm
+// can report (§28.4/§28.6) -- crucially including the explicit-NULL
+// failureReason case: the schema publishes failureReason as a REQUIRED key
+// whose value type is ["string","null"], so an accidental `omitempty` added
+// to ConfirmUploadResponse.FailureReason's own struct tag would silently
+// drop the key entirely on the ready path and violate that contract without
+// this test ever failing loudly if it only ever exercised the non-null
+// case.
+func TestConfirmUploadResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ConfirmUploadResponse")
+
+	t.Run("ReadyWithExplicitNullFailureReason", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.ConfirmUploadResponse{
+			Status:        restdtos.ConfirmUploadResponseStatusReady,
+			FailureReason: nil,
+		})
+	})
+
+	t.Run("FailedWithReason", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.ConfirmUploadResponse{
+			Status:        restdtos.ConfirmUploadResponseStatusFailed,
+			FailureReason: &restdtos.ConfirmUploadResponseFailureReason{Value: "verification_failed"},
 		})
 	})
 }

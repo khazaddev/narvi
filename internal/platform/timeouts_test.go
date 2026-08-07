@@ -108,6 +108,19 @@ func TestValidate_CatchesEachBrokenLink(t *testing.T) {
 			},
 			wantChain: "AutomationCronCatchUpWindow > AutomationEnginePumpInterval",
 		},
+		{
+			// Step 58 ("uploads, blob storage & the in-sandbox
+			// download_file tool", §28.4): UploadPendingSweepAfter must
+			// stay at least MinTimeoutMargin above
+			// UploadAbandonmentSweepInterval, or a pending row could cross
+			// the abandonment threshold and still sit unswept for much
+			// longer than that threshold's own name implies.
+			name: "UploadPendingSweepAfter not > UploadAbandonmentSweepInterval",
+			mutate: func(to *platform.Timeouts) {
+				to.UploadPendingSweepAfter = to.UploadAbandonmentSweepInterval
+			},
+			wantChain: "UploadPendingSweepAfter > UploadAbandonmentSweepInterval",
+		},
 	}
 
 	for _, tc := range tests {
@@ -1041,6 +1054,64 @@ func TestDefaultTimeouts_ImageRefreshClaimStaleAfter(t *testing.T) {
 
 	if err := to.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil (ImageRefreshClaimStaleAfter must not disturb either invariant chain)", err)
+	}
+}
+
+// TestDefaultTimeouts_Step58StandaloneFields proves Step 58's ("uploads,
+// blob storage & the in-sandbox download_file tool", §28) own additions --
+// UploadPresignPutTTL, UploadPresignGetTTL, UploadPendingSweepAfter,
+// UploadAbandonmentSweepInterval, ObjectStoreHTTPClientTimeout -- ship with
+// sane, non-zero defaults matching their own documented values, that the
+// two upload-presign TTLs are ordered as intended (GET is much
+// shorter-lived than PUT), and that adding them did not disturb any
+// pre-existing invariant chain.
+func TestDefaultTimeouts_Step58StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.UploadPresignPutTTL <= 0 {
+		t.Errorf("UploadPresignPutTTL = %v, want > 0", to.UploadPresignPutTTL)
+	}
+	if to.UploadPresignPutTTL != 15*time.Minute {
+		t.Errorf("UploadPresignPutTTL = %v, want %v", to.UploadPresignPutTTL, 15*time.Minute)
+	}
+
+	if to.UploadPresignGetTTL <= 0 {
+		t.Errorf("UploadPresignGetTTL = %v, want > 0", to.UploadPresignGetTTL)
+	}
+	if to.UploadPresignGetTTL != 5*time.Minute {
+		t.Errorf("UploadPresignGetTTL = %v, want %v", to.UploadPresignGetTTL, 5*time.Minute)
+	}
+	if to.UploadPresignGetTTL >= to.UploadPresignPutTTL {
+		t.Errorf("UploadPresignGetTTL = %v, want strictly less than UploadPresignPutTTL = %v "+
+			"(a GET redirect is followed within one curl invocation; a PUT may sit open on a slow link)",
+			to.UploadPresignGetTTL, to.UploadPresignPutTTL)
+	}
+
+	if to.UploadPendingSweepAfter <= 0 {
+		t.Errorf("UploadPendingSweepAfter = %v, want > 0", to.UploadPendingSweepAfter)
+	}
+	if to.UploadPendingSweepAfter != 24*time.Hour {
+		t.Errorf("UploadPendingSweepAfter = %v, want %v", to.UploadPendingSweepAfter, 24*time.Hour)
+	}
+
+	if to.UploadAbandonmentSweepInterval <= 0 {
+		t.Errorf("UploadAbandonmentSweepInterval = %v, want > 0 (a ticker on a non-positive duration panics)", to.UploadAbandonmentSweepInterval)
+	}
+	if to.UploadAbandonmentSweepInterval != 15*time.Minute {
+		t.Errorf("UploadAbandonmentSweepInterval = %v, want %v", to.UploadAbandonmentSweepInterval, 15*time.Minute)
+	}
+
+	if to.ObjectStoreHTTPClientTimeout <= 0 {
+		t.Errorf("ObjectStoreHTTPClientTimeout = %v, want > 0", to.ObjectStoreHTTPClientTimeout)
+	}
+	if to.ObjectStoreHTTPClientTimeout != 10*time.Second {
+		t.Errorf("ObjectStoreHTTPClientTimeout = %v, want %v", to.ObjectStoreHTTPClientTimeout, 10*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (Step 58's additions must not disturb any invariant chain)", err)
 	}
 }
 

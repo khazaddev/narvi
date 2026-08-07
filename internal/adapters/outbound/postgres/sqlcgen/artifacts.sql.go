@@ -15,7 +15,7 @@ const createArtifact = `-- name: CreateArtifact :one
 
 INSERT INTO artifacts (session_id, type, url, metadata)
 VALUES ($1, $2, $3, $4)
-RETURNING id, session_id, type, url, metadata, created_at
+RETURNING id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by
 `
 
 type CreateArtifactParams struct {
@@ -48,12 +48,112 @@ func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) 
 		&i.Url,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.Status,
+		&i.FailureReason,
+		&i.BlobKey,
+		&i.SizeBytes,
+		&i.ContentType,
+		&i.Filename,
+		&i.CreatedBy,
+	)
+	return i, err
+}
+
+const createUploadArtifact = `-- name: CreateUploadArtifact :one
+INSERT INTO artifacts (id, session_id, type, url, status, blob_key, size_bytes, content_type, filename, created_by)
+VALUES ($1, $2, 'upload', $3, 'pending', $4, $5, $6, $7, $8)
+RETURNING id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by
+`
+
+type CreateUploadArtifactParams struct {
+	ID          pgtype.UUID `json:"id"`
+	SessionID   pgtype.UUID `json:"session_id"`
+	Url         string      `json:"url"`
+	BlobKey     *string     `json:"blob_key"`
+	SizeBytes   *int64      `json:"size_bytes"`
+	ContentType *string     `json:"content_type"`
+	Filename    *string     `json:"filename"`
+	CreatedBy   pgtype.UUID `json:"created_by"`
+}
+
+// Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
+// §28.4): the upload lifecycle's own queries. type is always the literal
+// 'upload' and status always starts 'pending' -- never caller-supplied --
+// so a pending upload row can never be minted with the wrong type or in
+// any status other than 'pending' by construction, unlike CreateArtifact
+// above (which is used for already-resolved pr/preview rows and takes
+// both as parameters).
+//
+// id is caller-supplied (a fresh uuid.New(), Go-side), not left to the
+// table's own DEFAULT gen_random_uuid(): the mint handler needs the row's
+// own id BEFORE this insert, to build both the object-storage key
+// (internal/domain/upload.BuildBlobKey) and the stable /api/.../content
+// url this same insert's own url column stores -- generating it
+// client-side avoids either a second UPDATE after the fact or ever
+// persisting a row with an empty url/blob_key, even momentarily.
+func (q *Queries) CreateUploadArtifact(ctx context.Context, arg CreateUploadArtifactParams) (Artifact, error) {
+	row := q.db.QueryRow(ctx, createUploadArtifact,
+		arg.ID,
+		arg.SessionID,
+		arg.Url,
+		arg.BlobKey,
+		arg.SizeBytes,
+		arg.ContentType,
+		arg.Filename,
+		arg.CreatedBy,
+	)
+	var i Artifact
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Type,
+		&i.Url,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.Status,
+		&i.FailureReason,
+		&i.BlobKey,
+		&i.SizeBytes,
+		&i.ContentType,
+		&i.Filename,
+		&i.CreatedBy,
+	)
+	return i, err
+}
+
+const getArtifactForSession = `-- name: GetArtifactForSession :one
+SELECT id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by FROM artifacts
+WHERE id = $1 AND session_id = $2
+`
+
+type GetArtifactForSessionParams struct {
+	ID        pgtype.UUID `json:"id"`
+	SessionID pgtype.UUID `json:"session_id"`
+}
+
+func (q *Queries) GetArtifactForSession(ctx context.Context, arg GetArtifactForSessionParams) (Artifact, error) {
+	row := q.db.QueryRow(ctx, getArtifactForSession, arg.ID, arg.SessionID)
+	var i Artifact
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Type,
+		&i.Url,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.Status,
+		&i.FailureReason,
+		&i.BlobKey,
+		&i.SizeBytes,
+		&i.ContentType,
+		&i.Filename,
+		&i.CreatedBy,
 	)
 	return i, err
 }
 
 const listArtifactsForSession = `-- name: ListArtifactsForSession :many
-SELECT id, session_id, type, url, metadata, created_at FROM artifacts
+SELECT id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by FROM artifacts
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -74,6 +174,13 @@ func (q *Queries) ListArtifactsForSession(ctx context.Context, sessionID pgtype.
 			&i.Url,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.Status,
+			&i.FailureReason,
+			&i.BlobKey,
+			&i.SizeBytes,
+			&i.ContentType,
+			&i.Filename,
+			&i.CreatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -83,4 +190,170 @@ func (q *Queries) ListArtifactsForSession(ctx context.Context, sessionID pgtype.
 		return nil, err
 	}
 	return items, nil
+}
+
+const listPendingUploadArtifactsOlderThan = `-- name: ListPendingUploadArtifactsOlderThan :many
+SELECT id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by FROM artifacts
+WHERE type = 'upload' AND status = 'pending' AND created_at < $1
+ORDER BY created_at ASC
+LIMIT $2
+`
+
+type ListPendingUploadArtifactsOlderThanParams struct {
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Limit     int32              `json:"limit"`
+}
+
+// ListPendingUploadArtifactsOlderThan backs the abandonment sweep
+// (§28.4): a pending row older than UploadPendingSweepAfter is a
+// candidate for failed(abandoned). limitCount bounds one sweep pass
+// (mirrors ListOrphanedStarting's own batching precedent in
+// internal/app/automation/sweep.go).
+func (q *Queries) ListPendingUploadArtifactsOlderThan(ctx context.Context, arg ListPendingUploadArtifactsOlderThanParams) ([]Artifact, error) {
+	rows, err := q.db.Query(ctx, listPendingUploadArtifactsOlderThan, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Artifact
+	for rows.Next() {
+		var i Artifact
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Type,
+			&i.Url,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.Status,
+			&i.FailureReason,
+			&i.BlobKey,
+			&i.SizeBytes,
+			&i.ContentType,
+			&i.Filename,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReadyUploadArtifactsByIDsForSession = `-- name: ListReadyUploadArtifactsByIDsForSession :many
+SELECT id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by FROM artifacts
+WHERE session_id = $1 AND type = 'upload' AND status = 'ready' AND id = ANY($2::uuid[])
+`
+
+type ListReadyUploadArtifactsByIDsForSessionParams struct {
+	SessionID pgtype.UUID   `json:"session_id"`
+	Ids       []pgtype.UUID `json:"ids"`
+}
+
+// ListReadyUploadArtifactsByIDsForSession backs attachmentIds validation
+// at the turn-creation chokepoint (createTurnLocked, §28.5): every
+// requested id must come back in this result, scoped to THIS session and
+// status = 'ready' -- a caller-side count/set comparison against the
+// requested ids catches any unknown, foreign, or not-yet-ready id.
+func (q *Queries) ListReadyUploadArtifactsByIDsForSession(ctx context.Context, arg ListReadyUploadArtifactsByIDsForSessionParams) ([]Artifact, error) {
+	rows, err := q.db.Query(ctx, listReadyUploadArtifactsByIDsForSession, arg.SessionID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Artifact
+	for rows.Next() {
+		var i Artifact
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Type,
+			&i.Url,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.Status,
+			&i.FailureReason,
+			&i.BlobKey,
+			&i.SizeBytes,
+			&i.ContentType,
+			&i.Filename,
+			&i.CreatedBy,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markUploadArtifactFailedIfPending = `-- name: MarkUploadArtifactFailedIfPending :execrows
+UPDATE artifacts
+SET status = 'failed', failure_reason = $3
+WHERE id = $1 AND session_id = $2 AND status = 'pending'
+`
+
+type MarkUploadArtifactFailedIfPendingParams struct {
+	ID            pgtype.UUID            `json:"id"`
+	SessionID     pgtype.UUID            `json:"session_id"`
+	FailureReason *ArtifactFailureReason `json:"failure_reason"`
+}
+
+func (q *Queries) MarkUploadArtifactFailedIfPending(ctx context.Context, arg MarkUploadArtifactFailedIfPendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markUploadArtifactFailedIfPending, arg.ID, arg.SessionID, arg.FailureReason)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markUploadArtifactReadyIfPending = `-- name: MarkUploadArtifactReadyIfPending :execrows
+
+UPDATE artifacts
+SET status = 'ready'
+WHERE id = $1 AND session_id = $2 AND status = 'pending'
+`
+
+type MarkUploadArtifactReadyIfPendingParams struct {
+	ID        pgtype.UUID `json:"id"`
+	SessionID pgtype.UUID `json:"session_id"`
+}
+
+// MarkUploadArtifactReadyIfPending/MarkUploadArtifactFailedIfPending are
+// the guarded transitions confirm uses (§28.4's own "guarded transition,
+// the §25.6 idiom" -- mirrors ApprovePlanIfAwaitingApproval's identical
+// "WHERE ... status = <the one valid predecessor>" shape): :execrows lets
+// the caller distinguish "this call performed the transition" (1) from
+// "someone else already resolved this row" (0), so a retried confirm of
+// an already-resolved row can re-read and return the recorded outcome
+// instead of re-verifying or double-appending an event.
+func (q *Queries) MarkUploadArtifactReadyIfPending(ctx context.Context, arg MarkUploadArtifactReadyIfPendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markUploadArtifactReadyIfPending, arg.ID, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const sumSessionUploadBytes = `-- name: SumSessionUploadBytes :one
+SELECT COALESCE(SUM(size_bytes), 0)::bigint AS total_bytes
+FROM artifacts
+WHERE session_id = $1 AND type = 'upload' AND status IN ('pending', 'ready')
+`
+
+// SumSessionUploadBytes backs the session-level quota check at both mint
+// (fast-fail courtesy) and confirm (enforcement of record, §28.4):
+// SUM(size_bytes) over the session's OWN pending+ready upload rows,
+// derived from rows that already exist -- never a dedicated counter
+// column (§25.5's own discipline, named directly in §28.4).
+func (q *Queries) SumSessionUploadBytes(ctx context.Context, sessionID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, sumSessionUploadBytes, sessionID)
+	var total_bytes int64
+	err := row.Scan(&total_bytes)
+	return total_bytes, err
 }

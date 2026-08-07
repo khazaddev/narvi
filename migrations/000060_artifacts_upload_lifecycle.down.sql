@@ -1,0 +1,10 @@
+DROP INDEX IF EXISTS artifacts_pending_created_at_idx;
+ALTER TABLE artifacts DROP COLUMN IF EXISTS created_by;
+ALTER TABLE artifacts DROP COLUMN IF EXISTS filename;
+ALTER TABLE artifacts DROP COLUMN IF EXISTS content_type;
+ALTER TABLE artifacts DROP COLUMN IF EXISTS size_bytes;
+ALTER TABLE artifacts DROP COLUMN IF EXISTS blob_key;
+ALTER TABLE artifacts DROP COLUMN IF EXISTS failure_reason;
+ALTER TABLE artifacts DROP COLUMN IF EXISTS status;
+DROP TYPE IF EXISTS artifact_failure_reason;
+DROP TYPE IF EXISTS artifact_status;
