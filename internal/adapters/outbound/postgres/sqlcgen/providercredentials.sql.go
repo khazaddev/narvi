@@ -15,7 +15,7 @@ const createProviderCredential = `-- name: CreateProviderCredential :one
 
 INSERT INTO provider_credentials (scope, scope_target_id, provider, value_encrypted)
 VALUES ($1, $4, $2, $3)
-RETURNING id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at
+RETURNING id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink
 `
 
 type CreateProviderCredentialParams struct {
@@ -55,8 +55,32 @@ func (q *Queries) CreateProviderCredential(ctx context.Context, arg CreateProvid
 		&i.ValueEncrypted,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
+		&i.OauthExpiresAt,
+		&i.OauthNeedsRelink,
 	)
 	return i, err
+}
+
+const deleteOAuthProviderCredentialForUser = `-- name: DeleteOAuthProviderCredentialForUser :execrows
+DELETE FROM provider_credentials
+WHERE scope = 'user' AND scope_target_id = $1 AND provider = $2 AND kind = 'oauth'
+`
+
+type DeleteOAuthProviderCredentialForUserParams struct {
+	ScopeTargetID *string                    `json:"scope_target_id"`
+	Provider      ProviderCredentialProvider `json:"provider"`
+}
+
+// Unlink (§29.3's own "unlink deletes it"). :execrows so the caller can
+// distinguish "actually deleted a row" from "nothing to unlink" without a
+// separate SELECT.
+func (q *Queries) DeleteOAuthProviderCredentialForUser(ctx context.Context, arg DeleteOAuthProviderCredentialForUserParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOAuthProviderCredentialForUser, arg.ScopeTargetID, arg.Provider)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteProviderCredential = `-- name: DeleteProviderCredential :execrows
@@ -71,8 +95,40 @@ func (q *Queries) DeleteProviderCredential(ctx context.Context, id pgtype.UUID) 
 	return result.RowsAffected(), nil
 }
 
+const getOAuthProviderCredentialForUser = `-- name: GetOAuthProviderCredentialForUser :one
+SELECT id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink FROM provider_credentials
+WHERE scope = 'user' AND scope_target_id = $1 AND provider = $2 AND kind = 'oauth'
+`
+
+type GetOAuthProviderCredentialForUserParams struct {
+	ScopeTargetID *string                    `json:"scope_target_id"`
+	Provider      ProviderCredentialProvider `json:"provider"`
+}
+
+// Backs GET /api/me/chatgpt-link's own "already linked?" check and DELETE
+// /api/me/chatgpt-link's unlink lookup (§29.3/§29.9) -- pgx.ErrNoRows means
+// "not linked", the caller's own ordinary not-found branch, never a
+// distinguished error.
+func (q *Queries) GetOAuthProviderCredentialForUser(ctx context.Context, arg GetOAuthProviderCredentialForUserParams) (ProviderCredential, error) {
+	row := q.db.QueryRow(ctx, getOAuthProviderCredentialForUser, arg.ScopeTargetID, arg.Provider)
+	var i ProviderCredential
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.ScopeTargetID,
+		&i.Provider,
+		&i.ValueEncrypted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.OauthExpiresAt,
+		&i.OauthNeedsRelink,
+	)
+	return i, err
+}
+
 const getProviderCredential = `-- name: GetProviderCredential :one
-SELECT id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at FROM provider_credentials WHERE id = $1
+SELECT id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink FROM provider_credentials WHERE id = $1
 `
 
 func (q *Queries) GetProviderCredential(ctx context.Context, id pgtype.UUID) (ProviderCredential, error) {
@@ -86,12 +142,68 @@ func (q *Queries) GetProviderCredential(ctx context.Context, id pgtype.UUID) (Pr
 		&i.ValueEncrypted,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
+		&i.OauthExpiresAt,
+		&i.OauthNeedsRelink,
 	)
 	return i, err
 }
 
+const listExpiringOAuthProviderCredentials = `-- name: ListExpiringOAuthProviderCredentials :many
+SELECT id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink FROM provider_credentials
+WHERE kind = 'oauth' AND oauth_needs_relink = false AND oauth_expires_at < $1
+ORDER BY oauth_expires_at
+FOR UPDATE SKIP LOCKED
+LIMIT $2
+`
+
+type ListExpiringOAuthProviderCredentialsParams struct {
+	OauthExpiresAt pgtype.Timestamptz `json:"oauth_expires_at"`
+	Limit          int32              `json:"limit"`
+}
+
+// The refresh pump's own claim query (§29.5): every oauth row not already
+// marked oauth_needs_relink, expiring within margin of now -- ordered
+// soonest-first, FOR UPDATE SKIP LOCKED so a concurrent pump tick (this
+// pod's own next tick, racing in from another pod) claims a DISJOINT batch
+// rather than double-refreshing the same row (§29.5: "N concurrent
+// sandboxes... exactly the case OpenAI's docs prohibit" -- the identical
+// concurrency hazard applies to two pump instances racing each other, not
+// only to sandboxes). expiresBefore is the caller's own now()+margin;
+// limit mirrors outboxworker's own pumpBatchSize precedent.
+func (q *Queries) ListExpiringOAuthProviderCredentials(ctx context.Context, arg ListExpiringOAuthProviderCredentialsParams) ([]ProviderCredential, error) {
+	rows, err := q.db.Query(ctx, listExpiringOAuthProviderCredentials, arg.OauthExpiresAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProviderCredential
+	for rows.Next() {
+		var i ProviderCredential
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.ScopeTargetID,
+			&i.Provider,
+			&i.ValueEncrypted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Kind,
+			&i.OauthExpiresAt,
+			&i.OauthNeedsRelink,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProviderCredentialsByScope = `-- name: ListProviderCredentialsByScope :many
-SELECT id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at FROM provider_credentials
+SELECT id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink FROM provider_credentials
 WHERE scope = $1 AND scope_target_id IS NOT DISTINCT FROM $2
 ORDER BY provider
 `
@@ -124,6 +236,9 @@ func (q *Queries) ListProviderCredentialsByScope(ctx context.Context, arg ListPr
 			&i.ValueEncrypted,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Kind,
+			&i.OauthExpiresAt,
+			&i.OauthNeedsRelink,
 		); err != nil {
 			return nil, err
 		}
@@ -136,33 +251,41 @@ func (q *Queries) ListProviderCredentialsByScope(ctx context.Context, arg ListPr
 }
 
 const listProviderCredentialsForResolution = `-- name: ListProviderCredentialsForResolution :many
-SELECT id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at FROM provider_credentials
+SELECT id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink FROM provider_credentials
 WHERE scope = 'global'
    OR (scope = 'repo' AND scope_target_id = ANY($1::text[]))
    OR (scope = 'environment' AND scope_target_id IS NOT NULL AND scope_target_id = $2)
+   OR (scope = 'user' AND scope_target_id IS NOT NULL AND scope_target_id = $3)
 ORDER BY provider
 `
 
 type ListProviderCredentialsForResolutionParams struct {
 	RepoFullNames []string `json:"repo_full_names"`
 	EnvironmentID *string  `json:"environment_id"`
+	UserID        *string  `json:"user_id"`
 }
 
 // The delivery endpoint's own single, session-scoped read: every
-// candidate row (across ALL 3 scopes, for EVERY provider at once) that
+// candidate row (across ALL 4 scopes, for EVERY provider at once) that
 // could possibly apply to one session -- the global row for each
 // provider (always included), any repo-scoped row for one of this
-// session's own repo_full_names, and the environment-scoped row for this
-// session's own environment_id, if any. repo_full_names may be an empty
-// array (matches nothing, never an error); environment_id is sqlc.narg,
-// NULL when the session has none (matches nothing -- scope_target_id is
-// NEVER NULL for an environment-scoped row, so "environment_id IS NULL"
-// correctly excludes every environment-scoped row when the caller has no
-// environment at all, rather than needing a separate branch). The caller
-// (providercredentialsdelivery.go) groups the result by provider and runs
-// internal/domain/providercredential.Resolve over each group.
+// session's own repo_full_names, the environment-scoped row for this
+// session's own environment_id (if any), and -- Step 59, §29.4's own
+// "resolution keys on sessions.created_by" rule -- the user-scoped row for
+// the session's own creator (if any). repo_full_names may be an empty
+// array (matches nothing, never an error); environment_id/user_id are
+// both sqlc.narg, NULL when the session has none (matches nothing --
+// scope_target_id is NEVER NULL for an environment- or user-scoped row,
+// so "IS NULL" correctly excludes every row of that scope when the caller
+// has none at all, rather than needing a separate branch). userID is
+// passed as NULL for a bot/automation session (sessions.created_by IS
+// NULL, migration 000004's own comment) -- it then simply contributes no
+// user candidate, falling through to the static-key scopes exactly as
+// today (§29.4's own named, accepted "creator's seat" consequence). The
+// caller (providercredentialsdelivery.go) groups the result by provider
+// and runs internal/domain/providercredential.Resolve over each group.
 func (q *Queries) ListProviderCredentialsForResolution(ctx context.Context, arg ListProviderCredentialsForResolutionParams) ([]ProviderCredential, error) {
-	rows, err := q.db.Query(ctx, listProviderCredentialsForResolution, arg.RepoFullNames, arg.EnvironmentID)
+	rows, err := q.db.Query(ctx, listProviderCredentialsForResolution, arg.RepoFullNames, arg.EnvironmentID, arg.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +301,9 @@ func (q *Queries) ListProviderCredentialsForResolution(ctx context.Context, arg 
 			&i.ValueEncrypted,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Kind,
+			&i.OauthExpiresAt,
+			&i.OauthNeedsRelink,
 		); err != nil {
 			return nil, err
 		}
@@ -189,11 +315,78 @@ func (q *Queries) ListProviderCredentialsForResolution(ctx context.Context, arg 
 	return items, nil
 }
 
+const markProviderCredentialNeedsRelink = `-- name: MarkProviderCredentialNeedsRelink :one
+UPDATE provider_credentials
+SET oauth_needs_relink = true, updated_at = now()
+WHERE id = $1
+RETURNING id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink
+`
+
+// The refresh pump's own terminal-failure path (§29.5: invalid_grant/
+// refresh_token_reused) -- the row stops being served by the delivery
+// endpoint's own resolution (providercredentialsdelivery.go filters
+// winners; a needs-relink row is left exactly as it was found, still
+// present so its own oauth_needs_relink flag can drive the Settings
+// "reconnect your ChatGPT account" card) until a fresh link (Upsert
+// above) clears it back to false.
+func (q *Queries) MarkProviderCredentialNeedsRelink(ctx context.Context, id pgtype.UUID) (ProviderCredential, error) {
+	row := q.db.QueryRow(ctx, markProviderCredentialNeedsRelink, id)
+	var i ProviderCredential
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.ScopeTargetID,
+		&i.Provider,
+		&i.ValueEncrypted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.OauthExpiresAt,
+		&i.OauthNeedsRelink,
+	)
+	return i, err
+}
+
+const updateOAuthProviderCredentialTokens = `-- name: UpdateOAuthProviderCredentialTokens :one
+UPDATE provider_credentials
+SET value_encrypted = $2, oauth_expires_at = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink
+`
+
+type UpdateOAuthProviderCredentialTokensParams struct {
+	ID             pgtype.UUID        `json:"id"`
+	ValueEncrypted []byte             `json:"value_encrypted"`
+	OauthExpiresAt pgtype.Timestamptz `json:"oauth_expires_at"`
+}
+
+// The refresh pump's own success path: atomically rewrites value_encrypted
+// (the rotated {access, refresh, expires_ms, account_id} blob) and its
+// plaintext oauth_expires_at mirror together -- never one without the
+// other, so the two can never drift out of sync.
+func (q *Queries) UpdateOAuthProviderCredentialTokens(ctx context.Context, arg UpdateOAuthProviderCredentialTokensParams) (ProviderCredential, error) {
+	row := q.db.QueryRow(ctx, updateOAuthProviderCredentialTokens, arg.ID, arg.ValueEncrypted, arg.OauthExpiresAt)
+	var i ProviderCredential
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.ScopeTargetID,
+		&i.Provider,
+		&i.ValueEncrypted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.OauthExpiresAt,
+		&i.OauthNeedsRelink,
+	)
+	return i, err
+}
+
 const updateProviderCredentialValue = `-- name: UpdateProviderCredentialValue :one
 UPDATE provider_credentials
 SET value_encrypted = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at
+RETURNING id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink
 `
 
 type UpdateProviderCredentialValueParams struct {
@@ -216,6 +409,56 @@ func (q *Queries) UpdateProviderCredentialValue(ctx context.Context, arg UpdateP
 		&i.ValueEncrypted,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
+		&i.OauthExpiresAt,
+		&i.OauthNeedsRelink,
+	)
+	return i, err
+}
+
+const upsertOAuthProviderCredential = `-- name: UpsertOAuthProviderCredential :one
+INSERT INTO provider_credentials (scope, scope_target_id, provider, kind, value_encrypted, oauth_expires_at, oauth_needs_relink)
+VALUES ('user', $1, $2, 'oauth', $3, $4, false)
+ON CONFLICT (scope, scope_target_id, provider) WHERE scope_target_id IS NOT NULL
+DO UPDATE SET value_encrypted = EXCLUDED.value_encrypted, oauth_expires_at = EXCLUDED.oauth_expires_at, oauth_needs_relink = false, updated_at = now()
+RETURNING id, scope, scope_target_id, provider, value_encrypted, created_at, updated_at, kind, oauth_expires_at, oauth_needs_relink
+`
+
+type UpsertOAuthProviderCredentialParams struct {
+	ScopeTargetID  *string                    `json:"scope_target_id"`
+	Provider       ProviderCredentialProvider `json:"provider"`
+	ValueEncrypted []byte                     `json:"value_encrypted"`
+	OauthExpiresAt pgtype.Timestamptz         `json:"oauth_expires_at"`
+}
+
+// Step 59's own ChatGPT-account-OAuth link/relink flow (§29.3/§29.4),
+// internal/app/chatgptlink. Always scope='user', kind='oauth' -- the ONLY
+// creating path for either value (§29.4: "v1 creates user-scope rows ONLY
+// via the link flow"). The ON CONFLICT arbiter matches provider_
+// credentials_scoped_uniq's own exact partial-index shape (migrations/
+// 000056_provider_credentials.up.sql) -- "relink replaces the row (same
+// upsert)" (§29.3): a second link for the same user+provider overwrites
+// the stored ciphertext/expiry and clears any prior oauth_needs_relink,
+// never leaving a stale duplicate row behind.
+func (q *Queries) UpsertOAuthProviderCredential(ctx context.Context, arg UpsertOAuthProviderCredentialParams) (ProviderCredential, error) {
+	row := q.db.QueryRow(ctx, upsertOAuthProviderCredential,
+		arg.ScopeTargetID,
+		arg.Provider,
+		arg.ValueEncrypted,
+		arg.OauthExpiresAt,
+	)
+	var i ProviderCredential
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.ScopeTargetID,
+		&i.Provider,
+		&i.ValueEncrypted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.OauthExpiresAt,
+		&i.OauthNeedsRelink,
 	)
 	return i, err
 }

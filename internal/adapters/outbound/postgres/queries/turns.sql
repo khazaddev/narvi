@@ -9,8 +9,16 @@
 -- (every prior Step's `CreateTurnParams{SessionID, Status}`) keeps
 -- compiling and behaving identically: the zero-value nil/nil/false it
 -- already implicitly got before this Step's own columns existed.
-INSERT INTO turns (session_id, status, prompt, model_id, plan_mode)
-VALUES ($1, $2, $3, $4, $5)
+--
+-- effort (migrations/000063_turn_session_effort.up.sql, Step 59, §29.8)
+-- mirrors model_id's own shape exactly, one column over -- plain
+-- positional param like model_id itself (this query's own existing style
+-- for a nullable column; sqlc generates a keyed struct either way, so
+-- every EXISTING call site that never sets it -- a keyed
+-- CreateTurnParams{...} literal omitting Effort -- keeps compiling and
+-- behaving identically: the zero value, nil, "use the default").
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
 -- name: GetTurn :one

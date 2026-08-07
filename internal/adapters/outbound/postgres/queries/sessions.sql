@@ -21,14 +21,19 @@
 -- compiling and behaving identically (NULL, "use the default model
 -- catalog entry", migrations/000034_plan_mode.up.sql's own convention).
 --
+-- build_effort (migrations/000063_turn_session_effort.up.sql, Step 59,
+-- §29.8) mirrors build_model_id's own shape exactly, one column over --
+-- same sqlc.narg treatment, same "every existing call site keeps
+-- compiling and behaving identically (NULL, use the default)" guarantee.
+--
 -- parent_session_id/spawn_depth (Step 48, "sentinels + suggestions",
 -- §17.2, migrations/000045) are likewise sqlc.narg/COALESCE-defaulted --
 -- every EXISTING call site (every session created before this Step) keeps
 -- compiling and behaving identically: parent_session_id stays NULL,
 -- spawn_depth stays 0. httpapi.SpawnChildSession (childsession.go) is this
 -- Step's own one real caller that supplies non-default values.
-INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag, build_model_id, parent_session_id, spawn_depth)
-VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb), sqlc.narg('environment_id'), sqlc.narg('provenance_tag'), sqlc.narg('build_model_id'), sqlc.narg('parent_session_id'), COALESCE(sqlc.narg('spawn_depth'), 0))
+INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag, build_model_id, build_effort, parent_session_id, spawn_depth)
+VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb), sqlc.narg('environment_id'), sqlc.narg('provenance_tag'), sqlc.narg('build_model_id'), sqlc.narg('build_effort'), sqlc.narg('parent_session_id'), COALESCE(sqlc.narg('spawn_depth'), 0))
 RETURNING *;
 
 -- name: GetSession :one

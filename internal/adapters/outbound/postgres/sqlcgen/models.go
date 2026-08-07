@@ -533,6 +533,48 @@ func (ns NullPlanStatus) Value() (driver.Value, error) {
 	return string(ns.PlanStatus), nil
 }
 
+type ProviderCredentialKind string
+
+const (
+	ProviderCredentialKindApiKey ProviderCredentialKind = "api_key"
+	ProviderCredentialKindOauth  ProviderCredentialKind = "oauth"
+)
+
+func (e *ProviderCredentialKind) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ProviderCredentialKind(s)
+	case string:
+		*e = ProviderCredentialKind(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ProviderCredentialKind: %T", src)
+	}
+	return nil
+}
+
+type NullProviderCredentialKind struct {
+	ProviderCredentialKind ProviderCredentialKind `json:"provider_credential_kind"`
+	Valid                  bool                   `json:"valid"` // Valid is true if ProviderCredentialKind is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullProviderCredentialKind) Scan(value interface{}) error {
+	if value == nil {
+		ns.ProviderCredentialKind, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ProviderCredentialKind.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullProviderCredentialKind) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ProviderCredentialKind), nil
+}
+
 type ProviderCredentialProvider string
 
 const (
@@ -582,6 +624,7 @@ const (
 	ProviderCredentialScopeRepo        ProviderCredentialScope = "repo"
 	ProviderCredentialScopeEnvironment ProviderCredentialScope = "environment"
 	ProviderCredentialScopeGlobal      ProviderCredentialScope = "global"
+	ProviderCredentialScopeUser        ProviderCredentialScope = "user"
 )
 
 func (e *ProviderCredentialScope) Scan(src interface{}) error {
@@ -1310,6 +1353,16 @@ type AutomationRun struct {
 	CreatedAt    pgtype.Timestamptz  `json:"created_at"`
 }
 
+type ChatgptLinkAttempt struct {
+	ID           pgtype.UUID        `json:"id"`
+	UserID       pgtype.UUID        `json:"user_id"`
+	DeviceAuthID string             `json:"device_auth_id"`
+	UserCode     string             `json:"user_code"`
+	LastPolledAt pgtype.Timestamptz `json:"last_polled_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type ContractDriftSnapshot struct {
 	RepoKey                  string             `json:"repo_key"`
 	LastRepoSha              string             `json:"last_repo_sha"`
@@ -1457,13 +1510,16 @@ type PromptTemplate struct {
 }
 
 type ProviderCredential struct {
-	ID             pgtype.UUID                `json:"id"`
-	Scope          ProviderCredentialScope    `json:"scope"`
-	ScopeTargetID  *string                    `json:"scope_target_id"`
-	Provider       ProviderCredentialProvider `json:"provider"`
-	ValueEncrypted []byte                     `json:"value_encrypted"`
-	CreatedAt      pgtype.Timestamptz         `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz         `json:"updated_at"`
+	ID               pgtype.UUID                `json:"id"`
+	Scope            ProviderCredentialScope    `json:"scope"`
+	ScopeTargetID    *string                    `json:"scope_target_id"`
+	Provider         ProviderCredentialProvider `json:"provider"`
+	ValueEncrypted   []byte                     `json:"value_encrypted"`
+	CreatedAt        pgtype.Timestamptz         `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz         `json:"updated_at"`
+	Kind             ProviderCredentialKind     `json:"kind"`
+	OauthExpiresAt   pgtype.Timestamptz         `json:"oauth_expires_at"`
+	OauthNeedsRelink bool                       `json:"oauth_needs_relink"`
 }
 
 type ReleaseManifestPending struct {
@@ -1570,6 +1626,7 @@ type Session struct {
 	BuildModelID           *string               `json:"build_model_id"`
 	ParentSessionID        pgtype.UUID           `json:"parent_session_id"`
 	SpawnDepth             int32                 `json:"spawn_depth"`
+	BuildEffort            *string               `json:"build_effort"`
 }
 
 type SessionTimer struct {
@@ -1600,6 +1657,7 @@ type Turn struct {
 	PlanMode             bool               `json:"plan_mode"`
 	DispatchedSandboxGen *int32             `json:"dispatched_sandbox_gen"`
 	ProgressNotifiedAt   pgtype.Timestamptz `json:"progress_notified_at"`
+	Effort               *string            `json:"effort"`
 }
 
 type User struct {
@@ -1681,6 +1739,7 @@ type WorkflowStepDefinition struct {
 	CanvasPosition         []byte                         `json:"canvas_position"`
 	CreatedAt              pgtype.Timestamptz             `json:"created_at"`
 	UpdatedAt              pgtype.Timestamptz             `json:"updated_at"`
+	Effort                 *string                        `json:"effort"`
 }
 
 type WorkflowStepRun struct {

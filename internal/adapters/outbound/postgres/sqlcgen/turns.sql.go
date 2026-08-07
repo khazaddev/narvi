@@ -13,9 +13,9 @@ import (
 
 const createTurn = `-- name: CreateTurn :one
 
-INSERT INTO turns (session_id, status, prompt, model_id, plan_mode)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort
 `
 
 type CreateTurnParams struct {
@@ -24,6 +24,7 @@ type CreateTurnParams struct {
 	Prompt    *string     `json:"prompt"`
 	ModelID   *string     `json:"model_id"`
 	PlanMode  bool        `json:"plan_mode"`
+	Effort    *string     `json:"effort"`
 }
 
 // Queries backing TurnStore (§4.3). Just enough to prove the pipeline end
@@ -35,6 +36,14 @@ type CreateTurnParams struct {
 // (every prior Step's `CreateTurnParams{SessionID, Status}`) keeps
 // compiling and behaving identically: the zero-value nil/nil/false it
 // already implicitly got before this Step's own columns existed.
+//
+// effort (migrations/000063_turn_session_effort.up.sql, Step 59, §29.8)
+// mirrors model_id's own shape exactly, one column over -- plain
+// positional param like model_id itself (this query's own existing style
+// for a nullable column; sqlc generates a keyed struct either way, so
+// every EXISTING call site that never sets it -- a keyed
+// CreateTurnParams{...} literal omitting Effort -- keeps compiling and
+// behaving identically: the zero value, nil, "use the default").
 func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, error) {
 	row := q.db.QueryRow(ctx, createTurn,
 		arg.SessionID,
@@ -42,6 +51,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		arg.Prompt,
 		arg.ModelID,
 		arg.PlanMode,
+		arg.Effort,
 	)
 	var i Turn
 	err := row.Scan(
@@ -57,12 +67,13 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.PlanMode,
 		&i.DispatchedSandboxGen,
 		&i.ProgressNotifiedAt,
+		&i.Effort,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort FROM turns
 WHERE id = $1
 `
 
@@ -82,12 +93,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.PlanMode,
 		&i.DispatchedSandboxGen,
 		&i.ProgressNotifiedAt,
+		&i.Effort,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -117,6 +129,7 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.PlanMode,
 			&i.DispatchedSandboxGen,
 			&i.ProgressNotifiedAt,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}
@@ -165,7 +178,7 @@ SET status = $2,
     completed_at = COALESCE($4, completed_at),
     dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort
 `
 
 type UpdateTurnStatusParams struct {
@@ -216,6 +229,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.PlanMode,
 		&i.DispatchedSandboxGen,
 		&i.ProgressNotifiedAt,
+		&i.Effort,
 	)
 	return i, err
 }
