@@ -87,11 +87,19 @@ export interface CreateSessionRequest {
    * Null means use the default model catalog entry.
    */
   modelId: string | null;
+  /**
+   * Step 59 (§29.8). Reasoning-effort override for this session's first turn; null means use the default. Required-nullable, mirroring modelId's own convention exactly -- valid values are owned per-model by OpenCode's own catalog `variants` maps (GET /api/models, this Step's own catalog endpoint), never a Narvi-side enum.
+   */
+  effort: string | null;
   planMode: boolean;
   /**
    * Optional (Step 37, 'plan mode, web', §12.2 item 3). Like pathScope/mockConfig below, this key is genuinely OPTIONAL (may be absent from the request body entirely) -- only meaningful when planMode is true: the model the eventual approval-dispatched IMPLEMENTATION turn should use, distinct from modelId (which names the PLAN turn's own model). Absent/null means 'use the default model catalog entry', the same convention modelId itself already establishes. Stored as sessions.build_model_id (migrations/000034_plan_mode.up.sql) -- a session-level, set-once value, unlike modelId/planMode which are per-turn (CreateTurnRequest does NOT carry this field: a 'request changes' turn never resubmits it).
    */
   buildModelId?: string | null;
+  /**
+   * Optional (Step 59, §29.8), mirroring buildModelId's own optional-key convention exactly, one field over: the reasoning effort the eventual approval-dispatched IMPLEMENTATION turn should use, distinct from effort (which names the PLAN turn's own effort). Absent/null means 'use the default'. Stored as sessions.build_effort (migrations/000063_turn_session_effort.up.sql).
+   */
+  buildEffort?: string | null;
   /**
    * Optional (row 10, 'domain: Environment scoping', §14.1). Absent or null means today's exact unscoped behavior, unchanged: no environments row is created and the session's environmentId/provenanceTag stay null. A non-empty list of sparse-checkout glob patterns creates a new, session-scoped Environment row (internal/domain/environment.ValidatePathScope validates each pattern; the first invalid pattern is rejected with 400 before any Postgres write). Unlike every other field on this DTO, this key is genuinely OPTIONAL (may be absent from the request body entirely), not merely nullable -- there is no separately-managed, ID-referenced Environment entity to reference here yet (see this schema's own top-level SCOPE NOTE above).
    */
@@ -121,6 +129,10 @@ export interface CreateTurnRequest {
    * Null means use the default model catalog entry -- same convention as CreateSessionRequest.modelId.
    */
   modelId: string | null;
+  /**
+   * Step 59 (§29.8). Reasoning-effort override for this turn; null means use the default -- same convention and required-nullable shape as CreateSessionRequest.effort.
+   */
+  effort: string | null;
   planMode: boolean;
   /**
    * Optional (Step 58, 'uploads, blob storage & the in-sandbox download_file tool', §28.5). Genuinely OPTIONAL -- may be absent from the request body entirely, matching CreateSessionRequest.pathScope's own precedent, never merely an empty array. Each id must name a status='ready' upload artifact of THIS session -- validated at the turn-creation chokepoint; any unknown, foreign, or not-yet-ready id is refused with a structured 4xx before any turn is created. Absent (or an empty array) means no attachment block is rendered into the turn's own prompt -- a byte-for-byte no-op, not a degraded case.
@@ -833,7 +845,7 @@ export interface WorkflowEdge {
   toStepId: string;
 }
 /**
- * One workflow_step_definitions row plus its outgoing edges (Step 54, §25.10). order is 1-based and unique per definition, not required contiguous. modelId null means inherit exactly what the session would use today (turns.model_id/sessions.build_model_id -- §25.8's zero-config proof); non-null is the same opaque 'provider/model' passthrough convention modelId fields already use (§25.1/§25.7, no Narvi-side allowlist). promptTemplate uses the established '{{variable_name}}' placeholder syntax (§18.6); '{{prompt}}' is the caller's own text.
+ * One workflow_step_definitions row plus its outgoing edges (Step 54, §25.10). order is 1-based and unique per definition, not required contiguous. modelId null means inherit exactly what the session would use today (turns.model_id/sessions.build_model_id -- §25.8's zero-config proof); non-null is the same opaque 'provider/model' passthrough convention modelId fields already use (§25.1/§25.7, no Narvi-side allowlist). effort (Step 59, §29.8) mirrors modelId's own shape and inherit-when-null semantics exactly, one field over. promptTemplate uses the established '{{variable_name}}' placeholder syntax (§18.6); '{{prompt}}' is the caller's own text.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "WorkflowStepDefinition".
@@ -846,6 +858,10 @@ export interface WorkflowStepDefinition {
    */
   kind: 'agent';
   modelId: string | null;
+  /**
+   * Step 59, §29.8's 'workflow engine echo'. Null means inherit exactly what the session would use today (turns.effort/sessions.build_effort).
+   */
+  effort: string | null;
   promptTemplate: string;
   /**
    * Matches Postgres workflow_execution_scope exactly (§25.6: child_session is reserved for steps needing real isolation; same_session is the default and what every built-in step uses).
@@ -1023,4 +1039,140 @@ export interface WorkflowStepDecideResponse {
    * The newly enqueued turn's id when this verdict dispatched one (an approve advancing to the next step, a revise re-executing the same step); null when it did not (a reject) -- mirrors PlanActionResponse.turnId.
    */
   turnId: string | null;
+}
+/**
+ * Response body for POST/GET /api/me/chatgpt-link (Step 59, §29.3/§29.9): the ChatGPT-account-OAuth link flow's own status, read by the Settings page's own poll loop -- there is no background worker driving this flow forward; the human sitting on the page IS the polling loop (§29.3 point 2), so GET simply reports the current chatgpt_link_attempts/provider_credentials state and, at most, performs ONE throttled upstream poll attempt per call. DELETE /api/me/chatgpt-link (unlink) returns 204 with no body, not this shape.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ChatGPTLinkStatus".
+ */
+export interface ChatGPTLinkStatus {
+  /**
+   * unlinked: no attempt in progress and no linked account. pending: a device-flow attempt is in progress (verificationUrl/userCode/expiresAt are populated). linked: a ChatGPT account is linked and its stored token is healthy. needs_relink: was linked, but the refresh pump's own terminal failure (§29.5: invalid_grant/refresh_token_reused) means it is no longer served to any sandbox -- the Settings card's own 'reconnect your ChatGPT account' case.
+   */
+  status: 'unlinked' | 'pending' | 'linked' | 'needs_relink';
+  /**
+   * Populated only when status is 'pending' -- always the literal https://auth.openai.com/codex/device (§29.2/§29.3), included so the UI never hardcodes it independently.
+   */
+  verificationUrl?: string | null;
+  /**
+   * Populated only when status is 'pending' -- the short code the human enters at verificationUrl.
+   */
+  userCode?: string | null;
+  /**
+   * Populated only when status is 'pending' -- this device-flow attempt's own expiry (chatgpt_link_attempts.expires_at); past this time a fresh POST starts a new attempt. goJSONSchema forces the literal time.Time type (no leading '*' here, unlike Plan.decidedAt's own required-field precedent -- this key is OPTIONAL, so go-jsonschema's own omitempty pointer-wrapping already adds the one pointer level this field needs; combining that wrapping with an already-pointer goJSONSchema.type produced a double pointer, **time.Time, verified directly against a real regen during this Step).
+   */
+  expiresAt?: string | null;
+}
+/**
+ * Response body for GET /api/models -- Step 59's own 'Catalog' deliverable (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8; §29; §25.2). STRUCTURAL DECISION, named here since §29 leaves it open: sourced from a control-plane-embedded snapshot of OpenCode's own GET /provider catalog (live-verified against the pinned OpenCode 1.17.15 binary during this Step's own implementation), NOT a live per-sandbox proxy -- the control-plane image does not ship the OpenCode binary (§29.9's own identical reasoning for why the ChatGPT device-flow client is a direct CP-side adapter rather than brokered through a spawned sandbox), so there is no running OpenCode server this endpoint could query live even if it wanted to. This is the SAME 'pinned known-good set' convention §7 already established for the sandbox-side per-turn fallback (the opencode adapter's own resolveProviderModel/fallbackModel), applied here as the control plane's ONLY source rather than a fallback of last resort -- refreshed by hand whenever the pinned OpenCode version bumps, exactly like that fallback constant already is. Scope: the 3 providers Step 53 already wires credential injection for (google/anthropic/openai) -- every model id is the exact catalog id OpenCode itself recognizes, usable verbatim as the '<providerId>/<modelId>' string modelId/buildModelId/effort/buildEffort already accept end to end today (§25.1's own 'no Narvi-side allowlist' passthrough, unchanged by this catalog's existence -- it is a discovery aid, never a validating allowlist).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ModelCatalog".
+ */
+export interface ModelCatalog {
+  providers: ModelCatalogProvider[];
+}
+/**
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ModelCatalogProvider".
+ */
+export interface ModelCatalogProvider {
+  /**
+   * The catalog provider id, e.g. "openai" -- the exact string used as the '<providerId>/...' prefix, matching internal/domain/providercredential.Provider's own values.
+   */
+  id: string;
+  models: ModelCatalogModel[];
+}
+/**
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ModelCatalogModel".
+ */
+export interface ModelCatalogModel {
+  /**
+   * The catalog model id, e.g. "gpt-5.3-codex-spark" -- combine with the owning ModelCatalogProvider.id and a "/" to get the exact modelId/buildModelId string this Step's own generic passthrough already accepts.
+   */
+  id: string;
+  /**
+   * Human-readable display name.
+   */
+  name: string;
+  /**
+   * Total context window, in tokens.
+   */
+  contextWindow: number;
+  /**
+   * Whether this model supports tool calling -- OpenCode's own catalog capabilities.toolcall.
+   */
+  toolCall: boolean;
+  /**
+   * Whether this model exposes a reasoning-effort dial at all -- OpenCode's own catalog capabilities.reasoning. False means variants is always empty for this model: effort has nothing to override.
+   */
+  reasoning: boolean;
+  /**
+   * The valid effort/buildEffort override values for THIS model, e.g. ["none","low","medium","high","xhigh"] for an OpenAI reasoning model, or ["high","max"] for anthropic/claude-sonnet-4-5 (both live-verified during this Step) -- owned per-model by OpenCode's own catalog (§29.8), never a Narvi-side enum. The composer's own model/effort selector (§12.2 item 1, Phase 7) reads this list to populate its effort dropdown once a model is chosen.
+   */
+  variants: string[];
+  cost: ModelCatalogCost;
+}
+/**
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ModelCatalogCost".
+ */
+export interface ModelCatalogCost {
+  /**
+   * USD per million input tokens.
+   */
+  input: number;
+  /**
+   * USD per million output tokens.
+   */
+  output: number;
+  /**
+   * USD per million cache-read tokens when this model supports prompt caching; null otherwise.
+   */
+  cacheRead?: number | null;
+  /**
+   * USD per million cache-write tokens when this model supports prompt caching; null otherwise.
+   */
+  cacheWrite?: number | null;
+}
+/**
+ * Response body for GET /api/admin/shadow-compare (Step 59's own 'shadow-comparison tooling for review' deliverable, IMPLEMENTATION_PLAN.md Step 59 row, reusing §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used again for every future model swap'). §29 has no dedicated design subsection for this piece -- this is a deliberately minimal, from-scratch interpretation, named as such: a READ-ONLY, side-effect-free comparison of two ALREADY-COMPLETED turns (e.g. the same PR/prompt dispatched once on the active model and once on a shadow/candidate model or effort, or a session's own two differently-configured re-runs), never a re-execution orchestrator -- 'shadow' here means 'never affects either compared turn or its session', the same never-act-only-observe posture §18.5 requires stay permanent, applied to model/effort evaluation rather than classifier routing. Cost is deliberately NOT included: no per-turn cost column exists anywhere in this schema today (§7.1's own named, unclosed debt -- 'per-model cost attribution ... is not designed here'), and inventing one for this endpoint alone would be exactly the kind of shape invention this Step's own hard constraints forbid.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ShadowComparisonReport".
+ */
+export interface ShadowComparisonReport {
+  turnA: ShadowComparisonTurn;
+  turnB: ShadowComparisonTurn;
+}
+/**
+ * One side of a ShadowComparisonReport -- mirrors the subset of the turns table (migrations/000005_turns.up.sql, 000018_session_repos.up.sql, 000063_turn_session_effort.up.sql) this comparison actually reads. No turn-level failureReason: unlike sessions.failure_reason, there is no such column on turns itself (that taxonomy is derived at the SESSION level from a turn's own outcome, internal/domain/turn/failurereason.go) -- status alone is this DTO's own outcome signal.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ShadowComparisonTurn".
+ */
+export interface ShadowComparisonTurn {
+  turnId: string;
+  sessionId: string;
+  modelId: string | null;
+  effort: string | null;
+  /**
+   * Matches Postgres turn_status exactly, same enum as CreateTurnResponse.status.
+   */
+  status: 'pending' | 'dispatched' | 'processing' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  /**
+   * goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment.
+   */
+  dispatchedAt: string | null;
+  /**
+   * goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment.
+   */
+  completedAt: string | null;
+  /**
+   * completedAt minus dispatchedAt, in seconds; null until both are set.
+   */
+  durationSeconds: number | null;
 }

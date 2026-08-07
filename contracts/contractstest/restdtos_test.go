@@ -133,6 +133,182 @@ func TestCreateTurnRequestRoundTrip_NullModelId(t *testing.T) {
 	})
 }
 
+// TestCreateSessionRequestRoundTrip_WithEffort (Step 59, §29.8) exercises
+// effort/buildEffort with real, non-null values -- mirrors
+// TestCreateSessionRequestRoundTrip's own modelId/buildModelId fixture
+// immediately above (deliberately distinct values, same reasoning: a
+// reader diffing effort against buildEffort can tell the PLAN turn's own
+// value apart from the eventual IMPLEMENTATION turn's).
+func TestCreateSessionRequestRoundTrip_WithEffort(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateSessionRequest")
+
+	prompt := "implement the feature"
+	modelID := "openai/gpt-5.3-codex-spark"
+	effort := "high"
+	buildEffort := "medium"
+
+	roundTrip(t, sch, restdtos.CreateSessionRequest{
+		SpawnSource: restdtos.CreateSessionRequestSpawnSourceWeb,
+		Prompt:      &prompt,
+		Repos: []restdtos.CreateSessionRequestReposElem{
+			{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git"},
+		},
+		ModelId:     &modelID,
+		Effort:      restdtos.CreateSessionRequestEffort(&effort),
+		PlanMode:    true,
+		BuildEffort: restdtos.CreateSessionRequestBuildEffort(&buildEffort),
+	})
+}
+
+// TestCreateTurnRequestRoundTrip_WithEffort (Step 59, §29.8) mirrors
+// TestCreateTurnRequestRoundTrip's own modelId fixture, one field over.
+func TestCreateTurnRequestRoundTrip_WithEffort(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateTurnRequest")
+
+	modelID := "anthropic/claude-sonnet-4-5"
+	effort := "max"
+
+	roundTrip(t, sch, restdtos.CreateTurnRequest{
+		Prompt:   "continue where we left off",
+		ModelId:  &modelID,
+		Effort:   restdtos.CreateTurnRequestEffort(&effort),
+		PlanMode: false,
+	})
+}
+
+// TestChatGPTLinkStatusRoundTrip_Pending exercises the ChatGPTLinkStatus
+// (Step 59, §29.3/§29.9) shape for an in-progress device-flow attempt --
+// every optional field populated.
+func TestChatGPTLinkStatusRoundTrip_Pending(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ChatGPTLinkStatus")
+
+	verificationURL := "https://auth.openai.com/codex/device"
+	userCode := "WDJB-MJHT"
+	expiresAt := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+	roundTrip(t, sch, restdtos.ChatGPTLinkStatus{
+		Status:          restdtos.ChatGPTLinkStatusStatusPending,
+		VerificationUrl: restdtos.ChatGPTLinkStatusVerificationUrl(&verificationURL),
+		UserCode:        restdtos.ChatGPTLinkStatusUserCode(&userCode),
+		ExpiresAt:       &expiresAt,
+	})
+}
+
+// TestChatGPTLinkStatusRoundTrip_Unlinked exercises the "genuinely absent"
+// case for every optional field (§29.3: unlinked/linked/needs_relink never
+// populate verificationUrl/userCode/expiresAt at all).
+func TestChatGPTLinkStatusRoundTrip_Unlinked(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ChatGPTLinkStatus")
+
+	roundTrip(t, sch, restdtos.ChatGPTLinkStatus{
+		Status: restdtos.ChatGPTLinkStatusStatusUnlinked,
+	})
+}
+
+// TestChatGPTLinkStatusRoundTrip_NeedsRelink pins the Settings-card
+// "reconnect your ChatGPT account" status value (§29.5's own terminal
+// refresh-failure marker) round-trips too.
+func TestChatGPTLinkStatusRoundTrip_NeedsRelink(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ChatGPTLinkStatus")
+
+	roundTrip(t, sch, restdtos.ChatGPTLinkStatus{
+		Status: restdtos.ChatGPTLinkStatusStatusNeedsRelink,
+	})
+}
+
+// TestModelCatalogRoundTrip (Step 59's own "Catalog" deliverable) uses
+// real, live-verified-against-the-pinned-OpenCode-1.17.15-binary values
+// (this Step's own research pass) for both an OpenAI reasoning model
+// (variants none/low/medium/high/xhigh, zero cost -- §29.10 risk 5:
+// "subscription turns report cost 0") and an Anthropic one (variants
+// high/max only -- proving variants really is per-model, never a fixed
+// Narvi-side list, §29.8).
+func TestModelCatalogRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ModelCatalog")
+
+	roundTrip(t, sch, restdtos.ModelCatalog{
+		Providers: []restdtos.ModelCatalogProvider{
+			{
+				Id: "openai",
+				Models: []restdtos.ModelCatalogModel{
+					{
+						Id:            "gpt-5.3-codex-spark",
+						Name:          "GPT-5.3 Codex Spark",
+						ContextWindow: 128000,
+						ToolCall:      true,
+						Reasoning:     true,
+						Variants:      []string{"none", "low", "medium", "high", "xhigh"},
+						Cost:          restdtos.ModelCatalogCost{Input: 0, Output: 0},
+					},
+				},
+			},
+			{
+				Id: "anthropic",
+				Models: []restdtos.ModelCatalogModel{
+					{
+						Id:            "claude-sonnet-4-5",
+						Name:          "Claude Sonnet 4.5",
+						ContextWindow: 200000,
+						ToolCall:      true,
+						Reasoning:     true,
+						Variants:      []string{"high", "max"},
+						Cost: restdtos.ModelCatalogCost{
+							Input: 3, Output: 15,
+							CacheRead:  restdtos.ModelCatalogCostCacheRead(floatPtr(0.3)),
+							CacheWrite: restdtos.ModelCatalogCostCacheWrite(floatPtr(3.75)),
+						},
+					},
+				},
+			},
+		},
+	})
+}
+
+// TestShadowComparisonReportRoundTrip (Step 59's own "shadow-comparison
+// tooling for review" deliverable) exercises one completed turn and one
+// still-processing turn (completedAt/durationSeconds null) side by side --
+// the two most common real shapes a comparison would actually see.
+func TestShadowComparisonReportRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ShadowComparisonReport")
+
+	modelA := "anthropic/claude-sonnet-4-5"
+	effortA := "high"
+	modelB := "openai/gpt-5.3-codex-spark"
+	effortB := "xhigh"
+	createdA := time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC)
+	dispatchedA := createdA.Add(time.Second)
+	completedA := dispatchedA.Add(42 * time.Second)
+	durationA := completedA.Sub(dispatchedA).Seconds()
+	createdB := createdA.Add(time.Minute)
+	dispatchedB := createdB.Add(time.Second)
+
+	roundTrip(t, sch, restdtos.ShadowComparisonReport{
+		TurnA: restdtos.ShadowComparisonTurn{
+			TurnId:          testUploadID,
+			SessionId:       testSessionID,
+			ModelId:         restdtos.ShadowComparisonTurnModelId(&modelA),
+			Effort:          restdtos.ShadowComparisonTurnEffort(&effortA),
+			Status:          restdtos.ShadowComparisonTurnStatusCompleted,
+			CreatedAt:       createdA,
+			DispatchedAt:    &dispatchedA,
+			CompletedAt:     &completedA,
+			DurationSeconds: restdtos.ShadowComparisonTurnDurationSeconds(&durationA),
+		},
+		TurnB: restdtos.ShadowComparisonTurn{
+			TurnId:       testUploadID,
+			SessionId:    testSessionID,
+			ModelId:      restdtos.ShadowComparisonTurnModelId(&modelB),
+			Effort:       restdtos.ShadowComparisonTurnEffort(&effortB),
+			Status:       restdtos.ShadowComparisonTurnStatusProcessing,
+			CreatedAt:    createdB,
+			DispatchedAt: &dispatchedB,
+			// CompletedAt/DurationSeconds left nil: still processing.
+		},
+	})
+}
+
+func floatPtr(f float64) *float64 { return &f }
+
 func TestCreateTurnResponseRoundTrip(t *testing.T) {
 	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateTurnResponse")
 

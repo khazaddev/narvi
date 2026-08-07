@@ -79,7 +79,12 @@ func newSession(t *testing.T, ctx context.Context, sessions *postgres.SessionSto
 func startRunAndAttachRealTurn(t *testing.T, ctx context.Context, sessions *postgres.SessionStore, turns *postgres.TurnStore, workflows *postgres.WorkflowStore, sessionRow sqlcgen.Session, prompt string, modelID *string, planMode bool) (liveRow, workflowengine.Resolution) {
 	t.Helper()
 
-	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID)
+	// effort is always nil here -- no existing caller of this helper
+	// exercises effort-specific behavior (that gets its own, faster,
+	// DB-free unit test: applyStep's ModelID/Effort override logic is pure,
+	// see dispatch_test.go's TestApplyStep_EffortOverride). Mirrors
+	// modelID's own "nil unless a test cares" convention exactly.
+	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID, nil)
 	if !res.Tracked {
 		t.Fatalf("ResolveStepForNewTurn: Tracked = false, want true for a fresh session")
 	}
@@ -89,6 +94,7 @@ func startRunAndAttachRealTurn(t *testing.T, ctx context.Context, sessions *post
 		Status:    sqlcgen.TurnStatusProcessing,
 		Prompt:    &res.Prompt,
 		ModelID:   res.ModelID,
+		Effort:    res.Effort,
 		PlanMode:  planMode,
 	})
 	if err != nil {
@@ -125,7 +131,7 @@ func TestResolveStepForNewTurn_ZeroConfigRequestLane_StartsNewRunAndTracksFirstS
 
 	session := newSession(t, ctx, sessions)
 
-	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "hello there", nil)
+	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "hello there", nil, nil)
 	if !res.Tracked {
 		t.Fatal("Tracked = false, want true")
 	}
@@ -224,7 +230,7 @@ func TestResolveStepForNewTurn_RepoOverrideBinding_UsesOverrideNotGlobal(t *test
 		t.Fatalf("create session with repos: %v", err)
 	}
 
-	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "fix the bug", nil)
+	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "fix the bug", nil, nil)
 	if !res.Tracked {
 		t.Fatal("Tracked = false, want true")
 	}
@@ -273,7 +279,7 @@ func TestResolveStepForNewTurn_MultiRepoSession_FallsBackToGlobalBinding(t *test
 		t.Fatalf("create session with repos: %v", err)
 	}
 
-	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "do it", nil)
+	res := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "do it", nil, nil)
 	if !res.Tracked {
 		t.Fatal("Tracked = false, want true")
 	}
@@ -328,7 +334,7 @@ func TestResolveStepForNewTurn_LiveAwaitingDecisionStep_ResolvesButDoesNotTrack(
 		t.Fatalf("step-run status = %q, want awaiting_decision (test setup assumption)", stepRun.Status)
 	}
 
-	res2 := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "revise: drop the retry", nil)
+	res2 := workflowengine.ResolveStepForNewTurn(ctx, workflows, session, "revise: drop the retry", nil, nil)
 	if res2.Tracked {
 		t.Error("Tracked = true, want false (an awaiting_decision live step must not get a second attempt created by this Step's engine)")
 	}

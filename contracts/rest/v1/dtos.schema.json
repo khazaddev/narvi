@@ -37,7 +37,7 @@
       "type": "object",
       "additionalProperties": false,
       "description": "The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3 milestone: 'atomic dedupe, one CreateSessionRequest').",
-      "required": ["spawnSource", "title", "prompt", "repos", "modelId", "planMode"],
+      "required": ["spawnSource", "title", "prompt", "repos", "modelId", "effort", "planMode"],
       "properties": {
         "spawnSource": {
           "type": "string",
@@ -62,8 +62,10 @@
           }
         },
         "modelId": { "type": ["string", "null"], "description": "Null means use the default model catalog entry." },
+        "effort": { "type": ["string", "null"], "description": "Step 59 (§29.8). Reasoning-effort override for this session's first turn; null means use the default. Required-nullable, mirroring modelId's own convention exactly -- valid values are owned per-model by OpenCode's own catalog `variants` maps (GET /api/models, this Step's own catalog endpoint), never a Narvi-side enum." },
         "planMode": { "type": "boolean", "default": false },
         "buildModelId": { "type": ["string", "null"], "description": "Optional (Step 37, 'plan mode, web', §12.2 item 3). Like pathScope/mockConfig below, this key is genuinely OPTIONAL (may be absent from the request body entirely) -- only meaningful when planMode is true: the model the eventual approval-dispatched IMPLEMENTATION turn should use, distinct from modelId (which names the PLAN turn's own model). Absent/null means 'use the default model catalog entry', the same convention modelId itself already establishes. Stored as sessions.build_model_id (migrations/000034_plan_mode.up.sql) -- a session-level, set-once value, unlike modelId/planMode which are per-turn (CreateTurnRequest does NOT carry this field: a 'request changes' turn never resubmits it)." },
+        "buildEffort": { "type": ["string", "null"], "description": "Optional (Step 59, §29.8), mirroring buildModelId's own optional-key convention exactly, one field over: the reasoning effort the eventual approval-dispatched IMPLEMENTATION turn should use, distinct from effort (which names the PLAN turn's own effort). Absent/null means 'use the default'. Stored as sessions.build_effort (migrations/000063_turn_session_effort.up.sql)." },
         "pathScope": {
           "type": ["array", "null"],
           "items": { "type": "string" },
@@ -86,10 +88,11 @@
       "type": "object",
       "additionalProperties": false,
       "description": "POST /api/sessions/:id/turns (Step 28, 'turn recovery', §8.7 'relaunch-and-resume: conversation id replay'). Enqueues a new turn on an EXISTING session -- mirrors CreateSessionRequest's own prompt/modelId/planMode fields exactly (same shape, not reinvented) for the turn's own dispatch-time inputs. Deliberately has NO 'resume'/'conversationId' field of its own: sessions.opencode_conversation_id (already persisted across turns, §3.3) is threaded into every dispatched Prompt automatically by the control plane's own dispatch logic, so a new turn on a session that already has one continues that same OpenCode conversation with no separate request field needed.",
-      "required": ["prompt", "modelId", "planMode"],
+      "required": ["prompt", "modelId", "effort", "planMode"],
       "properties": {
         "prompt": { "type": "string", "description": "The turn's prompt text. Unlike CreateSessionRequest.prompt, this is required and non-null: this request's entire purpose is enqueuing one new turn, so there is no 'no turn' case to support here." },
         "modelId": { "type": ["string", "null"], "description": "Null means use the default model catalog entry -- same convention as CreateSessionRequest.modelId." },
+        "effort": { "type": ["string", "null"], "description": "Step 59 (§29.8). Reasoning-effort override for this turn; null means use the default -- same convention and required-nullable shape as CreateSessionRequest.effort." },
         "planMode": { "type": "boolean", "default": false },
         "attachmentIds": {
           "type": "array",
@@ -823,8 +826,8 @@
     "WorkflowStepDefinition": {
       "type": "object",
       "additionalProperties": false,
-      "description": "One workflow_step_definitions row plus its outgoing edges (Step 54, §25.10). order is 1-based and unique per definition, not required contiguous. modelId null means inherit exactly what the session would use today (turns.model_id/sessions.build_model_id -- §25.8's zero-config proof); non-null is the same opaque 'provider/model' passthrough convention modelId fields already use (§25.1/§25.7, no Narvi-side allowlist). promptTemplate uses the established '{{variable_name}}' placeholder syntax (§18.6); '{{prompt}}' is the caller's own text.",
-      "required": ["id", "order", "kind", "modelId", "promptTemplate", "executionScope", "conversationContinuity", "hitlBefore", "hitlAfter", "edges"],
+      "description": "One workflow_step_definitions row plus its outgoing edges (Step 54, §25.10). order is 1-based and unique per definition, not required contiguous. modelId null means inherit exactly what the session would use today (turns.model_id/sessions.build_model_id -- §25.8's zero-config proof); non-null is the same opaque 'provider/model' passthrough convention modelId fields already use (§25.1/§25.7, no Narvi-side allowlist). effort (Step 59, §29.8) mirrors modelId's own shape and inherit-when-null semantics exactly, one field over. promptTemplate uses the established '{{variable_name}}' placeholder syntax (§18.6); '{{prompt}}' is the caller's own text.",
+      "required": ["id", "order", "kind", "modelId", "effort", "promptTemplate", "executionScope", "conversationContinuity", "hitlBefore", "hitlAfter", "edges"],
       "properties": {
         "id": { "type": "string", "format": "uuid" },
         "order": { "type": "integer", "minimum": 1 },
@@ -834,6 +837,7 @@
           "description": "Matches Postgres workflow_step_kind exactly -- a single-value closed enum as of Step 54 (every §25.8 shape is an ordinary agent turn); modeled as an enum, not a literal, so a later phase can add a kind without a shape change."
         },
         "modelId": { "type": ["string", "null"] },
+        "effort": { "type": ["string", "null"], "description": "Step 59, §29.8's 'workflow engine echo'. Null means inherit exactly what the session would use today (turns.effort/sessions.build_effort)." },
         "promptTemplate": { "type": "string", "minLength": 1 },
         "executionScope": {
           "type": "string",
@@ -1021,6 +1025,106 @@
           "description": "The owning run's status after this call -- e.g. 'failed' after a winning reject ends the run, 'running' after an approve/revise continues it."
         },
         "turnId": { "type": ["string", "null"], "format": "uuid", "description": "The newly enqueued turn's id when this verdict dispatched one (an approve advancing to the next step, a revise re-executing the same step); null when it did not (a reject) -- mirrors PlanActionResponse.turnId." }
+      }
+    },
+    "ChatGPTLinkStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Response body for POST/GET /api/me/chatgpt-link (Step 59, §29.3/§29.9): the ChatGPT-account-OAuth link flow's own status, read by the Settings page's own poll loop -- there is no background worker driving this flow forward; the human sitting on the page IS the polling loop (§29.3 point 2), so GET simply reports the current chatgpt_link_attempts/provider_credentials state and, at most, performs ONE throttled upstream poll attempt per call. DELETE /api/me/chatgpt-link (unlink) returns 204 with no body, not this shape.",
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["unlinked", "pending", "linked", "needs_relink"],
+          "description": "unlinked: no attempt in progress and no linked account. pending: a device-flow attempt is in progress (verificationUrl/userCode/expiresAt are populated). linked: a ChatGPT account is linked and its stored token is healthy. needs_relink: was linked, but the refresh pump's own terminal failure (§29.5: invalid_grant/refresh_token_reused) means it is no longer served to any sandbox -- the Settings card's own 'reconnect your ChatGPT account' case."
+        },
+        "verificationUrl": { "type": ["string", "null"], "description": "Populated only when status is 'pending' -- always the literal https://auth.openai.com/codex/device (§29.2/§29.3), included so the UI never hardcodes it independently." },
+        "userCode": { "type": ["string", "null"], "description": "Populated only when status is 'pending' -- the short code the human enters at verificationUrl." },
+        "expiresAt": { "type": ["string", "null"], "format": "date-time", "description": "Populated only when status is 'pending' -- this device-flow attempt's own expiry (chatgpt_link_attempts.expires_at); past this time a fresh POST starts a new attempt. goJSONSchema forces the literal time.Time type (no leading '*' here, unlike Plan.decidedAt's own required-field precedent -- this key is OPTIONAL, so go-jsonschema's own omitempty pointer-wrapping already adds the one pointer level this field needs; combining that wrapping with an already-pointer goJSONSchema.type produced a double pointer, **time.Time, verified directly against a real regen during this Step).", "goJSONSchema": { "type": "time.Time", "imports": ["time"] } }
+      }
+    },
+    "ModelCatalog": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Response body for GET /api/models -- Step 59's own 'Catalog' deliverable (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8; §29; §25.2). STRUCTURAL DECISION, named here since §29 leaves it open: sourced from a control-plane-embedded snapshot of OpenCode's own GET /provider catalog (live-verified against the pinned OpenCode 1.17.15 binary during this Step's own implementation), NOT a live per-sandbox proxy -- the control-plane image does not ship the OpenCode binary (§29.9's own identical reasoning for why the ChatGPT device-flow client is a direct CP-side adapter rather than brokered through a spawned sandbox), so there is no running OpenCode server this endpoint could query live even if it wanted to. This is the SAME 'pinned known-good set' convention §7 already established for the sandbox-side per-turn fallback (the opencode adapter's own resolveProviderModel/fallbackModel), applied here as the control plane's ONLY source rather than a fallback of last resort -- refreshed by hand whenever the pinned OpenCode version bumps, exactly like that fallback constant already is. Scope: the 3 providers Step 53 already wires credential injection for (google/anthropic/openai) -- every model id is the exact catalog id OpenCode itself recognizes, usable verbatim as the '<providerId>/<modelId>' string modelId/buildModelId/effort/buildEffort already accept end to end today (§25.1's own 'no Narvi-side allowlist' passthrough, unchanged by this catalog's existence -- it is a discovery aid, never a validating allowlist).",
+      "required": ["providers"],
+      "properties": {
+        "providers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ModelCatalogProvider" }
+        }
+      }
+    },
+    "ModelCatalogProvider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "models"],
+      "properties": {
+        "id": { "type": "string", "description": "The catalog provider id, e.g. \"openai\" -- the exact string used as the '<providerId>/...' prefix, matching internal/domain/providercredential.Provider's own values." },
+        "models": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ModelCatalogModel" }
+        }
+      }
+    },
+    "ModelCatalogModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "contextWindow", "toolCall", "reasoning", "variants", "cost"],
+      "properties": {
+        "id": { "type": "string", "description": "The catalog model id, e.g. \"gpt-5.3-codex-spark\" -- combine with the owning ModelCatalogProvider.id and a \"/\" to get the exact modelId/buildModelId string this Step's own generic passthrough already accepts." },
+        "name": { "type": "string", "description": "Human-readable display name." },
+        "contextWindow": { "type": "integer", "description": "Total context window, in tokens." },
+        "toolCall": { "type": "boolean", "description": "Whether this model supports tool calling -- OpenCode's own catalog capabilities.toolcall." },
+        "reasoning": { "type": "boolean", "description": "Whether this model exposes a reasoning-effort dial at all -- OpenCode's own catalog capabilities.reasoning. False means variants is always empty for this model: effort has nothing to override." },
+        "variants": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The valid effort/buildEffort override values for THIS model, e.g. [\"none\",\"low\",\"medium\",\"high\",\"xhigh\"] for an OpenAI reasoning model, or [\"high\",\"max\"] for anthropic/claude-sonnet-4-5 (both live-verified during this Step) -- owned per-model by OpenCode's own catalog (§29.8), never a Narvi-side enum. The composer's own model/effort selector (§12.2 item 1, Phase 7) reads this list to populate its effort dropdown once a model is chosen."
+        },
+        "cost": { "$ref": "#/$defs/ModelCatalogCost" }
+      }
+    },
+    "ModelCatalogCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "output"],
+      "properties": {
+        "input": { "type": "number", "description": "USD per million input tokens." },
+        "output": { "type": "number", "description": "USD per million output tokens." },
+        "cacheRead": { "type": ["number", "null"], "description": "USD per million cache-read tokens when this model supports prompt caching; null otherwise." },
+        "cacheWrite": { "type": ["number", "null"], "description": "USD per million cache-write tokens when this model supports prompt caching; null otherwise." }
+      }
+    },
+    "ShadowComparisonReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Response body for GET /api/admin/shadow-compare (Step 59's own 'shadow-comparison tooling for review' deliverable, IMPLEMENTATION_PLAN.md Step 59 row, reusing §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used again for every future model swap'). §29 has no dedicated design subsection for this piece -- this is a deliberately minimal, from-scratch interpretation, named as such: a READ-ONLY, side-effect-free comparison of two ALREADY-COMPLETED turns (e.g. the same PR/prompt dispatched once on the active model and once on a shadow/candidate model or effort, or a session's own two differently-configured re-runs), never a re-execution orchestrator -- 'shadow' here means 'never affects either compared turn or its session', the same never-act-only-observe posture §18.5 requires stay permanent, applied to model/effort evaluation rather than classifier routing. Cost is deliberately NOT included: no per-turn cost column exists anywhere in this schema today (§7.1's own named, unclosed debt -- 'per-model cost attribution ... is not designed here'), and inventing one for this endpoint alone would be exactly the kind of shape invention this Step's own hard constraints forbid.",
+      "required": ["turnA", "turnB"],
+      "properties": {
+        "turnA": { "$ref": "#/$defs/ShadowComparisonTurn" },
+        "turnB": { "$ref": "#/$defs/ShadowComparisonTurn" }
+      }
+    },
+    "ShadowComparisonTurn": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One side of a ShadowComparisonReport -- mirrors the subset of the turns table (migrations/000005_turns.up.sql, 000018_session_repos.up.sql, 000063_turn_session_effort.up.sql) this comparison actually reads. No turn-level failureReason: unlike sessions.failure_reason, there is no such column on turns itself (that taxonomy is derived at the SESSION level from a turn's own outcome, internal/domain/turn/failurereason.go) -- status alone is this DTO's own outcome signal.",
+      "required": ["turnId", "sessionId", "modelId", "effort", "status", "createdAt", "dispatchedAt", "completedAt", "durationSeconds"],
+      "properties": {
+        "turnId": { "type": "string", "format": "uuid" },
+        "sessionId": { "type": "string", "format": "uuid" },
+        "modelId": { "type": ["string", "null"] },
+        "effort": { "type": ["string", "null"] },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "dispatched", "processing", "completed", "failed", "cancelled"],
+          "description": "Matches Postgres turn_status exactly, same enum as CreateTurnResponse.status."
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "dispatchedAt": { "type": ["string", "null"], "format": "date-time", "description": "goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment.", "goJSONSchema": { "type": "*time.Time", "imports": ["time"] } },
+        "completedAt": { "type": ["string", "null"], "format": "date-time", "description": "goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment.", "goJSONSchema": { "type": "*time.Time", "imports": ["time"] } },
+        "durationSeconds": { "type": ["number", "null"], "description": "completedAt minus dispatchedAt, in seconds; null until both are set." }
       }
     }
   }

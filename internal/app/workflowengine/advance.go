@@ -224,18 +224,19 @@ func dispatchNextAttempt(ctx context.Context, deps Deps, runID pgtype.UUID, toSt
 	}
 
 	// applyStep (dispatch.go) is this package's own existing "render a
-	// step's PromptTemplate against incoming text, resolve its ModelID
-	// override" logic -- reused verbatim here so a decision/re-fire-driven
-	// dispatch renders identically to an ordinary new turn's own resolution
-	// (§25.7: modelID falls back to sessionRow.BuildModelID, never a
-	// Narvi-side default of its own).
-	res := applyStep(ctx, toStep, promptText, sessionRow.BuildModelID, true, stepRun.ID)
+	// step's PromptTemplate against incoming text, resolve its ModelID/
+	// Effort override" logic -- reused verbatim here so a decision/re-fire-
+	// driven dispatch renders identically to an ordinary new turn's own
+	// resolution (§25.7/§29.8: modelID/effort fall back to sessionRow.
+	// BuildModelID/BuildEffort, never a Narvi-side default of their own).
+	res := applyStep(ctx, toStep, promptText, sessionRow.BuildModelID, sessionRow.BuildEffort, true, stepRun.ID)
 
 	created, err := deps.Turns.Create(ctx, sqlcgen.CreateTurnParams{
 		SessionID: sessionRow.ID,
 		Status:    sqlcgen.TurnStatusPending,
 		Prompt:    &res.Prompt,
 		ModelID:   res.ModelID,
+		Effort:    res.Effort,
 		PlanMode:  false,
 	})
 	if err != nil {

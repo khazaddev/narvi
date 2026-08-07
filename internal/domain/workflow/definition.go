@@ -127,10 +127,18 @@ func IsValidConversationContinuity(c ConversationContinuity) bool {
 // caller's own text, making the built-in review/request steps a pure
 // passthrough.
 type StepDefinition struct {
-	ID                     ID
-	Order                  int
-	Kind                   StepKind
-	ModelID                *string
+	ID      ID
+	Order   int
+	Kind    StepKind
+	ModelID *string
+	// Effort mirrors ModelID's own shape and semantics exactly (Step 59,
+	// §29.8's "workflow engine echo"): nil inherits exactly what the
+	// session would use today (turns.effort/sessions.build_effort), a
+	// non-nil value overrides it for this step -- the same "provider/
+	// model" passthrough discipline §25.1/§25.7 established for ModelID,
+	// with no Narvi-side allowlist here either (valid values are owned
+	// per-model by OpenCode's own catalog `variants` maps, §29.8).
+	Effort                 *string
 	PromptTemplate         string
 	ExecutionScope         ExecutionScope
 	ConversationContinuity ConversationContinuity
@@ -169,6 +177,7 @@ var (
 	ErrDuplicateStepOrder            = errors.New("workflow: duplicate step order")
 	ErrInvalidStepKind               = errors.New("workflow: invalid step kind")
 	ErrEmptyModelID                  = errors.New("workflow: model id set but empty")
+	ErrEmptyEffort                   = errors.New("workflow: effort set but empty")
 	ErrEmptyPromptTemplate           = errors.New("workflow: empty prompt template")
 	ErrInvalidExecutionScope         = errors.New("workflow: invalid execution scope")
 	ErrInvalidConversationContinuity = errors.New("workflow: invalid conversation continuity")
@@ -228,6 +237,9 @@ func ValidateDefinition(def Definition) error {
 		}
 		if step.ModelID != nil && *step.ModelID == "" {
 			return fmt.Errorf("%w: step %q", ErrEmptyModelID, step.ID)
+		}
+		if step.Effort != nil && *step.Effort == "" {
+			return fmt.Errorf("%w: step %q", ErrEmptyEffort, step.ID)
 		}
 		if step.PromptTemplate == "" {
 			return fmt.Errorf("%w: step %q", ErrEmptyPromptTemplate, step.ID)

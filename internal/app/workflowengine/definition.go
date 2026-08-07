@@ -98,6 +98,7 @@ func LoadDefinition(ctx context.Context, workflows *postgres.WorkflowStore, defi
 			Order:                  int(s.StepOrder),
 			Kind:                   workflow.StepKind(s.Kind),
 			ModelID:                s.ModelID,
+			Effort:                 s.Effort,
 			PromptTemplate:         s.PromptTemplate,
 			ExecutionScope:         workflow.ExecutionScope(s.ExecutionScope),
 			ConversationContinuity: workflow.ConversationContinuity(s.ConversationContinuity),
