@@ -122,6 +122,43 @@ func TestCreateTurn_HappyPath(t *testing.T) {
 	}
 }
 
+// TestCreateTurn_EffortReachesTurnsEffort is H1's own regression guard
+// (adversarial review, §29.8): every OTHER test in this file mechanically
+// sends "effort":null, so createTurnLocked's own `Effort: effectiveEffort`
+// write (turn.go) -- the actual turns.effort column write path -- was
+// entirely unasserted; a regression silently dropping it (e.g. reverting to
+// an unconditional Effort: nil) would have passed every existing test here.
+// This POSTs a genuinely non-null effort and reads it back from the
+// database, mirroring TestCreateTurn_HappyPath's own rig/assertion style.
+func TestCreateTurn_EffortReachesTurnsEffort(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	user, token := rig.createAuthenticatedUser(ctx, t)
+	session := createSessionForUser(ctx, t, rig, user.ID, nil)
+
+	body := []byte(`{"prompt": "think hard about this", "modelId": null, "effort": "high", "planMode": false}`)
+	var got restdtos.CreateTurnResponse
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", body, &got, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("len(turns) = %d, want 1", len(turns))
+	}
+	if turns[0].Effort == nil || *turns[0].Effort != "high" {
+		gotEffort := "<nil>"
+		if turns[0].Effort != nil {
+			gotEffort = *turns[0].Effort
+		}
+		t.Errorf("turn effort = %s, want %q", gotEffort, "high")
+	}
+}
+
 // TestCreateTurn_InFlightTurnExists_Returns409 proves the "exactly one
 // processing per session" application-level check: a session with an
 // already-Processing turn rejects a new CreateTurn with 409, and does NOT
