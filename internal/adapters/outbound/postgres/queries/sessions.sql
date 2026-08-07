@@ -96,3 +96,25 @@ RETURNING *;
 UPDATE sessions
 SET intent_decision = $2
 WHERE id = $1 AND intent_decision IS NULL;
+
+-- name: ListFailedSessions :many
+-- Step 60 ("decision inbox: read model + API", §16.1)'s own
+-- needs_attention row source: every session currently 'failed' -- §3.2's
+-- own resume/recreate lanes make every failed session resume-eligible in
+-- SOME form (recreate-from-scratch at minimum, via conversation replay --
+-- see internal/app/decisioninbox's own doc comment for why this Step does
+-- not further narrow "resume available" beyond the status itself, since
+-- no additional per-provider capability signal is available at this read-
+-- model layer). Most-recently-failed first (updated_at -- set to now() by
+-- UpdateSessionStatus at the exact moment a session's own status last
+-- changed, which for an unarchived, still-'failed' row is the instant it
+-- became failed), bounded by $1 (§21.1's own "bounded from day one"
+-- discipline -- never an unbounded scan).
+--
+-- ADMIN-ONLY at the RBAC/httpapi layer (§16.1's own parenthetical) -- this
+-- query itself carries no per-user filter: an admin's own ops-triage view
+-- is system-wide, not narrowed to sessions they personally created.
+SELECT * FROM sessions
+WHERE status = 'failed' AND NOT archived
+ORDER BY updated_at DESC
+LIMIT $1;

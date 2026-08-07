@@ -356,6 +356,19 @@ func (f *applySuggestionFakeSourceControl) ListMergedBetween(context.Context, po
 	return nil, false, errors.New("not implemented")
 }
 
+// ListOpenPRsForUser/ResolveCodeOwners/MergePR (Step 60, "decision inbox:
+// read model + API", §16.2) are never reached from this test -- same
+// "not implemented" precedent as every other unused method above.
+func (f *applySuggestionFakeSourceControl) ListOpenPRsForUser(context.Context, ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
+	return nil, false, errors.New("not implemented")
+}
+func (f *applySuggestionFakeSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *applySuggestionFakeSourceControl) MergePR(context.Context, ports.MergePRSpec) (string, error) {
+	return "", errors.New("not implemented")
+}
+
 var _ ports.SourceControl = (*applySuggestionFakeSourceControl)(nil)
 
 // setupFindingWithSuggestedFix creates an owned GitHub review session,

@@ -172,6 +172,70 @@ func (q *Queries) GetOutboxEntry(ctx context.Context, id pgtype.UUID) (Outbox, e
 	return i, err
 }
 
+const listDeadLetterOutboxEntries = `-- name: ListDeadLetterOutboxEntries :many
+SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
+WHERE status = 'dead_letter'
+ORDER BY created_at DESC
+LIMIT $1
+`
+
+// Step 60 ("decision inbox: read model + API", §16.1)'s own
+// needs_attention row source: every outbox row that exhausted retries
+// (MarkOutboxEntryDeadLetter above), bounded by $1 (§21.1's own "bounded
+// from day one" discipline). Ordered by created_at, NOT a dedicated
+// "became dead-lettered at" timestamp -- this table has none (verified:
+// migrations/000010_outbox.up.sql's own columns are id/session_id/kind/
+// payload/status/attempts/next_attempt_at/delivered_at/last_error/
+// created_at/correlation_id; no dead_lettered_at) -- adding one now would
+// be a new WRITE this Step's own read-model scope deliberately excludes
+// ("derive it, do not add a writer"). created_at therefore honestly
+// UNDER-estimates true time-in-dead-letter-state (a row dead-letters some
+// time strictly after its own creation, never before), which is the safe
+// direction for a STALENESS flag (over-flagging a row as old enough to
+// need attention is the harmless failure mode here) -- but is NOT precise
+// enough to feed the decision-latency metric's own median, so
+// internal/app/decisioninbox deliberately excludes dead-lettered outbox
+// rows from that specific computation (scoped instead to PR merges and
+// plan decisions, where a real actioned-at instant exists) while still
+// surfacing them in the queue itself.
+//
+// ADMIN-ONLY at the RBAC/httpapi layer (§16.1's own parenthetical),
+// mirroring ListFailedSessions' own identical "no per-user filter, an ops
+// view is system-wide" reasoning -- an outbox row has no single owning end
+// user in the first place (CountPendingOutboxEntries' own doc comment
+// above: outbox rows aren't user-scoped).
+func (q *Queries) ListDeadLetterOutboxEntries(ctx context.Context, limit int32) ([]Outbox, error) {
+	rows, err := q.db.Query(ctx, listDeadLetterOutboxEntries, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Outbox
+	for rows.Next() {
+		var i Outbox
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Kind,
+			&i.Payload,
+			&i.Status,
+			&i.Attempts,
+			&i.NextAttemptAt,
+			&i.DeliveredAt,
+			&i.LastError,
+			&i.CreatedAt,
+			&i.CorrelationID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDuePendingOutboxEntries = `-- name: ListDuePendingOutboxEntries :many
 SELECT id, session_id, kind, payload, status, attempts, next_attempt_at, delivered_at, last_error, created_at, correlation_id FROM outbox
 WHERE status = 'pending' AND next_attempt_at <= now()

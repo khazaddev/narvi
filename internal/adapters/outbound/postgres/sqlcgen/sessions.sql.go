@@ -169,6 +169,69 @@ func (q *Queries) GetSessionActorEpochForUpdate(ctx context.Context, id pgtype.U
 	return actor_epoch, err
 }
 
+const listFailedSessions = `-- name: ListFailedSessions :many
+SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort FROM sessions
+WHERE status = 'failed' AND NOT archived
+ORDER BY updated_at DESC
+LIMIT $1
+`
+
+// Step 60 ("decision inbox: read model + API", §16.1)'s own
+// needs_attention row source: every session currently 'failed' -- §3.2's
+// own resume/recreate lanes make every failed session resume-eligible in
+// SOME form (recreate-from-scratch at minimum, via conversation replay --
+// see internal/app/decisioninbox's own doc comment for why this Step does
+// not further narrow "resume available" beyond the status itself, since
+// no additional per-provider capability signal is available at this read-
+// model layer). Most-recently-failed first (updated_at -- set to now() by
+// UpdateSessionStatus at the exact moment a session's own status last
+// changed, which for an unarchived, still-'failed' row is the instant it
+// became failed), bounded by $1 (§21.1's own "bounded from day one"
+// discipline -- never an unbounded scan).
+//
+// ADMIN-ONLY at the RBAC/httpapi layer (§16.1's own parenthetical) -- this
+// query itself carries no per-user filter: an admin's own ops-triage view
+// is system-wide, not narrowed to sessions they personally created.
+func (q *Queries) ListFailedSessions(ctx context.Context, limit int32) ([]Session, error) {
+	rows, err := q.db.Query(ctx, listFailedSessions, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Session
+	for rows.Next() {
+		var i Session
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Status,
+			&i.FailureReason,
+			&i.Archived,
+			&i.SpawnSource,
+			&i.CreatedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ActorEpoch,
+			&i.Repos,
+			&i.OpencodeConversationID,
+			&i.EnvironmentID,
+			&i.ProvenanceTag,
+			&i.IntentDecision,
+			&i.BuildModelID,
+			&i.ParentSessionID,
+			&i.SpawnDepth,
+			&i.BuildEffort,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateSessionConversationID = `-- name: UpdateSessionConversationID :one
 UPDATE sessions
 SET opencode_conversation_id = $2, updated_at = now()

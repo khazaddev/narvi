@@ -47,6 +47,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/automation"
 	"github.com/khazaddev/narvi/internal/app/chatgptlink"
 	"github.com/khazaddev/narvi/internal/app/chatgptrefresh"
+	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
@@ -855,6 +856,36 @@ func serve() error {
 	router.Route("/api/audit-log", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.ListAuditLog(auditLogStore))
+	})
+
+	// /api/decision-inbox (Step 60, "decision inbox: read model + API",
+	// §16 -- Phase 5 half: read model + endpoints; the UI is Phase 7).
+	// decisionInboxDeps bundles every Postgres store the read model
+	// aggregates (internal/app/decisioninbox.Build's own doc comment: a
+	// read model over plans/sessions/automations/outbox/review_findings/
+	// sentinel_fixes/artifacts, all already constructed above for their
+	// own existing purposes) plus decisionInboxSCMCache, the §16.2 short-
+	// TTL cache wrapping the SAME sourceControl instance every other
+	// GitHub-facing route already shares.
+	decisionInboxSCMCache := decisioninbox.NewSCMCache(sourceControl, cfg.Timeouts)
+	decisionInboxDeps := decisioninbox.Deps{
+		Plans:              planStore,
+		Sessions:           sessionStore,
+		Participants:       participantStore,
+		Automations:        automationStore,
+		Outbox:             outboxStore,
+		ReviewFindings:     reviewFindingStore,
+		SentinelFixes:      sentinelFixStore,
+		Artifacts:          artifactStore,
+		Identities:         identityStore,
+		SCMCache:           decisionInboxSCMCache,
+		TokenEncryptionKey: cfg.TokenEncryptionKey,
+		Timeouts:           cfg.Timeouts,
+	}
+	router.Route("/api/decision-inbox", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListDecisionInbox(decisionInboxDeps))
+		r.Post("/merge", httpapi.MergePullRequest(decisionInboxDeps, sourceControl, auditLogStore))
 	})
 
 	// /api/intent-templates, /api/intent-templates/preview (audit finding

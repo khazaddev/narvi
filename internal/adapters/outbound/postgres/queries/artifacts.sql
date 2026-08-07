@@ -17,6 +17,21 @@ SELECT * FROM artifacts
 WHERE session_id = $1
 ORDER BY created_at ASC;
 
+-- name: GetPRArtifactByURL :one
+-- Step 60 ("decision inbox: read model + API", §16.1)'s own "authored by
+-- a platform session" signal for ready_to_merge: a 'pr'-typed artifact row
+-- exists, keyed on its own url column, iff SOME session's own
+-- createPRBestEffort (pushpr.go) actually pushed and opened exactly this
+-- pull request -- the SAME (type, url) identity recordPRArtifact itself
+-- already leans on for its own idempotency check ("art.Type ==
+-- ArtifactTypePr && art.Url == ref.URL"). pgx.ErrNoRows means this PR was
+-- opened some other way (a human, or a tool outside Narvi) -- never
+-- treated as an error by any caller, simply excluded from ready_to_merge
+-- (§16.1's own inclusion criterion).
+SELECT * FROM artifacts
+WHERE type = 'pr' AND url = $1
+LIMIT 1;
+
 -- Step 58 ("uploads, blob storage & the in-sandbox download_file tool",
 -- §28.4): the upload lifecycle's own queries. type is always the literal
 -- 'upload' and status always starts 'pending' -- never caller-supplied --
