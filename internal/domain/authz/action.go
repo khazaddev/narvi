@@ -60,6 +60,20 @@ const (
 	// ListArtifacts/ListEvents' own existing "session exists + logged in,
 	// no separate Authorize call" precedent.
 	ActionUploadToSession Action = "upload_to_session"
+	// ActionLinkChatGPTAccount covers self-service linking/unlinking of
+	// the caller's OWN ChatGPT account (POST/DELETE /api/me/chatgpt-link,
+	// Step 59, §29.3/§29.9 — "self-service, own-user only... one new
+	// action row, own-aware like ActionApprovePlan's own row"): admin/
+	// maintainer unconditionally (though in practice every /api/me/...
+	// call is already self-scoped by the caller's own identity), member
+	// only via the allowIfOwned carve-out — which for a strictly
+	// self-scoped endpoint is always satisfied for the caller's own
+	// request; viewers never link (§13.3: viewers are read-only). Admin
+	// unlink-of-ANY-user's account mirrors §13.2's own admin force-link
+	// precedent by reusing ActionManageMembers (row 6, admin-only) instead
+	// of a second action here — see internal/app/chatgptlink's own doc
+	// comment for the exact split.
+	ActionLinkChatGPTAccount Action = "link_chatgpt_account"
 
 	// -- Row 3: "Stop/resume ANY session; approve ANY plan" — admin,
 	// maintainer only. Deliberately no member own/joined carve-out here,
@@ -187,6 +201,7 @@ var AllActions = []Action{
 	ActionApprovePlan,
 	ActionDecideWorkflowStep,
 	ActionUploadToSession,
+	ActionLinkChatGPTAccount,
 	ActionStopSession,
 	ActionResumeSession,
 	ActionManageAutomations,

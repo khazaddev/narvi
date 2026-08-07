@@ -1354,13 +1354,14 @@ type AutomationRun struct {
 }
 
 type ChatgptLinkAttempt struct {
-	ID           pgtype.UUID        `json:"id"`
-	UserID       pgtype.UUID        `json:"user_id"`
-	DeviceAuthID string             `json:"device_auth_id"`
-	UserCode     string             `json:"user_code"`
-	LastPolledAt pgtype.Timestamptz `json:"last_polled_at"`
-	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ID              pgtype.UUID        `json:"id"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	DeviceAuthID    string             `json:"device_auth_id"`
+	UserCode        string             `json:"user_code"`
+	IntervalSeconds int32              `json:"interval_seconds"`
+	LastPolledAt    pgtype.Timestamptz `json:"last_polled_at"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 type ContractDriftSnapshot struct {

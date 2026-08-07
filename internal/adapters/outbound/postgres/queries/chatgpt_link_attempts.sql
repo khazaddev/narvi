@@ -8,8 +8,8 @@
 -- also follows.
 
 -- name: CreateChatGPTLinkAttempt :one
-INSERT INTO chatgpt_link_attempts (user_id, device_auth_id, user_code, expires_at)
-VALUES ($1, $2, $3, $4)
+INSERT INTO chatgpt_link_attempts (user_id, device_auth_id, user_code, interval_seconds, expires_at)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: GetLatestChatGPTLinkAttemptForUser :one

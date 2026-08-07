@@ -57,6 +57,13 @@ ALTER TABLE provider_credentials ADD CONSTRAINT provider_credentials_kind_oauth_
 -- one upstream deviceauth/token attempt per server-provided interval,
 -- §29.3 point 2 -- the human sitting on the Settings page IS the polling
 -- loop; there is no background goroutine for this table to leak from).
+-- interval_seconds is that SAME server-provided interval (usercode's own
+-- response, §29.2: "{device_auth_id, user_code, interval}"), persisted
+-- verbatim so PollLink can throttle against the value auth.openai.com
+-- itself asked for rather than a Narvi-side guess -- without this column
+-- the interval would be lost the moment StartLink's own HTTP response
+-- goes out of scope, and every later poll would have nothing real to
+-- throttle against.
 --
 -- Deliberately NO UNIQUE constraint on user_id, mirroring identity_link_
 -- prompts' own documented choice: "relink replaces the row (same upsert)"
@@ -64,13 +71,14 @@ ALTER TABLE provider_credentials ADD CONSTRAINT provider_credentials_kind_oauth_
 -- constraint -- an expired-but-unresolved attempt is simply superseded by
 -- a fresh one, never deleted out from under a concurrent poll.
 CREATE TABLE chatgpt_link_attempts (
-    id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    device_auth_id TEXT NOT NULL,
-    user_code      TEXT NOT NULL,
-    last_polled_at TIMESTAMPTZ,
-    expires_at     TIMESTAMPTZ NOT NULL,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_auth_id   TEXT NOT NULL,
+    user_code        TEXT NOT NULL,
+    interval_seconds INTEGER NOT NULL,
+    last_polled_at   TIMESTAMPTZ,
+    expires_at       TIMESTAMPTZ NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Lookup index for "does this user already have a pending attempt"

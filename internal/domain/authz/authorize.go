@@ -118,6 +118,11 @@ var matrix = map[Action]actionRule{
 	// SAME row as prompting by that section's own explicit instruction --
 	// see action.go's own doc comment.
 	ActionUploadToSession: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
+	// Step 59 (§29.9): linking/unlinking the caller's OWN ChatGPT account
+	// is own/joined-aware, the SAME row as plan approval by that
+	// section's explicit "own-aware like ActionApprovePlan's own row"
+	// instruction -- see action.go's own doc comment.
+	ActionLinkChatGPTAccount: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
 
 	// Row 3: stop/resume ANY session -- admin/maintainer only, no member
 	// own/joined escape hatch (see action.go's own doc comment on why).

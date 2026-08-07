@@ -1949,6 +1949,19 @@ type Timeouts struct {
 	// 6h".
 	ChatGPTOAuthRefreshPumpInterval time.Duration
 
+	// ChatGPTLinkAttemptTTL bounds how long a single device-flow link
+	// attempt (chatgpt_link_attempts row) stays valid before a fresh
+	// "Connect ChatGPT account" click is required — §29.2 gives OpenAI's
+	// own usercode response shape ({device_auth_id, user_code, interval})
+	// but names no expiry field on it explicitly; not specified in the
+	// plan, chosen generously as 15m — comfortably enough wall-clock time
+	// for a human to switch devices/tabs and enter a short code, mirroring
+	// this codebase's own "chosen generously when the concrete cost is
+	// unknown" convention (HookTimeout's own doc comment) and, numerically,
+	// UploadPresignPutTTL's own identical "propose 15 min" figure for an
+	// unrelated but similarly-shaped "how long can a human take" bound.
+	ChatGPTLinkAttemptTTL time.Duration
+
 	// ChatGPTOAuthHTTPClientTimeout bounds every outbound HTTP call this
 	// Step's own new device-flow adapter (internal/adapters/outbound/
 	// chatgptoauth) makes directly to auth.openai.com — the 4 calls §29.2/
@@ -2125,6 +2138,7 @@ func DefaultTimeouts() Timeouts {
 
 		ChatGPTOAuthRefreshMargin:       72 * time.Hour,   // Step 59, §29.5, explicit ("propose 72h")
 		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // Step 59, §29.5, explicit ("propose 6h")
+		ChatGPTLinkAttemptTTL:           15 * time.Minute, // Step 59; not specified, chosen generously (human device-switch time)
 		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // Step 59; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
 	}
 }

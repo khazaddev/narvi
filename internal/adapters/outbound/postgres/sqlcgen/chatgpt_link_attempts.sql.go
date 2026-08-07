@@ -13,16 +13,17 @@ import (
 
 const createChatGPTLinkAttempt = `-- name: CreateChatGPTLinkAttempt :one
 
-INSERT INTO chatgpt_link_attempts (user_id, device_auth_id, user_code, expires_at)
-VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, device_auth_id, user_code, last_polled_at, expires_at, created_at
+INSERT INTO chatgpt_link_attempts (user_id, device_auth_id, user_code, interval_seconds, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, user_id, device_auth_id, user_code, interval_seconds, last_polled_at, expires_at, created_at
 `
 
 type CreateChatGPTLinkAttemptParams struct {
-	UserID       pgtype.UUID        `json:"user_id"`
-	DeviceAuthID string             `json:"device_auth_id"`
-	UserCode     string             `json:"user_code"`
-	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+	UserID          pgtype.UUID        `json:"user_id"`
+	DeviceAuthID    string             `json:"device_auth_id"`
+	UserCode        string             `json:"user_code"`
+	IntervalSeconds int32              `json:"interval_seconds"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
 }
 
 // Queries backing ChatGPTLinkAttemptStore -- the ChatGPT-account-OAuth
@@ -38,6 +39,7 @@ func (q *Queries) CreateChatGPTLinkAttempt(ctx context.Context, arg CreateChatGP
 		arg.UserID,
 		arg.DeviceAuthID,
 		arg.UserCode,
+		arg.IntervalSeconds,
 		arg.ExpiresAt,
 	)
 	var i ChatgptLinkAttempt
@@ -46,6 +48,7 @@ func (q *Queries) CreateChatGPTLinkAttempt(ctx context.Context, arg CreateChatGP
 		&i.UserID,
 		&i.DeviceAuthID,
 		&i.UserCode,
+		&i.IntervalSeconds,
 		&i.LastPolledAt,
 		&i.ExpiresAt,
 		&i.CreatedAt,
@@ -79,7 +82,7 @@ func (q *Queries) DeleteChatGPTLinkAttemptsForUser(ctx context.Context, userID p
 }
 
 const getLatestChatGPTLinkAttemptForUser = `-- name: GetLatestChatGPTLinkAttemptForUser :one
-SELECT id, user_id, device_auth_id, user_code, last_polled_at, expires_at, created_at FROM chatgpt_link_attempts
+SELECT id, user_id, device_auth_id, user_code, interval_seconds, last_polled_at, expires_at, created_at FROM chatgpt_link_attempts
 WHERE user_id = $1
 ORDER BY created_at DESC
 LIMIT 1
@@ -99,6 +102,7 @@ func (q *Queries) GetLatestChatGPTLinkAttemptForUser(ctx context.Context, userID
 		&i.UserID,
 		&i.DeviceAuthID,
 		&i.UserCode,
+		&i.IntervalSeconds,
 		&i.LastPolledAt,
 		&i.ExpiresAt,
 		&i.CreatedAt,
@@ -110,7 +114,7 @@ const updateChatGPTLinkAttemptLastPolledAt = `-- name: UpdateChatGPTLinkAttemptL
 UPDATE chatgpt_link_attempts
 SET last_polled_at = $2
 WHERE id = $1
-RETURNING id, user_id, device_auth_id, user_code, last_polled_at, expires_at, created_at
+RETURNING id, user_id, device_auth_id, user_code, interval_seconds, last_polled_at, expires_at, created_at
 `
 
 type UpdateChatGPTLinkAttemptLastPolledAtParams struct {
@@ -131,6 +135,7 @@ func (q *Queries) UpdateChatGPTLinkAttemptLastPolledAt(ctx context.Context, arg 
 		&i.UserID,
 		&i.DeviceAuthID,
 		&i.UserCode,
+		&i.IntervalSeconds,
 		&i.LastPolledAt,
 		&i.ExpiresAt,
 		&i.CreatedAt,
