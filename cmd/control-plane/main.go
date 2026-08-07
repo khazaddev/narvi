@@ -842,6 +842,16 @@ func serve() error {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.GetModelCatalog())
 	})
+
+	// /api/admin/shadow-compare (Step 59, "shadow-comparison tooling for
+	// review", §9.4/§18.5) -- mounted exactly like /api/members above:
+	// gated behind auth.Middleware, with the handler itself rendering the
+	// real authz.ActionViewShadowComparison verdict (admin/maintainer
+	// only).
+	router.Route("/api/admin/shadow-compare", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetShadowComparison(turnStore))
+	})
 	router.Route("/api/audit-log", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.ListAuditLog(auditLogStore))

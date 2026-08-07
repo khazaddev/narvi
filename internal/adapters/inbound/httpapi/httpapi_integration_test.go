@@ -398,6 +398,13 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.GetModelCatalog())
 	})
+	// /api/admin/shadow-compare (Step 59, "shadow-comparison tooling for
+	// review", §9.4/§18.5) -- mounted exactly like cmd/control-plane/
+	// main.go's own wiring.
+	router.Route("/api/admin/shadow-compare", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetShadowComparison(rig.turns))
+	})
 	// /api/intent-templates, /api/intent-templates/preview (audit finding
 	// M5, completeness) -- mounted exactly like cmd/control-plane/main.go's
 	// own wiring (see classifiertemplates.go's own doc comment).

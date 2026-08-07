@@ -128,6 +128,10 @@ var matrix = map[Action]actionRule{
 	// own/joined escape hatch (see action.go's own doc comment on why).
 	ActionStopSession:   {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionResumeSession: {allow: roles(RoleAdmin, RoleMaintainer)},
+	// Step 59: shadow-comparison tooling reads across ANY two turns --
+	// same row as stop/resume, same reasoning (action.go's own doc
+	// comment).
+	ActionViewShadowComparison: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 4: automations/environments/repo+env secrets -- admin/maintainer.
 	// Step 54 (§25.11) adds workflow-definition authoring (an unbound

@@ -91,6 +91,15 @@ const (
 	// ActionResumeSession resumes a stopped session. Same "no caller yet"
 	// note as ActionStopSession.
 	ActionResumeSession Action = "resume_session"
+	// ActionViewShadowComparison covers Step 59's own "shadow-comparison
+	// tooling for review" deliverable (GET /api/admin/shadow-compare,
+	// shadowcompare.go) -- reads across ANY two turns/sessions, never
+	// scoped to ones the caller created or joined, so this sits in THIS
+	// row ("ANY session", admin/maintainer only, no member own/joined
+	// escape hatch) rather than row 1's "everyone including viewer" one:
+	// introspective model-rollout tooling, not an ordinary product
+	// surface a member should reach for their own sessions.
+	ActionViewShadowComparison Action = "view_shadow_comparison"
 
 	// -- Row 4: "Manage automations, environments, repo/env secrets" —
 	// admin, maintainer only. No caller exists yet for any of these three
@@ -204,6 +213,7 @@ var AllActions = []Action{
 	ActionLinkChatGPTAccount,
 	ActionStopSession,
 	ActionResumeSession,
+	ActionViewShadowComparison,
 	ActionManageAutomations,
 	ActionManageEnvironments,
 	ActionManageRepoSecrets,
