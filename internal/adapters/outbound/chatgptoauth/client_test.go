@@ -57,7 +57,7 @@ func TestStartDeviceAuth(t *testing.T) {
 	t.Run("malformed interval is a real error", func(t *testing.T) {
 		t.Parallel()
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(usercodeResponse{DeviceAuthID: "dev-123", UserCode: "WDJB-MJHT", Interval: "not-a-number", ExpiresAt: "2026-08-07T01:48:44.868061+00:00"})
 		}))
 		defer srv.Close()
@@ -71,7 +71,7 @@ func TestStartDeviceAuth(t *testing.T) {
 	t.Run("malformed expires_at is a real error", func(t *testing.T) {
 		t.Parallel()
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(usercodeResponse{DeviceAuthID: "dev-123", UserCode: "WDJB-MJHT", Interval: "5", ExpiresAt: "not-a-timestamp"})
 		}))
 		defer srv.Close()
@@ -85,7 +85,7 @@ func TestStartDeviceAuth(t *testing.T) {
 	t.Run("server error surfaces as a real error", func(t *testing.T) {
 		t.Parallel()
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer srv.Close()
@@ -128,7 +128,7 @@ func TestPollDeviceToken(t *testing.T) {
 		t.Run("pending ("+http.StatusText(status)+")", func(t *testing.T) {
 			t.Parallel()
 
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(status)
 			}))
 			defer srv.Close()
@@ -144,7 +144,7 @@ func TestPollDeviceToken(t *testing.T) {
 	t.Run("real failure is NOT mistaken for pending", func(t *testing.T) {
 		t.Parallel()
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer srv.Close()
@@ -217,7 +217,7 @@ func TestRefreshToken(t *testing.T) {
 	t.Run("no id_token at all still succeeds, with an empty AccountID", func(t *testing.T) {
 		t.Parallel()
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(tokenResponse{
 				AccessToken: "new-access", RefreshToken: "new-refresh", ExpiresIn: 864000,
 				// IDToken deliberately omitted.
@@ -269,7 +269,7 @@ func TestRefreshToken(t *testing.T) {
 	t.Run("reuse detection surfaces as a terminal TokenError", func(t *testing.T) {
 		t.Parallel()
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(tokenErrorResponse{Error: "refresh_token_reused", ErrorDescription: "token already used"})
 		}))
@@ -289,7 +289,7 @@ func TestRefreshToken(t *testing.T) {
 	t.Run("transient failure is NOT terminal", func(t *testing.T) {
 		t.Parallel()
 
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
 		defer srv.Close()

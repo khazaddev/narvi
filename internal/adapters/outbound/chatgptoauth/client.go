@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // DefaultBaseURL is auth.openai.com's real base -- the ONLY place this
@@ -138,7 +140,7 @@ func (c *Client) StartDeviceAuth(ctx context.Context) (UsercodeResult, error) {
 	return UsercodeResult{
 		DeviceAuthID: resp.DeviceAuthID,
 		UserCode:     resp.UserCode,
-		Interval:     time.Duration(intervalSeconds) * time.Second,
+		Interval:     platform.SecondsToDuration(intervalSeconds),
 		ExpiresAt:    expiresAt,
 	}, nil
 }
@@ -169,7 +171,7 @@ func (c *Client) PollDeviceToken(ctx context.Context, deviceAuthID, userCode str
 	if resp.AuthorizationCode == "" || resp.CodeVerifier == "" {
 		return DeviceTokenResult{}, fmt.Errorf("chatgptoauth: poll device token: response carried no authorization_code/code_verifier")
 	}
-	return DeviceTokenResult{AuthorizationCode: resp.AuthorizationCode, CodeVerifier: resp.CodeVerifier}, nil
+	return DeviceTokenResult(resp), nil
 }
 
 // TokenResult is /oauth/token's own translated result, for BOTH grant
@@ -286,7 +288,7 @@ func (c *Client) postToken(ctx context.Context, form url.Values) (TokenResult, e
 	return TokenResult{
 		AccessToken:  parsed.AccessToken,
 		RefreshToken: parsed.RefreshToken,
-		ExpiresIn:    time.Duration(parsed.ExpiresIn) * time.Second,
+		ExpiresIn:    platform.SecondsToDuration(parsed.ExpiresIn),
 		AccountID:    accountID,
 	}, nil
 }

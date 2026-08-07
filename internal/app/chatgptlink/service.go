@@ -103,10 +103,10 @@ func StartLink(ctx context.Context, deps Deps, userID pgtype.UUID) (Status, erro
 	// meaningless to Narvi past the point its own Settings-page prompt
 	// would be considered stale regardless of what the server claims.
 	expiresAt := started.ExpiresAt
-	if cap := time.Now().Add(deps.Timeouts.ChatGPTLinkAttemptTTL); cap.Before(expiresAt) {
-		expiresAt = cap
+	if expiresAtCap := time.Now().Add(deps.Timeouts.ChatGPTLinkAttemptTTL); expiresAtCap.Before(expiresAt) {
+		expiresAt = expiresAtCap
 	}
-	created, err := deps.LinkAttempts.Create(ctx, userID, started.DeviceAuthID, started.UserCode, int32(started.Interval/time.Second), expiresAt)
+	created, err := deps.LinkAttempts.Create(ctx, userID, started.DeviceAuthID, started.UserCode, platform.DurationToSeconds(started.Interval), expiresAt)
 	if err != nil {
 		return Status{}, fmt.Errorf("chatgptlink: create link attempt: %w", err)
 	}
@@ -148,7 +148,7 @@ func PollLink(ctx context.Context, deps Deps, userID pgtype.UUID) (Status, error
 		return currentLinkedStatus(ctx, deps, userID)
 	}
 
-	interval := time.Duration(attempt.IntervalSeconds) * time.Second
+	interval := platform.SecondsToDuration(attempt.IntervalSeconds)
 	if attempt.LastPolledAt.Valid && time.Since(attempt.LastPolledAt.Time) < interval {
 		return attemptToStatus(attempt), nil
 	}

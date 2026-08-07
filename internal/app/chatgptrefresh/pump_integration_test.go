@@ -131,7 +131,7 @@ type fakeRefreshServer struct {
 
 func (f *fakeRefreshServer) start(t *testing.T) string {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		f.calls++
 		if f.statusCode != 0 && f.statusCode != http.StatusOK {
 			w.WriteHeader(f.statusCode)

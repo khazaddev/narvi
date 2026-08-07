@@ -105,13 +105,13 @@ func TestChatGPTLink_StartAndPollHappyPath(t *testing.T) {
 func newFakeChatGPTAuthServer(t *testing.T, tokenPollStatus int) string {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/accounts/deviceauth/usercode", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/accounts/deviceauth/usercode", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"device_auth_id": "dev-123", "user_code": "WDJB-MJHT", "interval": "0",
 			"expires_at": "2099-01-01T00:00:00Z",
 		})
 	})
-	mux.HandleFunc("/api/accounts/deviceauth/token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/accounts/deviceauth/token", func(w http.ResponseWriter, _ *http.Request) {
 		if tokenPollStatus != http.StatusOK {
 			w.WriteHeader(tokenPollStatus)
 			return
@@ -120,7 +120,7 @@ func newFakeChatGPTAuthServer(t *testing.T, tokenPollStatus int) string {
 			"authorization_code": "auth-code-xyz", "code_verifier": "verifier-abc",
 		})
 	})
-	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, _ *http.Request) {
 		header := "eyJhbGciOiJub25lIn0"                                 // {"alg":"none"}, base64url, pre-encoded
 		payload := "eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LXh5ei03ODkifQ" // {"chatgpt_account_id":"acct-xyz-789"}, base64url
 		_ = json.NewEncoder(w).Encode(map[string]any{

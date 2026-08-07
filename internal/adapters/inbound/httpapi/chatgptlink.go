@@ -19,6 +19,7 @@
 // caller's own resource, so admin/maintainer/member (never viewer, per
 // that action's own matrix row) all pass the ownership check
 // unconditionally here; the action still correctly excludes viewers.
+
 package httpapi
 
 import (

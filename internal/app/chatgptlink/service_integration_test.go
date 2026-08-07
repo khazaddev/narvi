@@ -169,7 +169,7 @@ type fakeAuthServer struct {
 func (f *fakeAuthServer) start(t *testing.T) string {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/accounts/deviceauth/usercode", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/accounts/deviceauth/usercode", func(w http.ResponseWriter, _ *http.Request) {
 		f.usercodeCalls++
 		// interval is a STRING and expires_at is present -- the real,
 		// live-verified shape (chatgptoauth's own usercode canary), not
@@ -183,7 +183,7 @@ func (f *fakeAuthServer) start(t *testing.T) string {
 			"expires_at": time.Now().Add(15 * time.Minute).Format(time.RFC3339Nano),
 		})
 	})
-	mux.HandleFunc("/api/accounts/deviceauth/token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/accounts/deviceauth/token", func(w http.ResponseWriter, _ *http.Request) {
 		f.tokenPollCalls++
 		if f.tokenPollStatus != http.StatusOK {
 			w.WriteHeader(f.tokenPollStatus)
@@ -193,7 +193,7 @@ func (f *fakeAuthServer) start(t *testing.T) string {
 			"authorization_code": "auth-code-xyz", "code_verifier": "verifier-abc",
 		})
 	})
-	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, _ *http.Request) {
 		idToken := fakeJWT(`{"chatgpt_account_id":"acct-xyz-789"}`)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token": "access-1", "refresh_token": "refresh-1", "expires_in": 864000, "id_token": idToken,

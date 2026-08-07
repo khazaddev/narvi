@@ -2290,3 +2290,22 @@ func (t Timeouts) Validate() error {
 
 	return errors.Join(errs...)
 }
+
+// SecondsToDuration converts a raw whole-seconds count -- e.g. an OAuth
+// response's own interval/expires_in field (chatgptoauth), or a stored
+// *_seconds database column (chatgpt_link_attempts.interval_seconds) --
+// into a time.Duration. Step 59 ("models: Codex via ChatGPT-account OAuth")
+// introduces the first callers that need to turn a plain wire/storage
+// integer into a Duration outside this package; this helper exists so
+// those callers never spell out time.Second themselves, which
+// notimeliteral (§5.4/§11) forbids everywhere but here and _test.go files.
+func SecondsToDuration[T ~int | ~int32 | ~int64](seconds T) time.Duration {
+	return time.Duration(seconds) * time.Second
+}
+
+// DurationToSeconds is SecondsToDuration's own inverse, truncating toward
+// zero -- e.g. for storing a time.Duration back into a database column
+// typed as a raw integer seconds count.
+func DurationToSeconds(d time.Duration) int32 {
+	return int32(d / time.Second)
+}

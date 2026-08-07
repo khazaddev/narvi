@@ -14,6 +14,7 @@
 // route in this package renders a real authz.Authorize verdict rather
 // than relying on auth.Middleware alone, so this reuses that same
 // discipline instead of being the one exception.
+
 package httpapi
 
 import (
