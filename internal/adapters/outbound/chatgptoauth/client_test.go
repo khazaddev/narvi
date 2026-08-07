@@ -3,6 +3,7 @@ package chatgptoauth
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -304,4 +305,42 @@ func TestRefreshToken(t *testing.T) {
 			t.Error("TokenError.IsTerminal() = true for a 503 with no OAuth error body, want false")
 		}
 	})
+}
+
+// TestPostToken_RefusesToFollowRedirects is R1's own regression test
+// (adversarial review): POST /oauth/token's own request body carries a
+// live authorization code or refresh token (postToken is the shared body
+// of both ExchangeAuthorizationCode and RefreshToken). http.Client's own
+// DEFAULT redirect policy automatically follows a 307/308 and RE-POSTS
+// the identical method+body to wherever it points -- Go strips only
+// sensitive HEADERS crossing hosts on a redirect, never the body -- so a
+// malicious or compromised token endpoint could exfiltrate a live
+// credential via nothing more than a same-request redirect. Proves the
+// dedicated tokenEndpointClient (client.go's own New) never follows one:
+// the "attacker" server the primary server's own 307 points to must
+// receive NO request at all.
+func TestPostToken_RefusesToFollowRedirects(t *testing.T) {
+	t.Parallel()
+
+	var attackerHit bool
+	attacker := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		attackerHit = true
+		body, _ := io.ReadAll(r.Body)
+		t.Errorf("attacker server received a request it should never have seen (the redirect was followed): body=%s", body)
+	}))
+	defer attacker.Close()
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, attacker.URL+"/oauth/token", http.StatusTemporaryRedirect)
+	}))
+	defer primary.Close()
+
+	c := New(primary.Client(), primary.URL, testTimeout)
+	_, err := c.RefreshToken(t.Context(), "some-live-refresh-token")
+	if err == nil {
+		t.Error("RefreshToken() error = nil, want a non-nil error (a 307 is not a valid token response)")
+	}
+	if attackerHit {
+		t.Error("the attacker server was hit -- the redirect was followed, leaking the request body carrying the refresh token")
+	}
 }

@@ -65,9 +65,13 @@ var ErrDeviceAuthPending = errors.New("chatgptoauth: device authorization pendin
 // package doc.go).
 type Client struct {
 	httpClient *http.Client
-	baseURL    string
-	clientID   string
-	timeout    time.Duration
+	// tokenEndpointClient is postToken's own dedicated client (R1,
+	// adversarial review) -- see New's own doc comment for why this is
+	// never just httpClient.
+	tokenEndpointClient *http.Client
+	baseURL             string
+	clientID            string
+	timeout             time.Duration
 }
 
 // New builds a Client. httpClient is accepted (rather than constructed
@@ -80,6 +84,20 @@ type Client struct {
 // opencode's own doJSONTimeout precedent -- never http.Client.Timeout
 // itself, so a caller-supplied ctx deadline and this package's own bound
 // compose the same way opencode's adapter already does.
+//
+// R1 (adversarial review, cheap hardening): also builds tokenEndpointClient,
+// a SEPARATE *http.Client used only by postToken -- POST /oauth/token's own
+// request body carries either a raw authorization code or a live refresh
+// token (§29.2), the exact hop either one leaves the control plane.
+// http.Client's own DEFAULT redirect policy follows a 307/308 and RE-POSTS
+// the identical method+body to the redirect target (Go strips only
+// sensitive HEADERS crossing hosts on a redirect, never the body) -- so a
+// malicious or compromised token endpoint could exfiltrate a live
+// credential via nothing more than a same-request redirect. tokenEndpointClient
+// mirrors httpClient's own Transport/Timeout/Jar (so a caller-injected test
+// transport still applies to it) but its own CheckRedirect unconditionally
+// refuses to follow ANY redirect, returning the redirect response itself
+// (http.ErrUseLastResponse) rather than ever re-issuing the request.
 func New(httpClient *http.Client, baseURL string, timeout time.Duration) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
@@ -89,9 +107,17 @@ func New(httpClient *http.Client, baseURL string, timeout time.Duration) *Client
 	}
 	return &Client{
 		httpClient: httpClient,
-		baseURL:    strings.TrimSuffix(baseURL, "/"),
-		clientID:   ClientID,
-		timeout:    timeout,
+		tokenEndpointClient: &http.Client{
+			Transport: httpClient.Transport,
+			Timeout:   httpClient.Timeout,
+			Jar:       httpClient.Jar,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		baseURL:  strings.TrimSuffix(baseURL, "/"),
+		clientID: ClientID,
+		timeout:  timeout,
 	}
 }
 
@@ -223,6 +249,11 @@ func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (TokenRe
 // Standard RFC 6749 §4 form-encoding -- see package doc.go's own "verified
 // vs. inferred" section for why (not JSON, unlike the two custom
 // /api/accounts/deviceauth/* calls above).
+//
+// Uses tokenEndpointClient, NEVER httpClient -- R1's own fix (see New's
+// own doc comment): this request's body carries a live authorization
+// code or refresh token, so this call must never automatically follow a
+// redirect.
 func (c *Client) postToken(ctx context.Context, form url.Values) (TokenResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -234,7 +265,7 @@ func (c *Client) postToken(ctx context.Context, form url.Values) (TokenResult, e
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.tokenEndpointClient.Do(req)
 	if err != nil {
 		return TokenResult{}, fmt.Errorf("chatgptoauth: POST /oauth/token: %w", err)
 	}
