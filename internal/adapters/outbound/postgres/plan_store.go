@@ -109,3 +109,19 @@ func (s *PlanStore) SetSlackMessageRef(ctx context.Context, id pgtype.UUID, chan
 		SlackMessageTs: &messageTS,
 	})
 }
+
+// ListAwaitingApproval returns every plan still 'awaiting_approval',
+// system-wide, joined with each plan's own session for (created_by,
+// title) -- Step 60's own awaiting_approval row source (see
+// ListAwaitingApprovalPlans' own generated doc comment for the full
+// design).
+func (s *PlanStore) ListAwaitingApproval(ctx context.Context) ([]sqlcgen.ListAwaitingApprovalPlansRow, error) {
+	return s.q.ListAwaitingApprovalPlans(ctx)
+}
+
+// ListRecentlyDecided returns up to limit plans decided (approved or
+// rejected) at or after since -- Step 60's own decision-latency metric
+// input (see ListRecentlyDecidedPlans' own generated doc comment).
+func (s *PlanStore) ListRecentlyDecided(ctx context.Context, since pgtype.Timestamptz, limit int32) ([]sqlcgen.Plan, error) {
+	return s.q.ListRecentlyDecidedPlans(ctx, sqlcgen.ListRecentlyDecidedPlansParams{DecidedAt: since, Limit: limit})
+}

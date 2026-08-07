@@ -104,6 +104,16 @@ func (s *ArtifactStore) MarkUploadFailedIfPending(ctx context.Context, id, sessi
 	})
 }
 
+// GetPRArtifactByURL reports whether SOME session pushed and opened the
+// pull request at url (Step 60's own "authored by a platform session"
+// signal for ready_to_merge -- see GetPRArtifactByURL's own generated doc
+// comment). Returns pgx.ErrNoRows (via errors.Is) when no such artifact
+// exists -- callers must never treat that as an error, only as "not
+// platform-authored".
+func (s *ArtifactStore) GetPRArtifactByURL(ctx context.Context, url string) (sqlcgen.Artifact, error) {
+	return s.q.GetPRArtifactByURL(ctx, url)
+}
+
 // ListPendingUploadsOlderThan backs the abandonment sweep (§28.4): pending
 // upload rows created before cutoff, oldest first, capped at limit rows
 // per sweep pass.
