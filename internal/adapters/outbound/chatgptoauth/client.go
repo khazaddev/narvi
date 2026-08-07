@@ -244,10 +244,23 @@ func (c *Client) postToken(ctx context.Context, form url.Values) (TokenResult, e
 		return TokenResult{}, fmt.Errorf("chatgptoauth: POST /oauth/token: response carried no access_token/refresh_token")
 	}
 
-	accountID, err := decodeIDTokenAccountID(parsed.IDToken)
-	if err != nil {
-		return TokenResult{}, fmt.Errorf("chatgptoauth: POST /oauth/token: %w", err)
-	}
+	// AccountID extraction is BEST-EFFORT, not fatal to this call --
+	// deliberate, and load-bearing for RefreshToken specifically. §29.10
+	// risk 7: "the pinned binary preserves stored accountId across
+	// refreshes rather than re-deriving it each time; the CP refresher
+	// does the same" -- i.e. a refresh_token grant's own response is not
+	// guaranteed to carry a fresh, usable id_token the way the initial
+	// authorization_code exchange's response does (RFC 6749 leaves
+	// id_token-on-refresh provider-specific, and §29.2 never states
+	// OpenAI includes one). A parse failure here therefore does NOT fail
+	// the whole call -- AccountID is simply left "" and the CALLER
+	// decides what that means: ExchangeAuthorizationCode's own caller
+	// (internal/app/chatgptlink, a brand-new link) must treat "" as a
+	// real error (there is no "stored" accountId yet to fall back to);
+	// RefreshToken's own caller (internal/app/chatgptrefresh) must NEVER
+	// read this field at all, always preserving the accountId it already
+	// had stored from the original link, per §29.10 risk 7 verbatim.
+	accountID, _ := decodeIDTokenAccountID(parsed.IDToken)
 
 	return TokenResult{
 		AccessToken:  parsed.AccessToken,

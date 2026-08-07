@@ -169,6 +169,37 @@ func TestExchangeAuthorizationCode(t *testing.T) {
 func TestRefreshToken(t *testing.T) {
 	t.Parallel()
 
+	// §29.10 risk 7 / client.go's own postToken doc comment: a
+	// refresh_token grant's own response is NOT guaranteed to carry a
+	// usable id_token the way the initial authorization_code exchange's
+	// response does -- this must NOT fail the call; AccountID is simply
+	// left "" and internal/app/chatgptrefresh (the only real caller of
+	// RefreshToken) must never read it, always preserving the accountId
+	// it already had stored instead.
+	t.Run("no id_token at all still succeeds, with an empty AccountID", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(tokenResponse{
+				AccessToken: "new-access", RefreshToken: "new-refresh", ExpiresIn: 864000,
+				// IDToken deliberately omitted.
+			})
+		}))
+		defer srv.Close()
+
+		c := New(srv.Client(), srv.URL, testTimeout)
+		got, err := c.RefreshToken(t.Context(), "old-refresh")
+		if err != nil {
+			t.Fatalf("RefreshToken() error = %v, want nil", err)
+		}
+		if got.AccessToken != "new-access" || got.RefreshToken != "new-refresh" {
+			t.Errorf("RefreshToken() = %+v, want the rotated access/refresh tokens regardless of AccountID", got)
+		}
+		if got.AccountID != "" {
+			t.Errorf("RefreshToken().AccountID = %q, want empty (no id_token in this response)", got.AccountID)
+		}
+	})
+
 	t.Run("success rotates both tokens", func(t *testing.T) {
 		t.Parallel()
 

@@ -224,6 +224,17 @@ func Unlink(ctx context.Context, deps Deps, userID pgtype.UUID) error {
 // transaction, so a crash between steps can never leave a linked-but-
 // still-pending or pending-but-secretly-linked inconsistent state.
 func storeLinkedCredential(ctx context.Context, deps Deps, userID pgtype.UUID, tokens chatgptoauth.TokenResult) error {
+	// Unlike a refresh (internal/app/chatgptrefresh, which per §29.10 risk
+	// 7 must PRESERVE the already-stored accountId rather than trust
+	// whatever a refresh response's own id_token says, chatgptoauth.
+	// Client's own doc comment), a BRAND NEW link has no prior stored
+	// value to fall back on -- an empty AccountID here (chatgptoauth's own
+	// best-effort id_token parse failed) is a real, reportable error, not
+	// a silently-degraded link.
+	if tokens.AccountID == "" {
+		return fmt.Errorf("chatgptlink: exchange response carried no chatgpt_account_id claim")
+	}
+
 	blob, err := json.Marshal(oauthCredentialBlob{
 		Access:    tokens.AccessToken,
 		Refresh:   tokens.RefreshToken,
