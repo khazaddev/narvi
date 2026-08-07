@@ -833,6 +833,15 @@ func serve() error {
 		r.Get("/", httpapi.GetChatGPTLinkStatus(chatGPTLinkDeps))
 		r.Delete("/", httpapi.DeleteChatGPTLink(chatGPTLinkDeps))
 	})
+
+	// /api/models (Step 59, "models: Catalog", §8 item 8/§29/§25.2) --
+	// mounted exactly like /api/members above: gated behind auth.
+	// Middleware only, with the handler itself rendering the real
+	// authz.ActionViewAnalytics verdict (everyone including viewer).
+	router.Route("/api/models", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetModelCatalog())
+	})
 	router.Route("/api/audit-log", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.ListAuditLog(auditLogStore))

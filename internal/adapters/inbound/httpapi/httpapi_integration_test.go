@@ -392,6 +392,12 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/", httpapi.GetChatGPTLinkStatus(chatGPTLinkDeps))
 		r.Delete("/", httpapi.DeleteChatGPTLink(chatGPTLinkDeps))
 	})
+	// /api/models (Step 59, "models: Catalog", §8 item 8/§29/§25.2) --
+	// mounted exactly like cmd/control-plane/main.go's own wiring.
+	router.Route("/api/models", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetModelCatalog())
+	})
 	// /api/intent-templates, /api/intent-templates/preview (audit finding
 	// M5, completeness) -- mounted exactly like cmd/control-plane/main.go's
 	// own wiring (see classifiertemplates.go's own doc comment).
