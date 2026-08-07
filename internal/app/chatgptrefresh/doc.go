@@ -17,20 +17,31 @@
 // Builder.PumpOnce/imagebuild.Builder.PumpOnce, so tests can drive exactly
 // one tick deterministically.
 //
-// PumpOnce deliberately does NOT mirror outboxworker's own "claim in one
-// short transaction, then do the slow network call OUTSIDE any
-// transaction" shape. Here, claim + refresh + rewrite all happen inside
-// ONE transaction per batch, holding each claimed row's FOR UPDATE SKIP
-// LOCKED lock for the duration of its own refresh call. This is a
-// deliberate deviation, not an oversight: outboxworker's own shape exists
-// to avoid holding a DB connection open across a POTENTIALLY large,
-// slow, high-frequency batch of notifier calls (ticks every 5s); this
-// pump ticks every 6h, expects a low single-digit row count per tick in
-// realistic deployments, and — most importantly — the failure mode a
-// held lock prevents (two pump instances concurrently refreshing the SAME
-// row) is exactly the "concurrent jobs sharing one credential" case
-// OpenAI's own docs prohibit, with a real, costly consequence (a forced
-// user re-link) rather than outbox's own comparatively benign
-// worst case (a slightly-delayed duplicate notification). See PumpOnce's
-// own doc comment for the full shape.
+// PumpOnce deliberately does NOT mirror outboxworker's own "claim a WHOLE
+// BATCH in one short transaction, then do every slow network call OUTSIDE
+// any transaction" shape. Here, EACH row's own claim + refresh + rewrite
+// happen inside ONE transaction PER ROW, holding that one claimed row's
+// own FOR UPDATE SKIP LOCKED lock for the duration of its own refresh
+// call, committed immediately after -- see refreshClaimedRow's own doc
+// comment (pump.go) for the full mechanism, including the S1 finding
+// (adversarial review) that motivated committing per row instead of once
+// per whole batch: a shared batch-wide transaction meant an interruption
+// before its own single final commit could roll back every already-
+// rotated row in the batch at once, even though each one's own refresh
+// token had already been consumed upstream by then.
+//
+// Holding a lock across the live refresh call at all (rather than
+// releasing it immediately, outboxworker-style) is still the deliberate
+// deviation from outboxworker's own shape, not an oversight: outboxworker
+// releases its claim lock immediately because ITS OWN failure mode (two
+// builders concurrently delivering the SAME notification) is
+// comparatively benign (a slightly-delayed duplicate), so it can afford a
+// cheaper claim-then-release-then-act shape with a lease-based CAS
+// renewal instead. Here, the failure mode a held lock prevents (two pump
+// instances concurrently refreshing the SAME row) is exactly the
+// "concurrent jobs sharing one credential" case OpenAI's own docs
+// prohibit, with a real, costly consequence (a forced user re-link) --
+// worth the cost of holding one row's own lock for the duration of one
+// HTTP call, especially now that "one row's own lock" is the full extent
+// of it, not a whole batch's.
 package chatgptrefresh

@@ -77,20 +77,55 @@ DELETE FROM provider_credentials
 WHERE scope = 'user' AND scope_target_id = $1 AND provider = $2 AND kind = 'oauth';
 
 -- name: ListExpiringOAuthProviderCredentials :many
--- The refresh pump's own claim query (§29.5): every oauth row not already
--- marked oauth_needs_relink, expiring within margin of now -- ordered
--- soonest-first, FOR UPDATE SKIP LOCKED so a concurrent pump tick (this
--- pod's own next tick, racing in from another pod) claims a DISJOINT batch
--- rather than double-refreshing the same row (§29.5: "N concurrent
--- sandboxes... exactly the case OpenAI's docs prohibit" -- the identical
--- concurrency hazard applies to two pump instances racing each other, not
--- only to sandboxes). expiresBefore is the caller's own now()+margin;
--- limit mirrors outboxworker's own pumpBatchSize precedent.
+-- The refresh pump's own candidate SNAPSHOT query (§29.5): every
+-- openai/oauth row not already marked oauth_needs_relink, expiring within
+-- margin of now -- ordered soonest-first, FOR UPDATE SKIP LOCKED so a
+-- concurrent pump tick (this pod's own next tick, racing in from another
+-- pod) skips whatever a DIFFERENT tick already has locked rather than
+-- double-refreshing the same row (§29.5: "N concurrent sandboxes...
+-- exactly the case OpenAI's docs prohibit" -- the identical concurrency
+-- hazard applies to two pump instances racing each other, not only to
+-- sandboxes). expiresBefore is the caller's own now()+margin; limit
+-- mirrors outboxworker's own pumpBatchSize precedent.
+--
+-- R2 (adversarial review, cheap hardening): explicitly scoped to
+-- provider = 'openai', not just kind = 'oauth' -- the pump
+-- (internal/app/chatgptrefresh) posts every refresh token it claims to
+-- the hardcoded auth.openai.com token endpoint (chatgptoauth.Client's own
+-- DefaultBaseURL); kind='oauth' alone would silently also claim, decrypt,
+-- and post a FUTURE second OAuth provider's own refresh token to OpenAI.
+-- Zero exploitability today (chatgptlink, the only writer of oauth-kind
+-- rows, only ever creates provider='openai' ones) -- this closes the gap
+-- BEFORE a second OAuth provider could ever silently inherit it.
+--
+-- S1 fix (adversarial review): the caller (internal/app/chatgptrefresh)
+-- runs this inside its OWN short transaction, committed immediately --
+-- just a snapshot of candidate ids, not held open across any row's own
+-- refresh -- then re-claims and refreshes each candidate id ONE AT A TIME
+-- via GetExpiringOAuthProviderCredentialForUpdate below, each inside ITS
+-- OWN short transaction. See that package's own doc.go/PumpOnce for why.
 SELECT * FROM provider_credentials
-WHERE kind = 'oauth' AND oauth_needs_relink = false AND oauth_expires_at < $1
+WHERE provider = 'openai' AND kind = 'oauth' AND oauth_needs_relink = false AND oauth_expires_at < $1
 ORDER BY oauth_expires_at
 FOR UPDATE SKIP LOCKED
 LIMIT $2;
+
+-- name: GetExpiringOAuthProviderCredentialForUpdate :one
+-- The refresh pump's own PER-ROW re-claim (§29.5, S1 fix): re-verifies id
+-- (one of ListExpiringOAuthProviderCredentials' own earlier candidates)
+-- STILL matches the identical due criteria (openai/oauth, not already
+-- needs-relink, still expiring before expiresBefore -- R2's own provider
+-- restriction mirrored here too) AND locks it (FOR UPDATE SKIP LOCKED),
+-- immediately before actually refreshing it. Returns no rows
+-- (pgx.ErrNoRows) -- never an error -- when id is currently locked by a
+-- concurrent pump instance's own still-in-flight refresh, or when a
+-- SIBLING row's own earlier refresh already advanced id past due (or
+-- needs-relink) since the snapshot was taken; the caller treats either
+-- case identically: nothing to do for id right now, move on to the next
+-- candidate.
+SELECT * FROM provider_credentials
+WHERE id = $1 AND provider = 'openai' AND kind = 'oauth' AND oauth_needs_relink = false AND oauth_expires_at < $2
+FOR UPDATE SKIP LOCKED;
 
 -- name: UpdateOAuthProviderCredentialTokens :one
 -- The refresh pump's own success path: atomically rewrites value_encrypted

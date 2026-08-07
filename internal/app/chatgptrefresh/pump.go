@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/chatgptoauth"
@@ -22,7 +24,7 @@ import (
 // single-digit number of linked accounts due for refresh in any given 6h
 // window (§29.5's own 72h margin against a verified 10-day access
 // lifetime); if this pump ever needs to scale to thousands of linked
-// users, PumpOnce's own single-transaction-per-batch shape (see package
+// users, PumpOnce's own bounded-iterations-per-tick shape (see package
 // doc.go) would need revisiting first.
 const pumpBatchSize = 20
 
@@ -50,8 +52,8 @@ type Pump struct {
 }
 
 // NewPump builds a Pump backed by store/pool (pool is needed directly,
-// alongside store, for PumpOnce's own per-batch transaction -- mirrors
-// outboxworker.NewBuilder's identical reasoning), deviceFlow (the same
+// alongside store, for refreshClaimedRow's own per-row transaction --
+// mirrors outboxworker.NewBuilder's identical reasoning), deviceFlow (the same
 // adapter internal/app/chatgptlink uses for the link flow's own token
 // calls), tokenEncryptionKey (platform.Config.TokenEncryptionKey -- the
 // ONE key that ever decrypts/encrypts a provider_credentials row's own
@@ -89,39 +91,152 @@ func (p *Pump) Run(ctx context.Context) error {
 	}
 }
 
-// PumpOnce runs exactly one pump tick, entirely inside ONE transaction
-// (see package doc.go for why this deliberately differs from
-// outboxworker's own claim-then-release shape): claims up to
-// pumpBatchSize oauth-kind provider_credentials rows expiring within
-// platform.Timeouts.ChatGPTOAuthRefreshMargin of now (FOR UPDATE SKIP
-// LOCKED, so a concurrent tick -- this pod's next one, or another pod's
-// -- claims a disjoint batch), then refreshes each in turn, still holding
-// every claimed row's own lock, before committing the whole batch at
-// once. Exported (rather than only reachable through Run's own loop) so
-// tests can drive exactly one tick deterministically, matching
-// outboxworker.Builder.PumpOnce's own precedent.
+// PumpOnce runs exactly one pump tick, in two phases -- S1's own fix
+// (adversarial review) to the previous single-shared-transaction-per-
+// BATCH shape (see package doc.go for the full writeup of why that shape
+// was unsafe):
+//
+//  1. listCandidates takes a short, read-only SNAPSHOT of up to
+//     pumpBatchSize due row ids, committed immediately -- so this step's
+//     own FOR UPDATE SKIP LOCKED locks are released the instant it
+//     returns, well before any real refresh work begins.
+//  2. Each candidate id is then re-claimed and refreshed ONE AT A TIME,
+//     each entirely inside its OWN short transaction, committed
+//     immediately after (refreshClaimedRow below).
+//
+// Taking the snapshot up front (rather than re-listing fresh before each
+// per-row claim) is what keeps this tick's own retry behavior matching
+// the OLD design's: EACH distinct due row gets AT MOST ONE refresh
+// attempt this tick, even if that attempt fails transiently and the row
+// is therefore STILL due moments later -- re-listing fresh each time
+// would keep re-selecting that SAME still-due row every iteration
+// (nothing about it changed) instead of giving every OTHER due row in
+// the batch its own chance this tick.
+//
+// A failure in the snapshot step itself aborts the tick and returns the
+// error (Run logs it), mirroring outboxworker.Builder.PumpOnce's own
+// identical split between "a batch-level failure aborts the tick" and
+// "one row's own failure is isolated, logged, never propagated" -- once
+// the snapshot succeeds, every per-row claim/refresh failure below is
+// isolated by refreshClaimedRow. Exported (rather than only reachable
+// through Run's own loop) so tests can drive exactly one tick
+// deterministically, matching outboxworker.Builder.PumpOnce's own
+// precedent.
 func (p *Pump) PumpOnce(ctx context.Context) error {
+	candidates, err := p.listCandidates(ctx)
+	if err != nil {
+		return fmt.Errorf("chatgptrefresh: list expiring oauth credentials: %w", err)
+	}
+
+	for _, id := range candidates {
+		p.refreshClaimedRow(ctx, id)
+	}
+	return nil
+}
+
+// listCandidates takes PumpOnce's own up-front snapshot: up to
+// pumpBatchSize due oauth-kind row ids (soonest-expiring first), inside
+// ONE short transaction committed immediately after the read -- never
+// held open across any of the real per-row work refreshClaimedRow does.
+func (p *Pump) listCandidates(ctx context.Context) ([]pgtype.UUID, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("chatgptrefresh: begin batch transaction: %w", err)
+		return nil, fmt.Errorf("begin snapshot transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	rows, err := p.store.WithTx(tx).ListExpiringOAuth(ctx, time.Now().Add(p.timeouts.ChatGPTOAuthRefreshMargin), pumpBatchSize)
+	if err != nil {
+		return nil, fmt.Errorf("list expiring oauth credentials: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit snapshot transaction: %w", err)
+	}
+
+	ids := make([]pgtype.UUID, len(rows))
+	for i, row := range rows {
+		ids[i] = row.ID
+	}
+	return ids, nil
+}
+
+// refreshClaimedRow re-claims (GetExpiringOAuthForUpdate -- FOR UPDATE
+// SKIP LOCKED, re-verifying id still matches the due criteria
+// listCandidates already checked a moment ago) and refreshes id
+// specifically, entirely inside ONE short transaction committed before
+// this function returns. A no-op when id is no longer claimable -- either
+// pgx.ErrNoRows (locked by a concurrent pump instance's own still-in-
+// flight refresh, or a SIBLING id's own earlier refresh this same tick
+// already changed it, e.g. an unrelated write is never expected here but
+// is handled identically either way) or any other claim-step error (a
+// real infrastructure problem) -- logged, never propagated: one id's own
+// failure must never prevent the REST of this tick's candidates from
+// getting their own attempt.
+//
+// S1 fix (adversarial review): the previous shape ran the ENTIRE batch
+// (claim every due row, then refresh each in turn) inside one shared
+// transaction, committed once at the end. Two interacting problems with
+// that:
+//
+//  1. RefreshToken (called below, inside refreshOne) is a live upstream
+//     call that ROTATES the refresh token -- OpenAI consumes the old one
+//     the moment this call succeeds, whether or not this pump ever
+//     commits its own local rewrite. Any interruption before the shared
+//     batch's own final commit (SIGTERM/rolling deploy cancelling ctx,
+//     OOM, DB failover) rolled back EVERY already-rotated row in the
+//     batch at once -- the DB kept the old, now upstream-consumed
+//     tokens, and the next tick would replay them straight into a
+//     terminal refresh_token_reused/invalid_grant failure, forcing a
+//     needless re-link. Committing per row (this function) means an
+//     interruption can only ever strand the ONE row currently mid-flight,
+//     never a whole batch's worth.
+//  2. A failed DB statement puts THAT statement's own transaction into
+//     Postgres's aborted (25P02) state, failing every later statement on
+//     it, including the eventual commit. Under the old shared-transaction
+//     shape this could silently fail every OTHER row's own write for the
+//     rest of the batch while the loop kept calling RefreshToken (so kept
+//     consuming those rows' own tokens) regardless -- tokens consumed
+//     with no possible write. Since every row now gets its own,
+//     independent transaction, one row's DB-level failure can never
+//     reach a sibling row's transaction at all.
+//
+// This still preserves the FOR UPDATE SKIP LOCKED guarantee exactly:
+// only the ONE row actually being refreshed is ever locked, for exactly
+// the duration of its own refresh call -- mirrors outboxworker's own
+// claim-then-act shape (this package's own doc.go cites it), adapted to
+// keep the claim and the act in the SAME transaction (unlike outboxworker)
+// specifically so the lock stays held across the live upstream call --
+// still the deliberate deviation doc.go documents, just correctly scoped
+// to one row instead of a whole batch.
+func (p *Pump) refreshClaimedRow(ctx context.Context, id pgtype.UUID) {
+	logger := platform.Logger(ctx).With("provider_credential_id", id.String())
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		logger.Error("chatgptrefresh: begin per-row transaction failed", "error", err)
+		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	txStore := p.store.WithTx(tx)
 
-	expiring, err := txStore.ListExpiringOAuth(ctx, time.Now().Add(p.timeouts.ChatGPTOAuthRefreshMargin), pumpBatchSize)
+	row, err := txStore.GetExpiringOAuthForUpdate(ctx, id, time.Now().Add(p.timeouts.ChatGPTOAuthRefreshMargin))
 	if err != nil {
-		return fmt.Errorf("chatgptrefresh: list expiring oauth credentials: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// No longer claimable right now -- not an error, see this
+			// function's own doc comment.
+			return
+		}
+		logger.Error("chatgptrefresh: re-claim credential failed", "error", err)
+		return
 	}
 
-	for _, row := range expiring {
-		p.refreshOne(ctx, txStore, row)
-	}
+	p.refreshOne(ctx, txStore, row)
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("chatgptrefresh: commit batch transaction: %w", err)
+		logger.Error("chatgptrefresh: commit per-row transaction failed", "error", err)
 	}
-	return nil
 }
 
 // refreshOne refreshes ONE already-claimed row -- decrypt, call POST
@@ -129,9 +244,10 @@ func (p *Pump) PumpOnce(ctx context.Context) error {
 // (success) or mark it oauth_needs_relink (a terminal failure, §29.5) or
 // leave it untouched (a transient failure, retried automatically next
 // pump cycle since nothing about the row changed). Every outcome is
-// logged; none is ever returned as an error to PumpOnce -- a single
-// row's own failure must never abort or roll back the whole batch's
-// transaction (a sibling row's own successful refresh must still commit).
+// logged; none is ever returned as an error to refreshClaimedRow -- txStore
+// here is always scoped to THIS row's own short transaction (S1 fix, see
+// refreshClaimedRow's own doc comment), so there is no longer a wider
+// batch transaction any write here could abort or roll back.
 func (p *Pump) refreshOne(ctx context.Context, txStore *postgres.ProviderCredentialStore, row sqlcgen.ProviderCredential) {
 	logger := platform.Logger(ctx).With("provider_credential_id", row.ID.String())
 

@@ -133,17 +133,34 @@ func (s *ProviderCredentialStore) DeleteOAuthForUser(ctx context.Context, userID
 	})
 }
 
-// ListExpiringOAuth claims (FOR UPDATE SKIP LOCKED, see the query's own
-// doc comment) up to limit oauth-kind rows expiring before expiresBefore
-// and not already marked oauth_needs_relink -- the refresh pump's
-// (internal/app/chatgptrefresh, §29.5) own batch claim, meant to be called
-// inside the SAME transaction the pump holds open for the whole batch (see
-// that package's own doc comment for why, unlike outboxworker's own
-// claim-then-release shape).
+// ListExpiringOAuth takes a snapshot (FOR UPDATE SKIP LOCKED, see the
+// query's own doc comment) of up to limit oauth-kind rows expiring before
+// expiresBefore and not already marked oauth_needs_relink -- the refresh
+// pump's (internal/app/chatgptrefresh, §29.5) own up-front candidate list
+// for one tick, called inside its OWN short transaction that commits
+// immediately (S1 fix: see that package's own doc comment/PumpOnce for
+// why this is now just a snapshot, not held open across any row's own
+// refresh) -- the pump then re-claims and refreshes each candidate one at
+// a time via GetExpiringOAuthForUpdate below.
 func (s *ProviderCredentialStore) ListExpiringOAuth(ctx context.Context, expiresBefore time.Time, limit int32) ([]sqlcgen.ProviderCredential, error) {
 	return s.q.ListExpiringOAuthProviderCredentials(ctx, sqlcgen.ListExpiringOAuthProviderCredentialsParams{
 		OauthExpiresAt: pgtype.Timestamptz{Time: expiresBefore, Valid: true},
 		Limit:          limit,
+	})
+}
+
+// GetExpiringOAuthForUpdate re-claims (FOR UPDATE SKIP LOCKED) exactly one
+// row by id, re-verifying it still matches ListExpiringOAuth's own due
+// criteria -- the refresh pump's own per-row re-claim (S1 fix), called
+// inside the SAME short, per-ROW transaction the pump holds open for
+// exactly that one row's own refresh+rewrite. pgx.ErrNoRows (unwrapped)
+// means id is no longer claimable right now (locked by a concurrent pump
+// instance, or no longer due/already needs-relink) -- never a real error;
+// the caller simply has nothing to do for id.
+func (s *ProviderCredentialStore) GetExpiringOAuthForUpdate(ctx context.Context, id pgtype.UUID, expiresBefore time.Time) (sqlcgen.ProviderCredential, error) {
+	return s.q.GetExpiringOAuthProviderCredentialForUpdate(ctx, sqlcgen.GetExpiringOAuthProviderCredentialForUpdateParams{
+		ID:             id,
+		OauthExpiresAt: pgtype.Timestamptz{Time: expiresBefore, Valid: true},
 	})
 }
 
