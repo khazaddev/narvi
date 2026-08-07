@@ -60,13 +60,46 @@ func mustParseSnapshot() []Provider {
 }
 
 // Catalog returns every provider/model this Step's own embedded snapshot
-// carries (§29's own "Catalog" deliverable) -- a defensive copy of the
-// top-level slice (callers may freely append to what they get back;
-// the package's own parsed backing array must never be mutated out from
-// under every other caller), mirroring providercredential.EnvVarNames'
-// own identical "defensive copy" precedent.
+// carries (§29's own "Catalog" deliverable) -- a DEEP defensive copy:
+// every caller gets its own independent Providers slice, own independent
+// per-provider Models slice, own independent per-model Variants slice, and
+// own independent Cost.CacheRead/CacheWrite pointers, so mutating anything
+// any caller gets back -- at any depth -- can never corrupt the package's
+// own parsed backing data or any OTHER caller's own already-returned copy.
+//
+// M2 (adversarial review): an earlier version of this copied only the
+// top-level []Provider slice, the same shallow shape
+// providercredential.EnvVarNames uses for its own defensive copy -- correct
+// THERE because EnvVarNames returns a flat []string with no nested
+// reference types to alias, but NOT here: Provider/Model both nest slices
+// (Models, Variants) and Cost nests two pointers, none of which a
+// top-level-only copy protects. Verified experimentally: mutating
+// first[0].Models[0].ID under that old shape corrupted the process-global
+// parsed for every later caller.
 func Catalog() []Provider {
 	out := make([]Provider, len(parsed))
-	copy(out, parsed)
+	for i, p := range parsed {
+		out[i] = Provider{ID: p.ID, Models: make([]Model, len(p.Models))}
+		for j, m := range p.Models {
+			out[i].Models[j] = copyModel(m)
+		}
+	}
 	return out
+}
+
+// copyModel deep-copies m's own nested reference fields (Variants, and
+// Cost's two optional pointers) -- see Catalog's own doc comment for why
+// a plain `cp := m` alone is not enough.
+func copyModel(m Model) Model {
+	cp := m
+	cp.Variants = append([]string(nil), m.Variants...)
+	if m.Cost.CacheRead != nil {
+		v := *m.Cost.CacheRead
+		cp.Cost.CacheRead = &v
+	}
+	if m.Cost.CacheWrite != nil {
+		v := *m.Cost.CacheWrite
+		cp.Cost.CacheWrite = &v
+	}
+	return cp
 }

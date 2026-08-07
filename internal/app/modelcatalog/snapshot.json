@@ -6,10 +6,10 @@
         {
           "contextWindow": 128000,
           "cost": {
-            "cacheRead": 0,
+            "cacheRead": 0.175,
             "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "input": 1.75,
+            "output": 14
           },
           "id": "gpt-5.3-codex-spark",
           "name": "GPT-5.3 Codex Spark",
@@ -26,10 +26,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
+            "cacheRead": 0.25,
             "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "input": 2.5,
+            "output": 15
           },
           "id": "gpt-5.4",
           "name": "GPT-5.4",
@@ -46,10 +46,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
+            "cacheRead": 0.5,
             "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "input": 5,
+            "output": 30
           },
           "id": "gpt-5.4-fast",
           "name": "GPT-5.4 Fast",
@@ -66,10 +66,10 @@
         {
           "contextWindow": 400000,
           "cost": {
-            "cacheRead": 0,
+            "cacheRead": 0.075,
             "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "input": 0.75,
+            "output": 4.5
           },
           "id": "gpt-5.4-mini",
           "name": "GPT-5.4 mini",
@@ -86,10 +86,10 @@
         {
           "contextWindow": 400000,
           "cost": {
-            "cacheRead": 0,
+            "cacheRead": 0.15,
             "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "input": 1.5,
+            "output": 9
           },
           "id": "gpt-5.4-mini-fast",
           "name": "GPT-5.4 mini Fast",
@@ -106,10 +106,10 @@
         {
           "contextWindow": 400000,
           "cost": {
-            "cacheRead": 0,
+            "cacheRead": 0.5,
             "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "input": 5,
+            "output": 30
           },
           "id": "gpt-5.5",
           "name": "GPT-5.5",
@@ -126,10 +126,10 @@
         {
           "contextWindow": 400000,
           "cost": {
-            "cacheRead": 0,
+            "cacheRead": 1.25,
             "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "input": 12.5,
+            "output": 75
           },
           "id": "gpt-5.5-fast",
           "name": "GPT-5.5 Fast",
@@ -146,10 +146,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25,
+            "input": 5,
+            "output": 30
           },
           "id": "gpt-5.6",
           "name": "GPT-5.6",
@@ -166,10 +166,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 1,
+            "cacheWrite": 12.5,
+            "input": 10,
+            "output": 60
           },
           "id": "gpt-5.6-fast",
           "name": "GPT-5.6 Fast",
@@ -186,10 +186,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.02,
+            "cacheWrite": 0.25,
+            "input": 0.2,
+            "output": 1.2
           },
           "id": "gpt-5.6-luna",
           "name": "GPT-5.6 Luna",
@@ -206,10 +206,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.04,
+            "cacheWrite": 0.5,
+            "input": 0.4,
+            "output": 2.4
           },
           "id": "gpt-5.6-luna-fast",
           "name": "GPT-5.6 Luna Fast",
@@ -226,10 +226,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.02,
+            "cacheWrite": 0.25,
+            "input": 0.2,
+            "output": 1.2
           },
           "id": "gpt-5.6-luna-pro",
           "name": "GPT-5.6 Luna Pro",
@@ -246,10 +246,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25,
+            "input": 5,
+            "output": 30
           },
           "id": "gpt-5.6-pro",
           "name": "GPT-5.6 Pro",
@@ -266,10 +266,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25,
+            "input": 5,
+            "output": 30
           },
           "id": "gpt-5.6-sol",
           "name": "GPT-5.6 Sol",
@@ -286,10 +286,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 1,
+            "cacheWrite": 12.5,
+            "input": 10,
+            "output": 60
           },
           "id": "gpt-5.6-sol-fast",
           "name": "GPT-5.6 Sol Fast",
@@ -306,10 +306,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25,
+            "input": 5,
+            "output": 30
           },
           "id": "gpt-5.6-sol-pro",
           "name": "GPT-5.6 Sol Pro",
@@ -326,10 +326,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.2,
+            "cacheWrite": 2.5,
+            "input": 2,
+            "output": 12
           },
           "id": "gpt-5.6-terra",
           "name": "GPT-5.6 Terra",
@@ -346,10 +346,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.4,
+            "cacheWrite": 5,
+            "input": 4,
+            "output": 24
           },
           "id": "gpt-5.6-terra-fast",
           "name": "GPT-5.6 Terra Fast",
@@ -366,10 +366,10 @@
         {
           "contextWindow": 1050000,
           "cost": {
-            "cacheRead": 0,
-            "cacheWrite": 0,
-            "input": 0,
-            "output": 0
+            "cacheRead": 0.2,
+            "cacheWrite": 2.5,
+            "input": 2,
+            "output": 12
           },
           "id": "gpt-5.6-terra-pro",
           "name": "GPT-5.6 Terra Pro",
