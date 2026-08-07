@@ -31,17 +31,20 @@
 //  4. sandbox.IsDeadSandboxStatus(sandboxRow.Status) -> 410.
 //  5. X-Sandbox-Gen missing/malformed/mismatched -> 403.
 //  6. The presented token fails verifySandboxBearerToken -> 401.
-//  7. Otherwise -> 200 with a plain, provider-keyed map of PLAINTEXT
-//     values, e.g. {"anthropic": "sk-..."} -- resolved via
-//     internal/domain/providercredential.Resolve over every candidate row
-//     (across all 3 scopes) that could apply to this session's own
-//     repo(s)/environment, decrypted server-side (the ONLY layer that
-//     ever holds cfg.TokenEncryptionKey). A provider with nothing
-//     configured at any scope is simply ABSENT from the map -- never a
-//     null/empty-string entry, and never itself an error: the overwhelming
-//     common case is zero rows configured for any given session, and this
-//     endpoint degrades to an empty {} exactly as gracefully as a fully-
-//     configured one.
+//  7. Otherwise -> 200 with a provider-keyed map of credentialAuthValue
+//     (Step 59, §29.6: {"type":"api","key":"sk-..."} or {"type":"oauth",
+//     "access":...,"expires":...,"accountId":...} -- see that type's own
+//     doc comment for the full shape, and for why it structurally cannot
+//     carry a refresh token) -- resolved via internal/domain/
+//     providercredential.Resolve over every candidate row (across all 4
+//     scopes, including Step 59's own ScopeUser) that could apply to this
+//     session's own repo(s)/environment/creator, decrypted server-side
+//     (the ONLY layer that ever holds cfg.TokenEncryptionKey). A provider
+//     with nothing configured at any scope is simply ABSENT from the map
+//     -- never a null/empty-string entry, and never itself an error: the
+//     overwhelming common case is zero rows configured for any given
+//     session, and this endpoint degrades to an empty {} exactly as
+//     gracefully as a fully-configured one.
 //
 // sandbox-agent (internal/sandboxagent/credentials' own CPClient.
 // FetchProviderCredentials, and ultimately cmd/sandbox-agent/main.go's own
@@ -86,13 +89,61 @@ import (
 
 // providerCredentialsResponse is this Step's own invented, documented
 // response shape: a plain map from provider name ("google"/"anthropic"/
-// "openai") to its resolved PLAINTEXT credential value. Mirrors
-// scmCredentialsResponse's own "small, explicit, invented wire shape"
-// precedent (scmcredentials.go) -- internal/sandboxagent/credentials'
-// own client-side type must match this exactly, the same reconciliation
-// scmcredentials.go's own top doc comment describes for the SCM case.
+// "openai") to its resolved credential value. Mirrors scmCredentialsResponse
+// 's own "small, explicit, invented wire shape" precedent (scmcredentials.go)
+// -- internal/sandboxagent/credentials' own client-side type must match
+// this exactly, the same reconciliation scmcredentials.go's own top doc
+// comment describes for the SCM case.
+//
+// Step 59 (§29.6) evolves the per-provider VALUE from a bare plaintext
+// string into credentialAuthValue, a discriminated union -- see that
+// type's own doc comment for the exact shape and, critically, for why it
+// has no "refresh" field at all.
 type providerCredentialsResponse struct {
-	Credentials map[string]string `json:"credentials"`
+	Credentials map[string]credentialAuthValue `json:"credentials"`
+}
+
+// credentialAuthValue mirrors OpenCode's own two real Auth-union member
+// shapes verbatim (§29.1/§29.6, verified live against the pinned OpenCode
+// 1.17.15 binary's own /doc OpenAPI schema during this Step):
+// {"type":"api","key":...} for a static credential (today's behavior,
+// re-labeled, never changed shape) or {"type":"oauth","access":...,
+// "expires":...,"accountId":...} for a resolved user-scope row.
+//
+// Deliberately has NO "refresh" field in EITHER variant -- not merely
+// "sent empty", genuinely ABSENT from the Go type, so there is no field
+// for a bug anywhere in this response-building code to accidentally
+// populate. §29.5's own rule ("the refresh token NEVER leaves the control
+// plane") is enforced structurally at exactly this wire boundary: the
+// oauth-kind branch below decrypts and parses the stored {access, refresh,
+// expires_ms, account_id} blob (oauthCredentialBlob) but never copies its
+// Refresh field into this type. sandbox-agent's own SetOAuthAuth call
+// (internal/adapters/outbound/opencode, called from cmd/sandbox-agent/
+// main.go) is what later builds OpenCode's own PUT /auth/openai body with
+// a HARDCODED refresh:"" literal -- sourced from nowhere, least of all
+// this response.
+type credentialAuthValue struct {
+	Type      string  `json:"type"`
+	Key       *string `json:"key,omitempty"`
+	Access    *string `json:"access,omitempty"`
+	Expires   *int64  `json:"expires,omitempty"`
+	AccountID *string `json:"accountId,omitempty"`
+}
+
+// oauthCredentialBlob is the JSON document encrypted into an oauth-kind
+// provider_credentials row's own value_encrypted column (§29.4: "one
+// blob, rewritten atomically on every refresh, never four separately-
+// encrypted columns... {access, refresh, expires_ms, account_id}").
+// Decrypted ONLY inside this handler (the one layer that ever holds
+// tokenEncryptionKey, same as the api-kind path below) -- Refresh is
+// parsed (required to unmarshal the blob at all) and then DELIBERATELY
+// NEVER READ again past this struct -- see credentialAuthValue's own doc
+// comment for the full enforcement chain.
+type oauthCredentialBlob struct {
+	Access    string `json:"access"`
+	Refresh   string `json:"refresh"`
+	ExpiresMs int64  `json:"expires_ms"`
+	AccountID string `json:"account_id"`
 }
 
 // sessionRepoFullNames unmarshals rawRepos (sessions.repos' own raw JSONB
@@ -202,7 +253,18 @@ func ProviderCredentialsDelivery(
 			environmentID = &id
 		}
 
-		rows, err := providerCredentials.ListForResolution(ctx, repoFullNames, environmentID)
+		// Step 59 (§29.4): "resolution keys on sessions.created_by" --
+		// nil for a bot/automation session (CreatedBy invalid, migration
+		// 000004's own comment), which simply contributes no user-scope
+		// candidate below, falling through to the static-key scopes
+		// exactly as before this Step existed.
+		var userID *string
+		if sessionRow.CreatedBy.Valid {
+			id := sessionRow.CreatedBy.String()
+			userID = &id
+		}
+
+		rows, err := providerCredentials.ListForResolution(ctx, repoFullNames, environmentID, userID)
 		if err != nil {
 			logger.Error("httpapi: provider-credentials: list candidates failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
@@ -256,7 +318,7 @@ func ProviderCredentialsDelivery(
 			byProvider[provider] = candidates
 		}
 
-		credentials := make(map[string]string, len(byProvider))
+		credentials := make(map[string]credentialAuthValue, len(byProvider))
 		for provider, candidates := range byProvider {
 			winner, ok := providercredential.Resolve(candidates)
 			if !ok {
@@ -272,7 +334,35 @@ func ProviderCredentialsDelivery(
 					"error", err, "provider", string(provider), "scope", string(winner.Scope))
 				continue
 			}
-			credentials[string(provider)] = string(plaintext)
+
+			// Step 59 (§29.6): split by kind -- api_key re-labels today's
+			// plaintext-string behavior into the "api" Auth-union member;
+			// oauth parses the decrypted {access, refresh, expires_ms,
+			// account_id} blob and builds the "oauth" member WITHOUT ever
+			// reading Refresh past oauthCredentialBlob itself (see
+			// credentialAuthValue's own doc comment).
+			switch winner.Kind {
+			case sqlcgen.ProviderCredentialKindOauth:
+				var blob oauthCredentialBlob
+				if err := json.Unmarshal(plaintext, &blob); err != nil {
+					// Never logs plaintext -- matches the decrypt-failure
+					// branch immediately above. Logged and SKIPPED, not a
+					// 500 for the whole request.
+					logger.Error("httpapi: provider-credentials: parse oauth blob failed",
+						"error", err, "provider", string(provider))
+					continue
+				}
+				expires := blob.ExpiresMs
+				credentials[string(provider)] = credentialAuthValue{
+					Type:      "oauth",
+					Access:    &blob.Access,
+					Expires:   &expires,
+					AccountID: &blob.AccountID,
+				}
+			default:
+				value := string(plaintext)
+				credentials[string(provider)] = credentialAuthValue{Type: "api", Key: &value}
+			}
 		}
 
 		writeJSON(w, http.StatusOK, providerCredentialsResponse{Credentials: credentials})

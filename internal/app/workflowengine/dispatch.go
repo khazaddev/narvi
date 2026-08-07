@@ -57,6 +57,10 @@ type Resolution struct {
 	// proof: nil stays nil, inheriting turns.model_id/sessions.
 	// build_model_id exactly as today, no override).
 	ModelID *string
+	// Effort mirrors ModelID exactly, one field over (Step 59, §29.8's
+	// "workflow engine echo"): the resolved step's own Effort when
+	// non-nil, otherwise the caller's own effort UNCHANGED.
+	Effort *string
 
 	// Tracked reports whether CreateStepRun just created a NEW
 	// workflow_step_runs attempt for this turn -- AttachTurn is a no-op
@@ -71,10 +75,10 @@ type Resolution struct {
 }
 
 // passthrough is Resolution's own safe, always-available fallback: the
-// caller's prompt/modelID entirely unchanged, untracked -- exactly what
-// createTurnLocked did before this Step existed.
-func passthrough(callerPrompt string, callerModelID *string) Resolution {
-	return Resolution{Prompt: callerPrompt, ModelID: callerModelID}
+// caller's prompt/modelID/effort entirely unchanged, untracked -- exactly
+// what createTurnLocked did before this Step existed.
+func passthrough(callerPrompt string, callerModelID, callerEffort *string) Resolution {
+	return Resolution{Prompt: callerPrompt, ModelID: callerModelID, Effort: callerEffort}
 }
 
 // ResolveStepForNewTurn is createTurnLocked's own new first step (§25.6):
@@ -115,25 +119,25 @@ func passthrough(callerPrompt string, callerModelID *string) Resolution {
 // A defensive fourth case (a running run with NO live step-run at all --
 // should be unreachable given OnTurnCompleted's own invariants,
 // completion.go) also degrades to passthrough, logged.
-func ResolveStepForNewTurn(ctx context.Context, workflows *postgres.WorkflowStore, sessionRow sqlcgen.Session, callerPrompt string, callerModelID *string) Resolution {
+func ResolveStepForNewTurn(ctx context.Context, workflows *postgres.WorkflowStore, sessionRow sqlcgen.Session, callerPrompt string, callerModelID, callerEffort *string) Resolution {
 	logger := platform.Logger(ctx)
 
 	runRow, err := workflows.GetRunningRunForSession(ctx, sessionRow.ID)
 	switch {
 	case err == nil:
-		return resolveWithinRunningRun(ctx, workflows, runRow, callerPrompt, callerModelID)
+		return resolveWithinRunningRun(ctx, workflows, runRow, callerPrompt, callerModelID, callerEffort)
 	case errors.Is(err, pgx.ErrNoRows):
-		return startNewRun(ctx, workflows, sessionRow, callerPrompt, callerModelID)
+		return startNewRun(ctx, workflows, sessionRow, callerPrompt, callerModelID, callerEffort)
 	default:
 		logger.Warn("workflowengine: get running run for session failed; passing turn through unchanged",
 			"session_id", sessionRow.ID.String(), "error", err)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 }
 
 // startNewRun implements case 1 of ResolveStepForNewTurn's own doc
 // comment above.
-func startNewRun(ctx context.Context, workflows *postgres.WorkflowStore, sessionRow sqlcgen.Session, callerPrompt string, callerModelID *string) Resolution {
+func startNewRun(ctx context.Context, workflows *postgres.WorkflowStore, sessionRow sqlcgen.Session, callerPrompt string, callerModelID, callerEffort *string) Resolution {
 	logger := platform.Logger(ctx)
 
 	lane := resolveLane(sessionRow.IntentDecision)
@@ -143,49 +147,49 @@ func startNewRun(ctx context.Context, workflows *postgres.WorkflowStore, session
 	if err != nil {
 		logger.Warn("workflowengine: resolve binding failed; passing turn through unchanged",
 			"session_id", sessionRow.ID.String(), "lane", string(lane), "error", err)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
 	def, err := LoadDefinition(ctx, workflows, binding.WorkflowDefinitionID)
 	if err != nil {
 		logger.Warn("workflowengine: load definition failed; passing turn through unchanged",
 			"session_id", sessionRow.ID.String(), "definition_id", binding.WorkflowDefinitionID.String(), "error", err)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 	if verr := workflow.ValidateDefinition(def); verr != nil {
 		logger.Error("workflowengine: resolved definition fails validation; passing turn through unchanged",
 			"definition_id", binding.WorkflowDefinitionID.String(), "error", verr)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
 	first := firstStepByOrder(def)
 	firstID, err := parseWorkflowID(first.ID)
 	if err != nil {
 		logger.Error("workflowengine: parse first step id failed; passing turn through unchanged", "error", err)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
 	run, err := workflows.CreateRun(ctx, sessionRow.ID, string(lane), binding.WorkflowDefinitionID, int32(def.Version))
 	if err != nil {
 		logger.Error("workflowengine: create workflow run failed; passing turn through unchanged",
 			"session_id", sessionRow.ID.String(), "error", err)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
 	stepRun, err := workflows.CreateStepRun(ctx, run.ID, firstID)
 	if err != nil {
 		logger.Error("workflowengine: create step run failed; passing turn through unchanged",
 			"run_id", run.ID.String(), "error", err)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
-	return applyStep(ctx, first, callerPrompt, callerModelID, true, stepRun.ID)
+	return applyStep(ctx, first, callerPrompt, callerModelID, callerEffort, true, stepRun.ID)
 }
 
 // resolveWithinRunningRun implements cases 2/3 of ResolveStepForNewTurn's
 // own doc comment above -- and its defensive fourth case (no live
 // step-run at all).
-func resolveWithinRunningRun(ctx context.Context, workflows *postgres.WorkflowStore, runRow sqlcgen.WorkflowRun, callerPrompt string, callerModelID *string) Resolution {
+func resolveWithinRunningRun(ctx context.Context, workflows *postgres.WorkflowStore, runRow sqlcgen.WorkflowRun, callerPrompt string, callerModelID, callerEffort *string) Resolution {
 	logger := platform.Logger(ctx)
 
 	liveStepRun, err := workflows.GetLiveStepRunForRun(ctx, runRow.ID)
@@ -195,36 +199,37 @@ func resolveWithinRunningRun(ctx context.Context, workflows *postgres.WorkflowSt
 		// should be unreachable in practice.
 		logger.Warn("workflowengine: running run has no live step-run; passing turn through unchanged",
 			"run_id", runRow.ID.String(), "error", err)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
 	def, err := LoadDefinition(ctx, workflows, runRow.WorkflowDefinitionID)
 	if err != nil {
 		logger.Warn("workflowengine: load definition for running run failed; passing turn through unchanged",
 			"run_id", runRow.ID.String(), "error", err)
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
 	step, ok := stepByID(def, workflow.ID(liveStepRun.StepDefinitionID.String()))
 	if !ok {
 		logger.Warn("workflowengine: live step-run names a step not in its own definition; passing turn through unchanged",
 			"run_id", runRow.ID.String(), "step_definition_id", liveStepRun.StepDefinitionID.String())
-		return passthrough(callerPrompt, callerModelID)
+		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
 	// Whether awaiting_decision (a HITL gate, e.g. the plan lane's own
 	// revise loop) or running (its own turn still in flight, only
 	// reachable via AlwaysQueue) -- either way this deliberately creates no
 	// new attempt (see this function's own doc comment above): resolve the
-	// SAME step's template/model, untracked.
-	return applyStep(ctx, step, callerPrompt, callerModelID, false, pgtype.UUID{})
+	// SAME step's template/model/effort, untracked.
+	return applyStep(ctx, step, callerPrompt, callerModelID, callerEffort, false, pgtype.UUID{})
 }
 
 // applyStep renders step's own PromptTemplate against callerPrompt and
-// resolves its own ModelID -- the one place both §25.6's passthrough-
-// template and §25.7's per-step-model-override logic actually run, shared
-// by every ResolveStepForNewTurn branch above.
-func applyStep(ctx context.Context, step workflow.StepDefinition, callerPrompt string, callerModelID *string, tracked bool, stepRunID pgtype.UUID) Resolution {
+// resolves its own ModelID/Effort -- the one place both §25.6's
+// passthrough-template and §25.7's per-step-model-override logic (and its
+// Step 59 effort twin, §29.8) actually run, shared by every
+// ResolveStepForNewTurn branch above.
+func applyStep(ctx context.Context, step workflow.StepDefinition, callerPrompt string, callerModelID, callerEffort *string, tracked bool, stepRunID pgtype.UUID) Resolution {
 	rendered, err := intent.AssembleTemplate(step.PromptTemplate, map[string]string{"prompt": callerPrompt})
 	if err != nil {
 		// A custom (non-built-in) step's own malformed PromptTemplate --
@@ -241,7 +246,12 @@ func applyStep(ctx context.Context, step workflow.StepDefinition, callerPrompt s
 		modelID = step.ModelID
 	}
 
-	return Resolution{Prompt: rendered, ModelID: modelID, Tracked: tracked, StepRunID: stepRunID}
+	effort := callerEffort
+	if step.Effort != nil {
+		effort = step.Effort
+	}
+
+	return Resolution{Prompt: rendered, ModelID: modelID, Effort: effort, Tracked: tracked, StepRunID: stepRunID}
 }
 
 // AttachTurn backfills res's own newly created step-run with turnID's real

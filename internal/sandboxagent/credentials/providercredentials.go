@@ -46,14 +46,32 @@ const maxProviderCredentialsResponseSize = 1 << 20 // 1 MiB
 // identical "narrow interface alongside the concrete struct" shape
 // (cpclient.go).
 type ProviderCredentialsFetcher interface {
-	FetchProviderCredentials(ctx context.Context, sessionID, sandboxToken string, gen int) (map[string]string, error)
+	FetchProviderCredentials(ctx context.Context, sessionID, sandboxToken string, gen int) (map[string]AuthValue, error)
+}
+
+// AuthValue mirrors internal/adapters/inbound/httpapi's own (unexported)
+// credentialAuthValue byte-for-byte (Step 59, §29.6) -- independently
+// declared here, reconciled by hand, exactly like providerCredentials
+// Response's own pre-Step-59 doc comment already established for this
+// sibling endpoint (scmcredentials.go's identical precedent). Has
+// structurally NO field for a refresh token, in either variant -- see
+// that same doc comment's full chain for why this is deliberate, not an
+// oversight: the CP delivery response this type decodes never carries
+// one either.
+type AuthValue struct {
+	Type      string  `json:"type"`
+	Key       *string `json:"key,omitempty"`
+	Access    *string `json:"access,omitempty"`
+	Expires   *int64  `json:"expires,omitempty"`
+	AccountID *string `json:"accountId,omitempty"`
 }
 
 // providerCredentialsResponse mirrors internal/adapters/inbound/httpapi's
-// own (unexported) providerCredentialsResponse exactly -- a plain map from
-// provider name to its resolved PLAINTEXT value.
+// own (unexported) providerCredentialsResponse -- a map from provider name
+// to its resolved AuthValue (Step 59, §29.6 -- a plain plaintext-string
+// map before this Step).
 type providerCredentialsResponse struct {
-	Credentials map[string]string `json:"credentials"`
+	Credentials map[string]AuthValue `json:"credentials"`
 }
 
 // FetchProviderCredentials POSTs (no body) to
@@ -61,11 +79,11 @@ type providerCredentialsResponse struct {
 // "Authorization: Bearer <sandboxToken>" and an "X-Sandbox-Gen: <gen>"
 // header -- the SAME two headers Fetch already sends, mirroring that
 // method's own exact header-name/convention choices -- and expects back
-// {"credentials": {"<provider>": "<plaintext value>", ...}} on a 2xx
-// response. A provider with nothing configured for this session is simply
-// ABSENT from the map, never an error of its own; the map itself may
-// legitimately be empty (the overwhelming common case: no provider
-// credential configured at any scope for this session).
+// {"credentials": {"<provider>": {"type": "api"|"oauth", ...}, ...}} on a
+// 2xx response (Step 59, §29.6). A provider with nothing configured for
+// this session is simply ABSENT from the map, never an error of its own;
+// the map itself may legitimately be empty (the overwhelming common case:
+// no provider credential configured at any scope for this session).
 //
 // Any non-2xx or malformed response is a plain error -- no retry, no
 // transient/permanent classification, mirroring Fetch's own identical
@@ -82,7 +100,7 @@ type providerCredentialsResponse struct {
 // error -- mirrors Fetch's own identical rationale (a validation-failure
 // body is exactly the kind of thing that can echo request data back
 // verbatim, and this error can end up logged).
-func (c CPClient) FetchProviderCredentials(ctx context.Context, sessionID, sandboxToken string, gen int) (map[string]string, error) {
+func (c CPClient) FetchProviderCredentials(ctx context.Context, sessionID, sandboxToken string, gen int) (map[string]AuthValue, error) {
 	path := fmt.Sprintf("%s/sessions/%s/provider-credentials", c.baseURL, url.PathEscape(sessionID))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, path, nil)
 	if err != nil {

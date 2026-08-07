@@ -1,0 +1,27 @@
+-- Step 59 ("models", §29.4): provider_credential_scope gains 'user', a
+-- personally-linked-account scope more specific than any environment/repo/
+-- global org key (a ChatGPT Plus/Pro subscription is an individual seat,
+-- §29.3). scope_target_id for a 'user' row is users.id stringified -- the
+-- same stringified-UUID convention the 'environment' scope already uses
+-- (migrations/000056_provider_credentials.up.sql's own scope_target_id
+-- doc comment).
+--
+-- This is its OWN migration, deliberately separate from 000062 (which adds
+-- the oauth kind/columns and the chatgpt_link_attempts table): Postgres
+-- forbids using a value added via ALTER TYPE ... ADD VALUE inside the SAME
+-- transaction/statement batch that added it -- migration 000042's own
+-- comment already names this exact restriction as the reason THAT Step
+-- chose a boolean column over a new enum value; here the enum value is
+-- genuinely the right shape (provider_credential.Scope's scopePriority
+-- ordering needs a real new case, not a boolean), so the restriction is
+-- instead worked around by isolating the ADD VALUE in its own
+-- single-statement migration -- no other statement in this file, or the
+-- next one, ever references the literal 'user' scope value.
+--
+-- No CHECK/index change needed: provider_credentials_scope_target_id_shape
+-- already requires scope_target_id NOT NULL for any scope <> 'global'
+-- (covers 'user' for free), and provider_credentials_scoped_uniq already
+-- covers (scope, scope_target_id, provider) for any scope_target_id IS NOT
+-- NULL row -- exactly "one ChatGPT link per user" once a 'user'-scoped row
+-- for provider 'openai' exists.
+ALTER TYPE provider_credential_scope ADD VALUE 'user';

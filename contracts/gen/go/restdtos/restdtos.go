@@ -509,6 +509,103 @@ func (j *Automation) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Response body for POST/GET /api/me/chatgpt-link (Step 59, §29.3/§29.9): the
+// ChatGPT-account-OAuth link flow's own status, read by the Settings page's own
+// poll loop -- there is no background worker driving this flow forward; the human
+// sitting on the page IS the polling loop (§29.3 point 2), so GET simply reports
+// the current chatgpt_link_attempts/provider_credentials state and, at most,
+// performs ONE throttled upstream poll attempt per call. DELETE
+// /api/me/chatgpt-link (unlink) returns 204 with no body, not this shape.
+type ChatGPTLinkStatus struct {
+	// Populated only when status is 'pending' -- this device-flow attempt's own
+	// expiry (chatgpt_link_attempts.expires_at); past this time a fresh POST starts a
+	// new attempt. goJSONSchema forces the literal time.Time type (no leading '*'
+	// here, unlike Plan.decidedAt's own required-field precedent -- this key is
+	// OPTIONAL, so go-jsonschema's own omitempty pointer-wrapping already adds the
+	// one pointer level this field needs; combining that wrapping with an
+	// already-pointer goJSONSchema.type produced a double pointer, **time.Time,
+	// verified directly against a real regen during this Step).
+	ExpiresAt *time.Time `json:"expiresAt,omitempty,omitzero" yaml:"expiresAt,omitempty" mapstructure:"expiresAt,omitempty"`
+
+	// unlinked: no attempt in progress and no linked account. pending: a device-flow
+	// attempt is in progress (verificationUrl/userCode/expiresAt are populated).
+	// linked: a ChatGPT account is linked and its stored token is healthy.
+	// needs_relink: was linked, but the refresh pump's own terminal failure (§29.5:
+	// invalid_grant/refresh_token_reused) means it is no longer served to any sandbox
+	// -- the Settings card's own 'reconnect your ChatGPT account' case.
+	Status ChatGPTLinkStatusStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// Populated only when status is 'pending' -- the short code the human enters at
+	// verificationUrl.
+	UserCode ChatGPTLinkStatusUserCode `json:"userCode,omitempty,omitzero" yaml:"userCode,omitempty" mapstructure:"userCode,omitempty"`
+
+	// Populated only when status is 'pending' -- always the literal
+	// https://auth.openai.com/codex/device (§29.2/§29.3), included so the UI never
+	// hardcodes it independently.
+	VerificationUrl ChatGPTLinkStatusVerificationUrl `json:"verificationUrl,omitempty,omitzero" yaml:"verificationUrl,omitempty" mapstructure:"verificationUrl,omitempty"`
+}
+
+type ChatGPTLinkStatusStatus string
+
+const ChatGPTLinkStatusStatusLinked ChatGPTLinkStatusStatus = "linked"
+const ChatGPTLinkStatusStatusNeedsRelink ChatGPTLinkStatusStatus = "needs_relink"
+const ChatGPTLinkStatusStatusPending ChatGPTLinkStatusStatus = "pending"
+const ChatGPTLinkStatusStatusUnlinked ChatGPTLinkStatusStatus = "unlinked"
+
+var enumValues_ChatGPTLinkStatusStatus = []interface{}{
+	"unlinked",
+	"pending",
+	"linked",
+	"needs_relink",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ChatGPTLinkStatusStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ChatGPTLinkStatusStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ChatGPTLinkStatusStatus, v)
+	}
+	*j = ChatGPTLinkStatusStatus(v)
+	return nil
+}
+
+// Populated only when status is 'pending' -- the short code the human enters at
+// verificationUrl.
+type ChatGPTLinkStatusUserCode *string
+
+// Populated only when status is 'pending' -- always the literal
+// https://auth.openai.com/codex/device (§29.2/§29.3), included so the UI never
+// hardcodes it independently.
+type ChatGPTLinkStatusVerificationUrl *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ChatGPTLinkStatus) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in ChatGPTLinkStatus: required")
+	}
+	type Plain ChatGPTLinkStatus
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ChatGPTLinkStatus(plain)
+	return nil
+}
+
 // Response to POST /api/sessions/:id/uploads/:uploadId/complete (§28.4/§28.6):
 // tells the caller the RECORDED outcome -- the artifacts row and its
 // broadcast/persisted event are the durable truth regardless of what this response
@@ -850,6 +947,13 @@ func (j *CreateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 // The one CreateSessionRequest shape used by every ingress surface (§10 Phase-3
 // milestone: 'atomic dedupe, one CreateSessionRequest').
 type CreateSessionRequest struct {
+	// Optional (Step 59, §29.8), mirroring buildModelId's own optional-key convention
+	// exactly, one field over: the reasoning effort the eventual approval-dispatched
+	// IMPLEMENTATION turn should use, distinct from effort (which names the PLAN
+	// turn's own effort). Absent/null means 'use the default'. Stored as
+	// sessions.build_effort (migrations/000063_turn_session_effort.up.sql).
+	BuildEffort CreateSessionRequestBuildEffort `json:"buildEffort,omitempty,omitzero" yaml:"buildEffort,omitempty" mapstructure:"buildEffort,omitempty"`
+
 	// Optional (Step 37, 'plan mode, web', §12.2 item 3). Like pathScope/mockConfig
 	// below, this key is genuinely OPTIONAL (may be absent from the request body
 	// entirely) -- only meaningful when planMode is true: the model the eventual
@@ -861,6 +965,13 @@ type CreateSessionRequest struct {
 	// (CreateTurnRequest does NOT carry this field: a 'request changes' turn never
 	// resubmits it).
 	BuildModelId CreateSessionRequestBuildModelId `json:"buildModelId,omitempty,omitzero" yaml:"buildModelId,omitempty" mapstructure:"buildModelId,omitempty"`
+
+	// Step 59 (§29.8). Reasoning-effort override for this session's first turn; null
+	// means use the default. Required-nullable, mirroring modelId's own convention
+	// exactly -- valid values are owned per-model by OpenCode's own catalog
+	// `variants` maps (GET /api/models, this Step's own catalog endpoint), never a
+	// Narvi-side enum.
+	Effort CreateSessionRequestEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
 
 	// Optional (row 27, 'mocking + contract drift', §14.3). Like pathScope above,
 	// this key is genuinely OPTIONAL (may be absent from the request body entirely)
@@ -910,6 +1021,13 @@ type CreateSessionRequest struct {
 	Title CreateSessionRequestTitle `json:"title" yaml:"title" mapstructure:"title"`
 }
 
+// Optional (Step 59, §29.8), mirroring buildModelId's own optional-key convention
+// exactly, one field over: the reasoning effort the eventual approval-dispatched
+// IMPLEMENTATION turn should use, distinct from effort (which names the PLAN
+// turn's own effort). Absent/null means 'use the default'. Stored as
+// sessions.build_effort (migrations/000063_turn_session_effort.up.sql).
+type CreateSessionRequestBuildEffort *string
+
 // Optional (Step 37, 'plan mode, web', §12.2 item 3). Like pathScope/mockConfig
 // below, this key is genuinely OPTIONAL (may be absent from the request body
 // entirely) -- only meaningful when planMode is true: the model the eventual
@@ -921,6 +1039,13 @@ type CreateSessionRequest struct {
 // (CreateTurnRequest does NOT carry this field: a 'request changes' turn never
 // resubmits it).
 type CreateSessionRequestBuildModelId *string
+
+// Step 59 (§29.8). Reasoning-effort override for this session's first turn; null
+// means use the default. Required-nullable, mirroring modelId's own convention
+// exactly -- valid values are owned per-model by OpenCode's own catalog `variants`
+// maps (GET /api/models, this Step's own catalog endpoint), never a Narvi-side
+// enum.
+type CreateSessionRequestEffort *string
 
 // Optional (row 27, 'mocking + contract drift', §14.3). Like pathScope above, this
 // key is genuinely OPTIONAL (may be absent from the request body entirely) and
@@ -1047,6 +1172,9 @@ func (j *CreateSessionRequest) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["effort"]; raw != nil && !ok {
+		return fmt.Errorf("field effort in CreateSessionRequest: required")
+	}
 	if _, ok := raw["modelId"]; raw != nil && !ok {
 		return fmt.Errorf("field modelId in CreateSessionRequest: required")
 	}
@@ -1100,6 +1228,11 @@ type CreateTurnRequest struct {
 	// turn's own prompt -- a byte-for-byte no-op, not a degraded case.
 	AttachmentIds []string `json:"attachmentIds,omitempty,omitzero" yaml:"attachmentIds,omitempty" mapstructure:"attachmentIds,omitempty"`
 
+	// Step 59 (§29.8). Reasoning-effort override for this turn; null means use the
+	// default -- same convention and required-nullable shape as
+	// CreateSessionRequest.effort.
+	Effort CreateTurnRequestEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
+
 	// Null means use the default model catalog entry -- same convention as
 	// CreateSessionRequest.modelId.
 	ModelId CreateTurnRequestModelId `json:"modelId" yaml:"modelId" mapstructure:"modelId"`
@@ -1113,6 +1246,11 @@ type CreateTurnRequest struct {
 	Prompt string `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
 }
 
+// Step 59 (§29.8). Reasoning-effort override for this turn; null means use the
+// default -- same convention and required-nullable shape as
+// CreateSessionRequest.effort.
+type CreateTurnRequestEffort *string
+
 // Null means use the default model catalog entry -- same convention as
 // CreateSessionRequest.modelId.
 type CreateTurnRequestModelId *string
@@ -1122,6 +1260,9 @@ func (j *CreateTurnRequest) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
+	}
+	if _, ok := raw["effort"]; raw != nil && !ok {
+		return fmt.Errorf("field effort in CreateTurnRequest: required")
 	}
 	if _, ok := raw["modelId"]; raw != nil && !ok {
 		return fmt.Errorf("field modelId in CreateTurnRequest: required")
@@ -1742,6 +1883,194 @@ func (j *MintUploadResponse) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = MintUploadResponse(plain)
+	return nil
+}
+
+// Response body for GET /api/models -- Step 59's own 'Catalog' deliverable
+// (IMPLEMENTATION_PLAN.md Step 59 row; §8 item 8; §29; §25.2). STRUCTURAL
+// DECISION, named here since §29 leaves it open: sourced from a
+// control-plane-embedded snapshot of OpenCode's own GET /provider catalog
+// (live-verified against the pinned OpenCode 1.17.15 binary during this Step's own
+// implementation), NOT a live per-sandbox proxy -- the control-plane image does
+// not ship the OpenCode binary (§29.9's own identical reasoning for why the
+// ChatGPT device-flow client is a direct CP-side adapter rather than brokered
+// through a spawned sandbox), so there is no running OpenCode server this endpoint
+// could query live even if it wanted to. This is the SAME 'pinned known-good set'
+// convention §7 already established for the sandbox-side per-turn fallback (the
+// opencode adapter's own resolveProviderModel/fallbackModel), applied here as the
+// control plane's ONLY source rather than a fallback of last resort -- refreshed
+// by hand whenever the pinned OpenCode version bumps, exactly like that fallback
+// constant already is. Scope: the 3 providers Step 53 already wires credential
+// injection for (google/anthropic/openai) -- every model id is the exact catalog
+// id OpenCode itself recognizes, usable verbatim as the '<providerId>/<modelId>'
+// string modelId/buildModelId/effort/buildEffort already accept end to end today
+// (§25.1's own 'no Narvi-side allowlist' passthrough, unchanged by this catalog's
+// existence -- it is a discovery aid, never a validating allowlist).
+type ModelCatalog struct {
+	// Providers corresponds to the JSON schema field "providers".
+	Providers []ModelCatalogProvider `json:"providers" yaml:"providers" mapstructure:"providers"`
+}
+
+type ModelCatalogCost struct {
+	// USD per million cache-read tokens when this model supports prompt caching; null
+	// otherwise.
+	CacheRead ModelCatalogCostCacheRead `json:"cacheRead,omitempty,omitzero" yaml:"cacheRead,omitempty" mapstructure:"cacheRead,omitempty"`
+
+	// USD per million cache-write tokens when this model supports prompt caching;
+	// null otherwise.
+	CacheWrite ModelCatalogCostCacheWrite `json:"cacheWrite,omitempty,omitzero" yaml:"cacheWrite,omitempty" mapstructure:"cacheWrite,omitempty"`
+
+	// USD per million input tokens.
+	Input float64 `json:"input" yaml:"input" mapstructure:"input"`
+
+	// USD per million output tokens.
+	Output float64 `json:"output" yaml:"output" mapstructure:"output"`
+}
+
+// USD per million cache-read tokens when this model supports prompt caching; null
+// otherwise.
+type ModelCatalogCostCacheRead *float64
+
+// USD per million cache-write tokens when this model supports prompt caching; null
+// otherwise.
+type ModelCatalogCostCacheWrite *float64
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelCatalogCost) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["input"]; raw != nil && !ok {
+		return fmt.Errorf("field input in ModelCatalogCost: required")
+	}
+	if _, ok := raw["output"]; raw != nil && !ok {
+		return fmt.Errorf("field output in ModelCatalogCost: required")
+	}
+	type Plain ModelCatalogCost
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ModelCatalogCost(plain)
+	return nil
+}
+
+type ModelCatalogModel struct {
+	// Total context window, in tokens.
+	ContextWindow int `json:"contextWindow" yaml:"contextWindow" mapstructure:"contextWindow"`
+
+	// Cost corresponds to the JSON schema field "cost".
+	Cost ModelCatalogCost `json:"cost" yaml:"cost" mapstructure:"cost"`
+
+	// The catalog model id, e.g. "gpt-5.3-codex-spark" -- combine with the owning
+	// ModelCatalogProvider.id and a "/" to get the exact modelId/buildModelId string
+	// this Step's own generic passthrough already accepts.
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Human-readable display name.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Whether this model exposes a reasoning-effort dial at all -- OpenCode's own
+	// catalog capabilities.reasoning. False means variants is always empty for this
+	// model: effort has nothing to override.
+	Reasoning bool `json:"reasoning" yaml:"reasoning" mapstructure:"reasoning"`
+
+	// Whether this model supports tool calling -- OpenCode's own catalog
+	// capabilities.toolcall.
+	ToolCall bool `json:"toolCall" yaml:"toolCall" mapstructure:"toolCall"`
+
+	// The valid effort/buildEffort override values for THIS model, e.g.
+	// ["none","low","medium","high","xhigh"] for an OpenAI reasoning model, or
+	// ["high","max"] for anthropic/claude-sonnet-4-5 (both live-verified during this
+	// Step) -- owned per-model by OpenCode's own catalog (§29.8), never a Narvi-side
+	// enum. The composer's own model/effort selector (§12.2 item 1, Phase 7) reads
+	// this list to populate its effort dropdown once a model is chosen.
+	Variants []string `json:"variants" yaml:"variants" mapstructure:"variants"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelCatalogModel) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["contextWindow"]; raw != nil && !ok {
+		return fmt.Errorf("field contextWindow in ModelCatalogModel: required")
+	}
+	if _, ok := raw["cost"]; raw != nil && !ok {
+		return fmt.Errorf("field cost in ModelCatalogModel: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in ModelCatalogModel: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ModelCatalogModel: required")
+	}
+	if _, ok := raw["reasoning"]; raw != nil && !ok {
+		return fmt.Errorf("field reasoning in ModelCatalogModel: required")
+	}
+	if _, ok := raw["toolCall"]; raw != nil && !ok {
+		return fmt.Errorf("field toolCall in ModelCatalogModel: required")
+	}
+	if _, ok := raw["variants"]; raw != nil && !ok {
+		return fmt.Errorf("field variants in ModelCatalogModel: required")
+	}
+	type Plain ModelCatalogModel
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ModelCatalogModel(plain)
+	return nil
+}
+
+type ModelCatalogProvider struct {
+	// The catalog provider id, e.g. "openai" -- the exact string used as the
+	// '<providerId>/...' prefix, matching
+	// internal/domain/providercredential.Provider's own values.
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Models corresponds to the JSON schema field "models".
+	Models []ModelCatalogModel `json:"models" yaml:"models" mapstructure:"models"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelCatalogProvider) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in ModelCatalogProvider: required")
+	}
+	if _, ok := raw["models"]; raw != nil && !ok {
+		return fmt.Errorf("field models in ModelCatalogProvider: required")
+	}
+	type Plain ModelCatalogProvider
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ModelCatalogProvider(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelCatalog) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["providers"]; raw != nil && !ok {
+		return fmt.Errorf("field providers in ModelCatalog: required")
+	}
+	type Plain ModelCatalog
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ModelCatalog(plain)
 	return nil
 }
 
@@ -3289,6 +3618,176 @@ func (j *Session) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Response body for GET /api/admin/shadow-compare (Step 59's own
+// 'shadow-comparison tooling for review' deliverable, IMPLEMENTATION_PLAN.md Step
+// 59 row, reusing §9.4/§18.5's shadow-mode discipline: 'the same mechanism is used
+// again for every future model swap'). §29 has no dedicated design subsection for
+// this piece -- this is a deliberately minimal, from-scratch interpretation, named
+// as such: a READ-ONLY, side-effect-free comparison of two ALREADY-COMPLETED turns
+// (e.g. the same PR/prompt dispatched once on the active model and once on a
+// shadow/candidate model or effort, or a session's own two differently-configured
+// re-runs), never a re-execution orchestrator -- 'shadow' here means 'never
+// affects either compared turn or its session', the same never-act-only-observe
+// posture §18.5 requires stay permanent, applied to model/effort evaluation rather
+// than classifier routing. Cost is deliberately NOT included: no per-turn cost
+// column exists anywhere in this schema today (§7.1's own named, unclosed debt --
+// 'per-model cost attribution ... is not designed here'), and inventing one for
+// this endpoint alone would be exactly the kind of shape invention this Step's own
+// hard constraints forbid.
+type ShadowComparisonReport struct {
+	// TurnA corresponds to the JSON schema field "turnA".
+	TurnA ShadowComparisonTurn `json:"turnA" yaml:"turnA" mapstructure:"turnA"`
+
+	// TurnB corresponds to the JSON schema field "turnB".
+	TurnB ShadowComparisonTurn `json:"turnB" yaml:"turnB" mapstructure:"turnB"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ShadowComparisonReport) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["turnA"]; raw != nil && !ok {
+		return fmt.Errorf("field turnA in ShadowComparisonReport: required")
+	}
+	if _, ok := raw["turnB"]; raw != nil && !ok {
+		return fmt.Errorf("field turnB in ShadowComparisonReport: required")
+	}
+	type Plain ShadowComparisonReport
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ShadowComparisonReport(plain)
+	return nil
+}
+
+// One side of a ShadowComparisonReport -- mirrors the subset of the turns table
+// (migrations/000005_turns.up.sql, 000018_session_repos.up.sql,
+// 000063_turn_session_effort.up.sql) this comparison actually reads. No turn-level
+// failureReason: unlike sessions.failure_reason, there is no such column on turns
+// itself (that taxonomy is derived at the SESSION level from a turn's own outcome,
+// internal/domain/turn/failurereason.go) -- status alone is this DTO's own outcome
+// signal.
+type ShadowComparisonTurn struct {
+	// goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc
+	// comment.
+	CompletedAt *time.Time `json:"completedAt" yaml:"completedAt" mapstructure:"completedAt"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc
+	// comment.
+	DispatchedAt *time.Time `json:"dispatchedAt" yaml:"dispatchedAt" mapstructure:"dispatchedAt"`
+
+	// completedAt minus dispatchedAt, in seconds; null until both are set.
+	DurationSeconds ShadowComparisonTurnDurationSeconds `json:"durationSeconds" yaml:"durationSeconds" mapstructure:"durationSeconds"`
+
+	// Effort corresponds to the JSON schema field "effort".
+	Effort ShadowComparisonTurnEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
+
+	// ModelId corresponds to the JSON schema field "modelId".
+	ModelId ShadowComparisonTurnModelId `json:"modelId" yaml:"modelId" mapstructure:"modelId"`
+
+	// SessionId corresponds to the JSON schema field "sessionId".
+	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// Matches Postgres turn_status exactly, same enum as CreateTurnResponse.status.
+	Status ShadowComparisonTurnStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// TurnId corresponds to the JSON schema field "turnId".
+	TurnId string `json:"turnId" yaml:"turnId" mapstructure:"turnId"`
+}
+
+// completedAt minus dispatchedAt, in seconds; null until both are set.
+type ShadowComparisonTurnDurationSeconds *float64
+
+type ShadowComparisonTurnEffort *string
+
+type ShadowComparisonTurnModelId *string
+
+type ShadowComparisonTurnStatus string
+
+const ShadowComparisonTurnStatusCancelled ShadowComparisonTurnStatus = "cancelled"
+const ShadowComparisonTurnStatusCompleted ShadowComparisonTurnStatus = "completed"
+const ShadowComparisonTurnStatusDispatched ShadowComparisonTurnStatus = "dispatched"
+const ShadowComparisonTurnStatusFailed ShadowComparisonTurnStatus = "failed"
+const ShadowComparisonTurnStatusPending ShadowComparisonTurnStatus = "pending"
+const ShadowComparisonTurnStatusProcessing ShadowComparisonTurnStatus = "processing"
+
+var enumValues_ShadowComparisonTurnStatus = []interface{}{
+	"pending",
+	"dispatched",
+	"processing",
+	"completed",
+	"failed",
+	"cancelled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ShadowComparisonTurnStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ShadowComparisonTurnStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ShadowComparisonTurnStatus, v)
+	}
+	*j = ShadowComparisonTurnStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ShadowComparisonTurn) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["completedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field completedAt in ShadowComparisonTurn: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in ShadowComparisonTurn: required")
+	}
+	if _, ok := raw["dispatchedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field dispatchedAt in ShadowComparisonTurn: required")
+	}
+	if _, ok := raw["durationSeconds"]; raw != nil && !ok {
+		return fmt.Errorf("field durationSeconds in ShadowComparisonTurn: required")
+	}
+	if _, ok := raw["effort"]; raw != nil && !ok {
+		return fmt.Errorf("field effort in ShadowComparisonTurn: required")
+	}
+	if _, ok := raw["modelId"]; raw != nil && !ok {
+		return fmt.Errorf("field modelId in ShadowComparisonTurn: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in ShadowComparisonTurn: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in ShadowComparisonTurn: required")
+	}
+	if _, ok := raw["turnId"]; raw != nil && !ok {
+		return fmt.Errorf("field turnId in ShadowComparisonTurn: required")
+	}
+	type Plain ShadowComparisonTurn
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ShadowComparisonTurn(plain)
+	return nil
+}
+
 // PATCH /api/members/{userID}/role's own request body. role is deliberately
 // modeled as an unconstrained string, not an enum matching user_role -- it is
 // validated against that closed set at the application layer instead (members.go's
@@ -4097,9 +4596,10 @@ func (j *WorkflowStepDecideResponse) UnmarshalJSON(value []byte) error {
 // null means inherit exactly what the session would use today
 // (turns.model_id/sessions.build_model_id -- §25.8's zero-config proof); non-null
 // is the same opaque 'provider/model' passthrough convention modelId fields
-// already use (§25.1/§25.7, no Narvi-side allowlist). promptTemplate uses the
-// established '{{variable_name}}' placeholder syntax (§18.6); '{{prompt}}' is the
-// caller's own text.
+// already use (§25.1/§25.7, no Narvi-side allowlist). effort (Step 59, §29.8)
+// mirrors modelId's own shape and inherit-when-null semantics exactly, one field
+// over. promptTemplate uses the established '{{variable_name}}' placeholder syntax
+// (§18.6); '{{prompt}}' is the caller's own text.
 type WorkflowStepDefinition struct {
 	// §25.10's optional canvas-layout attachment: this step's node position on the
 	// visual editor's canvas (Step 79, §25.12). OPAQUE server-side -- stored verbatim
@@ -4117,6 +4617,10 @@ type WorkflowStepDefinition struct {
 	// This step's own explicit outgoing edges -- empty means pure default routing
 	// (§25.4). At most one edge per onStatus value (workflow_edges_from_status_uniq).
 	Edges []WorkflowEdge `json:"edges" yaml:"edges" mapstructure:"edges"`
+
+	// Step 59, §29.8's 'workflow engine echo'. Null means inherit exactly what the
+	// session would use today (turns.effort/sessions.build_effort).
+	Effort WorkflowStepDefinitionEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
 
 	// Matches Postgres workflow_execution_scope exactly (§25.6: child_session is
 	// reserved for steps needing real isolation; same_session is the default and what
@@ -4213,6 +4717,10 @@ func (j *WorkflowStepDefinitionConversationContinuity) UnmarshalJSON(value []byt
 	return nil
 }
 
+// Step 59, §29.8's 'workflow engine echo'. Null means inherit exactly what the
+// session would use today (turns.effort/sessions.build_effort).
+type WorkflowStepDefinitionEffort *string
+
 type WorkflowStepDefinitionExecutionScope string
 
 const WorkflowStepDefinitionExecutionScopeChildSession WorkflowStepDefinitionExecutionScope = "child_session"
@@ -4284,6 +4792,9 @@ func (j *WorkflowStepDefinition) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["edges"]; raw != nil && !ok {
 		return fmt.Errorf("field edges in WorkflowStepDefinition: required")
+	}
+	if _, ok := raw["effort"]; raw != nil && !ok {
+		return fmt.Errorf("field effort in WorkflowStepDefinition: required")
 	}
 	if _, ok := raw["executionScope"]; raw != nil && !ok {
 		return fmt.Errorf("field executionScope in WorkflowStepDefinition: required")

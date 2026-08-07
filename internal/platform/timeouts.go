@@ -1922,6 +1922,62 @@ type Timeouts struct {
 	// own "lightweight call, not a large data transfer" reasoning — Stat
 	// is a HeadObject, Delete a DeleteObject, neither moves object bytes.
 	ObjectStoreHTTPClientTimeout time.Duration
+
+	// --- Step 59 standalone additions ("models: Codex via ChatGPT-account
+	// OAuth", §29.5/§29.9): no ordering relationship with either invariant
+	// chain above (or any prior Step's own standalone additions), so —
+	// per those additions' own precedent — plain fields with sensible
+	// defaults, not wired into a fake invariant link.
+
+	// ChatGPTOAuthRefreshMargin is how far ahead of an oauth-kind provider_
+	// credentials row's own oauth_expires_at the refresh pump (§29.5)
+	// starts trying to refresh it — i.e. the pump's own claim query is
+	// "oauth_expires_at < now() + ChatGPTOAuthRefreshMargin". §29.5 gives
+	// this explicitly: "propose 72h ... against the verified 10-day access
+	// lifetime and OpenAI's own ~8-day staleness refresh in Codex CLI" —
+	// generous enough that a served access token always has comfortably
+	// more than ChatGPTOAuthRefreshPumpInterval of validity left even if a
+	// single pump tick is missed.
+	ChatGPTOAuthRefreshMargin time.Duration
+
+	// ChatGPTOAuthRefreshPumpInterval is the refresh pump's own tick
+	// cadence — mirrors OutboxPumpInterval/ReconcilerInterval's own
+	// ticker-loop shape (outboxworker.Builder.Run, internal/app/
+	// reconciler.Reconciler.Run), just far less frequent, since the whole
+	// point of a 72h margin against a 10-day lifetime is that this pump
+	// does not need to run often. §29.5 gives this explicitly: "propose
+	// 6h".
+	ChatGPTOAuthRefreshPumpInterval time.Duration
+
+	// ChatGPTLinkAttemptTTL is a DEFENSIVE CAP on how long a single
+	// device-flow link attempt (chatgpt_link_attempts row) stays valid --
+	// NOT the primary source of its expiry. auth.openai.com's own
+	// usercode response carries a real expires_at field (live-verified by
+	// internal/adapters/outbound/chatgptoauth's own usercode canary,
+	// despite §29.2's own original field list never naming it), which
+	// internal/app/chatgptlink.StartLink uses directly as authoritative;
+	// this field only clamps that server-provided value from above, so a
+	// wildly-off or malicious response can never keep an attempt "live"
+	// far longer than a human would plausibly still be mid-flow. Not
+	// specified in the plan; chosen generously as 15m, mirroring this
+	// codebase's own "chosen generously when the concrete cost is
+	// unknown" convention (HookTimeout's own doc comment) and, numerically,
+	// UploadPresignPutTTL's own identical "propose 15 min" figure for an
+	// unrelated but similarly-shaped "how long can a human take" bound.
+	ChatGPTLinkAttemptTTL time.Duration
+
+	// ChatGPTOAuthHTTPClientTimeout bounds every outbound HTTP call this
+	// Step's own new device-flow adapter (internal/adapters/outbound/
+	// chatgptoauth) makes directly to auth.openai.com — the 4 calls §29.2/
+	// §29.9 name (usercode, token-poll, code exchange, refresh). Not
+	// specified in the plan; chosen generously as 15s — a real third-party
+	// OAuth endpoint over the public internet, more generous than this
+	// codebase's own "lightweight internal call" precedents
+	// (RepoSHAResolutionTimeout/ContractsFingerprintResolutionTimeout/
+	// ObjectStoreHTTPClientTimeout, all 10s) since neither this adapter's
+	// own latency nor auth.openai.com's is under Narvi's control the way a
+	// same-datacenter Postgres/internal-service call's is.
+	ChatGPTOAuthHTTPClientTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2083,6 +2139,11 @@ func DefaultTimeouts() Timeouts {
 		UploadPendingSweepAfter:        24 * time.Hour,   // Step 58, §28.4, explicit ("propose 24 h")
 		UploadAbandonmentSweepInterval: 15 * time.Minute, // Step 58, §28.4, explicit ("propose 15 min")
 		ObjectStoreHTTPClientTimeout:   10 * time.Second, // Step 58; not specified, chosen, matches RepoSHAResolutionTimeout's own "lightweight call" reasoning
+
+		ChatGPTOAuthRefreshMargin:       72 * time.Hour,   // Step 59, §29.5, explicit ("propose 72h")
+		ChatGPTOAuthRefreshPumpInterval: 6 * time.Hour,    // Step 59, §29.5, explicit ("propose 6h")
+		ChatGPTLinkAttemptTTL:           15 * time.Minute, // Step 59; not specified, chosen generously (human device-switch time)
+		ChatGPTOAuthHTTPClientTimeout:   15 * time.Second, // Step 59; not specified, chosen generously (a real third-party OAuth endpoint over the public internet)
 	}
 }
 
@@ -2228,4 +2289,23 @@ func (t Timeouts) Validate() error {
 		"UploadPendingSweepAfter", t.UploadPendingSweepAfter, "UploadAbandonmentSweepInterval", t.UploadAbandonmentSweepInterval)
 
 	return errors.Join(errs...)
+}
+
+// SecondsToDuration converts a raw whole-seconds count -- e.g. an OAuth
+// response's own interval/expires_in field (chatgptoauth), or a stored
+// *_seconds database column (chatgpt_link_attempts.interval_seconds) --
+// into a time.Duration. Step 59 ("models: Codex via ChatGPT-account OAuth")
+// introduces the first callers that need to turn a plain wire/storage
+// integer into a Duration outside this package; this helper exists so
+// those callers never spell out time.Second themselves, which
+// notimeliteral (§5.4/§11) forbids everywhere but here and _test.go files.
+func SecondsToDuration[T ~int | ~int32 | ~int64](seconds T) time.Duration {
+	return time.Duration(seconds) * time.Second
+}
+
+// DurationToSeconds is SecondsToDuration's own inverse, truncating toward
+// zero -- e.g. for storing a time.Duration back into a database column
+// typed as a raw integer seconds count.
+func DurationToSeconds(d time.Duration) int32 {
+	return int32(d / time.Second)
 }

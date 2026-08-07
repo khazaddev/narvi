@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -189,8 +190,9 @@ func TestProviderCredentialStore_ListByScope_Global(t *testing.T) {
 // TestProviderCredentialStore_ListForResolution proves the resolution
 // query returns exactly the candidate rows that could apply to a given
 // session shape: the global row for every provider, the repo-scoped row
-// for a NAMED repo, and the environment-scoped row for a NAMED
-// environment id -- and nothing for an UNNAMED repo/environment.
+// for a NAMED repo, the environment-scoped row for a NAMED environment id,
+// and (Step 59, §29.4) the user-scoped row for a NAMED creator userID --
+// and nothing for an UNNAMED repo/environment/user.
 func TestProviderCredentialStore_ListForResolution(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -211,9 +213,23 @@ func TestProviderCredentialStore_ListForResolution(t *testing.T) {
 	if _, err := store.Create(ctx, sqlcgen.ProviderCredentialScopeEnvironment, ptr("env-not-in-session"), sqlcgen.ProviderCredentialProviderAnthropic, []byte("other-env-anthropic")); err != nil {
 		t.Fatalf("Create environment (not in session): %v", err)
 	}
+	// scope_target_id is a polymorphic TEXT column with no FK to users(id)
+	// (unlike chatgpt_link_attempts.user_id) -- see migrations/
+	// 000056_provider_credentials.up.sql's own doc comment -- so, mirroring
+	// this test's own existing repo/environment fixtures immediately above
+	// (plain literal strings, no real repo_settings/environments row
+	// either), a plain literal UUID-shaped string is enough here too.
+	inSessionUserID := "11111111-1111-1111-1111-111111111111"
+	notInSessionUserID := "22222222-2222-2222-2222-222222222222"
+	if _, err := store.UpsertOAuth(ctx, inSessionUserID, sqlcgen.ProviderCredentialProviderOpenai, []byte(`{"access":"a","refresh":"r","expires_ms":1,"account_id":"acct"}`), time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("UpsertOAuth (in session creator): %v", err)
+	}
+	if _, err := store.UpsertOAuth(ctx, notInSessionUserID, sqlcgen.ProviderCredentialProviderOpenai, []byte(`{"access":"a","refresh":"r","expires_ms":1,"account_id":"acct"}`), time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("UpsertOAuth (not in session, other user): %v", err)
+	}
 
 	envID := "env-in-session"
-	got, err := store.ListForResolution(ctx, []string{"acme/in-session"}, &envID)
+	got, err := store.ListForResolution(ctx, []string{"acme/in-session"}, &envID, &inSessionUserID)
 	if err != nil {
 		t.Fatalf("ListForResolution: %v", err)
 	}
@@ -222,18 +238,56 @@ func TestProviderCredentialStore_ListForResolution(t *testing.T) {
 	for _, row := range got {
 		scopes = append(scopes, string(row.Scope)+":"+derefOrEmpty(row.ScopeTargetID))
 	}
-	if len(got) != 3 {
-		t.Fatalf("len(got) = %d, want 3 (global + the named repo + the named environment); got scopes %v", len(got), scopes)
+	if len(got) != 4 {
+		t.Fatalf("len(got) = %d, want 4 (global + the named repo + the named environment + the named creator's own user-scope row); got scopes %v", len(got), scopes)
 	}
 
-	// No session repos/environment named at all -- only the global row
-	// should ever come back.
-	onlyGlobal, err := store.ListForResolution(ctx, nil, nil)
+	// No session repos/environment/creator named at all -- only the global
+	// row should ever come back.
+	onlyGlobal, err := store.ListForResolution(ctx, nil, nil, nil)
 	if err != nil {
-		t.Fatalf("ListForResolution (no repos/environment): %v", err)
+		t.Fatalf("ListForResolution (no repos/environment/user): %v", err)
 	}
 	if len(onlyGlobal) != 1 || onlyGlobal[0].Scope != sqlcgen.ProviderCredentialScopeGlobal {
-		t.Fatalf("ListForResolution (no repos/environment) = %+v, want exactly the 1 global row", onlyGlobal)
+		t.Fatalf("ListForResolution (no repos/environment/user) = %+v, want exactly the 1 global row", onlyGlobal)
+	}
+}
+
+// TestProviderCredentialStore_ListForResolution_ExcludesNeedsRelink proves
+// Step 59's own resolution-query addition (§29.5: "the row stops being
+// served"): a user-scope oauth row marked oauth_needs_relink is excluded
+// from the candidate set entirely, even though it is otherwise a perfect
+// match for the named creator userID.
+func TestProviderCredentialStore_ListForResolution_ExcludesNeedsRelink(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewProviderCredentialStore(pool)
+
+	userID := "33333333-3333-3333-3333-333333333333"
+	row, err := store.UpsertOAuth(ctx, userID, sqlcgen.ProviderCredentialProviderOpenai, []byte(`{"access":"a","refresh":"r","expires_ms":1,"account_id":"acct"}`), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("UpsertOAuth: %v", err)
+	}
+
+	// Sanity: present before marking needs-relink.
+	before, err := store.ListForResolution(ctx, nil, nil, &userID)
+	if err != nil {
+		t.Fatalf("ListForResolution (before): %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("ListForResolution (before) = %d rows, want 1", len(before))
+	}
+
+	if _, err := store.MarkNeedsRelink(ctx, row.ID); err != nil {
+		t.Fatalf("MarkNeedsRelink: %v", err)
+	}
+
+	after, err := store.ListForResolution(ctx, nil, nil, &userID)
+	if err != nil {
+		t.Fatalf("ListForResolution (after): %v", err)
+	}
+	if len(after) != 0 {
+		t.Fatalf("ListForResolution (after MarkNeedsRelink) = %d rows, want 0 (row must stop being served)", len(after))
 	}
 }
 

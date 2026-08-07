@@ -1115,6 +1115,53 @@ func TestDefaultTimeouts_Step58StandaloneFields(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeouts_Step59StandaloneFields proves the ChatGPT-account-
+// OAuth (§29.5/§29.9) timeout additions carry their own §29-specified
+// values and don't disturb any existing invariant chain.
+func TestDefaultTimeouts_Step59StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ChatGPTOAuthRefreshMargin <= 0 {
+		t.Errorf("ChatGPTOAuthRefreshMargin = %v, want > 0", to.ChatGPTOAuthRefreshMargin)
+	}
+	if to.ChatGPTOAuthRefreshMargin != 72*time.Hour {
+		t.Errorf("ChatGPTOAuthRefreshMargin = %v, want %v (§29.5, explicit)", to.ChatGPTOAuthRefreshMargin, 72*time.Hour)
+	}
+
+	if to.ChatGPTOAuthRefreshPumpInterval <= 0 {
+		t.Errorf("ChatGPTOAuthRefreshPumpInterval = %v, want > 0 (a ticker on a non-positive duration panics)", to.ChatGPTOAuthRefreshPumpInterval)
+	}
+	if to.ChatGPTOAuthRefreshPumpInterval != 6*time.Hour {
+		t.Errorf("ChatGPTOAuthRefreshPumpInterval = %v, want %v (§29.5, explicit)", to.ChatGPTOAuthRefreshPumpInterval, 6*time.Hour)
+	}
+	if to.ChatGPTOAuthRefreshPumpInterval >= to.ChatGPTOAuthRefreshMargin {
+		t.Errorf("ChatGPTOAuthRefreshPumpInterval = %v, want strictly less than ChatGPTOAuthRefreshMargin = %v "+
+			"(the pump must tick comfortably more often than the margin it claims against, or a row could "+
+			"expire before the pump ever gets to it)",
+			to.ChatGPTOAuthRefreshPumpInterval, to.ChatGPTOAuthRefreshMargin)
+	}
+
+	if to.ChatGPTLinkAttemptTTL <= 0 {
+		t.Errorf("ChatGPTLinkAttemptTTL = %v, want > 0", to.ChatGPTLinkAttemptTTL)
+	}
+	if to.ChatGPTLinkAttemptTTL != 15*time.Minute {
+		t.Errorf("ChatGPTLinkAttemptTTL = %v, want %v", to.ChatGPTLinkAttemptTTL, 15*time.Minute)
+	}
+
+	if to.ChatGPTOAuthHTTPClientTimeout <= 0 {
+		t.Errorf("ChatGPTOAuthHTTPClientTimeout = %v, want > 0", to.ChatGPTOAuthHTTPClientTimeout)
+	}
+	if to.ChatGPTOAuthHTTPClientTimeout != 15*time.Second {
+		t.Errorf("ChatGPTOAuthHTTPClientTimeout = %v, want %v", to.ChatGPTOAuthHTTPClientTimeout, 15*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (Step 59's additions must not disturb any invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

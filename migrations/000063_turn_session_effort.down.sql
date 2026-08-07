@@ -1,0 +1,2 @@
+ALTER TABLE sessions DROP COLUMN IF EXISTS build_effort;
+ALTER TABLE turns DROP COLUMN IF EXISTS effort;

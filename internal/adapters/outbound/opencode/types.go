@@ -28,9 +28,11 @@ type sessionResponse struct {
 
 // promptAsyncRequest is POST /session/{id}/prompt_async's request body.
 // VERIFIED live via /doc (OpenAPI): {"messageID"?, "model"?:
-// {"providerID","modelID"}, "agent"?, "parts": [...]}. Only the fields this
-// adapter sends are modeled; "noReply"/"tools"/"format"/"system"/"variant"
-// remain real but unused by this Step's own scope.
+// {"providerID","modelID"}, "agent"?, "parts": [...], "variant"?}. Only the
+// fields this adapter sends are modeled; "noReply"/"tools"/"format"/"system"
+// remain real but unused by this Step's own scope. "variant" (§29.8:
+// "reasoning-effort overrides") carries cmd.Effort verbatim -- see
+// postPromptAsync (session.go).
 //
 // Agent (Step 37, "plan mode, web", §8.1) is this adapter's own wiring of
 // cmd.PlanMode (sandboxws.Prompt) onto OpenCode's REAL, NATIVE plan/build
@@ -53,9 +55,10 @@ type sessionResponse struct {
 // bash specifically (e.g. a sandbox-agent-level tool restriction) is
 // explicitly out of this Step's scope, left for a future hardening pass.
 type promptAsyncRequest struct {
-	Model *promptModelRef   `json:"model,omitempty"`
-	Agent *string           `json:"agent,omitempty"`
-	Parts []promptPartInput `json:"parts"`
+	Model   *promptModelRef   `json:"model,omitempty"`
+	Agent   *string           `json:"agent,omitempty"`
+	Parts   []promptPartInput `json:"parts"`
+	Variant *string           `json:"variant,omitempty"`
 }
 
 // planAgentName is the literal OpenCode agent name this adapter requests

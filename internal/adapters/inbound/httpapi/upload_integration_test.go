@@ -725,7 +725,7 @@ func TestCreateTurn_WithReadyAttachment_RendersAttachmentBlock(t *testing.T) {
 		t.Fatalf("confirm = (status %d, body %+v), want 200/ready", status, confirm)
 	}
 
-	turnBody := []byte(fmt.Sprintf(`{"prompt":"please review spec.txt","modelId":null,"planMode":false,"attachmentIds":[%q]}`, mint.UploadId))
+	turnBody := []byte(fmt.Sprintf(`{"prompt":"please review spec.txt","modelId":null,"effort":null,"planMode":false,"attachmentIds":[%q]}`, mint.UploadId))
 	var turnResp restdtos.CreateTurnResponse
 	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", turnBody, &turnResp, token)
 	if status != http.StatusCreated {
@@ -777,7 +777,7 @@ func TestCreateTurn_NoAttachments_StorageConfigured_RendersNoteButNoBlock(t *tes
 	owner, token := rig.createAuthenticatedUser(ctx, t)
 	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
 
-	turnBody := []byte(`{"prompt":"do the thing","modelId":null,"planMode":false}`)
+	turnBody := []byte(`{"prompt":"do the thing","modelId":null,"effort":null,"planMode":false}`)
 	var turnResp restdtos.CreateTurnResponse
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", turnBody, &turnResp, token)
 	if status != http.StatusCreated {
@@ -826,7 +826,7 @@ func TestCreateTurn_NoAttachments_StorageNotConfigured_ByteForByteNoOp(t *testin
 	owner, token := rig.createAuthenticatedUser(ctx, t)
 	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
 
-	turnBody := []byte(`{"prompt":"do the thing","modelId":null,"planMode":false}`)
+	turnBody := []byte(`{"prompt":"do the thing","modelId":null,"effort":null,"planMode":false}`)
 	var turnResp restdtos.CreateTurnResponse
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", turnBody, &turnResp, token)
 	if status != http.StatusCreated {
@@ -853,7 +853,7 @@ func TestCreateTurn_WithUnknownAttachment_Returns400(t *testing.T) {
 	owner, token := rig.createAuthenticatedUser(ctx, t)
 	session := createSessionForUser(ctx, t, rig, owner.ID, nil)
 
-	turnBody := []byte(`{"prompt":"do something","modelId":null,"planMode":false,"attachmentIds":["00000000-0000-0000-0000-000000000000"]}`)
+	turnBody := []byte(`{"prompt":"do something","modelId":null,"effort":null,"planMode":false,"attachmentIds":["00000000-0000-0000-0000-000000000000"]}`)
 	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", turnBody, nil, token)
 	if status != http.StatusBadRequest {
 		t.Fatalf("create turn status = %d, want %d", status, http.StatusBadRequest)
@@ -883,7 +883,7 @@ func TestCreateTurn_WithPendingNotYetReadyAttachment_Returns400(t *testing.T) {
 	}
 	// Deliberately never PUT/confirm -- the row stays 'pending'.
 
-	turnBody := []byte(fmt.Sprintf(`{"prompt":"use the file","modelId":null,"planMode":false,"attachmentIds":[%q]}`, mint.UploadId))
+	turnBody := []byte(fmt.Sprintf(`{"prompt":"use the file","modelId":null,"effort":null,"planMode":false,"attachmentIds":[%q]}`, mint.UploadId))
 	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/turns", turnBody, nil, token)
 	if status != http.StatusBadRequest {
 		t.Fatalf("create turn status = %d, want %d (attachment is still pending, not ready)", status, http.StatusBadRequest)
@@ -1400,7 +1400,7 @@ func TestCreateTurn_ForeignSessionAttachment_Returns400(t *testing.T) {
 	ownerB, tokenB := rig.createAuthenticatedUser(ctx, t)
 	sessionB := createSessionForUser(ctx, t, rig, ownerB.ID, nil)
 
-	turnBody := []byte(fmt.Sprintf(`{"prompt":"use it","modelId":null,"planMode":false,"attachmentIds":[%q]}`, mint.UploadId))
+	turnBody := []byte(fmt.Sprintf(`{"prompt":"use it","modelId":null,"effort":null,"planMode":false,"attachmentIds":[%q]}`, mint.UploadId))
 	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+sessionB.ID.String()+"/turns", turnBody, nil, tokenB)
 	if status != http.StatusBadRequest {
 		t.Fatalf("create turn status = %d, want %d (session B must never attach session A's own upload)", status, http.StatusBadRequest)
@@ -1486,7 +1486,7 @@ func TestMintUpload_NoObjectStorageConfigured_Returns503(t *testing.T) {
 
 	// Nothing else degrades: an ordinary, attachment-free turn still
 	// creates fine on this same session.
-	turnBody := []byte(`{"prompt":"do the thing","modelId":null,"planMode":false}`)
+	turnBody := []byte(`{"prompt":"do the thing","modelId":null,"effort":null,"planMode":false}`)
 	var turnResp restdtos.CreateTurnResponse
 	status = rig.doJSON(t, http.MethodPost, "/api/sessions/"+sessionAPI.ID.String()+"/turns", turnBody, &turnResp, token)
 	if status != http.StatusCreated {

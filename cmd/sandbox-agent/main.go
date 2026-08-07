@@ -753,12 +753,15 @@ func shutdownSandboxAgentOTel(shutdown func(context.Context) error, timeout time
 // dispatches to this testable, error-returning function.
 // fetchProviderCredentialSpawnEnv (Step 53, "provider credential
 // injection", §25.1/§25.3) fetches this session's own resolved provider
-// credentials from CP (POST /sessions/{id}/provider-credentials) and maps
-// each provider name onto its own OpenCode env-var name(s)
-// (internal/domain/providercredential.EnvVarNames), building the
-// "NAME=VALUE" entries opencodeproc.Spawn's own providerCredentialEnv
-// parameter expects. Only ever called when cfg.SessionConfig is non-nil
-// (the caller's own enclosing branch already guarantees this).
+// credentials from CP ONCE (POST /sessions/{id}/provider-credentials) --
+// callers split the result by kind: providerCredentialSpawnEnv (api-kind,
+// unchanged since Step 53) and providerCredentialOAuthSets (oauth-kind,
+// Step 59, §29.6) below. A single fetch, not two, so both env injection
+// and the post-spawn PUT /auth/{providerID} call see the EXACT SAME
+// resolved snapshot -- two independent fetches could race and observe
+// different results if a credential changed between them. Only ever
+// called when cfg.SessionConfig is non-nil (the caller's own enclosing
+// branch already guarantees this).
 //
 // Deliberately BEST-EFFORT, never fatal to boot: the overwhelming common
 // case is zero credentials configured for a session (today's exact,
@@ -769,8 +772,8 @@ func shutdownSandboxAgentOTel(shutdown func(context.Context) error, timeout time
 // turn into a hard boot failure over what is, for most sessions, a no-op
 // anyway. A failure here is logged (Warn, never Error -- this is an
 // expected, tolerated degraded path, not a genuine server malfunction)
-// and returns nil -- Spawn already treats nil identically to "nothing
-// resolved", i.e. exactly today's pre-Step-53 behavior.
+// and returns nil -- both callers already treat nil identically to
+// "nothing resolved".
 //
 // No disk cache (unlike internal/sandboxagent/credentials.Cache, the SCM
 // credential-helper's own flock'd cache): a provider credential is needed
@@ -784,7 +787,7 @@ func shutdownSandboxAgentOTel(shutdown func(context.Context) error, timeout time
 // NAMES (never secret material) for observability, matching
 // tokenencrypt.go's own "never log plaintext, key, or ciphertext"
 // discipline exactly.
-func fetchProviderCredentialSpawnEnv(ctx context.Context, cfg boot.Config, timeout time.Duration) []string {
+func fetchProviderCredentials(ctx context.Context, cfg boot.Config, timeout time.Duration) map[string]credentials.AuthValue {
 	client, err := credentials.NewCPClient(cfg.SessionConfig.ControlPlaneWsUrl, timeout)
 	if err != nil {
 		slog.Warn("sandbox-agent: build provider-credentials CP client failed, spawning opencode with no resolved provider credential", "error", err)
@@ -799,21 +802,52 @@ func fetchProviderCredentialSpawnEnv(ctx context.Context, cfg boot.Config, timeo
 		slog.Warn("sandbox-agent: fetch provider credentials failed, spawning opencode with no resolved provider credential", "error", err)
 		return nil
 	}
-	if len(resolved) == 0 {
-		return nil
-	}
 
-	providerNames := make([]string, 0, len(resolved))
+	if len(resolved) > 0 {
+		providerNames := make([]string, 0, len(resolved))
+		for provider := range resolved {
+			providerNames = append(providerNames, provider)
+		}
+		sort.Strings(providerNames)
+		slog.Info("sandbox-agent: resolved provider credentials", "providers", providerNames)
+	}
+	return resolved
+}
+
+// providerCredentialSpawnEnv maps every "api"-kind entry in resolved onto
+// its own OpenCode env-var name(s) (internal/domain/providercredential.
+// EnvVarNames), building the "NAME=VALUE" entries opencodeproc.Spawn's own
+// providerCredentialEnv parameter expects -- Step 53's own original
+// behavior, unchanged, now just fed from the shared fetch above rather
+// than fetching for itself. An "oauth"-kind entry contributes NOTHING
+// here (§29.6: an oauth credential is delivered via PUT /auth/{providerID}
+// instead, never an env var -- see providerCredentialOAuthSets below).
+func providerCredentialSpawnEnv(resolved map[string]credentials.AuthValue) []string {
 	var env []string
 	for provider, value := range resolved {
-		providerNames = append(providerNames, provider)
+		if value.Type != "api" || value.Key == nil {
+			continue
+		}
 		for _, name := range providercredential.EnvVarNames(providercredential.Provider(provider)) {
-			env = append(env, name+"="+value)
+			env = append(env, name+"="+*value.Key)
 		}
 	}
-	sort.Strings(providerNames)
-	slog.Info("sandbox-agent: resolved provider credentials for opencode spawn", "providers", providerNames)
 	return env
+}
+
+// providerCredentialOAuthSets returns every "oauth"-kind entry in
+// resolved, unchanged -- Step 59's own new split (§29.6): the caller
+// (run(), below) PUTs each to OpenCode's own auth store via
+// agentRuntime.SetOAuthAuth, sequenced after Spawn reports healthy and
+// before the WS bridge accepts its first command.
+func providerCredentialOAuthSets(resolved map[string]credentials.AuthValue) map[string]credentials.AuthValue {
+	oauth := make(map[string]credentials.AuthValue)
+	for provider, value := range resolved {
+		if value.Type == "oauth" {
+			oauth[provider] = value
+		}
+	}
+	return oauth
 }
 
 func run() error {
@@ -924,6 +958,14 @@ func run() error {
 	// exist by then -- see this file's own package doc comment for the
 	// full reasoning.
 	var agentRuntime *opencode.Adapter
+	// resolvedCredentials is populated inside the SAME block below and
+	// consumed twice: providerCredentialSpawnEnv (api-kind, feeding
+	// opencodeproc.Spawn's own env) here, and providerCredentialOAuthSets
+	// (oauth-kind, Step 59 §29.6) in the SECOND cfg.SessionConfig != nil
+	// block below, once bridge exists -- declared at this outer scope
+	// (mirroring agentRuntime's own identical need) so both call sites see
+	// the exact same fetched snapshot.
+	var resolvedCredentials map[string]credentials.AuthValue
 	if cfg.SessionConfig != nil {
 		// opencodeproc.Spawn's own Dir is cfg.WorkspaceDir -- normally
 		// created by gitclone.CloneAll (runBootSequence, below), which
@@ -969,13 +1011,15 @@ func run() error {
 		}
 
 		// Step 53 ("provider credential injection", §25.1/§25.3): resolve
-		// this session's own provider credentials (repo/environment/global
-		// scoped, most-specific-wins) BEFORE spawning `opencode serve`,
-		// mapping each onto its own env-var name(s) -- see
-		// fetchProviderCredentialSpawnEnv's own doc comment for why this is
+		// this session's own provider credentials (repo/environment/global/
+		// user scoped, most-specific-wins) BEFORE spawning `opencode serve`
+		// -- see fetchProviderCredentials' own doc comment for why this is
 		// deliberately best-effort (nil on any failure, never fatal to
-		// boot).
-		providerCredentialEnv := fetchProviderCredentialSpawnEnv(ctx, cfg, timeouts.ProviderCredentialFetchTimeout)
+		// boot) and why it is fetched exactly ONCE here for both the
+		// api-kind env-var injection below and the oauth-kind PUT
+		// /auth/{providerID} call once bridge exists (Step 59, §29.6).
+		resolvedCredentials = fetchProviderCredentials(ctx, cfg, timeouts.ProviderCredentialFetchTimeout)
+		providerCredentialEnv := providerCredentialSpawnEnv(resolvedCredentials)
 
 		result, spawnErr := opencodeproc.Spawn(ctx, sup, cfg.WorkspaceDir, providerCredentialEnv,
 			timeouts.OpenCodeReadinessTimeout, timeouts.OpenCodeReadinessPollInterval)
@@ -1032,6 +1076,47 @@ func run() error {
 			timeouts.SandboxWSDialTimeout, timeouts.SandboxWSHeartbeatInterval,
 			timeouts.SandboxWSReconnectMinBackoff, timeouts.SandboxWSReconnectMaxBackoff)
 		handler.bridge = bridge
+
+		// Step 59 (§29.6): inject every resolved oauth-kind credential
+		// into OpenCode's own auth store, ONE PUT /auth/{providerID} call
+		// per provider, sequenced strictly HERE -- after Spawn already
+		// reported healthy (agentRuntime exists) and bridge already
+		// exists (so a failure can be reported as a wire Warning below),
+		// but BEFORE bridge.Run(ctx) starts accepting inbound commands
+		// (a few lines down): "sequenced inside the spawn/readiness path
+		// so a turn can never race an unauthenticated provider" (§29.6).
+		// Failure is logged and emitted as a non-fatal wire Warning, NEVER
+		// a boot failure (§29.6) -- the credential is delivered
+		// independently of whether this session's turns will ever name an
+		// openai/... model; a turn that does need it then fails typed
+		// (ProviderAuthError) into the ordinary §8.7 recovery UX instead.
+		for provider, value := range providerCredentialOAuthSets(resolvedCredentials) {
+			if value.Access == nil || value.Expires == nil {
+				slog.Warn("sandbox-agent: oauth credential missing access/expires, skipping auth injection", "provider", provider)
+				continue
+			}
+			accountID := ""
+			if value.AccountID != nil {
+				accountID = *value.AccountID
+			}
+			if err := agentRuntime.SetOAuthAuth(ctx, provider, opencode.OAuthCredential{
+				Access:    *value.Access,
+				Expires:   *value.Expires,
+				AccountID: accountID,
+			}); err != nil {
+				slog.Warn("sandbox-agent: set oauth auth failed", "provider", provider, "error", err)
+				warnMsg := sandboxws.Warning{
+					Type:      "warning",
+					MessageId: uuid.NewString(),
+					SessionId: cfg.SessionConfig.SessionId,
+					Gen:       cfg.SessionConfig.Gen,
+					Message:   fmt.Sprintf("failed to inject %s credential into the coding agent; turns naming an %s/... model may fail until this is resolved", provider, provider),
+				}
+				if sendErr := bridge.SendBestEffort(ctx, warnMsg); sendErr != nil {
+					slog.Warn("sandbox-agent: send oauth-auth-failure warning over WS bridge failed", "provider", provider, "error", sendErr)
+				}
+			}
+		}
 	}
 
 	// reportBootProgress forwards each §6.1 boot_progress event over the

@@ -48,12 +48,13 @@ func TestBuildPromptPayload(t *testing.T) {
 	sandboxRow := sqlcgen.Sandbox{ID: sandboxID, Gen: 4}
 	prompt := "please do the thing"
 	model := "claude-sonnet-5"
+	effort := "high"
 
 	t.Run("no prior conversation -> nil ConversationId", func(t *testing.T) {
 		t.Parallel()
 
 		sessionRow := sqlcgen.Session{OpencodeConversationID: nil}
-		turn := sqlcgen.Turn{ID: turnID, Prompt: &prompt, ModelID: &model, PlanMode: true}
+		turn := sqlcgen.Turn{ID: turnID, Prompt: &prompt, ModelID: &model, Effort: &effort, PlanMode: true}
 
 		raw, err := BuildPromptPayload("session-1", sessionRow, sandboxRow, turn)
 		if err != nil {
@@ -88,8 +89,12 @@ func TestBuildPromptPayload(t *testing.T) {
 		if got.ScmName == "" || got.ScmEmail == "" {
 			t.Error("ScmName/ScmEmail must be non-empty")
 		}
-		if got.Effort != nil {
-			t.Errorf("Effort = %v, want nil", got.Effort)
+		// Step 59 (§29.8): turns.effort now threads through end to end,
+		// mirroring model_id's own assertion immediately above -- this
+		// replaces the pre-Step-59 hardcoded-nil assertion this test used
+		// to make here.
+		if got.Effort == nil || *got.Effort != effort {
+			t.Errorf("Effort = %v, want %q", got.Effort, effort)
 		}
 		if got.MessageId == "" {
 			t.Error("MessageId is empty, want a freshly minted uuid")
@@ -133,6 +138,9 @@ func TestBuildPromptPayload(t *testing.T) {
 		}
 		if got.Text != "" {
 			t.Errorf("Text = %q, want empty", got.Text)
+		}
+		if got.Model != nil || got.Effort != nil {
+			t.Errorf("Model = %v, Effort = %v, want both nil for a turn with neither set", got.Model, got.Effort)
 		}
 	})
 }

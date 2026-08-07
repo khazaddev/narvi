@@ -119,6 +119,16 @@ func fallbackModelRef() *promptModelRef {
 // promptAsyncRequest's own doc comment (types.go) for the full,
 // empirically-verified rationale and its honest scope limits.
 //
+// cmd.Effort (§29.8: "reasoning-effort overrides") maps directly onto the
+// request's own "variant" field when non-nil -- OpenCode's own per-model
+// "variants" catalog (GET /provider) names each valid value and its
+// provider-native meaning (openai: none/low/medium/high/xhigh ->
+// reasoningEffort; anthropic: low/medium/high/(xhigh/)max -> adaptive
+// thinking effort). Narvi validates nothing but nullability here, exactly
+// like model itself (resolveProviderModel's own doc comment) -- valid
+// values are per-model facts owned by OpenCode's catalog, not a
+// Narvi-side allowlist.
+//
 // HONEST GAP: cmd.ScmName/cmd.ScmEmail (§6.1: Prompt "with author
 // scmName/scmEmail for git attribution") are deliberately NOT threaded
 // into this request or anywhere else in this package -- this Step's live
@@ -131,8 +141,9 @@ func fallbackModelRef() *promptModelRef {
 // is lost; a future Step can wire them once such a mechanism exists.
 func (a *Adapter) postPromptAsync(ctx context.Context, sessionID string, cmd sandboxws.Prompt, model *promptModelRef) error {
 	body := promptAsyncRequest{
-		Model: model,
-		Parts: []promptPartInput{{Type: "text", Text: cmd.Text}},
+		Model:   model,
+		Parts:   []promptPartInput{{Type: "text", Text: cmd.Text}},
+		Variant: cmd.Effort,
 	}
 	switch {
 	case cmd.PlanMode:

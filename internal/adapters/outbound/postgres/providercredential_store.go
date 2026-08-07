@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -75,18 +77,117 @@ func (s *ProviderCredentialStore) Delete(ctx context.Context, id pgtype.UUID) (i
 	return s.q.DeleteProviderCredential(ctx, id)
 }
 
-// ListForResolution fetches every candidate row (across all 3 scopes, for
+// ListForResolution fetches every candidate row (across all 4 scopes, for
 // every provider at once) that could apply to a session naming
-// repoFullNames and, optionally, environmentID -- the sandbox-facing
-// delivery endpoint's own single read. repoFullNames may be empty (never
-// an error); environmentID nil means "this session has no attached
-// Environment" (matches nothing at the environment scope, never a wildcard).
-func (s *ProviderCredentialStore) ListForResolution(ctx context.Context, repoFullNames []string, environmentID *string) ([]sqlcgen.ProviderCredential, error) {
+// repoFullNames, optionally environmentID, and optionally the session's
+// own creator userID (Step 59, §29.4: "resolution keys on sessions.
+// created_by") -- the sandbox-facing delivery endpoint's own single read.
+// repoFullNames may be empty (never an error); environmentID/userID nil
+// mean "this session has no attached Environment"/"this is a bot-
+// attributed session with no creator" respectively (matches nothing at
+// that scope, never a wildcard).
+func (s *ProviderCredentialStore) ListForResolution(ctx context.Context, repoFullNames []string, environmentID, userID *string) ([]sqlcgen.ProviderCredential, error) {
 	if repoFullNames == nil {
 		repoFullNames = []string{}
 	}
 	return s.q.ListProviderCredentialsForResolution(ctx, sqlcgen.ListProviderCredentialsForResolutionParams{
 		RepoFullNames: repoFullNames,
 		EnvironmentID: environmentID,
+		UserID:        userID,
 	})
+}
+
+// UpsertOAuth creates or replaces (§29.3: "relink replaces the row, same
+// upsert") the SINGLE scope=user/kind=oauth row for (userID, provider) --
+// internal/app/chatgptlink's own link/relink write path (§29.4). Always
+// clears any prior oauth_needs_relink back to false, matching a fresh
+// link's own "this token is healthy again" reality.
+func (s *ProviderCredentialStore) UpsertOAuth(ctx context.Context, userID string, provider sqlcgen.ProviderCredentialProvider, valueEncrypted []byte, oauthExpiresAt time.Time) (sqlcgen.ProviderCredential, error) {
+	return s.q.UpsertOAuthProviderCredential(ctx, sqlcgen.UpsertOAuthProviderCredentialParams{
+		ScopeTargetID:  &userID,
+		Provider:       provider,
+		ValueEncrypted: valueEncrypted,
+		OauthExpiresAt: pgtype.Timestamptz{Time: oauthExpiresAt, Valid: true},
+	})
+}
+
+// GetOAuthForUser fetches the scope=user/kind=oauth row for (userID,
+// provider), if any -- backs GET/DELETE /api/me/chatgpt-link (§29.3/
+// §29.9). pgx.ErrNoRows means "not linked".
+func (s *ProviderCredentialStore) GetOAuthForUser(ctx context.Context, userID string, provider sqlcgen.ProviderCredentialProvider) (sqlcgen.ProviderCredential, error) {
+	return s.q.GetOAuthProviderCredentialForUser(ctx, sqlcgen.GetOAuthProviderCredentialForUserParams{
+		ScopeTargetID: &userID,
+		Provider:      provider,
+	})
+}
+
+// DeleteOAuthForUser removes the scope=user/kind=oauth row for (userID,
+// provider) -- DELETE /api/me/chatgpt-link's own unlink (§29.3). Returns
+// the number of rows actually deleted (0 or 1), mirroring Delete's own
+// "affected-row-count decides the caller's own not-found branch"
+// convention.
+func (s *ProviderCredentialStore) DeleteOAuthForUser(ctx context.Context, userID string, provider sqlcgen.ProviderCredentialProvider) (int64, error) {
+	return s.q.DeleteOAuthProviderCredentialForUser(ctx, sqlcgen.DeleteOAuthProviderCredentialForUserParams{
+		ScopeTargetID: &userID,
+		Provider:      provider,
+	})
+}
+
+// ListExpiringOAuth takes a snapshot (FOR UPDATE SKIP LOCKED, see the
+// query's own doc comment) of up to limit oauth-kind rows expiring before
+// expiresBefore and not already marked oauth_needs_relink -- the refresh
+// pump's (internal/app/chatgptrefresh, §29.5) own up-front candidate list
+// for one tick, called inside its OWN short transaction that commits
+// immediately (S1 fix: see that package's own doc comment/PumpOnce for
+// why this is now just a snapshot, not held open across any row's own
+// refresh) -- the pump then re-claims and refreshes each candidate one at
+// a time via GetExpiringOAuthForUpdate below.
+func (s *ProviderCredentialStore) ListExpiringOAuth(ctx context.Context, expiresBefore time.Time, limit int32) ([]sqlcgen.ProviderCredential, error) {
+	return s.q.ListExpiringOAuthProviderCredentials(ctx, sqlcgen.ListExpiringOAuthProviderCredentialsParams{
+		OauthExpiresAt: pgtype.Timestamptz{Time: expiresBefore, Valid: true},
+		Limit:          limit,
+	})
+}
+
+// GetExpiringOAuthForUpdate re-claims (FOR UPDATE SKIP LOCKED) exactly one
+// row by id, re-verifying it still matches ListExpiringOAuth's own due
+// criteria -- the refresh pump's own per-row re-claim (S1 fix), called
+// inside the SAME short, per-ROW transaction the pump holds open for
+// exactly that one row's own refresh+rewrite. pgx.ErrNoRows (unwrapped)
+// means id is no longer claimable right now (locked by a concurrent pump
+// instance, or no longer due/already needs-relink) -- never a real error;
+// the caller simply has nothing to do for id.
+func (s *ProviderCredentialStore) GetExpiringOAuthForUpdate(ctx context.Context, id pgtype.UUID, expiresBefore time.Time) (sqlcgen.ProviderCredential, error) {
+	return s.q.GetExpiringOAuthProviderCredentialForUpdate(ctx, sqlcgen.GetExpiringOAuthProviderCredentialForUpdateParams{
+		ID:             id,
+		OauthExpiresAt: pgtype.Timestamptz{Time: expiresBefore, Valid: true},
+	})
+}
+
+// UpdateOAuthTokens atomically rewrites id's own value_encrypted/
+// oauth_expires_at together -- the refresh pump's own success path
+// (§29.5), never one without the other.
+func (s *ProviderCredentialStore) UpdateOAuthTokens(ctx context.Context, id pgtype.UUID, valueEncrypted []byte, oauthExpiresAt time.Time) (sqlcgen.ProviderCredential, error) {
+	return s.q.UpdateOAuthProviderCredentialTokens(ctx, sqlcgen.UpdateOAuthProviderCredentialTokensParams{
+		ID:             id,
+		ValueEncrypted: valueEncrypted,
+		OauthExpiresAt: pgtype.Timestamptz{Time: oauthExpiresAt, Valid: true},
+	})
+}
+
+// MarkNeedsRelink sets id's own oauth_needs_relink true -- the refresh
+// pump's own terminal-failure path (§29.5: invalid_grant/
+// refresh_token_reused).
+func (s *ProviderCredentialStore) MarkNeedsRelink(ctx context.Context, id pgtype.UUID) (sqlcgen.ProviderCredential, error) {
+	return s.q.MarkProviderCredentialNeedsRelink(ctx, id)
+}
+
+// WithTx returns a ProviderCredentialStore whose queries run on tx instead
+// of the pool this store was built with -- mirrors IdentityLinkPromptStore
+// .WithTx exactly; used by internal/app/chatgptlink's own link/relink
+// transaction (which also writes/deletes a chatgpt_link_attempts row in
+// the SAME transaction) and by the refresh pump's own per-batch
+// transaction (internal/app/chatgptrefresh, §29.5).
+func (s *ProviderCredentialStore) WithTx(tx pgx.Tx) *ProviderCredentialStore {
+	return &ProviderCredentialStore{q: s.q.WithTx(tx)}
 }

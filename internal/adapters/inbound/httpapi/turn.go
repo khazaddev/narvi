@@ -176,6 +176,7 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID, RejectIfOpen, CreateTurnOptions{
 			AttachmentIDs:     attachmentIDs,
 			StorageConfigured: objCfg != nil,
+			Effort:            (*string)(req.Effort),
 		})
 		if cerr != nil {
 			logger.Error("httpapi: create turn failed", "status", cerr.Status, "message", cerr.Message)
@@ -326,6 +327,19 @@ type CreateTurnOptions struct {
 	// any of those four packages needing to learn anything about object
 	// storage at all.
 	StorageConfigured bool
+
+	// Effort mirrors modelID's own "per-message override" role one field
+	// over (Step 59, §29.8) -- bundled into this same options struct
+	// rather than a new positional parameter alongside modelID for the
+	// identical reason AttachmentIDs/StorageConfigured are: every one of
+	// this core's five OTHER call sites (reviewretrigger.go, linear/
+	// webhook.go, slack/turn.go, slack/interactive.go, bot.go) has no
+	// per-message effort selector of its own to supply (confirmed: every
+	// one of them already passes modelID=nil too, the same "no per-surface
+	// override" reality effort now shares) -- left at its Go zero value
+	// (nil, "use the default") by all of them, exactly like Storage
+	// Configured. Only CreateTurn's own REST handler below ever sets it.
+	Effort *string
 }
 
 // CreateTurnCore is everything CreateTurn's own doc comment above
@@ -458,9 +472,11 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// far as THIS turn's own rendering is concerned).
 	var attachmentIDs []pgtype.UUID
 	var storageConfigured bool
+	var effort *string
 	if len(opts) > 0 {
 		attachmentIDs = opts[0].AttachmentIDs
 		storageConfigured = opts[0].StorageConfigured
+		effort = opts[0].Effort
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -606,14 +622,14 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		}
 	}
 
-	effectivePrompt, effectiveModelID := prompt, modelID
+	effectivePrompt, effectiveModelID, effectiveEffort := prompt, modelID, effort
 	workflows := postgres.NewWorkflowStore(pool).WithTx(tx)
 	var resolution workflowengine.Resolution
 	if sessionRow, sessErr := sessions.WithTx(tx).Get(ctx, sessionID); sessErr != nil {
 		logger.Warn("httpapi: get session row for workflow engine resolution failed; dispatching unchanged", "error", sessErr)
 	} else {
-		resolution = workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID)
-		effectivePrompt, effectiveModelID = resolution.Prompt, resolution.ModelID
+		resolution = workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID, effort)
+		effectivePrompt, effectiveModelID, effectiveEffort = resolution.Prompt, resolution.ModelID, resolution.Effort
 	}
 
 	// Step 58 (§28.5): the attachment block (deterministic per-attachment
@@ -680,6 +696,7 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		Status:    sqlcgen.TurnStatusPending,
 		Prompt:    &effectivePrompt,
 		ModelID:   effectiveModelID,
+		Effort:    effectiveEffort,
 		PlanMode:  planMode,
 	})
 	if err != nil {

@@ -1,0 +1,25 @@
+-- Step 59 ("models", §29.8): turns.effort / sessions.build_effort mirror
+-- turns.model_id (migrations/000018_session_repos.up.sql) / sessions.
+-- build_model_id (migrations/000034_plan_mode.up.sql) verbatim -- same
+-- plain nullable TEXT shape, no DEFAULT, no DB-level COMMENT ON COLUMN
+-- (this schema's own established convention for these two columns: the
+-- only documentation is this SQL comment itself). Null means "use the
+-- default", the exact same convention model_id/build_model_id already
+-- establish -- sandboxws.Prompt.effort's own JSON Schema description
+-- (contracts/sandbox-ws/v1/commands.schema.json, already present and
+-- required-nullable since before this Step) says it in those exact words.
+--
+-- turns.effort: per-message, dispatch-time input beside turns.model_id --
+-- read back by BuildPromptPayload (internal/app/sessionactor/dispatch.go)
+-- exactly like model_id is today.
+--
+-- sessions.build_effort: per-session, beside sessions.build_model_id --
+-- copied onto the approval-dispatched build turn's own effort exactly as
+-- build_model_id -> model_id already happens today (httpapi/decideplan.go).
+--
+-- No Narvi-side enum, no CHECK constraint on the value: valid values are
+-- owned per-model by OpenCode's own catalog `variants` maps (§29.8) --
+-- Narvi validates nothing here but nullability, exactly like model_id's
+-- own "no allowlist" precedent (§25.1).
+ALTER TABLE turns ADD COLUMN effort TEXT;
+ALTER TABLE sessions ADD COLUMN build_effort TEXT;

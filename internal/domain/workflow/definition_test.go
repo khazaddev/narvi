@@ -90,6 +90,7 @@ func TestValidateDefinition(t *testing.T) {
 	t.Parallel()
 
 	emptyModel := ""
+	emptyEffort := ""
 
 	tests := []struct {
 		name    string
@@ -174,6 +175,12 @@ func TestValidateDefinition(t *testing.T) {
 			def:     validSingleStep,
 			mutate:  func(d *workflow.Definition) { d.Steps[0].ModelID = &emptyModel },
 			wantErr: workflow.ErrEmptyModelID,
+		},
+		{
+			name:    "effort set but empty",
+			def:     validSingleStep,
+			mutate:  func(d *workflow.Definition) { d.Steps[0].Effort = &emptyEffort },
+			wantErr: workflow.ErrEmptyEffort,
 		},
 		{
 			name:    "empty prompt template",

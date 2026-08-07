@@ -627,7 +627,7 @@ func (q *Queries) ListWorkflowEdgesForDefinition(ctx context.Context, workflowDe
 }
 
 const listWorkflowStepDefinitions = `-- name: ListWorkflowStepDefinitions :many
-SELECT id, workflow_definition_id, step_order, kind, model_id, prompt_template, execution_scope, conversation_continuity, hitl_before, hitl_after, canvas_position, created_at, updated_at FROM workflow_step_definitions WHERE workflow_definition_id = $1 ORDER BY step_order
+SELECT id, workflow_definition_id, step_order, kind, model_id, prompt_template, execution_scope, conversation_continuity, hitl_before, hitl_after, canvas_position, created_at, updated_at, effort FROM workflow_step_definitions WHERE workflow_definition_id = $1 ORDER BY step_order
 `
 
 func (q *Queries) ListWorkflowStepDefinitions(ctx context.Context, workflowDefinitionID pgtype.UUID) ([]WorkflowStepDefinition, error) {
@@ -653,6 +653,7 @@ func (q *Queries) ListWorkflowStepDefinitions(ctx context.Context, workflowDefin
 			&i.CanvasPosition,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Effort,
 		); err != nil {
 			return nil, err
 		}

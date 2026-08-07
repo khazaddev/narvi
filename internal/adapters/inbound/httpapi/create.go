@@ -604,6 +604,9 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// context" convention (a non-plan-mode session simply never reads
 		// it back).
 		BuildModelID: (*string)(req.BuildModelId),
+		// Step 59 (§29.8): build_effort mirrors build_model_id's own
+		// shape/storage convention exactly, one field over.
+		BuildEffort: (*string)(req.BuildEffort),
 		// ParentSessionID/SpawnDepth (Step 48, §17.2, migrations/000045):
 		// zero values (pgtype.UUID{}, int32(0)) for every ordinary
 		// session -- see ChildSessionOptions' own doc comment.
@@ -629,6 +632,7 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 			Status:    sqlcgen.TurnStatusPending,
 			Prompt:    (*string)(req.Prompt),
 			ModelID:   (*string)(req.ModelId),
+			Effort:    (*string)(req.Effort),
 			PlanMode:  req.PlanMode,
 		}); err != nil {
 			logger.Error("httpapi: create turn failed", "error", err)
