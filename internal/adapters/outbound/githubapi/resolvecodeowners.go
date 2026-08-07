@@ -9,7 +9,26 @@ import (
 
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/codeowners"
+	"github.com/khazaddev/narvi/internal/platform"
 )
+
+// maxCodeOwnerRefsPerCall bounds how many DISTINCT owner tokens
+// (individual "@login" entries and "@org/team-slug" entries, each costing
+// one outbound GitHub call the first time it is seen within this one
+// call) ONE ResolveCodeOwners call will ever resolve -- mirrors
+// maxOpenPRsForUser's own (listopenprs.go) identical "bounded from day
+// one" discipline (§60 review finding B3). A CODEOWNERS file's content is,
+// in the end, arbitrary text: it is read from the PR's own BASE ref (this
+// file's own ResolveCodeOwners doc comment -- deliberately never the
+// attacker-controlled head), but a repository's base-branch CODEOWNERS
+// file can still be shaped by anyone with write/PR access to that branch
+// over time. Without this cap, a single CODEOWNERS file naming thousands
+// of distinct owners would fan out that many outbound calls EVERY time
+// any PR's provenance is resolved against it -- and every one of those
+// calls authenticates as the INBOX VIEWER's own token (§16.2), not the
+// CODEOWNERS file's author, so the cost lands entirely on a person who
+// did nothing but have a PR assigned to them.
+const maxCodeOwnerRefsPerCall = 50
 
 // codeownersCandidatePaths is every location GitHub itself checks for a
 // CODEOWNERS file, IN PRECEDENCE ORDER -- GitHub's own docs: "GitHub
@@ -65,6 +84,21 @@ type simpleUserResponse struct {
 // -- it never fails the whole call, mirroring this package's own
 // established "one bad sub-fetch degrades gracefully, never aborts the
 // batch" discipline (mergedbetween.go's buildMergedPR).
+//
+// Bounded to at most maxCodeOwnerRefsPerCall DISTINCT NEW owner-token
+// resolutions (§60 review finding B3) -- once reached, any FURTHER
+// not-yet-seen "@login"/"@org/team-slug" token is simply skipped for the
+// rest of this call (already-resolved tokens, cached in userCache/
+// teamCache below, keep resolving for free regardless), and a single
+// warning is logged, once, naming which (owner, repo) hit the cap --
+// never silently. This is deliberately in ADDITION to, not instead of,
+// internal/app/decisioninbox's own separate per-inbox-BUILD budget
+// (aggregate.go's codeOwnersBudget): this cap bounds a single CALL (one
+// PR's own CODEOWNERS file), that one bounds the SUM across every PR one
+// Build invocation resolves -- the same two-layer shape maxOpenPRsForUser
+// (a per-call bound) and maxAttentionRowsPerSource (a per-source-scan
+// bound) already establish independently elsewhere in this codebase, not
+// a single shared budget doing both jobs at once.
 func (a *Adapter) ResolveCodeOwners(ctx context.Context, spec ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
 	content, found, err := a.fetchCodeownersContent(ctx, spec.Owner, spec.Repo, spec.Ref, spec.Token)
 	if err != nil {
@@ -78,6 +112,8 @@ func (a *Adapter) ResolveCodeOwners(ctx context.Context, spec ports.ResolveCodeO
 
 	userCache := map[string]ports.Owner{}
 	teamCache := map[string][]ports.Owner{}
+	remainingNewResolutions := maxCodeOwnerRefsPerCall
+	truncated := false
 
 	var result []ports.Owner
 	for _, path := range spec.Paths {
@@ -88,9 +124,19 @@ func (a *Adapter) ResolveCodeOwners(ctx context.Context, spec ports.ResolveCodeO
 		for _, ref := range rule.Owners {
 			switch ref.Kind {
 			case codeowners.OwnerKindEmail:
+				// Never costs an outbound call (no GitHub lookup at all --
+				// see ResolveCodeOwners' own doc comment), so never counted
+				// against the cap.
 				result = append(result, ports.Owner{Email: ref.Login, Path: path, Pattern: rule.Pattern})
 
 			case codeowners.OwnerKindUser:
+				if _, cached := userCache[ref.Login]; !cached {
+					if remainingNewResolutions <= 0 {
+						truncated = true
+						continue
+					}
+					remainingNewResolutions--
+				}
 				owner, err := a.resolveCodeOwnerUser(ctx, ref.Login, spec.Token, userCache)
 				if err != nil {
 					continue
@@ -99,6 +145,14 @@ func (a *Adapter) ResolveCodeOwners(ctx context.Context, spec ports.ResolveCodeO
 				result = append(result, owner)
 
 			case codeowners.OwnerKindTeam:
+				key := ref.OrgSlug + "/" + ref.TeamSlug
+				if _, cached := teamCache[key]; !cached {
+					if remainingNewResolutions <= 0 {
+						truncated = true
+						continue
+					}
+					remainingNewResolutions--
+				}
 				members, err := a.resolveCodeOwnerTeam(ctx, ref.OrgSlug, ref.TeamSlug, spec.Token, teamCache)
 				if err != nil {
 					continue
@@ -109,6 +163,11 @@ func (a *Adapter) ResolveCodeOwners(ctx context.Context, spec ports.ResolveCodeO
 				}
 			}
 		}
+	}
+
+	if truncated {
+		platform.Logger(ctx).Warn("githubapi: resolve code owners: per-call owner-resolution cap reached, some CODEOWNERS entries were not resolved",
+			"owner", spec.Owner, "repo", spec.Repo, "ref", spec.Ref, "max_refs_per_call", maxCodeOwnerRefsPerCall)
 	}
 
 	return result, nil

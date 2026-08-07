@@ -24,7 +24,6 @@ import (
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/authz"
-	decisioninboxdomain "github.com/khazaddev/narvi/internal/domain/decisioninbox"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -78,6 +77,7 @@ func decisionInboxResultToDTO(result decisioninbox.Result) restdtos.ListDecision
 	resp := restdtos.ListDecisionInboxResponse{
 		Items:                     items,
 		ScmAsOf:                   result.SCMAsOf,
+		ScmFetchFailed:            result.SCMFetchFailed,
 		DecisionLatencySampleSize: result.DecisionLatencySampleSize,
 		DecisionLatencyComputed:   result.DecisionLatencyComputed,
 	}
@@ -118,17 +118,27 @@ func decisionInboxItemToDTO(it decisioninbox.Item) restdtos.DecisionInboxItem {
 		if it.Provenance.Pattern != "" {
 			dto.ProvenancePattern = &it.Provenance.Pattern
 		}
-	}
-	if it.RiskLabel != "" {
-		dto.RiskLabel = &it.RiskLabel
-	}
-	if it.Kind == decisioninboxdomain.KindReadyToMerge || it.Kind == decisioninboxdomain.KindNeedsReview {
+
+		// ciGreen/findings/isHandoff/hasApprovingReview are PR-shaped
+		// fields, gated on "is this row a PR at all" (it.Provenance is
+		// set unconditionally by buildPROpenItem for EVERY PR row) --
+		// deliberately NOT on Kind (§60 review finding C4): Kind alone
+		// cannot distinguish a handoff PR (KindAwaitingApproval,
+		// Provenance non-nil) from an ordinary plan-approval row
+		// (KindAwaitingApproval, Provenance nil), so the previous
+		// Kind==ready_to_merge/needs_review gate silently nulled
+		// isHandoff for the ONE row kind that field exists to identify.
 		ciGreen := it.CIGreen
 		dto.CiGreen = &ciGreen
 		findings := it.Findings
 		dto.Findings = &findings
 		isHandoff := it.IsHandoff
 		dto.IsHandoff = &isHandoff
+		hasApprovingReview := it.HasApprovingReview
+		dto.HasApprovingReview = &hasApprovingReview
+	}
+	if it.RiskLabel != "" {
+		dto.RiskLabel = &it.RiskLabel
 	}
 
 	if it.PlanID != "" {
@@ -163,17 +173,32 @@ func decisionInboxItemToDTO(it decisioninbox.Item) restdtos.DecisionInboxItem {
 // Merge endpoint; mockups.html decision 33: "Auto-approved still means
 // human-merged... The Merge button re-validates CI, approval state, and
 // RBAC server-side at click time; the rendered queue is never trusted as
-// authority"). Sequence: decode + validate the request, resolve the
-// caller's own decrypted GitHub token, LIVE-revalidate (decisioninbox.
-// RevalidateForMerge -- never the cache), THEN authz.Authorize
-// (ActionMergePR, OwnedOrJoined=true -- only ever set once revalidation
-// itself has confirmed the PR is currently assigned to this actor), THEN
-// call SourceControl.MergePR, THEN record the audit log. Any step failing
-// stops the sequence -- an already-succeeded GitHub merge is never
-// undone by a later step's own failure (only the audit-log write, which
-// is best-effort and logged, not retried or rolled back, mirroring this
+// authority"). Sequence: decode + validate the request, a CHEAP role-only
+// authz pre-check (§60 review finding A5, below), resolve the caller's
+// own decrypted GitHub token, LIVE-revalidate (decisioninbox.
+// RevalidateForMerge -- never the cache), THEN the SAME authz.Authorize
+// call AGAIN -- now authoritative (ActionMergePR, OwnedOrJoined=true --
+// only ever legitimately true once revalidation itself has confirmed the
+// PR is currently assigned to this actor), THEN call SourceControl.
+// MergePR, THEN record the audit log. Any step failing stops the
+// sequence -- an already-succeeded GitHub merge is never undone by a
+// later step's own failure (only the audit-log write, which is
+// best-effort and logged, not retried or rolled back, mirroring this
 // codebase's own "the merge already happened, a logging failure must
 // never claim otherwise" discipline).
+//
+// The "approval state" mockups.html's own decision 33 says this endpoint
+// re-validates (§60 review finding A4) is SPECIFICALLY GitHub's own
+// HasChangesRequested fact, enforced inside RevalidateForMerge -- a hard
+// block, since nobody should one-click merge a PR a human explicitly
+// requested changes on. It is NOT GitHub's own HasApprovingReview: §16.1
+// defines ready_to_merge's own "approved" as auto-approval BY THE
+// DETERMINISTIC ELIGIBILITY ENGINE (RevalidateForMerge's own
+// ComputeAutoApprovalEligible re-check), never a human GitHub review --
+// requiring one here on top of that would silently redefine what
+// "auto-approved" means for exactly the population this endpoint exists
+// to fast-path. HasApprovingReview is surfaced to the actor as a plain
+// display field instead (decisioninbox.Item.HasApprovingReview).
 func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl, auditLog *postgres.AuditLogStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -212,6 +237,37 @@ func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl
 			return
 		}
 
+		// Cheap, role-only authz PRE-CHECK (§60 review finding A5) --
+		// short-circuits a viewer (denied ActionMergePR unconditionally,
+		// regardless of OwnedOrJoined -- see authz.Authorize's own
+		// matrix, internal/domain/authz/authorize.go) at ZERO I/O, before
+		// ever paying for the expensive live SCM re-validation below (up
+		// to ~250 GitHub calls under a 3-minute budget, §16.2). Passing
+		// OwnedOrJoined=true here is NOT a claim that ownership is
+		// already confirmed -- it cannot be, this early -- it is a
+		// deliberately PERMISSIVE assumption for a role-only admit/reject
+		// test: a role this check rejects (a viewer) would ALSO be
+		// rejected by the real, ownership-confirmed check below, so this
+		// can never produce a false ALLOW; a role it admits (member,
+		// maintainer, admin) still goes on to the authoritative check
+		// below, unchanged, once revalidation has actually confirmed
+		// assignment. This preserves the documented "OwnedOrJoined is
+		// only ever legitimately true once revalidation has confirmed
+		// it" property for a MEMBER specifically (action.go's own
+		// ActionMergePR doc comment) -- this pre-check does not weaken or
+		// replace that, it only ever grants a cheap EARLY rejection to a
+		// role the real check would reject anyway.
+		actor := authz.Actor{UserID: actorUserID.String(), Role: authz.Role(authUser.Role)}
+		if err := authz.Authorize(actor, authz.ActionMergePR, authz.Resource{OwnedOrJoined: true}); err != nil {
+			if errors.Is(err, authz.ErrForbidden) {
+				writeError(w, http.StatusForbidden, "not authorized to perform this action")
+				return
+			}
+			logger.Error("httpapi: authz.Authorize failed", "error", err, "action", string(authz.ActionMergePR))
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
 		// pgx.ErrNoRows (no linked GitHub identity) is an expected, common
 		// outcome -- never logged as an error, mirroring ApplySuggestion's
 		// own identical "no usable git credential" 403 (reviewfindings.go).
@@ -243,13 +299,16 @@ func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl
 			return
 		}
 
-		// RBAC, LAST -- only once live revalidation has itself confirmed
-		// this PR is currently assigned to the actor does OwnedOrJoined
-		// become true (authz.ActionMergePR's own doc comment,
-		// internal/domain/authz/action.go): never trusted from the
-		// client-rendered queue, exactly like every other fact this
-		// handler re-checks.
-		actor := authz.Actor{UserID: actorUserID.String(), Role: authz.Role(authUser.Role)}
+		// RBAC, AUTHORITATIVE -- the pre-check above only ever proved this
+		// actor's ROLE is not unconditionally denied; OwnedOrJoined only
+		// becomes true, FOR REAL, once live revalidation has itself
+		// confirmed this PR is currently assigned to the actor
+		// (authz.ActionMergePR's own doc comment, internal/domain/authz/
+		// action.go): never trusted from the client-rendered queue,
+		// exactly like every other fact this handler re-checks. This is
+		// the gate a member's own verdict genuinely depends on (unlike
+		// admin/maintainer, unconditionally allowed either way) -- the
+		// cheap pre-check above cannot replace it.
 		if err := authz.Authorize(actor, authz.ActionMergePR, authz.Resource{OwnedOrJoined: true}); err != nil {
 			if errors.Is(err, authz.ErrForbidden) {
 				writeError(w, http.StatusForbidden, "not authorized to perform this action")

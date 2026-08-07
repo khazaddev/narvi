@@ -138,20 +138,53 @@ func NewSCMCache(sourceControl ports.SourceControl, timeouts platform.Timeouts) 
 // ACTUALLY fetched (a cache hit returns the ORIGINAL fetch's own instant,
 // never now) -- the "as of 2 min ago" staleness §16.2 requires be
 // displayed, never silently masked.
+//
+// A truncated fetch (ports.SourceControl.ListOpenPRsForUser's own
+// truncated return -- §60 review finding C1: a degraded/partial read,
+// e.g. one of GitHub's two underlying search queries itself failed while
+// the other still returned a real, if incomplete, result) is NEVER
+// cached: the caller still gets today's best-effort partial result
+// (never blanked out), but writing it into the cache for the full TTL
+// would silently present a transient, partial read as a confirmed-
+// complete, fresh empty-or-partial queue for up to
+// DecisionInboxSCMCacheTTL -- the exact "never presented as live truth"
+// hazard §16.2 exists to prevent. Only the NEXT request is affected, by
+// retrying live instead of serving a stale, possibly-still-wrong cache
+// hit.
 func (c *SCMCache) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPRsForUserSpec, now time.Time) (prs []ports.OpenPR, asOf time.Time, err error) {
 	if cached, fetchedAt, ok := c.openPRs.get(spec.GitHubExternalID, now); ok {
 		return cached, fetchedAt, nil
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, c.timeouts.GitHubListOpenPRsForUserTimeout)
-	defer cancel()
-	prs, err = c.sourceControl.ListOpenPRsForUser(callCtx, spec)
+	prs, truncated, err := c.sourceControl.ListOpenPRsForUser(callCtx, spec)
+	cancel()
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("decisioninbox: list open prs for user: %w", err)
 	}
 
-	c.openPRs.set(spec.GitHubExternalID, prs, now, c.timeouts.DecisionInboxSCMCacheTTL)
-	return prs, now, nil
+	// fetchedAt (§60 review finding, "born-expired entries"): anchored on
+	// FETCH COMPLETION, a fresh now taken AFTER the (potentially slow, up
+	// to GitHubListOpenPRsForUserTimeout == 3 minutes) call above returns
+	// -- deliberately NOT the pre-fetch `now` parameter this method was
+	// called with. expiresAt was previously computed from that pre-fetch
+	// instant while the fetch itself could take up to 3 minutes against a
+	// 2-minute TTL (DecisionInboxSCMCacheTTL): a slow fetch for a heavy
+	// user could write an entry get() would immediately reject as already
+	// expired, so the cache never amortized for exactly the users it
+	// exists to help. The displayed asOf below is this SAME completion
+	// instant -- still the real, honest "when the data was actually
+	// fetched" moment §16.2 requires, just measured at the end of the
+	// call rather than the (arbitrarily earlier, for a slow fetch) start.
+	fetchedAt := time.Now()
+
+	if truncated {
+		platform.Logger(ctx).Warn("decisioninbox: list open prs for user returned a truncated/degraded result -- not caching", "github_external_id", spec.GitHubExternalID)
+		return prs, fetchedAt, nil
+	}
+
+	c.openPRs.set(spec.GitHubExternalID, prs, fetchedAt, c.timeouts.DecisionInboxSCMCacheTTL)
+	return prs, fetchedAt, nil
 }
 
 // ResolveCodeOwners returns spec's own owner resolution, live-fetching on

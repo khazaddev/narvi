@@ -800,7 +800,20 @@ type SourceControl interface {
 	// this port except MergePR below -- this is a best-effort READ feeding
 	// a cached, explicitly-stale-labeled read model (§16.2), never an
 	// interactive action a caller needs a granular failure reason for.
-	ListOpenPRsForUser(ctx context.Context, spec ListOpenPRsForUserSpec) ([]OpenPR, error)
+	//
+	// truncated mirrors ListMergedBetween's own identical (merged,
+	// truncated, err) shape below (§60 review finding C1): true whenever
+	// this adapter KNOWS the returned prs slice is an incomplete picture
+	// of every PR spec's own account is actually involved in right now --
+	// e.g. one of the underlying discovery queries itself failed (a
+	// transient 5xx, a rate limit) while another still returned a real,
+	// if partial, result; prs itself is never blanked out just because
+	// truncated is true (mirrors ListMergedBetween's own "a confirmed
+	// exclusion is never folded into truncated, only a genuine coverage
+	// gap is" discipline). A caller must never cache a truncated=true
+	// result and present it later identically to a confirmed-complete
+	// read -- see internal/app/decisioninbox.SCMCache's own handling.
+	ListOpenPRsForUser(ctx context.Context, spec ListOpenPRsForUserSpec) (prs []OpenPR, truncated bool, err error)
 
 	// ResolveCodeOwners resolves CODEOWNERS ownership for every path in
 	// spec.Paths against the repo's own CODEOWNERS file at spec.Ref (Step

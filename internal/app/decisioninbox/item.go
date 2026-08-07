@@ -23,7 +23,17 @@ type Item struct {
 
 	// EnteredQueueAt is when this row first became a pending decision --
 	// SortIndex's own ranking input, and Age/IsStale's own reference
-	// point.
+	// point. For a PR row specifically (KindReadyToMerge/KindNeedsReview,
+	// and the handoff sub-case of KindAwaitingApproval) this is an
+	// APPROXIMATION -- the PR's own GitHub creation time (pr.CreatedAt),
+	// not the instant it became assigned/eligible for THIS actor
+	// specifically -- see aggregate.go's buildPROpenItem for the full
+	// "why", including why this errs in the OPPOSITE direction from the
+	// outbox's own similarly-approximated timestamps (§60 review finding
+	// C3: this one can only ever UNDER-state how recently a PR became a
+	// decision, which means the stale flag below can OVER-fire on an
+	// old-but-recently-assigned PR, not fail safely quiet the way the
+	// outbox's own approximation does).
 	EnteredQueueAt time.Time
 	AgeSeconds     int64
 	Stale          bool
@@ -39,6 +49,17 @@ type Item struct {
 	CIGreen      bool
 	Findings     int
 	IsHandoff    bool
+	// HasApprovingReview is the PR's own current review-decision fact
+	// (ports.OpenPR.HasApprovingReview) -- display only: §16.1 defines
+	// ready_to_merge's own "approval" as the deterministic eligibility
+	// engine's auto-approval, never a human GitHub review, so this field
+	// feeds NO eligibility computation anywhere in this package (see
+	// HasChangesRequested's own doc comment on RevalidateForMerge for the
+	// one review-decision fact that DOES gate a merge). Populated
+	// unconditionally by buildPROpenItem, mirroring CIGreen/Findings/
+	// IsHandoff immediately above (§60 review finding A4: this field used
+	// to be fetched from GitHub and then read by nothing at all).
+	HasApprovingReview bool
 
 	// Plan fields (KindAwaitingApproval, non-handoff).
 	PlanID           string

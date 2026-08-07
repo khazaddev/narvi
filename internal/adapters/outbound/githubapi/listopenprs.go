@@ -167,10 +167,22 @@ type openPRDetailResponse struct {
 // ListOpenPRsForUser implements ports.SourceControl -- see this file's own
 // top doc comment for the full design (login resolution, candidate
 // discovery, cost).
-func (a *Adapter) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, error) {
+//
+// truncated (§60 review finding C1) is true iff at least one of the two
+// discovery queries below itself failed -- a genuine coverage gap, since
+// the SURVIVING query's own results are still returned (never blanked
+// out, this function's own established best-effort-per-query discipline,
+// unchanged), but the FAILING query's own candidates are simply never
+// discovered at all. This method still reports no analogous truncation
+// signal for a PER-PR buildOpenPR failure below (unlike the top-level
+// discovery queries) -- §16.2 already frames this whole read as advisory,
+// short-TTL-cached, and re-validated at action time, so an occasionally-
+// missing ROW is a staleness/coverage nicety, never a correctness hazard
+// the way missing an entire QUERY's worth of candidates is.
+func (a *Adapter) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPRsForUserSpec) (prs []ports.OpenPR, truncated bool, err error) {
 	login, err := a.resolveLoginByID(ctx, spec.GitHubExternalID, spec.Token)
 	if err != nil {
-		return nil, fmt.Errorf("githubapi: list open prs for user: resolve login: %w", err)
+		return nil, false, fmt.Errorf("githubapi: list open prs for user: resolve login: %w", err)
 	}
 
 	type prKey struct {
@@ -185,7 +197,11 @@ func (a *Adapter) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPRs
 		if searchErr != nil {
 			// Best-effort per-query: one qualifier's own search failing
 			// (e.g. a transient 5xx) should never blank out whatever the
-			// OTHER qualifier already found.
+			// OTHER qualifier already found -- but it DOES mean this
+			// call's own result is an incomplete picture, so truncated is
+			// set regardless of whether the OTHER qualifier's own query
+			// still succeeds.
+			truncated = true
 			continue
 		}
 		for _, item := range items {
@@ -214,18 +230,15 @@ func (a *Adapter) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPRs
 		if !ok {
 			// Best-effort per-PR, mirrors buildMergedPR's own identical
 			// "a genuine sub-fetch failure excludes just this one row"
-			// discipline (mergedbetween.go) -- this method reports no
-			// analogous "truncated" signal (unlike ListMergedBetween)
-			// since §16.2 already frames this whole read as advisory,
-			// short-TTL-cached, and re-validated at action time -- an
-			// occasionally-missing row here is a staleness/coverage
-			// nicety, never a correctness hazard the way an incomplete
-			// release-compliance manifest would be.
+			// discipline (mergedbetween.go) -- see this method's own top
+			// doc comment for why this specific degrade is NOT folded
+			// into truncated, unlike a whole discovery query failing
+			// above.
 			continue
 		}
 		result = append(result, pr)
 	}
-	return result, nil
+	return result, truncated, nil
 }
 
 // resolveLoginByID resolves externalID (a numeric GitHub account id, as a
@@ -300,7 +313,11 @@ func (a *Adapter) buildOpenPR(ctx context.Context, owner, repo string, number in
 
 	ci := ports.CIConclusionUnknown
 	if detail.Head.SHA != "" {
-		ci = a.fetchCIConclusion(ctx, owner, repo, detail.Head.SHA, token)
+		// fetchCIConclusionLive, deliberately NOT fetchCIConclusion (§60
+		// review finding A2) -- see that function's own doc comment for
+		// why a LIVE, pre-merge gate needs a STRICT conclusion, distinct
+		// from mergedbetween.go's retrospective-audit-only lenient one.
+		ci = a.fetchCIConclusionLive(ctx, owner, repo, detail.Head.SHA, token)
 	}
 
 	files, filesErr := a.fetchChangedFilePaths(ctx, owner, repo, number, token)
@@ -368,6 +385,101 @@ func (a *Adapter) buildOpenPR(ctx context.Context, owner, repo string, number in
 	}
 
 	return pr, true
+}
+
+// fetchCIConclusionLive determines an OPEN PR's own CI conclusion AT ITS
+// CURRENT HEAD SHA, for a LIVE, PRE-MERGE gate -- the decision inbox's own
+// read-model classification (KindReadyToMerge) and, via the exact same
+// SourceControl.ListOpenPRsForUser call, decisioninbox.RevalidateForMerge's
+// own re-check at click time (§16.2's own "the rendered queue is never
+// trusted as authority"). See mergedbetween.go's fetchCIConclusion for the
+// RETROSPECTIVE §15.2 audit sibling this function is deliberately NOT --
+// that function's own doc comment now cross-references this one; the two
+// must never be merged back into one, and never share a caller (§60
+// review finding A2).
+//
+// STRICT, unlike fetchCIConclusion's lenient "any confirmed success, no
+// confirmed failure" rule: an incomplete check run (Conclusion == nil,
+// i.e. still queued/in_progress on GitHub's Checks API) or a "cancelled"
+// conclusion from EITHER CI surface means CI is NOT green here, full
+// stop -- reported as ports.CIConclusionUnknown (never Success), which
+// this port's own callers already treat identically to Failure for
+// eligibility purposes (ComputeAutoApprovalEligible checks
+// CIConclusion == CIConclusionSuccess, nothing weaker). Reusing
+// fetchCIConclusion's own lenient rule here would let a single fast,
+// low-value check (e.g. lint) finishing green stand in for "the whole
+// required suite is green", while five other required checks are still
+// queued -- exactly the "not yet red" masquerading as "green" gap this
+// function exists to close. A genuine, confirmed failure signal still
+// wins over an incomplete one (both already mean "not green" for
+// ComputeAutoApprovalEligible's own purposes, but Failure is the more
+// specific, more useful fact to report when both are true at once).
+func (a *Adapter) fetchCIConclusionLive(ctx context.Context, owner, repo, headSHA, token string) ports.CIConclusion {
+	sawFailure := false
+	sawSuccess := false
+	sawIncomplete := false
+
+	statusPath := fmt.Sprintf("%s/repos/%s/%s/commits/%s/status", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(headSHA))
+	if body, err := a.doGet(ctx, statusPath, token); err == nil {
+		var status combinedStatusResponse
+		if json.Unmarshal(body, &status) == nil {
+			switch status.State {
+			case "failure", "error":
+				sawFailure = true
+			case "success":
+				sawSuccess = true
+			case "pending":
+				// The legacy Status API's own "not yet concluded" state --
+				// the combined-status surface's exact analogue of the
+				// Checks API's Conclusion == nil below.
+				sawIncomplete = true
+			}
+		}
+	}
+
+	checksPath := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(headSHA))
+	if body, err := a.doGet(ctx, checksPath, token); err == nil {
+		var runs checkRunsResponse
+		if json.Unmarshal(body, &runs) == nil {
+			for _, r := range runs.CheckRuns {
+				if r.Conclusion == nil {
+					// Still queued/in_progress -- UNLIKE fetchCIConclusion's
+					// own identical loop, this is never simply skipped: a
+					// live pre-merge gate must never let a check that has
+					// not finished yet read as though it were never
+					// required at all.
+					sawIncomplete = true
+					continue
+				}
+				switch *r.Conclusion {
+				case "cancelled":
+					// Also never green for a live gate, unlike
+					// fetchCIConclusion's own lenient rule, which leaves a
+					// cancelled run contributing to neither sawFailure nor
+					// sawSuccess at all (§60 review finding A2's own
+					// "cancelled is likewise ignored" text).
+					sawIncomplete = true
+				case "success", "neutral":
+					sawSuccess = true
+				default:
+					if ciFailureConclusions[*r.Conclusion] {
+						sawFailure = true
+					}
+				}
+			}
+		}
+	}
+
+	switch {
+	case sawFailure:
+		return ports.CIConclusionFailure
+	case sawIncomplete:
+		return ports.CIConclusionUnknown
+	case sawSuccess:
+		return ports.CIConclusionSuccess
+	default:
+		return ports.CIConclusionUnknown
+	}
 }
 
 func (a *Adapter) fetchOpenPRDetail(ctx context.Context, owner, repo string, number int, token string) (openPRDetailResponse, error) {

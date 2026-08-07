@@ -118,6 +118,21 @@ type Result struct {
 	// timestamp... never presented as live truth").
 	SCMAsOf *time.Time
 
+	// SCMFetchFailed is the third state SCMAsOf==nil alone cannot express
+	// (§60 review finding C1): true iff the actor DOES have a usable
+	// linked GitHub credential but the live PR fetch itself failed
+	// (buildPRItems returned an error -- a revoked token, a GitHub
+	// incident, a timeout), as opposed to SCMAsOf==nil with
+	// SCMFetchFailed==false, which means no linked identity was found at
+	// all, so no SCM read was even ATTEMPTED. The contract (dtos.schema.
+	// json) previously documented scmAsOf==null as meaning ONLY the
+	// latter -- an outage was indistinguishable from "you have no GitHub
+	// linked" to a contract-abiding client, which would render the wrong
+	// empty state. Always false when SCMAsOf is non-nil (a successful
+	// fetch and a failed one are mutually exclusive within one Build
+	// call).
+	SCMFetchFailed bool
+
 	// DecisionLatencyMedian/DecisionLatencySampleSize/
 	// DecisionLatencyComputed mirror §21.1's own "not yet computed
 	// sentinel, distinct from a real zero" discipline for every other
@@ -137,11 +152,13 @@ func Build(ctx context.Context, deps Deps, actorUserID pgtype.UUID, actorRole au
 
 	var items []Item
 	var scmAsOf *time.Time
+	var scmFetchFailed bool
 
 	if login, token, ok := resolveActorGitHubCredential(ctx, deps, actorUserID); ok {
 		prItems, asOf, err := buildPRItems(ctx, deps, login, token, now)
 		if err != nil {
 			logger.Error("decisioninbox: build pr items failed", "error", err)
+			scmFetchFailed = true
 		} else {
 			items = append(items, prItems...)
 			scmAsOf = &asOf
@@ -169,6 +186,7 @@ func Build(ctx context.Context, deps Deps, actorUserID pgtype.UUID, actorRole au
 	return Result{
 		Items:                     items,
 		SCMAsOf:                   scmAsOf,
+		SCMFetchFailed:            scmFetchFailed,
 		DecisionLatencyMedian:     median,
 		DecisionLatencySampleSize: sampleSize,
 		DecisionLatencyComputed:   computed,
@@ -226,6 +244,11 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 		return nil, time.Time{}, err
 	}
 
+	// One fresh budget per Build call -- see codeOwnersBudget's own doc
+	// comment (§60 review finding B3) for why this must never be shared
+	// across actors/requests the way deps.SCMCache itself is.
+	budget := newCodeOwnersBudget(maxCodeOwnerResolutionsPerBuild)
+
 	items := make([]Item, 0, len(prs))
 	for _, pr := range prs {
 		if pr.Draft {
@@ -234,39 +257,68 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 
 		repoFullName := pr.Owner + "/" + pr.Repo
 
-		if excluded, err := deps.SentinelFixes.ExistsByFixPRNumber(ctx, repoFullName, int32(pr.Number)); err == nil && excluded {
+		excluded, existsErr := deps.SentinelFixes.ExistsByFixPRNumber(ctx, repoFullName, int32(pr.Number))
+		if existsErr != nil {
+			// §17's structural exclusion must fail CLOSED (§60 review
+			// finding A3): a store error means "cannot prove this is NOT
+			// a sentinel-auto-fix follow-up", treated identically to a
+			// CONFIRMED one below -- excluded outright, never best-effort
+			// passed through as if the check had simply found nothing.
+			// isPlatformAuthored (below) already fails closed this same
+			// way; this now matches it.
+			platform.Logger(ctx).Error("decisioninbox: check sentinel-fix exclusion failed -- failing closed (excluding this pr)", "error", existsErr, "repo", repoFullName, "pr_number", pr.Number)
+			continue
+		}
+		if excluded {
 			continue // §17 structural exclusion -- never a row, regardless of any other criterion.
 		}
 
-		item := buildPROpenItem(ctx, deps, pr, repoFullName, actorGitHubID, token, now)
+		item := buildPROpenItem(ctx, deps, pr, repoFullName, actorGitHubID, token, now, budget)
 		items = append(items, item)
 	}
 
 	return items, asOf, nil
 }
 
+// openFindingsUnknownFailClosed is the OpenBlockingFindings value
+// buildPROpenItem substitutes when countOpenFindings itself errors (§60
+// review finding A1) -- any positive value fails ComputeAutoApprovalEligible
+// closed (its own check is a bare "> 0"), so the exact magnitude carries
+// no further meaning beyond that; 1 is chosen purely so a human reading a
+// rendered row sees a small, plausible-looking finding count rather than
+// an obviously-synthetic sentinel like MaxInt32.
+const openFindingsUnknownFailClosed = 1
+
 // buildPROpenItem assembles one Item for an already-filtered, non-draft,
 // non-§17-excluded OpenPR.
-func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullName, actorGitHubID, token string, now time.Time) Item {
-	provenance := resolvePRProvenance(ctx, deps, pr, repoFullName, actorGitHubID, token, now)
+func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullName, actorGitHubID, token string, now time.Time, budget *codeOwnersBudget) Item {
+	provenance := resolvePRProvenance(ctx, deps, pr, repoFullName, actorGitHubID, token, now, budget)
 
 	hasNeedsHuman, riskLabel, isHandoffPR := classifyPRLabels(pr.Labels)
 
-	openFindings := countOpenFindings(ctx, deps, repoFullName, pr.Number)
+	openFindings, findingsErr := countOpenFindings(ctx, deps, repoFullName, pr.Number)
+	if findingsErr != nil {
+		// Fail CLOSED (§60 review finding A1) -- see countOpenFindings'
+		// own doc comment for why a degraded zero here would be actively
+		// dangerous, not merely imprecise.
+		platform.Logger(ctx).Error("decisioninbox: count open findings failed -- failing closed (treated as a blocking finding present)", "error", findingsErr, "repo", repoFullName, "pr_number", pr.Number)
+		openFindings = openFindingsUnknownFailClosed
+	}
 	ciGreen := pr.CIConclusion == ports.CIConclusionSuccess
 
 	item := Item{
-		RepoFullName:   repoFullName,
-		PRNumber:       pr.Number,
-		Title:          pr.Title,
-		HTMLURL:        pr.HTMLURL,
-		HeadSHA:        pr.HeadSHA,
-		Provenance:     &provenance,
-		RiskLabel:      riskLabel,
-		CIGreen:        ciGreen,
-		Findings:       openFindings,
-		IsHandoff:      isHandoffPR,
-		EnteredQueueAt: pr.CreatedAt,
+		RepoFullName:       repoFullName,
+		PRNumber:           pr.Number,
+		Title:              pr.Title,
+		HTMLURL:            pr.HTMLURL,
+		HeadSHA:            pr.HeadSHA,
+		Provenance:         &provenance,
+		RiskLabel:          riskLabel,
+		CIGreen:            ciGreen,
+		Findings:           openFindings,
+		IsHandoff:          isHandoffPR,
+		HasApprovingReview: pr.HasApprovingReview,
+		EnteredQueueAt:     pr.CreatedAt,
 	}
 	item.AgeSeconds = int64(decisioninbox.Age(item.EnteredQueueAt, now).Seconds())
 	item.Stale = decisioninbox.IsStale(item.EnteredQueueAt, now, deps.Timeouts.DecisionInboxStaleAfter)
@@ -295,7 +347,7 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 
 // resolvePRProvenance determines WHY pr is assigned to actorGitHubID --
 // §16.1's own "a first-class field" assignment provenance.
-func resolvePRProvenance(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullName, actorGitHubID, token string, now time.Time) decisioninbox.Provenance {
+func resolvePRProvenance(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullName, actorGitHubID, token string, now time.Time, budget *codeOwnersBudget) decisioninbox.Provenance {
 	in := decisioninbox.ProvenanceInput{RepoFullName: repoFullName}
 
 	for _, a := range pr.Assignees {
@@ -311,14 +363,33 @@ func resolvePRProvenance(ctx context.Context, deps Deps, pr ports.OpenPR, repoFu
 		}
 	}
 
-	if owners, _, err := deps.SCMCache.ResolveCodeOwners(ctx, ports.ResolveCodeOwnersSpec{
-		Owner: pr.Owner, Repo: pr.Repo, Ref: pr.HeadSHA, Paths: pr.ChangedFiles, Token: token,
-	}, now); err == nil {
-		for _, o := range owners {
-			if o.ExternalID == actorGitHubID {
-				in.CodeOwnerMatch = true
-				in.CodeOwnerPattern = o.Pattern
-				break
+	// budget.take gates this call at zero I/O once the per-build
+	// CODEOWNERS-resolution cap is exhausted (§60 review finding B3) --
+	// see codeOwnersBudget's own doc comment. Skipping it here only ever
+	// degrades a display nicety (this ONE PR's provenance falls back to
+	// the "un-pinned requested reviewer" default below, or plain
+	// ProvenanceRequestedReviewer/ProvenanceDirect if either of those
+	// already matched) -- CODEOWNERS resolution is never how a PR is
+	// DISCOVERED (searchOpenPRs' own doc comment), so skipping it can
+	// never hide a row or grant unintended access.
+	//
+	// Ref is pr.BaseRef, deliberately never pr.HeadSHA (§60 review
+	// finding B3's own related hardening): the PR's HEAD is attacker-
+	// chosen (whoever opened/pushed the PR controls it), so resolving
+	// CODEOWNERS there would let a PR's own author dictate which
+	// CODEOWNERS file this call reads for classifying THEIR OWN PR --
+	// GitHub's own real CODEOWNERS enforcement is evaluated against the
+	// repo's base branch, never a PR's head, and this now matches that.
+	if budget.take(ctx) {
+		if owners, _, err := deps.SCMCache.ResolveCodeOwners(ctx, ports.ResolveCodeOwnersSpec{
+			Owner: pr.Owner, Repo: pr.Repo, Ref: pr.BaseRef, Paths: pr.ChangedFiles, Token: token,
+		}, now); err == nil {
+			for _, o := range owners {
+				if o.ExternalID == actorGitHubID {
+					in.CodeOwnerMatch = true
+					in.CodeOwnerPattern = o.Pattern
+					break
+				}
 			}
 		}
 	}
@@ -345,13 +416,36 @@ func resolvePRProvenance(ctx context.Context, deps Deps, pr ports.OpenPR, repoFu
 
 // classifyPRLabels scans pr's own current labels for the three signals
 // this Step's own interim eligibility/handoff classification needs.
+//
+// riskLabel picks the MOST RESTRICTIVE of the review:*-risk labels
+// present -- any high-risk label wins over medium, which wins over low
+// (§60 review finding A6). GitHub's own labels array carries NO ordering
+// guarantee a caller may rely on (verified directly: this codebase's own
+// verdictnotifier.go issues AddLabels then a SEPARATE per-label
+// RemoveLabel call, two independent GitHub calls -- a failed Remove
+// durably leaves BOTH an old and a new risk label on the same PR at
+// once, a genuinely reachable state, not a hypothetical), so picking
+// "whichever label happens to appear last in the slice" would authorize
+// a merge decision on an unspecified, externally-controlled ordering.
+// This mirrors reviewpost.RiskLabel/review.baselineFromRisk's own
+// already-established "unrecognized/ambiguous fails conservative toward
+// the more alarming tier" convention, applied here to "more than one
+// tier present at once" instead of "no tier recognized at all".
 func classifyPRLabels(labels []string) (hasNeedsHuman bool, riskLabel string, isHandoff bool) {
 	for _, l := range labels {
 		switch l {
 		case reviewpost.LabelNeedsHuman:
 			hasNeedsHuman = true
-		case reviewpost.LabelLowRisk, reviewpost.LabelMediumRisk, reviewpost.LabelHighRisk:
-			riskLabel = l
+		case reviewpost.LabelHighRisk:
+			riskLabel = reviewpost.LabelHighRisk
+		case reviewpost.LabelMediumRisk:
+			if riskLabel != reviewpost.LabelHighRisk {
+				riskLabel = reviewpost.LabelMediumRisk
+			}
+		case reviewpost.LabelLowRisk:
+			if riskLabel == "" {
+				riskLabel = reviewpost.LabelLowRisk
+			}
 		case handoff.Label:
 			isHandoff = true
 		}
@@ -359,21 +453,82 @@ func classifyPRLabels(labels []string) (hasNeedsHuman bool, riskLabel string, is
 	return hasNeedsHuman, riskLabel, isHandoff
 }
 
+// maxCodeOwnerResolutionsPerBuild bounds the TOTAL number of
+// ResolveCodeOwners calls ONE Build invocation will make across every
+// candidate PR -- the per-inbox-build half of B3's own two-layer cap
+// (the adapter's own maxCodeOwnerRefsPerCall, githubapi/
+// resolvecodeowners.go, bounds a SINGLE PR's own CODEOWNERS fan-out;
+// this bounds the SUM across up to maxOpenPRsForUser PRs in one page
+// load) -- §60 review finding B3: a victim whose review is requested on
+// many PRs, each carrying a moderately large CODEOWNERS file, still
+// cannot drive an unbounded number of outbound calls on the victim's own
+// token in one inbox load.
+const maxCodeOwnerResolutionsPerBuild = 200
+
+// codeOwnersBudget bounds how many MORE ResolveCodeOwners calls the
+// CURRENT Build invocation is still willing to make. A fresh budget is
+// created once per Build call (buildPRItems) and threaded down through
+// buildPROpenItem/resolvePRProvenance -- it must NEVER be shared across
+// actors/requests the way deps.SCMCache itself is (SCMCache is
+// constructed once, process-wide, at wiring time): a budget living
+// there would leak across unrelated users' own inbox loads instead of
+// bounding each one independently, exactly the per-victim isolation
+// this cap exists to provide.
+type codeOwnersBudget struct {
+	remaining       int
+	truncatedLogged bool
+}
+
+// newCodeOwnersBudget builds a fresh, per-Build-call budget.
+func newCodeOwnersBudget(limit int) *codeOwnersBudget {
+	return &codeOwnersBudget{remaining: limit}
+}
+
+// take reports whether the caller may still make one more
+// ResolveCodeOwners call this Build invocation -- false once the
+// per-build cap is exhausted, in which case the FIRST such call logs a
+// warning (never silently); every later call this same Build invocation
+// makes after that stays silent, so one truncated inbox load produces
+// exactly one log line, not one per remaining PR.
+func (b *codeOwnersBudget) take(ctx context.Context) bool {
+	if b.remaining <= 0 {
+		if !b.truncatedLogged {
+			platform.Logger(ctx).Warn("decisioninbox: codeowners resolution budget exhausted for this inbox build -- remaining prs' codeowners provenance will be skipped", "max_per_build", maxCodeOwnerResolutionsPerBuild)
+			b.truncatedLogged = true
+		}
+		return false
+	}
+	b.remaining--
+	return true
+}
+
 // countOpenFindings counts repoFullName/prNumber's own STILL-OPEN
 // (reviewpost.FindingStatusOpen) review_findings rows -- a rebutted or
 // fix-pending/open/merged/applied finding does not count (each already
-// has an explicit resolution). A fetch failure degrades to zero (never
-// treated as "definitely no open findings" for any SECURITY-relevant
-// purpose -- but this Step's own eligibility check already requires the
-// risk label to be exactly LabelLowRisk before this count matters at all,
-// so a degraded zero here can only ever make a PR look SLIGHTLY more
-// eligible than a fully-confirmed read would, never the more dangerous
-// direction of hiding a genuinely open, unresolved finding that WOULD
-// have been found).
-func countOpenFindings(ctx context.Context, deps Deps, repoFullName string, prNumber int) int {
+// has an explicit resolution).
+//
+// A fetch failure is propagated to the caller (§60 review finding A1) --
+// it must NEVER degrade to zero. This function's own doc comment used to
+// justify a degraded zero here by claiming "this Step's own eligibility
+// check already requires the risk label to be exactly LabelLowRisk
+// before this count matters at all" -- that reasoning was backwards:
+// ComputeAutoApprovalEligible's OpenBlockingFindings > 0 check and its
+// RiskLabel == LabelLowRisk check are two INDEPENDENT AND-conditions,
+// not one gated behind the other -- a low-risk PR WITH a genuinely open,
+// unresolved finding is EXACTLY the population this count exists to
+// keep out of ready_to_merge, so a degraded zero on a store error would
+// silently flip that PR from ineligible to eligible, the opposite of
+// this codebase's own fail-conservative discipline (isPlatformAuthored,
+// this same file, already fails closed on ITS OWN store error -- this
+// now matches it). Each of this function's own two callers fails closed
+// in the way appropriate to its own context: aggregate.go's
+// buildPROpenItem degrades the affected row to non-ready_to_merge rather
+// than failing the whole read model; revalidate.go's RevalidateForMerge
+// propagates the error outright, refusing the merge.
+func countOpenFindings(ctx context.Context, deps Deps, repoFullName string, prNumber int) (int, error) {
 	findings, err := deps.ReviewFindings.ListOpenAndRebutted(ctx, repoFullName, int32(prNumber))
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	count := 0
 	for _, f := range findings {
@@ -381,7 +536,7 @@ func countOpenFindings(ctx context.Context, deps Deps, repoFullName string, prNu
 			count++
 		}
 	}
-	return count
+	return count, nil
 }
 
 // isPlatformAuthored reports whether SOME Narvi session pushed and opened
