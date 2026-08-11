@@ -100,6 +100,14 @@ type SessionCoalescer struct {
 	Identities   *postgres.IdentityStore
 	Users        *postgres.UserStore
 	Participants *postgres.ParticipantStore
+
+	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// check", §20.4) is threaded through to the REUSE path's own
+	// httpapi.CreateTurnForBot call below exactly like every other
+	// createTurnLocked-reaching caller now gets -- production wiring
+	// (cmd/control-plane/main.go) passes the SAME platform.Config.
+	// EpistemicCheckDefault value every other caller does.
+	EpistemicCheckDefault bool
 }
 
 // CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
@@ -355,7 +363,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// is the SAME already-resolved commenter identity passed to the
 		// authz checks above (Valid iff linked, invalid/bot-attributed
 		// otherwise), never a second, independently-resolved actor.
-		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, actor)
+		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, c.EpistemicCheckDefault, actor)
 		if err != nil {
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}

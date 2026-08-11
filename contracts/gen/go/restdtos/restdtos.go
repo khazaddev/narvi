@@ -973,6 +973,18 @@ type CreateSessionRequest struct {
 	// Narvi-side enum.
 	Effort CreateSessionRequestEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
 
+	// Optional (Step 61, 'builder epistemic pre-action check', §20.4), mirroring
+	// buildModelId's own optional-key convention exactly: this session's own override
+	// of the platform-wide default for the devil's-advocate pre-action check on its
+	// own (non-plan-mode) build turns. Absent/null means 'use platform.Config's own
+	// global default' (off, unless an operator has turned the default on) -- a
+	// non-null value always wins regardless of that default. Stored as
+	// sessions.epistemic_check_enabled
+	// (migrations/000066_builder_epistemic_check.up.sql). Session-scoped, not
+	// turn-scoped, exactly like buildModelId/buildEffort -- CreateTurnRequest does
+	// NOT carry this field.
+	EpistemicCheckEnabled CreateSessionRequestEpistemicCheckEnabled `json:"epistemicCheckEnabled,omitempty,omitzero" yaml:"epistemicCheckEnabled,omitempty" mapstructure:"epistemicCheckEnabled,omitempty"`
+
 	// Optional (row 27, 'mocking + contract drift', §14.3). Like pathScope above,
 	// this key is genuinely OPTIONAL (may be absent from the request body entirely)
 	// and independent of it -- an Environment can be path-scoped, mock-configured,
@@ -1046,6 +1058,18 @@ type CreateSessionRequestBuildModelId *string
 // maps (GET /api/models, this Step's own catalog endpoint), never a Narvi-side
 // enum.
 type CreateSessionRequestEffort *string
+
+// Optional (Step 61, 'builder epistemic pre-action check', §20.4), mirroring
+// buildModelId's own optional-key convention exactly: this session's own override
+// of the platform-wide default for the devil's-advocate pre-action check on its
+// own (non-plan-mode) build turns. Absent/null means 'use platform.Config's own
+// global default' (off, unless an operator has turned the default on) -- a
+// non-null value always wins regardless of that default. Stored as
+// sessions.epistemic_check_enabled
+// (migrations/000066_builder_epistemic_check.up.sql). Session-scoped, not
+// turn-scoped, exactly like buildModelId/buildEffort -- CreateTurnRequest does NOT
+// carry this field.
+type CreateSessionRequestEpistemicCheckEnabled *bool
 
 // Optional (row 27, 'mocking + contract drift', §14.3). Like pathScope above, this
 // key is genuinely OPTIONAL (may be absent from the request body entirely) and
@@ -2937,6 +2961,102 @@ func (j *Plan) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = Plan(plain)
+	return nil
+}
+
+// Request body for POST /sessions/:id/turn/epistemic-outcome (Step 61, 'builder
+// epistemic pre-action check', §20.2) -- the devil's-advocate preamble's own
+// reporting tool, mirroring
+// PostWorkflowStepOutcomeRequest/PostReviewVerdictRequest's own
+// sandbox-bearer-authenticated-endpoint shape exactly (see reviewverdict.go's doc
+// comment for the full 'why an HTTP endpoint, not a genuine OpenCode/LLM
+// tool-call' reasoning, which applies identically here). Posts onto whichever turn
+// is CURRENTLY the calling session's own live (status='processing') one; the
+// caller names no turn id at all -- the endpoint resolves that itself from the
+// sandbox-authenticated session id alone, exactly like the workflow-step-outcome
+// endpoint's own identical convention.
+type PostEpistemicOutcomeRequest struct {
+	// Matches Postgres turn_epistemic_outcome exactly
+	// (internal/domain/turn.EpistemicOutcome) -- §20.1's own two-tier taxonomy
+	// (minor/strong) plus none (the check ran and found nothing worth even a MINOR
+	// mention). Never inferred from the agent's own natural-language reply (§20.2's
+	// own 'never prompt-only' requirement) -- this typed field is the outcome of
+	// record.
+	Outcome PostEpistemicOutcomeRequestOutcome `json:"outcome" yaml:"outcome" mapstructure:"outcome"`
+}
+
+type PostEpistemicOutcomeRequestOutcome string
+
+const PostEpistemicOutcomeRequestOutcomeMinor PostEpistemicOutcomeRequestOutcome = "minor"
+const PostEpistemicOutcomeRequestOutcomeNone PostEpistemicOutcomeRequestOutcome = "none"
+const PostEpistemicOutcomeRequestOutcomeStrong PostEpistemicOutcomeRequestOutcome = "strong"
+
+var enumValues_PostEpistemicOutcomeRequestOutcome = []interface{}{
+	"none",
+	"minor",
+	"strong",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostEpistemicOutcomeRequestOutcome) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostEpistemicOutcomeRequestOutcome {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostEpistemicOutcomeRequestOutcome, v)
+	}
+	*j = PostEpistemicOutcomeRequestOutcome(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostEpistemicOutcomeRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["outcome"]; raw != nil && !ok {
+		return fmt.Errorf("field outcome in PostEpistemicOutcomeRequest: required")
+	}
+	type Plain PostEpistemicOutcomeRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PostEpistemicOutcomeRequest(plain)
+	return nil
+}
+
+// 201 response body for POST /sessions/:id/turn/epistemic-outcome (Step 61, §20.2)
+// -- confirms which turn actually recorded the posted outcome.
+type PostEpistemicOutcomeResponse struct {
+	// TurnId corresponds to the JSON schema field "turnId".
+	TurnId string `json:"turnId" yaml:"turnId" mapstructure:"turnId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostEpistemicOutcomeResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["turnId"]; raw != nil && !ok {
+		return fmt.Errorf("field turnId in PostEpistemicOutcomeResponse: required")
+	}
+	type Plain PostEpistemicOutcomeResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = PostEpistemicOutcomeResponse(plain)
 	return nil
 }
 

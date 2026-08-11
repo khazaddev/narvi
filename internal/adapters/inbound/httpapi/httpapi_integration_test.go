@@ -341,7 +341,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Post("/{sessionID}/uploads/{uploadID}/complete", httpapi.ConfirmUploadAPI(rig.sessions, rig.participants, rig.pool, rig.artifacts, rig.events, rig.outbox, rig.sandboxes, rig.broadcaster, rig.blobStore, rig.objCfg))
 		r.Get("/{sessionID}/uploads/{uploadID}/content", httpapi.UploadContentAPI(rig.sessions, rig.artifacts, rig.blobStore, rig.objCfg, platform.DefaultTimeouts()))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.auditLog, rig.registry, rig.objCfg))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.auditLog, rig.registry, rig.objCfg, false))
 		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry))
 		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog))
 		// Audit-fix batch (completeness/discoverability, M3) -- see
@@ -431,6 +431,11 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// comment.
 	router.Post("/sessions/{sessionID}/workflow/step-outcome",
 		httpapi.PostWorkflowStepOutcome(rig.sandboxes, rig.workflows))
+	// turn/epistemic-outcome (Step 61, "builder epistemic pre-action
+	// check", §20.2) is mounted the SAME way -- see epistemicoutcome.go's
+	// own doc comment.
+	router.Post("/sessions/{sessionID}/turn/epistemic-outcome",
+		httpapi.PostEpistemicOutcome(rig.sandboxes, rig.turns))
 	// uploads mint/confirm/content (Step 58, §28.4/§28.5) sandbox-bearer
 	// variants are mounted the SAME way -- see uploadmint.go/
 	// uploadconfirm.go/uploadcontent.go's own doc comments.

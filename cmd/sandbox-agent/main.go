@@ -328,6 +328,14 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 	// turn-creation time by createTurnLocked) -- a no-op for a turn with
 	// none of those placeholders present.
 	cmd.Text = renderUploadToolPromptText(cmd.Text, h.cfg.SessionConfig)
+	// Step 61 (§20.2): the SAME mechanism, extended for the devil's-
+	// advocate preamble's own epistemic-outcome-reporting tool
+	// (internal/domain/turn.RenderEpistemicPreamble, rendered at
+	// turn-creation time by createTurnLocked when the check is enabled
+	// for a non-plan-mode turn, §20.3/§20.4) -- a no-op for every turn
+	// with none of those placeholders present, i.e. the overwhelming
+	// common case while the feature stays off by default.
+	cmd.Text = renderEpistemicOutcomeToolPromptText(cmd.Text, h.cfg.SessionConfig)
 
 	h.group.Go(func() error {
 		sink := func(event ports.AgentEvent) {

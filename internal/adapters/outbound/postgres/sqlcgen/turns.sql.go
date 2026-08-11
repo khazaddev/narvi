@@ -15,7 +15,7 @@ const createTurn = `-- name: CreateTurn :one
 
 INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome
 `
 
 type CreateTurnParams struct {
@@ -68,12 +68,49 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.DispatchedSandboxGen,
 		&i.ProgressNotifiedAt,
 		&i.Effort,
+		&i.EpistemicOutcome,
+	)
+	return i, err
+}
+
+const getProcessingTurnForSession = `-- name: GetProcessingTurnForSession :one
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome FROM turns
+WHERE session_id = $1 AND status = 'processing'
+`
+
+// Step 61 ("builder epistemic pre-action check", §20.2) own epistemic-
+// outcome-posting endpoint's first read -- mirrors WorkflowStore's own
+// GetRunningRunForSession/GetLiveStepRunForRun precedent (queries/
+// workflows.sql): the caller (a sandbox-authenticated POST naming no turn
+// id at all, exactly like the workflow-step-outcome endpoint) resolves
+// "the session's own CURRENTLY live turn" itself, from the sandbox-
+// authenticated session id alone. turns_one_processing_per_session
+// (migrations/000005_turns.up.sql) guarantees at most one row can ever
+// match.
+func (q *Queries) GetProcessingTurnForSession(ctx context.Context, sessionID pgtype.UUID) (Turn, error) {
+	row := q.db.QueryRow(ctx, getProcessingTurnForSession, sessionID)
+	var i Turn
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Status,
+		&i.ConversationID,
+		&i.CreatedAt,
+		&i.DispatchedAt,
+		&i.CompletedAt,
+		&i.Prompt,
+		&i.ModelID,
+		&i.PlanMode,
+		&i.DispatchedSandboxGen,
+		&i.ProgressNotifiedAt,
+		&i.Effort,
+		&i.EpistemicOutcome,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome FROM turns
 WHERE id = $1
 `
 
@@ -94,12 +131,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.DispatchedSandboxGen,
 		&i.ProgressNotifiedAt,
 		&i.Effort,
+		&i.EpistemicOutcome,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -130,6 +168,7 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.DispatchedSandboxGen,
 			&i.ProgressNotifiedAt,
 			&i.Effort,
+			&i.EpistemicOutcome,
 		); err != nil {
 			return nil, err
 		}
@@ -171,6 +210,38 @@ func (q *Queries) MarkTurnProgressNotified(ctx context.Context, arg MarkTurnProg
 	return result.RowsAffected(), nil
 }
 
+const setTurnEpistemicOutcome = `-- name: SetTurnEpistemicOutcome :execrows
+UPDATE turns
+SET epistemic_outcome = $2
+WHERE id = $1 AND status = 'processing'
+`
+
+type SetTurnEpistemicOutcomeParams struct {
+	ID               pgtype.UUID           `json:"id"`
+	EpistemicOutcome *TurnEpistemicOutcome `json:"epistemic_outcome"`
+}
+
+// The guarded UPDATE backing that same endpoint (§20.2) -- mirrors
+// SetWorkflowStepRunOutcome's own "WHERE ... AND status = 'running'" guard
+// exactly (queries/workflows.sql), one status value over: re-checks the
+// turn is STILL the live processing one at write time, closing the race
+// where it completed/failed/was cancelled between this endpoint's own
+// GetProcessingTurnForSession read and this write. Unguarded by "AND
+// epistemic_outcome IS NULL" -- deliberately, mirroring
+// SetWorkflowStepRunOutcome's own identical choice: an agent that calls
+// this endpoint more than once for the same still-processing turn (e.g.
+// correcting itself) gets last-write-wins, not a rejected second call.
+// 0 rows affected means the turn is no longer processing (a genuine race,
+// or a stale/foreign turn id having somehow been targeted -- this query
+// takes none, so in practice only the race).
+func (q *Queries) SetTurnEpistemicOutcome(ctx context.Context, arg SetTurnEpistemicOutcomeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setTurnEpistemicOutcome, arg.ID, arg.EpistemicOutcome)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateTurnStatus = `-- name: UpdateTurnStatus :one
 UPDATE turns
 SET status = $2,
@@ -178,7 +249,7 @@ SET status = $2,
     completed_at = COALESCE($4, completed_at),
     dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome
 `
 
 type UpdateTurnStatusParams struct {
@@ -230,6 +301,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.DispatchedSandboxGen,
 		&i.ProgressNotifiedAt,
 		&i.Effort,
+		&i.EpistemicOutcome,
 	)
 	return i, err
 }

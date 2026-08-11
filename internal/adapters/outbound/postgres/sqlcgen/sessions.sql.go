@@ -31,22 +31,23 @@ func (q *Queries) BumpActorEpoch(ctx context.Context, id pgtype.UUID) (int64, er
 
 const createSession = `-- name: CreateSession :one
 
-INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag, build_model_id, build_effort, parent_session_id, spawn_depth)
-VALUES ($1, $2, $3, COALESCE($4, '[]'::jsonb), $5, $6, $7, $8, $9, COALESCE($10, 0))
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort
+INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag, build_model_id, build_effort, parent_session_id, spawn_depth, epistemic_check_enabled)
+VALUES ($1, $2, $3, COALESCE($4, '[]'::jsonb), $5, $6, $7, $8, $9, COALESCE($10, 0), $11)
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort, epistemic_check_enabled
 `
 
 type CreateSessionParams struct {
-	Title           *string            `json:"title"`
-	SpawnSource     SessionSpawnSource `json:"spawn_source"`
-	CreatedBy       pgtype.UUID        `json:"created_by"`
-	Repos           interface{}        `json:"repos"`
-	EnvironmentID   pgtype.UUID        `json:"environment_id"`
-	ProvenanceTag   *string            `json:"provenance_tag"`
-	BuildModelID    *string            `json:"build_model_id"`
-	BuildEffort     *string            `json:"build_effort"`
-	ParentSessionID pgtype.UUID        `json:"parent_session_id"`
-	SpawnDepth      interface{}        `json:"spawn_depth"`
+	Title                 *string            `json:"title"`
+	SpawnSource           SessionSpawnSource `json:"spawn_source"`
+	CreatedBy             pgtype.UUID        `json:"created_by"`
+	Repos                 interface{}        `json:"repos"`
+	EnvironmentID         pgtype.UUID        `json:"environment_id"`
+	ProvenanceTag         *string            `json:"provenance_tag"`
+	BuildModelID          *string            `json:"build_model_id"`
+	BuildEffort           *string            `json:"build_effort"`
+	ParentSessionID       pgtype.UUID        `json:"parent_session_id"`
+	SpawnDepth            interface{}        `json:"spawn_depth"`
+	EpistemicCheckEnabled *bool              `json:"epistemic_check_enabled"`
 }
 
 // Queries backing SessionStore (§4.3). Just enough to prove the pipeline
@@ -81,6 +82,12 @@ type CreateSessionParams struct {
 // compiling and behaving identically: parent_session_id stays NULL,
 // spawn_depth stays 0. httpapi.SpawnChildSession (childsession.go) is this
 // Step's own one real caller that supplies non-default values.
+//
+// epistemic_check_enabled (Step 61, "builder epistemic pre-action check",
+// §20.4, migrations/000066) mirrors build_model_id's own sqlc.narg
+// treatment exactly: every EXISTING call site that never sets it keeps
+// compiling and behaving identically (NULL, "use platform.Config's own
+// global default" -- off, unless an operator has turned the default on).
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error) {
 	row := q.db.QueryRow(ctx, createSession,
 		arg.Title,
@@ -93,6 +100,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		arg.BuildEffort,
 		arg.ParentSessionID,
 		arg.SpawnDepth,
+		arg.EpistemicCheckEnabled,
 	)
 	var i Session
 	err := row.Scan(
@@ -115,12 +123,13 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (S
 		&i.ParentSessionID,
 		&i.SpawnDepth,
 		&i.BuildEffort,
+		&i.EpistemicCheckEnabled,
 	)
 	return i, err
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort FROM sessions
+SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort, epistemic_check_enabled FROM sessions
 WHERE id = $1
 `
 
@@ -147,6 +156,7 @@ func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (Session, erro
 		&i.ParentSessionID,
 		&i.SpawnDepth,
 		&i.BuildEffort,
+		&i.EpistemicCheckEnabled,
 	)
 	return i, err
 }
@@ -170,7 +180,7 @@ func (q *Queries) GetSessionActorEpochForUpdate(ctx context.Context, id pgtype.U
 }
 
 const listFailedSessions = `-- name: ListFailedSessions :many
-SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort FROM sessions
+SELECT id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort, epistemic_check_enabled FROM sessions
 WHERE status = 'failed' AND NOT archived
 ORDER BY updated_at DESC
 LIMIT $1
@@ -221,6 +231,7 @@ func (q *Queries) ListFailedSessions(ctx context.Context, limit int32) ([]Sessio
 			&i.ParentSessionID,
 			&i.SpawnDepth,
 			&i.BuildEffort,
+			&i.EpistemicCheckEnabled,
 		); err != nil {
 			return nil, err
 		}
@@ -236,7 +247,7 @@ const updateSessionConversationID = `-- name: UpdateSessionConversationID :one
 UPDATE sessions
 SET opencode_conversation_id = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort, epistemic_check_enabled
 `
 
 type UpdateSessionConversationIDParams struct {
@@ -273,6 +284,7 @@ func (q *Queries) UpdateSessionConversationID(ctx context.Context, arg UpdateSes
 		&i.ParentSessionID,
 		&i.SpawnDepth,
 		&i.BuildEffort,
+		&i.EpistemicCheckEnabled,
 	)
 	return i, err
 }
@@ -310,7 +322,7 @@ const updateSessionStatus = `-- name: UpdateSessionStatus :one
 UPDATE sessions
 SET status = $2, failure_reason = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort
+RETURNING id, title, status, failure_reason, archived, spawn_source, created_by, created_at, updated_at, actor_epoch, repos, opencode_conversation_id, environment_id, provenance_tag, intent_decision, build_model_id, parent_session_id, spawn_depth, build_effort, epistemic_check_enabled
 `
 
 type UpdateSessionStatusParams struct {
@@ -346,6 +358,7 @@ func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStat
 		&i.ParentSessionID,
 		&i.SpawnDepth,
 		&i.BuildEffort,
+		&i.EpistemicCheckEnabled,
 	)
 	return i, err
 }

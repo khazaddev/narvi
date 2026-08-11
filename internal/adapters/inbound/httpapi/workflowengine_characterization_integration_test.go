@@ -159,7 +159,7 @@ func TestCharacterization_RequestLane_ZeroConfig_IdenticalPromptJSON(t *testing.
 	inputPrompt := "please refactor the widget loader"
 	inputModelID := "anthropic/claude-sonnet-5"
 
-	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, inputPrompt, &inputModelID, false, pgtype.UUID{}, RejectIfOpen)
+	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, inputPrompt, &inputModelID, false, false, pgtype.UUID{}, RejectIfOpen)
 	if cerr != nil {
 		t.Fatalf("CreateTurnCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -220,7 +220,7 @@ func TestCharacterization_ReviewLane_ZeroConfig_IdenticalPromptJSON(t *testing.T
 	// the request-lane test above.
 	inputPrompt := "## Review request\n\nPlease review PR #42 in acme/widgets."
 
-	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, inputPrompt, nil, false, pgtype.UUID{}, AlwaysQueue)
+	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, inputPrompt, nil, false, false, pgtype.UUID{}, AlwaysQueue)
 	if cerr != nil {
 		t.Fatalf("CreateTurnCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -283,7 +283,7 @@ func TestCharacterization_PlanLane_FirstTurn_ZeroConfig_IdenticalPromptJSON(t *t
 
 	inputPrompt := "draft a plan for adding dark mode"
 
-	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, inputPrompt, nil, true, pgtype.UUID{}, RejectIfOpen)
+	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, inputPrompt, nil, true, false, pgtype.UUID{}, RejectIfOpen)
 	if cerr != nil {
 		t.Fatalf("CreateTurnCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}

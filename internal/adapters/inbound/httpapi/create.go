@@ -612,6 +612,12 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// session -- see ChildSessionOptions' own doc comment.
 		ParentSessionID: opts.ParentSessionID,
 		SpawnDepth:      opts.SpawnDepth,
+		// EpistemicCheckEnabled (Step 61, "builder epistemic pre-action
+		// check", §20.4) mirrors BuildModelID's own "always stored,
+		// nil/absent means no session-level override" convention exactly
+		// -- consulted later by turn.ResolveEpistemicCheckEnabled
+		// (createTurnLocked, turn.go), never re-derived here.
+		EpistemicCheckEnabled: (*bool)(req.EpistemicCheckEnabled),
 	})
 	if err != nil {
 		logger.Error("httpapi: create session failed", "error", err)

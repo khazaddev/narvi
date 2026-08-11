@@ -94,7 +94,7 @@ func hasOpenTurn(turns []sqlcgen.Turn) bool {
 // checks) -- never consulted for anything else here; nil is a completely
 // valid, ordinary value (a deployment with no object storage configured
 // at all), never a caller error.
-func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, objCfg *platform.ObjectStorageConfig) http.HandlerFunc {
+func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, objCfg *platform.ObjectStorageConfig, epistemicCheckDefault bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -173,7 +173,7 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			attachmentIDs = append(attachmentIDs, id)
 		}
 
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, actorUserID, RejectIfOpen, CreateTurnOptions{
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, epistemicCheckDefault, actorUserID, RejectIfOpen, CreateTurnOptions{
 			AttachmentIDs:     attachmentIDs,
 			StorageConfigured: objCfg != nil,
 			Effort:            (*string)(req.Effort),
@@ -398,7 +398,24 @@ type CreateTurnOptions struct {
 // completely UNCHANGED, since neither concept is anything they carry --
 // only CreateTurn's own handler below, the sole caller that ever has
 // either to pass, changed at all.
-func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
+//
+// epistemicCheckDefault (Step 61, "builder epistemic pre-action check",
+// §20.4) is a REQUIRED positional parameter, deliberately NOT bundled into
+// CreateTurnOptions' own trailing variadic slot: unlike StorageConfigured/
+// Effort there (genuinely REST-only concerns, §28.5/§29.8, safe to leave
+// at their Go zero value for every other caller), the platform-wide
+// epistemic-check default is a real, deployment-wide setting every
+// ingress surface must apply identically -- leaving it implicit would mean
+// Slack/Linear/GitHub-bot-created turns could never receive the operator's
+// own configured default (platform.Config.EpistemicCheckDefault) even
+// when REST turns do, a silent, surface-dependent inconsistency. Making it
+// a required parameter instead means every call site (this function, plus
+// createTurnLocked's five other callers) must compile-time-decide what to
+// pass, exactly like planMode itself immediately before it -- the two
+// travel together into createTurnLocked's own turn.ResolveEpistemicCheck
+// Enabled/turn.ShouldInjectEpistemicPreamble calls (see that function's
+// own doc comment).
+func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	if _, err := sessions.Get(ctx, sessionID); err != nil {
@@ -409,7 +426,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
-	return createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, policy, opts...)
+	return createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, policy, opts...)
 }
 
 // createTurnLocked is the genuinely shared core every one of this batch's
@@ -462,7 +479,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // is never forced to wire one up. Every real production caller
 // (cmd/control-plane/main.go) always passes the SAME, real *postgres.
 // PlanStore, so this is never nil outside tests.
-func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
+func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	// opts is a trailing variadic (CreateTurnOptions' own doc comment)
@@ -623,6 +640,12 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	effectivePrompt, effectiveModelID, effectiveEffort := prompt, modelID, effort
+	// epistemicCheckEnabled (Step 61, §20.2/§20.4) starts false -- the same
+	// safe, off-by-default fallback the sessErr != nil branch below already
+	// applies to workflow-engine resolution, reused here rather than a
+	// second, differently-reasoned fallback for a second concern that reads
+	// the SAME session row.
+	epistemicCheckEnabled := false
 	workflows := postgres.NewWorkflowStore(pool).WithTx(tx)
 	var resolution workflowengine.Resolution
 	if sessionRow, sessErr := sessions.WithTx(tx).Get(ctx, sessionID); sessErr != nil {
@@ -630,6 +653,13 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	} else {
 		resolution = workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID, effort)
 		effectivePrompt, effectiveModelID, effectiveEffort = resolution.Prompt, resolution.ModelID, resolution.Effort
+		// Step 61 (§20.4): session override wins when set, platform
+		// default otherwise -- internal/domain/turn.
+		// ResolveEpistemicCheckEnabled is the one pure function deciding
+		// this; see its own doc comment for the verified precedent this
+		// mirrors (sessions.build_model_id/build_effort, NOT turns.
+		// plan_mode itself, despite §20.4's own wording).
+		epistemicCheckEnabled = turn.ResolveEpistemicCheckEnabled(epistemicCheckDefault, sessionRow.EpistemicCheckEnabled)
 	}
 
 	// Step 58 (§28.5): the attachment block (deterministic per-attachment
@@ -689,6 +719,22 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 	if storageConfigured {
 		effectivePrompt += domainupload.RenderUploadToolNote(sessionID.String())
+	}
+
+	// Step 61 (§20.1/§20.3): the devil's-advocate preamble is PRECEDED --
+	// prepended, never appended -- onto the turn's own FULLY assembled
+	// prompt (after workflow-template resolution and the attachment/
+	// upload-tool blocks above, so it is the very first thing the agent
+	// reads), exactly when ShouldInjectEpistemicPreamble reports true --
+	// the ONE place §20.3's plan-mode exclusion is enforced, structural
+	// and impossible to silently drop (that function's own doc comment).
+	// With epistemicCheckEnabled always false (feature off, the default,
+	// §20.4) this condition is always false and effectivePrompt is
+	// UNCHANGED versus every prior Step -- the required byte-for-byte
+	// no-op (pinned by TestCreateTurnCore_EpistemicCheckOff_ByteForByteNoOp,
+	// turn_integration_test.go).
+	if turn.ShouldInjectEpistemicPreamble(epistemicCheckEnabled, planMode) {
+		effectivePrompt = turn.RenderEpistemicPreamble() + effectivePrompt
 	}
 
 	created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{

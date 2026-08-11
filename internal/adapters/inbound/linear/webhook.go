@@ -163,6 +163,14 @@ type Deps struct {
 	// IntentClassifier simply skips classification entirely.
 	IntentClassifier *intentclassifier.Service
 
+	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// check", §20.4) is threaded through to handlePrompted's own
+	// httpapi.CreateTurnCore call below exactly like every other caller
+	// now gets -- production wiring (cmd/control-plane/main.go) passes
+	// the SAME platform.Config.EpistemicCheckDefault value every other
+	// caller does.
+	EpistemicCheckDefault bool
+
 	WebhookSecret      []byte
 	TokenEncryptionKey []byte
 	DefaultRepoName    string
@@ -814,7 +822,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// actorUserID attributed) and L12 (this package's own copy-pasted
 	// hasOpenTurn helper is gone entirely -- httpapi's own copy, already
 	// unexported there, is the only one left).
-	createdTurn, wasCreated, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, sessionID, prompt, nil, planMode, actorUserID, httpapi.DropIfOpen)
+	createdTurn, wasCreated, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, sessionID, prompt, nil, planMode, deps.EpistemicCheckDefault, actorUserID, httpapi.DropIfOpen)
 	if cerr != nil {
 		if errors.Is(cerr, httpapi.ErrPlanAwaitingApproval) {
 			// Step 37/38 follow-up fix (§8.1): honest reply, never a hard

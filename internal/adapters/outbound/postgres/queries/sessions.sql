@@ -32,8 +32,14 @@
 -- compiling and behaving identically: parent_session_id stays NULL,
 -- spawn_depth stays 0. httpapi.SpawnChildSession (childsession.go) is this
 -- Step's own one real caller that supplies non-default values.
-INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag, build_model_id, build_effort, parent_session_id, spawn_depth)
-VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb), sqlc.narg('environment_id'), sqlc.narg('provenance_tag'), sqlc.narg('build_model_id'), sqlc.narg('build_effort'), sqlc.narg('parent_session_id'), COALESCE(sqlc.narg('spawn_depth'), 0))
+--
+-- epistemic_check_enabled (Step 61, "builder epistemic pre-action check",
+-- §20.4, migrations/000066) mirrors build_model_id's own sqlc.narg
+-- treatment exactly: every EXISTING call site that never sets it keeps
+-- compiling and behaving identically (NULL, "use platform.Config's own
+-- global default" -- off, unless an operator has turned the default on).
+INSERT INTO sessions (title, spawn_source, created_by, repos, environment_id, provenance_tag, build_model_id, build_effort, parent_session_id, spawn_depth, epistemic_check_enabled)
+VALUES ($1, $2, $3, COALESCE(sqlc.narg('repos'), '[]'::jsonb), sqlc.narg('environment_id'), sqlc.narg('provenance_tag'), sqlc.narg('build_model_id'), sqlc.narg('build_effort'), sqlc.narg('parent_session_id'), COALESCE(sqlc.narg('spawn_depth'), 0), sqlc.narg('epistemic_check_enabled'))
 RETURNING *;
 
 -- name: GetSession :one

@@ -67,3 +67,31 @@ func (s *TurnStore) MarkProgressNotified(ctx context.Context, id pgtype.UUID, no
 		ProgressNotifiedAt: now,
 	})
 }
+
+// GetProcessingTurnForSession fetches sessionID's own currently-live
+// (status='processing') turn, if any (§20.2, Step 61) -- mirrors
+// WorkflowStore.GetRunningRunForSession's identical "resolve the caller's
+// own live attempt from a session id alone" role, one layer down (a turn,
+// not a workflow run). turns_one_processing_per_session (migrations/
+// 000005_turns.up.sql) guarantees at most one row can ever match; a caller
+// with no processing turn gets pgx.ErrNoRows, exactly like GetTurn's own
+// not-found case.
+func (s *TurnStore) GetProcessingTurnForSession(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.Turn, error) {
+	return s.q.GetProcessingTurnForSession(ctx, sessionID)
+}
+
+// SetEpistemicOutcome is the guarded write backing the epistemic-outcome-
+// posting endpoint (§20.2, Step 61) -- mirrors WorkflowStore.
+// SetStepRunOutcome's own "guarded UPDATE, observed via :execrows" idiom
+// exactly, one status value over (turns.status = 'processing' rather than
+// workflow_step_runs.status = 'running'). Returns the number of rows
+// actually updated (0 or 1): 0 means id is no longer the live processing
+// turn (a race between this endpoint's own GetProcessingTurnForSession
+// read and this write -- the turn completed/failed/was cancelled in
+// between).
+func (s *TurnStore) SetEpistemicOutcome(ctx context.Context, id pgtype.UUID, outcome sqlcgen.TurnEpistemicOutcome) (int64, error) {
+	return s.q.SetTurnEpistemicOutcome(ctx, sqlcgen.SetTurnEpistemicOutcomeParams{
+		ID:               id,
+		EpistemicOutcome: &outcome,
+	})
+}

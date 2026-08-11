@@ -25,6 +25,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -410,7 +411,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessions, users))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry, nil))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry, nil, false))
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
@@ -505,5 +506,193 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	}
 	if prompt.Text != "continue where we left off" {
 		t.Errorf("dispatched Prompt.Text = %q, want %q", prompt.Text, "continue where we left off")
+	}
+}
+
+// --- Step 61 ("domain/turn: builder epistemic pre-action check", §20) --
+// end-to-end coverage for the devil's-advocate preamble's own injection
+// into a dispatched turn's REAL Prompt.Text, proven the SAME way
+// TestCreateTurn_CarriesExistingConversationID above proves conversation-id
+// threading: via the actual JSON payload the fake commander captured, not
+// a re-derived approximation of what createTurnLocked is supposed to do.
+
+// epistemicCheckTestRig bundles what every TestCreateTurn_EpistemicCheck*
+// test below needs -- factored out of TestCreateTurn_CarriesExistingConversationID's
+// own standalone rig above (this file's own top doc comment: "building
+// exactly what one test needs rather than forcing it through a shared
+// fixture") since three tests below need the IDENTICAL setup, varying only
+// epistemicCheckDefault (CreateTurn's own new Step 61 constructor
+// parameter) and the request body's own planMode.
+type epistemicCheckTestRig struct {
+	commander *fakeTurnCommander
+	server    *httptest.Server
+	sessionID pgtype.UUID
+	token     string
+}
+
+func newEpistemicCheckTestRig(t *testing.T, epistemicCheckDefault bool) epistemicCheckTestRig {
+	t.Helper()
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	sandboxes := narvipg.NewSandboxStore(pool)
+	users := narvipg.NewUserStore(pool)
+	identities := narvipg.NewIdentityStore(pool)
+	userSessions := narvipg.NewUserSessionStore(pool)
+	participants := narvipg.NewParticipantStore(pool)
+	plans := narvipg.NewPlanStore(pool)
+	auditLog := narvipg.NewAuditLogStore(pool)
+
+	commander := &fakeTurnCommander{}
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "http://localhost:8080", nil, nil, "", nil)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	t.Cleanup(func() { _ = registry.Shutdown() })
+
+	router := chi.NewRouter()
+	router.Route("/api/sessions", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessions, users))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry, nil, epistemicCheckDefault))
+	})
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+
+	externalID := fmt.Sprintf("test-github-id-%d", time.Now().UnixNano())
+	email := externalID + "@example.com"
+	user, err := users.Create(ctx, sqlcgen.CreateUserParams{
+		PrimaryEmail: email, DisplayName: "Test User", Role: sqlcgen.UserRoleMember,
+	})
+	if err != nil {
+		t.Fatalf("create test user: %v", err)
+	}
+	if _, err := identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID: user.ID, Provider: sqlcgen.IdentityProviderGithub, ExternalID: externalID,
+		Email: &email, EmailVerified: true, LinkedVia: sqlcgen.IdentityLinkedViaAdmin,
+	}); err != nil {
+		t.Fatalf("create test identity: %v", err)
+	}
+	token, err := platform.GenerateToken()
+	if err != nil {
+		t.Fatalf("GenerateToken: %v", err)
+	}
+	if _, err := userSessions.Create(ctx, sqlcgen.CreateUserSessionParams{
+		UserID: user.ID, TokenHash: platform.HashToken(token),
+		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(platform.DefaultTimeouts().UserSessionTTL), Valid: true},
+	}); err != nil {
+		t.Fatalf("create test user session: %v", err)
+	}
+
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb, CreatedBy: user.ID})
+	if err != nil {
+		t.Fatalf("create test session: %v", err)
+	}
+
+	if _, err := sandboxes.Create(ctx, session.ID); err != nil {
+		t.Fatalf("create sandbox: %v", err)
+	}
+	if _, err := sandboxes.UpdateStatus(ctx, sqlcgen.UpdateSandboxStatusParams{
+		SessionID: session.ID, Status: sqlcgen.SandboxStatusReady,
+	}); err != nil {
+		t.Fatalf("move sandbox to ready: %v", err)
+	}
+
+	return epistemicCheckTestRig{commander: commander, server: server, sessionID: session.ID, token: token}
+}
+
+// dispatchAndCapturePrompt POSTs body to rig's own turns endpoint and
+// returns the dispatched sandboxws.Prompt.Text the fake commander
+// captured -- mirrors TestCreateTurn_CarriesExistingConversationID's own
+// request/wait/unmarshal sequence exactly.
+func dispatchAndCapturePrompt(t *testing.T, rig epistemicCheckTestRig, body []byte) string {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodPost, rig.server.URL+"/api/sessions/"+rig.sessionID.String()+"/turns", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: platform.AuthSessionCookieName, Value: rig.token})
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && rig.commander.callCount() == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if rig.commander.callCount() != 1 {
+		t.Fatalf("commander.callCount() = %d, want 1 (the new turn must have dispatched)", rig.commander.callCount())
+	}
+
+	var prompt sandboxws.Prompt
+	if err := json.Unmarshal(rig.commander.lastPayload(), &prompt); err != nil {
+		t.Fatalf("unmarshal dispatched payload as sandboxws.Prompt: %v", err)
+	}
+	return prompt.Text
+}
+
+// TestCreateTurnCore_EpistemicCheckOff_ByteForByteNoOp pins §20.4's "off by
+// default" requirement at the wire level: with epistemicCheckDefault=false
+// (CreateTurn's own default -- exactly what cmd/control-plane/main.go
+// wires when NARVI_EPISTEMIC_CHECK_DEFAULT is unset, platform/config.go)
+// and no session-level override, the dispatched Prompt.Text is BYTE-FOR-
+// BYTE identical to the prompt this request would have produced before
+// Step 61 existed -- no preamble text, no placeholder tokens, nothing
+// prepended at all. This is the required "assembled prompt is a
+// byte-for-byte no-op versus today" proof CLAUDE.md's own prompt-byte-
+// stability discipline demands.
+func TestCreateTurnCore_EpistemicCheckOff_ByteForByteNoOp(t *testing.T) {
+	rig := newEpistemicCheckTestRig(t, false)
+
+	body := []byte(`{"prompt": "implement the feature", "modelId": null, "effort": null, "planMode": false}`)
+	gotText := dispatchAndCapturePrompt(t, rig, body)
+
+	if gotText != "implement the feature" {
+		t.Fatalf("dispatched Prompt.Text = %q, want %q (byte-for-byte no-op, feature off by default)", gotText, "implement the feature")
+	}
+}
+
+// TestCreateTurnCore_EpistemicCheckOn_BuildTurn_InjectsPreamble proves the
+// positive case: with the platform default on and a non-plan-mode turn,
+// the dispatched Prompt.Text is PRECEDED by turn.RenderEpistemicPreamble's
+// own exact text (§20.1: "the turn prompt is preceded by"), with the
+// caller's own original prompt text still present, verbatim, at the end.
+func TestCreateTurnCore_EpistemicCheckOn_BuildTurn_InjectsPreamble(t *testing.T) {
+	rig := newEpistemicCheckTestRig(t, true)
+
+	body := []byte(`{"prompt": "implement the feature", "modelId": null, "effort": null, "planMode": false}`)
+	gotText := dispatchAndCapturePrompt(t, rig, body)
+
+	wantPrefix := turn.RenderEpistemicPreamble()
+	if !strings.HasPrefix(gotText, wantPrefix) {
+		t.Fatalf("dispatched Prompt.Text does not start with RenderEpistemicPreamble()'s own text\ngot:  %q\nwant prefix: %q", gotText, wantPrefix)
+	}
+	if !strings.HasSuffix(gotText, "implement the feature") {
+		t.Fatalf("dispatched Prompt.Text does not end with the caller's own original prompt text, verbatim\ngot: %q", gotText)
+	}
+}
+
+// TestCreateTurnCore_EpistemicCheckOn_PlanModeTurn_NoPreamble pins §20.3's
+// exclusion at the SAME wire-level fidelity as the two tests above: even
+// with the platform default on, a plan_mode=true turn's dispatched
+// Prompt.Text carries NO preamble text at all -- byte-for-byte identical
+// to the off case for the identical request, just with planMode flipped.
+func TestCreateTurnCore_EpistemicCheckOn_PlanModeTurn_NoPreamble(t *testing.T) {
+	rig := newEpistemicCheckTestRig(t, true)
+
+	body := []byte(`{"prompt": "make a plan for this", "modelId": null, "effort": null, "planMode": true}`)
+	gotText := dispatchAndCapturePrompt(t, rig, body)
+
+	if gotText != "make a plan for this" {
+		t.Fatalf("dispatched Prompt.Text = %q, want %q (plan-mode turns never get the preamble, §20.3, even with the check enabled)", gotText, "make a plan for this")
 	}
 }
