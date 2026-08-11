@@ -284,7 +284,7 @@ The adapter already has a *partial* answer for the auto-compaction case: an `Ove
 ## 8. Feature set (exit criteria, not options)
 
 1. **Plan mode**: persistent plans, HITL approve/reject on web/Slack/Linear/GitHub, server-side implementation dispatch on approval, plan/build model split, cross-channel verdict + archive notifications.
-2. **Code review**: review sessions per PR with session reuse; atomic claim coalescing of concurrent @mentions; risk-map verdict with `review:*` labels — **a structured verdict from day one** (premise state, risk drivers, shippable class — server-computed, never self-reported, never re-parsed from posted text; full design and the automation policy built on it in §21); test-coverage & doc-drift sentinels; **server-side** verdict floor + formal-review gate + verdict-posting tool (raw issue comments blocked, scoped to review sessions); re-trigger via label/button, or automatically on new commits (debounced, off by default per repo, §24); inline diff pre-fetched into context (agent must not need to run `gh pr diff` repeatedly); suggestion safety (apply via validated endpoint); **criteria-driven auto-approval** (`visual-qa: pass/skip` unchanged; `review: low risk` **inverts** into a `review: needs-human` escape hatch — approval itself is deterministic and criteria-driven rather than label-triggered, §21); dedicated review model selection; optional sentinel auto-fix for coverage/doc-drift findings, merge-gated on the origin PR (§17, disabled by default); **review as a merge readout** (§26) — the verdict front-loads a diff-derived summary, the diff's architecture choices, and its risks to the stack, demoting findings to a collapsed appendix; a description-adequacy check with a third raise-only floor and graduated remediation; deterministic light/deep review triage, measurable per path; adversarial counter-review with contested-points surfacing on the deep path.
+2. **Code review**: review sessions per PR with session reuse; atomic claim coalescing of concurrent @mentions; risk-map verdict with `review:*` labels — **a structured verdict from day one** (premise state, risk drivers, shippable class — server-computed, never self-reported, never re-parsed from posted text; full design and the automation policy built on it in §21); test-coverage & doc-drift sentinels; **server-side** verdict floor + formal-review gate + verdict-posting tool (raw issue comments blocked, scoped to review sessions); re-trigger via label/button, or automatically on new commits (debounced, off by default per repo, §24); inline diff pre-fetched into context (agent must not need to run `gh pr diff` repeatedly); suggestion safety (apply via validated endpoint); **criteria-driven auto-approval** (`visual-qa: pass/skip` unchanged; `review: low risk` **inverts** into a `review: needs-human` escape hatch — approval itself is deterministic and criteria-driven rather than label-triggered, §21); dedicated review model selection; optional sentinel auto-fix for coverage/doc-drift findings, merge-gated on the origin PR (§17, disabled by default); **review as a merge readout** (§26) — the verdict front-loads a diff-derived summary, the diff's architecture choices, and its risks to the stack, demoting findings to a collapsed appendix; a description-adequacy check with a third raise-only floor and graduated remediation; deterministic light/deep review triage, measurable per path; adversarial counter-review with contested-points surfacing on the deep path; a diff-only fact-check pass on both paths that kills only provably-wrong findings (§26.6); a per-path cost budget with dispatch-time look-ahead (§26.7); findings anchored to the diff by content, never a guessed line number (§22.1.1).
 3. **Unified intent classifier** (detailed design — see §18): review-vs-request and plan-vs-build across all ingress surfaces; shadow mode (log-only) → active, permanently available, never a one-time launch gate; never-throw contract with an enumerated fallback-reason taxonomy; confidence rubric anchored on textual directness, not model self-reported certainty; DB-backed editable prompt templates with assembled-prompt preview; per-session routing decision records (§18.4).
 4. **Automations**: GitHub/Linear/webhook/cron triggers with condition builder; sandbox settings honored on automation sessions; creator/status filters; `last_run` + `artifact_summary` populated; per-automation env vars/secrets.
 5. **Enterprise sandbox glue** (full design in §27): cloud credentials via OIDC (provider-agnostic), kubeconfig injection for the target cluster, Docker-in-sandbox, egress proxy, repo/environment/global secrets, OpenCode config storage + injection, toolchain in images (Playwright+Chromium, ripgrep, typescript-language-server).
@@ -833,6 +833,19 @@ Problem this solves: two independent frictions compound in code review (§8.2) t
 ### 22.1 Rebuttal identity by content, not position
 A finding's rebuttal (§12.2 item 2's Dismiss-with-rebuttal) is reconciled against the finding's own **persisted content** — a hash/text of the finding stored at the moment the verdict that raised it was posted (§8.2/Step 45's structured type already carries this data; storing it is not new capture, just retention) — **never by file:line alone**. A file:line-only identity breaks the moment a line shifts (an unrelated edit above it, a reformat) — the same finding then silently reads as a *new* one, and a human's already-given rebuttal is lost on the very next review pass. Content-based identity survives exactly the churn that makes file:line fragile.
 
+### 22.1.1 Content-anchored positioning: snippet match and the relocation fallback
+Refines §22.1 — folded directly into Step 63's own scope, not a follow-up Step. §22.1's stored content (the finding's own hash/text, captured once at post time) answers *identity*: is this the same finding as before. It says nothing about *position*: where the finding should be drawn on a PR whose diff has since moved. This is a distinct problem with independent production validation: OpenCodeReview (github.com/alibaba/open-code-review) — Alibaba's line-level AI code-review CLI, open-sourced after roughly two years of internal production use, ~20k★, Apache-2.0; verified directly against its own repository, fetched 2026-08-11 — computes a finding's `start_line`/`end_line` with a **sliding-window match** of the finding's own quoted `existing_code` snippet against the diff text, falls back to a dedicated small **re-location** model call (`RE_LOCATION_TASK`, `internal/diff/relocation.go`) when the match fails, and resolves both together in a second pass (`diff.ResolveLineNumbers`) after its main review loop.
+
+`reviewpost.Finding` gains the equivalent shape — computed server-side, never by the model directly, the same never-trust-the-model-for-a-derivable-fact discipline §18.1's `FallbackReason` and §21.2's recomputed `Shippable` already apply elsewhere:
+
+- **One field, two consumers.** The snippet §22.1 already mandates storing IS the anchor text — never a second, parallel capture of the same content. Its hash answers identity (§22.1); the same text, sliding-window-matched against the diff, answers position (here).
+- **The match is a pure function**, `(snippet, diff) → (StartLine, EndLine)`, run by `reviewpost` at posting/render time — the same server-side-rendering posture §26.1 already establishes for this package ("rendering is server-side from the typed fields (`reviewpost`)"), not a second copy of the diff shipped back into a model prompt to ask it where its own finding lives.
+- **A failed match sets both to `0` — an explicit, typed "unanchored," never a guessed line number.** A finding rendered against the *wrong* line is worse than one rendered with none: `0` is a UI-branchable fact ("position not found"), not a plausible-looking wrong answer a maintainer might act on directly.
+- **Relocation fallback reuses the existing `LLM` port (§4.3), never a new call path.** A failed match triggers one small, structured, non-agentic call through the same multi-provider-by-construction port the intent classifier already requires (§18.1) — not a review-session turn, not §7.1's sub-task fan-out: a utility call with no tool access, the same class of call as classification, not review. On failure (provider error, timeout — the same typed-error discipline §18.1 requires of this port), the finding stays unanchored (`0`, per above), never a second guess stacked on the first. Gating relocation behind a size threshold (skip it on trivially small diffs where a failed match is rare) is a plausible later refinement if telemetry shows the call volume unwelcome — not designed now, and deliberately not reusing §26.3's PR-level triage threshold, which governs a different-scoped decision (whole-PR routing, not one finding's anchor).
+- **No second pass, by construction — a second simplification, not a corner cut.** OpenCodeReview's own second pass exists because its findings surface one at a time from a live, iterative loop, so an early finding's position can resolve before a later one supplies information that would change it. A Narvi verdict posts once, as a single typed payload with every finding already present (Step 45's structured-verdict invariant) — there is no "later": each finding's position is a pure function of its own snippet and the one diff already in hand, resolved once, together, at render time.
+
+**No migration, because there is nothing to migrate.** Step 63 has not shipped; no finding has ever been identified by file:line, in storage, that this would need to reconcile against. This is a real simplification the unbuilt state of this plan buys outright — the anchoring fields ship as part of Step 63's original schema, never as a later `ALTER` plus a backfill against data that predates them.
+
 ### 22.2 Repo-scoped learned patterns
 A repo-scoped table holds maintainer-taught false-positive descriptions: free-text patterns a maintainer teaches once, so the same class of non-issue doesn't need re-litigating on every subsequent review. Capture is via an explicit `false positive: <reason>` command on a PR thread, **dispatch-before-router** — it reuses the existing `Authorize` write-permission gate (§13.3, Step 39) directly, the same check any other state-changing actor command goes through, rather than inventing a parallel permission model for this one command.
 
@@ -847,7 +860,7 @@ Learned patterns are injected into every review pass (first pass and re-review a
 Retire, hit-count, and an audit view for this table **ship in the same Step** as the capture mechanism — never a deferred follow-up. A learned-pattern table with no retirement path only ever grows, accumulating stale or wrong patterns with no mechanism to review or remove them; shipping capture without a lifecycle would create exactly that unreviewable, ever-growing state from day one.
 
 ### 22.5 Phasing
-Step 63, Phase 5, after Step 47 (needs the verdict-posting path new patterns get weighed against) and Step 39 (`Authorize`, RBAC). UI: Settings → Environments gains false-positive pattern view/retire per repo (maintainer+, §12.2 item 5, Step 84); finding cards gain rebuttal history with the content-based finding-identity linkage (§12.2 item 2, Step 82).
+Step 63, Phase 5, after Step 47 (needs the verdict-posting path new patterns get weighed against) and Step 39 (`Authorize`, RBAC). §22.1.1's relocation fallback additionally depends on the `LLM` port (§4.3), already required and shipped for the intent classifier (Step 36) — no new port, one new call site on an existing one. UI: Settings → Environments gains false-positive pattern view/retire per repo (maintainer+, §12.2 item 5, Step 84); finding cards gain rebuttal history with the content-based finding-identity linkage, rendered at its anchored position or explicitly flagged unanchored (§12.2 item 2, Step 82).
 
 ## 23. Plan follow-up classification (amend vs answer) (new capability)
 
@@ -1277,6 +1290,20 @@ trust agent judgment for routing; deterministic fallbacks throughout, §18):
 - **Re-review on push** (§24): depth re-evaluated on the delta, but floored at the PR's previous
   depth — once deep, a PR stays deep.
 
+**Triage as a two-axis decision, not one — independently validated in production.** The rules above
+decide *which path* a PR gets (model/effort tier). A second, narrower axis this section did not
+previously name is *which passes run at all* once a path is chosen. OpenCodeReview (§26.6's full
+citation) independently validates gating passes on the same kind of size signal, in production, one
+level more granular than this section's own PR-level fork: `threshold :=
+template.PlanModeLineThreshold` (50), `changeLines := d.Insertions + d.Deletions`, and its
+planning/analysis pass is skipped entirely below it. This is not new evidence for the light/deep
+fork itself — that fork already exists here — it is independent validation that gating *whole
+passes* on a size signal, not just a model tier, holds up outside this plan too. §26.6's fact-check
+pass is the one v1 consumer of this second axis (light path runs it same as deep, so for that pass
+the axis is binary-on, not size-gated); further gating *within* the deep path (skipping
+`architecture-scribe` or `counter-reviewer` themselves below some size) is named, not designed —
+§26.9 resolves why it stays out of v1.
+
 ### 26.4 The deep path: adversarial counter-review (Step 69)
 
 **One sandbox.** The primary reviewer orchestrates context-isolated sub-agents via the engine's
@@ -1307,18 +1334,165 @@ N× boot cost with no real independence gain — each sub-agent already has a cl
   per digest section, plus a maintainer command `arch recap wrong: <reason>` mirroring Step 63's
   `false positive:` command exactly — maintainer+ via the existing `Authorize` gate,
   deterministically routable (§5.2), idempotent on the triggering comment id. The recap itself
-  becomes measurable and correctable.
+  becomes measurable and correctable. Each contest is reconciled by a content hash of the digest
+  section's own persisted text (§22.1's identity discipline, extended from findings to digest
+  sections) — never by section index or position, which would suffer the exact churn-fragility
+  §22.1 already solves for findings: a PR update that merely reorders or rewords an unrelated
+  section must never make an already-contested `ArchDecision` read as a new one.
 - **KPIs** (Step 62 analytics + §12.2): digest precision (contestation rate); decision latency
-  (verdict → approve — already a §16 KPI, now attributable per review path); cost per path; and
-  the paradigm's proxy metric: **% of PRs approved with zero human inline comments** — the number
-  that says whether the shift is actually operating.
+  (verdict → approve — already a §16 KPI, now attributable per review path); cost per path — **as
+  of §26.7, bounded per path, not merely measured after the fact**; and the paradigm's proxy
+  metric: **% of PRs approved with zero human inline comments** — the number that says whether the
+  shift is actually operating.
 - The §21.3 deterministic digest and the §16 decision inbox surface the readout's `Summary` line
   per PR — reusing their existing aggregation, no new mechanism.
 - **Evals**: known-PR digest-quality cases (expected architecture decisions on reference diffs,
   seeded description-drift cases) join the shadow-precision discipline the Phase 5 milestone
   already requires.
 
-### 26.6 Interplay with the workflow engine (§25)
+### 26.6 Diff-only fact-check pass, both paths (Step 69)
+
+Extends Step 69's still-unbuilt scope — a scope change to an unshipped Step, not a patch to shipped
+behavior. OpenCodeReview (github.com/alibaba/open-code-review — full citation §22.1.1, fetched
+2026-08-11) runs a cheap secondary pass, `REVIEW_FILTER_TASK`, that tries only to **disprove** each
+finding using the diff text alone — no tool calls, no extra file reads — and kills a finding only
+when it is provably wrong from the diff alone, letting anything merely uncertain through. Its own
+system prompt (`internal/config/template/prompts/review_filter_task_system.md`) states the
+asymmetry directly: "your task is NOT to verify whether all review comments are correct, but to
+filter out only those review comments that can be confirmed as incorrect based solely on the
+current diff... you should let them pass — because the Agent may have access to context that you
+cannot see."
+
+**Composition with §26.4's counter-review — not the same check, and both run on deep.**
+Counter-review is deep, adversarial, tool-equipped, and runs only on the deep path; the fact-check
+pass is shallow, mechanical, and runs on **both**. On the deep path they compose as a funnel:
+
+primary reviewer's findings → **fact-check** (kills only provably-wrong-from-diff) →
+**counter-review** (§26.4, adjudicates the survivors, may itself surface new findings) →
+synthesis (unchanged) → publish
+
+(`architecture-scribe` is orthogonal to this ordering — §26.4's own "virgin context, uncontaminated
+by the primary's finding hunt" design means it never consumes or feeds the findings list this
+funnel prunes, so this section does not sequence it relative to fact-check or counter-review.)
+
+Fact-check running first, not last, is a deliberate cost decision: it prunes findings before the
+expensive adversarial pass has to spend context and tool calls adjudicating them, directly reducing
+what §26.7's cost budget has to cover. It is not redundant with counter-review despite the apparent
+overlap — counter-review can talk itself out of a real defect just as easily as it can correctly
+refute a fake one, where a mechanical, diff-only disproof cannot be argued with, the same "a
+restriction enforced at spawn time is never trusted as sufficient on its own" logic §17.4 already
+applies to its own two independent, deliberately-redundant checks. Findings counter-review itself
+surfaces are **not** re-run through fact-check: counter-review, with tool access and full context,
+is by construction at least as rigorous as a diff-only check for a finding it produced from
+stronger evidence than fact-check could ever see — a second, weaker pass over a stronger pass's own
+output would be redundant in the direction that doesn't matter.
+
+**Mechanically an in-sandbox sub-task, not §22.1.1's `LLM` port.** Unlike §22.1.1's relocation
+fallback — a post-hoc, purely mechanical rendering computation that runs after the sandbox turn has
+already finished — the fact-check pass is a mid-review content judgment that must compose with, and
+precede, counter-review inside the same turn. It is therefore one more sub-task the primary
+reviewer's own orchestration spawns via the existing engine-native fan-out (§7.1, already shipped
+Step 17), exactly like `architecture-scribe`/`counter-reviewer` — configured with no tool access,
+never a CP-side call mid-turn. On the light path, where there is no scribe or counter-reviewer, it
+is still available: §7.1's fan-out is a general per-turn mechanism, not something Step 68 gates by
+path, so the light path's own single review turn spawns exactly one fact-check sub-task after
+producing its findings, nothing else.
+
+**Typed field, schema-required on both paths.** `FactCheck: done|skipped` (plus `FactCheckKilled
+int`, the count removed, `0` when skipped) rides the same verdict payload as `CounterReview:
+done|skipped` (§26.4) — schema-required unconditionally from Step 69 on, since it runs on both
+paths, never only on deep.
+
+**`skipped` never raises `Shippable` — the deliberate, load-bearing difference from `CounterReview:
+skipped`.** A skipped fact-check pass means one thing only: the published findings were not pruned
+of provably-wrong ones. It never means a real defect went unverified — the pass, by construction,
+can only remove findings, never add or vouch for one, so its absence can only make the appendix
+noisier, never less safe. `CounterReview: skipped` floors `Shippable` because a real adversarial
+check was skipped on a PR whose own routing signal said it needed one; there is no equivalent
+safety claim for fact-check to under-deliver on. This is a genuine, intentional difference in kind
+between the two typed fields, not an oversight.
+
+**Non-fatal on error — the same fail-open posture §26.3 already applies to triage.** If the
+sub-task itself errors (provider failure, timeout, malformed output), the orchestrating primary
+reviewer sets `FactCheck: skipped` and publishes the findings exactly as if the pass had never run
+— never a blocked or repaired verdict. This is not merely convenient; it follows from the same
+asymmetry that makes the pass safe to run on the light path at all (below): a pass that fails
+**open** on error can only ever under-filter, the one failure direction the invariant below
+requires.
+
+**Why the asymmetric construction is consistent with §26.9's invariant — resolved, not skipped.**
+§26.9 states: "the light path's behavior remains exactly today's review — the router may only ever
+add depth, never subtract rigor from the default." A pass that removes findings from the light path
+looks, on its face, like exactly the subtraction that line forbids. It is not, and the reason is the
+asymmetry itself: the pass may kill a finding only when it is **provably** wrong from the diff text
+alone — a fact, not a judgment call — and must let anything merely uncertain through untouched.
+Rigor is the capacity to catch a real defect; a provably-incorrect finding was never a real defect
+and was never contributing to that capacity, so removing it costs nothing rigor bears on, while
+directly serving the precision half of this whole chantier's own KPIs (§26.5). Had the pass been
+built to kill on *suspicion* rather than *proof*, it would indeed subtract rigor — it could talk
+itself out of a finding the primary reviewer was right to raise, using less context than the primary
+had. The asymmetry is not a nicety on top of the design; it is the specific property that makes
+adding this pass to the light path compatible with the invariant at all. §26.9 amends the
+invariant's own wording to say this outright, so a future reader does not have to re-derive it from
+here.
+
+### 26.7 Per-review cost budget with look-ahead (Step 69)
+
+**Honest framing: this closes a cost gap, not the context-window gap — that one is already closed.**
+OpenCodeReview's own budget mechanism (full citation §22.1.1) is a **context-window** guard, not a
+cost cap: `if countMessagesTokens(messages) > tokenLimit { record warning; return nil }` where
+`tokenLimit := MaxTokens * 4 / 5`, checked before dispatching the next file's subtask, backed by
+in-loop compression at 60%/80% of `MaxTokens`. Narvi already has the equivalent of that half — Step
+44's OpenCode-adapter context-overflow compaction retry (§7.2) — and this section does not
+re-propose it. What their design genuinely validates, independent of the token-vs-dollar
+distinction, is a **shape**: a look-ahead check performed **before** committing to the next unit of
+work, not a measurement taken after the fact. What Narvi actually lacks, and what this section
+adds, is the other axis entirely — a **cost** ceiling, so that §26.5's "cost per path" becomes
+bounded, not merely observed.
+
+**Mechanism: check accumulated spend before each optional pass, never predict the next one's
+cost.** §7.1 already rolls up every `step_finish.cost` — main lane and every sub-task alike — into
+one running total per turn. Before the primary reviewer's orchestration dispatches the *next*
+optional sub-task (`architecture-scribe`, `counter-reviewer`, or §26.6's fact-check sub-task), it
+checks that running total against a per-path ceiling at a safety margin — propose 80%, mirroring
+OpenCodeReview's own `4/5` figure — and skips the dispatch if already at or over it. This is
+deliberately not a prediction of what the next pass would cost (unknowable in advance, and no more
+reliable a number here than anywhere else this plan refuses to guess) — it is a ceiling enforced
+**before** commitment, which is what makes it a real bound rather than a retrospective statistic.
+
+**The budget gates optional passes only, never the primary pass a verdict depends on.** The primary
+reviewer's own findings-producing pass is never itself budget-gated — there is no verdict to post
+without it, and a review blocked by its own cost guard is exactly the failure §26.3's "any triage
+error fails open to light" rule already refuses to allow triage to cause. The ceiling only ever
+prevents *further* spend on top of a review that will be posted regardless.
+
+**No new typed field, and no new enum value — the budget trips an existing one, the differentiator
+lives in the reason string.** A breach does not invent a `BudgetExceeded` flag; it is simply one
+more legitimate cause of the *next* pass's own already-specified `skipped` state — `CounterReview:
+skipped` (§26.4) if the ceiling trips before counter-review would have been dispatched, `FactCheck:
+skipped` (§26.6) if it trips before the fact-check sub-task. Each field's already-decided
+`Shippable` consequence applies unchanged and un-special-cased: a budget-triggered `CounterReview:
+skipped` floors `Shippable` to `needs_human` exactly as a tool failure would, because from the
+verdict's own point of view the two are indistinguishable in consequence — an adversarial check a
+sensitive or sizable PR's own routing said it needed did not happen, whatever the cause. A
+budget-triggered `FactCheck: skipped` raises nothing, per §26.6's own reasoning. Exactly which cause
+fired is not lost — it lives in the reason string and structured logs, the same discipline §7.2
+already established for not growing `FailureReason` a new enum value per distinguishable cause:
+"the differentiator lives in the reason string ... and structured logs ..., not in a new enum
+value." This reuse is deliberate economy, not an oversight: this plan does not grow a parallel
+outcome field for every new way an existing one can end up `skipped`.
+
+**Per-path ceilings, per-repo tunable.** `reviewCostBudget: {light: <usd>, deep: <usd>}` joins
+§26.3's `reviewDepth` config on the same per-repo settings row — initial figures proposed, not
+derived (propose $0.50 light / $5 deep per review, matching this plan's own convention of proposing
+a concrete, explicitly-tunable starting figure rather than leaving a blank, §24.6's
+`auto_retrigger_count` budget is the precedent). Light path's own ceiling is a degenerate,
+one-checkpoint case (the one optional pass it can run at all is §26.6's fact-check sub-task); deep
+path's is checked once before each optional sub-task the primary's orchestration dispatches — up to
+three (`architecture-scribe`, fact-check, `counter-reviewer`), in whatever order that orchestration
+dispatches them.
+
+### 26.8 Interplay with the workflow engine (§25)
 
 The readout lives **inside** the review lane's single workflow step (§25.8's built-in review
 workflow is one step, and stays one step); the deep path's counter-review is sub-task
@@ -1327,25 +1501,91 @@ engine-visible steps (scribe → find → counter-review → synthesize) is a po
 systems are stable — explicitly not v1 scope, mirroring §25's own decision not to retrofit the
 sentinel auto-fix onto the engine.
 
-### 26.7 Decided defaults and v1 non-goals
+### 26.9 Decided defaults and v1 non-goals
 
 Defaults (decided; thresholds tunable on per-path analytics): description autofix =
 apply-behind-flag, per-repo, default off, Narvi-authored PRs only, body only; triage v1 = pure
-deterministic, thresholds as in §26.3. Non-goals for v1: no N-sandbox parallel review; no
-comment-parsing of any verdict element; no LLM triage tie-break; no workflow-engine decomposition
-of review; and the light path's behavior remains exactly today's review — the router may only ever
-*add* depth, never subtract rigor from the default.
+deterministic, thresholds as in §26.3; **fact-check pass (§26.6) = on by default, both paths,
+non-fatal on error**; **cost budget (§26.7) = on by default, both paths, propose $0.50 light / $5
+deep per review, per-repo tunable**.
 
-### 26.8 Phasing
+Non-goals for v1: no N-sandbox parallel review; no comment-parsing of any verdict element; no LLM
+triage tie-break; no workflow-engine decomposition of review; **no within-deep-path pass skipping**
+(resolved below); **no new outcome-field per skip cause** (§26.7 reuses `CounterReview`/`FactCheck`
+unchanged); and the light path's behavior remains exactly today's review — the router may only ever
+*add* depth, never subtract **rigor** from the default, where rigor means the capacity to catch a
+real defect, never the raw count of findings a path happens to publish.
+
+**Why §26.6's fact-check pass does not violate that invariant.** Full argument at §26.6's own
+close; in short, the pass may kill a finding only on **proof** it is wrong from the diff alone,
+never on suspicion, and must let anything merely uncertain through — the asymmetry is precisely
+what keeps "removes findings" from meaning "subtracts rigor." A pass built to kill on suspicion
+would violate this invariant and has no place on either path; none is proposed here.
+
+**Mechanism 3's within-deep-path axis stays out of v1 — resolved, not left silent.** §26.3
+already validates, independently, the light/deep fork itself — a PR-level, add-only decision the
+invariant above governs. A finer axis it suggests — skipping `architecture-scribe` or
+`counter-reviewer` *within* an already-deep-routed PR — is a genuinely different question the
+original invariant never spoke to, because deep path was previously monolithic (both sub-agents,
+always, once routed deep). It is **moot for the light path** (nothing to skip: no scribe, no
+counter-review exist there to begin with) — the live question is only ever the deep path's own
+internal composition, a new axis this plan did not previously name. V1 answers it with **no**:
+every one of deep path's v1 triggers (§26.3 — sensitive-glob hit, >600 lines, ≥3 path roots) is, by
+construction, a PR the router judged to need full rigor; a secondary, finer signal that skipped
+scribe or counter-review on such a PR could reintroduce risk on precisely the case deep routing
+exists to cover — most concretely, a small sensitive-glob-triggered diff (a three-line migration)
+is exactly the shape a size-based secondary gate would be tempted to downgrade, and exactly the
+shape that must not be. The invariant above is hereby extended to cover this axis explicitly: no
+v1 mechanism skips `architecture-scribe` or `counter-reviewer` on a PR already routed deep, for any
+reason short of §26.7's own cost ceiling (which floors `Shippable` when it fires, never a silent
+downgrade). §26.6's fact-check pass is exempt from this floor for the same reason it is exempt from
+the light-path invariant above — it was never a rigor-bearing pass to begin with, not because of
+which path it runs on. A future, telemetry-justified version of within-deep gating remains open,
+mirroring §26.3's own "v2 option only if per-path analytics show a real grey zone" deferral for the
+LLM tie-break — not designed now.
+
+**Per-mechanism v1/deferred status, stated once, for all four:**
+1. Diff-only fact-check pass (§26.6) — **v1, Step 69**, both paths.
+2. Content-anchored positioning + relocation fallback (§22.1.1) — **v1, Step 63**, folded into
+   that Step's original scope; no separate Step, no migration.
+3. Pass-routing as a validated extension of triage (§26.3) — the citation strengthening §26.3's
+   existing light/deep rules is **v1 documentation**, no new behavior beyond those rules; the
+   within-deep-path gating it further suggests is **explicitly deferred**, per above.
+4. Per-review cost budget with look-ahead (§26.7) — **v1, Step 69**, both paths, per-path
+   ceilings.
+
+### 26.10 Risks and open questions
+
+- **Buy vs. build: a delegation-mode spike, not a decision.** OpenCodeReview (§22.1.1's full
+  citation) ships both a Claude Code plugin and a "delegation mode" — deterministic scope/rule
+  resolution done by the tool itself, then the actual review handed to the host agent using the
+  host's own subscription rather than a separate API key. That last part is notably the same
+  ToS/cost constraint already hit once in this plan for background agents running under a Claude
+  subscription (§29 is the closest analogue here). A short spike running `ocr` inside a review
+  sandbox, scoped to generating only the line-level findings layer (§26.6's fact-check pass and
+  §22.1.1's positioning — the two mechanisms it already validates in production), could plausibly
+  be faster than reimplementing both from this plan alone. Two concrete frictions, named
+  rather than papered over, are why this stays a spike and not a decision: (1) **output-format
+  mismatch** — its findings would need to be adapted into `reviewpost.Finding`/the typed
+  `Digest`/`Shippable` verdict this plan's whole pipeline is built on (§21's typed verdict, §26.1's
+  reject-don't-repair posture at the posting endpoint) rather than free text; (2) **rule-engine
+  mismatch** — its own scope/rule resolution is a second, parallel mechanism to §22.2-§22.4's
+  repo-scoped learned-pattern table, and reconciling or replacing one with the other is unscoped
+  work in its own right. Recorded here as an open question for whoever picks up Step 69, not
+  resolved by this amendment.
+
+### 26.11 Phasing
 
 Steps 66-69, end of Phase 5 — see the Phase 5 renumbering note (IMPLEMENTATION_PLAN.md). 66
 (digest) → 67 (adequacy — needs 66's diff-derived summary as its reference text); 68 (triage) is
 independent of 66-67 and valuable alone (model/effort tiering per path) but sequenced before 69
-because the deep path must exist to route to; 69 (counter-review + measurement) needs 66's digest
-structure and 68's deep path, and rides Step 62's instrument. 66 extends Step 45's domain type,
-Step 47's posting tool, and Step 62's persistence — hence the whole chantier sits after Steps
-62-65. UI: the review screen's readout layout (digest first, collapsed appendix, contested-points
-block) lands with the existing review view Step (Step 82, Phase 7); no new screen.
+because the deep path must exist to route to; 69 (counter-review + measurement, **now also §26.6's
+fact-check pass and §26.7's cost budget**) needs 66's digest structure and 68's deep path, and
+rides Step 62's instrument. 66 extends Step 45's domain type, Step 47's posting tool, and Step 62's
+persistence — hence the whole chantier sits after Steps 62-65. §22.1.1's snippet anchoring ships
+inside Step 63, not this chantier, and has no dependency on Steps 66-69. UI: the review screen's
+readout layout (digest first, collapsed appendix, contested-points block) lands with the existing
+review view Step (Step 82, Phase 7); no new screen.
 
 ## 27. Enterprise sandbox glue (detailed design)
 
