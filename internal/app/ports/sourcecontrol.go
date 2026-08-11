@@ -461,6 +461,23 @@ type OpenPR struct {
 	// state instead of one fixed historical SHA.
 	HasApprovingReview  bool
 	HasChangesRequested bool
+	// ReviewDecisionDegraded (§62 review finding C4, BLOCKER, fixed) is
+	// true iff the fetch that produced HasApprovingReview/
+	// HasChangesRequested above itself failed (a transient HTTP error, or
+	// a response that did not decode) -- githubapi.fetchReviewDecision's
+	// own doc comment. BEFORE this fix, that failure silently returned
+	// both fields false, indistinguishable from a genuine, confirmed "no
+	// reviewer has requested changes" read -- exactly satisfying
+	// decisioninbox.RevalidateForMerge's own HARD unattended-merge block
+	// on HasChangesRequested with a degraded, not a confirmed, negative.
+	//
+	// FAIL CLOSED: every caller that gates on HasChangesRequested MUST
+	// also check this field and treat true identically to
+	// HasChangesRequested itself being true -- "we could not tell" must
+	// never be read as "no". HasApprovingReview/HasChangesRequested both
+	// stay their zero value (false) when this is true; neither carries any
+	// real signal in that case.
+	ReviewDecisionDegraded bool
 
 	// CIConclusion is this PR's CI result AT HeadSHA specifically (§16.2:
 	// "CI at head SHA") -- reuses CIConclusion's own three-value,
