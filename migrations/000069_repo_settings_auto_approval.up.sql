@@ -1,0 +1,44 @@
+-- Auto-approval eligibility config + the auto-merge toggle (Step 62,
+-- §21.2): three further columns on repo_settings -- migrations/000044's
+-- own doc comment anticipated exactly this ("§21's future per-repo
+-- auto-merge toggle ... ADDED as further columns on this SAME table
+-- rather than one bespoke table per toggle"), and migrations/000059
+-- already extended it once this same way for RWX previews.
+--
+-- auto_merge_enabled is the §21.2 stage-2 toggle -- STRICT BOOLEAN,
+-- DEFAULT false: every repo starts (and stays, until an admin explicitly
+-- arms it) in "auto-approval computes ready_to_merge, but nothing merges
+-- unattended" -- mirrors block_on_high_risk/sentinel_autofix_enabled's
+-- own identical DEFAULT false / fail-closed-on-missing-row precedent.
+-- Gated by a NEW admin-only RBAC action (authz.ActionToggleAutoMerge,
+-- internal/domain/authz/action.go) -- deliberately the SAME admin-only
+-- row as sentinel_autofix_enabled, not maintainer-level
+-- ActionConfigureAutoApprove below, since arming this ends in an
+-- UNATTENDED merge, never a human Merge click (§13.3 row 6's own
+-- parenthetical, distinguishing it from row 5's per-PR-judgment actions).
+--
+-- max_auto_approve_files_changed / sensitive_blast_radius_tags are
+-- §21.2 stage-1's remaining two configurable-per-repo eligibility
+-- criteria ("diff size under a configurable-per-repo threshold", "no
+-- sensitive path touched -- a configurable-per-repo list"). Both
+-- NULLABLE, DEFAULT NULL: NULL means "use the engine's own built-in
+-- default" (internal/domain/autoapproval.DefaultEligibilityConfig),
+-- never a magic sentinel NUMBER/empty-list a caller could confuse with a
+-- deliberately-chosen value -- mirrors rwx_preview_dispatch_key's own
+-- identical "nullable, absent = use the feature's own default behavior"
+-- shape (migrations/000059), and this table's own established
+-- fail-closed-on-missing-row precedent generalizes cleanly to
+-- fail-DEFAULT-on-missing-COLUMN-VALUE here. Gated by the
+-- ALREADY-EXISTING authz.ActionConfigureAutoApprove action
+-- (internal/domain/authz/action.go -- added ahead of this Step, "no
+-- caller exists yet" per its own doc comment; this Step is that first
+-- caller), maintainer+ (§13.3 row 5: "auto-approval eligibility config").
+--
+-- sensitive_blast_radius_tags is JSONB (a JSON array of
+-- review.Tag-vocabulary strings), mirroring review_verdicts.blast_radius's
+-- own identical choice (migrations/000067) over a native Postgres array
+-- type, for the same "no precedent for a native array column anywhere in
+-- this schema" reason.
+ALTER TABLE repo_settings ADD COLUMN auto_merge_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE repo_settings ADD COLUMN max_auto_approve_files_changed INTEGER;
+ALTER TABLE repo_settings ADD COLUMN sensitive_blast_radius_tags JSONB;

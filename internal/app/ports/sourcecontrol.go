@@ -824,6 +824,30 @@ type SourceControl interface {
 	// read -- see internal/app/decisioninbox.SCMCache's own handling.
 	ListOpenPRsForUser(ctx context.Context, spec ListOpenPRsForUserSpec) (prs []OpenPR, truncated bool, err error)
 
+	// GetOpenPR fetches ONE specific (owner, repo, number) pull request's
+	// current OpenPR state DIRECTLY -- no search, no scoping to any
+	// particular account's own assignments (Step 62, §21.2 stage 2). The
+	// minimal port extension internal/app/automerge's own machine-
+	// initiated caller needs: ListOpenPRsForUser above is fundamentally
+	// shaped around "which PRs is THIS human account involved in", a
+	// question that has no sensible answer for a background worker
+	// acting with a bot credential rather than any particular human's
+	// own identity. This method answers the DIFFERENT, simpler question
+	// a machine caller actually has: "what is the CURRENT state of this
+	// one already-known PR" -- the exact same OpenPR shape (CI
+	// conclusion, labels, HasChangesRequested, etc.) ListOpenPRsForUser
+	// already builds per candidate, reused via the SAME internal
+	// construction (githubapi's own buildOpenPR), never a second,
+	// independently-maintained OpenPR builder.
+	//
+	// found=false, err=nil means the PR does not exist, or is no longer
+	// open (closed/merged) -- a legitimate, expected outcome (mirrors
+	// GetFileContent's own "exists=false, err=nil" discipline for an
+	// absent-but-not-erroneous read), never conflated with a genuine API
+	// failure (err != nil). Errors are plain, exactly like every other
+	// method on this port except MergePR.
+	GetOpenPR(ctx context.Context, owner, repo string, number int, token string) (pr OpenPR, found bool, err error)
+
 	// ResolveCodeOwners resolves CODEOWNERS ownership for every path in
 	// spec.Paths against the repo's own CODEOWNERS file at spec.Ref (Step
 	// 60, §16.2) -- see githubapi.ResolveCodeOwners' own doc comment for

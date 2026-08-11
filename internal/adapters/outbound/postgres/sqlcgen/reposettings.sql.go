@@ -11,7 +11,7 @@ import (
 
 const getRepoSettings = `-- name: GetRepoSettings :one
 
-SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug FROM repo_settings WHERE repo_full_name = $1
+SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags FROM repo_settings WHERE repo_full_name = $1
 `
 
 // Queries backing RepoSettingsStore (§8.2/Step 47, §21.2): a small,
@@ -33,6 +33,101 @@ func (q *Queries) GetRepoSettings(ctx context.Context, repoFullName string) (Rep
 		&i.RwxPreviewDispatchKey,
 		&i.RwxPreviewEndpointTemplate,
 		&i.RwxPreviewOrgSlug,
+		&i.AutoMergeEnabled,
+		&i.MaxAutoApproveFilesChanged,
+		&i.SensitiveBlastRadiusTags,
+	)
+	return i, err
+}
+
+const listAutoMergeEnabledRepos = `-- name: ListAutoMergeEnabledRepos :many
+SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags FROM repo_settings WHERE auto_merge_enabled = true
+`
+
+// internal/app/automerge's own per-tick repo enumeration (§21.2 stage
+// 2): every repo an admin has armed -- mirrors this table's own
+// established "repo_settings is the one shared home for admin-configured
+// per-repo policy" precedent; there is no separate registry of "every
+// repo Narvi manages" anywhere in this codebase (internal/adapters/
+// outbound/githubapi/listopenprs.go's own doc comment names this same
+// gap), so a repo with auto_merge_enabled = true is, by construction,
+// already a repo this deployment has touched.
+func (q *Queries) ListAutoMergeEnabledRepos(ctx context.Context) ([]RepoSetting, error) {
+	rows, err := q.db.Query(ctx, listAutoMergeEnabledRepos)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RepoSetting
+	for rows.Next() {
+		var i RepoSetting
+		if err := rows.Scan(
+			&i.RepoFullName,
+			&i.BlockOnHighRisk,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SentinelAutofixEnabled,
+			&i.RwxPreviewDispatchKey,
+			&i.RwxPreviewEndpointTemplate,
+			&i.RwxPreviewOrgSlug,
+			&i.AutoMergeEnabled,
+			&i.MaxAutoApproveFilesChanged,
+			&i.SensitiveBlastRadiusTags,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertAutoApprovalSettings = `-- name: UpsertAutoApprovalSettings :one
+INSERT INTO repo_settings (repo_full_name, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET auto_merge_enabled = EXCLUDED.auto_merge_enabled, max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_changed, sensitive_blast_radius_tags = EXCLUDED.sensitive_blast_radius_tags, updated_at = now()
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags
+`
+
+type UpsertAutoApprovalSettingsParams struct {
+	RepoFullName               string `json:"repo_full_name"`
+	AutoMergeEnabled           bool   `json:"auto_merge_enabled"`
+	MaxAutoApproveFilesChanged *int32 `json:"max_auto_approve_files_changed"`
+	SensitiveBlastRadiusTags   []byte `json:"sensitive_blast_radius_tags"`
+}
+
+// Step 62 (§21.2): idempotent create-or-update of ONLY the three
+// auto-approval/auto-merge columns (migrations/000069_repo_settings_auto_
+// approval.up.sql) -- mirrors UpsertRWXPreviewSettings' own identical
+// "touches ONLY these columns, ON CONFLICT leaves every other column
+// untouched" shape, deliberately independent of UpsertRepoSettings above:
+// this endpoint is gated by a DIFFERENT pair of RBAC actions
+// (ActionConfigureAutoApprove for the threshold/tags, admin-only
+// ActionToggleAutoMerge for the merge toggle -- httpapi/reposettings.go),
+// never block_on_high_risk/sentinel_autofix_enabled's own two.
+func (q *Queries) UpsertAutoApprovalSettings(ctx context.Context, arg UpsertAutoApprovalSettingsParams) (RepoSetting, error) {
+	row := q.db.QueryRow(ctx, upsertAutoApprovalSettings,
+		arg.RepoFullName,
+		arg.AutoMergeEnabled,
+		arg.MaxAutoApproveFilesChanged,
+		arg.SensitiveBlastRadiusTags,
+	)
+	var i RepoSetting
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.BlockOnHighRisk,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SentinelAutofixEnabled,
+		&i.RwxPreviewDispatchKey,
+		&i.RwxPreviewEndpointTemplate,
+		&i.RwxPreviewOrgSlug,
+		&i.AutoMergeEnabled,
+		&i.MaxAutoApproveFilesChanged,
+		&i.SensitiveBlastRadiusTags,
 	)
 	return i, err
 }
@@ -42,7 +137,7 @@ INSERT INTO repo_settings (repo_full_name, rwx_preview_dispatch_key, rwx_preview
 VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET rwx_preview_dispatch_key = EXCLUDED.rwx_preview_dispatch_key, rwx_preview_endpoint_template = EXCLUDED.rwx_preview_endpoint_template, rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags
 `
 
 type UpsertRWXPreviewSettingsParams struct {
@@ -78,6 +173,9 @@ func (q *Queries) UpsertRWXPreviewSettings(ctx context.Context, arg UpsertRWXPre
 		&i.RwxPreviewDispatchKey,
 		&i.RwxPreviewEndpointTemplate,
 		&i.RwxPreviewOrgSlug,
+		&i.AutoMergeEnabled,
+		&i.MaxAutoApproveFilesChanged,
+		&i.SensitiveBlastRadiusTags,
 	)
 	return i, err
 }
@@ -87,7 +185,7 @@ INSERT INTO repo_settings (repo_full_name, block_on_high_risk, sentinel_autofix_
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET block_on_high_risk = EXCLUDED.block_on_high_risk, sentinel_autofix_enabled = EXCLUDED.sentinel_autofix_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags
 `
 
 type UpsertRepoSettingsParams struct {
@@ -116,6 +214,9 @@ func (q *Queries) UpsertRepoSettings(ctx context.Context, arg UpsertRepoSettings
 		&i.RwxPreviewDispatchKey,
 		&i.RwxPreviewEndpointTemplate,
 		&i.RwxPreviewOrgSlug,
+		&i.AutoMergeEnabled,
+		&i.MaxAutoApproveFilesChanged,
+		&i.SensitiveBlastRadiusTags,
 	)
 	return i, err
 }

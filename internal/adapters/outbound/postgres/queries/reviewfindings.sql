@@ -84,6 +84,19 @@ SET status = 'fix_applied'
 WHERE repo_full_name = $1 AND pr_number = $2 AND identity_hash = $3
 RETURNING *;
 
+-- name: ListReviewFindingStatusesInWindow :many
+-- Step 62's own "Review finding outcomes" analytics KPI (§21.1/§12.2
+-- item 6) -- every finding FIRST seen for repoFullName after sinceTime,
+-- bounded by limit (§21.1's own "bounded from day one" discipline). Only
+-- the status column is selected: internal/domain/reviewverdict.
+-- FindingOutcomes reduces a plain []reviewpost.FindingStatus, never a
+-- full row, mirroring internal/app/decisioninbox.Metrics' own identical
+-- "select only the columns the pure reduction actually needs" precedent.
+SELECT status FROM review_findings
+WHERE repo_full_name = $1 AND first_seen_at > $2
+ORDER BY first_seen_at ASC
+LIMIT $3;
+
 -- name: MarkReviewFindingsFixMergedByFixSession :many
 -- Merge-gating's own terminal write (§17.4, once all four checks pass and
 -- the fix PR actually merges) -- every finding this ONE fix session was

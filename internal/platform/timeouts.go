@@ -2052,6 +2052,54 @@ type Timeouts struct {
 	// past time rather than deadlines on a single operation, and the
 	// notimeliteral check treats them all alike.
 	DecisionInboxLatencyWindow time.Duration
+
+	// -- Step 62 ("review verdict persistence, analytics, digest &
+	// automated approval", §21) --
+
+	// ReviewVerdictAnalyticsWindow bounds every §21.1 analytics rollup
+	// (timeseries, top-risk-driver breakdown, the finding-outcome KPI)
+	// AND §21.2 stage 2's own contradiction-rate calibration read model
+	// -- the SAME "explicit active/recent window... never an unbounded
+	// scan" discipline DecisionInboxLatencyWindow already applies one
+	// Step up, at the SAME 30-day figure (a month of history is long
+	// enough for a stable rollup, bounded per §21.1, and this Step's own
+	// read model is a direct sibling of that one).
+	ReviewVerdictAnalyticsWindow time.Duration
+
+	// AutoMergePumpInterval is how often internal/app/automerge.Worker's
+	// own background tick runs (§21.2 stage 2) -- mirrors
+	// AutomationEnginePumpInterval's own identical shape and reasoning: a
+	// periodic background policy engine, not a live chat a human is
+	// actively watching (OutboxPumpInterval's own near-real-time 5s is
+	// the wrong comparison here).
+	AutoMergePumpInterval time.Duration
+
+	// AutoMergeCandidateLookback bounds how far back internal/app/
+	// automerge.Worker's own DISCOVERY query (review_verdicts.
+	// ListLatestAutoApproved) looks for candidate PRs -- a verdict older
+	// than this is unlikely to still name an open, mergeable PR, and
+	// every candidate is re-confirmed LIVE regardless (RevalidateForAutoMerge,
+	// §21.2's own reused re-validation contract) before anything merges,
+	// so this window only ever bounds a cheap discovery scan's own cost,
+	// never eligibility itself.
+	AutoMergeCandidateLookback time.Duration
+
+	// DigestPumpInterval is how often internal/app/digest.Pump's own
+	// background tick checks whether today's digest is due (§21.3) --
+	// deliberately much coarser than AutoMergePumpInterval/
+	// OutboxPumpInterval: a digest fires at most once per channel per
+	// day (digest_send_state's own claim-before-act guarantee), so
+	// polling for "is it time yet" every few minutes is ample.
+	DigestPumpInterval time.Duration
+
+	// DigestChannelDiscoveryLookback bounds how far back internal/app/
+	// digest's own channel-discovery query (joining slack_thread_sessions/
+	// linear_agent_sessions through github_pr_sessions, §21.3) looks for
+	// "which channels has this repo's review activity actually reached
+	// recently" -- the SAME 30-day figure as ReviewVerdictAnalyticsWindow/
+	// DecisionInboxLatencyWindow above, for the same "a month is long
+	// enough to be representative, bounded per §21.1" reasoning.
+	DigestChannelDiscoveryLookback time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2225,6 +2273,12 @@ func DefaultTimeouts() Timeouts {
 		DecisionInboxSCMCacheTTL:        2 * time.Minute,     // Step 60, §16.2's own worked example ("as of 2 min ago")
 		DecisionInboxStaleAfter:         48 * time.Hour,      // Step 60, §16.1, explicit ("stale items (>48h, configurable)")
 		DecisionInboxLatencyWindow:      30 * 24 * time.Hour, // Step 60, §16.2; not specified, chosen as a month of decision history -- long enough for a stable median, bounded per §21.1
+
+		ReviewVerdictAnalyticsWindow:   30 * 24 * time.Hour, // Step 62, §21.1; not specified, mirrors DecisionInboxLatencyWindow's own identical "a month, bounded" reasoning
+		AutoMergePumpInterval:          60 * time.Second,    // Step 62, §21.2; not specified, mirrors AutomationEnginePumpInterval's own identical periodic-background-policy-engine reasoning
+		AutoMergeCandidateLookback:     7 * 24 * time.Hour,  // Step 62, §21.2; not specified, chosen generously -- every candidate is re-confirmed live regardless
+		DigestPumpInterval:             5 * time.Minute,     // Step 62, §21.3; not specified, chosen -- a digest fires at most once per channel per day, so coarse polling is ample
+		DigestChannelDiscoveryLookback: 30 * 24 * time.Hour, // Step 62, §21.3; not specified, mirrors ReviewVerdictAnalyticsWindow's own identical "a month, bounded" reasoning
 	}
 }
 

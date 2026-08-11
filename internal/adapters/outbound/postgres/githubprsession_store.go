@@ -77,3 +77,16 @@ func (s *GitHubPRSessionStore) SetSessionID(ctx context.Context, repoFullName st
 func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.GithubPrSession, error) {
 	return s.q.GetGitHubPRSessionBySessionID(ctx, sessionID)
 }
+
+// SetHeadSHA overwrites (repoFullName, prNumber)'s own pending_head_sha
+// (Step 62, §21.1) -- see SetGitHubPRSessionHeadSHA's own generated doc
+// comment for the full "why" and the best-effort, outside-the-claim-
+// transaction calling convention every real caller (internal/adapters/
+// inbound/github/handler.go, httpapi/reviewretrigger.go) follows.
+func (s *GitHubPRSessionStore) SetHeadSHA(ctx context.Context, repoFullName string, prNumber int32, headSHA string) error {
+	return s.q.SetGitHubPRSessionHeadSHA(ctx, sqlcgen.SetGitHubPRSessionHeadSHAParams{
+		RepoFullName:   repoFullName,
+		PrNumber:       prNumber,
+		PendingHeadSha: &headSHA,
+	})
+}

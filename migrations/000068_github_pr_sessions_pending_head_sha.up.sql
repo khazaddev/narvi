@@ -1,0 +1,43 @@
+-- pending_head_sha (Step 62, §21.1): the head SHA every review-trigger
+-- ingress path's own pre-fetched diff (internal/app/reviewcontext.Fetch,
+-- Step 46) was most recently anchored to, for this (repo_full_name,
+-- pr_number) -- the value review_verdicts.head_sha (migrations/000067)
+-- forwards verbatim at verdict-post time.
+--
+-- Why this table, and why "pending": github_pr_sessions already is the
+-- one durable (repo_full_name, pr_number) -> session_id mapping every
+-- review-trigger path reads/writes (migrations/000028); riding a further
+-- column on it, rather than a new table, avoids a second (repo, PR)
+-- keyed table with its own independent lifecycle. "Pending" because this
+-- column is deliberately NOT scoped to any one turn or verdict -- it is
+-- overwritten on EVERY fresh context fetch (a new @mention, a label
+-- retrigger, a manual re-review button click), each of which re-fetches
+-- the diff at whatever the PR's CURRENT head happens to be at that
+-- moment, so this column always holds "the head SHA the NEXT verdict
+-- posted on this session will have been produced against" -- exactly
+-- what reviewverdict.go's own PostReviewVerdict handler needs to read at
+-- POST time, since a review turn can run for a real span of wall-clock
+-- time between context-fetch and verdict-post.
+--
+-- Explicitly NOT sourced from the reviewing agent's own tool call
+-- (restdtos.PostReviewVerdictRequest carries no such field, and this
+-- migration deliberately does not add one): review_findings' own
+-- migration (000046) already named the reason this needs a genuine
+-- control-plane-side value, not a self-report -- "neither
+-- PostReviewVerdictRequest ... nor the review turn's own rendered prompt
+-- ... carries a reliable head SHA a reviewing agent could honestly
+-- self-report". This column is that value, finally threaded through: the
+-- SAME githubapi.PullRequest.HeadSHA (or the webhook payload's own
+-- inline pull_request.head.sha, when the triggering event already
+-- carries it) internal/app/reviewcontext.Fetch now returns alongside its
+-- existing Diff/Stack fields, written here by the ingress caller
+-- immediately after a successful fetch -- never by the sandbox agent,
+-- and never parsed back out of anything the model posts.
+--
+-- Nullable: a claim row can exist with no review ever having fetched
+-- context for it yet (EnsureGitHubPRSessionRow's own "session_id left
+-- NULL on a fresh insert" precedent, migrations/000028) -- PostReviewVerdict
+-- treats a NULL here as "no head SHA known", logged and failing the
+-- review_verdicts write closed (that table's own NOT NULL head_sha
+-- column, migrations/000067) without blocking the verdict POST itself.
+ALTER TABLE github_pr_sessions ADD COLUMN pending_head_sha TEXT;

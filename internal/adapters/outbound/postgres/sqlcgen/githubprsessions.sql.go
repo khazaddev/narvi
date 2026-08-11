@@ -41,7 +41,7 @@ func (q *Queries) EnsureGitHubPRSessionRow(ctx context.Context, arg EnsureGitHub
 }
 
 const getGitHubPRSessionBySessionID = `-- name: GetGitHubPRSessionBySessionID :one
-SELECT repo_full_name, pr_number, session_id, claimed_at FROM github_pr_sessions
+SELECT repo_full_name, pr_number, session_id, claimed_at, pending_head_sha FROM github_pr_sessions
 WHERE session_id = $1
 `
 
@@ -61,6 +61,7 @@ func (q *Queries) GetGitHubPRSessionBySessionID(ctx context.Context, sessionID p
 		&i.PrNumber,
 		&i.SessionID,
 		&i.ClaimedAt,
+		&i.PendingHeadSha,
 	)
 	return i, err
 }
@@ -88,6 +89,34 @@ func (q *Queries) LockGitHubPRSessionForUpdate(ctx context.Context, arg LockGitH
 	var session_id pgtype.UUID
 	err := row.Scan(&session_id)
 	return session_id, err
+}
+
+const setGitHubPRSessionHeadSHA = `-- name: SetGitHubPRSessionHeadSHA :exec
+UPDATE github_pr_sessions
+SET pending_head_sha = $3
+WHERE repo_full_name = $1 AND pr_number = $2
+`
+
+type SetGitHubPRSessionHeadSHAParams struct {
+	RepoFullName   string  `json:"repo_full_name"`
+	PrNumber       int32   `json:"pr_number"`
+	PendingHeadSha *string `json:"pending_head_sha"`
+}
+
+// Step 62 (§21.1): overwrites pending_head_sha (migrations/000068) for
+// (repo_full_name, pr_number) -- called by every review-trigger ingress
+// path immediately after a successful internal/app/reviewcontext.Fetch,
+// OUTSIDE the CreateOrJoin claim transaction (best-effort enrichment
+// data, never a reason to fail or serialize against the atomic claim
+// itself -- see that migration's own doc comment). A caller for a
+// (repo_full_name, pr_number) with no existing row is a no-op (0 rows
+// affected), never an error -- mirrors EnsureGitHubPRSessionRow's own
+// "make sure the row is there" precedent; every real caller of THIS
+// query runs after CreateOrJoin/GetBySessionID has already confirmed the
+// row exists.
+func (q *Queries) SetGitHubPRSessionHeadSHA(ctx context.Context, arg SetGitHubPRSessionHeadSHAParams) error {
+	_, err := q.db.Exec(ctx, setGitHubPRSessionHeadSHA, arg.RepoFullName, arg.PrNumber, arg.PendingHeadSha)
+	return err
 }
 
 const setGitHubPRSessionID = `-- name: SetGitHubPRSessionID :exec

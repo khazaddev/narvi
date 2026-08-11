@@ -117,6 +117,14 @@ func (f *fakeMergeSourceControl) ListMergedBetween(context.Context, ports.ListMe
 func (f *fakeMergeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
 	return errors.New("not implemented")
 }
+func (f *fakeMergeSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
+	// Step 62, §21.2 stage 2: this fake backs the HUMAN-clicked Merge
+	// endpoint's own tests (MergePullRequest -> RevalidateForMerge),
+	// which never calls GetOpenPR at all (that is RevalidateForAutoMerge's
+	// own machine-caller primitive) -- not implemented is the correct,
+	// never-exercised default here.
+	return ports.OpenPR{}, false, errors.New("not implemented")
+}
 
 func newDecisionInboxTestRig(t *testing.T, sourceControl ports.SourceControl) *decisionInboxTestRig {
 	t.Helper()

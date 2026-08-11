@@ -24,6 +24,33 @@ ON CONFLICT (repo_full_name)
 DO UPDATE SET block_on_high_risk = EXCLUDED.block_on_high_risk, sentinel_autofix_enabled = EXCLUDED.sentinel_autofix_enabled, updated_at = now()
 RETURNING *;
 
+-- name: UpsertAutoApprovalSettings :one
+-- Step 62 (§21.2): idempotent create-or-update of ONLY the three
+-- auto-approval/auto-merge columns (migrations/000069_repo_settings_auto_
+-- approval.up.sql) -- mirrors UpsertRWXPreviewSettings' own identical
+-- "touches ONLY these columns, ON CONFLICT leaves every other column
+-- untouched" shape, deliberately independent of UpsertRepoSettings above:
+-- this endpoint is gated by a DIFFERENT pair of RBAC actions
+-- (ActionConfigureAutoApprove for the threshold/tags, admin-only
+-- ActionToggleAutoMerge for the merge toggle -- httpapi/reposettings.go),
+-- never block_on_high_risk/sentinel_autofix_enabled's own two.
+INSERT INTO repo_settings (repo_full_name, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET auto_merge_enabled = EXCLUDED.auto_merge_enabled, max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_changed, sensitive_blast_radius_tags = EXCLUDED.sensitive_blast_radius_tags, updated_at = now()
+RETURNING *;
+
+-- name: ListAutoMergeEnabledRepos :many
+-- internal/app/automerge's own per-tick repo enumeration (§21.2 stage
+-- 2): every repo an admin has armed -- mirrors this table's own
+-- established "repo_settings is the one shared home for admin-configured
+-- per-repo policy" precedent; there is no separate registry of "every
+-- repo Narvi manages" anywhere in this codebase (internal/adapters/
+-- outbound/githubapi/listopenprs.go's own doc comment names this same
+-- gap), so a repo with auto_merge_enabled = true is, by construction,
+-- already a repo this deployment has touched.
+SELECT * FROM repo_settings WHERE auto_merge_enabled = true;
+
 -- name: UpsertRWXPreviewSettings :one
 -- Step 57 ("RWX provider + previews", §4.1.2 point 1): idempotent
 -- create-or-update of ONLY the three RWX-preview columns (migrations/

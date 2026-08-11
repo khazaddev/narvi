@@ -1162,6 +1162,51 @@ func TestDefaultTimeouts_Step59StandaloneFields(t *testing.T) {
 	}
 }
 
+func TestDefaultTimeouts_Step62StandaloneFields(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ReviewVerdictAnalyticsWindow <= 0 {
+		t.Errorf("ReviewVerdictAnalyticsWindow = %v, want > 0", to.ReviewVerdictAnalyticsWindow)
+	}
+	if to.ReviewVerdictAnalyticsWindow != 30*24*time.Hour {
+		t.Errorf("ReviewVerdictAnalyticsWindow = %v, want %v (mirrors DecisionInboxLatencyWindow)", to.ReviewVerdictAnalyticsWindow, 30*24*time.Hour)
+	}
+
+	if to.AutoMergePumpInterval <= 0 {
+		t.Errorf("AutoMergePumpInterval = %v, want > 0 (a ticker on a non-positive duration panics)", to.AutoMergePumpInterval)
+	}
+	if to.AutoMergePumpInterval != 60*time.Second {
+		t.Errorf("AutoMergePumpInterval = %v, want %v", to.AutoMergePumpInterval, 60*time.Second)
+	}
+
+	if to.AutoMergeCandidateLookback <= 0 {
+		t.Errorf("AutoMergeCandidateLookback = %v, want > 0", to.AutoMergeCandidateLookback)
+	}
+	if to.AutoMergeCandidateLookback != 7*24*time.Hour {
+		t.Errorf("AutoMergeCandidateLookback = %v, want %v", to.AutoMergeCandidateLookback, 7*24*time.Hour)
+	}
+
+	if to.DigestPumpInterval <= 0 {
+		t.Errorf("DigestPumpInterval = %v, want > 0 (a ticker on a non-positive duration panics)", to.DigestPumpInterval)
+	}
+	if to.DigestPumpInterval != 5*time.Minute {
+		t.Errorf("DigestPumpInterval = %v, want %v", to.DigestPumpInterval, 5*time.Minute)
+	}
+
+	if to.DigestChannelDiscoveryLookback <= 0 {
+		t.Errorf("DigestChannelDiscoveryLookback = %v, want > 0", to.DigestChannelDiscoveryLookback)
+	}
+	if to.DigestChannelDiscoveryLookback != 30*24*time.Hour {
+		t.Errorf("DigestChannelDiscoveryLookback = %v, want %v", to.DigestChannelDiscoveryLookback, 30*24*time.Hour)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (Step 62's additions must not disturb any invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

@@ -288,6 +288,9 @@ func (f *fakeSourceControl) lastRegisterStackSpec() ports.RegisterPRStackSpec {
 func (f *fakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
 	return errors.New("fakeSourceControl: CreateBranch not implemented")
 }
+func (f *fakeSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
+	return ports.OpenPR{}, false, errors.New("fakeSourceControl: GetOpenPR not implemented")
+}
 
 // ListMergedBetween (Step 50, "release PR review", §15.2) is never
 // reached from this package either -- same "not implemented" precedent

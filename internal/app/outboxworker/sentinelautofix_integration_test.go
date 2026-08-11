@@ -99,6 +99,9 @@ func (f *fakeSentinelAutoFixSourceControl) CreateBranch(_ context.Context, spec 
 	f.createBranchCalls = append(f.createBranchCalls, spec)
 	return f.createBranchErr
 }
+func (f *fakeSentinelAutoFixSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
+	return ports.OpenPR{}, false, errors.New("fakeSentinelAutoFixSourceControl: GetOpenPR not implemented")
+}
 
 func (f *fakeSentinelAutoFixSourceControl) createBranchCallCount() int {
 	f.mu.Lock()

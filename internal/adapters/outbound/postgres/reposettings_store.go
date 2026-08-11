@@ -49,6 +49,34 @@ func (s *RepoSettingsStore) Upsert(ctx context.Context, repoFullName string, blo
 	})
 }
 
+// UpsertAutoApprovalSettings idempotently creates-or-updates repoFullName's
+// §21.2 auto-approval eligibility config + auto-merge toggle -- autoMergeEnabled
+// as the new, full current value for that column; maxAutoApproveFilesChanged
+// nil / sensitiveBlastRadiusTagsJSON nil both mean "use the engine's own
+// built-in default" (internal/domain/autoapproval.DefaultEligibilityConfig)
+// -- see UpsertAutoApprovalSettings' own generated doc comment.
+// sensitiveBlastRadiusTagsJSON is pre-marshaled JSON bytes (a JSON array
+// of review.Tag strings) -- this store does no JSON encoding of its own,
+// mirroring this package's own "thin, pass-through, no business rules"
+// discipline; the caller (internal/app/reviewverdict) owns the
+// review.Tag <-> JSON conversion.
+func (s *RepoSettingsStore) UpsertAutoApprovalSettings(ctx context.Context, repoFullName string, autoMergeEnabled bool, maxAutoApproveFilesChanged *int32, sensitiveBlastRadiusTagsJSON []byte) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertAutoApprovalSettings(ctx, sqlcgen.UpsertAutoApprovalSettingsParams{
+		RepoFullName:               repoFullName,
+		AutoMergeEnabled:           autoMergeEnabled,
+		MaxAutoApproveFilesChanged: maxAutoApproveFilesChanged,
+		SensitiveBlastRadiusTags:   sensitiveBlastRadiusTagsJSON,
+	})
+}
+
+// ListAutoMergeEnabled returns every repo_settings row with
+// auto_merge_enabled = true -- internal/app/automerge's own per-tick
+// repo enumeration (see ListAutoMergeEnabledRepos' own generated doc
+// comment for why this is the one enumeration source available).
+func (s *RepoSettingsStore) ListAutoMergeEnabled(ctx context.Context) ([]sqlcgen.RepoSetting, error) {
+	return s.q.ListAutoMergeEnabledRepos(ctx)
+}
+
 // UpsertPreviewSettings idempotently creates-or-updates repoFullName's RWX
 // preview configuration (Step 57, §4.1.2 point 1) -- dispatchKey/
 // endpointTemplate/orgSlug as the new, full current values for those THREE

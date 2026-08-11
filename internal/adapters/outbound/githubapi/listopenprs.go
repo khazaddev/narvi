@@ -303,11 +303,31 @@ func splitRepositoryURL(repositoryURL string) (owner, repo string, ok bool) {
 // ONE field to its own honest zero-value/Unknown rather than excluding
 // the PR outright -- the SAME per-field-degrade discipline buildMergedPR
 // already establishes.
+// buildOpenPR fetches number's own detail and builds a full ports.OpenPR
+// -- ok=false means the detail fetch itself failed (any reason: not
+// found, transient, rate-limited -- this caller, ListOpenPRsForUser's
+// own per-candidate loop, treats every failure identically as "drop this
+// one row", so it has never needed to distinguish them). Step 62's own
+// GetOpenPR (getopenpr.go) below needs a FINER distinction (genuinely
+// not found vs. a real error worth propagating), so it calls
+// fetchOpenPRDetail itself and hands the result to buildOpenPRFromDetail
+// directly, rather than through this wrapper -- see that file's own doc
+// comment.
 func (a *Adapter) buildOpenPR(ctx context.Context, owner, repo string, number int, token string) (ports.OpenPR, bool) {
 	detail, err := a.fetchOpenPRDetail(ctx, owner, repo, number, token)
 	if err != nil {
 		return ports.OpenPR{}, false
 	}
+	return a.buildOpenPRFromDetail(ctx, owner, repo, detail, token), true
+}
+
+// buildOpenPRFromDetail is buildOpenPR's own construction half, taking an
+// ALREADY-FETCHED detail -- the one place both buildOpenPR (above) and
+// GetOpenPR (getopenpr.go) build a ports.OpenPR from, so the two never
+// drift into two independently-maintained constructions of the identical
+// shape.
+func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string, detail openPRDetailResponse, token string) ports.OpenPR {
+	number := detail.Number
 
 	hasApproving, hasChangesRequested := a.fetchReviewDecision(ctx, owner, repo, number, token)
 
@@ -384,7 +404,7 @@ func (a *Adapter) buildOpenPR(ctx context.Context, owner, repo string, number in
 		pr.UpdatedAt = t
 	}
 
-	return pr, true
+	return pr
 }
 
 // fetchCIConclusionLive determines an OPEN PR's own CI conclusion AT ITS

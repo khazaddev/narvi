@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -136,6 +137,14 @@ type fakeDecisionInboxSourceControl struct {
 	// Ref: pr.BaseRef -> pr.HeadSHA... passes everything" because nothing
 	// previously inspected what spec this fake was actually called with.
 	codeOwnersCalls []ports.ResolveCodeOwnersSpec
+
+	// getOpenPRByKey/getOpenPRErr (Step 62, §21.2 stage 2) back GetOpenPR
+	// below -- keyed by "owner/repo#number", the direct single-PR lookup
+	// internal/app/decisioninbox.RevalidateForAutoMerge uses instead of a
+	// user-scoped ListOpenPRsForUser search (revalidate_integration_test.go's
+	// own TestRevalidateForAutoMerge is this field's one real user).
+	getOpenPRByKey map[string]ports.OpenPR
+	getOpenPRErr   error
 }
 
 var _ ports.SourceControl = (*fakeDecisionInboxSourceControl)(nil)
@@ -186,6 +195,21 @@ func (f *fakeDecisionInboxSourceControl) CreateBranch(context.Context, ports.Cre
 }
 func (f *fakeDecisionInboxSourceControl) MergePR(context.Context, ports.MergePRSpec) (string, error) {
 	return "", errors.New("fakeDecisionInboxSourceControl: MergePR not implemented")
+}
+
+// GetOpenPR (Step 62, §21.2 stage 2) looks up f.getOpenPRByKey by
+// "owner/repo#number" -- a miss (the ordinary case for every test that
+// never populates this field) reports found=false, err=nil, mirroring a
+// confirmed GitHub 404 (ports.SourceControl.GetOpenPR's own doc comment)
+// rather than an error, since most callers of this fake never exercise
+// this method at all.
+func (f *fakeDecisionInboxSourceControl) GetOpenPR(_ context.Context, owner, repo string, number int, _ string) (ports.OpenPR, bool, error) {
+	if f.getOpenPRErr != nil {
+		return ports.OpenPR{}, false, f.getOpenPRErr
+	}
+	key := fmt.Sprintf("%s/%s#%d", owner, repo, number)
+	pr, ok := f.getOpenPRByKey[key]
+	return pr, ok, nil
 }
 
 func strPtr(s string) *string { return &s }

@@ -114,6 +114,46 @@ func (q *Queries) ListOpenAndRebuttedReviewFindings(ctx context.Context, arg Lis
 	return items, nil
 }
 
+const listReviewFindingStatusesInWindow = `-- name: ListReviewFindingStatusesInWindow :many
+SELECT status FROM review_findings
+WHERE repo_full_name = $1 AND first_seen_at > $2
+ORDER BY first_seen_at ASC
+LIMIT $3
+`
+
+type ListReviewFindingStatusesInWindowParams struct {
+	RepoFullName string             `json:"repo_full_name"`
+	FirstSeenAt  pgtype.Timestamptz `json:"first_seen_at"`
+	Limit        int32              `json:"limit"`
+}
+
+// Step 62's own "Review finding outcomes" analytics KPI (§21.1/§12.2
+// item 6) -- every finding FIRST seen for repoFullName after sinceTime,
+// bounded by limit (§21.1's own "bounded from day one" discipline). Only
+// the status column is selected: internal/domain/reviewverdict.
+// FindingOutcomes reduces a plain []reviewpost.FindingStatus, never a
+// full row, mirroring internal/app/decisioninbox.Metrics' own identical
+// "select only the columns the pure reduction actually needs" precedent.
+func (q *Queries) ListReviewFindingStatusesInWindow(ctx context.Context, arg ListReviewFindingStatusesInWindowParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listReviewFindingStatusesInWindow, arg.RepoFullName, arg.FirstSeenAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			return nil, err
+		}
+		items = append(items, status)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markReviewFindingFixApplied = `-- name: MarkReviewFindingFixApplied :one
 UPDATE review_findings
 SET status = 'fix_applied'
