@@ -53,7 +53,7 @@ func TestTurnDeadlineTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("move turn to processing: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, timeouts, nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestLivenessCheckTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("seed overdue liveness_check timer: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestInactivityTimerFired_FullRoundTrip(t *testing.T) {
 		t.Fatalf("seed overdue inactivity timer: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestConnectingDeadlineHandoff_ToLivenessCheck(t *testing.T) {
 		t.Fatalf("seed connecting_deadline timer: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

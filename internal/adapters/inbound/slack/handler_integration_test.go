@@ -34,6 +34,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -165,6 +166,21 @@ func linkSlackIdentityForTest(ctx context.Context, t *testing.T, pool *pgxpool.P
 // package's own tests never make a real network call.
 func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	t.Helper()
+	return newSlackTestRigWithEpistemicCheckDefault(t, pool, false)
+}
+
+// newSlackTestRigWithEpistemicCheckDefault is newSlackTestRig's own
+// generalization (test-wiring bundle, adversarial review): every ORIGINAL
+// caller keeps going through newSlackTestRig above (epistemicCheckDefault
+// hardcoded false, preserving every existing test's own behavior
+// byte-for-byte); TestHandler_OrdinaryReply_ForwardsEpistemicCheckDefault
+// below is this parameter's own one real user, proving Deps.
+// EpistemicCheckDefault (handler.go) actually reaches addTurn (handler.go:725)
+// and, through it, createTurnLocked's own epistemic-preamble gate -- before
+// this existed, nothing in this package proved the value was forwarded at
+// all; mutating it to a literal false at handler.go:725 failed nothing.
+func newSlackTestRigWithEpistemicCheckDefault(t *testing.T, pool *pgxpool.Pool, epistemicCheckDefault bool) *slackTestRig {
+	t.Helper()
 	ctx := context.Background()
 
 	// Audit-fix batch addition: appMentionEnvelope/messageEnvelope's own
@@ -191,7 +207,7 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 	plans := narvipg.NewPlanStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -231,6 +247,11 @@ func newSlackTestRig(t *testing.T, pool *pgxpool.Pool) *slackTestRig {
 		// a real match).
 		SlackClient: slackapi.New(ackServer.Client(), ackServer.URL, "test-bot-token"),
 		Timeouts:    platform.DefaultTimeouts(),
+		// EpistemicCheckDefault (test-wiring bundle, adversarial review):
+		// every ORIGINAL caller (newSlackTestRig) gets false here, exactly
+		// as before this parameter existed -- see this function's own doc
+		// comment.
+		EpistemicCheckDefault: epistemicCheckDefault,
 		IdentityLink: identitylink.Deps{
 			Pool:          pool,
 			Users:         narvipg.NewUserStore(pool),
@@ -343,6 +364,81 @@ func TestHandler_NewMention_CreatesSessionAndTurn(t *testing.T) {
 	}
 	if turns[0].Prompt == nil || !strings.Contains(*turns[0].Prompt, "@U0BOT") {
 		t.Errorf("turn prompt = %v, want the unwrapped @U0BOT mention", turns[0].Prompt)
+	}
+}
+
+// TestHandler_OrdinaryReply_ForwardsEpistemicCheckDefault is the
+// test-wiring bundle's own addition (adversarial review): proves Deps.
+// EpistemicCheckDefault (handler.go) actually reaches addTurn
+// (handler.go:725) and, through it, createTurnLocked's own epistemic-
+// preamble gate -- an ordinary reply in an existing thread (never itself a
+// new-session/new-turn edge case) is deliberately the scenario under test,
+// since this package's own resolveOrClaimSession creates every brand-new
+// session BARE (no Prompt at all, handler.go:990-995) -- addTurn is the
+// ONE call that ever carries real prompt text on ANY Slack-originated
+// turn, first message or reply alike. Before this test existed, mutating
+// handler.go:725's own deps.EpistemicCheckDefault argument to a literal
+// false failed nothing.
+func TestHandler_OrdinaryReply_ForwardsEpistemicCheckDefault(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	rig := newSlackTestRigWithEpistemicCheckDefault(t, pool, true)
+
+	// First message creates the session/thread mapping (the bare-session
+	// path, no prompt injection possible there at all -- see this test's
+	// own doc comment); the SECOND, a plain reply in the same thread, is
+	// what actually exercises addTurn/createTurnLocked's own preamble gate.
+	first := appMentionEnvelope("Ev0EPI001", "C0EPI", "1700000030.000100", "", "please build the thing")
+	rec1 := httptest.NewRecorder()
+	rig.handler(rec1, signedSlackRequest(t, first))
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first event status = %d, want 200 (body=%s)", rec1.Code, rec1.Body.String())
+	}
+
+	mapping, err := rig.threads.Get(ctx, "C0EPI", "1700000030.000100")
+	if err != nil {
+		t.Fatalf("Get thread mapping: %v", err)
+	}
+	firstTurns, err := rig.turns.ListForSession(ctx, mapping.SessionID)
+	if err != nil || len(firstTurns) != 1 {
+		t.Fatalf("ListForSession after first mention: turns=%v err=%v, want exactly 1", firstTurns, err)
+	}
+	// Drive the first turn terminal so the reply below is free to add a
+	// second one, rather than being dropped by the open-turn/busy gate --
+	// mirrors TestHandler_ReplyOnMappedThread_AddsTurnToSameSession's own
+	// identical setup (this file, below).
+	if _, err := rig.turns.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
+		ID: firstTurns[0].ID, Status: sqlcgen.TurnStatusCompleted, CompletedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+
+	reply := messageEnvelope("Ev0EPI002", "C0EPI", "1700000031.000100", "1700000030.000100", "actually also do this")
+	rec2 := httptest.NewRecorder()
+	rig.handler(rec2, signedSlackRequest(t, reply))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("reply event status = %d, want 200 (body=%s)", rec2.Code, rec2.Body.String())
+	}
+
+	turns, err := rig.turns.ListForSession(ctx, mapping.SessionID)
+	if err != nil {
+		t.Fatalf("ListForSession: %v", err)
+	}
+	if len(turns) != 2 {
+		t.Fatalf("len(turns) = %d, want 2 (the first message, then the reply)", len(turns))
+	}
+	// turns is ordered oldest-first (ListForSession's own doc comment) --
+	// turns[1] is the reply, the one addTurn (handler.go:725) created.
+	replyTurn := turns[1]
+	if replyTurn.Prompt == nil {
+		t.Fatal("reply turn has a nil prompt")
+	}
+	wantPrefix := turn.RenderEpistemicPreamble()
+	if !strings.HasPrefix(*replyTurn.Prompt, wantPrefix) {
+		t.Errorf("reply turn prompt does not start with RenderEpistemicPreamble()'s own text -- Deps.EpistemicCheckDefault was not forwarded to addTurn/createTurnLocked\ngot:  %q\nwant prefix: %q", *replyTurn.Prompt, wantPrefix)
+	}
+	if !strings.Contains(*replyTurn.Prompt, "actually also do this") {
+		t.Errorf("reply turn prompt lost the caller's own original text\ngot: %q", *replyTurn.Prompt)
 	}
 }
 

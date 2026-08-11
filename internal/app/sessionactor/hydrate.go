@@ -112,6 +112,7 @@ func (r *Registry) hydrateAndAcquire(ctx context.Context, sessionID pgtype.UUID)
 		githubBotToken:         r.githubBotToken,
 		contractDriftDetected:  r.contractDriftDetected,
 		repoAccessCache:        r.repoAccessCache,
+		epistemicCheckDefault:  r.epistemicCheckDefault,
 		registry:               r,
 		lockConn:               conn,
 		mailbox:                make(chan Command, mailboxBufferSize),

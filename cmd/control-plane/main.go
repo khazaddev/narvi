@@ -210,7 +210,7 @@ func serve() error {
 	// reviewcontext.Fetcher below (DiffFetcher: sourceControl) -- never a
 	// second, independently-constructed client.
 	registry, err := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
-		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, sourceControl, cfg.GitHubBotToken)
+		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, sourceControl, cfg.EpistemicCheckDefault, cfg.GitHubBotToken)
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
 	}
@@ -459,7 +459,7 @@ func serve() error {
 	automationEngine := automation.NewEngine(
 		automationStore, automationInvocationStore, automationRunStore,
 		sessionStore, turnStore, environmentStore, auditLogStore,
-		pool, registry, cfg.Timeouts,
+		pool, registry, cfg.Timeouts, cfg.EpistemicCheckDefault,
 	)
 
 	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
@@ -573,6 +573,15 @@ func serve() error {
 	router.Post("/sessions/{sessionID}/workflow/step-outcome",
 		httpapi.PostWorkflowStepOutcome(sandboxStore, workflowStore))
 
+	// turn/epistemic-outcome (Step 61, "builder epistemic pre-action
+	// check", §20.2): the devil's-advocate preamble's own required
+	// structured-signal-reporting tool -- deliberately mounted OUTSIDE
+	// /api/sessions and outside auth.Middleware entirely, mirroring
+	// review/verdict and workflow/step-outcome immediately above exactly
+	// (see httpapi/epistemicoutcome.go's own doc comment).
+	router.Post("/sessions/{sessionID}/turn/epistemic-outcome",
+		httpapi.PostEpistemicOutcome(sandboxStore, turnStore))
+
 	// uploads mint/confirm/content (Step 58, "uploads, blob storage & the
 	// in-sandbox download_file tool", §28.4/§28.5): deliberately mounted
 	// OUTSIDE /api/sessions and outside auth.Middleware entirely, mirroring
@@ -626,13 +635,17 @@ func serve() error {
 		// independently-constructed copy.
 		Participants:     participantStore,
 		IntentClassifier: intentClassifierSvc,
-		SigningSecret:    cfg.SlackSigningSecret,
-		BotToken:         cfg.SlackBotToken,
-		DefaultRepoName:  cfg.SlackDefaultRepoName,
-		DefaultRepoURL:   cfg.SlackDefaultRepoURL,
-		TimestampWindow:  cfg.Timeouts.WebhookTimestampFreshnessWindow,
-		SlackAPIBaseURL:  slackAPIBaseURL,
-		AckTimeout:       cfg.Timeouts.SlackAckTimeout,
+		// EpistemicCheckDefault (Step 61, §20.4): the SAME platform.Config
+		// value every other CreateTurnCore-reaching caller below also
+		// receives.
+		EpistemicCheckDefault: cfg.EpistemicCheckDefault,
+		SigningSecret:         cfg.SlackSigningSecret,
+		BotToken:              cfg.SlackBotToken,
+		DefaultRepoName:       cfg.SlackDefaultRepoName,
+		DefaultRepoURL:        cfg.SlackDefaultRepoURL,
+		TimestampWindow:       cfg.Timeouts.WebhookTimestampFreshnessWindow,
+		SlackAPIBaseURL:       slackAPIBaseURL,
+		AckTimeout:            cfg.Timeouts.SlackAckTimeout,
 		// IdentityLink/SlackClient/Timeouts (Step 39, "identities + full
 		// RBAC", §13.2): SlackClient reuses the SAME slackNotifier
 		// instance already constructed above (for the outbox delivery
@@ -667,9 +680,16 @@ func serve() error {
 		// the SAME participantStore instance Step 37's own REST plan
 		// approve/reject endpoints already use (constructed once, above),
 		// never a second, independently-constructed copy.
-		Participants:  participantStore,
-		SigningSecret: cfg.SlackSigningSecret,
-		Timeouts:      cfg.Timeouts,
+		Participants: participantStore,
+		// EpistemicCheckDefault (Step 61, §20.4): see slack.Deps' own
+		// identical field above -- this route's own CreateTurnCore call
+		// always names planMode=true, so this value never actually
+		// changes behavior here today (§20.3), but is threaded for the
+		// same "correct by construction" reason documented on
+		// InteractiveDeps.EpistemicCheckDefault itself.
+		EpistemicCheckDefault: cfg.EpistemicCheckDefault,
+		SigningSecret:         cfg.SlackSigningSecret,
+		Timeouts:              cfg.Timeouts,
 	}))
 
 	// GitHub webhook ingress (Step 32, "GitHub ingress", §8.2): mounted
@@ -701,6 +721,14 @@ func serve() error {
 			// instance every other caller above already uses -- threaded
 			// through to CreateTurnForBot's own awaiting-plan gate.
 			Plans: planStore,
+			// F7 correction (adversarial review, Step 61): SessionCoalescer
+			// no longer has an EpistemicCheckDefault field -- both of its
+			// own CreateSessionOnTx/CreateTurnForBot call sites now
+			// hardcode false instead (coalesce.go's own doc comment on the
+			// removed field explains the full "why": every session/turn
+			// this package creates or joins is a PR review session, never a
+			// build turn, so the platform's real epistemic-check default
+			// must never reach it).
 		},
 		webhookDeliveryStore,
 		githubingress.Config{
@@ -919,7 +947,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc, cfg.EpistemicCheckDefault))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
@@ -938,14 +966,14 @@ func serve() error {
 		// turns (Step 28, "turn recovery", §8.7): the relaunch-and-resume
 		// REST API -- enqueues a new turn on an existing session, 409 if
 		// one is already in flight. See httpapi/turn.go's own doc comment.
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, planStore, participantStore, auditLogStore, registry, cfg.ObjectStorage))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessionStore, turnStore, planStore, participantStore, auditLogStore, registry, cfg.ObjectStorage, cfg.EpistemicCheckDefault))
 		// plans (Step 37, "plan mode, web", §8.1/§12.2 item 3): the
 		// approve/reject HITL actions -- see httpapi/planapprove.go's own
 		// doc comment for the full sequencing. outboxStore/
 		// linearAgentSessionStore (Step 38, "plan mode, cross-channel") feed
 		// DecidePlanOnTx's own cross-channel-notify step (decideplan.go).
-		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, registry))
-		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore))
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, registry, cfg.EpistemicCheckDefault))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, cfg.EpistemicCheckDefault))
 		// Audit-fix batch (completeness/discoverability, M3): the read half
 		// plans/{planId}/approve|reject above was always missing -- a web
 		// client had no way to ever discover a planId to approve. See
@@ -979,7 +1007,7 @@ func serve() error {
 	// never a second, independently-constructed copy.
 	router.Route("/api/workflow-runs", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(pool, sessionStore, turnStore, participantStore, workflowStore, slackThreadSessionStore, linearAgentSessionStore, githubPRSessionStore, outboxStore, registry))
+		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(pool, sessionStore, turnStore, participantStore, workflowStore, slackThreadSessionStore, linearAgentSessionStore, githubPRSessionStore, outboxStore, registry, cfg.EpistemicCheckDefault))
 	})
 
 	// /api/repos/{owner}/{repo}/settings (Step 47, "server-side verdict",
@@ -1126,6 +1154,10 @@ func serve() error {
 		AuditLog:     auditLogStore,
 		IdentityLink: appIdentityLinkDeps,
 		Participants: participantStore,
+		// EpistemicCheckDefault (Step 61, §20.4): the SAME platform.Config
+		// value every other CreateTurnCore-reaching caller above also
+		// receives.
+		EpistemicCheckDefault: cfg.EpistemicCheckDefault,
 	}))
 
 	// Outbox delivery worker (Step 35, "outbox delivery", §5.1/§9.3
@@ -1165,7 +1197,7 @@ func serve() error {
 	// sentinelAutoFixNotifier (Step 48, "sentinels + suggestions", §17.2)
 	// spawns the child session -- reviewFindingStore/sentinelFixStore are
 	// the SAME instances every other caller above already uses.
-	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts)
+	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts, cfg.EpistemicCheckDefault)
 	// handoffNotifier (Step 49, "handoff-readiness sentinel", §14.4) posts
 	// the handoff-readiness comment and applies the "handoff" label on a
 	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken

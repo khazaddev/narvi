@@ -34,8 +34,16 @@ import (
 // direct human creator, exactly CreateSessionCore's own doc comment and
 // createcore_integration_test.go's own TestCreateSessionCore_NilCreator_*
 // tests already establish and cover.
-func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest) (sqlcgen.Session, error) {
-	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, pgtype.UUID{})
+//
+// epistemicCheckDefault (F6, adversarial review, Step 61) mirrors
+// CreateSessionCore's own identical required parameter -- see that
+// function's own doc comment. This function has no real production caller
+// today (coalesce.go's own doc comment explains why GitHub's own ingress
+// deliberately calls CreateSessionOnTx directly instead, for connection-
+// pool safety) -- kept parameter-complete/consistent regardless, exactly
+// like every other createTurnLocked-adjacent entry point in this package.
+func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, epistemicCheckDefault bool) (sqlcgen.Session, error) {
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, pgtype.UUID{}, epistemicCheckDefault)
 	if cerr != nil {
 		return sqlcgen.Session{}, cerr
 	}
@@ -86,8 +94,16 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // createTurnLocked's own awaiting-plan gate exactly like every other
 // caller -- see that function's own doc comment (turn.go) for the nil-safe
 // "skips the gate" contract this shares with them.
-func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, actorUserID pgtype.UUID) (sqlcgen.Turn, error) {
-	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, actorUserID, AlwaysQueue)
+//
+// epistemicCheckDefault (Step 61, §20.4) is threaded through to
+// createTurnLocked exactly like planMode immediately before it -- a
+// REQUIRED parameter, not one left at a zero-value default, so a
+// GitHub-bot-created build turn honors the SAME platform-wide
+// epistemic-check default a REST-created one does (see CreateTurnCore's
+// own doc comment, turn.go, for why this is required rather than bundled
+// into a variadic options slot).
+func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID) (sqlcgen.Turn, error) {
+	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue)
 	if cerr != nil {
 		// %w, NOT %s (Step 37/38 follow-up fix, Finding 1): cerr's own
 		// Error() method returns exactly cerr.Message, so this produces the

@@ -1,0 +1,42 @@
+-- Step 61 ("domain/turn: builder epistemic pre-action check", §20).
+--
+-- turn_epistemic_outcome / turns.epistemic_outcome: the structured signal
+-- §20.2 makes non-negotiable ("a non-negotiable part of Step 61, not a
+-- nice-to-have"). A REAL Postgres enum (mirrors artifact_status/
+-- workflow_step_outcome_status's own precedent, migrations/
+-- 000060_artifacts_upload_lifecycle.up.sql / 000057_workflows.up.sql) --
+-- unlike turns.effort/model_id (open-ended, per-model-catalog values, no
+-- Narvi-side enum), this vocabulary IS closed and small (§20.1's own
+-- two-tier taxonomy plus "nothing worth mentioning"), so a real enum type
+-- enforces it at the DB layer, not just in Go.
+--
+-- Deliberately NULLABLE, no DEFAULT: NULL means the check never ran for
+-- this turn at all (feature off, a plan-mode turn per §20.3, or a build
+-- turn whose agent never called the reporting endpoint before the turn
+-- ended) -- a DISTINCT fact from the real value 'none' ("the check ran
+-- and found nothing"), same discipline as §21.1's own "'not yet computed'
+-- sentinel, distinct from a real zero" one layer up, at the analytics
+-- read-model level. See internal/domain/turn.EpistemicOutcome's own doc
+-- comment for the full reasoning.
+CREATE TYPE turn_epistemic_outcome AS ENUM ('none', 'minor', 'strong');
+ALTER TABLE turns ADD COLUMN epistemic_outcome turn_epistemic_outcome;
+
+-- sessions.epistemic_check_enabled: §20.4's own per-session override,
+-- "mirrors plan_mode's own nullable-column threading" per the Step's own
+-- wording -- verified against the real code (internal/domain/turn's own
+-- ResolveEpistemicCheckEnabled doc comment records the verification):
+-- turns.plan_mode itself has no such threading, but sessions.
+-- build_model_id/build_effort (migrations/000034_plan_mode.up.sql,
+-- migrations/000063_turn_session_effort.up.sql) -- introduced in the SAME
+-- "plan mode" body of work -- already establish exactly this shape: a
+-- plain nullable column, no DEFAULT, no DB-level COMMENT ON COLUMN (this
+-- schema's own established convention for this class of column, per
+-- 000063's own comment). NULL means "use platform.Config's own global
+-- default" (§20.4: "a global platform.Config default plus an optional
+-- override field on SessionConfig/TurnSpec, resolved with the same
+-- precedence -- session override wins when set, global default
+-- otherwise"); a non-null value always wins regardless of the platform
+-- default. Off by default (§20.4): platform.Config's own default is
+-- false, and this column starts NULL for every existing session, so
+-- nothing changes for any session that predates this migration.
+ALTER TABLE sessions ADD COLUMN epistemic_check_enabled BOOLEAN;

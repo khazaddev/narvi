@@ -46,13 +46,13 @@ func newWhiteboxEngine(t *testing.T) (*Engine, *narvipg.AutomationStore, *narvip
 	environments := narvipg.NewEnvironmentStore(pool)
 	auditLog := narvipg.NewAuditLogStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
-	engine := NewEngine(automations, invocations, runs, sessions, turns, environments, auditLog, pool, registry, platform.DefaultTimeouts())
+	engine := NewEngine(automations, invocations, runs, sessions, turns, environments, auditLog, pool, registry, platform.DefaultTimeouts(), false)
 	return engine, automations, invocations
 }
 

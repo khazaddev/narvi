@@ -176,6 +176,61 @@ func TestCreateTurnRequestRoundTrip_WithEffort(t *testing.T) {
 	})
 }
 
+// TestCreateSessionRequestRoundTrip_WithEpistemicCheckEnabled (Step 61,
+// §20.4) exercises epistemicCheckEnabled with a real, non-null value --
+// mirrors TestCreateSessionRequestRoundTrip_WithEffort's own
+// buildEffort fixture immediately above. The absent-key case (this
+// field's own Go zero value, nil -- "the key is absent from the request
+// body entirely", exactly like BuildModelId's own precedent) is already
+// exercised by TestCreateSessionRequestRoundTrip_NullOptionals above,
+// which never sets it either.
+func TestCreateSessionRequestRoundTrip_WithEpistemicCheckEnabled(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/CreateSessionRequest")
+
+	prompt := "implement the feature"
+	enabled := true
+
+	roundTrip(t, sch, restdtos.CreateSessionRequest{
+		SpawnSource: restdtos.CreateSessionRequestSpawnSourceWeb,
+		Prompt:      &prompt,
+		Repos: []restdtos.CreateSessionRequestReposElem{
+			{Name: "narvi", Url: "https://github.com/khazaddev/narvi.git"},
+		},
+		PlanMode:              false,
+		EpistemicCheckEnabled: restdtos.CreateSessionRequestEpistemicCheckEnabled(&enabled),
+	})
+}
+
+// TestPostEpistemicOutcomeRequestRoundTrip (Step 61, "builder epistemic
+// pre-action check", §20.2) covers all three EpistemicOutcome values --
+// mirrors internal/domain/turn.AllEpistemicOutcomes' own exhaustive-list
+// discipline, one layer up at the wire-contract level, so a fourth value
+// added to one side without the other fails a test instead of silently
+// drifting.
+func TestPostEpistemicOutcomeRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/PostEpistemicOutcomeRequest")
+
+	for _, outcome := range []restdtos.PostEpistemicOutcomeRequestOutcome{
+		restdtos.PostEpistemicOutcomeRequestOutcomeNone,
+		restdtos.PostEpistemicOutcomeRequestOutcomeMinor,
+		restdtos.PostEpistemicOutcomeRequestOutcomeStrong,
+	} {
+		t.Run(string(outcome), func(t *testing.T) {
+			roundTrip(t, sch, restdtos.PostEpistemicOutcomeRequest{
+				Outcome: outcome,
+			})
+		})
+	}
+}
+
+func TestPostEpistemicOutcomeResponseRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/PostEpistemicOutcomeResponse")
+
+	roundTrip(t, sch, restdtos.PostEpistemicOutcomeResponse{
+		TurnId: testSessionID,
+	})
+}
+
 // TestChatGPTLinkStatusRoundTrip_Pending exercises the ChatGPTLinkStatus
 // (Step 59, §29.3/§29.9) shape for an in-progress device-flow attempt --
 // every optional field populated.

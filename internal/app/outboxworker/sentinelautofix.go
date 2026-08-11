@@ -79,6 +79,13 @@ type sentinelAutoFixNotifier struct {
 	sourceControl  ports.SourceControl
 	githubBotToken string
 	timeouts       platform.Timeouts
+	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// platform.Config.EpistemicCheckDefault value every other
+	// CreateSessionOnTx-reaching caller in this codebase now threads
+	// through -- Deliver's own SpawnChildSession call below is an ordinary
+	// (never review-session) build session, so no F7-style hardcoded-false
+	// carve-out applies here.
+	epistemicCheckDefault bool
 }
 
 var _ ports.Notifier = (*sentinelAutoFixNotifier)(nil)
@@ -103,11 +110,13 @@ func NewSentinelAutoFixNotifier(
 	sourceControl ports.SourceControl,
 	githubBotToken string,
 	timeouts platform.Timeouts,
+	epistemicCheckDefault bool,
 ) ports.Notifier {
 	return &sentinelAutoFixNotifier{
 		pool: pool, sessions: sessions, turns: turns, environments: environments,
 		auditLog: auditLog, registry: registry, sentinelFixes: sentinelFixes, reviewFindings: reviewFindings,
 		sourceControl: sourceControl, githubBotToken: githubBotToken, timeouts: timeouts,
+		epistemicCheckDefault: epistemicCheckDefault,
 	}
 }
 
@@ -236,7 +245,7 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 		},
 	}
 
-	childSession, cerr := httpapi.SpawnChildSession(ctx, n.pool, n.sessions, n.turns, n.environments, n.auditLog, n.registry, req, parentSessionID, 1, provenance.SentinelAutoFix)
+	childSession, cerr := httpapi.SpawnChildSession(ctx, n.pool, n.sessions, n.turns, n.environments, n.auditLog, n.registry, req, parentSessionID, 1, provenance.SentinelAutoFix, n.epistemicCheckDefault)
 	if cerr != nil {
 		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: spawn child session: %s", cerr.Message)
 	}

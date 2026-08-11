@@ -45,6 +45,15 @@ import (
 // exists (today, always provenance.SentinelAutoFix); a caller with no
 // provenance tag to set should call CreateSessionCore instead, not this
 // function with an empty string.
+//
+// epistemicCheckDefault (F6, adversarial review, Step 61) mirrors
+// CreateSessionOnTx's own identical required parameter -- see that
+// function's own doc comment. internal/app/outboxworker's own
+// sentinelAutoFixNotifier (this function's one real caller) passes the
+// real, operator-configured platform.Config.EpistemicCheckDefault: a
+// sentinel-auto-fix child session is an ordinary build session (it edits
+// test/doc files to fix a finding), never a review session, so no F7-style
+// hardcoded-false carve-out applies here.
 func SpawnChildSession(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -57,6 +66,7 @@ func SpawnChildSession(
 	parentSessionID pgtype.UUID,
 	spawnDepth int32,
 	provenanceTag string,
+	epistemicCheckDefault bool,
 ) (sqlcgen.Session, *CreateSessionError) {
 	logger := platform.Logger(ctx)
 
@@ -72,7 +82,7 @@ func SpawnChildSession(
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	tag := provenanceTag
-	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, pgtype.UUID{}, ChildSessionOptions{
+	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, pgtype.UUID{}, epistemicCheckDefault, ChildSessionOptions{
 		ParentSessionID: parentSessionID,
 		SpawnDepth:      spawnDepth,
 		ProvenanceTag:   &tag,

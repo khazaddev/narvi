@@ -158,7 +158,21 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// exactly like another @mention on the same PR (coalesce.go's own
 		// REUSE branch), never CreateTurn's own single-relaunch-at-a-time
 		// REST policy.
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, nil, false, actorUserID, AlwaysQueue)
+		//
+		// epistemicCheckDefault: hardcoded false, deliberately never the
+		// operator's own platform.Config.EpistemicCheckDefault -- Step 61's
+		// own devil's-advocate preamble (§20) is a BUILDER check ("domain/
+		// turn: builder epistemic pre-action check", the Step's own title);
+		// a review turn is never a build turn (this function creates
+		// review-session turns, with review.RenderTurnPrompt's own
+		// verdict-tool-instructions already appended above, an entirely
+		// separate concern). Passing the real default here would leak the
+		// preamble onto review turns with no code path ever exercising
+		// ShouldInjectEpistemicPreamble's own planMode=false branch to stop
+		// it (a review-retrigger turn is always planMode=false, never
+		// true), so this call site is EXCLUDED at the source rather than
+		// relying on some other gate downstream.
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue)
 		if cerr != nil {
 			logger.Error("httpapi: retrigger review (create turn) failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)

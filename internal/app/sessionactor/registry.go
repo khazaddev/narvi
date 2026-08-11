@@ -280,6 +280,18 @@ type Registry struct {
 	// any one of them.
 	repoAccessCache *repoAccessCache
 
+	// epistemicCheckDefault (F6, adversarial review, Step 61) is
+	// platform.Config.EpistemicCheckDefault, threaded through to every
+	// Actor this Registry hydrates exactly like the fields above --
+	// workflowengine.Deps.EpistemicCheckDefault (each Actor's own three
+	// OnTurnCompleted call sites: pushpr.go, dispatch.go, timerfired.go)
+	// is this value's one consumer, needed so a machine-triggered
+	// workflow-advance turn (ApplyStepOutcome's own NextAdvance case,
+	// internal/app/workflowengine/advance.go) resolves the epistemic-check
+	// gate identically to every other build-turn-creating call site in
+	// this codebase.
+	epistemicCheckDefault bool
+
 	// group tracks every actor's mailbox-loop goroutine, so evicted/
 	// crashed actors are cleanly reaped and Shutdown can wait on all of
 	// them. Deliberately the zero value, NOT errgroup.WithContext(...) --
@@ -351,6 +363,7 @@ func NewRegistry(
 	tokenEncryptionKey []byte,
 	openCodeRuntimeVersion string,
 	diffFetcher PRDiffFetcher,
+	epistemicCheckDefault bool,
 	githubBotToken ...string,
 ) (*Registry, error) {
 	meter := otel.Meter(meterName)
@@ -386,6 +399,7 @@ func NewRegistry(
 		githubBotToken:         botToken,
 		contractDriftDetected:  contractDriftDetected,
 		repoAccessCache:        newRepoAccessCache(),
+		epistemicCheckDefault:  epistemicCheckDefault,
 		lifecycleCtx:           lifecycleCtx,
 		cancel:                 cancel,
 	}, nil

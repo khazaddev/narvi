@@ -1469,12 +1469,13 @@ func (a *Actor) failDispatchedTurn(ctx context.Context, turnID pgtype.UUID, send
 			return fmt.Errorf("sessionactor: get session: %w", err)
 		}
 		workflowengine.OnTurnCompleted(ctx, workflowengine.Deps{
-			Workflows:           a.stores.workflow.WithTx(tx),
-			Turns:               a.stores.turn.WithTx(tx),
-			SlackThreadSessions: a.stores.slackThreadSession.WithTx(tx),
-			LinearAgentSessions: a.stores.linearAgentSession.WithTx(tx),
-			GitHubPRSessions:    a.stores.githubPRSession.WithTx(tx),
-			Outbox:              a.stores.outbox.WithTx(tx),
+			Workflows:             a.stores.workflow.WithTx(tx),
+			Turns:                 a.stores.turn.WithTx(tx),
+			SlackThreadSessions:   a.stores.slackThreadSession.WithTx(tx),
+			LinearAgentSessions:   a.stores.linearAgentSession.WithTx(tx),
+			GitHubPRSessions:      a.stores.githubPRSession.WithTx(tx),
+			Outbox:                a.stores.outbox.WithTx(tx),
+			EpistemicCheckDefault: a.epistemicCheckDefault,
 		}, sessionRow, turnID, turn.TriggerTimeout)
 
 		if turn.RequiresSyntheticExecutionComplete(turn.TriggerTimeout) {

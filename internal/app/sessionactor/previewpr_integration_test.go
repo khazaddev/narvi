@@ -118,7 +118,7 @@ func TestHandleSandboxEvent_PushComplete_PreviewSettingsConfigured_EnqueuesPrevi
 		nextRef:           ports.PRRef{Number: 99, URL: "https://github.com/preview-acme/repo1/pull/99"},
 		defaultBranchName: "main",
 	}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestHandleSandboxEvent_PushComplete_NoPreviewSettings_SkipsPreview(t *testi
 		nextRef:           ports.PRRef{Number: 5, URL: "https://github.com/no-preview-acme/repo1/pull/5"},
 		defaultBranchName: "main",
 	}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -493,7 +493,7 @@ func TestHandleSandboxEvent_PushComplete_MalformedSha_SkipsPreviewButCreatesPR(t
 				nextRef:           ports.PRRef{Number: 11, URL: fmt.Sprintf("https://github.com/%s/repo1/pull/11", repoOwner)},
 				defaultBranchName: "main",
 			}
-			r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+			r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 			if err != nil {
 				t.Fatalf("NewRegistry: %v", err)
 			}
@@ -584,7 +584,7 @@ func TestHandleSandboxEvent_PushComplete_PartialPreviewSettings_TreatedAsOff(t *
 		nextRef:           ports.PRRef{Number: 77, URL: "https://github.com/partial-preview-acme/repo1/pull/77"},
 		defaultBranchName: "main",
 	}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestHandleSandboxEvent_PushComplete_RedeliveredFrame_DoesNotDuplicatePrevie
 		nextRef:           ports.PRRef{Number: 200, URL: "https://github.com/redelivered-push-acme/repo1/pull/200"},
 		defaultBranchName: "main",
 	}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -785,7 +785,7 @@ func TestHandleSandboxEvent_PushComplete_TwoDistinctPushes_EnqueuesTwoIndependen
 		nextRef:           ports.PRRef{Number: 123, URL: "https://github.com/two-push-acme/repo1/pull/123"},
 		defaultBranchName: "main",
 	}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

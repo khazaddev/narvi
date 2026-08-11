@@ -142,7 +142,7 @@ func TestSentinelAutoFixNotifier_SpawnsChildSessionAndUpdatesStores(t *testing.T
 	sentinelFixes := narvipg.NewSentinelFixStore(pool)
 	reviewFindings := narvipg.NewReviewFindingStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestSentinelAutoFixNotifier_SpawnsChildSessionAndUpdatesStores(t *testing.T
 
 	sourceControl := &fakeSentinelAutoFixSourceControl{nextSHA: "deadbeef"}
 	notifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessions, turns, environments, auditLog, registry, sentinelFixes, reviewFindings,
-		sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts())
+		sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts(), false)
 
 	payload, err := json.Marshal(ports.SentinelAutoFixPayload{
 		SentinelFixID:         fix.ID.String(),
@@ -322,7 +322,7 @@ func TestSentinelAutoFixNotifier_ResolveBranchSHAFails_NeverSpawnsChildSession(t
 	sentinelFixes := narvipg.NewSentinelFixStore(pool)
 	reviewFindings := narvipg.NewReviewFindingStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -341,7 +341,7 @@ func TestSentinelAutoFixNotifier_ResolveBranchSHAFails_NeverSpawnsChildSession(t
 
 	sourceControl := &fakeSentinelAutoFixSourceControl{nextSHAErr: errors.New("simulated GitHub API failure resolving origin head branch")}
 	notifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessions, turns, environments, auditLog, registry, sentinelFixes, reviewFindings,
-		sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts())
+		sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts(), false)
 
 	payload, err := json.Marshal(ports.SentinelAutoFixPayload{
 		SentinelFixID:         fix.ID.String(),
@@ -387,7 +387,7 @@ func TestSentinelAutoFixNotifier_CreateBranchFails_NeverSpawnsChildSession(t *te
 	sentinelFixes := narvipg.NewSentinelFixStore(pool)
 	reviewFindings := narvipg.NewReviewFindingStore(pool)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -406,7 +406,7 @@ func TestSentinelAutoFixNotifier_CreateBranchFails_NeverSpawnsChildSession(t *te
 
 	sourceControl := &fakeSentinelAutoFixSourceControl{nextSHA: "deadbeef", createBranchErr: errors.New("simulated GitHub API failure creating branch")}
 	notifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessions, turns, environments, auditLog, registry, sentinelFixes, reviewFindings,
-		sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts())
+		sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts(), false)
 
 	payload, err := json.Marshal(ports.SentinelAutoFixPayload{
 		SentinelFixID:         fix.ID.String(),

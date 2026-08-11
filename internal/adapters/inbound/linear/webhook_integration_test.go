@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +30,9 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/linear"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/linearapi"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -147,7 +150,7 @@ func newHandlerDeps(t *testing.T, pool *pgxpool.Pool) linear.Deps {
 	t.Helper()
 	ctx := context.Background()
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -240,6 +243,96 @@ func TestWebhookHandler_Created_CreatesSessionAndTurn(t *testing.T) {
 	}
 	if mappedSessionID != sessionID {
 		t.Errorf("linear_agent_sessions.session_id = %q, want %q", mappedSessionID, sessionID)
+	}
+}
+
+// TestWebhookHandler_Prompted_ForwardsEpistemicCheckDefault is the
+// test-wiring bundle's own addition (adversarial review): proves Deps.
+// EpistemicCheckDefault (webhook.go) actually reaches handlePrompted's own
+// ordinary-reply httpapi.CreateTurnCore call (webhook.go:825, DropIfOpen
+// policy) and, through it, createTurnLocked's own epistemic-preamble gate.
+// Mirrors planverdict_integration_test.go's own seed-session-directly
+// scaffolding (skip resolveOrClaimSession/handleCreated's own "created"
+// event entirely -- this test only cares about the ordinary-reply path) --
+// a COMPLETED producing turn is seeded first so the reply below is free of
+// the open-turn/busy gate, exactly like that file's own identical setup.
+// Before this test existed, mutating webhook.go:825's own deps.
+// EpistemicCheckDefault argument to a literal false failed nothing.
+func TestWebhookHandler_Prompted_ForwardsEpistemicCheckDefault(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	deps := newHandlerDeps(t, pool)
+	deps.EpistemicCheckDefault = true
+	// Participants (test-wiring bundle addition): newHandlerDeps's own
+	// baseline fixture never sets this -- harmless for every EXISTING
+	// caller (none reach authorizeSessionAction's own OwnedOrJoined check
+	// with a non-nil actor the way this test's linked replier does), but
+	// required here: actorauthz.OwnedOrJoined (identity.go) dereferences
+	// it unconditionally once actorUserID.Valid.
+	deps.Participants = narvipg.NewParticipantStore(pool)
+
+	agentSessionID := "agent-session-epistemic-1"
+	organizationID := "org-epistemic-1"
+
+	installLinearFixture(ctx, t, pool, organizationID, deps.TokenEncryptionKey)
+	stub, _ := newGenericLinearGraphQLStub(t)
+	deps.LinearClient = linearapi.New(stub.Client(), stub.URL)
+	deps.IdentityLink = newIdentityLinkDepsForTest(pool, deps.AuditLog)
+	const replierID = "linear-epistemic-replier-1"
+	linkLinearIdentityForTest(ctx, t, pool, replierID, sqlcgen.UserRoleMaintainer)
+
+	handler := linear.NewWebhookHandler(deps)
+
+	sessions := narvipg.NewSessionStore(pool)
+	turns := narvipg.NewTurnStore(pool)
+	agentSessions := narvipg.NewLinearAgentSessionStore(pool)
+
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceLinear})
+	if err != nil {
+		t.Fatalf("create linear-origin session: %v", err)
+	}
+	if _, err := agentSessions.Claim(ctx, agentSessionID, organizationID); err != nil {
+		t.Fatalf("claim agent session: %v", err)
+	}
+	if err := agentSessions.SetSessionID(ctx, agentSessionID, session.ID); err != nil {
+		t.Fatalf("attach session id: %v", err)
+	}
+	producingTurn, err := turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: false})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+
+	body := agentSessionPromptedPayloadWithUser(agentSessionID, organizationID, replierID, "also handle the edge case")
+	rec := postWebhook(t, handler, body, "delivery-epistemic-1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	allTurns, err := turns.ListForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(allTurns) != 2 {
+		t.Fatalf("len(turns) = %d, want 2 (the seeded producing turn + the new ordinary-reply turn)", len(allTurns))
+	}
+	var newTurn *sqlcgen.Turn
+	for i := range allTurns {
+		if allTurns[i].ID != producingTurn.ID {
+			newTurn = &allTurns[i]
+		}
+	}
+	if newTurn == nil {
+		t.Fatal("no new turn found")
+	}
+	if newTurn.Prompt == nil {
+		t.Fatal("new turn has a nil prompt")
+	}
+	wantPrefix := turn.RenderEpistemicPreamble()
+	if !strings.HasPrefix(*newTurn.Prompt, wantPrefix) {
+		t.Errorf("new turn prompt does not start with RenderEpistemicPreamble()'s own text -- Deps.EpistemicCheckDefault was not forwarded to handlePrompted's own CreateTurnCore call\ngot:  %q\nwant prefix: %q", *newTurn.Prompt, wantPrefix)
+	}
+	if !strings.Contains(*newTurn.Prompt, "also handle the edge case") {
+		t.Errorf("new turn prompt lost the caller's own original text\ngot: %q", *newTurn.Prompt)
 	}
 }
 

@@ -92,7 +92,7 @@ func TestHandleSandboxEvent_PushComplete_SentinelFixPR_BaseIsOriginHeadBranch_Ne
 		defaultBranchName: wantRepoDefaultBranch,
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, wantBotToken)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false, wantBotToken)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

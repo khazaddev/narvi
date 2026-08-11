@@ -60,6 +60,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/domain/loopguard"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/domain/workflow"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -231,10 +232,25 @@ func dispatchNextAttempt(ctx context.Context, deps Deps, runID pgtype.UUID, toSt
 	// BuildModelID/BuildEffort, never a Narvi-side default of their own).
 	res := applyStep(ctx, toStep, promptText, sessionRow.BuildModelID, sessionRow.BuildEffort, true, stepRun.ID)
 
+	// F6 (adversarial review, Step 61): the SAME shared gate createTurnLocked/
+	// CreateSessionOnTx/DecidePlanOnTx also route through
+	// (internal/domain/turn.MaybeInjectEpistemicPreamble) -- this call
+	// site used to bypass it entirely (this file's own top doc comment
+	// explains why dispatchNextAttempt never goes through createTurnLocked/
+	// CreateTurnCore), so a machine-triggered workflow-advance turn NEVER
+	// got the devil's-advocate preamble regardless of platform/session
+	// config, and always recorded epistemic_outcome = NULL -- indistinguishable
+	// from feature-off even with the check enabled, corrupting the
+	// false-alarm-rate telemetry §20.2 exists to collect. planMode is
+	// passed literally false, matching CreateTurnParams.PlanMode
+	// immediately below (a workflow-engine-dispatched turn is never
+	// plan-mode).
+	dispatchedPrompt := turn.MaybeInjectEpistemicPreamble(deps.EpistemicCheckDefault, sessionRow.EpistemicCheckEnabled, false, res.Prompt)
+
 	created, err := deps.Turns.Create(ctx, sqlcgen.CreateTurnParams{
 		SessionID: sessionRow.ID,
 		Status:    sqlcgen.TurnStatusPending,
-		Prompt:    &res.Prompt,
+		Prompt:    &dispatchedPrompt,
 		ModelID:   res.ModelID,
 		Effort:    res.Effort,
 		PlanMode:  false,

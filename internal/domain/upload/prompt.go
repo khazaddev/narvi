@@ -15,42 +15,72 @@ import (
 // neither, and reaching sideways into a sibling domain package's own
 // vocabulary is exactly the kind of new dependency that doc comment rules
 // out, the same way importing cmd/sandbox-agent (the actual consumer of
-// all six literals below, reviewverdicttoolprompt.go) would be a backwards
+// all nine literals below, reviewverdicttoolprompt.go) would be a backwards
 // layering violation this package must never make either.
 //
-// Why this package needs review's own literals AT ALL: sandbox-agent's own
-// prompt substitution (cmd/sandbox-agent/reviewverdicttoolprompt.go) runs
-// its OWN placeholder set's strings.ReplaceAll over a turn's ENTIRE
-// assembled prompt text, not just the fragment each producer rendered --
-// so an attacker-controlled Filename/ContentType containing one of
-// review's three literals verbatim would be expanded into that OTHER
-// tool's real, live bearer/gen by that later, blind substitution, exactly
-// as readily as this package's own three. sanitizeUntrustedField (below)
-// must therefore neutralize all six, not just the three this package
-// itself defines.
+// epistemicOutcomeToolURLPlaceholderLiteral, epistemicOutcomeToolBearerPlaceholderLiteral,
+// and epistemicOutcomeToolGenPlaceholderLiteral are the identical byte-for-byte
+// treatment for internal/domain/turn's own EpistemicOutcomeToolURLPlaceholder/
+// EpistemicOutcomeToolBearerPlaceholder/EpistemicOutcomeToolGenPlaceholder
+// (turn/epistemicpreamble.go, Step 61/§20.2) -- the SAME layering
+// restriction bars importing internal/domain/turn here too (neither
+// internal/app/ports nor the standard library), so these are duplicated as
+// raw literals exactly like review's three immediately above, never
+// imported.
 //
-// TestPlaceholderTokensMatchReviewPackage (prompt_test.go, an external
-// upload_test package free to import internal/domain/review for exactly
-// this cross-package consistency check) asserts these three literals stay
-// byte-for-byte identical to review's own real exported constants, so any
-// future drift between the two packages fails CI instead of silently
+// F1 (adversarial review, Step 61): these three were the verified
+// omission -- added to Step 61's own turn package but never registered
+// here, so sanitizeUntrustedField did not strip them from untrusted
+// attachment metadata, letting a filename like
+// "x{{EPISTEMIC_OUTCOME_TOOL_BEARER}}" survive into a dispatched build-turn
+// prompt and get expanded into the live sandbox bearer by sandbox-agent's
+// own later, unconditional substitution (cmd/sandbox-agent/
+// epistemicoutcometoolprompt.go) -- reachable even with the epistemic
+// feature OFF, since that substitution is driven only by the placeholder
+// text's presence, never by whether the check actually ran on this turn.
+// See placeholderdrift_internal_test.go for the general, self-updating
+// mechanism that now guards against a FOURTH family being forgotten the
+// same way.
+//
+// Why this package needs review's/turn's own literals AT ALL: sandbox-
+// agent's own prompt substitution (cmd/sandbox-agent/
+// reviewverdicttoolprompt.go, epistemicoutcometoolprompt.go) runs its OWN
+// placeholder set's strings.ReplaceAll over a turn's ENTIRE assembled
+// prompt text, not just the fragment each producer rendered -- so an
+// attacker-controlled Filename/ContentType containing one of these
+// literals verbatim would be expanded into that OTHER tool's real, live
+// bearer/gen by that later, blind substitution, exactly as readily as this
+// package's own three. sanitizeUntrustedField (below) must therefore
+// neutralize all nine, not just the three this package itself defines.
+//
+// TestPlaceholderTokensMatchReviewPackage/TestPlaceholderTokensMatchTurnPackage
+// (placeholders_internal_test.go, an internal test package free to import
+// internal/domain/review and internal/domain/turn for exactly this
+// cross-package consistency check) assert these six literals stay
+// byte-for-byte identical to review's/turn's own real exported constants,
+// so any future drift between the packages fails CI instead of silently
 // reopening this gap.
 const (
 	reviewVerdictToolURLPlaceholderLiteral    = "{{REVIEW_VERDICT_TOOL_URL}}"
 	reviewVerdictToolBearerPlaceholderLiteral = "{{REVIEW_VERDICT_TOOL_BEARER}}"
 	reviewVerdictToolGenPlaceholderLiteral    = "{{REVIEW_VERDICT_TOOL_GEN}}"
+
+	epistemicOutcomeToolURLPlaceholderLiteral    = "{{EPISTEMIC_OUTCOME_TOOL_URL}}"
+	epistemicOutcomeToolBearerPlaceholderLiteral = "{{EPISTEMIC_OUTCOME_TOOL_BEARER}}"
+	epistemicOutcomeToolGenPlaceholderLiteral    = "{{EPISTEMIC_OUTCOME_TOOL_GEN}}"
 )
 
 // placeholderTokens lists every literal placeholder token this whole
 // system ever substitutes for a live secret at prompt-substitution time
 // (sandbox-agent's own blind, whole-prompt strings.ReplaceAll calls,
-// cmd/sandbox-agent/reviewverdicttoolprompt.go): this package's own three
-// (BaseURLPlaceholder/BearerPlaceholder/GenPlaceholder) plus review's own
-// three (immediately above). sanitizeUntrustedField (below) destroys every
-// exact occurrence of all six before any untrusted value is interpolated
-// into rendered output, so a poisoned Filename/ContentType can never
-// survive to that later substitution step -- see that function's own doc
-// comment for the full attack this closes.
+// cmd/sandbox-agent/reviewverdicttoolprompt.go/epistemicoutcometoolprompt.go):
+// this package's own three (BaseURLPlaceholder/BearerPlaceholder/
+// GenPlaceholder), review's own three, plus turn's own three (all
+// immediately above). sanitizeUntrustedField (below) destroys every exact
+// occurrence of all nine before any untrusted value is interpolated into
+// rendered output, so a poisoned Filename/ContentType can never survive to
+// that later substitution step -- see that function's own doc comment for
+// the full attack this closes.
 var placeholderTokens = []string{
 	BaseURLPlaceholder,
 	BearerPlaceholder,
@@ -58,6 +88,9 @@ var placeholderTokens = []string{
 	reviewVerdictToolURLPlaceholderLiteral,
 	reviewVerdictToolBearerPlaceholderLiteral,
 	reviewVerdictToolGenPlaceholderLiteral,
+	epistemicOutcomeToolURLPlaceholderLiteral,
+	epistemicOutcomeToolBearerPlaceholderLiteral,
+	epistemicOutcomeToolGenPlaceholderLiteral,
 }
 
 // BaseURLPlaceholder, BearerPlaceholder, and GenPlaceholder are the fixed

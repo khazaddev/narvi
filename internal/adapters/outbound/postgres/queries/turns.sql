@@ -75,3 +75,34 @@ ORDER BY created_at ASC;
 UPDATE turns
 SET progress_notified_at = $2
 WHERE id = $1 AND progress_notified_at IS NULL;
+
+-- name: GetProcessingTurnForSession :one
+-- Step 61 ("builder epistemic pre-action check", §20.2) own epistemic-
+-- outcome-posting endpoint's first read -- mirrors WorkflowStore's own
+-- GetRunningRunForSession/GetLiveStepRunForRun precedent (queries/
+-- workflows.sql): the caller (a sandbox-authenticated POST naming no turn
+-- id at all, exactly like the workflow-step-outcome endpoint) resolves
+-- "the session's own CURRENTLY live turn" itself, from the sandbox-
+-- authenticated session id alone. turns_one_processing_per_session
+-- (migrations/000005_turns.up.sql) guarantees at most one row can ever
+-- match.
+SELECT * FROM turns
+WHERE session_id = $1 AND status = 'processing';
+
+-- name: SetTurnEpistemicOutcome :execrows
+-- The guarded UPDATE backing that same endpoint (§20.2) -- mirrors
+-- SetWorkflowStepRunOutcome's own "WHERE ... AND status = 'running'" guard
+-- exactly (queries/workflows.sql), one status value over: re-checks the
+-- turn is STILL the live processing one at write time, closing the race
+-- where it completed/failed/was cancelled between this endpoint's own
+-- GetProcessingTurnForSession read and this write. Unguarded by "AND
+-- epistemic_outcome IS NULL" -- deliberately, mirroring
+-- SetWorkflowStepRunOutcome's own identical choice: an agent that calls
+-- this endpoint more than once for the same still-processing turn (e.g.
+-- correcting itself) gets last-write-wins, not a rejected second call.
+-- 0 rows affected means the turn is no longer processing (a genuine race,
+-- or a stale/foreign turn id having somehow been targeted -- this query
+-- takes none, so in practice only the race).
+UPDATE turns
+SET epistemic_outcome = $2
+WHERE id = $1 AND status = 'processing';

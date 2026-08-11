@@ -20,6 +20,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/environment"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -241,7 +242,7 @@ const defaultContractsPath = "contracts/api"
 // intentSvc is nil-safe (see recordExplicitIntentDecision's own doc
 // comment) so every existing call site that doesn't care about Step 36
 // can keep passing nil unchanged.
-func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service) http.HandlerFunc {
+func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service, epistemicCheckDefault bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
@@ -301,7 +302,7 @@ func CreateSession(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *p
 			return
 		}
 
-		created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, createdBy)
+		created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, createdBy, epistemicCheckDefault)
 		if cerr != nil {
 			writeError(w, cerr.Status, cerr.Message)
 			return
@@ -515,7 +516,29 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 // Slack/Linear session creation, createdBy left invalid) alike, mirroring
 // sessions.created_by's own existing NULL-for-bot convention: actor_user_id
 // is NULL on a bot-attributed row, never a fabricated "system user".
-func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, childOpts ...ChildSessionOptions) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
+//
+// epistemicCheckDefault (F6, adversarial review, Step 61) is a REQUIRED
+// parameter, exactly mirroring createTurnLocked's own identical parameter
+// (turn.go's own doc comment on why: every call site must compile-time-
+// decide what to pass, never a silently-defaulted zero value) -- this
+// closes F6's own verified gap: this function's own turn insert below
+// used to bypass turn.MaybeInjectEpistemicPreamble entirely (the ONE other
+// raw turns.Create site, alongside workflowengine's dispatchNextAttempt
+// and DecidePlanOnTx, that did), so a session created WITH a prompt here
+// never got the devil's-advocate preamble even when the platform default
+// (or this SAME session's own just-inserted EpistemicCheckEnabled
+// override) called for it -- including the "compounding absurdity" F6
+// names: a caller opting in with {"epistemicCheckEnabled": true, "prompt":
+// "..."} used to get no preamble on the very turn it opted in for, since
+// created.EpistemicCheckEnabled (read back from this SAME INSERT ...
+// RETURNING *, so it reflects the value just written) is now consulted
+// below instead. Most callers pass their own real, operator-configured
+// platform.Config.EpistemicCheckDefault; internal/adapters/inbound/github's
+// own coalesce.go (the WINNER path, a brand-new PR REVIEW session) passes
+// a hardcoded false instead -- see that call site's own doc comment for
+// why (F7: a review session must never get the builder-only preamble,
+// mirroring reviewretrigger.go's identical REUSE-branch precedent).
+func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, epistemicCheckDefault bool, childOpts ...ChildSessionOptions) (session sqlcgen.Session, hasPrompt bool, cerr *CreateSessionError) {
 	logger := platform.Logger(ctx)
 	opts := childSessionOptionsFrom(childOpts)
 
@@ -612,6 +635,12 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// session -- see ChildSessionOptions' own doc comment.
 		ParentSessionID: opts.ParentSessionID,
 		SpawnDepth:      opts.SpawnDepth,
+		// EpistemicCheckEnabled (Step 61, "builder epistemic pre-action
+		// check", §20.4) mirrors BuildModelID's own "always stored,
+		// nil/absent means no session-level override" convention exactly
+		// -- consulted later by turn.ResolveEpistemicCheckEnabled
+		// (createTurnLocked, turn.go), never re-derived here.
+		EpistemicCheckEnabled: (*bool)(req.EpistemicCheckEnabled),
 	})
 	if err != nil {
 		logger.Error("httpapi: create session failed", "error", err)
@@ -627,10 +656,20 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 
 	hasPrompt = req.Prompt != nil
 	if hasPrompt {
+		// F6 (adversarial review, Step 61): the SAME shared gate
+		// createTurnLocked/dispatchNextAttempt/DecidePlanOnTx now all
+		// route through (internal/domain/turn.MaybeInjectEpistemicPreamble)
+		// -- created.EpistemicCheckEnabled is THIS SAME session's own
+		// just-inserted override (created is this function's own INSERT
+		// ... RETURNING * result, above), never re-derived or re-read, so
+		// a caller opting in via req.EpistemicCheckEnabled on this exact
+		// request sees it take effect on this exact first turn. req.PlanMode
+		// excludes per §20.3 exactly like every other caller.
+		firstTurnPrompt := turn.MaybeInjectEpistemicPreamble(epistemicCheckDefault, created.EpistemicCheckEnabled, req.PlanMode, *req.Prompt)
 		if _, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
 			SessionID: created.ID,
 			Status:    sqlcgen.TurnStatusPending,
-			Prompt:    (*string)(req.Prompt),
+			Prompt:    &firstTurnPrompt,
 			ModelID:   (*string)(req.ModelId),
 			Effort:    (*string)(req.Effort),
 			PlanMode:  req.PlanMode,
@@ -694,7 +733,7 @@ func TriggerDispatch(ctx context.Context, registry *sessionactor.Registry, sessi
 // That caller should call CreateSessionOnTx directly, inline on its own
 // already-open tx, and call TriggerDispatch itself once its own outer
 // transaction has committed and hasPrompt is true.
-func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID) (sqlcgen.Session, *CreateSessionError) {
+func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, createdBy pgtype.UUID, epistemicCheckDefault bool) (sqlcgen.Session, *CreateSessionError) {
 	logger := platform.Logger(ctx)
 
 	// Validate BEFORE ever acquiring a pooled connection -- see
@@ -717,7 +756,7 @@ func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	// own transact.
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, createdBy)
+	created, hasPrompt, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, createdBy, epistemicCheckDefault)
 	if cerr != nil {
 		return sqlcgen.Session{}, cerr
 	}

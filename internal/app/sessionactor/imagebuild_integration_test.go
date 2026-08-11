@@ -70,7 +70,7 @@ const testRuntimeVersion = "1.0.0-test"
 func newImageBuildTestRegistry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, sourceControl ports.SourceControl) *Registry {
 	t.Helper()
 	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, provider, "http://localhost:8080",
-		sourceControl, testTokenEncryptionKey, testRuntimeVersion, nil)
+		sourceControl, testTokenEncryptionKey, testRuntimeVersion, nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

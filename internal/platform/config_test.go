@@ -1015,6 +1015,71 @@ func TestLoadGitHubReReviewLabel(t *testing.T) {
 	})
 }
 
+// TestLoadEpistemicCheckDefault covers Step 61's ("builder epistemic
+// pre-action check", §20.4) own platform-wide default -- mirrors
+// TestLoadObjectStorageConfig's own NARVI_OBJECT_STORE_USE_PATH_STYLE
+// subtests exactly, the cited precedent for "optional boolean env var,
+// off by default, InvalidXError on an unparseable value" (test-wiring
+// bundle, adversarial review): before this test existed, flipping
+// EpistemicCheckDefault's own default false->true in Load shipped green
+// (nothing asserted the default at all), and the invalid-value branch
+// (errs = append(errs, &InvalidEpistemicCheckDefaultError{...})) was never
+// even constructed by any test.
+func TestLoadEpistemicCheckDefault(t *testing.T) {
+	t.Run("unset defaults to false (§20.4: off by default)", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_EPISTEMIC_CHECK_DEFAULT", "")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil (this default is optional)", err)
+		}
+		if cfg.EpistemicCheckDefault {
+			t.Errorf("Load().EpistemicCheckDefault = true, want false when unset")
+		}
+	})
+
+	t.Run("set true carries the real value through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_EPISTEMIC_CHECK_DEFAULT", "true")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if !cfg.EpistemicCheckDefault {
+			t.Errorf("Load().EpistemicCheckDefault = false, want true")
+		}
+	})
+
+	t.Run("set false explicitly carries through", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_EPISTEMIC_CHECK_DEFAULT", "false")
+
+		cfg, err := platform.Load()
+		if err != nil {
+			t.Fatalf("Load() error = %v, want nil", err)
+		}
+		if cfg.EpistemicCheckDefault {
+			t.Errorf("Load().EpistemicCheckDefault = true, want false")
+		}
+	})
+
+	t.Run("invalid value fails", func(t *testing.T) {
+		setRequiredEnv(t)
+		t.Setenv("NARVI_EPISTEMIC_CHECK_DEFAULT", "not-a-bool")
+
+		_, err := platform.Load()
+		if err == nil {
+			t.Fatal("Load() error = nil, want error")
+		}
+		var epistemicErr *platform.InvalidEpistemicCheckDefaultError
+		if !errors.As(err, &epistemicErr) {
+			t.Fatalf("Load() error = %v, want *platform.InvalidEpistemicCheckDefaultError", err)
+		}
+	})
+}
+
 // TestLoadObjectStorageConfig covers Step 58's ("uploads, blob storage &
 // the in-sandbox download_file tool", §28.7) object-storage block --
 // feature-flagged on NARVI_OBJECT_STORE_ENDPOINT alone, with Region/Bucket

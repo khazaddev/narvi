@@ -844,6 +844,49 @@ func (ns NullSessionStatus) Value() (driver.Value, error) {
 	return string(ns.SessionStatus), nil
 }
 
+type TurnEpistemicOutcome string
+
+const (
+	TurnEpistemicOutcomeNone   TurnEpistemicOutcome = "none"
+	TurnEpistemicOutcomeMinor  TurnEpistemicOutcome = "minor"
+	TurnEpistemicOutcomeStrong TurnEpistemicOutcome = "strong"
+)
+
+func (e *TurnEpistemicOutcome) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = TurnEpistemicOutcome(s)
+	case string:
+		*e = TurnEpistemicOutcome(s)
+	default:
+		return fmt.Errorf("unsupported scan type for TurnEpistemicOutcome: %T", src)
+	}
+	return nil
+}
+
+type NullTurnEpistemicOutcome struct {
+	TurnEpistemicOutcome TurnEpistemicOutcome `json:"turn_epistemic_outcome"`
+	Valid                bool                 `json:"valid"` // Valid is true if TurnEpistemicOutcome is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullTurnEpistemicOutcome) Scan(value interface{}) error {
+	if value == nil {
+		ns.TurnEpistemicOutcome, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.TurnEpistemicOutcome.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullTurnEpistemicOutcome) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.TurnEpistemicOutcome), nil
+}
+
 type TurnStatus string
 
 const (
@@ -1628,6 +1671,7 @@ type Session struct {
 	ParentSessionID        pgtype.UUID           `json:"parent_session_id"`
 	SpawnDepth             int32                 `json:"spawn_depth"`
 	BuildEffort            *string               `json:"build_effort"`
+	EpistemicCheckEnabled  *bool                 `json:"epistemic_check_enabled"`
 }
 
 type SessionTimer struct {
@@ -1646,19 +1690,20 @@ type SlackThreadSession struct {
 }
 
 type Turn struct {
-	ID                   pgtype.UUID        `json:"id"`
-	SessionID            pgtype.UUID        `json:"session_id"`
-	Status               TurnStatus         `json:"status"`
-	ConversationID       *string            `json:"conversation_id"`
-	CreatedAt            pgtype.Timestamptz `json:"created_at"`
-	DispatchedAt         pgtype.Timestamptz `json:"dispatched_at"`
-	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
-	Prompt               *string            `json:"prompt"`
-	ModelID              *string            `json:"model_id"`
-	PlanMode             bool               `json:"plan_mode"`
-	DispatchedSandboxGen *int32             `json:"dispatched_sandbox_gen"`
-	ProgressNotifiedAt   pgtype.Timestamptz `json:"progress_notified_at"`
-	Effort               *string            `json:"effort"`
+	ID                   pgtype.UUID           `json:"id"`
+	SessionID            pgtype.UUID           `json:"session_id"`
+	Status               TurnStatus            `json:"status"`
+	ConversationID       *string               `json:"conversation_id"`
+	CreatedAt            pgtype.Timestamptz    `json:"created_at"`
+	DispatchedAt         pgtype.Timestamptz    `json:"dispatched_at"`
+	CompletedAt          pgtype.Timestamptz    `json:"completed_at"`
+	Prompt               *string               `json:"prompt"`
+	ModelID              *string               `json:"model_id"`
+	PlanMode             bool                  `json:"plan_mode"`
+	DispatchedSandboxGen *int32                `json:"dispatched_sandbox_gen"`
+	ProgressNotifiedAt   pgtype.Timestamptz    `json:"progress_notified_at"`
+	Effort               *string               `json:"effort"`
+	EpistemicOutcome     *TurnEpistemicOutcome `json:"epistemic_outcome"`
 }
 
 type User struct {

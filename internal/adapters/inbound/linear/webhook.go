@@ -163,6 +163,14 @@ type Deps struct {
 	// IntentClassifier simply skips classification entirely.
 	IntentClassifier *intentclassifier.Service
 
+	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// check", §20.4) is threaded through to handlePrompted's own
+	// httpapi.CreateTurnCore call below exactly like every other caller
+	// now gets -- production wiring (cmd/control-plane/main.go) passes
+	// the SAME platform.Config.EpistemicCheckDefault value every other
+	// caller does.
+	EpistemicCheckDefault bool
+
 	WebhookSecret      []byte
 	TokenEncryptionKey []byte
 	DefaultRepoName    string
@@ -489,7 +497,7 @@ func (deps Deps) handleCreated(ctx context.Context, payload agentSessionEventWeb
 		return true
 	}
 
-	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, creator)
+	created, cerr := httpapi.CreateSessionCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Environments, deps.AuditLog, deps.Registry, req, creator, deps.EpistemicCheckDefault)
 	if cerr != nil {
 		logger.Error("linear: create session failed", "status", cerr.Status, "message", cerr.Message, "agent_session_id", payload.AgentSession.ID)
 		// H2/H3 audit fix: release BOTH claims this delivery is holding --
@@ -814,7 +822,7 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// actorUserID attributed) and L12 (this package's own copy-pasted
 	// hasOpenTurn helper is gone entirely -- httpapi's own copy, already
 	// unexported there, is the only one left).
-	createdTurn, wasCreated, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, sessionID, prompt, nil, planMode, actorUserID, httpapi.DropIfOpen)
+	createdTurn, wasCreated, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, sessionID, prompt, nil, planMode, deps.EpistemicCheckDefault, actorUserID, httpapi.DropIfOpen)
 	if cerr != nil {
 		if errors.Is(cerr, httpapi.ErrPlanAwaitingApproval) {
 			// Step 37/38 follow-up fix (§8.1): honest reply, never a hard
@@ -951,7 +959,7 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, logger *slog.Logger, ses
 		return false
 	}
 
-	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), decidedBy)
+	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.AgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), decidedBy, deps.EpistemicCheckDefault)
 	if err != nil {
 		if errors.Is(err, httpapi.ErrPlanOpenTurnInFlight) {
 			deps.postPlanOutcomeActivity(ctx, logger, organizationID, agentSessionID, appendNotice("A revision is already in progress for this plan -- try again once it completes.", identityNotice))

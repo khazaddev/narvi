@@ -475,7 +475,7 @@ func TestHandleSandboxEvent_ExecutionCompleteCompleted_CompletesTurnAndSendsPush
 	}
 
 	commander := &fakeSendCommander{}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -562,7 +562,7 @@ func TestHandleSandboxEvent_ExecutionCompleteFailed_NoPush(t *testing.T) {
 	created := createProcessingTurn(ctx, t, turnStore, sessionID)
 
 	commander := &fakeSendCommander{}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -665,7 +665,7 @@ func TestHandleSandboxEvent_PushComplete_CreatesPRArtifact(t *testing.T) {
 		nextRef:           ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"},
 		defaultBranchName: wantDefaultBranch,
 	}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -801,7 +801,7 @@ func TestHandleSandboxEvent_PushComplete_ResolveDefaultBranchFails_SkipsPRCreati
 		nextRef:    ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"},
 		nextSHAErr: errors.New("fakeSourceControl: simulated GitHub API failure resolving default branch"),
 	}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -859,7 +859,7 @@ func TestHandleSandboxEvent_PushComplete_NoCreatedBy_SkipsHonestly(t *testing.T)
 	}
 
 	sourceControl := &fakeSourceControl{}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -948,7 +948,7 @@ func TestHandleSandboxEvent_PushComplete_ViewerCreator_SkipsPRCreation(t *testin
 	}
 
 	sourceControl := &fakeSourceControl{nextRef: ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"}}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -1058,7 +1058,7 @@ func TestHandleSandboxEvent_PushComplete_DisabledCreator_SkipsPRCreation(t *test
 	}
 
 	sourceControl := &fakeSourceControl{nextRef: ports.PRRef{Number: 42, URL: "https://github.com/acme/repo1/pull/42"}}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -1158,7 +1158,7 @@ func TestHandleSandboxEvent_PushComplete_UnsupportedRepoHost_SkipsPRCreation(t *
 	// ever actually invoked -- this test's whole point is that it must
 	// NOT be, for a repo url naming a host other than github.com.
 	sourceControl := &fakeSourceControl{nextErr: errors.New("fakeSourceControl: CreatePR must never be called for a non-GitHub host")}
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

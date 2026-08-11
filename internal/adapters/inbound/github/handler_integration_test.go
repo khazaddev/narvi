@@ -32,6 +32,7 @@ import (
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -80,7 +81,7 @@ func newTestRig(t *testing.T, mutate ...func(*githubingress.Config)) testRig {
 	// internal/app/sessionactor's own dispatch_integration_test.go covers
 	// that decision tree exhaustively. Mirrors httpapi's own testRig
 	// precedent exactly.
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -570,6 +571,67 @@ func TestGitHubIntegration_OrdinaryMention_MemberAllowedOnOwnSession(t *testing.
 	}
 	if turnCount != 2 {
 		t.Errorf("turn count = %d, want exactly 2 (an ordinary second @mention by the session's own creator must still succeed, unchanged)", turnCount)
+	}
+}
+
+// TestGitHubIntegration_SecondMention_NeverGetsEpistemicPreamble is the
+// test-wiring bundle's own addition (adversarial review), pinning F7's own
+// fix: a second @mention on an existing PR review session (the REUSE
+// branch of CreateOrJoin, coalesce.go) must NEVER carry the builder-only
+// devil's-advocate preamble on its own turn, regardless of the platform's
+// configured epistemic-check default -- there is no config knob to even
+// flip here anymore (SessionCoalescer's own former EpistemicCheckDefault
+// field was removed entirely by F7; coalesce.go:399's own
+// httpapi.CreateTurnForBot call hardcodes false), which is exactly the
+// point: unlike a genuine forwarding test (mirrored by slack's
+// TestHandler_OrdinaryReply_ForwardsEpistemicCheckDefault and linear's
+// TestWebhookHandler_Prompted_ForwardsEpistemicCheckDefault, which each
+// prove Deps.EpistemicCheckDefault = true DOES reach their own ordinary-
+// reply turn), this test proves the review-session path can never reach
+// it AT ALL. Before this test existed, reverting coalesce.go:399's own
+// hardcoded false back to a real config value would have failed nothing
+// in this package.
+func TestGitHubIntegration_SecondMention_NeverGetsEpistemicPreamble(t *testing.T) {
+	ctx := context.Background()
+	rig := newTestRig(t)
+
+	const repoFullName = "acme/second-mention-no-preamble-repo"
+	const cloneURL = "https://github.com/acme/second-mention-no-preamble-repo.git"
+	const prNumber = 909
+	const commenterID = 90000909
+
+	createLinkedGitHubUser(ctx, t, rig.users, rig.identities, commenterID, sqlcgen.UserRoleMember)
+
+	first := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "second-mention-no-preamble-repo", cloneURL, prNumber, "first-mention", commenterID, "member-user"), "delivery-no-preamble-1")
+	if first != http.StatusOK {
+		t.Fatalf("first delivery status = %d, want %d", first, http.StatusOK)
+	}
+
+	second := postWebhook(t, rig, issueCommentBodyWithCommenter(repoFullName, "second-mention-no-preamble-repo", cloneURL, prNumber, "second-mention", commenterID, "member-user"), "delivery-no-preamble-2")
+	if second != http.StatusOK {
+		t.Fatalf("second delivery status = %d, want %d", second, http.StatusOK)
+	}
+
+	var sessionID string
+	if err := rig.pool.QueryRow(ctx, `SELECT id::text FROM sessions WHERE spawn_source = 'github'`).Scan(&sessionID); err != nil {
+		t.Fatalf("query session id: %v", err)
+	}
+	// The most recently created turn on this session -- turns carries no
+	// ordinal/sequence column, only created_at, matching this file's own
+	// established idiom elsewhere (e.g. the single-turn ORDER BY created_at
+	// DESC LIMIT 1 case above) for "the turn a given webhook just created".
+	var prompt *string
+	if err := rig.pool.QueryRow(ctx, `SELECT prompt FROM turns WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1`, sessionID).Scan(&prompt); err != nil {
+		t.Fatalf("query second turn prompt: %v", err)
+	}
+	if prompt == nil {
+		t.Fatal("second turn has a nil prompt")
+	}
+	if strings.HasPrefix(*prompt, turn.RenderEpistemicPreamble()) {
+		t.Errorf("second turn prompt starts with RenderEpistemicPreamble()'s own text -- a PR review turn must NEVER get the builder-only devil's-advocate preamble (F7)\ngot: %q", *prompt)
+	}
+	if !strings.Contains(*prompt, "second-mention") {
+		t.Errorf("second turn prompt lost the caller's own original text\ngot: %q", *prompt)
 	}
 }
 

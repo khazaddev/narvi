@@ -76,6 +76,22 @@ type Deps struct {
 	// Outbox is where enqueueWorkflowNotice writes the one notification row
 	// this Step ever enqueues per event.
 	Outbox *postgres.OutboxStore
+
+	// EpistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// platform.Config.EpistemicCheckDefault value every other
+	// createTurnLocked-reaching caller in this codebase now threads
+	// through -- advance.go's own dispatchNextAttempt is this package's
+	// ONE site that inserts a turn directly (bypassing createTurnLocked/
+	// CreateTurnCore entirely, this file's own doc comment on Turns
+	// explains why), so it is also this package's own one site that must
+	// separately route through turn.MaybeInjectEpistemicPreamble. Every
+	// workflow-engine-dispatched turn is an ordinary build turn (workflow
+	// runs have no notion of a "review session" at all -- internal/domain/
+	// workflow is a wholly separate subsystem from internal/adapters/
+	// inbound/github's PR-review coalescing), so no F7-style
+	// hardcoded-false carve-out applies here; every caller below passes
+	// its own real, operator-configured default.
+	EpistemicCheckDefault bool
 }
 
 // enqueueWorkflowNotice enqueues one outbox row carrying text to

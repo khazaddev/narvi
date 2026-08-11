@@ -138,6 +138,20 @@ type InteractiveDeps struct {
 	// auto-link or create a magic-link prompt.
 	IdentityLink identitylink.Deps
 
+	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// check", §20.4) is threaded through to handleViewSubmission's own
+	// httpapi.CreateTurnCore call below exactly like Deps.
+	// EpistemicCheckDefault (handler.go) -- production wiring
+	// (cmd/control-plane/main.go) passes the SAME platform.Config.
+	// EpistemicCheckDefault value both places. That call always names
+	// planMode=true (a "request changes" turn is always a plan-mode
+	// revise turn), so ShouldInjectEpistemicPreamble never actually
+	// injects the preamble here regardless of this value (§20.3) -- this
+	// field is threaded anyway, rather than a hardcoded false, so this
+	// call site stays correct by construction if it is ever reused for a
+	// non-plan-mode turn.
+	EpistemicCheckDefault bool
+
 	SigningSecret string
 	Timeouts      platform.Timeouts
 }
@@ -595,7 +609,7 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 		return
 	}
 
-	outcome, err := httpapi.DecidePlan(decideCtx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, verdict, decidedBy)
+	outcome, err := httpapi.DecidePlan(decideCtx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, verdict, decidedBy, deps.EpistemicCheckDefault)
 
 	var text string
 	switch {
@@ -857,7 +871,7 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 		return
 	}
 
-	if _, _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, sessionID, feedback, nil, true, actorUserID, httpapi.RejectIfOpen); cerr != nil {
+	if _, _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, sessionID, feedback, nil, true, deps.EpistemicCheckDefault, actorUserID, httpapi.RejectIfOpen); cerr != nil {
 		logger.Error("slack: interactivity: create request-changes turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionIDStr)
 	}
 	w.WriteHeader(http.StatusOK)

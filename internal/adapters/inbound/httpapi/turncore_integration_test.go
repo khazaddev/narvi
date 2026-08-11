@@ -46,7 +46,7 @@ func newTurnCoreTestRig(t *testing.T) *turnCoreTestRig {
 	ctx := context.Background()
 	pool := newBotTestPool(t)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestCreateTurnCore_RejectIfOpen_Success_WritesAuditRowWithActor(t *testing.
 	session := rig.newFixtureSession(t, ctx)
 	actor := rig.newFixtureUser(t, ctx)
 
-	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "do the thing", nil, false, actor.ID, RejectIfOpen)
+	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "do the thing", nil, false, false, actor.ID, RejectIfOpen)
 	if cerr != nil {
 		t.Fatalf("CreateTurnCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -192,7 +192,7 @@ func TestCreateTurnCore_RejectIfOpen_OpenTurn_ConflictsAndWritesNoAuditRow(t *te
 		t.Fatalf("seed open turn: %v", err)
 	}
 
-	_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "again", nil, false, pgtype.UUID{}, RejectIfOpen)
+	_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "again", nil, false, false, pgtype.UUID{}, RejectIfOpen)
 	if cerr == nil {
 		t.Fatal("cerr = nil, want a 409 CreateTurnError")
 	}
@@ -219,7 +219,7 @@ func TestCreateTurnCore_DropIfOpen_OpenTurn_ReturnsFalseNoErrorNoAuditRow(t *tes
 		t.Fatalf("seed open turn: %v", err)
 	}
 
-	_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "reply", nil, false, pgtype.UUID{}, DropIfOpen)
+	_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "reply", nil, false, false, pgtype.UUID{}, DropIfOpen)
 	if cerr != nil {
 		t.Fatalf("cerr = %+v, want nil (DropIfOpen never errors on an open turn)", cerr)
 	}
@@ -252,7 +252,7 @@ func TestCreateTurnCore_AlwaysQueue_SkipsOpenTurnCheck_WritesAuditRowPerCall(t *
 		t.Fatalf("seed open turn: %v", err)
 	}
 
-	first, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "first mention", nil, false, pgtype.UUID{}, AlwaysQueue)
+	first, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "first mention", nil, false, false, pgtype.UUID{}, AlwaysQueue)
 	if cerr != nil {
 		t.Fatalf("CreateTurnCore (first): status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -260,7 +260,7 @@ func TestCreateTurnCore_AlwaysQueue_SkipsOpenTurnCheck_WritesAuditRowPerCall(t *
 		t.Fatal("wasCreated (first) = false, want true")
 	}
 
-	second, wasCreated2, cerr2 := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "second mention", nil, false, pgtype.UUID{}, AlwaysQueue)
+	second, wasCreated2, cerr2 := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "second mention", nil, false, false, pgtype.UUID{}, AlwaysQueue)
 	if cerr2 != nil {
 		t.Fatalf("CreateTurnCore (second): status=%d message=%q", cerr2.Status, cerr2.Message)
 	}
@@ -316,7 +316,7 @@ func TestCreateTurnCore_RejectIfOpen_ConcurrentRequests_OnlyOneSucceeds(t *testi
 	for i := 0; i < n; i++ {
 		i := i
 		eg.Go(func() error {
-			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("relaunch %d", i), nil, false, pgtype.UUID{}, RejectIfOpen)
+			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("relaunch %d", i), nil, false, false, pgtype.UUID{}, RejectIfOpen)
 			results <- result{wasCreated: wasCreated, cerr: cerr}
 			return nil
 		})
@@ -378,7 +378,7 @@ func TestCreateTurnCore_DropIfOpen_ConcurrentRequests_OnlyOneSucceeds(t *testing
 	for i := 0; i < n; i++ {
 		i := i
 		eg.Go(func() error {
-			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("reply %d", i), nil, false, pgtype.UUID{}, DropIfOpen)
+			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("reply %d", i), nil, false, false, pgtype.UUID{}, DropIfOpen)
 			results <- result{wasCreated: wasCreated, cerr: cerr}
 			return nil
 		})
@@ -437,7 +437,7 @@ func TestCreateTurnCore_AlwaysQueue_ConcurrentRequests_AllSucceed(t *testing.T) 
 	for i := 0; i < n; i++ {
 		i := i
 		eg.Go(func() error {
-			created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("mention %d", i), nil, false, pgtype.UUID{}, AlwaysQueue)
+			created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, fmt.Sprintf("mention %d", i), nil, false, false, pgtype.UUID{}, AlwaysQueue)
 			if cerr != nil {
 				t.Errorf("goroutine %d: cerr = %+v, want nil", i, cerr)
 				return nil
@@ -505,7 +505,7 @@ func TestCreateTurnCore_AwaitingPlan_OrdinaryTurn_Gated(t *testing.T) {
 			session := rig.newFixtureSession(t, ctx)
 			rig.seedAwaitingApprovalPlan(t, ctx, session.ID)
 
-			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "build this now", nil, false, pgtype.UUID{}, policy)
+			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "build this now", nil, false, false, pgtype.UUID{}, policy)
 			if cerr == nil {
 				t.Fatal("cerr = nil, want a 409 CreateTurnError wrapping ErrPlanAwaitingApproval")
 			}
@@ -546,7 +546,7 @@ func TestCreateTurnCore_AwaitingPlan_PlanModeTrue_Allowed(t *testing.T) {
 	session := rig.newFixtureSession(t, ctx)
 	rig.seedAwaitingApprovalPlan(t, ctx, session.ID)
 
-	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "drop the retry", nil, true, pgtype.UUID{}, RejectIfOpen)
+	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "drop the retry", nil, true, false, pgtype.UUID{}, RejectIfOpen)
 	if cerr != nil {
 		t.Fatalf("CreateTurnCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -580,7 +580,7 @@ func TestCreateTurnCore_NoAwaitingPlan_OrdinaryTurn_Unaffected(t *testing.T) {
 	rig := newTurnCoreTestRig(t)
 	session := rig.newFixtureSession(t, ctx)
 
-	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "do the thing", nil, false, pgtype.UUID{}, RejectIfOpen)
+	created, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "do the thing", nil, false, false, pgtype.UUID{}, RejectIfOpen)
 	if cerr != nil {
 		t.Fatalf("CreateTurnCore: status=%d message=%q", cerr.Status, cerr.Message)
 	}
@@ -629,7 +629,7 @@ func TestCreateTurnCore_OpenTurnDuringAwaitingApproval_BusyWins(t *testing.T) {
 
 			// An ordinary (plan_mode=false) message arrives during that
 			// exact overlap window.
-			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "any updates?", nil, false, pgtype.UUID{}, policy)
+			_, wasCreated, cerr := CreateTurnCore(ctx, rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, session.ID, "any updates?", nil, false, false, pgtype.UUID{}, policy)
 
 			if wasCreated {
 				t.Error("wasCreated = true, want false (an open turn must still block a new one)")

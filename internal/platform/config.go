@@ -738,6 +738,31 @@ func (e *InvalidObjectStoreMaxBytesError) Error() string {
 // sign-in defaults to role "member".
 const initialAdminEmailsEnvVarName = "NARVI_INITIAL_ADMIN_EMAILS"
 
+// epistemicCheckDefaultEnvVarName configures Step 61's ("builder
+// epistemic pre-action check", §20.4) own platform-wide default for the
+// devil's-advocate pre-action check on build turns, read from
+// NARVI_EPISTEMIC_CHECK_DEFAULT. Optional, default false (§20.4: "Off by
+// default") — mirrors objectStoreUsePathStyleEnvVarName's own optional-
+// boolean-with-a-safe-default precedent exactly (Load's own object-storage
+// block, below), just unconditional rather than gated behind a separate
+// feature-on check: this default applies to every session regardless of
+// deployment config, only ever overridden per-session by
+// sessions.epistemic_check_enabled (migrations/000066_builder_epistemic_
+// check.up.sql, internal/domain/turn.ResolveEpistemicCheckEnabled).
+const epistemicCheckDefaultEnvVarName = "NARVI_EPISTEMIC_CHECK_DEFAULT"
+
+// InvalidEpistemicCheckDefaultError is returned by Load when
+// NARVI_EPISTEMIC_CHECK_DEFAULT is set to a value strconv.ParseBool does
+// not recognize -- mirrors InvalidObjectStoreUsePathStyleError's own
+// identical shape, one boolean env var over.
+type InvalidEpistemicCheckDefaultError struct {
+	Value string
+}
+
+func (e *InvalidEpistemicCheckDefaultError) Error() string {
+	return fmt.Sprintf("invalid %s=%q: must be a boolean (true/false/1/0/T/F/...)", epistemicCheckDefaultEnvVarName, e.Value)
+}
+
 // parseCommaSeparatedList splits raw on commas, trims whitespace from each
 // entry, and drops empty entries — used for every optional
 // comma-separated-list env var this file reads (the 3 allowlist mechanisms
@@ -893,6 +918,16 @@ type Config struct {
 	// verified sign-in email found here gets role "admin" at creation
 	// time instead of the enum's own "member" default.
 	InitialAdminEmails []string
+
+	// EpistemicCheckDefault is Step 61's ("builder epistemic pre-action
+	// check", §20.4) own platform-wide default for the devil's-advocate
+	// pre-action check on build turns, read from
+	// NARVI_EPISTEMIC_CHECK_DEFAULT. Optional: defaults to false (§20.4:
+	// "Off by default"). A session's own sessions.epistemic_check_enabled
+	// override, when set, always wins over this value regardless of
+	// direction (internal/domain/turn.ResolveEpistemicCheckEnabled) — this
+	// field is consulted only when that override is unset (NULL).
+	EpistemicCheckDefault bool
 
 	// ModalBaseURL and ModalAuthToken configure the real
 	// internal/adapters/outbound/modal.Provider cmd/control-plane/main.go
@@ -1200,6 +1235,20 @@ func Load() (*Config, error) {
 
 	initialAdminEmails := parseCommaSeparatedList(os.Getenv(initialAdminEmailsEnvVarName))
 
+	// epistemicCheckDefault (Step 61, §20.4): optional, default false --
+	// mirrors objectStoreUsePathStyle's own identical "empty means
+	// unset, parse only when present, reject anything ParseBool doesn't
+	// recognize" idiom (Load's own object-storage block, below).
+	epistemicCheckDefault := false
+	if raw := os.Getenv(epistemicCheckDefaultEnvVarName); raw != "" {
+		parsed, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			errs = append(errs, &InvalidEpistemicCheckDefaultError{Value: raw})
+		} else {
+			epistemicCheckDefault = parsed
+		}
+	}
+
 	modalBaseURL := os.Getenv(modalBaseURLEnvVarName)
 	if modalBaseURL == "" {
 		errs = append(errs, &MissingRequiredEnvError{EnvVar: modalBaseURLEnvVarName})
@@ -1395,6 +1444,7 @@ func Load() (*Config, error) {
 		AllowedGitHubOrgs:          allowedGitHubOrgs,
 		AllowedEmails:              allowedEmails,
 		InitialAdminEmails:         initialAdminEmails,
+		EpistemicCheckDefault:      epistemicCheckDefault,
 		ModalBaseURL:               modalBaseURL,
 		ModalAuthToken:             modalAuthToken,
 		ModalEgressProxyURL:        modalEgressProxyURL,

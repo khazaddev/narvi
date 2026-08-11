@@ -139,7 +139,7 @@ func authorizePlanAction(w http.ResponseWriter, r *http.Request, participants *p
 // item 3's own "Approve & build" action). See this file's own top doc
 // comment for the full sequencing; the actual decision now runs through
 // DecidePlanOnTx (decideplan.go), shared with every other entry point.
-func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, outbox *postgres.OutboxStore, linearAgentSessions *postgres.LinearAgentSessionStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry) http.HandlerFunc {
+func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, outbox *postgres.OutboxStore, linearAgentSessions *postgres.LinearAgentSessionStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, epistemicCheckDefault bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -171,7 +171,7 @@ func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *pos
 			return
 		}
 
-		outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, PlanVerdictApprove, actorUserID)
+		outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, PlanVerdictApprove, actorUserID, epistemicCheckDefault)
 		if err != nil {
 			if errors.Is(err, ErrPlanOpenTurnInFlight) {
 				// Mirrors CreateTurn's own hasOpenTurn 409 gate (turn.go)
@@ -233,7 +233,18 @@ func ApprovePlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *pos
 // RejectPlan backs POST /api/sessions/:id/plans/:planId/reject (§12.2
 // item 3's own "Reject" action). Same guarded-UPDATE shape as ApprovePlan,
 // with no new turn and no dispatch, via DecidePlanOnTx (decideplan.go).
-func RejectPlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, outbox *postgres.OutboxStore, linearAgentSessions *postgres.LinearAgentSessionStore, auditLog *postgres.AuditLogStore) http.HandlerFunc {
+//
+// epistemicCheckDefault is threaded through purely for parameter-shape
+// consistency with ApprovePlan/DecidePlanOnTx's own now-required parameter
+// (F6) -- DecidePlanOnTx only ever consults it on a PlanVerdictApprove
+// verdict (the branch that creates the post-approval implementation turn),
+// which this handler never passes, so this value never actually changes
+// behavior on this specific path today. Still required, never defaulted,
+// mirroring epistemicCheckDefault's own established convention throughout
+// this codebase (turn.go's own doc comment on CreateTurnCore: "every call
+// site must compile-time-decide what to pass, exactly like planMode
+// itself").
+func RejectPlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, outbox *postgres.OutboxStore, linearAgentSessions *postgres.LinearAgentSessionStore, auditLog *postgres.AuditLogStore, epistemicCheckDefault bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -265,7 +276,7 @@ func RejectPlan(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			return
 		}
 
-		outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, PlanVerdictReject, actorUserID)
+		outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, PlanVerdictReject, actorUserID, epistemicCheckDefault)
 		if err != nil {
 			logger.Error("httpapi: decide plan (reject) failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")

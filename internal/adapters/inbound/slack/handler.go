@@ -257,6 +257,13 @@ type Deps struct {
 	// safe): a nil IntentClassifier simply skips classification entirely.
 	IntentClassifier *intentclassifier.Service
 
+	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
+	// check", §20.4) is threaded through to addTurn's own createTurnLocked
+	// call (turn.go) exactly like every other caller now gets --
+	// production wiring (cmd/control-plane/main.go) passes the SAME
+	// platform.Config.EpistemicCheckDefault value every other caller does.
+	EpistemicCheckDefault bool
+
 	SigningSecret   string
 	BotToken        string
 	DefaultRepoName string
@@ -715,7 +722,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		logger.Info("slack: revise: reply had empty feedback, blocked by awaiting-approval plan guard", "session_id", res.SessionID)
 	} else {
 		var err error
-		createdTurn, created, err = addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, actorUserID)
+		createdTurn, created, err = addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, deps.EpistemicCheckDefault, actorUserID)
 		if err != nil {
 			if !errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
 				logger.Error("slack: add turn failed", "error", err)
@@ -865,7 +872,7 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *
 		return handleEventResult{OK: false}
 	}
 
-	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), actorUserID)
+	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), actorUserID, deps.EpistemicCheckDefault)
 
 	var text string
 	switch {
@@ -985,7 +992,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: deps.DefaultRepoName, Url: deps.DefaultRepoURL},
 		},
-	}, creator)
+	}, creator, deps.EpistemicCheckDefault)
 	if cerr != nil {
 		logger.Error("slack: create bare session failed", "status", cerr.Status, "message", cerr.Message)
 		return sessionResolution{}, false
