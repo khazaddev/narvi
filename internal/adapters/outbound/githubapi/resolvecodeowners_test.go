@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
@@ -174,5 +176,62 @@ func TestResolveCodeOwners_UnresolvableOwnerSkippedNotFatal(t *testing.T) {
 	}
 	if len(owners) != 1 || owners[0].Login != "real-user" {
 		t.Errorf("owners = %+v, want exactly one Owner{Login: real-user} (deleted-user skipped, not fatal)", owners)
+	}
+}
+
+// TestResolveCodeOwners_CapsDistinctOwnerResolutions is the B3 regression
+// test named explicitly in the §60 review's TEST BATCH: "raising the cap
+// passes everything" because no existing test in this file names more
+// than a handful of distinct owners -- maxCodeOwnerRefsPerCall (50) was
+// never actually exercised. A single catch-all pattern names 60 distinct
+// "@login" entries (deliberately > the cap); this proves BOTH that the
+// returned result is truncated to the cap AND -- the fact a length check
+// alone cannot distinguish from "resolve everything, then truncate the
+// slice afterward" -- that the cap stops NEW outbound resolutions
+// entirely once reached, never merely hides the overflow.
+func TestResolveCodeOwners_CapsDistinctOwnerResolutions(t *testing.T) {
+	t.Parallel()
+
+	const distinctOwners = 60 // deliberately > maxCodeOwnerRefsPerCall (50)
+	const wantCapped = 50
+
+	var codeowners strings.Builder
+	codeowners.WriteString("*")
+	for i := 0; i < distinctOwners; i++ {
+		fmt.Fprintf(&codeowners, " @owner%d", i)
+	}
+	codeowners.WriteString("\n")
+
+	userLookups := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/repos/acme/widgets/contents/.github/CODEOWNERS":
+			_ = json.NewEncoder(w).Encode(encodeContentsResponse(codeowners.String(), "file-sha"))
+		case strings.HasPrefix(r.URL.Path, "/users/owner"):
+			userLookups++
+			login := strings.TrimPrefix(r.URL.Path, "/users/")
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": userLookups, "login": login})
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	owners, err := adapter.ResolveCodeOwners(context.Background(), ports.ResolveCodeOwnersSpec{
+		Owner: "acme", Repo: "widgets", Ref: "main", Paths: []string{"x.go"}, Token: "tok",
+	})
+	if err != nil {
+		t.Fatalf("ResolveCodeOwners() error = %v, want nil", err)
+	}
+	if len(owners) != wantCapped {
+		t.Errorf("ResolveCodeOwners() returned %d owners, want exactly %d (maxCodeOwnerRefsPerCall) even though the CODEOWNERS file names %d", len(owners), wantCapped, distinctOwners)
+	}
+	if userLookups != wantCapped {
+		t.Errorf("made %d outbound /users/ lookups, want exactly %d (maxCodeOwnerRefsPerCall) -- the cap must stop NEW resolutions once reached, not merely truncate the result after resolving them all", userLookups, wantCapped)
 	}
 }
