@@ -4035,6 +4035,312 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) --
+// the three analytics rollups named in that section's own scope, each bounded to
+// platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and
+// carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0%
+// dismiss rate and a repo with no data yet must never render identically' (§21.1).
+// Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role
+// including viewer.
+type ReviewAnalytics struct {
+	// Every reviewpost.FindingStatus present in the window, sorted by count
+	// descending then status ascending. Null iff findingOutcomesComputed is false --
+	// like timeseries above, a real, computed result can never itself be an empty
+	// array (every counted status is non-empty by construction), so null is
+	// unambiguous here too.
+	FindingOutcomes *ReviewAnalyticsFindingOutcomes `json:"findingOutcomes" yaml:"findingOutcomes" mapstructure:"findingOutcomes"`
+
+	// False iff no review_findings row exists for this repo within the window --
+	// reads a DIFFERENT table than the two rollups above (review_findings, Step 48's
+	// mutable per-finding status history, never review_verdicts' own append-only rows
+	// -- internal/domain/reviewverdict.FindingOutcomes' own doc comment).
+	FindingOutcomesComputed bool `json:"findingOutcomesComputed" yaml:"findingOutcomesComputed" mapstructure:"findingOutcomesComputed"`
+
+	// The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own
+	// shape.
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// One entry per UTC calendar day that had at least one posted verdict within the
+	// window, oldest first. Null iff timeseriesComputed is false -- a real, computed
+	// timeseries can never itself be an empty array (every posted verdict belongs to
+	// some day, so any real data produces at least one bucket), so null is an
+	// unambiguous, redundant-with-the-boolean signal here, never a magic
+	// empty-vs-absent distinction a client must reason about on its own.
+	Timeseries *ReviewAnalyticsTimeseries `json:"timeseries" yaml:"timeseries" mapstructure:"timeseries"`
+
+	// False iff no review_verdicts row exists for this repo within the window --
+	// timeseries is then empty. Unlike topRiskDriversComputed below, this can never
+	// be true with an empty timeseries: every posted verdict belongs to some UTC
+	// calendar day, so any real data produces at least one bucket
+	// (internal/domain/reviewverdict.Timeseries' own doc comment).
+	TimeseriesComputed bool `json:"timeseriesComputed" yaml:"timeseriesComputed" mapstructure:"timeseriesComputed"`
+
+	// Every review.Tag that appeared in at least one verdict's BlastRadius within the
+	// window, sorted by count descending then tag ascending (a fixed, deterministic
+	// order -- never Go map iteration order). Null iff topRiskDriversComputed is
+	// false. A non-null EMPTY array with topRiskDriversComputed true is the one
+	// genuinely ambiguous-looking case this DTO can render, and it is deliberate:
+	// real verdicts exist, none tagged a risk driver -- the boolean, never array
+	// nullness/emptiness alone, is what a client must branch on.
+	TopRiskDrivers *ReviewAnalyticsTopRiskDrivers `json:"topRiskDrivers" yaml:"topRiskDrivers" mapstructure:"topRiskDrivers"`
+
+	// False iff no review_verdicts row exists for this repo within the window. UNLIKE
+	// timeseriesComputed, true with an EMPTY (but non-null) topRiskDrivers array
+	// below is itself a real, distinct, computed answer -- verdicts exist in the
+	// window but none tagged any BlastRadius risk driver
+	// (internal/domain/reviewverdict.TopRiskDrivers' own doc comment on why this is
+	// never confused with the ok=false sentinel above it).
+	TopRiskDriversComputed bool `json:"topRiskDriversComputed" yaml:"topRiskDriversComputed" mapstructure:"topRiskDriversComputed"`
+}
+
+// One UTC calendar day's own Shippable-classification counts --
+// ReviewAnalytics.timeseries' own per-day row
+// (internal/domain/reviewverdict.DayBucket).
+type ReviewAnalyticsDayBucket struct {
+	// How many verdicts posted this day carried Shippable == auto.
+	AutoCount int `json:"autoCount" yaml:"autoCount" mapstructure:"autoCount"`
+
+	// How many verdicts posted this day carried Shippable == block.
+	BlockCount int `json:"blockCount" yaml:"blockCount" mapstructure:"blockCount"`
+
+	// Midnight UTC of this bucket's own calendar day.
+	Day time.Time `json:"day" yaml:"day" mapstructure:"day"`
+
+	// How many verdicts posted this day carried Shippable == needs_human.
+	NeedsHumanCount int `json:"needsHumanCount" yaml:"needsHumanCount" mapstructure:"needsHumanCount"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsDayBucket) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["autoCount"]; raw != nil && !ok {
+		return fmt.Errorf("field autoCount in ReviewAnalyticsDayBucket: required")
+	}
+	if _, ok := raw["blockCount"]; raw != nil && !ok {
+		return fmt.Errorf("field blockCount in ReviewAnalyticsDayBucket: required")
+	}
+	if _, ok := raw["day"]; raw != nil && !ok {
+		return fmt.Errorf("field day in ReviewAnalyticsDayBucket: required")
+	}
+	if _, ok := raw["needsHumanCount"]; raw != nil && !ok {
+		return fmt.Errorf("field needsHumanCount in ReviewAnalyticsDayBucket: required")
+	}
+	type Plain ReviewAnalyticsDayBucket
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewAnalyticsDayBucket(plain)
+	return nil
+}
+
+// Every reviewpost.FindingStatus present in the window, sorted by count descending
+// then status ascending. Null iff findingOutcomesComputed is false -- like
+// timeseries above, a real, computed result can never itself be an empty array
+// (every counted status is non-empty by construction), so null is unambiguous here
+// too.
+type ReviewAnalyticsFindingOutcomes []ReviewAnalyticsFindingStatusCount
+
+// One reviewpost.FindingStatus's own occurrence count across the window's
+// review_findings rows -- ReviewAnalytics.findingOutcomes' own per-status row
+// (internal/domain/reviewverdict.FindingStatusCount).
+type ReviewAnalyticsFindingStatusCount struct {
+	// Count corresponds to the JSON schema field "count".
+	Count int `json:"count" yaml:"count" mapstructure:"count"`
+
+	// Status corresponds to the JSON schema field "status".
+	Status ReviewAnalyticsFindingStatusCountStatus `json:"status" yaml:"status" mapstructure:"status"`
+}
+
+type ReviewAnalyticsFindingStatusCountStatus string
+
+const ReviewAnalyticsFindingStatusCountStatusFixApplied ReviewAnalyticsFindingStatusCountStatus = "fix_applied"
+const ReviewAnalyticsFindingStatusCountStatusFixMerged ReviewAnalyticsFindingStatusCountStatus = "fix_merged"
+const ReviewAnalyticsFindingStatusCountStatusFixOpen ReviewAnalyticsFindingStatusCountStatus = "fix_open"
+const ReviewAnalyticsFindingStatusCountStatusFixPending ReviewAnalyticsFindingStatusCountStatus = "fix_pending"
+const ReviewAnalyticsFindingStatusCountStatusOpen ReviewAnalyticsFindingStatusCountStatus = "open"
+const ReviewAnalyticsFindingStatusCountStatusRebutted ReviewAnalyticsFindingStatusCountStatus = "rebutted"
+
+var enumValues_ReviewAnalyticsFindingStatusCountStatus = []interface{}{
+	"open",
+	"rebutted",
+	"fix_pending",
+	"fix_open",
+	"fix_merged",
+	"fix_applied",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsFindingStatusCountStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewAnalyticsFindingStatusCountStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewAnalyticsFindingStatusCountStatus, v)
+	}
+	*j = ReviewAnalyticsFindingStatusCountStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsFindingStatusCount) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["count"]; raw != nil && !ok {
+		return fmt.Errorf("field count in ReviewAnalyticsFindingStatusCount: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in ReviewAnalyticsFindingStatusCount: required")
+	}
+	type Plain ReviewAnalyticsFindingStatusCount
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewAnalyticsFindingStatusCount(plain)
+	return nil
+}
+
+// One review.Tag's own occurrence count across the window's verdicts --
+// ReviewAnalytics.topRiskDrivers' own per-tag row
+// (internal/domain/reviewverdict.TagCount).
+type ReviewAnalyticsTagCount struct {
+	// Count corresponds to the JSON schema field "count".
+	Count int `json:"count" yaml:"count" mapstructure:"count"`
+
+	// Tag corresponds to the JSON schema field "tag".
+	Tag ReviewAnalyticsTagCountTag `json:"tag" yaml:"tag" mapstructure:"tag"`
+}
+
+type ReviewAnalyticsTagCountTag string
+
+const ReviewAnalyticsTagCountTagAuth ReviewAnalyticsTagCountTag = "auth"
+const ReviewAnalyticsTagCountTagContracts ReviewAnalyticsTagCountTag = "contracts"
+const ReviewAnalyticsTagCountTagDataLayer ReviewAnalyticsTagCountTag = "data_layer"
+const ReviewAnalyticsTagCountTagDependencies ReviewAnalyticsTagCountTag = "dependencies"
+const ReviewAnalyticsTagCountTagInfra ReviewAnalyticsTagCountTag = "infra"
+const ReviewAnalyticsTagCountTagMigrations ReviewAnalyticsTagCountTag = "migrations"
+const ReviewAnalyticsTagCountTagPublicApi ReviewAnalyticsTagCountTag = "public_api"
+const ReviewAnalyticsTagCountTagSecrets ReviewAnalyticsTagCountTag = "secrets"
+
+var enumValues_ReviewAnalyticsTagCountTag = []interface{}{
+	"auth",
+	"migrations",
+	"contracts",
+	"secrets",
+	"infra",
+	"public_api",
+	"data_layer",
+	"dependencies",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsTagCountTag) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewAnalyticsTagCountTag {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewAnalyticsTagCountTag, v)
+	}
+	*j = ReviewAnalyticsTagCountTag(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsTagCount) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["count"]; raw != nil && !ok {
+		return fmt.Errorf("field count in ReviewAnalyticsTagCount: required")
+	}
+	if _, ok := raw["tag"]; raw != nil && !ok {
+		return fmt.Errorf("field tag in ReviewAnalyticsTagCount: required")
+	}
+	type Plain ReviewAnalyticsTagCount
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewAnalyticsTagCount(plain)
+	return nil
+}
+
+// One entry per UTC calendar day that had at least one posted verdict within the
+// window, oldest first. Null iff timeseriesComputed is false -- a real, computed
+// timeseries can never itself be an empty array (every posted verdict belongs to
+// some day, so any real data produces at least one bucket), so null is an
+// unambiguous, redundant-with-the-boolean signal here, never a magic
+// empty-vs-absent distinction a client must reason about on its own.
+type ReviewAnalyticsTimeseries []ReviewAnalyticsDayBucket
+
+// Every review.Tag that appeared in at least one verdict's BlastRadius within the
+// window, sorted by count descending then tag ascending (a fixed, deterministic
+// order -- never Go map iteration order). Null iff topRiskDriversComputed is
+// false. A non-null EMPTY array with topRiskDriversComputed true is the one
+// genuinely ambiguous-looking case this DTO can render, and it is deliberate: real
+// verdicts exist, none tagged a risk driver -- the boolean, never array
+// nullness/emptiness alone, is what a client must branch on.
+type ReviewAnalyticsTopRiskDrivers []ReviewAnalyticsTagCount
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalytics) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["findingOutcomes"]; raw != nil && !ok {
+		return fmt.Errorf("field findingOutcomes in ReviewAnalytics: required")
+	}
+	if _, ok := raw["findingOutcomesComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field findingOutcomesComputed in ReviewAnalytics: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in ReviewAnalytics: required")
+	}
+	if _, ok := raw["timeseries"]; raw != nil && !ok {
+		return fmt.Errorf("field timeseries in ReviewAnalytics: required")
+	}
+	if _, ok := raw["timeseriesComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field timeseriesComputed in ReviewAnalytics: required")
+	}
+	if _, ok := raw["topRiskDrivers"]; raw != nil && !ok {
+		return fmt.Errorf("field topRiskDrivers in ReviewAnalytics: required")
+	}
+	if _, ok := raw["topRiskDriversComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field topRiskDriversComputed in ReviewAnalytics: required")
+	}
+	type Plain ReviewAnalytics
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewAnalytics(plain)
+	return nil
+}
+
 // One review_findings row's own REST wire shape
 // (migrations/000046_review_findings.up.sql) -- returned by the rebut and
 // apply-suggestion endpoints (Step 48) so a caller can confirm the resulting

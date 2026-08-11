@@ -1092,6 +1092,17 @@ func serve() error {
 		r.Put("/", httpapi.PutAutoMergeToggle(repoSettingsStore, reviewVerdictDeps))
 	})
 
+	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):
+	// read-only GET over the three analytics rollups (timeseries,
+	// top-risk-driver breakdown, "Review finding outcomes" KPI) -- see
+	// httpapi/reviewanalytics.go's own doc comment. Gated by the existing
+	// authz.ActionViewAnalytics (§13.3 row 1: every role, including
+	// viewer), unlike every §21.2 write-side route above.
+	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps))
+	})
+
 	// /api/repos/{owner}/{repo}/provider-credentials,
 	// /api/environments/{environmentID}/provider-credentials,
 	// /api/provider-credentials (Step 53, "provider credential injection",

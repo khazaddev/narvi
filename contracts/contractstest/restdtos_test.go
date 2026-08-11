@@ -1089,4 +1089,65 @@ func TestUpdateAutoMergeToggleRequestRoundTrip(t *testing.T) {
 	roundTrip(t, sch, restdtos.UpdateAutoMergeToggleRequest{Enabled: false})
 }
 
+func TestReviewAnalyticsRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ReviewAnalytics")
+
+	t.Run("NothingComputedYet", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.ReviewAnalytics{
+			RepoFullName:            "acme/brand-new",
+			TimeseriesComputed:      false,
+			Timeseries:              nil,
+			TopRiskDriversComputed:  false,
+			TopRiskDrivers:          nil,
+			FindingOutcomesComputed: false,
+			FindingOutcomes:         nil,
+		})
+	})
+
+	t.Run("FullyComputed", func(t *testing.T) {
+		day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+		series := restdtos.ReviewAnalyticsTimeseries{
+			{Day: day, AutoCount: 3, NeedsHumanCount: 1, BlockCount: 0},
+		}
+		drivers := restdtos.ReviewAnalyticsTopRiskDrivers{
+			{Tag: restdtos.ReviewAnalyticsTagCountTagAuth, Count: 2},
+			{Tag: restdtos.ReviewAnalyticsTagCountTagMigrations, Count: 1},
+		}
+		outcomes := restdtos.ReviewAnalyticsFindingOutcomes{
+			{Status: restdtos.ReviewAnalyticsFindingStatusCountStatusOpen, Count: 4},
+			{Status: restdtos.ReviewAnalyticsFindingStatusCountStatusRebutted, Count: 2},
+		}
+		roundTrip(t, sch, restdtos.ReviewAnalytics{
+			RepoFullName:            "acme/widgets",
+			TimeseriesComputed:      true,
+			Timeseries:              &series,
+			TopRiskDriversComputed:  true,
+			TopRiskDrivers:          &drivers,
+			FindingOutcomesComputed: true,
+			FindingOutcomes:         &outcomes,
+		})
+	})
+
+	// The one sentinel-vs-real-zero case unique to this DTO (§21.1):
+	// verdicts exist in the window (timeseriesComputed=true, a real
+	// bucket present) but NONE tagged a BlastRadius risk driver --
+	// topRiskDriversComputed=true with a genuinely EMPTY (but non-nil)
+	// array, never confused with the topRiskDriversComputed=false "no
+	// data at all" case above (which is nil, not merely empty).
+	t.Run("VerdictsExistButNoRiskDriversTagged", func(t *testing.T) {
+		day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+		series := restdtos.ReviewAnalyticsTimeseries{{Day: day, AutoCount: 1, NeedsHumanCount: 0, BlockCount: 0}}
+		emptyDrivers := restdtos.ReviewAnalyticsTopRiskDrivers{}
+		roundTrip(t, sch, restdtos.ReviewAnalytics{
+			RepoFullName:            "acme/quiet-week",
+			TimeseriesComputed:      true,
+			Timeseries:              &series,
+			TopRiskDriversComputed:  true,
+			TopRiskDrivers:          &emptyDrivers,
+			FindingOutcomesComputed: false,
+			FindingOutcomes:         nil,
+		})
+	})
+}
+
 func strPtr(s string) *string { return &s }

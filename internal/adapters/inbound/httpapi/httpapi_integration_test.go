@@ -488,6 +488,13 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutAutoMergeToggle(rig.repoSettings, reviewVerdictDeps))
 	})
+	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1) --
+	// mounted behind auth.Middleware exactly like cmd/control-plane/
+	// main.go's own wiring (see reviewanalytics.go's own doc comment).
+	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps))
+	})
 	// /api/repos/{owner}/{repo}/provider-credentials,
 	// /api/environments/{environmentID}/provider-credentials,
 	// /api/provider-credentials (Step 53, "provider credential injection",
