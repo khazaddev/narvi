@@ -81,6 +81,27 @@ func TestComputeEligible(t *testing.T) {
 			wantEligible: false,
 			wantReason:   autoapproval.ReasonStaleVerdict,
 		},
+		{
+			// Isolates the empty-string clause from the inequality clause
+			// next to it: with a NON-empty CurrentHeadSHA (every other case
+			// in this table), "" != CurrentHeadSHA is ALREADY true, so the
+			// inequality clause alone would independently catch an empty
+			// VerdictHeadSHA regardless of the dedicated empty-string
+			// check -- proven by mutation testing (deleting the
+			// `in.VerdictHeadSHA == ""` clause left every other case in
+			// this table still green). This case sets CurrentHeadSHA to ""
+			// too, so ONLY the dedicated empty-string check -- never a
+			// same-value coincidence -- can still refuse a verdict that
+			// never recorded a real head sha in the first place.
+			name: "both head shas empty is still stale, never read as a trivially-matching pair",
+			in: func() autoapproval.EligibilityInput {
+				in := withVerdictHeadSHA(cleanInput(), "")
+				return withCurrentHeadSHA(in, "")
+			}(),
+			cfg:          cfg,
+			wantEligible: false,
+			wantReason:   autoapproval.ReasonStaleVerdict,
+		},
 
 		// --- criterion 3: CI green at the CURRENT head ---
 		{
