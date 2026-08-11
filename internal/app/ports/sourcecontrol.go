@@ -555,12 +555,21 @@ type ListOpenPRsForUserSpec struct {
 // ResolveCodeOwnersSpec is what SourceControl.ResolveCodeOwners (Step 60,
 // §16.2) needs: Owner/Repo/Token are the same generic source-control
 // concepts every other spec in this file already uses. Ref is the commit
-// SHA (or branch) the CODEOWNERS file itself is read at -- the PR's own
-// current head branch/SHA, so a path added/removed by the PR's own diff
-// is checked against the CODEOWNERS file as it exists on THAT branch, not
-// silently against main's possibly-different version. Paths is the set
-// of repo-relative file paths to resolve owners for (a PR's own changed-
-// files listing).
+// SHA (or branch) the CODEOWNERS file itself is read at -- callers MUST
+// pass the repo's own BASE ref/branch here, never the PR's head (§60
+// review finding P2-3, second round, correcting this doc comment, which
+// previously said the opposite -- "the PR's own current head branch/SHA"
+// -- the exact attacker-controlled value finding B3, first round, moved
+// callers away from): a PR's head is chosen by whoever opened/pushed the
+// PR, so resolving CODEOWNERS there would let a PR's own author dictate
+// which CODEOWNERS file this call reads when classifying THEIR OWN PR's
+// provenance. GitHub's own real CODEOWNERS enforcement is likewise always
+// evaluated against the repo's base branch, never a PR's head -- see
+// internal/app/decisioninbox's own resolvePRProvenance (aggregate.go),
+// this port's one real caller, which passes pr.BaseRef here for exactly
+// this reason; a future caller/adapter must do the same, not reintroduce
+// the vulnerability this fix removed. Paths is the set of repo-relative
+// file paths to resolve owners for (a PR's own changed-files listing).
 type ResolveCodeOwnersSpec struct {
 	Owner string
 	Repo  string
