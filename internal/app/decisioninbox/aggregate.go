@@ -64,10 +64,12 @@ package decisioninbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
@@ -119,18 +121,39 @@ type Result struct {
 	SCMAsOf *time.Time
 
 	// SCMFetchFailed is the third state SCMAsOf==nil alone cannot express
-	// (§60 review finding C1): true iff the actor DOES have a usable
-	// linked GitHub credential but the live PR fetch itself failed
-	// (buildPRItems returned an error -- a revoked token, a GitHub
-	// incident, a timeout), as opposed to SCMAsOf==nil with
-	// SCMFetchFailed==false, which means no linked identity was found at
-	// all, so no SCM read was even ATTEMPTED. The contract (dtos.schema.
-	// json) previously documented scmAsOf==null as meaning ONLY the
-	// latter -- an outage was indistinguishable from "you have no GitHub
-	// linked" to a contract-abiding client, which would render the wrong
-	// empty state. Always false when SCMAsOf is non-nil (a successful
-	// fetch and a failed one are mutually exclusive within one Build
-	// call).
+	// (§60 review finding C1): true iff the actor's PR-derived rows in
+	// this Result are a known-incomplete or degraded picture. ONE channel,
+	// fed by several independent producers (§60 review findings
+	// P1-2/P1-3/P2-1, second round -- deliberately reusing this SAME field
+	// rather than adding a second one, so a client only ever has one
+	// boolean to check):
+	//
+	//  1. The live PR fetch failed outright (buildPRItems returned an
+	//     error -- a revoked token, a GitHub incident, a timeout). SCMAsOf
+	//     stays nil here: no PR items were attempted at all.
+	//  2. resolveActorGitHubCredential hit a genuine identity-store DB
+	//     error or token-decrypt failure (P2-1) -- distinct from simply
+	//     having no linked GitHub identity at all (a legitimate,
+	//     NON-degraded empty state, which leaves this field false). SCMAsOf
+	//     also stays nil here: no fetch was even attempted.
+	//  3. SCMCache.ListOpenPRsForUser's own truncated return (P1-2): one of
+	//     GitHub's two discovery queries itself failed while the other
+	//     still returned a real, if partial, result. SCMAsOf IS set here
+	//     (a genuine, if partial, fetch happened) and Items MAY be
+	//     non-empty.
+	//  4. buildPRItems' own per-PR §17 SentinelFixStore exclusion check
+	//     erroring (P1-3): that ONE row is dropped (fails closed, excluded)
+	//     but the overall read is no longer a complete picture either.
+	//     SCMAsOf is set here too, same as (3).
+	//
+	// UNLIKE this field's own previous doc comment claimed, SCMAsOf
+	// non-nil and SCMFetchFailed true are NOT mutually exclusive as of
+	// producers (3)/(4) above -- a partial-but-real fetch can legitimately
+	// carry both a real as-of instant and a flag telling the caller not to
+	// present the rows present as complete. The contract (dtos.schema.
+	// json) previously documented scmAsOf==null as the ONLY signal here --
+	// an outage was indistinguishable from "you have no GitHub linked" to
+	// a contract-abiding client, which would render the wrong empty state.
 	SCMFetchFailed bool
 
 	// DecisionLatencyMedian/DecisionLatencySampleSize/
@@ -154,15 +177,34 @@ func Build(ctx context.Context, deps Deps, actorUserID pgtype.UUID, actorRole au
 	var scmAsOf *time.Time
 	var scmFetchFailed bool
 
-	if login, token, ok := resolveActorGitHubCredential(ctx, deps, actorUserID); ok {
-		prItems, asOf, err := buildPRItems(ctx, deps, login, token, now)
+	login, token, ok, credDegraded := resolveActorGitHubCredential(ctx, deps, actorUserID)
+	switch {
+	case ok:
+		prItems, asOf, degraded, err := buildPRItems(ctx, deps, login, token, now)
 		if err != nil {
 			logger.Error("decisioninbox: build pr items failed", "error", err)
 			scmFetchFailed = true
 		} else {
 			items = append(items, prItems...)
 			scmAsOf = &asOf
+			if degraded {
+				// P1-2/P1-3: a truncated (partial) GitHub read, or a
+				// per-PR §17 exclusion-check error -- see Result.
+				// SCMFetchFailed's own doc comment for the full producer
+				// list. The fetch itself still succeeded (asOf above is a
+				// real instant), so this is deliberately NOT an `else`
+				// branch of the `err != nil` check above.
+				scmFetchFailed = true
+			}
 		}
+	case credDegraded:
+		// P2-1: a genuine identity-store DB error or token-decrypt
+		// failure resolving the actor's OWN GitHub credential -- routed
+		// into the SAME degraded signal, never silently rendered
+		// identically to "you have no GitHub linked" (ok=false,
+		// credDegraded=false, which leaves scmFetchFailed correctly
+		// false below).
+		scmFetchFailed = true
 	}
 
 	planItems, err := buildPlanItems(ctx, deps, actorUserID, actorRole, now)
@@ -212,44 +254,73 @@ func rank(items []Item) []Item {
 // identity and decrypts its stored OAuth token -- mirrors httpapi.
 // ApplySuggestion's own identical decrypt-and-use pattern
 // (reviewfindings.go) exactly, applied here to the CURRENT actor rather
-// than an acting maintainer on a specific finding. ok=false (no linked
-// GitHub identity, or a decrypt failure) means this actor's PR-derived
-// items are simply skipped -- never an error that fails the whole Build
-// call, since plan/attention items still have plenty to show independent
-// of any GitHub credential.
-func resolveActorGitHubCredential(ctx context.Context, deps Deps, actorUserID pgtype.UUID) (externalID, token string, ok bool) {
+// than an acting maintainer on a specific finding.
+//
+// ok=false means this actor's PR-derived items are simply skipped --
+// never an error that fails the whole Build call, since plan/attention
+// items still have plenty to show independent of any GitHub credential.
+// degraded (§60 review finding P2-1, second round) distinguishes WHY:
+//
+//   - ok=false, degraded=false: no linked GitHub identity exists at all
+//     (pgx.ErrNoRows from the identity lookup) or the linked identity
+//     carries no stored token -- a legitimate, common, NON-degraded empty
+//     state. Build renders this identically to "no GitHub linked",
+//     exactly as before this fix.
+//   - ok=false, degraded=true: the lookup or decrypt ITSELF could not be
+//     completed -- a genuine identity-store DB error (anything other than
+//     pgx.ErrNoRows) or a token-decrypt failure. Before this fix, this
+//     collapsed into the exact same ok=false as "no linked identity",
+//     so a client rendered "you have no GitHub linked" for what was
+//     actually an outage. Build (below) now routes this into the SAME
+//     Result.SCMFetchFailed degraded signal P1-2/P1-3 use (see that
+//     field's own doc comment for the full producer list) -- ONE channel,
+//     several producers, not a second one.
+func resolveActorGitHubCredential(ctx context.Context, deps Deps, actorUserID pgtype.UUID) (externalID, token string, ok bool, degraded bool) {
 	identity, err := deps.Identities.GetByUserAndProvider(ctx, actorUserID, sqlcgen.IdentityProviderGithub)
 	if err != nil {
-		return "", "", false
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", false, false
+		}
+		platform.Logger(ctx).Error("decisioninbox: resolve actor github credential: identity lookup failed", "error", err)
+		return "", "", false, true
 	}
 	if identity.AccessTokenEncrypted == nil {
-		return "", "", false
+		return "", "", false, false
 	}
 	plaintext, err := platform.DecryptToken(deps.TokenEncryptionKey, identity.AccessTokenEncrypted)
 	if err != nil {
-		return "", "", false
+		platform.Logger(ctx).Error("decisioninbox: resolve actor github credential: decrypt token failed", "error", err)
+		return "", "", false, true
 	}
 	// Never logged, here or anywhere it might propagate to -- mirrors
 	// scmcredentials.go/reviewfindings.go's own identical discipline.
-	return identity.ExternalID, string(plaintext), true
+	return identity.ExternalID, string(plaintext), true, false
 }
 
 // buildPRItems fetches and classifies every open PR the actor is
 // currently assigned to -- see this file's own top doc comment for the
 // full ready_to_merge/needs_review/handoff decision and the §17
 // structural exclusion.
-func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, now time.Time) ([]Item, time.Time, error) {
-	prs, asOf, err := deps.SCMCache.ListOpenPRsForUser(ctx, ports.ListOpenPRsForUserSpec{GitHubExternalID: actorGitHubID, Token: token}, now)
+//
+// degraded (§60 review findings P1-2/P1-3, second round) is true iff this
+// read is known to be an incomplete/partial picture despite otherwise
+// succeeding -- see Result.SCMFetchFailed's own doc comment for the full
+// producer list this feeds into; asOf is still a real, honest fetch
+// instant even when degraded is true (a partial read is still a REAL
+// read, just not a complete one).
+func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, now time.Time) (items []Item, asOf time.Time, degraded bool, err error) {
+	prs, asOf, truncated, err := deps.SCMCache.ListOpenPRsForUser(ctx, ports.ListOpenPRsForUserSpec{GitHubExternalID: actorGitHubID, Token: token}, now)
 	if err != nil {
-		return nil, time.Time{}, err
+		return nil, time.Time{}, false, err
 	}
+	degraded = truncated
 
 	// One fresh budget per Build call -- see codeOwnersBudget's own doc
 	// comment (§60 review finding B3) for why this must never be shared
 	// across actors/requests the way deps.SCMCache itself is.
 	budget := newCodeOwnersBudget(maxCodeOwnerResolutionsPerBuild)
 
-	items := make([]Item, 0, len(prs))
+	items = make([]Item, 0, len(prs))
 	for _, pr := range prs {
 		if pr.Draft {
 			continue
@@ -265,8 +336,13 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 			// CONFIRMED one below -- excluded outright, never best-effort
 			// passed through as if the check had simply found nothing.
 			// isPlatformAuthored (below) already fails closed this same
-			// way; this now matches it.
+			// way; this now matches it. This ALSO marks the overall read
+			// degraded (§60 review finding P1-3, second round): a row was
+			// just dropped due to an infra failure, not a confirmed
+			// exclusion, so the read is no longer a complete picture --
+			// see Result.SCMFetchFailed's own doc comment.
 			platform.Logger(ctx).Error("decisioninbox: check sentinel-fix exclusion failed -- failing closed (excluding this pr)", "error", existsErr, "repo", repoFullName, "pr_number", pr.Number)
+			degraded = true
 			continue
 		}
 		if excluded {
@@ -277,7 +353,7 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 		items = append(items, item)
 	}
 
-	return items, asOf, nil
+	return items, asOf, degraded, nil
 }
 
 // openFindingsUnknownFailClosed is the OpenBlockingFindings value
@@ -297,28 +373,38 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 	hasNeedsHuman, riskLabel, isHandoffPR := classifyPRLabels(pr.Labels)
 
 	openFindings, findingsErr := countOpenFindings(ctx, deps, repoFullName, pr.Number)
+	findingsUnknown := false
 	if findingsErr != nil {
-		// Fail CLOSED (§60 review finding A1) -- see countOpenFindings'
-		// own doc comment for why a degraded zero here would be actively
-		// dangerous, not merely imprecise.
+		// Fail CLOSED for the ELIGIBILITY computation below (§60 review
+		// finding A1) -- see countOpenFindings' own doc comment for why a
+		// degraded zero there would be actively dangerous, not merely
+		// imprecise. openFindings keeps the synthetic sentinel value for
+		// THAT purpose only; findingsUnknown (§60 review finding P3-3,
+		// second round) is the separate signal that stops this same
+		// sentinel from also being rendered on the wire as an honest,
+		// real findings count -- see Item.FindingsUnknown's own doc
+		// comment.
 		platform.Logger(ctx).Error("decisioninbox: count open findings failed -- failing closed (treated as a blocking finding present)", "error", findingsErr, "repo", repoFullName, "pr_number", pr.Number)
 		openFindings = openFindingsUnknownFailClosed
+		findingsUnknown = true
 	}
 	ciGreen := pr.CIConclusion == ports.CIConclusionSuccess
 
 	item := Item{
-		RepoFullName:       repoFullName,
-		PRNumber:           pr.Number,
-		Title:              pr.Title,
-		HTMLURL:            pr.HTMLURL,
-		HeadSHA:            pr.HeadSHA,
-		Provenance:         &provenance,
-		RiskLabel:          riskLabel,
-		CIGreen:            ciGreen,
-		Findings:           openFindings,
-		IsHandoff:          isHandoffPR,
-		HasApprovingReview: pr.HasApprovingReview,
-		EnteredQueueAt:     pr.CreatedAt,
+		RepoFullName:        repoFullName,
+		PRNumber:            pr.Number,
+		Title:               pr.Title,
+		HTMLURL:             pr.HTMLURL,
+		HeadSHA:             pr.HeadSHA,
+		Provenance:          &provenance,
+		RiskLabel:           riskLabel,
+		CIGreen:             ciGreen,
+		Findings:            openFindings,
+		FindingsUnknown:     findingsUnknown,
+		IsHandoff:           isHandoffPR,
+		HasApprovingReview:  pr.HasApprovingReview,
+		HasChangesRequested: pr.HasChangesRequested,
+		EnteredQueueAt:      pr.CreatedAt,
 	}
 	item.AgeSeconds = int64(decisioninbox.Age(item.EnteredQueueAt, now).Seconds())
 	item.Stale = decisioninbox.IsStale(item.EnteredQueueAt, now, deps.Timeouts.DecisionInboxStaleAfter)
@@ -335,7 +421,15 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 			HasNeedsHumanLabel:   hasNeedsHuman,
 			OpenBlockingFindings: openFindings,
 		})
-		if platformAuthored && eligible {
+		// §60 review finding P1-4 (second round): HasChangesRequested is
+		// a HARD merge blocker at RevalidateForMerge (revalidate.go) but,
+		// before this fix, was never consulted HERE -- so such a PR sat
+		// in the TOP ready_to_merge section with a Merge button that
+		// would unconditionally 409 at click time. Demoted to
+		// needs_review instead, mirroring RevalidateForMerge's own
+		// identical, already-established gate, so the read model and the
+		// merge gate never disagree about what "ready to merge" means.
+		if platformAuthored && eligible && !pr.HasChangesRequested {
 			item.Kind = decisioninbox.KindReadyToMerge
 		} else {
 			item.Kind = decisioninbox.KindNeedsReview

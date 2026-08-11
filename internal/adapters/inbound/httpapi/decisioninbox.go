@@ -119,23 +119,33 @@ func decisionInboxItemToDTO(it decisioninbox.Item) restdtos.DecisionInboxItem {
 			dto.ProvenancePattern = &it.Provenance.Pattern
 		}
 
-		// ciGreen/findings/isHandoff/hasApprovingReview are PR-shaped
-		// fields, gated on "is this row a PR at all" (it.Provenance is
-		// set unconditionally by buildPROpenItem for EVERY PR row) --
-		// deliberately NOT on Kind (§60 review finding C4): Kind alone
-		// cannot distinguish a handoff PR (KindAwaitingApproval,
-		// Provenance non-nil) from an ordinary plan-approval row
-		// (KindAwaitingApproval, Provenance nil), so the previous
-		// Kind==ready_to_merge/needs_review gate silently nulled
+		// ciGreen/findings/isHandoff/hasApprovingReview/hasChangesRequested
+		// are PR-shaped fields, gated on "is this row a PR at all"
+		// (it.Provenance is set unconditionally by buildPROpenItem for
+		// EVERY PR row) -- deliberately NOT on Kind (§60 review finding
+		// C4): Kind alone cannot distinguish a handoff PR
+		// (KindAwaitingApproval, Provenance non-nil) from an ordinary
+		// plan-approval row (KindAwaitingApproval, Provenance nil), so the
+		// previous Kind==ready_to_merge/needs_review gate silently nulled
 		// isHandoff for the ONE row kind that field exists to identify.
 		ciGreen := it.CIGreen
 		dto.CiGreen = &ciGreen
-		findings := it.Findings
-		dto.Findings = &findings
+		// findings renders null, never it.Findings' own internal
+		// fail-closed sentinel value, whenever the count itself could not
+		// be determined (§60 review finding P3-3, second round) -- see
+		// Item.FindingsUnknown's own doc comment: that sentinel exists
+		// ONLY to fail the eligibility computation closed, and must never
+		// be presented on the wire as an honest, real findings count.
+		if !it.FindingsUnknown {
+			findings := it.Findings
+			dto.Findings = &findings
+		}
 		isHandoff := it.IsHandoff
 		dto.IsHandoff = &isHandoff
 		hasApprovingReview := it.HasApprovingReview
 		dto.HasApprovingReview = &hasApprovingReview
+		hasChangesRequested := it.HasChangesRequested
+		dto.HasChangesRequested = &hasChangesRequested
 	}
 	if it.RiskLabel != "" {
 		dto.RiskLabel = &it.RiskLabel
@@ -299,16 +309,35 @@ func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl
 			return
 		}
 
-		// RBAC, AUTHORITATIVE -- the pre-check above only ever proved this
-		// actor's ROLE is not unconditionally denied; OwnedOrJoined only
-		// becomes true, FOR REAL, once live revalidation has itself
-		// confirmed this PR is currently assigned to the actor
-		// (authz.ActionMergePR's own doc comment, internal/domain/authz/
-		// action.go): never trusted from the client-rendered queue,
-		// exactly like every other fact this handler re-checks. This is
-		// the gate a member's own verdict genuinely depends on (unlike
-		// admin/maintainer, unconditionally allowed either way) -- the
-		// cheap pre-check above cannot replace it.
+		// RBAC -- a DEFENSIVE re-assertion, NOT where a member's own PR
+		// ownership is actually enforced (§60 review finding P3-2, second
+		// round, correcting this comment: the previous text here claimed
+		// this call's own OwnedOrJoined "becomes true, FOR REAL, once live
+		// revalidation has itself confirmed" assignment, and called this
+		// "the gate a member's own verdict genuinely depends on" -- both
+		// provably false as written: Resource{OwnedOrJoined: true} is the
+		// exact same hardcoded literal `true` the pre-check above already
+		// passed for the SAME actor/action, and authz.Authorize is pure,
+		// so this call can never produce a DIFFERENT verdict than the
+		// pre-check already did moments earlier -- its own failure branch
+		// is provably unreachable given that. No auth bypass results
+		// (every role's verdict is still correct), but a maintainer
+		// reading the previous comment could reasonably delete this call
+		// believing revalidation's OWN confirmed-assignment fact flows
+		// into it, which it does not.
+		//
+		// The REAL enforcement that this PR is genuinely assigned to THIS
+		// actor already happened above, inside RevalidateForMerge: it
+		// looks the PR up in sourceControl.ListOpenPRsForUser scoped to
+		// the actor's OWN decrypted GitHub identity, and returns
+		// eligible=false (a 409, this handler never reaches here) when
+		// the PR is not in that actor's own assigned/requested-reviewer
+		// list. This call is kept anyway as defense in depth for a future
+		// edit that threads a REAL, per-call OwnedOrJoined value through
+		// here -- do not delete it believing it is dead code with no
+		// purpose; it is only ever dead given THIS file's CURRENT
+		// all-literal-true design, not because the RBAC gate itself is
+		// unnecessary.
 		if err := authz.Authorize(actor, authz.ActionMergePR, authz.Resource{OwnedOrJoined: true}); err != nil {
 			if errors.Is(err, authz.ErrForbidden) {
 				writeError(w, http.StatusForbidden, "not authorized to perform this action")

@@ -139,28 +139,37 @@ func NewSCMCache(sourceControl ports.SourceControl, timeouts platform.Timeouts) 
 // never now) -- the "as of 2 min ago" staleness §16.2 requires be
 // displayed, never silently masked.
 //
-// A truncated fetch (ports.SourceControl.ListOpenPRsForUser's own
-// truncated return -- §60 review finding C1: a degraded/partial read,
-// e.g. one of GitHub's two underlying search queries itself failed while
-// the other still returned a real, if incomplete, result) is NEVER
-// cached: the caller still gets today's best-effort partial result
-// (never blanked out), but writing it into the cache for the full TTL
-// would silently present a transient, partial read as a confirmed-
-// complete, fresh empty-or-partial queue for up to
+// truncated (§60 review finding P1-2, second round -- threading through
+// ports.SourceControl.ListOpenPRsForUser's own identical return, which
+// this method previously consumed only to decide whether to cache,
+// silently dropping it from its OWN return signature) mirrors §60 review
+// finding C1's original "degraded/partial read" meaning: true iff one of
+// GitHub's two underlying search queries itself failed while the other
+// still returned a real, if incomplete, result. A cache HIT always
+// reports truncated=false -- see the "never cached" paragraph below for
+// why a truncated result can never enter c.openPRs in the first place, so
+// there is nothing for a hit to ever return but false here. The caller
+// (aggregate.go's buildPRItems) folds this into Result.SCMFetchFailed --
+// see that field's own doc comment for the full producer list.
+//
+// A truncated fetch is NEVER cached: the caller still gets today's
+// best-effort partial result (never blanked out), but writing it into the
+// cache for the full TTL would silently present a transient, partial read
+// as a confirmed-complete, fresh empty-or-partial queue for up to
 // DecisionInboxSCMCacheTTL -- the exact "never presented as live truth"
 // hazard §16.2 exists to prevent. Only the NEXT request is affected, by
 // retrying live instead of serving a stale, possibly-still-wrong cache
 // hit.
-func (c *SCMCache) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPRsForUserSpec, now time.Time) (prs []ports.OpenPR, asOf time.Time, err error) {
+func (c *SCMCache) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPRsForUserSpec, now time.Time) (prs []ports.OpenPR, asOf time.Time, truncated bool, err error) {
 	if cached, fetchedAt, ok := c.openPRs.get(spec.GitHubExternalID, now); ok {
-		return cached, fetchedAt, nil
+		return cached, fetchedAt, false, nil
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, c.timeouts.GitHubListOpenPRsForUserTimeout)
-	prs, truncated, err := c.sourceControl.ListOpenPRsForUser(callCtx, spec)
+	prs, truncated, err = c.sourceControl.ListOpenPRsForUser(callCtx, spec)
 	cancel()
 	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("decisioninbox: list open prs for user: %w", err)
+		return nil, time.Time{}, false, fmt.Errorf("decisioninbox: list open prs for user: %w", err)
 	}
 
 	// fetchedAt (§60 review finding, "born-expired entries"): anchored on
@@ -180,16 +189,28 @@ func (c *SCMCache) ListOpenPRsForUser(ctx context.Context, spec ports.ListOpenPR
 
 	if truncated {
 		platform.Logger(ctx).Warn("decisioninbox: list open prs for user returned a truncated/degraded result -- not caching", "github_external_id", spec.GitHubExternalID)
-		return prs, fetchedAt, nil
+		return prs, fetchedAt, true, nil
 	}
 
 	c.openPRs.set(spec.GitHubExternalID, prs, fetchedAt, c.timeouts.DecisionInboxSCMCacheTTL)
-	return prs, fetchedAt, nil
+	return prs, fetchedAt, false, nil
 }
 
 // ResolveCodeOwners returns spec's own owner resolution, live-fetching on
 // a cache miss/expiry and caching the result -- mirrors ListOpenPRsForUser
-// above exactly, keyed on (owner, repo, ref, sorted paths).
+// above, keyed on (owner, repo, ref, sorted paths).
+//
+// fetchedAt/asOf are anchored on FETCH COMPLETION, exactly like
+// ListOpenPRsForUser's own identical "born-expired entries" fix above
+// (§60 review finding P2-2, second round: that fix was previously applied
+// ONLY to the openPRs cache -- this method still anchored both expiresAt
+// and the returned asOf on the caller's PRE-fetch `now` parameter, stale
+// by the whole duration of whichever ResolveCodeOwners call this races
+// against inside the SAME Build call, e.g. the openPRs fetch that
+// typically precedes it). A slow call (bounded by
+// GitHubResolveCodeOwnersTimeout) against the SAME DecisionInboxSCMCacheTTL
+// this cache uses for openPRs could otherwise write an entry get() would
+// immediately reject as already expired.
 func (c *SCMCache) ResolveCodeOwners(ctx context.Context, spec ports.ResolveCodeOwnersSpec, now time.Time) (owners []ports.Owner, asOf time.Time, err error) {
 	key := codeOwnersKey(spec.Owner, spec.Repo, spec.Ref, spec.Paths)
 	if cached, fetchedAt, ok := c.codeOwners.get(key, now); ok {
@@ -203,6 +224,7 @@ func (c *SCMCache) ResolveCodeOwners(ctx context.Context, spec ports.ResolveCode
 		return nil, time.Time{}, fmt.Errorf("decisioninbox: resolve code owners: %w", err)
 	}
 
-	c.codeOwners.set(key, owners, now, c.timeouts.DecisionInboxSCMCacheTTL)
-	return owners, now, nil
+	fetchedAt := time.Now()
+	c.codeOwners.set(key, owners, fetchedAt, c.timeouts.DecisionInboxSCMCacheTTL)
+	return owners, fetchedAt, nil
 }
