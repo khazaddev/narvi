@@ -1404,7 +1404,12 @@ type DecisionInboxItem struct {
 	FailureReason DecisionInboxItemFailureReason `json:"failureReason" yaml:"failureReason" mapstructure:"failureReason"`
 
 	// Count of still-open (never rebutted/fixed) review findings on this PR. Set for
-	// any PR-shaped row -- see ciGreen's own description.
+	// any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself
+	// could not be determined (a store error): §60 review finding P3-3 (second round)
+	// -- a transient failure fails the *eligibility computation* closed (treated
+	// internally as though a blocking finding were present) but that fail-closed
+	// sentinel must never be presented on the wire as an honest, real count, so this
+	// is null in that case instead, never the synthetic value used internally.
 	Findings DecisionInboxItemFindings `json:"findings" yaml:"findings" mapstructure:"findings"`
 
 	// The PR's own current GitHub review-decision fact -- display only, NEVER what
@@ -1413,6 +1418,18 @@ type DecisionInboxItem struct {
 	// re-validating CI/risk-label/open-findings/HasChangesRequested, never a human
 	// GitHub review). Set for any PR-shaped row, exactly like ciGreen above.
 	HasApprovingReview DecisionInboxItemHasApprovingReview `json:"hasApprovingReview" yaml:"hasApprovingReview" mapstructure:"hasApprovingReview"`
+
+	// The PR's own current GitHub review-decision fact, reduced to each reviewer's
+	// LATEST review (§60 review finding P1-1, second round) so a reviewer who
+	// requested changes and has since re-reviewed and approved no longer counts here.
+	// UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge
+	// treats a true value as a hard block on the Merge endpoint (§60 review finding
+	// A4, first round) -- a client should use this field, not hasApprovingReview, to
+	// pre-disable/explain a disabled Merge action (§60 review finding P1-4, second
+	// round: this field previously did not exist on the wire at all, even though the
+	// fact it surfaces already hard-blocked the merge server-side). Set for any
+	// PR-shaped row, exactly like ciGreen above.
+	HasChangesRequested DecisionInboxItemHasChangesRequested `json:"hasChangesRequested" yaml:"hasChangesRequested" mapstructure:"hasChangesRequested"`
 
 	// The PR's current head SHA at the moment this response's own scmAsOf snapshot
 	// was taken -- what a Merge click must still match server-side at click time
@@ -1500,7 +1517,12 @@ type DecisionInboxItemCiGreen *bool
 type DecisionInboxItemFailureReason *string
 
 // Count of still-open (never rebutted/fixed) review findings on this PR. Set for
-// any PR-shaped row -- see ciGreen's own description.
+// any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself
+// could not be determined (a store error): §60 review finding P3-3 (second round)
+// -- a transient failure fails the *eligibility computation* closed (treated
+// internally as though a blocking finding were present) but that fail-closed
+// sentinel must never be presented on the wire as an honest, real count, so this
+// is null in that case instead, never the synthetic value used internally.
 type DecisionInboxItemFindings *int
 
 // The PR's own current GitHub review-decision fact -- display only, NEVER what
@@ -1509,6 +1531,18 @@ type DecisionInboxItemFindings *int
 // re-validating CI/risk-label/open-findings/HasChangesRequested, never a human
 // GitHub review). Set for any PR-shaped row, exactly like ciGreen above.
 type DecisionInboxItemHasApprovingReview *bool
+
+// The PR's own current GitHub review-decision fact, reduced to each reviewer's
+// LATEST review (§60 review finding P1-1, second round) so a reviewer who
+// requested changes and has since re-reviewed and approved no longer counts here.
+// UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge
+// treats a true value as a hard block on the Merge endpoint (§60 review finding
+// A4, first round) -- a client should use this field, not hasApprovingReview, to
+// pre-disable/explain a disabled Merge action (§60 review finding P1-4, second
+// round: this field previously did not exist on the wire at all, even though the
+// fact it surfaces already hard-blocked the merge server-side). Set for any
+// PR-shaped row, exactly like ciGreen above.
+type DecisionInboxItemHasChangesRequested *bool
 
 // The PR's current head SHA at the moment this response's own scmAsOf snapshot was
 // taken -- what a Merge click must still match server-side at click time (§16.2,
@@ -1657,6 +1691,9 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["hasApprovingReview"]; raw != nil && !ok {
 		return fmt.Errorf("field hasApprovingReview in DecisionInboxItem: required")
+	}
+	if _, ok := raw["hasChangesRequested"]; raw != nil && !ok {
+		return fmt.Errorf("field hasChangesRequested in DecisionInboxItem: required")
 	}
 	if _, ok := raw["headSha"]; raw != nil && !ok {
 		return fmt.Errorf("field headSha in DecisionInboxItem: required")
@@ -1994,14 +2031,26 @@ type ListDecisionInboxResponse struct {
 	// breaks encoding/json here.
 	ScmAsOf *time.Time `json:"scmAsOf" yaml:"scmAsOf" mapstructure:"scmAsOf"`
 
-	// True iff the caller has a linked GitHub identity but the live PR fetch itself
-	// failed (a revoked token, a GitHub incident, a timeout) -- always false when
-	// scmAsOf is non-null (a successful fetch and a failed one are mutually exclusive
-	// within one response), and always false alongside scmAsOf==null when no linked
-	// identity exists at all (§60 review finding C1). A client should render a
+	// True iff the caller's PR-derived rows (ready_to_merge/needs_review) are a
+	// known-incomplete or degraded picture -- ONE channel fed by several independent
+	// producers (§60 review findings P1-2/P1-3/P2-1, second round, extending §60
+	// review finding C1, first round): the live PR fetch failing outright (a revoked
+	// token, a GitHub incident, a timeout, or a linked-identity lookup/decrypt
+	// failure -- scmAsOf stays null in these cases, no fetch was attempted or it
+	// never returned); one of GitHub's own underlying discovery queries failing while
+	// the other still returned a real, if partial, result (scmAsOf IS set here -- a
+	// genuine, if partial, fetch happened); or an individual PR's own §17
+	// sentinel-fix exclusion check erroring (that one row is dropped, fail-closed,
+	// but the overall read is no longer complete). UNLIKE this field's own previous
+	// doc comment claimed, scmAsOf non-null and scmFetchFailed true are NOT mutually
+	// exclusive -- a partial-but-real fetch legitimately carries both a real as-of
+	// instant and a flag telling the caller not to trust the rows present as
+	// complete. Always false alongside scmAsOf==null when no linked identity exists
+	// at all (a legitimate, non-degraded empty state). A client should render a
 	// distinct 'temporarily unable to load your pull requests, try again shortly'
-	// state here -- never the same 'no GitHub linked' empty state scmAsOf==null with
-	// scmFetchFailed==false means.
+	// state whenever this is true -- never the same 'no GitHub linked' empty state
+	// scmAsOf==null with scmFetchFailed==false means, and never silently trust the
+	// rows present as a complete queue.
 	ScmFetchFailed bool `json:"scmFetchFailed" yaml:"scmFetchFailed" mapstructure:"scmFetchFailed"`
 }
 

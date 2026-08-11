@@ -1231,7 +1231,7 @@ export interface DecisionInboxItem {
    */
   ciGreen: boolean | null;
   /**
-   * Count of still-open (never rebutted/fixed) review findings on this PR. Set for any PR-shaped row -- see ciGreen's own description.
+   * Count of still-open (never rebutted/fixed) review findings on this PR. Set for any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself could not be determined (a store error): §60 review finding P3-3 (second round) -- a transient failure fails the *eligibility computation* closed (treated internally as though a blocking finding were present) but that fail-closed sentinel must never be presented on the wire as an honest, real count, so this is null in that case instead, never the synthetic value used internally.
    */
   findings: number | null;
   /**
@@ -1242,6 +1242,10 @@ export interface DecisionInboxItem {
    * The PR's own current GitHub review-decision fact -- display only, NEVER what kind=ready_to_merge's own 'approved' means (§16.1 defines that as auto-approval by the deterministic eligibility engine, re-checked at merge time by re-validating CI/risk-label/open-findings/HasChangesRequested, never a human GitHub review). Set for any PR-shaped row, exactly like ciGreen above.
    */
   hasApprovingReview: boolean | null;
+  /**
+   * The PR's own current GitHub review-decision fact, reduced to each reviewer's LATEST review (§60 review finding P1-1, second round) so a reviewer who requested changes and has since re-reviewed and approved no longer counts here. UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge treats a true value as a hard block on the Merge endpoint (§60 review finding A4, first round) -- a client should use this field, not hasApprovingReview, to pre-disable/explain a disabled Merge action (§60 review finding P1-4, second round: this field previously did not exist on the wire at all, even though the fact it surfaces already hard-blocked the merge server-side). Set for any PR-shaped row, exactly like ciGreen above.
+   */
+  hasChangesRequested: boolean | null;
   /**
    * kind=awaiting_approval, a plan (not a handoff PR) only.
    */
@@ -1285,7 +1289,7 @@ export interface ListDecisionInboxResponse {
    */
   scmAsOf: string | null;
   /**
-   * True iff the caller has a linked GitHub identity but the live PR fetch itself failed (a revoked token, a GitHub incident, a timeout) -- always false when scmAsOf is non-null (a successful fetch and a failed one are mutually exclusive within one response), and always false alongside scmAsOf==null when no linked identity exists at all (§60 review finding C1). A client should render a distinct 'temporarily unable to load your pull requests, try again shortly' state here -- never the same 'no GitHub linked' empty state scmAsOf==null with scmFetchFailed==false means.
+   * True iff the caller's PR-derived rows (ready_to_merge/needs_review) are a known-incomplete or degraded picture -- ONE channel fed by several independent producers (§60 review findings P1-2/P1-3/P2-1, second round, extending §60 review finding C1, first round): the live PR fetch failing outright (a revoked token, a GitHub incident, a timeout, or a linked-identity lookup/decrypt failure -- scmAsOf stays null in these cases, no fetch was attempted or it never returned); one of GitHub's own underlying discovery queries failing while the other still returned a real, if partial, result (scmAsOf IS set here -- a genuine, if partial, fetch happened); or an individual PR's own §17 sentinel-fix exclusion check erroring (that one row is dropped, fail-closed, but the overall read is no longer complete). UNLIKE this field's own previous doc comment claimed, scmAsOf non-null and scmFetchFailed true are NOT mutually exclusive -- a partial-but-real fetch legitimately carries both a real as-of instant and a flag telling the caller not to trust the rows present as complete. Always false alongside scmAsOf==null when no linked identity exists at all (a legitimate, non-degraded empty state). A client should render a distinct 'temporarily unable to load your pull requests, try again shortly' state whenever this is true -- never the same 'no GitHub linked' empty state scmAsOf==null with scmFetchFailed==false means, and never silently trust the rows present as a complete queue.
    */
   scmFetchFailed: boolean;
   /**

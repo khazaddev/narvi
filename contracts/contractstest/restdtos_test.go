@@ -677,6 +677,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 		findings := 0
 		isHandoff := false
 		hasApprovingReview := true
+		hasChangesRequested := false
 		roundTrip(t, sch, restdtos.DecisionInboxItem{
 			Kind:                   restdtos.DecisionInboxItemKindReadyToMerge,
 			Title:                  "scheduler: exponential backoff on recovery sweep",
@@ -695,14 +696,21 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 			Findings:               &findings,
 			IsHandoff:              &isHandoff,
 			HasApprovingReview:     &hasApprovingReview,
-			PlanId:                 nil,
-			SessionId:              nil,
-			FailureReason:          nil,
-			AutomationId:           nil,
-			ArtifactSummary:        nil,
-			OutboxId:               nil,
-			OutboxKind:             nil,
-			LastError:              nil,
+			// hasChangesRequested (§60 review finding P1-4, second round):
+			// false here -- this row is ready_to_merge, which could never
+			// legitimately coexist with a true value (RevalidateForMerge
+			// hard-blocks the merge on it) -- see the
+			// AwaitingApprovalHandoffPR case immediately below for a
+			// PR-shaped row that DOES round-trip a true value.
+			HasChangesRequested: &hasChangesRequested,
+			PlanId:              nil,
+			SessionId:           nil,
+			FailureReason:       nil,
+			AutomationId:        nil,
+			ArtifactSummary:     nil,
+			OutboxId:            nil,
+			OutboxKind:          nil,
+			LastError:           nil,
 		})
 	})
 
@@ -723,6 +731,13 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 		findings := 0
 		isHandoff := true
 		hasApprovingReview := false
+		// hasChangesRequested TRUE here (§60 review finding P1-4, second
+		// round) -- the one PR-shaped kind=awaiting_approval case in this
+		// test that round-trips a true value, proving marshal/unmarshal of
+		// a REAL non-null payload for this new field, not merely a null
+		// passthrough (which json.Marshal would produce for this
+		// no-omitempty field regardless of whether any test ever set it).
+		hasChangesRequested := true
 		roundTrip(t, sch, restdtos.DecisionInboxItem{
 			Kind:                   restdtos.DecisionInboxItemKindAwaitingApproval,
 			Title:                  "prototype: self-serve export flow",
@@ -741,6 +756,7 @@ func TestDecisionInboxItemRoundTrip(t *testing.T) {
 			Findings:               &findings,
 			IsHandoff:              &isHandoff,
 			HasApprovingReview:     &hasApprovingReview,
+			HasChangesRequested:    &hasChangesRequested,
 			PlanId:                 nil,
 			SessionId:              nil,
 			FailureReason:          nil,
@@ -892,6 +908,30 @@ func TestListDecisionInboxResponseRoundTrip(t *testing.T) {
 		roundTrip(t, sch, restdtos.ListDecisionInboxResponse{
 			Items:                        []restdtos.DecisionInboxItem{},
 			ScmAsOf:                      nil,
+			ScmFetchFailed:               true,
+			DecisionLatencyMedianSeconds: nil,
+			DecisionLatencySampleSize:    0,
+			DecisionLatencyComputed:      false,
+		})
+	})
+
+	// PartialReadStillHasARealAsOf (§60 review findings P1-2/P1-3, second
+	// round) is a FOURTH state, distinct from GitHubLinkedButFetchFailed
+	// above: scmAsOf non-null AND scmFetchFailed true, together -- a
+	// truncated/partial GitHub read (one discovery query failed while the
+	// other still returned real data) or a per-PR §17 exclusion-check
+	// error still produces a genuine, honest as-of instant for whatever
+	// WAS fetched, while also flagging the overall picture incomplete.
+	// This field's own previous doc comment claimed scmAsOf non-null and
+	// scmFetchFailed true were mutually exclusive -- this case proves the
+	// wire contract itself has no such constraint (and never should),
+	// exercising the ONE combination the previous doc comment's own
+	// claim, if it had been schema-enforced, would have made illegal.
+	t.Run("PartialReadStillHasARealAsOf", func(t *testing.T) {
+		scmAsOf := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+		roundTrip(t, sch, restdtos.ListDecisionInboxResponse{
+			Items:                        []restdtos.DecisionInboxItem{},
+			ScmAsOf:                      &scmAsOf,
 			ScmFetchFailed:               true,
 			DecisionLatencyMedianSeconds: nil,
 			DecisionLatencySampleSize:    0,
