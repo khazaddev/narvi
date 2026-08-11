@@ -36,11 +36,14 @@ func DefaultSensitiveTags() []review.Tag {
 type EligibilityConfig struct {
 	// MaxFilesChanged is the diff-size threshold (§21.2: "diff size
 	// under a configurable-per-repo threshold") -- compared against
-	// Verdict.FilesChanged.
+	// EligibilityInput.ChangedFileCount (§62 review finding C1: the
+	// server-fetched fact, never Verdict.FilesChanged).
 	MaxFilesChanged int
 	// SensitiveTags is the configurable-per-repo sensitive-path list
 	// (§21.2: "no sensitive path touched -- configurable per repo").
-	// Compared against Verdict.BlastRadius: ANY overlap disqualifies.
+	// Compared against EligibilityInput.TouchedBlastRadius: ANY overlap
+	// disqualifies (§62 review finding C1: the server-DERIVED fact,
+	// never Verdict.BlastRadius).
 	SensitiveTags []review.Tag
 }
 
@@ -61,12 +64,54 @@ func DefaultEligibilityConfig() EligibilityConfig {
 type EligibilityInput struct {
 	// Verdict is the LATEST posted review.Verdict for this PR
 	// (review_verdicts' own DISTINCT ON (repo, pr_number) ... ORDER BY
-	// created_at DESC reduction, §21.1) -- the server-computed
-	// Shippable/FilesChanged/BlastRadius fields this engine gates on.
+	// created_at DESC reduction, §21.1). ONLY Verdict.Shippable is ever
+	// consulted by ComputeEligible below -- §62 review finding C1
+	// (CRITICAL, fixed): Verdict.FilesChanged and Verdict.BlastRadius are
+	// BOTH the reviewing LLM's own self-report, typed into its own POST
+	// body (restdtos.PostReviewVerdictRequest) alongside the untrusted PR
+	// diff §5.2 explicitly classifies as untrusted content -- a reviewing
+	// agent that posts riskLevel=low/premise=ok/testsCoverage=adequate
+	// (so Shippable legitimately computes to auto) plus a LOW
+	// filesChanged and an EMPTY blastRadius, regardless of the PR's real
+	// shape, used to sail through both criteria below unconditionally.
+	// ChangedFileCount/TouchedBlastRadius (below) are this fix: the SAME
+	// two criteria, now gated on facts GitHub itself reports. Verdict.
+	// FilesChanged/BlastRadius remain readable on this struct purely as
+	// DISPLAY/audit data for a caller that wants to show what the model
+	// itself claimed -- ComputeEligible never reads either.
 	Verdict review.Verdict
 	// VerdictHeadSHA is review_verdicts.head_sha for Verdict above --
 	// the commit Verdict was actually produced against.
 	VerdictHeadSHA string
+	// ChangedFileCount is this PR's own CURRENT, server-fetched
+	// changed-file count (§62 review finding C1) -- len(ports.OpenPR.
+	// ChangedFiles), populated by githubapi.fetchChangedFilePaths via
+	// GitHub's own Pull Request Files API, NEVER Verdict.FilesChanged.
+	// Compared against EligibilityConfig.MaxFilesChanged (§21.2: "diff
+	// size under a configurable-per-repo threshold").
+	//
+	// Chosen over Additions+Deletions (ports.OpenPR's OTHER diff-size
+	// signal, also server-fetched): EligibilityConfig.MaxFilesChanged is
+	// already named and shaped as a FILE-COUNT threshold (defaultMaxFilesChanged's
+	// own doc comment, this same package: "a PR this size is plausible to
+	// have been reviewed thoroughly in one pass... touching a handful of
+	// files") -- §21.2's own "diff size" text does not mandate a line-count
+	// interpretation over a file-count one, and switching the MEANING of an
+	// already-shipped, already-repo-configurable threshold field (rather
+	// than adding a new one) would silently reinterpret every repo's own
+	// already-configured number. A future Step is free to ALSO gate on
+	// Additions+Deletions via a new, separately-named config field --
+	// this fix deliberately does not invent one un-asked-for.
+	ChangedFileCount int
+	// TouchedBlastRadius is this PR's own CURRENT, server-DERIVED blast
+	// radius (§62 review finding C1) -- autoapproval.ClassifyChangedPaths
+	// applied to ports.OpenPR.ChangedFiles (the same server-fetched
+	// listing ChangedFileCount above is len() of), NEVER Verdict.
+	// BlastRadius. Compared against EligibilityConfig.SensitiveTags: ANY
+	// overlap disqualifies, exactly like Verdict.BlastRadius used to gate
+	// before this fix -- only the SOURCE of the tags changed, not the
+	// comparison itself.
+	TouchedBlastRadius []review.Tag
 	// CurrentHeadSHA is the PR's LIVE current head SHA, fetched fresh
 	// (never cached -- see internal/app/decisioninbox/revalidate.go's
 	// own "the whole point of this function is a fresh read" doc
@@ -125,10 +170,14 @@ func ComputeEligible(in EligibilityInput, cfg EligibilityConfig) (eligible bool,
 	if in.Verdict.Shippable != review.ShippableAuto {
 		return false, ReasonNotShippableAuto
 	}
-	if in.Verdict.FilesChanged > cfg.MaxFilesChanged {
+	// §62 review finding C1 (CRITICAL, fixed): both checks below now read
+	// server-derived facts (EligibilityInput's own doc comment) -- never
+	// in.Verdict.FilesChanged/in.Verdict.BlastRadius, which are the
+	// reviewing model's own self-report and were the exploited hole.
+	if in.ChangedFileCount > cfg.MaxFilesChanged {
 		return false, ReasonDiffTooLarge
 	}
-	if touchesSensitivePath(in.Verdict.BlastRadius, cfg.SensitiveTags) {
+	if touchesSensitivePath(in.TouchedBlastRadius, cfg.SensitiveTags) {
 		return false, ReasonSensitivePathTouched
 	}
 	return true, ReasonNone
