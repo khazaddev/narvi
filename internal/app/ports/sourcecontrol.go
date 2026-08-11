@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -385,6 +386,267 @@ type MergedPR struct {
 	Labels []string
 }
 
+// PRPerson identifies one source-control account attached to a pull
+// request in some role (assignee, requested reviewer, author) -- Step 60,
+// "decision inbox: read model + API", §16.2. ExternalID is the account's
+// STABLE, provider-native identifier (GitHub: the numeric account id, as
+// a decimal string) -- deliberately NOT Login: this codebase's own
+// identity graph (§13.2, migrations/000003_identities.up.sql) keys
+// identities.external_id on exactly this same stable id (populated at
+// GitHub OAuth sign-in from the OAuth /user response's own "id" field,
+// internal/adapters/inbound/auth/callback.go), so a caller resolving this
+// PRPerson to a Narvi user_id (the app-layer decision-inbox aggregator)
+// does so via that SAME already-established (provider, external_id)
+// lookup -- never a second, parallel login-keyed identity mechanism. Login
+// is carried alongside purely for DISPLAY (rendering a person's name on
+// an inbox row) -- never itself an identity key, since GitHub logins can
+// change while the numeric id never does (the exact reason GitHub's own
+// REST API offers "GET /user/{account_id}" as a durable id->login
+// resolution path, https://docs.github.com/rest/users/users#get-a-user-using-their-id,
+// fetched 2026-08-07 -- see githubapi.ListOpenPRsForUser's own doc
+// comment for why this port needs that resolution at all).
+type PRPerson struct {
+	ExternalID string
+	Login      string
+}
+
+// OpenPR is one open pull request ListOpenPRsForUser reports (Step 60,
+// §16.2: "ListOpenPRsForUser(ctx, user) ([]OpenPR, error) (review state,
+// CI at head SHA, labels, assignees/reviewers)"). Every field is this
+// PR's CURRENT, live state -- there is no historical/as-of-an-earlier-SHA
+// concept here the way MergedPR's own CIConclusionAtMergeSHA needs one;
+// §16.2's own short-TTL cache (never modeled inside this port -- see that
+// section's own "SCM data is cached with a short TTL" text) is what turns
+// a snapshot of these fields into the "as of 2 min ago" staleness a
+// caller displays, entirely at the app layer.
+type OpenPR struct {
+	// Owner/Repo are the same generic source-control concepts every other
+	// spec/return type in this file already uses -- carried here (unlike
+	// MergedPR, which never needs to since ListMergedBetween's own caller
+	// already knows the one repo it asked about) because
+	// ListOpenPRsForUser fans out across POTENTIALLY MANY different
+	// repos in one call, so each returned OpenPR must say which repo it
+	// belongs to.
+	Owner string
+	Repo  string
+
+	Number  int
+	Title   string
+	HTMLURL string
+
+	HeadSHA string
+	BaseRef string
+	Draft   bool
+
+	Author             PRPerson
+	Assignees          []PRPerson
+	RequestedReviewers []PRPerson
+	// RequestedTeams is every team slug ("org/team-slug") GitHub reports
+	// as a requested reviewer on this PR -- kept alongside
+	// RequestedReviewers (individuals) rather than merged into it, since a
+	// team is not itself a PRPerson (it has no single stable account id);
+	// resolving a team to the PERSONS who satisfy it is ResolveCodeOwners'
+	// own job when the team also happens to be a CODEOWNERS entry, and the
+	// identity graph's own job more generally -- this port only reports
+	// what GitHub itself reports.
+	RequestedTeams []string
+
+	// HasApprovingReview/HasChangesRequested are this PR's own CURRENT
+	// review-decision facts (§16.1's own "verdict is >= medium risk or a
+	// formal review is gated" needs SOME positive signal for "is a review
+	// still pending/blocking" beyond just the risk label) -- computed
+	// from every review GitHub reports, exactly like MergedPR.
+	// HasApprovingReview already does for a MERGED PR (mergedbetween.go's
+	// fetchHasApprovingReview), just evaluated for an OPEN PR's current
+	// state instead of one fixed historical SHA.
+	HasApprovingReview  bool
+	HasChangesRequested bool
+
+	// CIConclusion is this PR's CI result AT HeadSHA specifically (§16.2:
+	// "CI at head SHA") -- reuses CIConclusion's own three-value,
+	// positively-confirmed-vs-genuinely-unknown discipline verbatim (see
+	// that type's own doc comment).
+	CIConclusion CIConclusion
+
+	// Labels is this PR's own current GitHub labels -- a caller checks
+	// this against reviewpost.LabelLowRisk/.../LabelNeedsHuman to derive
+	// the decision-inbox taxonomy's own risk/escape-hatch signals, exactly
+	// like MergedPR.Labels' own identical "this port stays agnostic to
+	// that vocabulary" doc comment already establishes for the release-
+	// manifest read model.
+	Labels []string
+
+	// ChangedFiles is this PR's own current changed-file paths (first
+	// page, per_page=100 -- mirrors mergedbetween.go's own
+	// fetchChangedPathPrefixes precedent and its identical "an honestly-
+	// scoped approximation" acceptance) -- the input a caller feeds to
+	// ResolveCodeOwners' own Paths, and to a diff-size/sensitive-path
+	// eligibility check, without a second round-trip to re-fetch what this
+	// call already had in hand.
+	ChangedFiles []string
+	Additions    int
+	Deletions    int
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Owner is one CODEOWNERS entry resolved for ONE input path (Step 60,
+// §16.2: "ResolveCodeOwners(ctx, repo, paths) ([]Owner, error)...
+// CODEOWNERS teams resolve to persons through the identity graph
+// (§13.2)"). Exactly one of two shapes:
+//
+//   - A resolved GitHub account (ExternalID/Login both set) -- either an
+//     individual CODEOWNERS entry ("@login") or one member of a team
+//     entry ("@org/team-slug"), already expanded to that member's own
+//     account by the adapter (TeamSlug non-empty iff this Owner reached
+//     the caller via team expansion rather than a direct "@login" entry
+//     -- the port itself does the identity-graph-adjacent resolution
+//     GitHub's own API can do (id/login), but stops there: converting
+//     ExternalID into a Narvi user_id is the caller's own identities.
+//     GetByProviderAndExternalID lookup, exactly like PRPerson above,
+//     keeping this adapter-agnostic port ignorant of Narvi's own users
+//     table).
+//   - An unresolved email entry (Email set, ExternalID/Login both empty)
+//     -- CODEOWNERS also accepts a bare email address as an owner, which
+//     GitHub's own API offers no account-lookup-by-email endpoint for (a
+//     deliberate GitHub privacy boundary); the caller instead matches
+//     Email against the identity graph's OWN identities.email /
+//     users.primary_email columns, which this codebase already populates
+//     independently of GitHub.
+//
+// Path/Pattern are always both set (whichever of the two shapes above):
+// Path is which INPUT path (of the spec's own Paths slice) this Owner was
+// resolved for, and Pattern is the winning CODEOWNERS pattern
+// (codeowners.Rule.Pattern) that matched it -- carried so a caller never
+// has to re-derive "why is this person listed" (§16.1's own "with the
+// matched pattern" requirement) by re-running the match itself. The same
+// person can legitimately appear more than once in one ResolveCodeOwners
+// response -- once per distinct (Path, Pattern) they were matched
+// through -- this port does not deduplicate across paths on the caller's
+// behalf, since which specific path/pattern earned a given row its
+// provenance is exactly the fact §16.1 requires surfacing.
+type Owner struct {
+	ExternalID string
+	Login      string
+	TeamSlug   string // non-empty iff resolved via team-member expansion
+	Email      string // set instead of ExternalID/Login for an email-form entry
+
+	Path    string
+	Pattern string
+}
+
+// ListOpenPRsForUserSpec is what SourceControl.ListOpenPRsForUser (Step
+// 60, §16.2) needs: GitHubExternalID is the SAME stable, provider-native
+// account id PRPerson.ExternalID and identities.external_id already use
+// (this method's own implementation resolves it to a live login itself --
+// see githubapi.ListOpenPRsForUser's own doc comment for why the caller
+// never has to). Token is the SAME plaintext, decrypted OAuth access
+// token shape every other spec in this file already uses -- deliberately
+// the SUBJECT user's own token (never a bot/service credential): running
+// GitHub's search as that person means the result is naturally scoped to
+// exactly the repos they themselves can see, with no separate managed-
+// repo allowlist for this port to maintain.
+type ListOpenPRsForUserSpec struct {
+	GitHubExternalID string
+	Token            string
+}
+
+// ResolveCodeOwnersSpec is what SourceControl.ResolveCodeOwners (Step 60,
+// §16.2) needs: Owner/Repo/Token are the same generic source-control
+// concepts every other spec in this file already uses. Ref is the commit
+// SHA (or branch) the CODEOWNERS file itself is read at -- callers MUST
+// pass the repo's own BASE ref/branch here, never the PR's head (§60
+// review finding P2-3, second round, correcting this doc comment, which
+// previously said the opposite -- "the PR's own current head branch/SHA"
+// -- the exact attacker-controlled value finding B3, first round, moved
+// callers away from): a PR's head is chosen by whoever opened/pushed the
+// PR, so resolving CODEOWNERS there would let a PR's own author dictate
+// which CODEOWNERS file this call reads when classifying THEIR OWN PR's
+// provenance. GitHub's own real CODEOWNERS enforcement is likewise always
+// evaluated against the repo's base branch, never a PR's head -- see
+// internal/app/decisioninbox's own resolvePRProvenance (aggregate.go),
+// this port's one real caller, which passes pr.BaseRef here for exactly
+// this reason; a future caller/adapter must do the same, not reintroduce
+// the vulnerability this fix removed. Paths is the set of repo-relative
+// file paths to resolve owners for (a PR's own changed-files listing).
+type ResolveCodeOwnersSpec struct {
+	Owner string
+	Repo  string
+	Ref   string
+	Paths []string
+	Token string
+}
+
+// MergePRError is the typed error SourceControl.MergePR returns for any
+// non-2xx GitHub response -- a DELIBERATE departure from this port's own
+// established "errors are plain" precedent (CreatePR's own doc comment:
+// "this Step does not invent a typed transient/permanent classification
+// for source-control errors -- no caller of this port needs one yet").
+// MergePR is this port's FIRST method backing a synchronous, HUMAN-FACING
+// action (§16.2's own Merge endpoint, re-validating and then calling
+// through to here at click time) -- every other method on this port is
+// best-effort/fire-and-forget from the caller's own perspective
+// (createPRBestEffort, the release-manifest audit, etc.), so a plain,
+// opaque error was always an acceptable design there. A human who just
+// clicked Merge needs to know WHY it failed (their own view of the PR was
+// stale and CI is now red; someone else already merged and the head SHA
+// no longer matches; branch protection genuinely blocks it) well enough
+// to decide whether to just retry -- Status carries GitHub's own real
+// HTTP status (405: not mergeable; 409: spec.HeadSHA no longer matches
+// the PR's actual current head, GitHub's own documented optimistic-
+// concurrency check; anything else: a generic failure) so the httpapi
+// handler can render a genuinely different message per case, per GitHub's
+// own documented merge-endpoint semantics (https://docs.github.com/rest/pulls/pulls#merge-a-pull-request,
+// fetched 2026-08-07) rather than one generic "merge failed".
+type MergePRError struct {
+	Status  int
+	Message string
+}
+
+func (e *MergePRError) Error() string {
+	return fmt.Sprintf("sourcecontrol: merge pr: http %d: %s", e.Status, e.Message)
+}
+
+// MergePRSpec is what SourceControl.MergePR (Step 60, §16.2's own Merge
+// endpoint) needs. Owner/Repo/Number/Token are the same generic source-
+// control concepts every other spec in this file already uses (Number
+// mirrors PRRef.Number/RegisterPRStackSpec.PRNumbers' own plain-int
+// convention for a PR number). HeadSHA is REQUIRED, never optional --
+// GitHub's own merge endpoint accepts an optional "sha" field precisely
+// as an optimistic-concurrency guard ("SHA that pull request head must
+// match to allow merge"); this port makes it mandatory because §16.2's
+// own central invariant -- "the rendered queue is never trusted as
+// authority" -- means the httpapi handler MUST have already re-fetched
+// the PR's live head SHA moments earlier as part of its own re-
+// validation, and passing that freshly-observed value through here is
+// what makes a concurrent human push between re-validation and this call
+// fail loudly (MergePRError{Status: 409}) instead of silently merging
+// code nobody just re-checked.
+type MergePRSpec struct {
+	Owner  string
+	Repo   string
+	Number int
+
+	HeadSHA string
+
+	// MergeMethod is "merge"/"squash"/"rebase" (GitHub's own three
+	// documented values) -- empty defers to the repository's own default
+	// merge-method preference (GitHub's own doc comment on this same
+	// field: "merge_method... Default: merge").
+	MergeMethod string
+	// CommitTitle/CommitMessage are both optional -- empty defers to
+	// GitHub's own automatically generated commit title/message.
+	CommitTitle   string
+	CommitMessage string
+
+	// Token is the ACTING user's own decrypted OAuth token (the person who
+	// clicked Merge) -- the resulting merge commit (for the "merge"/
+	// "rebase" methods) or squash commit is attributed to THIS identity by
+	// GitHub itself, mirroring CreatePR's own token-based attribution.
+	Token string
+}
+
 // SourceControl is the port that creates a pull request against a source-
 // control host (§4.3). internal/adapters/outbound/githubapi (Step 21) is
 // the first real implementation; internal/adapters/outbound/gitlabapi
@@ -538,4 +800,63 @@ type SourceControl interface {
 	// trips a circuit-breaker on a creation failure beyond the outbox
 	// worker's own existing backoff/retry machinery.
 	CreateBranch(ctx context.Context, spec CreateBranchSpec) error
+
+	// ListOpenPRsForUser reports every open pull request the account named
+	// by spec.GitHubExternalID can currently see and is involved in as an
+	// assignee or requested reviewer (Step 60, "decision inbox: read
+	// model + API", §16.2) -- the decision inbox's own primary PR-
+	// discovery call. Errors are plain, exactly like every other method on
+	// this port except MergePR below -- this is a best-effort READ feeding
+	// a cached, explicitly-stale-labeled read model (§16.2), never an
+	// interactive action a caller needs a granular failure reason for.
+	//
+	// truncated mirrors ListMergedBetween's own identical (merged,
+	// truncated, err) shape below (§60 review finding C1): true whenever
+	// this adapter KNOWS the returned prs slice is an incomplete picture
+	// of every PR spec's own account is actually involved in right now --
+	// e.g. one of the underlying discovery queries itself failed (a
+	// transient 5xx, a rate limit) while another still returned a real,
+	// if partial, result; prs itself is never blanked out just because
+	// truncated is true (mirrors ListMergedBetween's own "a confirmed
+	// exclusion is never folded into truncated, only a genuine coverage
+	// gap is" discipline). A caller must never cache a truncated=true
+	// result and present it later identically to a confirmed-complete
+	// read -- see internal/app/decisioninbox.SCMCache's own handling.
+	ListOpenPRsForUser(ctx context.Context, spec ListOpenPRsForUserSpec) (prs []OpenPR, truncated bool, err error)
+
+	// ResolveCodeOwners resolves CODEOWNERS ownership for every path in
+	// spec.Paths against the repo's own CODEOWNERS file at spec.Ref (Step
+	// 60, §16.2) -- see githubapi.ResolveCodeOwners' own doc comment for
+	// which of the file's several documented candidate locations is
+	// actually read, and internal/domain/codeowners for the pure
+	// pattern-matching this method's implementation delegates to. A path
+	// with no matching CODEOWNERS rule at all (a real, common outcome for
+	// any repo without a catch-all "*" pattern) simply contributes no
+	// Owner to the result -- never an error. Errors are plain, exactly
+	// like every other method on this port except MergePR below, for the
+	// same "best-effort read feeding a cached read model" reason
+	// ListOpenPRsForUser's own doc comment gives.
+	ResolveCodeOwners(ctx context.Context, spec ResolveCodeOwnersSpec) ([]Owner, error)
+
+	// MergePR merges spec.Number (Step 60, §16.2's own Merge endpoint) --
+	// the ONE method on this port an interactive, human-facing HTTP
+	// handler calls synchronously and must render a genuinely different
+	// outcome for (see MergePRError's own doc comment for why this is the
+	// one method here with a typed error, unlike every other plain-error
+	// method on this port). mergeCommitSHA is GitHub's own newly created
+	// merge/squash commit SHA on success. A non-2xx GitHub response is
+	// always returned as *MergePRError (errors.As-checkable) -- a 405
+	// means GitHub itself refuses the merge as not currently mergeable
+	// (branch protection, unresolved conflicts, a failing REQUIRED check);
+	// a 409 means spec.HeadSHA no longer matches the PR's real current
+	// head (someone pushed since the caller's own re-validation read it) --
+	// GitHub's own documented optimistic-concurrency guard, load-bearing
+	// for §16.2's own "the rendered queue is never trusted as authority"
+	// invariant, not a decoration on top of it. Any OTHER non-2xx status
+	// is also *MergePRError, with GitHub's own real status/message. A
+	// transport/timeout failure that never reached GitHub at all is a
+	// PLAIN error instead (errors.As against *MergePRError fails) --
+	// mirrors CreatePRError's own identical "typed only for a real HTTP
+	// response, plain for a failure below that" precedent.
+	MergePR(ctx context.Context, spec MergePRSpec) (mergeCommitSHA string, err error)
 }

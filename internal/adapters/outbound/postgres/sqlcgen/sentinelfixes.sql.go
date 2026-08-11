@@ -11,6 +11,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const existsSentinelFixByFixPRNumber = `-- name: ExistsSentinelFixByFixPRNumber :one
+SELECT EXISTS (
+    SELECT 1 FROM sentinel_fixes
+    WHERE repo_full_name = $1 AND fix_pr_number = $2
+) AS exists
+`
+
+type ExistsSentinelFixByFixPRNumberParams struct {
+	RepoFullName string `json:"repo_full_name"`
+	FixPrNumber  *int32 `json:"fix_pr_number"`
+}
+
+// Step 60 ("decision inbox: read model + API")'s own §17 structural
+// exclusion: "sentinel auto-fix follow-up PRs must never appear as inbox
+// rows... Make this a structural exclusion, not a filter someone can
+// forget." A PR is a sentinel-auto-fix follow-up iff it appears as SOME
+// row's own fix_pr_number for this repo -- deliberately never inferred
+// from sessions.parent_session_id/spawn_depth alone (migrations/
+// 000045_sessions_child_sessions.up.sql's own doc comment: those two
+// columns are generic child-session markers shared by ANY future child-
+// session mechanism -- handoff v2, workflow HITL -- not sentinel-fix-
+// specific; over-matching on them would over-exclude an unrelated future
+// child-session's own PR). fix_pr_number is nullable (NULL until the fix
+// session's own PR actually opens, §17.2) so this naturally reports false
+// for a claim row still 'pending'/'spawned'.
+func (q *Queries) ExistsSentinelFixByFixPRNumber(ctx context.Context, arg ExistsSentinelFixByFixPRNumberParams) (bool, error) {
+	row := q.db.QueryRow(ctx, existsSentinelFixByFixPRNumber, arg.RepoFullName, arg.FixPrNumber)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const getSentinelFix = `-- name: GetSentinelFix :one
 SELECT id, repo_full_name, origin_pr_number, origin_review_session_id, origin_head_branch, fix_child_session_id, fix_pr_number, status, stack_registered, created_at, updated_at FROM sentinel_fixes
 WHERE repo_full_name = $1 AND origin_pr_number = $2

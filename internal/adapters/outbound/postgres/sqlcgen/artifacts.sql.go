@@ -152,6 +152,43 @@ func (q *Queries) GetArtifactForSession(ctx context.Context, arg GetArtifactForS
 	return i, err
 }
 
+const getPRArtifactByURL = `-- name: GetPRArtifactByURL :one
+SELECT id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by FROM artifacts
+WHERE type = 'pr' AND url = $1
+LIMIT 1
+`
+
+// Step 60 ("decision inbox: read model + API", §16.1)'s own "authored by
+// a platform session" signal for ready_to_merge: a 'pr'-typed artifact row
+// exists, keyed on its own url column, iff SOME session's own
+// createPRBestEffort (pushpr.go) actually pushed and opened exactly this
+// pull request -- the SAME (type, url) identity recordPRArtifact itself
+// already leans on for its own idempotency check ("art.Type ==
+// ArtifactTypePr && art.Url == ref.URL"). pgx.ErrNoRows means this PR was
+// opened some other way (a human, or a tool outside Narvi) -- never
+// treated as an error by any caller, simply excluded from ready_to_merge
+// (§16.1's own inclusion criterion).
+func (q *Queries) GetPRArtifactByURL(ctx context.Context, url string) (Artifact, error) {
+	row := q.db.QueryRow(ctx, getPRArtifactByURL, url)
+	var i Artifact
+	err := row.Scan(
+		&i.ID,
+		&i.SessionID,
+		&i.Type,
+		&i.Url,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.Status,
+		&i.FailureReason,
+		&i.BlobKey,
+		&i.SizeBytes,
+		&i.ContentType,
+		&i.Filename,
+		&i.CreatedBy,
+	)
+	return i, err
+}
+
 const listArtifactsForSession = `-- name: ListArtifactsForSession :many
 SELECT id, session_id, type, url, metadata, created_at, status, failure_reason, blob_key, size_bytes, content_type, filename, created_by FROM artifacts
 WHERE session_id = $1

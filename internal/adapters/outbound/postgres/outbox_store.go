@@ -100,6 +100,15 @@ func (s *OutboxStore) CountPending(ctx context.Context) (int64, error) {
 	return s.q.CountPendingOutboxEntries(ctx)
 }
 
+// ListDeadLetter returns up to limit 'dead_letter' outbox rows, most-
+// recently-created first -- Step 60's own needs_attention row source (see
+// ListDeadLetterOutboxEntries' own generated doc comment for the full
+// design, including why this orders by created_at rather than a "became
+// dead-lettered at" instant this table does not carry).
+func (s *OutboxStore) ListDeadLetter(ctx context.Context, limit int32) ([]sqlcgen.Outbox, error) {
+	return s.q.ListDeadLetterOutboxEntries(ctx, limit)
+}
+
 // MarkDelivered records a successful delivery. Returns pgx.ErrNoRows if
 // id's row is no longer 'pending' (an already-superseded/stale outcome --
 // see MarkOutboxEntryDelivered's own generated doc comment).

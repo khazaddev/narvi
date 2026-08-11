@@ -205,8 +205,16 @@ func (a *Adapter) fetchMergedPRDetail(ctx context.Context, owner, repo string, n
 // reviewItemResponse is the subset of one entry in GitHub's real GET
 // /repos/{owner}/{repo}/pulls/{number}/reviews response this adapter
 // needs (https://docs.github.com/rest/pulls/reviews#list-reviews-for-a-pull-request).
+// User identifies WHICH reviewer submitted this review -- needed by
+// listopenprs.go's own fetchReviewDecision (§60 review finding P1-1,
+// second round) to reduce GitHub's own append-only review list down to
+// each reviewer's LATEST decision; fetchHasApprovingReview immediately
+// below has no analogous need for it (a bare "does at least one APPROVED
+// review exist anywhere in this PR's history" is that function's own,
+// deliberately coarser, already-accepted question) and simply ignores it.
 type reviewItemResponse struct {
-	State string `json:"state"`
+	State string              `json:"state"`
+	User  *simpleUserResponse `json:"user"`
 }
 
 // fetchHasApprovingReview reports whether number carries at least one
@@ -292,8 +300,22 @@ func (a *Adapter) branchRequiresApprovingReview(ctx context.Context, owner, repo
 // (https://docs.github.com/rest/commits/statuses#get-the-combined-status-for-a-specific-reference)
 // -- GitHub's own LEGACY Status API surface (statuses created via POST
 // .../statuses), state is one of "success"/"pending"/"failure"/"error".
+// TotalCount is GitHub's own documented count of individual statuses this
+// combined result rolls up (§60 review finding P0, second round): GitHub's
+// own docs for this exact endpoint state the rule verbatim -- "pending if
+// there are no statuses or a context is pending" -- so state=="pending"
+// ALONE can never be read as "a status is genuinely still in flight": a
+// repo with ZERO legacy commit statuses ever posted (e.g. one whose CI
+// runs exclusively through GitHub Actions check-runs -- the SEPARATE
+// surface checkRunsResponse below reports, and the dominant modern CI
+// configuration) reports this SAME state=="pending" forever, for a
+// completely different reason. See fetchCIConclusionLive's own doc
+// comment (listopenprs.go) for where this distinction is load-bearing;
+// fetchCIConclusion (this file, below) never inspects state=="pending" at
+// all, so it has no analogous need for this field.
 type combinedStatusResponse struct {
-	State string `json:"state"`
+	State      string `json:"state"`
+	TotalCount int    `json:"total_count"`
 }
 
 // checkRunsResponse is the subset of GitHub's real GET
@@ -334,6 +356,30 @@ var ciFailureConclusions = map[string]bool{
 // review.CIConclusionUnknown -- see review.CIConclusionUnknown's own doc
 // comment (internal/domain/review/manifestcheck.go) for why this is
 // deliberately NOT treated as a failure.
+//
+// # §15.2 RETROSPECTIVE AUDIT ONLY -- never a live pre-merge gate (§60 review finding A2)
+//
+// This function's own LENIENCY is only correct for its one real caller
+// below (buildMergedPR, auditing an ALREADY-MERGED PR at its own fixed,
+// historical merge SHA): by the time anything is being audited, every
+// check run that will ever report for that commit already has -- an
+// in-progress/queued run simply cannot exist anymore, so silently
+// skipping a nil Conclusion (`if r.Conclusion == nil { continue }` below)
+// never actually discards a live, still-pending signal, only ever a
+// stale placeholder GitHub itself no longer updates. That precondition
+// does NOT hold for an OPEN PR's CURRENT head SHA -- there, "some check
+// finished green" while a nil-Conclusion run is silently skipped can
+// mean "several required checks are still queued", not "the suite
+// passed". listopenprs.go's own fetchCIConclusionLive is the STRICT
+// sibling built specifically for that live case (an incomplete or
+// cancelled run there means NOT green, full stop) -- it is a SEPARATE
+// function, not a parameter/flag on this one, precisely so this
+// function's own behavior for the §15.2 audit path can never be
+// accidentally tightened (or fetchCIConclusionLive's own live-gate
+// strictness accidentally loosened) by a future edit that assumes one
+// implementation can serve both callers. Do not reuse this function for
+// any live/pre-merge purpose; do not loosen fetchCIConclusionLive to
+// match this one's own leniency.
 func (a *Adapter) fetchCIConclusion(ctx context.Context, owner, repo, mergeSHA, token string) ports.CIConclusion {
 	sawFailure := false
 	sawSuccess := false

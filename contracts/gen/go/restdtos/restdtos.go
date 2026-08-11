@@ -1359,6 +1359,402 @@ func (j *CreateTurnResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Step 60 ('decision inbox: read model + API', §16): one decision-inbox row. Only
+// the fields relevant to `kind` are populated -- every OTHER field is present but
+// null, matching this schema's own established nullability convention (this file's
+// own top doc comment: 'nullable means a required key whose value may be JSON
+// null'). Mirrors internal/app/decisioninbox.Item 1:1 -- see that type's own doc
+// comment for the full per-kind field mapping (PR fields for
+// ready_to_merge/needs_review, plan fields for awaiting_approval,
+// session/automation/outbox fields for needs_attention).
+// provenanceKind/provenanceRepoFullName/provenancePattern are a FLATTENED nested
+// object (mirrors internal/domain/decisioninbox.Provenance's own three fields)
+// rather than a nullable $ref: this schema's own codegen tooling (go-jsonschema)
+// has no established precedent anywhere else in this file for a nullable
+// object-typed field via oneOf/$ref, and produces an untyped interface{} for one
+// -- flattening keeps every field here a plain, typed, nullable scalar, consistent
+// with every other kind-conditional field on this same object.
+type DecisionInboxItem struct {
+	// The response's own generation instant minus enteredQueueAt, in seconds.
+	AgeSeconds int `json:"ageSeconds" yaml:"ageSeconds" mapstructure:"ageSeconds"`
+
+	// The automation's own last deterministic run summary (§8.4).
+	ArtifactSummary DecisionInboxItemArtifactSummary `json:"artifactSummary" yaml:"artifactSummary" mapstructure:"artifactSummary"`
+
+	// kind=needs_attention, an auto-paused automation, only.
+	AutomationId DecisionInboxItemAutomationId `json:"automationId" yaml:"automationId" mapstructure:"automationId"`
+
+	// Set for any PR-shaped row, exactly like repoFullName above (§60 review finding
+	// C4 -- this field, findings, and isHandoff used to be nulled out for the handoff
+	// sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
+	CiGreen DecisionInboxItemCiGreen `json:"ciGreen" yaml:"ciGreen" mapstructure:"ciGreen"`
+
+	// When this row first became a pending decision -- the ranking (§16.1: 'by
+	// decision cost then age') and staleness reference point. For a PR row this is an
+	// APPROXIMATION (the PR's own GitHub creation time, not the instant it became
+	// assigned/eligible for this specific user) -- see
+	// internal/app/decisioninbox.Item.EnteredQueueAt's own doc comment for why, and
+	// for the direction this approximation errs in (it can only ever UNDER-state how
+	// recently a PR became a decision, so `stale` below can over-fire on an
+	// old-but-recently-assigned PR).
+	EnteredQueueAt time.Time `json:"enteredQueueAt" yaml:"enteredQueueAt" mapstructure:"enteredQueueAt"`
+
+	// Matches Postgres session_failure_reason -- kind=needs_attention, a failed
+	// session, only.
+	FailureReason DecisionInboxItemFailureReason `json:"failureReason" yaml:"failureReason" mapstructure:"failureReason"`
+
+	// Count of still-open (never rebutted/fixed) review findings on this PR. Set for
+	// any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself
+	// could not be determined (a store error): §60 review finding P3-3 (second round)
+	// -- a transient failure fails the *eligibility computation* closed (treated
+	// internally as though a blocking finding were present) but that fail-closed
+	// sentinel must never be presented on the wire as an honest, real count, so this
+	// is null in that case instead, never the synthetic value used internally.
+	Findings DecisionInboxItemFindings `json:"findings" yaml:"findings" mapstructure:"findings"`
+
+	// The PR's own current GitHub review-decision fact -- display only, NEVER what
+	// kind=ready_to_merge's own 'approved' means (§16.1 defines that as auto-approval
+	// by the deterministic eligibility engine, re-checked at merge time by
+	// re-validating CI/risk-label/open-findings/HasChangesRequested, never a human
+	// GitHub review). Set for any PR-shaped row, exactly like ciGreen above.
+	HasApprovingReview DecisionInboxItemHasApprovingReview `json:"hasApprovingReview" yaml:"hasApprovingReview" mapstructure:"hasApprovingReview"`
+
+	// The PR's own current GitHub review-decision fact, reduced to each reviewer's
+	// LATEST review (§60 review finding P1-1, second round) so a reviewer who
+	// requested changes and has since re-reviewed and approved no longer counts here.
+	// UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge
+	// treats a true value as a hard block on the Merge endpoint (§60 review finding
+	// A4, first round) -- a client should use this field, not hasApprovingReview, to
+	// pre-disable/explain a disabled Merge action (§60 review finding P1-4, second
+	// round: this field previously did not exist on the wire at all, even though the
+	// fact it surfaces already hard-blocked the merge server-side). Set for any
+	// PR-shaped row, exactly like ciGreen above.
+	HasChangesRequested DecisionInboxItemHasChangesRequested `json:"hasChangesRequested" yaml:"hasChangesRequested" mapstructure:"hasChangesRequested"`
+
+	// The PR's current head SHA at the moment this response's own scmAsOf snapshot
+	// was taken -- what a Merge click must still match server-side at click time
+	// (§16.2, §5.2).
+	HeadSha DecisionInboxItemHeadSha `json:"headSha" yaml:"headSha" mapstructure:"headSha"`
+
+	// HtmlUrl corresponds to the JSON schema field "htmlUrl".
+	HtmlUrl DecisionInboxItemHtmlUrl `json:"htmlUrl" yaml:"htmlUrl" mapstructure:"htmlUrl"`
+
+	// True for a handoff-labeled PR (§14.4) riding kind=awaiting_approval instead of
+	// an ordinary code-review kind. Set (to true or false) for any PR-shaped row --
+	// see ciGreen's own description; this is the field a client checks to tell a
+	// handoff PR apart from a plan awaiting approval within the SAME
+	// kind=awaiting_approval bucket.
+	IsHandoff DecisionInboxItemIsHandoff `json:"isHandoff" yaml:"isHandoff" mapstructure:"isHandoff"`
+
+	// Matches internal/domain/decisioninbox.Kind's own four values exactly (§16.1).
+	// needs_attention is only ever present for an admin caller (§16.1's own
+	// parenthetical) -- enforced server-side, never a client-side filter.
+	Kind DecisionInboxItemKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// LastError corresponds to the JSON schema field "lastError".
+	LastError DecisionInboxItemLastError `json:"lastError" yaml:"lastError" mapstructure:"lastError"`
+
+	// kind=needs_attention, a dead-lettered outbox delivery, only.
+	OutboxId DecisionInboxItemOutboxId `json:"outboxId" yaml:"outboxId" mapstructure:"outboxId"`
+
+	// OutboxKind corresponds to the JSON schema field "outboxKind".
+	OutboxKind DecisionInboxItemOutboxKind `json:"outboxKind" yaml:"outboxKind" mapstructure:"outboxKind"`
+
+	// kind=awaiting_approval, a plan (not a handoff PR) only.
+	PlanId DecisionInboxItemPlanId `json:"planId" yaml:"planId" mapstructure:"planId"`
+
+	// PrNumber corresponds to the JSON schema field "prNumber".
+	PrNumber DecisionInboxItemPrNumber `json:"prNumber" yaml:"prNumber" mapstructure:"prNumber"`
+
+	// How this PR reached the user (§16.1: 'a first-class field, not a UI nicety') --
+	// matches internal/domain/decisioninbox.ProvenanceKind's own three values
+	// exactly. Set for any PR-shaped row, exactly like repoFullName above
+	// (ready_to_merge/needs_review AND the handoff sub-case of awaiting_approval);
+	// null otherwise.
+	ProvenanceKind *DecisionInboxItemProvenanceKind `json:"provenanceKind" yaml:"provenanceKind" mapstructure:"provenanceKind"`
+
+	// The winning CODEOWNERS pattern -- set iff provenanceKind=codeowners (e.g.
+	// 'internal/app/scheduler/**').
+	ProvenancePattern DecisionInboxItemProvenancePattern `json:"provenancePattern" yaml:"provenancePattern" mapstructure:"provenancePattern"`
+
+	// Set iff provenanceKind=requested_reviewer (e.g. 'acme/payroll-api').
+	ProvenanceRepoFullName DecisionInboxItemProvenanceRepoFullName `json:"provenanceRepoFullName" yaml:"provenanceRepoFullName" mapstructure:"provenanceRepoFullName"`
+
+	// Set for any PR-shaped row -- kind=ready_to_merge/needs_review, AND the handoff
+	// sub-case of kind=awaiting_approval (a PR carrying the handoff label rides
+	// awaiting_approval instead of an ordinary code-review kind, but is still a PR
+	// row); null for a plan/session/automation/outbox row.
+	RepoFullName DecisionInboxItemRepoFullName `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// The PR's own current review:*-risk label, or null if never risk-labeled.
+	RiskLabel DecisionInboxItemRiskLabel `json:"riskLabel" yaml:"riskLabel" mapstructure:"riskLabel"`
+
+	// Set for a plan (kind=awaiting_approval) or a failed session
+	// (kind=needs_attention).
+	SessionId DecisionInboxItemSessionId `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
+
+	// True once age exceeds the configured staleness threshold (§16.1: '>48h,
+	// configurable').
+	Stale bool `json:"stale" yaml:"stale" mapstructure:"stale"`
+
+	// Title corresponds to the JSON schema field "title".
+	Title string `json:"title" yaml:"title" mapstructure:"title"`
+}
+
+// The automation's own last deterministic run summary (§8.4).
+type DecisionInboxItemArtifactSummary *string
+
+// kind=needs_attention, an auto-paused automation, only.
+type DecisionInboxItemAutomationId *string
+
+// Set for any PR-shaped row, exactly like repoFullName above (§60 review finding
+// C4 -- this field, findings, and isHandoff used to be nulled out for the handoff
+// sub-case of kind=awaiting_approval, the one row isHandoff exists to identify).
+type DecisionInboxItemCiGreen *bool
+
+// Matches Postgres session_failure_reason -- kind=needs_attention, a failed
+// session, only.
+type DecisionInboxItemFailureReason *string
+
+// Count of still-open (never rebutted/fixed) review findings on this PR. Set for
+// any PR-shaped row -- see ciGreen's own description -- UNLESS the count itself
+// could not be determined (a store error): §60 review finding P3-3 (second round)
+// -- a transient failure fails the *eligibility computation* closed (treated
+// internally as though a blocking finding were present) but that fail-closed
+// sentinel must never be presented on the wire as an honest, real count, so this
+// is null in that case instead, never the synthetic value used internally.
+type DecisionInboxItemFindings *int
+
+// The PR's own current GitHub review-decision fact -- display only, NEVER what
+// kind=ready_to_merge's own 'approved' means (§16.1 defines that as auto-approval
+// by the deterministic eligibility engine, re-checked at merge time by
+// re-validating CI/risk-label/open-findings/HasChangesRequested, never a human
+// GitHub review). Set for any PR-shaped row, exactly like ciGreen above.
+type DecisionInboxItemHasApprovingReview *bool
+
+// The PR's own current GitHub review-decision fact, reduced to each reviewer's
+// LATEST review (§60 review finding P1-1, second round) so a reviewer who
+// requested changes and has since re-reviewed and approved no longer counts here.
+// UNLIKE hasApprovingReview above, this DOES gate an action: RevalidateForMerge
+// treats a true value as a hard block on the Merge endpoint (§60 review finding
+// A4, first round) -- a client should use this field, not hasApprovingReview, to
+// pre-disable/explain a disabled Merge action (§60 review finding P1-4, second
+// round: this field previously did not exist on the wire at all, even though the
+// fact it surfaces already hard-blocked the merge server-side). Set for any
+// PR-shaped row, exactly like ciGreen above.
+type DecisionInboxItemHasChangesRequested *bool
+
+// The PR's current head SHA at the moment this response's own scmAsOf snapshot was
+// taken -- what a Merge click must still match server-side at click time (§16.2,
+// §5.2).
+type DecisionInboxItemHeadSha *string
+
+type DecisionInboxItemHtmlUrl *string
+
+// True for a handoff-labeled PR (§14.4) riding kind=awaiting_approval instead of
+// an ordinary code-review kind. Set (to true or false) for any PR-shaped row --
+// see ciGreen's own description; this is the field a client checks to tell a
+// handoff PR apart from a plan awaiting approval within the SAME
+// kind=awaiting_approval bucket.
+type DecisionInboxItemIsHandoff *bool
+
+type DecisionInboxItemKind string
+
+const DecisionInboxItemKindAwaitingApproval DecisionInboxItemKind = "awaiting_approval"
+const DecisionInboxItemKindNeedsAttention DecisionInboxItemKind = "needs_attention"
+const DecisionInboxItemKindNeedsReview DecisionInboxItemKind = "needs_review"
+const DecisionInboxItemKindReadyToMerge DecisionInboxItemKind = "ready_to_merge"
+
+var enumValues_DecisionInboxItemKind = []interface{}{
+	"ready_to_merge",
+	"needs_review",
+	"awaiting_approval",
+	"needs_attention",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DecisionInboxItemKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_DecisionInboxItemKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_DecisionInboxItemKind, v)
+	}
+	*j = DecisionInboxItemKind(v)
+	return nil
+}
+
+type DecisionInboxItemLastError *string
+
+// kind=needs_attention, a dead-lettered outbox delivery, only.
+type DecisionInboxItemOutboxId *string
+
+type DecisionInboxItemOutboxKind *string
+
+// kind=awaiting_approval, a plan (not a handoff PR) only.
+type DecisionInboxItemPlanId *string
+
+type DecisionInboxItemPrNumber *int
+
+type DecisionInboxItemProvenanceKind struct {
+	Value interface{}
+}
+
+// MarshalJSON implements json.Marshaler.
+func (j *DecisionInboxItemProvenanceKind) MarshalJSON() ([]byte, error) {
+	return json.Marshal(j.Value)
+}
+
+var enumValues_DecisionInboxItemProvenanceKind = []interface{}{
+	"assigned_directly",
+	"requested_reviewer",
+	"codeowners",
+	nil,
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DecisionInboxItemProvenanceKind) UnmarshalJSON(value []byte) error {
+	var v struct {
+		Value interface{}
+	}
+	if err := json.Unmarshal(value, &v.Value); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_DecisionInboxItemProvenanceKind {
+		if reflect.DeepEqual(v.Value, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_DecisionInboxItemProvenanceKind, v.Value)
+	}
+	*j = DecisionInboxItemProvenanceKind(v)
+	return nil
+}
+
+// The winning CODEOWNERS pattern -- set iff provenanceKind=codeowners (e.g.
+// 'internal/app/scheduler/**').
+type DecisionInboxItemProvenancePattern *string
+
+// Set iff provenanceKind=requested_reviewer (e.g. 'acme/payroll-api').
+type DecisionInboxItemProvenanceRepoFullName *string
+
+// Set for any PR-shaped row -- kind=ready_to_merge/needs_review, AND the handoff
+// sub-case of kind=awaiting_approval (a PR carrying the handoff label rides
+// awaiting_approval instead of an ordinary code-review kind, but is still a PR
+// row); null for a plan/session/automation/outbox row.
+type DecisionInboxItemRepoFullName *string
+
+// The PR's own current review:*-risk label, or null if never risk-labeled.
+type DecisionInboxItemRiskLabel *string
+
+// Set for a plan (kind=awaiting_approval) or a failed session
+// (kind=needs_attention).
+type DecisionInboxItemSessionId *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["ageSeconds"]; raw != nil && !ok {
+		return fmt.Errorf("field ageSeconds in DecisionInboxItem: required")
+	}
+	if _, ok := raw["artifactSummary"]; raw != nil && !ok {
+		return fmt.Errorf("field artifactSummary in DecisionInboxItem: required")
+	}
+	if _, ok := raw["automationId"]; raw != nil && !ok {
+		return fmt.Errorf("field automationId in DecisionInboxItem: required")
+	}
+	if _, ok := raw["ciGreen"]; raw != nil && !ok {
+		return fmt.Errorf("field ciGreen in DecisionInboxItem: required")
+	}
+	if _, ok := raw["enteredQueueAt"]; raw != nil && !ok {
+		return fmt.Errorf("field enteredQueueAt in DecisionInboxItem: required")
+	}
+	if _, ok := raw["failureReason"]; raw != nil && !ok {
+		return fmt.Errorf("field failureReason in DecisionInboxItem: required")
+	}
+	if _, ok := raw["findings"]; raw != nil && !ok {
+		return fmt.Errorf("field findings in DecisionInboxItem: required")
+	}
+	if _, ok := raw["hasApprovingReview"]; raw != nil && !ok {
+		return fmt.Errorf("field hasApprovingReview in DecisionInboxItem: required")
+	}
+	if _, ok := raw["hasChangesRequested"]; raw != nil && !ok {
+		return fmt.Errorf("field hasChangesRequested in DecisionInboxItem: required")
+	}
+	if _, ok := raw["headSha"]; raw != nil && !ok {
+		return fmt.Errorf("field headSha in DecisionInboxItem: required")
+	}
+	if _, ok := raw["htmlUrl"]; raw != nil && !ok {
+		return fmt.Errorf("field htmlUrl in DecisionInboxItem: required")
+	}
+	if _, ok := raw["isHandoff"]; raw != nil && !ok {
+		return fmt.Errorf("field isHandoff in DecisionInboxItem: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in DecisionInboxItem: required")
+	}
+	if _, ok := raw["lastError"]; raw != nil && !ok {
+		return fmt.Errorf("field lastError in DecisionInboxItem: required")
+	}
+	if _, ok := raw["outboxId"]; raw != nil && !ok {
+		return fmt.Errorf("field outboxId in DecisionInboxItem: required")
+	}
+	if _, ok := raw["outboxKind"]; raw != nil && !ok {
+		return fmt.Errorf("field outboxKind in DecisionInboxItem: required")
+	}
+	if _, ok := raw["planId"]; raw != nil && !ok {
+		return fmt.Errorf("field planId in DecisionInboxItem: required")
+	}
+	if _, ok := raw["prNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field prNumber in DecisionInboxItem: required")
+	}
+	if _, ok := raw["provenanceKind"]; raw != nil && !ok {
+		return fmt.Errorf("field provenanceKind in DecisionInboxItem: required")
+	}
+	if _, ok := raw["provenancePattern"]; raw != nil && !ok {
+		return fmt.Errorf("field provenancePattern in DecisionInboxItem: required")
+	}
+	if _, ok := raw["provenanceRepoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field provenanceRepoFullName in DecisionInboxItem: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in DecisionInboxItem: required")
+	}
+	if _, ok := raw["riskLabel"]; raw != nil && !ok {
+		return fmt.Errorf("field riskLabel in DecisionInboxItem: required")
+	}
+	if _, ok := raw["sessionId"]; raw != nil && !ok {
+		return fmt.Errorf("field sessionId in DecisionInboxItem: required")
+	}
+	if _, ok := raw["stale"]; raw != nil && !ok {
+		return fmt.Errorf("field stale in DecisionInboxItem: required")
+	}
+	if _, ok := raw["title"]; raw != nil && !ok {
+		return fmt.Errorf("field title in DecisionInboxItem: required")
+	}
+	type Plain DecisionInboxItem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = DecisionInboxItem(plain)
+	return nil
+}
+
 // GET /api/sessions/:id/events (§6.3). Mirrors client-ws/v1's own
 // FetchHistoryResponse shape exactly, for the same reason that schema gives: the
 // full event-payload shape is assembled by later PRs, and REST/WS should not
@@ -1601,6 +1997,102 @@ func (j *ListAutomationsResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// GET /api/decision-inbox's own response body (Step 60, §16.2/§16.3 -- Phase 5
+// half: read model + endpoints; the UI is Phase 7).
+type ListDecisionInboxResponse struct {
+	// DecisionLatencyComputed corresponds to the JSON schema field
+	// "decisionLatencyComputed".
+	DecisionLatencyComputed bool `json:"decisionLatencyComputed" yaml:"decisionLatencyComputed" mapstructure:"decisionLatencyComputed"`
+
+	// §16.2's own decision-latency metric -- null iff decisionLatencyComputed is
+	// false (§21.1's own 'not yet computed' sentinel, distinct from a real zero: a
+	// repo with a real 0-second median and one with no decisions yet in the window
+	// must never render identically).
+	DecisionLatencyMedianSeconds ListDecisionInboxResponseDecisionLatencyMedianSeconds `json:"decisionLatencyMedianSeconds" yaml:"decisionLatencyMedianSeconds" mapstructure:"decisionLatencyMedianSeconds"`
+
+	// How many already-decided items fed decisionLatencyMedianSeconds -- 0 whenever
+	// decisionLatencyComputed is false.
+	DecisionLatencySampleSize int `json:"decisionLatencySampleSize" yaml:"decisionLatencySampleSize" mapstructure:"decisionLatencySampleSize"`
+
+	// Already ranked server-side (§16.1: decision cost then age) -- a client renders
+	// this order as-is, never re-sorts.
+	Items []DecisionInboxItem `json:"items" yaml:"items" mapstructure:"items"`
+
+	// When the PR-derived rows (ready_to_merge/needs_review) were actually fetched
+	// from GitHub (§16.2: 'the response carries its as-of timestamp... never
+	// presented as live truth') -- null iff the caller has no linked GitHub identity,
+	// so no SCM read was attempted AT ALL. Distinct from scmFetchFailed below (§60
+	// review finding C1): scmAsOf==null alone used to be the ONLY signal here, which
+	// meant a GitHub outage or a revoked token (a read that WAS attempted and failed)
+	// was indistinguishable from never having linked GitHub in the first place -- a
+	// contract-abiding client would render 'no GitHub linked' for what was actually a
+	// transient failure. goJSONSchema forces the literal *time.Time type -- see
+	// Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently
+	// breaks encoding/json here.
+	ScmAsOf *time.Time `json:"scmAsOf" yaml:"scmAsOf" mapstructure:"scmAsOf"`
+
+	// True iff the caller's PR-derived rows (ready_to_merge/needs_review) are a
+	// known-incomplete or degraded picture -- ONE channel fed by several independent
+	// producers (§60 review findings P1-2/P1-3/P2-1, second round, extending §60
+	// review finding C1, first round): the live PR fetch failing outright (a revoked
+	// token, a GitHub incident, a timeout, or a linked-identity lookup/decrypt
+	// failure -- scmAsOf stays null in these cases, no fetch was attempted or it
+	// never returned); one of GitHub's own underlying discovery queries failing while
+	// the other still returned a real, if partial, result (scmAsOf IS set here -- a
+	// genuine, if partial, fetch happened); or an individual PR's own §17
+	// sentinel-fix exclusion check erroring (that one row is dropped, fail-closed,
+	// but the overall read is no longer complete). UNLIKE this field's own previous
+	// doc comment claimed, scmAsOf non-null and scmFetchFailed true are NOT mutually
+	// exclusive -- a partial-but-real fetch legitimately carries both a real as-of
+	// instant and a flag telling the caller not to trust the rows present as
+	// complete. Always false alongside scmAsOf==null when no linked identity exists
+	// at all (a legitimate, non-degraded empty state). A client should render a
+	// distinct 'temporarily unable to load your pull requests, try again shortly'
+	// state whenever this is true -- never the same 'no GitHub linked' empty state
+	// scmAsOf==null with scmFetchFailed==false means, and never silently trust the
+	// rows present as a complete queue.
+	ScmFetchFailed bool `json:"scmFetchFailed" yaml:"scmFetchFailed" mapstructure:"scmFetchFailed"`
+}
+
+// §16.2's own decision-latency metric -- null iff decisionLatencyComputed is false
+// (§21.1's own 'not yet computed' sentinel, distinct from a real zero: a repo with
+// a real 0-second median and one with no decisions yet in the window must never
+// render identically).
+type ListDecisionInboxResponseDecisionLatencyMedianSeconds *float64
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListDecisionInboxResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["decisionLatencyComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field decisionLatencyComputed in ListDecisionInboxResponse: required")
+	}
+	if _, ok := raw["decisionLatencyMedianSeconds"]; raw != nil && !ok {
+		return fmt.Errorf("field decisionLatencyMedianSeconds in ListDecisionInboxResponse: required")
+	}
+	if _, ok := raw["decisionLatencySampleSize"]; raw != nil && !ok {
+		return fmt.Errorf("field decisionLatencySampleSize in ListDecisionInboxResponse: required")
+	}
+	if _, ok := raw["items"]; raw != nil && !ok {
+		return fmt.Errorf("field items in ListDecisionInboxResponse: required")
+	}
+	if _, ok := raw["scmAsOf"]; raw != nil && !ok {
+		return fmt.Errorf("field scmAsOf in ListDecisionInboxResponse: required")
+	}
+	if _, ok := raw["scmFetchFailed"]; raw != nil && !ok {
+		return fmt.Errorf("field scmFetchFailed in ListDecisionInboxResponse: required")
+	}
+	type Plain ListDecisionInboxResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListDecisionInboxResponse(plain)
+	return nil
+}
+
 // GET /api/members's own response body (§13.2/§13.3): every user with
 // role/disabled and their own currently-linked identities, plus every system-wide
 // still-pending link prompt.
@@ -1787,6 +2279,76 @@ func (j *Member) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = Member(plain)
+	return nil
+}
+
+// POST /api/decision-inbox/merge's own request body (Step 60, §16.2's own Merge
+// endpoint, mockups.html decision 33: 'Auto-approved still means human-merged...
+// re-validates CI, approval state, and RBAC server-side at click time').
+type MergePullRequestRequest struct {
+	// PrNumber corresponds to the JSON schema field "prNumber".
+	PrNumber int `json:"prNumber" yaml:"prNumber" mapstructure:"prNumber"`
+
+	// RepoFullName corresponds to the JSON schema field "repoFullName".
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *MergePullRequestRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["prNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field prNumber in MergePullRequestRequest: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in MergePullRequestRequest: required")
+	}
+	type Plain MergePullRequestRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = MergePullRequestRequest(plain)
+	return nil
+}
+
+// 200 response body for POST /api/decision-inbox/merge -- returned only once the
+// endpoint's own server-side re-validation (CI green, approval state, Authorize)
+// passed AND the SourceControl.MergePR call itself succeeded.
+type MergePullRequestResponse struct {
+	// MergeCommitSha corresponds to the JSON schema field "mergeCommitSha".
+	MergeCommitSha string `json:"mergeCommitSha" yaml:"mergeCommitSha" mapstructure:"mergeCommitSha"`
+
+	// Merged corresponds to the JSON schema field "merged".
+	Merged bool `json:"merged" yaml:"merged" mapstructure:"merged"`
+
+	// Message corresponds to the JSON schema field "message".
+	Message string `json:"message" yaml:"message" mapstructure:"message"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *MergePullRequestResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["mergeCommitSha"]; raw != nil && !ok {
+		return fmt.Errorf("field mergeCommitSha in MergePullRequestResponse: required")
+	}
+	if _, ok := raw["merged"]; raw != nil && !ok {
+		return fmt.Errorf("field merged in MergePullRequestResponse: required")
+	}
+	if _, ok := raw["message"]; raw != nil && !ok {
+		return fmt.Errorf("field message in MergePullRequestResponse: required")
+	}
+	type Plain MergePullRequestResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = MergePullRequestResponse(plain)
 	return nil
 }
 

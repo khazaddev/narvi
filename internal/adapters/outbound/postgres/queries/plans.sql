@@ -86,3 +86,42 @@ SELECT * FROM plans WHERE id = $1;
 
 -- name: SetPlanSlackMessageRef :exec
 UPDATE plans SET slack_channel_id = $2, slack_message_ts = $3 WHERE id = $1;
+
+-- name: ListAwaitingApprovalPlans :many
+-- Step 60 ("decision inbox: read model + API", §16.1)'s own
+-- awaiting_approval row source: every plan still 'awaiting_approval',
+-- joined with its own session for the (created_by, title) the app-layer
+-- aggregator needs both to render the row and to resolve own/joined RBAC
+-- (mirrors httpapi.canActOnPlan's own identical CreatedBy check,
+-- planauthz.go -- the OTHER half, a participants-table "joined" check, is
+-- a separate per-session query this one does not embed, since a plan's
+-- own UNIQUE-per-session "at most one awaiting_approval row" invariant
+-- (plans_one_awaiting_approval_per_session) already keeps this result set
+-- small). System-wide, unscoped by user -- this Step's own read model
+-- resolves per-user ELIGIBILITY at the app layer, not in this query.
+-- Ordered oldest-first (plans.created_at) -- the SAME "entered the queue"
+-- instant the app-layer aggregator's own ranking needs, with no further
+-- derivation required.
+SELECT
+    plans.id, plans.session_id, plans.turn_id, plans.version, plans.status, plans.plan_model_id,
+    plans.created_at, plans.decided_at, plans.decided_by, plans.slack_channel_id, plans.slack_message_ts,
+    sessions.created_by AS session_created_by,
+    sessions.title AS session_title
+FROM plans
+JOIN sessions ON sessions.id = plans.session_id
+WHERE plans.status = 'awaiting_approval'
+ORDER BY plans.created_at;
+
+-- name: ListRecentlyDecidedPlans :many
+-- Step 60 ("decision inbox: read model + API", §16.2)'s own decision-
+-- latency metric input for the plan-approval half of that computation
+-- (median time from an item ENTERING the queue -- a plan's own
+-- created_at -- to its ACTION -- decided_at): every plan decided (approved
+-- or rejected, from ANY entry point -- web/Slack/Linear all funnel
+-- through the SAME guarded UPDATE, decideplan.go) at or after $1, bounded
+-- by $2 (§21.1's own "bounded from day one" discipline -- an explicit
+-- recent window, never an unbounded historical scan).
+SELECT * FROM plans
+WHERE status IN ('approved', 'rejected') AND decided_at >= $1
+ORDER BY decided_at DESC
+LIMIT $2;

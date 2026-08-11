@@ -127,6 +127,82 @@ func (q *Queries) GetPlan(ctx context.Context, id pgtype.UUID) (Plan, error) {
 	return i, err
 }
 
+const listAwaitingApprovalPlans = `-- name: ListAwaitingApprovalPlans :many
+SELECT
+    plans.id, plans.session_id, plans.turn_id, plans.version, plans.status, plans.plan_model_id,
+    plans.created_at, plans.decided_at, plans.decided_by, plans.slack_channel_id, plans.slack_message_ts,
+    sessions.created_by AS session_created_by,
+    sessions.title AS session_title
+FROM plans
+JOIN sessions ON sessions.id = plans.session_id
+WHERE plans.status = 'awaiting_approval'
+ORDER BY plans.created_at
+`
+
+type ListAwaitingApprovalPlansRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	SessionID        pgtype.UUID        `json:"session_id"`
+	TurnID           pgtype.UUID        `json:"turn_id"`
+	Version          int32              `json:"version"`
+	Status           PlanStatus         `json:"status"`
+	PlanModelID      *string            `json:"plan_model_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	DecidedAt        pgtype.Timestamptz `json:"decided_at"`
+	DecidedBy        pgtype.UUID        `json:"decided_by"`
+	SlackChannelID   *string            `json:"slack_channel_id"`
+	SlackMessageTs   *string            `json:"slack_message_ts"`
+	SessionCreatedBy pgtype.UUID        `json:"session_created_by"`
+	SessionTitle     *string            `json:"session_title"`
+}
+
+// Step 60 ("decision inbox: read model + API", §16.1)'s own
+// awaiting_approval row source: every plan still 'awaiting_approval',
+// joined with its own session for the (created_by, title) the app-layer
+// aggregator needs both to render the row and to resolve own/joined RBAC
+// (mirrors httpapi.canActOnPlan's own identical CreatedBy check,
+// planauthz.go -- the OTHER half, a participants-table "joined" check, is
+// a separate per-session query this one does not embed, since a plan's
+// own UNIQUE-per-session "at most one awaiting_approval row" invariant
+// (plans_one_awaiting_approval_per_session) already keeps this result set
+// small). System-wide, unscoped by user -- this Step's own read model
+// resolves per-user ELIGIBILITY at the app layer, not in this query.
+// Ordered oldest-first (plans.created_at) -- the SAME "entered the queue"
+// instant the app-layer aggregator's own ranking needs, with no further
+// derivation required.
+func (q *Queries) ListAwaitingApprovalPlans(ctx context.Context) ([]ListAwaitingApprovalPlansRow, error) {
+	rows, err := q.db.Query(ctx, listAwaitingApprovalPlans)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAwaitingApprovalPlansRow
+	for rows.Next() {
+		var i ListAwaitingApprovalPlansRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.TurnID,
+			&i.Version,
+			&i.Status,
+			&i.PlanModelID,
+			&i.CreatedAt,
+			&i.DecidedAt,
+			&i.DecidedBy,
+			&i.SlackChannelID,
+			&i.SlackMessageTs,
+			&i.SessionCreatedBy,
+			&i.SessionTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPlanSummariesForSession = `-- name: ListPlanSummariesForSession :many
 SELECT id, version, status FROM plans
 WHERE session_id = $1
@@ -181,6 +257,58 @@ ORDER BY version
 // versioned v1->v2 history view.
 func (q *Queries) ListPlansForSession(ctx context.Context, sessionID pgtype.UUID) ([]Plan, error) {
 	rows, err := q.db.Query(ctx, listPlansForSession, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Plan
+	for rows.Next() {
+		var i Plan
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.TurnID,
+			&i.Version,
+			&i.Status,
+			&i.PlanModelID,
+			&i.CreatedAt,
+			&i.DecidedAt,
+			&i.DecidedBy,
+			&i.SlackChannelID,
+			&i.SlackMessageTs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRecentlyDecidedPlans = `-- name: ListRecentlyDecidedPlans :many
+SELECT id, session_id, turn_id, version, status, plan_model_id, created_at, decided_at, decided_by, slack_channel_id, slack_message_ts FROM plans
+WHERE status IN ('approved', 'rejected') AND decided_at >= $1
+ORDER BY decided_at DESC
+LIMIT $2
+`
+
+type ListRecentlyDecidedPlansParams struct {
+	DecidedAt pgtype.Timestamptz `json:"decided_at"`
+	Limit     int32              `json:"limit"`
+}
+
+// Step 60 ("decision inbox: read model + API", §16.2)'s own decision-
+// latency metric input for the plan-approval half of that computation
+// (median time from an item ENTERING the queue -- a plan's own
+// created_at -- to its ACTION -- decided_at): every plan decided (approved
+// or rejected, from ANY entry point -- web/Slack/Linear all funnel
+// through the SAME guarded UPDATE, decideplan.go) at or after $1, bounded
+// by $2 (§21.1's own "bounded from day one" discipline -- an explicit
+// recent window, never an unbounded historical scan).
+func (q *Queries) ListRecentlyDecidedPlans(ctx context.Context, arg ListRecentlyDecidedPlansParams) ([]Plan, error) {
+	rows, err := q.db.Query(ctx, listRecentlyDecidedPlans, arg.DecidedAt, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

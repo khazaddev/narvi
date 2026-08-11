@@ -60,6 +60,28 @@ const (
 	// ListArtifacts/ListEvents' own existing "session exists + logged in,
 	// no separate Authorize call" precedent.
 	ActionUploadToSession Action = "upload_to_session"
+	// ActionMergePR covers clicking Merge on a decision-inbox
+	// ready_to_merge row (Step 60, "decision inbox: read model + API",
+	// §16.2/§16.1 -- "Viewer role sees the queue read-only and cannot
+	// merge"). §13.3's own table names no dedicated "merge PRs" row at
+	// all; this Action is placed in THIS row, the SAME shape as
+	// ActionPromptSession/ActionUploadToSession immediately above, by
+	// direct analogy rather than an explicit table row: a PR only ever
+	// reaches a given user's OWN ready_to_merge queue because it is
+	// ALREADY "assigned to the user" (§16.1's own inclusion criterion --
+	// directly, as requested reviewer, or via CODEOWNERS), which is
+	// exactly the same kind of per-resource ownership §13.3 row 2's
+	// "own/joined" carve-out already gates prompting/uploading/approving
+	// on for a member — never a blanket "any PR, anywhere" grant the way
+	// row 3's stop/resume-ANY-session actions are. The app-layer
+	// decision-inbox aggregator (never the httpapi handler itself) is
+	// what resolves Resource.OwnedOrJoined here: true iff the PR named by
+	// the merge request is one THIS caller's own already-computed
+	// provenance (internal/domain/decisioninbox.ResolveProvenance) found
+	// them assigned to, re-derived fresh at click time exactly like every
+	// other fact the Merge endpoint re-validates (§16.2, §5.2) — never
+	// read back from whatever the client-rendered queue merely claims.
+	ActionMergePR Action = "merge_pr"
 	// ActionLinkChatGPTAccount covers self-service linking/unlinking of
 	// the caller's OWN ChatGPT account (POST/DELETE /api/me/chatgpt-link,
 	// Step 59, §29.3/§29.9 — "self-service, own-user only... one new
@@ -210,6 +232,7 @@ var AllActions = []Action{
 	ActionApprovePlan,
 	ActionDecideWorkflowStep,
 	ActionUploadToSession,
+	ActionMergePR,
 	ActionLinkChatGPTAccount,
 	ActionStopSession,
 	ActionResumeSession,

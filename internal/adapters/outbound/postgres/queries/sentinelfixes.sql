@@ -93,3 +93,22 @@ UPDATE sentinel_fixes
 SET status = 'abandoned', updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: ExistsSentinelFixByFixPRNumber :one
+-- Step 60 ("decision inbox: read model + API")'s own §17 structural
+-- exclusion: "sentinel auto-fix follow-up PRs must never appear as inbox
+-- rows... Make this a structural exclusion, not a filter someone can
+-- forget." A PR is a sentinel-auto-fix follow-up iff it appears as SOME
+-- row's own fix_pr_number for this repo -- deliberately never inferred
+-- from sessions.parent_session_id/spawn_depth alone (migrations/
+-- 000045_sessions_child_sessions.up.sql's own doc comment: those two
+-- columns are generic child-session markers shared by ANY future child-
+-- session mechanism -- handoff v2, workflow HITL -- not sentinel-fix-
+-- specific; over-matching on them would over-exclude an unrelated future
+-- child-session's own PR). fix_pr_number is nullable (NULL until the fix
+-- session's own PR actually opens, §17.2) so this naturally reports false
+-- for a claim row still 'pending'/'spawned'.
+SELECT EXISTS (
+    SELECT 1 FROM sentinel_fixes
+    WHERE repo_full_name = sqlc.arg('repo_full_name') AND fix_pr_number = sqlc.arg('fix_pr_number')
+) AS exists;

@@ -123,6 +123,12 @@ var matrix = map[Action]actionRule{
 	// section's explicit "own-aware like ActionApprovePlan's own row"
 	// instruction -- see action.go's own doc comment.
 	ActionLinkChatGPTAccount: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
+	// Step 60 (§16.2): merging a decision-inbox PR is own/joined-aware,
+	// the SAME row shape as prompting/uploading above, by direct analogy
+	// -- see action.go's own ActionMergePR doc comment for the full
+	// reasoning (no dedicated §13.3 table row names this action
+	// explicitly).
+	ActionMergePR: {allow: roles(RoleAdmin, RoleMaintainer), allowIfOwned: roles(RoleMember)},
 
 	// Row 3: stop/resume ANY session -- admin/maintainer only, no member
 	// own/joined escape hatch (see action.go's own doc comment on why).

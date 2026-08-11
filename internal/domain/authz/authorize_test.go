@@ -94,6 +94,20 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"viewer cannot upload to any session", authz.RoleViewer, authz.ActionUploadToSession, false, false},
 		{"viewer cannot upload even to an owned/joined session", authz.RoleViewer, authz.ActionUploadToSession, true, false},
 
+		// Row 2b (Step 60, §16.2): merge a decision-inbox PR -- the SAME
+		// §13.3 row as prompting/uploading above (ActionMergePR's own doc
+		// comment, action.go): admin/maintainer on ANY PR; member ONLY on
+		// one already resolved as assigned to them (OwnedOrJoined); viewer
+		// never, regardless.
+		{"admin merges any pr", authz.RoleAdmin, authz.ActionMergePR, false, true},
+		{"admin merges own pr", authz.RoleAdmin, authz.ActionMergePR, true, true},
+		{"maintainer merges any pr", authz.RoleMaintainer, authz.ActionMergePR, false, true},
+		{"maintainer merges own pr", authz.RoleMaintainer, authz.ActionMergePR, true, true},
+		{"member merges a pr assigned to them", authz.RoleMember, authz.ActionMergePR, true, true},
+		{"member cannot merge a pr not assigned to them", authz.RoleMember, authz.ActionMergePR, false, false},
+		{"viewer cannot merge any pr", authz.RoleViewer, authz.ActionMergePR, false, false},
+		{"viewer cannot merge even a pr assigned to them", authz.RoleViewer, authz.ActionMergePR, true, false},
+
 		// Row 2c/Row 3b: approve a plan -- admin/maintainer approve ANY
 		// plan; member ONLY on own/joined; viewer never.
 		{"admin approves any plan", authz.RoleAdmin, authz.ActionApprovePlan, false, true},
