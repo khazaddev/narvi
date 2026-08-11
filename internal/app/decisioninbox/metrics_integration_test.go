@@ -124,7 +124,7 @@ func TestMetrics_WindowBoundary(t *testing.T) {
 	}
 
 	deps := decisioninbox.Deps{Plans: plans, Timeouts: timeouts}
-	_, sampleSize, computed, err := decisioninbox.Metrics(ctx, deps, time.Now())
+	median, sampleSize, computed, err := decisioninbox.Metrics(ctx, deps, time.Now())
 	if err != nil {
 		t.Fatalf("Metrics() error = %v, want nil", err)
 	}
@@ -133,6 +133,19 @@ func TestMetrics_WindowBoundary(t *testing.T) {
 	}
 	if sampleSize != 1 {
 		t.Errorf("Metrics() sampleSize = %d, want 1 (only the in-window plan -- the out-of-window one must be excluded)", sampleSize)
+	}
+	// §60 review finding (TEST BATCH, second round): this fixture's own
+	// created_at/decided_at gap is a KNOWN, exact 10 minutes (both
+	// timestamps above are derived from the SAME inWindowDecidedAt value,
+	// so the sub-microsecond remainder Postgres truncates on write is
+	// identical for both, and the DIFFERENCE survives exactly) -- the one
+	// fixture in this file with a known non-zero latency, previously
+	// discarded (`_, sampleSize, computed, err := ...`) rather than
+	// asserted. A single-sample median is just that one sample's own
+	// duration, so this pins the actual VALUE Metrics computes, not only
+	// that it computed something.
+	if median != 10*time.Minute {
+		t.Errorf("Metrics() median = %v, want exactly 10m (this fixture's own known created_at/decided_at gap)", median)
 	}
 }
 

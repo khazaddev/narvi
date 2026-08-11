@@ -124,18 +124,36 @@ func newTestPool(t *testing.T) *pgxpool.Pool {
 // outboxworker's own fakeSentinelAutoFixSourceControl precedent.
 type fakeDecisionInboxSourceControl struct {
 	openPRsByExternalID map[string][]ports.OpenPR
+	// openPRsTruncated/openPRsErr (§60 review finding C1, TEST BATCH: this
+	// fake previously hardcoded truncated=false and never errored, so
+	// Result.SCMFetchFailed=true had no test coverage at all) let a test
+	// drive ListOpenPRsForUser's own two degraded outcomes.
+	openPRsTruncated bool
+	openPRsErr       error
+
+	// codeOwnersCalls captures every ResolveCodeOwners call this fake
+	// receives, in order -- §60 review finding B3 (TEST BATCH): "reverting
+	// Ref: pr.BaseRef -> pr.HeadSHA... passes everything" because nothing
+	// previously inspected what spec this fake was actually called with.
+	codeOwnersCalls []ports.ResolveCodeOwnersSpec
 }
 
 var _ ports.SourceControl = (*fakeDecisionInboxSourceControl)(nil)
 
 func (f *fakeDecisionInboxSourceControl) ListOpenPRsForUser(_ context.Context, spec ports.ListOpenPRsForUserSpec) ([]ports.OpenPR, bool, error) {
-	return f.openPRsByExternalID[spec.GitHubExternalID], false, nil
+	if f.openPRsErr != nil {
+		return nil, false, f.openPRsErr
+	}
+	return f.openPRsByExternalID[spec.GitHubExternalID], f.openPRsTruncated, nil
 }
 
-// ResolveCodeOwners always reports no match -- this test's own scenario
-// exercises Direct/RequestedReviewer provenance, not CODEOWNERS (already
-// covered exhaustively at the adapter layer, resolvecodeowners_test.go).
-func (f *fakeDecisionInboxSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
+// ResolveCodeOwners always reports no match -- every existing test's own
+// scenario exercises Direct/RequestedReviewer provenance, not a real
+// CODEOWNERS match (already covered exhaustively at the adapter layer,
+// resolvecodeowners_test.go); this fake's own job here is only ever to
+// record WHAT it was called with (codeOwnersCalls above).
+func (f *fakeDecisionInboxSourceControl) ResolveCodeOwners(_ context.Context, spec ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
+	f.codeOwnersCalls = append(f.codeOwnersCalls, spec)
 	return nil, nil
 }
 
@@ -729,5 +747,358 @@ func TestBuild_PRLabelVariations(t *testing.T) {
 	}
 	if handoffPR.RepoFullName != "acme/widgets" {
 		t.Errorf("PR #21 (handoff) RepoFullName = %q, want acme/widgets -- must still populate even though Kind is awaiting_approval", handoffPR.RepoFullName)
+	}
+}
+
+// decisionInboxActorFixture creates a fresh member actor with a linked
+// GitHub identity -- the setup every test below this point repeats
+// verbatim, factored out once these three new tests made the duplication
+// worth naming.
+func decisionInboxActorFixture(ctx context.Context, t *testing.T, pool *pgxpool.Pool, primaryEmail, externalID string, tokenKey []byte) sqlcgen.User {
+	t.Helper()
+	users := narvipg.NewUserStore(pool)
+	identities := narvipg.NewIdentityStore(pool)
+
+	actor, err := users.Create(ctx, sqlcgen.CreateUserParams{PrimaryEmail: primaryEmail, DisplayName: "Actor", Role: sqlcgen.UserRoleMember})
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+	encryptedToken, err := platform.EncryptToken(tokenKey, []byte("fake-gh-token"))
+	if err != nil {
+		t.Fatalf("encrypt token: %v", err)
+	}
+	if _, err := identities.Create(ctx, sqlcgen.CreateIdentityParams{
+		UserID: actor.ID, Provider: sqlcgen.IdentityProviderGithub, ExternalID: externalID,
+		EmailVerified: true, LinkedVia: sqlcgen.IdentityLinkedViaAutoEmail, AccessTokenEncrypted: encryptedToken,
+	}); err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+	return actor
+}
+
+// TestBuild_HasChangesRequestedDemotesFromReadyToMerge is the read-path
+// regression test for §60 review finding P1-4 (second round): before this
+// fix, buildPROpenItem never consulted HasChangesRequested at all when
+// classifying Kind, even though it is a HARD merge blocker at
+// RevalidateForMerge -- so such a PR sat in the TOP ready_to_merge section
+// with a Merge button that would unconditionally 409 at click time. This
+// fixture is otherwise IDENTICAL to TestBuild_FullScenario's own
+// ready_to_merge PR #10 (platform-authored, low-risk, CI green, directly
+// assigned) so HasChangesRequested is the ONLY thing keeping it out of
+// ready_to_merge -- a deleted/bypassed check would otherwise still
+// correctly land this PR in needs_review for the WRONG reason.
+func TestBuild_HasChangesRequestedDemotesFromReadyToMerge(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	const actorGitHubExternalID = "4001"
+	tokenKey := []byte("01234567890123456789012345678901")
+	actor := decisionInboxActorFixture(ctx, t, pool, "p14-actor@example.com", actorGitHubExternalID, tokenKey)
+
+	artifacts := narvipg.NewArtifactStore(pool)
+	const htmlURL = "https://github.com/acme/widgets/pull/40"
+	platformSession, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceGithub, CreatedBy: actor.ID})
+	if err != nil {
+		t.Fatalf("create platform session: %v", err)
+	}
+	if _, err := artifacts.Create(ctx, sqlcgen.CreateArtifactParams{
+		SessionID: platformSession.ID, Type: sqlcgen.ArtifactTypePr, Url: htmlURL, Metadata: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("mark PR #40 platform-authored: %v", err)
+	}
+
+	fakeSCM := &fakeDecisionInboxSourceControl{
+		openPRsByExternalID: map[string][]ports.OpenPR{
+			actorGitHubExternalID: {
+				{
+					Owner: "acme", Repo: "widgets", Number: 40, Title: "otherwise fully eligible, but changes requested",
+					HTMLURL: htmlURL, HeadSHA: "sha40",
+					Assignees:           []ports.PRPerson{{ExternalID: actorGitHubExternalID, Login: "actor"}},
+					CIConclusion:        ports.CIConclusionSuccess,
+					Labels:              []string{"review:low-risk"},
+					HasChangesRequested: true,
+					CreatedAt:           time.Now(),
+				},
+			},
+		},
+	}
+
+	deps := decisioninbox.Deps{
+		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
+		Artifacts: artifacts, Identities: narvipg.NewIdentityStore(pool),
+		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
+		TokenEncryptionKey: tokenKey,
+		Timeouts:           platform.DefaultTimeouts(),
+	}
+
+	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
+	if err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
+	}
+
+	pr40 := findItemByPR(result.Items, 40)
+	if pr40 == nil {
+		t.Fatal("PR #40 missing from the inbox entirely")
+	}
+	if pr40.Kind != decisioninboxdomain.KindNeedsReview {
+		t.Errorf("PR #40 (changes requested) Kind = %s, want needs_review -- HasChangesRequested must force it out of ready_to_merge even though it is otherwise fully eligible", pr40.Kind)
+	}
+	if !pr40.HasChangesRequested {
+		t.Error("PR #40 HasChangesRequested = false, want true -- the domain Item field itself must also surface this fact (§60 review finding P1-4)")
+	}
+}
+
+// TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead is the B3 regression
+// test named explicitly in the §60 review's TEST BATCH: "reverting Ref:
+// pr.BaseRef -> pr.HeadSHA... passes everything" because no test captured
+// the actual ResolveCodeOwnersSpec resolvePRProvenance builds. HeadSHA is
+// deliberately a completely different, attacker-shaped string from
+// BaseRef here, so a regression back to the PR's own head is
+// unmistakable, never a coincidental match.
+func TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	const actorGitHubExternalID = "3001"
+	tokenKey := []byte("01234567890123456789012345678901")
+	actor := decisionInboxActorFixture(ctx, t, pool, "b3-baseref-actor@example.com", actorGitHubExternalID, tokenKey)
+
+	const wantBaseRef = "release/1.0"
+	fakeSCM := &fakeDecisionInboxSourceControl{
+		openPRsByExternalID: map[string][]ports.OpenPR{
+			actorGitHubExternalID: {
+				{
+					Owner: "acme", Repo: "widgets", Number: 30, Title: "codeowners base-ref check",
+					HTMLURL: "https://github.com/acme/widgets/pull/30",
+					// HeadSHA is deliberately attacker-shaped and distinct
+					// from BaseRef -- if resolvePRProvenance ever regresses
+					// to resolving CODEOWNERS at the PR's own head (§60
+					// review finding B3), the assertion below catches it
+					// immediately.
+					HeadSHA:      "attacker-controlled-head-sha",
+					BaseRef:      wantBaseRef,
+					Assignees:    []ports.PRPerson{{ExternalID: actorGitHubExternalID, Login: "actor"}},
+					CIConclusion: ports.CIConclusionSuccess,
+					Labels:       []string{"review:low-risk"},
+					ChangedFiles: []string{"internal/app/scheduler/backoff.go"},
+					CreatedAt:    time.Now(),
+				},
+			},
+		},
+	}
+
+	deps := decisioninbox.Deps{
+		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
+		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
+		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
+		TokenEncryptionKey: tokenKey,
+		Timeouts:           platform.DefaultTimeouts(),
+	}
+
+	if _, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now()); err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
+	}
+
+	if len(fakeSCM.codeOwnersCalls) == 0 {
+		t.Fatal("ResolveCodeOwners was never called -- test fixture problem, cannot verify Ref")
+	}
+	for _, call := range fakeSCM.codeOwnersCalls {
+		if call.Ref != wantBaseRef {
+			t.Errorf("ResolveCodeOwners called with Ref = %q, want the PR's own BASE ref %q (never HeadSHA -- §60 review finding B3)", call.Ref, wantBaseRef)
+		}
+	}
+}
+
+// TestBuild_SCMFetchFailedSignal proves Result.SCMFetchFailed actually
+// becomes true for its own producers (§60 review findings P1-2/P1-3,
+// second round; §60 review finding C1, TEST BATCH: SCMFetchFailed=true
+// had zero test coverage -- the fake hardcoded truncated=false and never
+// errored, so a mutation dropping the wiring entirely passed the whole
+// suite). Each subtest isolates ONE producer.
+func TestBuild_SCMFetchFailedSignal(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	tokenKey := []byte("01234567890123456789012345678901")
+
+	t.Run("TruncatedRead_StillSurfacesPartialItemsWithARealAsOf", func(t *testing.T) {
+		const actorGitHubExternalID = "5001"
+		actor := decisionInboxActorFixture(ctx, t, pool, "c1-truncated-actor@example.com", actorGitHubExternalID, tokenKey)
+
+		fakeSCM := &fakeDecisionInboxSourceControl{
+			openPRsByExternalID: map[string][]ports.OpenPR{
+				actorGitHubExternalID: {
+					{Owner: "acme", Repo: "widgets", Number: 50, Title: "partial read", HTMLURL: "https://github.com/acme/widgets/pull/50", HeadSHA: "sha50", CreatedAt: time.Now()},
+				},
+			},
+			openPRsTruncated: true,
+		}
+		deps := decisioninbox.Deps{
+			Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
+			Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+			ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
+			Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
+			SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
+			TokenEncryptionKey: tokenKey,
+			Timeouts:           platform.DefaultTimeouts(),
+		}
+
+		result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
+		if err != nil {
+			t.Fatalf("Build() error = %v, want nil", err)
+		}
+		if !result.SCMFetchFailed {
+			t.Error("SCMFetchFailed = false, want true (the underlying SourceControl read reported truncated=true)")
+		}
+		if result.SCMAsOf == nil {
+			t.Error("SCMAsOf = nil, want non-nil -- a truncated read is still a REAL, if partial, fetch: SCMAsOf and SCMFetchFailed are no longer mutually exclusive (§60 review finding P1-2)")
+		}
+	})
+
+	t.Run("UnderlyingFetchError_NoAsOfNoItems", func(t *testing.T) {
+		const actorGitHubExternalID = "5002"
+		actor := decisionInboxActorFixture(ctx, t, pool, "c1-error-actor@example.com", actorGitHubExternalID, tokenKey)
+
+		fakeSCM := &fakeDecisionInboxSourceControl{openPRsErr: errors.New("boom: github is down")}
+		deps := decisioninbox.Deps{
+			Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
+			Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+			ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
+			Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
+			SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
+			TokenEncryptionKey: tokenKey,
+			Timeouts:           platform.DefaultTimeouts(),
+		}
+
+		result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
+		if err != nil {
+			t.Fatalf("Build() error = %v, want nil (a failed PR fetch must not fail the whole Build call)", err)
+		}
+		if !result.SCMFetchFailed {
+			t.Error("SCMFetchFailed = false, want true (the underlying SourceControl call errored outright)")
+		}
+		if result.SCMAsOf != nil {
+			t.Errorf("SCMAsOf = %v, want nil -- no fetch ever completed", *result.SCMAsOf)
+		}
+	})
+}
+
+// TestBuild_SentinelFixStoreErrorDegradesTheReadButNeverPanics is the
+// P1-3 regression test (§60 review, second round): a genuine SentinelFixes
+// store error inside buildPRItems' per-PR loop must both (1) exclude ONLY
+// that one PR row (fail closed, exactly as before this fix) and (2) mark
+// the overall read degraded via Result.SCMFetchFailed, rather than
+// silently rendering a fresh, complete, empty-of-that-row queue. The
+// SentinelFixes store is deliberately built on an ALREADY-ROLLED-BACK
+// transaction (mirrors this same package's own eligiblePR/WithTx
+// precedent, revalidate_integration_test.go) -- a real, reliable way to
+// force exactly ONE dependency to fail without touching the healthy pool
+// every other store in this same Build call still needs.
+func TestBuild_SentinelFixStoreErrorDegradesTheReadButNeverPanics(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	tokenKey := []byte("01234567890123456789012345678901")
+
+	const actorGitHubExternalID = "5003"
+	actor := decisionInboxActorFixture(ctx, t, pool, "p1-3-actor@example.com", actorGitHubExternalID, tokenKey)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback tx: %v", err)
+	}
+	// brokenSentinelFixes wraps the now-closed tx above -- every query
+	// through it fails immediately with a real Postgres/pgx error, without
+	// any real outage or a second container.
+	brokenSentinelFixes := narvipg.NewSentinelFixStore(pool).WithTx(tx)
+
+	fakeSCM := &fakeDecisionInboxSourceControl{
+		openPRsByExternalID: map[string][]ports.OpenPR{
+			actorGitHubExternalID: {
+				{
+					Owner: "acme", Repo: "widgets", Number: 60, Title: "sentinel-fix check errors",
+					HTMLURL: "https://github.com/acme/widgets/pull/60", HeadSHA: "sha60",
+					Assignees:    []ports.PRPerson{{ExternalID: actorGitHubExternalID, Login: "actor"}},
+					CIConclusion: ports.CIConclusionSuccess,
+					Labels:       []string{"review:low-risk"},
+					CreatedAt:    time.Now(),
+				},
+			},
+		},
+	}
+
+	deps := decisioninbox.Deps{
+		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: brokenSentinelFixes,
+		Artifacts: narvipg.NewArtifactStore(pool), Identities: narvipg.NewIdentityStore(pool),
+		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
+		TokenEncryptionKey: tokenKey,
+		Timeouts:           platform.DefaultTimeouts(),
+	}
+
+	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
+	if err != nil {
+		t.Fatalf("Build() error = %v, want nil (a per-PR store error must degrade, never fail, the whole Build call)", err)
+	}
+	if item := findItemByPR(result.Items, 60); item != nil {
+		t.Errorf("PR #60 present in the inbox (%+v), want excluded -- the §17 exclusion check must fail CLOSED on a store error", item)
+	}
+	if !result.SCMFetchFailed {
+		t.Error("SCMFetchFailed = false, want true -- a per-PR SentinelFixStore error must degrade the overall read (§60 review finding P1-3), never silently render a fresh, complete queue with that row simply missing")
+	}
+}
+
+// TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub
+// is the P2-1 regression test (§60 review, second round): a genuine
+// identity-store error resolving the actor's OWN GitHub credential must
+// route into the SAME degraded signal as P1-2/P1-3, never collapse into
+// the identical, indistinguishable ok=false empty state "no GitHub linked
+// at all" renders. Uses the same already-rolled-back-tx fault injection
+// as the SentinelFixStore test above, applied to Identities instead.
+func TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	tokenKey := []byte("01234567890123456789012345678901")
+
+	users := narvipg.NewUserStore(pool)
+	actor, err := users.Create(ctx, sqlcgen.CreateUserParams{PrimaryEmail: "p2-1-actor@example.com", DisplayName: "Actor", Role: sqlcgen.UserRoleMember})
+	if err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback tx: %v", err)
+	}
+	brokenIdentities := narvipg.NewIdentityStore(pool).WithTx(tx)
+
+	deps := decisioninbox.Deps{
+		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
+		Artifacts: narvipg.NewArtifactStore(pool), Identities: brokenIdentities,
+		SCMCache:           decisioninbox.NewSCMCache(&fakeDecisionInboxSourceControl{}, platform.DefaultTimeouts()),
+		TokenEncryptionKey: tokenKey,
+		Timeouts:           platform.DefaultTimeouts(),
+	}
+
+	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
+	if err != nil {
+		t.Fatalf("Build() error = %v, want nil (a credential-resolution error must degrade, never fail, the whole Build call)", err)
+	}
+	if result.SCMAsOf != nil {
+		t.Errorf("SCMAsOf = %v, want nil -- no fetch was ever attempted", *result.SCMAsOf)
+	}
+	if !result.SCMFetchFailed {
+		t.Error("SCMFetchFailed = false, want true -- a genuine identity-store error must never render identically to \"no GitHub linked at all\" (§60 review finding P2-1)")
 	}
 }

@@ -14,6 +14,7 @@ package decisioninbox_test
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -150,6 +151,14 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
+	// Paired with review:low-risk deliberately -- an otherwise-fully-
+	// eligible risk label -- so needs-human is provably the ONE thing
+	// keeping this refused, not a coincidental "no/unrecognized risk
+	// label" refusal (§60 review TEST BATCH: this subtest and what used
+	// to be a separate "NeedsHumanWithLowRisk_Refused" subtest were
+	// byte-identical, both pairing needs-human with low-risk -- the
+	// latter was deleted as pure duplication, adding zero coverage
+	// despite its own comment's claim to cover "the OTHER half").
 	t.Run("NeedsHumanLabel_Refused", func(t *testing.T) {
 		const repoFullName = "acme/revalidate-needs-human"
 		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 3)
@@ -219,8 +228,18 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		if ok {
 			t.Fatal("RevalidateForMerge() ok = true, want false (this PR is a draft)")
 		}
-		if reason == "" {
-			t.Error("reason is empty, want a human-readable explanation")
+		// §60 review TEST BATCH: this subtest is DOUBLE-GATED by
+		// ComputeAutoApprovalEligible's own IsDraft input, so deleting
+		// RevalidateForMerge's explicit `if target.Draft` early return
+		// still passes an `ok`-only/reason-non-empty assertion -- the PR
+		// still refuses, just via the generic downstream eligibility
+		// check instead, for a DIFFERENT reason. This exact trap already
+		// cost one previous review round. Assert the reason NAMES
+		// "draft" specifically -- the fallback eligibility-based
+		// refusal's own reason text never mentions "draft" at all, so
+		// only the explicit check produces this exact string.
+		if !strings.Contains(reason, "draft") {
+			t.Errorf("reason = %q, want it to name \"draft\" specifically (proves the explicit draft check fired, not a coincidental eligibility refusal for some unrelated reason)", reason)
 		}
 	})
 
@@ -267,22 +286,59 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// §60 review finding T4: the needs-human exclusion's OTHER half --
-	// paired with a low-risk label, exactly like aggregate.go's own
-	// read-path equivalent fixture, proving needs-human wins regardless
-	// of an otherwise-fully-eligible risk label.
-	t.Run("NeedsHumanWithLowRisk_Refused", func(t *testing.T) {
-		const repoFullName = "acme/revalidate-needs-human-low-risk"
+	// §60 review finding A6 (TEST BATCH, second round): classifyPRLabels
+	// must pick the MOST RESTRICTIVE risk label present, never
+	// "whichever happens to appear last in GitHub's own unordered labels
+	// array" -- a PR can genuinely carry both at once (a failed
+	// RemoveLabel call after AddLabels durably leaves the OLD and NEW
+	// risk labels both present, reachable via verdictnotifier's own
+	// Add-then-separate-Remove sequence). low-risk is deliberately LAST
+	// in this slice: a "last wins" regression would read this PR as
+	// low-risk (eligible, auto-approved), while the correct
+	// "most-restrictive-wins" rule must still refuse it as high-risk.
+	t.Run("MostRestrictiveRiskLabelWins_Refused", func(t *testing.T) {
+		const repoFullName = "acme/revalidate-mixed-risk-labels"
 		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 8)
-		pr.Labels = []string{"review:low-risk", "review:needs-human"}
+		pr.Labels = []string{"review:high-risk", "review:low-risk"}
 		rs.replaceTargetPR(actorGitHubID, pr)
 
-		ok, _, _, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
+		ok, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
 		if err != nil {
 			t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
 		}
 		if ok {
-			t.Fatal("RevalidateForMerge() ok = true, want false (needs-human alongside low-risk must still refuse)")
+			t.Fatal("RevalidateForMerge() ok = true, want false (high-risk must win over low-risk regardless of label order)")
+		}
+		if reason == "" {
+			t.Error("reason is empty, want a human-readable explanation")
+		}
+	})
+
+	// §60 review TEST BATCH (second round): RevalidateForMerge's own
+	// truncated->500 branch was never executed by any existing test --
+	// when the target PR is not found in a TRUNCATED (partial/degraded)
+	// read, this must return a genuine ERROR (the httpapi handler maps
+	// this to a 500, prompting a client retry), never the confident "not
+	// assigned to you" 409 a complete-but-empty read would legitimately
+	// warrant: a degraded read cannot tell "genuinely not yours" apart
+	// from "we simply failed to see it". Deliberately the LAST subtest
+	// in this test function -- it mutates the shared fake's own
+	// openPRsTruncated flag, reset via defer, but sequencing it last
+	// avoids any risk of bleeding into an EARLIER subtest were t.Run's
+	// own declaration-order-execution guarantee ever to change.
+	t.Run("TruncatedReadWithoutTargetPR_ReturnsErrorNeverAConfident409", func(t *testing.T) {
+		rs.sourceControl.openPRsTruncated = true
+		defer func() { rs.sourceControl.openPRsTruncated = false }()
+
+		ok, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, "acme/revalidate-truncated-not-found", 9999, "tok")
+		if err == nil {
+			t.Fatal("RevalidateForMerge() error = nil, want a non-nil error -- a truncated read must never confidently deny, it must fail loudly instead so the caller retries")
+		}
+		if ok {
+			t.Error("RevalidateForMerge() ok = true, want false")
+		}
+		if reason != "" {
+			t.Errorf("reason = %q, want empty (this is an error return, not a domain refusal reason)", reason)
 		}
 	})
 }

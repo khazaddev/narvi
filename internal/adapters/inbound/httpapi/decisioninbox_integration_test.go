@@ -492,11 +492,19 @@ func TestMergePullRequest_MergePRErrorStatusMapping(t *testing.T) {
 // TestListDecisionInbox_HandoffPR_FieldsPopulated is the DTO-mapping half
 // of §60 review finding C4 (the domain-Item half is covered separately in
 // aggregate_integration_test.go's TestBuild_PRLabelVariations): a
-// handoff-labeled PR's ciGreen/findings/isHandoff/hasApprovingReview must
-// all render non-null over the wire even though it rides
-// kind=awaiting_approval instead of an ordinary ready_to_merge/
+// handoff-labeled PR's ciGreen/findings/isHandoff/hasApprovingReview/
+// hasChangesRequested must all render non-null over the wire even though
+// it rides kind=awaiting_approval instead of an ordinary ready_to_merge/
 // needs_review kind -- decisionInboxItemToDTO's own gate used to be keyed
 // on Kind, which nulled exactly these fields for exactly this row.
+//
+// HasApprovingReview/HasChangesRequested are deliberately set to TRUE in
+// the fixture below (§60 review TEST BATCH: "HasApprovingReview is
+// asserted non-nil only, never for its value" -- a fixture that leaves
+// both at their bool zero-value cannot tell "populated with the real
+// value" apart from "always renders false regardless of input"). Both
+// fields are independent GitHub review facts and can legitimately be
+// true at once (different reviewers).
 func TestListDecisionInbox_HandoffPR_FieldsPopulated(t *testing.T) {
 	const htmlURL = "https://github.com/acme/widgets/pull/1300"
 	fakeSCM := &fakeMergeSourceControl{
@@ -505,6 +513,7 @@ func TestListDecisionInbox_HandoffPR_FieldsPopulated(t *testing.T) {
 				Owner: "acme", Repo: "widgets", Number: 1300, Title: "prototype: handoff", HTMLURL: htmlURL,
 				HeadSHA: "headsha1300", Assignees: []ports.PRPerson{{ExternalID: "9005", Login: "octocat"}},
 				CIConclusion: ports.CIConclusionSuccess, Labels: []string{"review:low-risk", "handoff"},
+				HasApprovingReview: true, HasChangesRequested: true,
 			},
 		},
 	}
@@ -541,7 +550,111 @@ func TestListDecisionInbox_HandoffPR_FieldsPopulated(t *testing.T) {
 	if row.Findings == nil {
 		t.Error("Findings = nil, want a non-nil pointer (even if the count is 0)")
 	}
-	if row.HasApprovingReview == nil {
-		t.Error("HasApprovingReview = nil, want a non-nil pointer (even if false)")
+	if row.HasApprovingReview == nil || !*row.HasApprovingReview {
+		t.Errorf("HasApprovingReview = %v, want a non-nil pointer to TRUE (fixture sets HasApprovingReview: true -- previously this was asserted non-nil only, never for its real value)", row.HasApprovingReview)
+	}
+	if row.HasChangesRequested == nil || !*row.HasChangesRequested {
+		t.Errorf("HasChangesRequested = %v, want a non-nil pointer to TRUE (§60 review finding P1-4, second round: this DTO field previously did not exist on the wire at all)", row.HasChangesRequested)
+	}
+}
+
+// TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel
+// is the wire-level regression test for §60 review finding P3-3 (second
+// round): A1's fail-closed sentinel (openFindingsUnknownFailClosed, the
+// synthetic value 1) exists ONLY to fail buildPROpenItem's own eligibility
+// computation closed on a genuine ReviewFindings store error -- it must
+// never be presented on the wire as an honest, real findings count. This
+// deliberately builds its OWN router (rather than reusing
+// newDecisionInboxTestRig) so ReviewFindings alone can be wired to a
+// store backed by an ALREADY-ROLLED-BACK transaction (every query through
+// it fails immediately with a real Postgres/pgx error, mirroring this
+// package's own aggregate_integration_test.go precedent in the
+// decisioninbox app package) while every other dependency stays healthy.
+func TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	users := narvipg.NewUserStore(pool)
+	userSessions := narvipg.NewUserSessionStore(pool)
+	identities := narvipg.NewIdentityStore(pool)
+	sessions := narvipg.NewSessionStore(pool)
+	artifacts := narvipg.NewArtifactStore(pool)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback tx: %v", err)
+	}
+	brokenReviewFindings := narvipg.NewReviewFindingStore(pool).WithTx(tx)
+
+	const htmlURL = "https://github.com/acme/widgets/pull/1400"
+	fakeSCM := &fakeMergeSourceControl{
+		openPRs: []ports.OpenPR{
+			{
+				Owner: "acme", Repo: "widgets", Number: 1400, Title: "findings count unknown", HTMLURL: htmlURL,
+				HeadSHA: "headsha1400", Assignees: []ports.PRPerson{{ExternalID: "9006", Login: "octocat"}},
+				CIConclusion: ports.CIConclusionSuccess, Labels: []string{"review:low-risk"},
+			},
+		},
+	}
+
+	deps := decisioninbox.Deps{
+		Plans:              narvipg.NewPlanStore(pool),
+		Sessions:           sessions,
+		Participants:       narvipg.NewParticipantStore(pool),
+		Automations:        narvipg.NewAutomationStore(pool),
+		Outbox:             narvipg.NewOutboxStore(pool),
+		ReviewFindings:     brokenReviewFindings,
+		SentinelFixes:      narvipg.NewSentinelFixStore(pool),
+		Artifacts:          artifacts,
+		Identities:         identities,
+		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
+		TokenEncryptionKey: decisionInboxTokenKey,
+		Timeouts:           platform.DefaultTimeouts(),
+	}
+
+	router := chi.NewRouter()
+	router.Route("/api/decision-inbox", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessions, users))
+		r.Get("/", httpapi.ListDecisionInbox(deps))
+	})
+	server := httptest.NewServer(router)
+	t.Cleanup(server.Close)
+	rig := &decisionInboxTestRig{
+		pool: pool, users: users, userSessions: userSessions, identities: identities,
+		sessions: sessions, artifacts: artifacts, server: server,
+	}
+
+	user, token := rig.createAuthenticatedUser(ctx, t, sqlcgen.UserRoleMember)
+	rig.linkGitHub(ctx, t, user.ID, "9006")
+	rig.markPlatformAuthored(ctx, t, user.ID, htmlURL)
+
+	var got restdtos.ListDecisionInboxResponse
+	status := rig.doJSON(t, http.MethodGet, "/api/decision-inbox", nil, &got, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	var row *restdtos.DecisionInboxItem
+	for i := range got.Items {
+		if got.Items[i].PrNumber != nil && *got.Items[i].PrNumber == 1400 {
+			row = &got.Items[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("PR #1400 missing from the response entirely: %+v", got.Items)
+	}
+	// The store error must fail the READ-MODEL classification closed
+	// (never ready_to_merge for a PR whose open-findings count could not
+	// be confirmed zero) -- otherwise this test would prove the wire
+	// nulling half of P3-3 while silently missing a regression on the
+	// eligibility half A1 already fixed.
+	if row.Kind != restdtos.DecisionInboxItemKindNeedsReview {
+		t.Errorf("Kind = %q, want needs_review (a findings-count store error must still fail the eligibility computation closed)", row.Kind)
+	}
+	if row.Findings != nil {
+		t.Errorf("Findings = %d, want nil -- the internal fail-closed sentinel (openFindingsUnknownFailClosed) must never be rendered on the wire as an honest, real count", *row.Findings)
 	}
 }

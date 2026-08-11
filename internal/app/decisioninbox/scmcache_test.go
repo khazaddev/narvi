@@ -33,6 +33,22 @@ type fakeSCMCacheSourceControl struct {
 	// entries" test below needs a REAL fetch duration that outlasts a
 	// (deliberately tiny, test-only) TTL to actually exercise the bug.
 	openPRsDelay time.Duration
+	// openPRsTruncated/openPRsErr (§60 review finding C1, TEST BATCH:
+	// this fake previously hardcoded truncated=false and never errored,
+	// so neither the truncated->never-cached path nor the plain-error
+	// path below this struct had any test coverage at all) let a test
+	// drive ListOpenPRsForUser's own two degraded outcomes.
+	openPRsTruncated bool
+	openPRsErr       error
+
+	// codeOwnersDelay/codeOwnersCallCount mirror openPRsDelay/
+	// openPRsCallCount immediately above, for ResolveCodeOwners instead
+	// (§60 review finding P2-2, second round: the born-expired fix was
+	// previously applied only to the openPRs cache -- ResolveCodeOwners'
+	// own identical bug had no test at all, mirroring
+	// TestSCMCache_ListOpenPRsForUser_SlowFetchDoesNotBornExpire below).
+	codeOwnersDelay     time.Duration
+	codeOwnersCallCount int
 }
 
 var _ ports.SourceControl = (*fakeSCMCacheSourceControl)(nil)
@@ -45,6 +61,8 @@ func (f *fakeSCMCacheSourceControl) ListOpenPRsForUser(ctx context.Context, spec
 	f.openPRsCallCount[spec.GitHubExternalID]++
 	delay := f.openPRsDelay
 	prs := f.openPRsByExternalID[spec.GitHubExternalID]
+	truncated := f.openPRsTruncated
+	err := f.openPRsErr
 	f.mu.Unlock()
 
 	if delay > 0 {
@@ -54,8 +72,11 @@ func (f *fakeSCMCacheSourceControl) ListOpenPRsForUser(ctx context.Context, spec
 			return nil, false, ctx.Err()
 		}
 	}
+	if err != nil {
+		return nil, false, err
+	}
 
-	return prs, false, nil
+	return prs, truncated, nil
 }
 
 func (f *fakeSCMCacheSourceControl) callCount(externalID string) int {
@@ -64,8 +85,26 @@ func (f *fakeSCMCacheSourceControl) callCount(externalID string) int {
 	return f.openPRsCallCount[externalID]
 }
 
-func (f *fakeSCMCacheSourceControl) ResolveCodeOwners(context.Context, ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
+func (f *fakeSCMCacheSourceControl) ResolveCodeOwners(ctx context.Context, _ ports.ResolveCodeOwnersSpec) ([]ports.Owner, error) {
+	f.mu.Lock()
+	f.codeOwnersCallCount++
+	delay := f.codeOwnersDelay
+	f.mu.Unlock()
+
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	return nil, nil
+}
+
+func (f *fakeSCMCacheSourceControl) codeOwnersCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.codeOwnersCallCount
 }
 func (f *fakeSCMCacheSourceControl) CreatePR(context.Context, ports.CreatePRSpec) (ports.PRRef, error) {
 	return ports.PRRef{}, errors.New("fakeSCMCacheSourceControl: CreatePR not implemented")
@@ -118,7 +157,7 @@ func TestSCMCache_ListOpenPRsForUser_IsolatesByExternalID(t *testing.T) {
 	cache := decisioninbox.NewSCMCache(fake, platform.DefaultTimeouts())
 	now := time.Now()
 
-	alicePRs, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "alice-external-id"}, now)
+	alicePRs, _, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "alice-external-id"}, now)
 	if err != nil {
 		t.Fatalf("alice's call error = %v", err)
 	}
@@ -126,7 +165,7 @@ func TestSCMCache_ListOpenPRsForUser_IsolatesByExternalID(t *testing.T) {
 		t.Fatalf("alice's PRs = %+v, want exactly PR #111", alicePRs)
 	}
 
-	bobPRs, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "bob-external-id"}, now)
+	bobPRs, _, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "bob-external-id"}, now)
 	if err != nil {
 		t.Fatalf("bob's call error = %v", err)
 	}
@@ -166,14 +205,14 @@ func TestSCMCache_ListOpenPRsForUser_CacheHitReturnsOriginalFetchInstant(t *test
 	}
 	cache := decisioninbox.NewSCMCache(fake, platform.DefaultTimeouts())
 
-	_, firstAsOf, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, time.Now())
+	_, firstAsOf, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, time.Now())
 	if err != nil {
 		t.Fatalf("first call error = %v", err)
 	}
 
 	time.Sleep(20 * time.Millisecond)
 	secondNow := time.Now()
-	_, secondAsOf, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, secondNow)
+	_, secondAsOf, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, secondNow)
 	if err != nil {
 		t.Fatalf("second call error = %v", err)
 	}
@@ -214,7 +253,7 @@ func TestSCMCache_ListOpenPRsForUser_SlowFetchDoesNotBornExpire(t *testing.T) {
 	cache := decisioninbox.NewSCMCache(fake, timeouts)
 
 	preFetchNow := time.Now()
-	_, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, preFetchNow)
+	_, _, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, preFetchNow)
 	if err != nil {
 		t.Fatalf("first call error = %v", err)
 	}
@@ -229,11 +268,121 @@ func TestSCMCache_ListOpenPRsForUser_SlowFetchDoesNotBornExpire(t *testing.T) {
 		t.Fatalf("test setup invariant violated: the fetch (%s) must outlast the TTL (%s) for this test to actually exercise the bug -- preFetchNow=%v secondNow=%v", fetchDelay, ttl, preFetchNow, secondNow)
 	}
 
-	_, _, err = cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, secondNow)
+	_, _, _, err = cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, secondNow)
 	if err != nil {
 		t.Fatalf("second call error = %v", err)
 	}
 	if got := fake.callCount("1"); got != 1 {
+		t.Errorf("fetch called %d times after second call, want 1 (still a cache hit -- expiresAt must be anchored on fetch COMPLETION, not the pre-fetch `now`)", got)
+	}
+}
+
+// TestSCMCache_ListOpenPRsForUser_TruncatedResultIsNeitherHiddenNorCached
+// proves TWO facts §60 review finding C1 (TEST BATCH) named as previously
+// untested (this method's own fake used to hardcode truncated=false and
+// never error): (1) SCMCache.ListOpenPRsForUser's own truncated return
+// actually surfaces the underlying port's truncated=true (rather than
+// silently dropping it, which the type signature alone does not prove --
+// a mutation returning a hardcoded `false` here would still compile); and
+// (2) a truncated result is NEVER cached -- a second call moments later,
+// still well within the TTL, must re-fetch live rather than serving a
+// cache hit, since caching a known-partial read would silently present it
+// as confirmed-complete for the rest of the TTL window.
+func TestSCMCache_ListOpenPRsForUser_TruncatedResultIsNeitherHiddenNorCached(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeSCMCacheSourceControl{
+		openPRsByExternalID: map[string][]ports.OpenPR{"1": {{Number: 1}}},
+		openPRsTruncated:    true,
+	}
+	cache := decisioninbox.NewSCMCache(fake, platform.DefaultTimeouts())
+	now := time.Now()
+
+	prs, _, truncated, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, now)
+	if err != nil {
+		t.Fatalf("first call error = %v", err)
+	}
+	if !truncated {
+		t.Error("truncated = false, want true (the underlying SourceControl call reported truncated=true)")
+	}
+	if len(prs) != 1 {
+		t.Errorf("prs = %+v, want the best-effort partial result still returned, never blanked out", prs)
+	}
+
+	// A second call moments later, still well inside the TTL, must NOT be
+	// a cache hit.
+	_, _, _, err = cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, now)
+	if err != nil {
+		t.Fatalf("second call error = %v", err)
+	}
+	if got := fake.callCount("1"); got != 2 {
+		t.Errorf("fetch called %d times, want 2 (a truncated result must never be cached, so the second call must re-fetch live rather than hit)", got)
+	}
+}
+
+// TestSCMCache_ListOpenPRsForUser_PropagatesUnderlyingError is the second
+// half of §60 review finding C1's own "add a truncated knob and error
+// injection" instruction -- the fake never errored before this test.
+func TestSCMCache_ListOpenPRsForUser_PropagatesUnderlyingError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("boom: github is down")
+	fake := &fakeSCMCacheSourceControl{openPRsErr: wantErr}
+	cache := decisioninbox.NewSCMCache(fake, platform.DefaultTimeouts())
+
+	_, _, _, err := cache.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1"}, time.Now())
+	if err == nil {
+		t.Fatal("ListOpenPRsForUser() error = nil, want the underlying SourceControl error wrapped")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("ListOpenPRsForUser() error = %v, want it to wrap %v", err, wantErr)
+	}
+}
+
+// TestSCMCache_ResolveCodeOwners_SlowFetchDoesNotBornExpire is the P2-2
+// regression test (§60 review, second round): the "born-expired entries"
+// fix (anchoring expiresAt/asOf on fetch COMPLETION, not the caller's
+// pre-fetch `now`) was previously applied ONLY to the openPRs cache --
+// ResolveCodeOwners still anchored both on the pre-fetch `now`, stale by
+// the whole duration of whichever call races against it inside the SAME
+// Build (typically the openPRs fetch that precedes it). Mirrors
+// TestSCMCache_ListOpenPRsForUser_SlowFetchDoesNotBornExpire above exactly,
+// at the same test-friendly durations, for ResolveCodeOwners instead.
+func TestSCMCache_ResolveCodeOwners_SlowFetchDoesNotBornExpire(t *testing.T) {
+	t.Parallel()
+
+	const ttl = 50 * time.Millisecond
+	const fetchDelay = 200 * time.Millisecond
+
+	fake := &fakeSCMCacheSourceControl{codeOwnersDelay: fetchDelay}
+	timeouts := platform.DefaultTimeouts()
+	timeouts.DecisionInboxSCMCacheTTL = ttl
+	timeouts.GitHubResolveCodeOwnersTimeout = 10 * time.Second // plenty of headroom over fetchDelay
+	cache := decisioninbox.NewSCMCache(fake, timeouts)
+
+	spec := ports.ResolveCodeOwnersSpec{Owner: "acme", Repo: "widgets", Ref: "main", Paths: []string{"x.go"}}
+
+	preFetchNow := time.Now()
+	_, _, err := cache.ResolveCodeOwners(context.Background(), spec, preFetchNow)
+	if err != nil {
+		t.Fatalf("first call error = %v", err)
+	}
+	if got := fake.codeOwnersCalls(); got != 1 {
+		t.Fatalf("fetch called %d times after first call, want 1", got)
+	}
+
+	// A realistic, immediate follow-up request: `now` captured fresh,
+	// right after the first call returns.
+	secondNow := time.Now()
+	if !secondNow.After(preFetchNow.Add(ttl)) {
+		t.Fatalf("test setup invariant violated: the fetch (%s) must outlast the TTL (%s) for this test to actually exercise the bug -- preFetchNow=%v secondNow=%v", fetchDelay, ttl, preFetchNow, secondNow)
+	}
+
+	_, _, err = cache.ResolveCodeOwners(context.Background(), spec, secondNow)
+	if err != nil {
+		t.Fatalf("second call error = %v", err)
+	}
+	if got := fake.codeOwnersCalls(); got != 1 {
 		t.Errorf("fetch called %d times after second call, want 1 (still a cache hit -- expiresAt must be anchored on fetch COMPLETION, not the pre-fetch `now`)", got)
 	}
 }
