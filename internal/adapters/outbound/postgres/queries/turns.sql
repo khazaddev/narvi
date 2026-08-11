@@ -17,8 +17,17 @@
 -- every EXISTING call site that never sets it -- a keyed
 -- CreateTurnParams{...} literal omitting Effort -- keeps compiling and
 -- behaving identically: the zero value, nil, "use the default").
-INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort)
-VALUES ($1, $2, $3, $4, $5, $6)
+--
+-- review_head_sha (migrations/000072_turns_review_head_sha.up.sql, §62
+-- review finding C2) mirrors effort's own identical shape one column
+-- further -- nil/absent for every non-review turn (every existing call
+-- site), set exactly once, at creation, by the two review-turn-creation
+-- paths (internal/adapters/inbound/httpapi's createTurnLocked/
+-- CreateSessionOnTx) with the commit SHA that turn's own pre-fetched
+-- diff was anchored to. See that migration's own doc comment for the
+-- full "why".
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: GetTurn :one

@@ -431,7 +431,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2) is mounted
 	// the SAME way -- see reviewverdict.go's own doc comment.
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.reviewVerdicts, rig.botHandle))
+		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.reviewVerdicts, rig.turns, rig.botHandle))
 	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6)
 	// is mounted the SAME way -- see workflowstepoutcome.go's own doc
 	// comment.

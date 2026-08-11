@@ -1504,11 +1504,10 @@ type GithubActorLinkNotice struct {
 }
 
 type GithubPrSession struct {
-	RepoFullName   string             `json:"repo_full_name"`
-	PrNumber       int32              `json:"pr_number"`
-	SessionID      pgtype.UUID        `json:"session_id"`
-	ClaimedAt      pgtype.Timestamptz `json:"claimed_at"`
-	PendingHeadSha *string            `json:"pending_head_sha"`
+	RepoFullName string             `json:"repo_full_name"`
+	PrNumber     int32              `json:"pr_number"`
+	SessionID    pgtype.UUID        `json:"session_id"`
+	ClaimedAt    pgtype.Timestamptz `json:"claimed_at"`
 }
 
 type HandoffSentinelRun struct {
@@ -1790,6 +1789,7 @@ type Turn struct {
 	ProgressNotifiedAt   pgtype.Timestamptz    `json:"progress_notified_at"`
 	Effort               *string               `json:"effort"`
 	EpistemicOutcome     *TurnEpistemicOutcome `json:"epistemic_outcome"`
+	ReviewHeadSha        *string               `json:"review_head_sha"`
 }
 
 type User struct {

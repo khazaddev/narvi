@@ -78,15 +78,11 @@ func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgt
 	return s.q.GetGitHubPRSessionBySessionID(ctx, sessionID)
 }
 
-// SetHeadSHA overwrites (repoFullName, prNumber)'s own pending_head_sha
-// (Step 62, §21.1) -- see SetGitHubPRSessionHeadSHA's own generated doc
-// comment for the full "why" and the best-effort, outside-the-claim-
-// transaction calling convention every real caller (internal/adapters/
-// inbound/github/handler.go, httpapi/reviewretrigger.go) follows.
-func (s *GitHubPRSessionStore) SetHeadSHA(ctx context.Context, repoFullName string, prNumber int32, headSHA string) error {
-	return s.q.SetGitHubPRSessionHeadSHA(ctx, sqlcgen.SetGitHubPRSessionHeadSHAParams{
-		RepoFullName:   repoFullName,
-		PrNumber:       prNumber,
-		PendingHeadSha: &headSHA,
-	})
-}
+// SetHeadSHA is REMOVED as of migrations/000072_turns_review_head_sha.up.sql
+// (§62 review finding C2, CRITICAL, fixed) -- github_pr_sessions.
+// pending_head_sha (and this method) is superseded by turns.
+// review_head_sha, set once at turn-creation time
+// (internal/adapters/inbound/httpapi's createTurnLocked/CreateSessionOnTx)
+// and read back via TurnStore.GetProcessingTurnForSession -- see that
+// migration's own doc comment for the full "why a shared, mutable
+// per-(repo,PR) column was the wrong place for this fact".

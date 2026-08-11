@@ -800,6 +800,160 @@ func TestGetPullRequestDiff_EscapesOwnerAndRepo(t *testing.T) {
 	}
 }
 
+// TestGetCompareDiff_Success proves the happy path: GET
+// /repos/{owner}/{repo}/compare/{base}...{head}, content-negotiated for
+// the SAME diff media type GetPullRequestDiff uses -- §62 review finding
+// C2's own new adapter method.
+func TestGetCompareDiff_Success(t *testing.T) {
+	t.Parallel()
+
+	const wantDiff = "diff --git a/x b/x\nindex 111..222 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n"
+
+	var gotPath, gotAuth, gotAccept string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotAccept = r.Header.Get("Accept")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(wantDiff))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	diff, truncated, err := adapter.GetCompareDiff(context.Background(), "acme", "widgets", "main", "feature-sha", "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetCompareDiff() error = %v, want nil", err)
+	}
+	if gotPath != "/repos/acme/widgets/compare/main...feature-sha" {
+		t.Errorf("request path = %q, want %q", gotPath, "/repos/acme/widgets/compare/main...feature-sha")
+	}
+	if gotAuth != "Bearer gho_bottoken" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer gho_bottoken")
+	}
+	if gotAccept != "application/vnd.github.diff" {
+		t.Errorf("Accept header = %q, want the raw-diff media type", gotAccept)
+	}
+	if diff != wantDiff {
+		t.Errorf("diff = %q, want %q", diff, wantDiff)
+	}
+	if truncated {
+		t.Error("truncated = true, want false (the diff fit well within the cap)")
+	}
+}
+
+// TestGetCompareDiff_PinnedToExactBaseAndHead proves base/head are both
+// passed through verbatim into the request path -- distinct values on
+// each side (never the same string twice) so a transposition bug (base
+// and head swapped) would fail this assertion. This is the C2 fix's own
+// core property exercised directly at the adapter level: two calls with
+// DIFFERENT head values produce DIFFERENT request paths, unlike
+// GetPullRequestDiff's own fixed /pulls/{number} target.
+func TestGetCompareDiff_PinnedToExactBaseAndHead(t *testing.T) {
+	t.Parallel()
+
+	var gotPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("diff"))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	if _, _, err := adapter.GetCompareDiff(context.Background(), "acme", "widgets", "base-ref-abc", "head-sha-xyz", "gho_bottoken"); err != nil {
+		t.Fatalf("GetCompareDiff() error = %v, want nil", err)
+	}
+	if gotPath != "/repos/acme/widgets/compare/base-ref-abc...head-sha-xyz" {
+		t.Errorf("request path = %q, want %q", gotPath, "/repos/acme/widgets/compare/base-ref-abc...head-sha-xyz")
+	}
+}
+
+// TestGetCompareDiff_Truncated mirrors TestGetPullRequestDiff_Truncated's
+// own identical cap/truncation discipline.
+func TestGetCompareDiff_Truncated(t *testing.T) {
+	t.Parallel()
+
+	oversized := strings.Repeat("x", 5<<20)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(oversized))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	diff, truncated, err := adapter.GetCompareDiff(context.Background(), "acme", "widgets", "main", "sha", "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetCompareDiff() error = %v, want nil", err)
+	}
+	if !truncated {
+		t.Error("truncated = false, want true (the diff exceeded the cap)")
+	}
+	const wantLen = 4 << 20
+	if len(diff) != wantLen {
+		t.Errorf("len(diff) = %d, want exactly %d (cut at the cap)", len(diff), wantLen)
+	}
+}
+
+// TestGetCompareDiff_4xxMapsToRealError mirrors
+// TestGetPullRequestDiff_4xxMapsToRealError's own identical error-envelope
+// discipline.
+func TestGetCompareDiff_4xxMapsToRealError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, _, err := adapter.GetCompareDiff(context.Background(), "acme", "widgets", "main", "sha", "gho_bottoken")
+	if err == nil {
+		t.Fatal("GetCompareDiff() error = nil, want a *githubapi.APIError")
+	}
+	var apiErr *githubapi.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("GetCompareDiff() error = %v (%T), want *githubapi.APIError", err, err)
+	}
+	if apiErr.Status != http.StatusNotFound {
+		t.Errorf("APIError.Status = %d, want %d", apiErr.Status, http.StatusNotFound)
+	}
+}
+
+// TestGetCompareDiff_EscapesOwnerRepoBaseHead mirrors
+// TestGetPullRequestDiff_EscapesOwnerAndRepo's own identical discipline,
+// extended to base/head -- both are caller-suppliable (base from a PR's
+// own reported BaseRef, head from HeadSHA), so both must be escaped too.
+func TestGetCompareDiff_EscapesOwnerRepoBaseHead(t *testing.T) {
+	t.Parallel()
+
+	var gotEscapedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotEscapedPath = r.URL.EscapedPath()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("diff"))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	_, _, err := adapter.GetCompareDiff(context.Background(), "acme/evil", "widgets#v1", "main#ref", "feature/x", "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetCompareDiff() error = %v, want nil", err)
+	}
+
+	want := "/repos/acme%2Fevil/widgets%23v1/compare/main%23ref...feature%2Fx"
+	if gotEscapedPath != want {
+		t.Errorf("request EscapedPath = %q, want %q (owner/repo/base/head must all be escaped, not interpolated raw)", gotEscapedPath, want)
+	}
+}
+
 // TestNew_DefaultsAPIBaseURL proves an empty apiBaseURL falls back to
 // GitHub's own real API host rather than an empty/unusable base.
 func TestNew_DefaultsAPIBaseURL(t *testing.T) {

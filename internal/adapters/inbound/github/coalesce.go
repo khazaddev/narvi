@@ -263,7 +263,21 @@ type SessionCoalescer struct {
 // turn itself, classifyText carries only the human's own words, exactly
 // matching IntentClassifierInput.Text's own documented contract ("a
 // session's initial prompt, a Slack message, a GitHub comment body").
-func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID, isLabelRetrigger bool, classifyText string) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
+//
+// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is the commit
+// SHA handler.go's own reviewcontext.Fetch call just anchored req.Prompt's
+// own pre-fetched diff to (empty when that fetch failed/never ran) --
+// threaded through to whichever of the two branches below actually
+// creates the new turn (ChildSessionOptions.ReviewHeadSHA on the WINNER
+// path's CreateSessionOnTx call, or a direct parameter on the REUSE
+// path's CreateTurnForBot call), so it lands on THAT turn's own row
+// (turns.review_head_sha) at creation time -- see that column's own
+// migration doc comment for the full "why".
+func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID, isLabelRetrigger bool, classifyText string, reviewHeadSHA string) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
+	var reviewHeadSHAPtr *string
+	if reviewHeadSHA != "" {
+		reviewHeadSHAPtr = &reviewHeadSHA
+	}
 	logger := platform.Logger(ctx)
 
 	// Resolved BEFORE any transaction opens -- see this function's own
@@ -396,7 +410,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// never a build turn; passing the real platform default here would
 		// prepend the builder-only devil's-advocate preamble in front of
 		// review.RenderTurnPrompt's own verdict-tool block.
-		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, false, actor)
+		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, false, actor, reviewHeadSHAPtr)
 		if err != nil {
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}
@@ -450,7 +464,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// intentdomain.TargetReview below confirms it deterministically), so
 	// this is never a build turn either, for the identical reason the
 	// REUSE branch's own CreateTurnForBot call (below) hardcodes false.
-	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor, false)
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor, false, httpapi.ChildSessionOptions{ReviewHeadSHA: reviewHeadSHAPtr})
 	if cerr != nil {
 		return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create session: %w", cerr)
 	}

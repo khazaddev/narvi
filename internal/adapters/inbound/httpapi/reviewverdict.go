@@ -134,6 +134,7 @@ func PostReviewVerdict(
 	sentinelFixes *postgres.SentinelFixStore,
 	outbox *postgres.OutboxStore,
 	reviewVerdicts *postgres.ReviewVerdictStore,
+	turns *postgres.TurnStore,
 	botHandle string,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -317,6 +318,48 @@ func PostReviewVerdict(
 			}
 		}
 
+		// §62 review finding C2 (CRITICAL, fixed): resolve the head SHA
+		// THIS session's own CURRENTLY-PROCESSING turn was anchored to --
+		// never prSession.PendingHeadSha (github_pr_sessions' own shared,
+		// mutable per-(repo,PR) column, REMOVED by this fix; see
+		// migrations/000072_turns_review_head_sha.up.sql's own doc
+		// comment for the full "why" that design let a LATER, unrelated
+		// turn's own context-fetch silently overwrite the value THIS
+		// verdict eventually forwards). The review agent calling THIS
+		// endpoint is, by construction, the one whose own turn is right
+		// now 'processing' for sessionID -- turns_one_processing_per_session
+		// (migrations/000005_turns.up.sql) guarantees at most one such
+		// row can ever exist, mirroring Step 61's own epistemic-outcome-
+		// posting endpoint's identical "resolve the session's own
+		// CURRENTLY live turn from a sandbox-authenticated session id
+		// alone" precedent (TurnStore.GetProcessingTurnForSession,
+		// queries/turns.sql).
+		//
+		// Both a genuine store error AND a not-found (ErrNoRows -- a
+		// genuine race: the turn already completed/failed/was cancelled
+		// between this agent's own HTTP call landing and this read)
+		// degrade IDENTICALLY: logged, verdictHeadSHA stays "", and (per
+		// the existing skip branch below, unchanged by this fix) the
+		// review_verdicts insert is skipped -- never a reason to fail
+		// this whole tool call. Mirrors this handler's own pre-existing
+		// "a missing head SHA is a SAFE, not dangerous, degradation"
+		// reasoning below exactly: the auto-approval engine's own
+		// fail-CLOSED posture already treats "no verdict on record" as
+		// ineligible, so this lookup failing open (in the sense of "the
+		// verdict POST itself still succeeds") introduces no eligibility
+		// hazard -- it is not the SAME kind of "fail open" this whole
+		// review round exists to close.
+		var verdictHeadSHA string
+		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
+			if errors.Is(turnErr, pgx.ErrNoRows) {
+				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			} else {
+				logger.Error("httpapi: review-verdict: get processing turn for session failed, skipping review_verdicts insert", "error", turnErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			}
+		} else if processingTurn.ReviewHeadSha != nil {
+			verdictHeadSHA = *processingTurn.ReviewHeadSha
+		}
+
 		tx, err := pool.Begin(ctx)
 		if err != nil {
 			logger.Error("httpapi: review-verdict: begin tx failed", "error", err)
@@ -349,25 +392,24 @@ func PostReviewVerdict(
 		// Step 62 (§21.1): append one review_verdicts row, in the SAME
 		// transaction as the findings upserts/outbox write above -- pure
 		// storage of the verdict already computed above, forwarding
-		// head_sha verbatim from prSession.PendingHeadSha (populated at
-		// context-fetch time by every review-trigger ingress path, never
-		// re-derived or asked of the agent -- see migrations/
-		// 000068_github_pr_sessions_pending_head_sha.up.sql's own doc
-		// comment). A missing head SHA (nil -- e.g. a PR session that
-		// predates this Step, or whose own context fetch degraded to no
-		// diff at all) is logged and SKIPPED, never a reason to fail this
-		// tool call: review_verdicts existing reliably matters for the
-		// auto-approval engine, but that engine's own fail-CLOSED posture
-		// (internal/domain/autoapproval) already treats "no verdict on
-		// record" as ineligible, so a missing row here is a SAFE, not a
-		// dangerous, degradation. A genuine store error on the INSERT
-		// itself, by contrast, is treated exactly like a findings-upsert
-		// or outbox-create failure immediately above/below: it fails this
+		// head_sha verbatim from verdictHeadSHA (§62 review finding C2:
+		// resolved above from this session's own processing turn, never
+		// re-derived or asked of the agent). A missing head SHA (empty --
+		// e.g. a review turn whose own context fetch degraded to no diff
+		// at all, or no processing turn could be resolved) is logged and
+		// SKIPPED, never a reason to fail this tool call: review_verdicts
+		// existing reliably matters for the auto-approval engine, but
+		// that engine's own fail-CLOSED posture (internal/domain/
+		// autoapproval) already treats "no verdict on record" as
+		// ineligible, so a missing row here is a SAFE, not a dangerous,
+		// degradation. A genuine store error on the INSERT itself, by
+		// contrast, is treated exactly like a findings-upsert or
+		// outbox-create failure immediately above/below: it fails this
 		// whole request (500, rolled back), never silently proceeds with
 		// an unpersisted verdict.
-		if prSession.PendingHeadSha == nil || *prSession.PendingHeadSha == "" {
-			logger.Warn("httpapi: review-verdict: no pending head sha on record, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, *prSession.PendingHeadSha, sessionID, verdict); insertErr != nil {
+		if verdictHeadSHA == "" {
+			logger.Warn("httpapi: review-verdict: no review head sha on record, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict); insertErr != nil {
 			logger.Error("httpapi: review-verdict: insert review_verdicts row failed", "error", insertErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return

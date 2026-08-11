@@ -51,18 +51,10 @@ WHERE repo_full_name = $1 AND pr_number = $2;
 SELECT * FROM github_pr_sessions
 WHERE session_id = $1;
 
--- name: SetGitHubPRSessionHeadSHA :exec
--- Step 62 (§21.1): overwrites pending_head_sha (migrations/000068) for
--- (repo_full_name, pr_number) -- called by every review-trigger ingress
--- path immediately after a successful internal/app/reviewcontext.Fetch,
--- OUTSIDE the CreateOrJoin claim transaction (best-effort enrichment
--- data, never a reason to fail or serialize against the atomic claim
--- itself -- see that migration's own doc comment). A caller for a
--- (repo_full_name, pr_number) with no existing row is a no-op (0 rows
--- affected), never an error -- mirrors EnsureGitHubPRSessionRow's own
--- "make sure the row is there" precedent; every real caller of THIS
--- query runs after CreateOrJoin/GetBySessionID has already confirmed the
--- row exists.
-UPDATE github_pr_sessions
-SET pending_head_sha = $3
-WHERE repo_full_name = $1 AND pr_number = $2;
+-- SetGitHubPRSessionHeadSHA (and pending_head_sha, migrations/000068) is
+-- REMOVED as of migrations/000072_turns_review_head_sha.up.sql (§62
+-- review finding C2, CRITICAL, fixed) -- superseded by turns.
+-- review_head_sha, set once at turn-creation time and read back via
+-- TurnStore.GetProcessingTurnForSession, never a shared per-(repo,PR)
+-- column any later, unrelated turn's own context-fetch could overwrite.
+-- See that migration's own doc comment for the full "why".

@@ -102,8 +102,21 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // epistemic-check default a REST-created one does (see CreateTurnCore's
 // own doc comment, turn.go, for why this is required rather than bundled
 // into a variadic options slot).
-func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID) (sqlcgen.Turn, error) {
-	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue)
+//
+// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is non-nil ONLY
+// for github/coalesce.go's own REUSE-path caller (an @mention or label
+// re-trigger enqueuing a new turn on an ALREADY-EXISTING review session)
+// -- the commit SHA THIS turn's own pre-fetched review diff was anchored
+// to, threaded through to createTurnLocked's own CreateTurnOptions and
+// stored on THIS turn's own row (turns.review_head_sha) at creation, per
+// that field's own doc comment (turn.go). A REQUIRED parameter (not
+// bundled into a variadic options slot the way CreateTurnCore's own
+// StorageConfigured/Effort are) since this function's ONE real caller
+// always has a real value (or an honest nil) to supply -- there is no
+// "every other caller safely ignores this" population the way those two
+// REST-only fields have.
+func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, reviewHeadSHA *string) (sqlcgen.Turn, error) {
+	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
 	if cerr != nil {
 		// %w, NOT %s (Step 37/38 follow-up fix, Finding 1): cerr's own
 		// Error() method returns exactly cerr.Message, so this produces the
