@@ -3,6 +3,7 @@ package reviewverdict
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
@@ -12,25 +13,56 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
+// ErrLoadEligibilityConfigFailed is LoadEligibilityConfig's own sentinel
+// for a GENUINE repo_settings read failure (anything other than
+// pgx.ErrNoRows) -- §62 review finding C3. Before this fix,
+// LoadEligibilityConfig had no way to report this at all (it returned a
+// bare autoapproval.EligibilityConfig, no error): a transient store error
+// silently substituted the engine's own WIDER built-in defaults for a
+// repo's deliberately-NARROWER configured threshold/sensitive-tag list,
+// inside the one gate that decides an UNATTENDED merge -- widening policy
+// on a degraded read is exactly backwards for this call site. Wrapped
+// (errors.Is-checkable) so a caller can log/alert distinctly, though every
+// real caller today treats it identically to any other infra error at its
+// own site: fail CLOSED.
+var ErrLoadEligibilityConfigFailed = errors.New("reviewverdict: load eligibility config: repo settings read failed")
+
 // LoadEligibilityConfig resolves repoFullName's own §21.2 eligibility
-// config -- a MISSING repo_settings row, a genuine read ERROR, or a NULL
-// column all resolve to autoapproval.DefaultEligibilityConfig's own
-// values (fail-CONSERVATIVE: this package's own established narrow
-// defaults, never an accidentally-unbounded threshold or empty sensitive
-// list) -- mirrors reviewverdict.go's own identical "a missing row or
-// read error defaults to false/safe" precedent for blockOnHighRisk/
-// sentinelAutofixEnabled. Never returns an error: a degraded read here is
-// a POLICY nuance (which threshold applies), never a precondition for
-// the eligibility engine to run at all.
-func LoadEligibilityConfig(ctx context.Context, deps Deps, repoFullName string) autoapproval.EligibilityConfig {
+// config. Three distinct outcomes, deliberately NOT collapsed into one:
+//
+//   - A MISSING repo_settings row (pgx.ErrNoRows) resolves to
+//     autoapproval.DefaultEligibilityConfig's own values, err=nil -- a
+//     legitimate, common "never configured yet" state (this package's own
+//     established "missing row means every flag defaults to its own safe
+//     value" precedent), never an error.
+//   - A NULL column on an EXISTING row (settings.MaxAutoApproveFilesChanged
+//     nil / SensitiveBlastRadiusTags empty) resolves to that ONE field's
+//     own default, err=nil -- the row exists, this repo simply never
+//     overrode that one field.
+//   - A GENUINE read error (anything else) returns
+//     autoapproval.EligibilityConfig{}, ErrLoadEligibilityConfigFailed --
+//     §62 review finding C3 (BLOCKER, fixed): this function used to
+//     silently substitute the engine's own WIDER defaults here, the exact
+//     opposite of "cannot establish this repo's policy" fail-closed
+//     behavior an unattended-merge gate requires. THE CALLER MUST TREAT A
+//     NON-NIL ERROR AS "NOT ELIGIBLE", never fall back to the returned
+//     (zero-value, meaningless) config -- see revalidateCore/
+//     computeRealEligibility (internal/app/decisioninbox) for the two real
+//     callers, each failing closed in the way appropriate to its own
+//     context (a hard propagated error for revalidateCore's own action
+//     endpoint; a degraded "not eligible" row for computeRealEligibility's
+//     own best-effort read-model build) -- see each call site's own doc
+//     comment for why the two differ.
+func LoadEligibilityConfig(ctx context.Context, deps Deps, repoFullName string) (autoapproval.EligibilityConfig, error) {
 	cfg := autoapproval.DefaultEligibilityConfig()
 
 	settings, err := deps.RepoSettings.Get(ctx, repoFullName)
 	if err != nil {
-		if !errors.Is(err, pgx.ErrNoRows) {
-			platform.Logger(ctx).Warn("reviewverdict: load eligibility config: read repo settings failed, using defaults", "error", err, "repo_full_name", repoFullName)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return cfg, nil
 		}
-		return cfg
+		platform.Logger(ctx).Error("reviewverdict: load eligibility config: read repo settings failed -- failing CLOSED (caller must treat this as not eligible, never fall back to defaults)", "error", err, "repo_full_name", repoFullName)
+		return autoapproval.EligibilityConfig{}, fmt.Errorf("%w: %w", ErrLoadEligibilityConfigFailed, err)
 	}
 
 	if settings.MaxAutoApproveFilesChanged != nil {
@@ -39,7 +71,7 @@ func LoadEligibilityConfig(ctx context.Context, deps Deps, repoFullName string) 
 	if tags := unmarshalTags(settings.SensitiveBlastRadiusTags); len(tags) > 0 {
 		cfg.SensitiveTags = tags
 	}
-	return cfg
+	return cfg, nil
 }
 
 // AutoMergeEnabled reports whether repoFullName's own auto-merge toggle
@@ -93,17 +125,45 @@ func GetAutoApprovalSettings(ctx context.Context, deps Deps, repoFullName string
 	return out, nil
 }
 
-// UpsertAutoApprovalSettings idempotently creates-or-updates repoFullName's
-// §21.2 settings row -- see UpsertAutoApprovalSettings' own generated doc
-// comment (postgres.RepoSettingsStore) for the "touches only these three
-// columns" precedent this call relies on.
-func UpsertAutoApprovalSettings(ctx context.Context, deps Deps, repoFullName string, settings AutoApprovalSettings) (AutoApprovalSettings, error) {
+// UpsertAutoMergeToggle idempotently creates-or-updates repoFullName's
+// §21.2 stage-2 auto-merge toggle -- §62 review finding C5 (MEDIUM but a
+// privilege boundary, fixed): column-scoped, touches ONLY
+// auto_merge_enabled (postgres.RepoSettingsStore.UpsertAutoMergeToggle's
+// own generated-query doc comment) -- see that method's own doc comment
+// for the full "why" this replaces the PREVIOUS combined
+// UpsertAutoApprovalSettings (which wrote all three §21.2 columns
+// together, letting this endpoint's own write and
+// UpsertAutoApprovalEligibility's silently race). The returned
+// AutoApprovalSettings reflects the row's CURRENT
+// MaxAutoApproveFilesChanged/SensitiveBlastRadiusTags too (this query's
+// own RETURNING *) -- whatever a prior UpsertAutoApprovalEligibility call
+// already set, UNMODIFIED by this call, so a caller building a REST
+// response never needs a separate read to render the complete picture.
+func UpsertAutoMergeToggle(ctx context.Context, deps Deps, repoFullName string, autoMergeEnabled bool) (AutoApprovalSettings, error) {
+	row, err := deps.RepoSettings.UpsertAutoMergeToggle(ctx, repoFullName, autoMergeEnabled)
+	if err != nil {
+		return AutoApprovalSettings{}, err
+	}
+	return autoApprovalSettingsFromRow(row), nil
+}
+
+// UpsertAutoApprovalEligibility idempotently creates-or-updates
+// repoFullName's §21.2 stage-1 eligibility config -- §62 review finding
+// C5's own column-scoped sibling: touches ONLY
+// max_auto_approve_files_changed/sensitive_blast_radius_tags, leaving
+// auto_merge_enabled untouched (postgres.RepoSettingsStore.
+// UpsertAutoApprovalEligibility's own generated-query doc comment) -- see
+// UpsertAutoMergeToggle's own doc comment above for the full "why" this
+// replaces the previous combined UpsertAutoApprovalSettings. The returned
+// AutoApprovalSettings.AutoMergeEnabled reflects the row's CURRENT value
+// too (this query's own RETURNING *), unmodified by this call.
+func UpsertAutoApprovalEligibility(ctx context.Context, deps Deps, repoFullName string, maxAutoApproveFilesChanged *int, sensitiveBlastRadiusTags []review.Tag) (AutoApprovalSettings, error) {
 	var maxFiles *int32
-	if settings.MaxAutoApproveFilesChanged != nil {
-		v := int32(*settings.MaxAutoApproveFilesChanged)
+	if maxAutoApproveFilesChanged != nil {
+		v := int32(*maxAutoApproveFilesChanged)
 		maxFiles = &v
 	}
-	tagsJSON, err := marshalTags(settings.SensitiveBlastRadiusTags)
+	tagsJSON, err := marshalTags(sensitiveBlastRadiusTags)
 	if err != nil {
 		return AutoApprovalSettings{}, err
 	}
@@ -119,11 +179,11 @@ func UpsertAutoApprovalSettings(ctx context.Context, deps Deps, repoFullName str
 	// still get arbitrarily close by naming a list of tags known never
 	// to appear, but this Step does not add a THIRD tri-state wire
 	// representation for a distinction nothing else in §21.2 asks for.
-	if len(settings.SensitiveBlastRadiusTags) == 0 {
+	if len(sensitiveBlastRadiusTags) == 0 {
 		tagsJSON = nil
 	}
 
-	row, err := deps.RepoSettings.UpsertAutoApprovalSettings(ctx, repoFullName, settings.AutoMergeEnabled, maxFiles, tagsJSON)
+	row, err := deps.RepoSettings.UpsertAutoApprovalEligibility(ctx, repoFullName, maxFiles, tagsJSON)
 	if err != nil {
 		return AutoApprovalSettings{}, err
 	}

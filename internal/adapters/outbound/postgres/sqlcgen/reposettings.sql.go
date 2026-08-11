@@ -84,37 +84,90 @@ func (q *Queries) ListAutoMergeEnabledRepos(ctx context.Context) ([]RepoSetting,
 	return items, nil
 }
 
-const upsertAutoApprovalSettings = `-- name: UpsertAutoApprovalSettings :one
-INSERT INTO repo_settings (repo_full_name, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, updated_at)
-VALUES ($1, $2, $3, $4, now())
+const upsertAutoApprovalEligibility = `-- name: UpsertAutoApprovalEligibility :one
+INSERT INTO repo_settings (repo_full_name, max_auto_approve_files_changed, sensitive_blast_radius_tags, updated_at)
+VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
-DO UPDATE SET auto_merge_enabled = EXCLUDED.auto_merge_enabled, max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_changed, sensitive_blast_radius_tags = EXCLUDED.sensitive_blast_radius_tags, updated_at = now()
+DO UPDATE SET max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_changed, sensitive_blast_radius_tags = EXCLUDED.sensitive_blast_radius_tags, updated_at = now()
 RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags
 `
 
-type UpsertAutoApprovalSettingsParams struct {
+type UpsertAutoApprovalEligibilityParams struct {
 	RepoFullName               string `json:"repo_full_name"`
-	AutoMergeEnabled           bool   `json:"auto_merge_enabled"`
 	MaxAutoApproveFilesChanged *int32 `json:"max_auto_approve_files_changed"`
 	SensitiveBlastRadiusTags   []byte `json:"sensitive_blast_radius_tags"`
 }
 
-// Step 62 (§21.2): idempotent create-or-update of ONLY the three
-// auto-approval/auto-merge columns (migrations/000069_repo_settings_auto_
-// approval.up.sql) -- mirrors UpsertRWXPreviewSettings' own identical
-// "touches ONLY these columns, ON CONFLICT leaves every other column
-// untouched" shape, deliberately independent of UpsertRepoSettings above:
-// this endpoint is gated by a DIFFERENT pair of RBAC actions
-// (ActionConfigureAutoApprove for the threshold/tags, admin-only
-// ActionToggleAutoMerge for the merge toggle -- httpapi/reposettings.go),
-// never block_on_high_risk/sentinel_autofix_enabled's own two.
-func (q *Queries) UpsertAutoApprovalSettings(ctx context.Context, arg UpsertAutoApprovalSettingsParams) (RepoSetting, error) {
-	row := q.db.QueryRow(ctx, upsertAutoApprovalSettings,
-		arg.RepoFullName,
-		arg.AutoMergeEnabled,
-		arg.MaxAutoApproveFilesChanged,
-		arg.SensitiveBlastRadiusTags,
+// §62 review finding C5's own fix: idempotent create-or-update of ONLY
+// max_auto_approve_files_changed/sensitive_blast_radius_tags -- the
+// column-scoped sibling of UpsertAutoMergeToggle immediately above (see
+// that query's own doc comment for the full "why"). auto_merge_enabled
+// is left COMPLETELY untouched by this query -- its own column DEFAULT
+// (false) when this creates a brand-new row, or whatever a PRIOR
+// UpsertAutoMergeToggle call already set, on an update.
+func (q *Queries) UpsertAutoApprovalEligibility(ctx context.Context, arg UpsertAutoApprovalEligibilityParams) (RepoSetting, error) {
+	row := q.db.QueryRow(ctx, upsertAutoApprovalEligibility, arg.RepoFullName, arg.MaxAutoApproveFilesChanged, arg.SensitiveBlastRadiusTags)
+	var i RepoSetting
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.BlockOnHighRisk,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SentinelAutofixEnabled,
+		&i.RwxPreviewDispatchKey,
+		&i.RwxPreviewEndpointTemplate,
+		&i.RwxPreviewOrgSlug,
+		&i.AutoMergeEnabled,
+		&i.MaxAutoApproveFilesChanged,
+		&i.SensitiveBlastRadiusTags,
 	)
+	return i, err
+}
+
+const upsertAutoMergeToggle = `-- name: UpsertAutoMergeToggle :one
+
+INSERT INTO repo_settings (repo_full_name, auto_merge_enabled, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET auto_merge_enabled = EXCLUDED.auto_merge_enabled, updated_at = now()
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags
+`
+
+type UpsertAutoMergeToggleParams struct {
+	RepoFullName     string `json:"repo_full_name"`
+	AutoMergeEnabled bool   `json:"auto_merge_enabled"`
+}
+
+// UpsertAutoApprovalSettings (Step 62, §21.2) is REMOVED as of §62
+// review finding C5 (MEDIUM but a privilege boundary, fixed) -- it wrote
+// all three auto-approval/auto-merge columns together, even though the
+// TWO REST endpoints that ever called it (PutAutoApprovalSettings,
+// gated by ActionConfigureAutoApprove; PutAutoMergeToggle, admin-only
+// ActionToggleAutoMerge -- httpapi/reposettings.go) are separately
+// gated and each owns a DIFFERENT subset of these columns. Both
+// handlers worked around this via an app-layer read-modify-write (read
+// the OTHER endpoint's own columns first, pass them straight through
+// unchanged) -- but that read-modify-write is exactly the kind of race
+// this fix closes: a maintainer's PutAutoApprovalSettings write and an
+// admin's PutAutoMergeToggle write, landing concurrently, could each
+// read the OTHER's stale pre-write value and silently clobber it on
+// write-back, including reverting a toggle an admin just armed/
+// disarmed. Replaced by the two column-scoped upserts below --
+// UpsertAutoMergeToggle/UpsertAutoApprovalEligibility -- each touching
+// ONLY the columns its own one caller owns, so two concurrent writers
+// touching DIFFERENT columns can no longer race at the DATABASE level,
+// closing the hazard by construction rather than by an app-layer
+// read-then-preserve convention a future edit could easily forget.
+// §62 review finding C5's own fix: idempotent create-or-update of ONLY
+// auto_merge_enabled (migrations/000069_repo_settings_auto_approval.up.sql)
+// -- mirrors UpsertRWXPreviewSettings' own identical "touches ONLY these
+// columns, ON CONFLICT leaves every other column untouched" shape.
+// max_auto_approve_files_changed/sensitive_blast_radius_tags are left
+// COMPLETELY untouched by this query -- their own column DEFAULT (NULL)
+// when this creates a brand-new row, or whatever a PRIOR
+// UpsertAutoApprovalEligibility call already set, on an update.
+func (q *Queries) UpsertAutoMergeToggle(ctx context.Context, arg UpsertAutoMergeToggleParams) (RepoSetting, error) {
+	row := q.db.QueryRow(ctx, upsertAutoMergeToggle, arg.RepoFullName, arg.AutoMergeEnabled)
 	var i RepoSetting
 	err := row.Scan(
 		&i.RepoFullName,

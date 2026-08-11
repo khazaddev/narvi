@@ -271,14 +271,19 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc 
 // UpdateAutoApprovalSettingsRequest's own doc comment, contracts/rest/v1/
 // dtos.schema.json).
 //
-// Read-modify-write: repo_settings.auto_merge_enabled is a DIFFERENT
-// column this endpoint never touches (PutAutoMergeToggle below owns it,
-// under its own admin-only gate) -- since UpsertAutoApprovalSettings
-// writes all three §21.2 columns together (postgres.RepoSettingsStore's
-// own doc comment), this handler reads the CURRENT auto-merge value
-// first and passes it straight through unchanged, so a maintainer
-// configuring the diff-size threshold can never accidentally arm or
-// disarm auto-merge as a side effect.
+// §62 review finding C5 (MEDIUM but a privilege boundary, fixed):
+// COLUMN-SCOPED write, via appreviewverdict.UpsertAutoApprovalEligibility
+// -- touches ONLY max_auto_approve_files_changed/sensitive_blast_radius_tags
+// at the SQL level, never repo_settings.auto_merge_enabled (PutAutoMergeToggle
+// below owns that column, under its own admin-only gate). Replaces the
+// PREVIOUS read-modify-write (read auto_merge_enabled first, pass it
+// straight through unchanged on every write) -- that pattern is exactly
+// the race this fix closes: a maintainer's write here and an admin's
+// PutAutoMergeToggle write, landing concurrently, could each read the
+// OTHER's stale pre-write value and silently clobber it, including
+// reverting a toggle an admin just armed/disarmed. No read-before-write
+// is needed anymore at all -- the column-scoped UPDATE simply never
+// touches the column it doesn't own, so there is nothing to preserve.
 func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps appreviewverdict.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -301,16 +306,6 @@ func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVer
 			return
 		}
 
-		current, err := appreviewverdict.GetAutoApprovalSettings(ctx, reviewVerdictDeps, repoFullName)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			logger.Error("httpapi: get current auto-approval settings failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-		// pgx.ErrNoRows -- no repo_settings row yet: current.AutoMergeEnabled
-		// is already its own safe zero value (false), exactly what a
-		// brand-new row should be armed with.
-
 		var tags []review.Tag
 		if req.SensitiveBlastRadiusTags != nil {
 			tags = make([]review.Tag, len(*req.SensitiveBlastRadiusTags))
@@ -319,13 +314,9 @@ func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVer
 			}
 		}
 
-		updated, err := appreviewverdict.UpsertAutoApprovalSettings(ctx, reviewVerdictDeps, repoFullName, appreviewverdict.AutoApprovalSettings{
-			AutoMergeEnabled:           current.AutoMergeEnabled,
-			MaxAutoApproveFilesChanged: (*int)(req.MaxAutoApproveFilesChanged),
-			SensitiveBlastRadiusTags:   tags,
-		})
+		updated, err := appreviewverdict.UpsertAutoApprovalEligibility(ctx, reviewVerdictDeps, repoFullName, (*int)(req.MaxAutoApproveFilesChanged), tags)
 		if err != nil {
-			logger.Error("httpapi: upsert auto-approval settings failed", "error", err)
+			logger.Error("httpapi: upsert auto-approval eligibility failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -339,9 +330,12 @@ func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVer
 // toggle. Gated SOLELY by authz.ActionToggleAutoMerge (admin only, §13.3
 // row 6) -- see UpdateAutoMergeToggleRequest's own doc comment for why
 // this is a separate endpoint from PutAutoApprovalSettings above.
-// Read-modify-write, mirroring that handler's own identical discipline in
-// the other direction: the eligibility-config columns are read first and
-// passed through unchanged.
+//
+// §62 review finding C5's own fix, mirrored in the other direction:
+// COLUMN-SCOPED write, via appreviewverdict.UpsertAutoMergeToggle --
+// touches ONLY auto_merge_enabled, never the eligibility-config columns
+// PutAutoApprovalSettings above owns. See that handler's own doc comment
+// for the full "why" this replaces the previous read-modify-write.
 func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps appreviewverdict.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -364,20 +358,9 @@ func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictD
 			return
 		}
 
-		current, err := appreviewverdict.GetAutoApprovalSettings(ctx, reviewVerdictDeps, repoFullName)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			logger.Error("httpapi: get current auto-approval settings failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-
-		updated, err := appreviewverdict.UpsertAutoApprovalSettings(ctx, reviewVerdictDeps, repoFullName, appreviewverdict.AutoApprovalSettings{
-			AutoMergeEnabled:           req.Enabled,
-			MaxAutoApproveFilesChanged: current.MaxAutoApproveFilesChanged,
-			SensitiveBlastRadiusTags:   current.SensitiveBlastRadiusTags,
-		})
+		updated, err := appreviewverdict.UpsertAutoMergeToggle(ctx, reviewVerdictDeps, repoFullName, req.Enabled)
 		if err != nil {
-			logger.Error("httpapi: upsert auto-approval settings failed", "error", err)
+			logger.Error("httpapi: upsert auto-merge toggle failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}

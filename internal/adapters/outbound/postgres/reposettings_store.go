@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
@@ -28,6 +29,22 @@ func NewRepoSettingsStore(pool *pgxpool.Pool) *RepoSettingsStore {
 	return &RepoSettingsStore{q: sqlcgen.New(pool)}
 }
 
+// WithTx returns a RepoSettingsStore whose queries run on tx instead of the
+// pool this store was built with -- mirrors GitHubPRSessionStore.WithTx/
+// TurnStore.WithTx exactly (every other multi-column-write store in this
+// package already has this). §62 review findings C3/C5 are this store's
+// first real callers: C5's column-scoped upserts (PutAutoApprovalSettings/
+// PutAutoMergeToggle, httpapi/reposettings.go) don't themselves need a
+// shared transaction (each is already a single atomic UPDATE), but this
+// package's own established integration-test fault-injection idiom (an
+// already-rolled-back tx standing in for a genuine store outage, see
+// internal/app/decisioninbox's own TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub)
+// needs SOME WithTx to target -- adding it here rather than inventing a
+// parallel fault-injection mechanism just for this one store.
+func (s *RepoSettingsStore) WithTx(tx pgx.Tx) *RepoSettingsStore {
+	return &RepoSettingsStore{q: s.q.WithTx(tx)}
+}
+
 // Get fetches repoFullName's own settings row. pgx.ErrNoRows (unwrapped)
 // means no row exists yet -- every flag on it defaults to its own safe
 // value; this is not an error condition for a caller to alarm on.
@@ -49,21 +66,39 @@ func (s *RepoSettingsStore) Upsert(ctx context.Context, repoFullName string, blo
 	})
 }
 
-// UpsertAutoApprovalSettings idempotently creates-or-updates repoFullName's
-// §21.2 auto-approval eligibility config + auto-merge toggle -- autoMergeEnabled
-// as the new, full current value for that column; maxAutoApproveFilesChanged
-// nil / sensitiveBlastRadiusTagsJSON nil both mean "use the engine's own
-// built-in default" (internal/domain/autoapproval.DefaultEligibilityConfig)
-// -- see UpsertAutoApprovalSettings' own generated doc comment.
+// UpsertAutoMergeToggle idempotently creates-or-updates repoFullName's
+// §21.2 stage-2 auto-merge toggle -- §62 review finding C5 (MEDIUM but a
+// privilege boundary, fixed): touches ONLY auto_merge_enabled, leaving
+// max_auto_approve_files_changed/sensitive_blast_radius_tags completely
+// untouched (see UpsertAutoMergeToggle's own generated doc comment for
+// the full "why" this replaces the previous, combined
+// UpsertAutoApprovalSettings). Column-scoped: a concurrent
+// UpsertAutoApprovalEligibility call for the SAME repo can never be
+// clobbered by this write, or vice versa.
+func (s *RepoSettingsStore) UpsertAutoMergeToggle(ctx context.Context, repoFullName string, autoMergeEnabled bool) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertAutoMergeToggle(ctx, sqlcgen.UpsertAutoMergeToggleParams{
+		RepoFullName:     repoFullName,
+		AutoMergeEnabled: autoMergeEnabled,
+	})
+}
+
+// UpsertAutoApprovalEligibility idempotently creates-or-updates
+// repoFullName's §21.2 stage-1 eligibility config -- §62 review finding
+// C5's own column-scoped sibling: touches ONLY
+// max_auto_approve_files_changed/sensitive_blast_radius_tags, leaving
+// auto_merge_enabled completely untouched (see
+// UpsertAutoApprovalEligibility's own generated doc comment). nil
+// maxAutoApproveFilesChanged / nil sensitiveBlastRadiusTagsJSON both mean
+// "use the engine's own built-in default"
+// (internal/domain/autoapproval.DefaultEligibilityConfig).
 // sensitiveBlastRadiusTagsJSON is pre-marshaled JSON bytes (a JSON array
 // of review.Tag strings) -- this store does no JSON encoding of its own,
 // mirroring this package's own "thin, pass-through, no business rules"
 // discipline; the caller (internal/app/reviewverdict) owns the
 // review.Tag <-> JSON conversion.
-func (s *RepoSettingsStore) UpsertAutoApprovalSettings(ctx context.Context, repoFullName string, autoMergeEnabled bool, maxAutoApproveFilesChanged *int32, sensitiveBlastRadiusTagsJSON []byte) (sqlcgen.RepoSetting, error) {
-	return s.q.UpsertAutoApprovalSettings(ctx, sqlcgen.UpsertAutoApprovalSettingsParams{
+func (s *RepoSettingsStore) UpsertAutoApprovalEligibility(ctx context.Context, repoFullName string, maxAutoApproveFilesChanged *int32, sensitiveBlastRadiusTagsJSON []byte) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertAutoApprovalEligibility(ctx, sqlcgen.UpsertAutoApprovalEligibilityParams{
 		RepoFullName:               repoFullName,
-		AutoMergeEnabled:           autoMergeEnabled,
 		MaxAutoApproveFilesChanged: maxAutoApproveFilesChanged,
 		SensitiveBlastRadiusTags:   sensitiveBlastRadiusTagsJSON,
 	})

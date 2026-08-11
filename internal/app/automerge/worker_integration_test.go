@@ -248,7 +248,7 @@ func TestPumpOnce_ExplicitlyDisabled_NoMerge(t *testing.T) {
 	const repoFullName = "acme/automerge-explicitly-off"
 
 	htmlURL := rig.seedEligiblePR(ctx, t, repoFullName, 2, "sha-2")
-	if _, err := rig.repoSettings.UpsertAutoApprovalSettings(ctx, repoFullName, false, nil, nil); err != nil {
+	if _, err := rig.repoSettings.UpsertAutoMergeToggle(ctx, repoFullName, false); err != nil {
 		t.Fatalf("upsert auto-approval settings: %v", err)
 	}
 
@@ -280,7 +280,7 @@ func TestPumpOnce_Armed_MergesEligibleCandidate(t *testing.T) {
 	const repoFullName = "acme/automerge-armed"
 
 	htmlURL := rig.seedEligiblePR(ctx, t, repoFullName, 3, "sha-3")
-	if _, err := rig.repoSettings.UpsertAutoApprovalSettings(ctx, repoFullName, true, nil, nil); err != nil {
+	if _, err := rig.repoSettings.UpsertAutoMergeToggle(ctx, repoFullName, true); err != nil {
 		t.Fatalf("upsert auto-approval settings: %v", err)
 	}
 
@@ -328,7 +328,7 @@ func TestPumpOnce_Armed_StaleVerdictNeverMerges(t *testing.T) {
 	const repoFullName = "acme/automerge-stale"
 
 	htmlURL := rig.seedEligiblePR(ctx, t, repoFullName, 4, "sha-4-old")
-	if _, err := rig.repoSettings.UpsertAutoApprovalSettings(ctx, repoFullName, true, nil, nil); err != nil {
+	if _, err := rig.repoSettings.UpsertAutoMergeToggle(ctx, repoFullName, true); err != nil {
 		t.Fatalf("upsert auto-approval settings: %v", err)
 	}
 
@@ -360,7 +360,7 @@ func TestPumpOnce_CandidateNoLongerOpen_NeverErrors(t *testing.T) {
 	const repoFullName = "acme/automerge-closed-race"
 
 	rig.seedEligiblePR(ctx, t, repoFullName, 5, "sha-5")
-	if _, err := rig.repoSettings.UpsertAutoApprovalSettings(ctx, repoFullName, true, nil, nil); err != nil {
+	if _, err := rig.repoSettings.UpsertAutoMergeToggle(ctx, repoFullName, true); err != nil {
 		t.Fatalf("upsert auto-approval settings: %v", err)
 	}
 

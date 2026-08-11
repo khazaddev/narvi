@@ -142,6 +142,19 @@ func revalidateCore(ctx context.Context, deps Deps, repoFullName string, prNumbe
 		return false, "", "this pull request is a handoff item, not an ordinary code-review merge decision", nil
 	}
 
+	// §62 review finding C4: a degraded review-decision read (GitHub's
+	// reviews endpoint itself failed) must never be indistinguishable from
+	// a clean "no changes requested" read -- checked BEFORE
+	// HasChangesRequested itself so a degraded read gets its own distinct,
+	// honest reason string rather than falsely claiming a reviewer
+	// requested changes. FAIL CLOSED: this function is reached by BOTH the
+	// human-clicked Merge endpoint AND (via RevalidateForAutoMerge, which
+	// shares this exact core) the UNATTENDED auto-merge worker -- "we
+	// could not tell" must block exactly like a confirmed changes-request
+	// would, never silently pass through as "no".
+	if target.ReviewDecisionDegraded {
+		return false, "", "this pull request's review decision could not be confirmed (a degraded GitHub read) -- failing closed rather than trusting an unconfirmed read", nil
+	}
 	if target.HasChangesRequested {
 		return false, "", "this pull request has changes requested by a reviewer", nil
 	}
@@ -170,13 +183,35 @@ func revalidateCore(ctx context.Context, deps Deps, repoFullName string, prNumbe
 		return false, "", "this pull request has no review verdict of record", nil
 	}
 
-	cfg := appreviewverdict.LoadEligibilityConfig(ctx, deps.ReviewVerdict, repoFullName)
+	// §62 review finding C3: a genuine repo_settings read error here means
+	// this repo's OWN configured policy (its diff-size threshold, its
+	// sensitive-tag list) cannot be established at all -- propagated
+	// outright as err, exactly like the §17 sentinel-fix exclusion/
+	// open-findings-count errors immediately above (this function's own
+	// top doc comment: "propagated outright as err, refusing the merge").
+	// FAIL CLOSED: an unattended-merge gate must never substitute the
+	// engine's own WIDER built-in defaults for a repo's own narrower
+	// configured policy merely because Postgres could not be read this
+	// instant.
+	cfg, cfgErr := appreviewverdict.LoadEligibilityConfig(ctx, deps.ReviewVerdict, repoFullName)
+	if cfgErr != nil {
+		return false, "", "", fmt.Errorf("decisioninbox: revalidate for merge: load eligibility config: %w", cfgErr)
+	}
+	// §62 review finding C1: ChangedFileCount/TouchedBlastRadius are BOTH
+	// derived here from target.ChangedFiles -- target is revalidateCore's
+	// own already-fetched, server-side ports.OpenPR (RevalidateForMerge's
+	// live ListOpenPRsForUser search, or RevalidateForAutoMerge's live
+	// GetOpenPR call), never the posted verdict's own self-reported
+	// FilesChanged/BlastRadius. No new I/O: ChangedFiles was already
+	// fetched by the SAME call that produced target.
 	eligible, eligReason := autoapproval.ComputeEligible(autoapproval.EligibilityInput{
 		Verdict:            record.Verdict,
 		VerdictHeadSHA:     record.HeadSHA,
 		CurrentHeadSHA:     target.HeadSHA,
 		CIGreen:            ciGreen,
 		HasNeedsHumanLabel: hasNeedsHuman,
+		ChangedFileCount:   len(target.ChangedFiles),
+		TouchedBlastRadius: autoapproval.ClassifyChangedPaths(target.ChangedFiles),
 	}, cfg)
 	if !eligible {
 		return false, "", fmt.Sprintf("this pull request no longer meets the auto-approval eligibility criteria: %s", eligReason), nil
