@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 )
 
 // TestPlaceholderTokensMatchReviewPackage is deliberately an INTERNAL test
@@ -30,15 +31,6 @@ import (
 func TestPlaceholderTokensMatchReviewPackage(t *testing.T) {
 	t.Parallel()
 
-	containsToken := func(tokens []string, want string) bool {
-		for _, got := range tokens {
-			if got == want {
-				return true
-			}
-		}
-		return false
-	}
-
 	for _, tok := range []string{
 		review.VerdictToolURLPlaceholder,
 		review.VerdictToolBearerPlaceholder,
@@ -48,6 +40,44 @@ func TestPlaceholderTokensMatchReviewPackage(t *testing.T) {
 			t.Errorf("placeholderTokens = %v, want it to contain review's own real placeholder %q", placeholderTokens, tok)
 		}
 	}
+}
+
+// TestPlaceholderTokensMatchTurnPackage is
+// TestPlaceholderTokensMatchReviewPackage's own exact mirror for
+// internal/domain/turn's three EPISTEMIC_OUTCOME_TOOL_* placeholders
+// (turn/epistemicpreamble.go, Step 61/§20.2) -- added by F1 (adversarial
+// review): these three were the verified omission (placeholderTokens'
+// own doc comment, prompt.go) that let an attacker-controlled filename
+// carrying a literal "{{EPISTEMIC_OUTCOME_TOOL_BEARER}}" survive
+// sanitizeUntrustedField and later get expanded into the live sandbox
+// bearer by sandbox-agent's own unconditional substitution. Same
+// reasoning as the review test above: if internal/domain/turn ever
+// renames or rotates one of these three without a matching update here,
+// this fails CI immediately rather than silently reopening that gap.
+func TestPlaceholderTokensMatchTurnPackage(t *testing.T) {
+	t.Parallel()
+
+	for _, tok := range []string{
+		turn.EpistemicOutcomeToolURLPlaceholder,
+		turn.EpistemicOutcomeToolBearerPlaceholder,
+		turn.EpistemicOutcomeToolGenPlaceholder,
+	} {
+		if !containsToken(placeholderTokens, tok) {
+			t.Errorf("placeholderTokens = %v, want it to contain turn's own real placeholder %q", placeholderTokens, tok)
+		}
+	}
+}
+
+// TestPlaceholderTokensExactCount pins placeholderTokens' own total size --
+// this package's own three, plus review's own three, plus turn's own three,
+// no more no less (F1, adversarial review: bumped 6 -> 9 when turn's three
+// EPISTEMIC_OUTCOME_TOOL_* literals were registered). A future family that
+// grows this list without a corresponding drift-matcher test above (or
+// without the general cross-domain-package scan,
+// placeholderdrift_internal_test.go) fails here first, forcing a deliberate
+// update to this exact number rather than an unnoticed size change.
+func TestPlaceholderTokensExactCount(t *testing.T) {
+	t.Parallel()
 
 	// This package's own three, for completeness -- trivially true by
 	// construction today, but guards against a future refactor of
@@ -58,7 +88,18 @@ func TestPlaceholderTokensMatchReviewPackage(t *testing.T) {
 		}
 	}
 
-	if len(placeholderTokens) != 6 {
-		t.Errorf("len(placeholderTokens) = %d, want exactly 6 (this package's own 3 plus review's own 3, no more no less)", len(placeholderTokens))
+	if len(placeholderTokens) != 9 {
+		t.Errorf("len(placeholderTokens) = %d, want exactly 9 (this package's own 3, plus review's own 3, plus turn's own 3, no more no less)", len(placeholderTokens))
 	}
+}
+
+// containsToken reports whether want appears anywhere in tokens -- shared
+// by every drift-matcher test in this file.
+func containsToken(tokens []string, want string) bool {
+	for _, got := range tokens {
+		if got == want {
+			return true
+		}
+	}
+	return false
 }

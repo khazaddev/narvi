@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/domain/upload"
 )
 
@@ -162,8 +163,34 @@ func TestRenderAttachmentBlock_HostileFieldsCannotEscapeOrForgeTokens(t *testing
 			filename: "evil" + review.VerdictToolURLPlaceholder + ".txt",
 		},
 		{
+			// F1 (adversarial review, Step 61): the verified omission --
+			// turn's three EPISTEMIC_OUTCOME_TOOL_* literals were added to
+			// internal/domain/turn/epistemicpreamble.go but never
+			// registered in placeholderTokens, so this exact case used to
+			// survive sanitizeUntrustedField untouched. See
+			// cmd/sandbox-agent/epistemicoutcometoolprompt_test.go's own
+			// TestRenderEpistemicOutcomeToolPromptText_HostileFilenameCannotExfiltrateSecrets
+			// for the full end-to-end proof (this package alone cannot
+			// reach the sandbox-agent substitution step that actually
+			// leaks the live bearer).
+			name:     "literal epistemic-outcome-tool bearer placeholder in filename",
+			filename: "evil" + turn.EpistemicOutcomeToolBearerPlaceholder + ".txt",
+		},
+		{
+			name:     "literal epistemic-outcome-tool gen placeholder in filename",
+			filename: "evil" + turn.EpistemicOutcomeToolGenPlaceholder + ".txt",
+		},
+		{
+			name:     "literal epistemic-outcome-tool url placeholder in filename",
+			filename: "evil" + turn.EpistemicOutcomeToolURLPlaceholder + ".txt",
+		},
+		{
 			name:        "literal upload-tool bearer placeholder in contentType instead of filename",
 			contentType: "text/plain" + upload.BearerPlaceholder,
+		},
+		{
+			name:        "literal epistemic-outcome-tool bearer placeholder in contentType instead of filename",
+			contentType: "text/plain" + turn.EpistemicOutcomeToolBearerPlaceholder,
 		},
 	}
 
@@ -209,6 +236,16 @@ func TestRenderAttachmentBlock_HostileFieldsCannotEscapeOrForgeTokens(t *testing
 			for _, tok := range []string{review.VerdictToolURLPlaceholder, review.VerdictToolBearerPlaceholder, review.VerdictToolGenPlaceholder} {
 				if strings.Contains(got, tok) {
 					t.Errorf("RenderAttachmentBlock(...) = %q, want it to NEVER contain review's own placeholder token %q", got, tok)
+				}
+			}
+			// turn's own epistemic-outcome-tool placeholder tokens (F1,
+			// adversarial review) likewise have NO legitimate occurrence
+			// anywhere in an attachment block: RenderAttachmentBlock never
+			// emits them itself, so the only way one could appear is an
+			// attacker's own filename/content-type surviving unsanitized.
+			for _, tok := range []string{turn.EpistemicOutcomeToolURLPlaceholder, turn.EpistemicOutcomeToolBearerPlaceholder, turn.EpistemicOutcomeToolGenPlaceholder} {
+				if strings.Contains(got, tok) {
+					t.Errorf("RenderAttachmentBlock(...) = %q, want it to NEVER contain turn's own epistemic-outcome-tool placeholder token %q", got, tok)
 				}
 			}
 		})
