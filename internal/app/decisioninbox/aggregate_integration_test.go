@@ -20,6 +20,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 	"github.com/testcontainers/testcontainers-go"
@@ -30,8 +31,10 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	decisioninboxdomain "github.com/khazaddev/narvi/internal/domain/decisioninbox"
+	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/platform"
 	"github.com/khazaddev/narvi/migrations"
 )
@@ -214,6 +217,34 @@ func (f *fakeDecisionInboxSourceControl) GetOpenPR(_ context.Context, owner, rep
 
 func strPtr(s string) *string { return &s }
 
+// seedAutoApprovedVerdict inserts a review_verdicts row (Step 62, §21.1)
+// whose Shippable is 'auto' and whose head_sha matches headSHA exactly --
+// the ONE fact internal/domain/autoapproval.ComputeEligible now requires
+// before ANY PR can classify ready_to_merge (a missing verdict is
+// unconditionally ineligible). Every existing "this PR must land
+// ready_to_merge" / "X is the ONLY thing keeping this PR out of
+// ready_to_merge" fixture in this file calls this so that claim stays
+// genuinely single-variable -- omitting it would make every such test
+// pass for the WRONG reason (no verdict on record) regardless of whether
+// the ACTUAL behavior under test still works, exactly the double-gated-
+// fixture trap this codebase's own review rounds have repeatedly found.
+func seedAutoApprovedVerdict(ctx context.Context, t *testing.T, pool *pgxpool.Pool, repoFullName string, prNumber int32, headSHA string) {
+	t.Helper()
+	store := narvipg.NewReviewVerdictStore(pool)
+	verdict := review.Verdict{
+		RiskLevel:         review.RiskLevelLow,
+		Premise:           review.PremiseStateOK,
+		TestsCoverage:     review.TestsCoverageStateAdequate,
+		DocsDrift:         review.DocsDriftStateNone,
+		ProposedShippable: review.ProposedShippableAuto,
+		FilesChanged:      3,
+	}
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
+	if _, err := appreviewverdict.Insert(ctx, store, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict); err != nil {
+		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
+	}
+}
+
 // TestBuild_FullScenario exercises every kind's own real inclusion
 // criterion end to end against a real Postgres instance: ready_to_merge
 // (platform-authored + eligible), needs_review (the same PR shape but
@@ -268,6 +299,11 @@ func TestBuild_FullScenario(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create pr artifact: %v", err)
 	}
+	// Step 62 (§21.1/§21.2): PR #10 needs a Shippable=auto review_verdicts
+	// row, at its own exact head sha, before the REAL eligibility engine
+	// will ever classify it ready_to_merge -- see seedAutoApprovedVerdict's
+	// own doc comment.
+	seedAutoApprovedVerdict(ctx, t, pool, "acme/widgets", 10, "sha10")
 
 	// PR #11: the SAME shape, but NOT platform-authored (no artifacts
 	// row) -- must land needs_review, never ready_to_merge, despite being
@@ -383,6 +419,7 @@ func TestBuild_FullScenario(t *testing.T) {
 		Plans: plans, Sessions: sessions, Participants: participants, Automations: automations,
 		Outbox: outbox, ReviewFindings: reviewFindings, SentinelFixes: sentinelFixes, Artifacts: artifacts,
 		Identities: identities, SCMCache: scmCache, TokenEncryptionKey: tokenKey, Timeouts: platform.DefaultTimeouts(),
+		ReviewVerdict: appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 	}
 	now := time.Now()
 
@@ -521,6 +558,7 @@ func TestBuild_NoLinkedGitHubIdentity(t *testing.T) {
 		SCMCache:           decisioninbox.NewSCMCache(&fakeDecisionInboxSourceControl{}, platform.DefaultTimeouts()),
 		TokenEncryptionKey: []byte("01234567890123456789012345678901"),
 		Timeouts:           platform.DefaultTimeouts(),
+		ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 	}
 
 	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
@@ -621,6 +659,7 @@ func TestBuild_PlanOwnershipScoping(t *testing.T) {
 		SCMCache:           decisioninbox.NewSCMCache(&fakeDecisionInboxSourceControl{}, platform.DefaultTimeouts()),
 		TokenEncryptionKey: []byte("01234567890123456789012345678901"),
 		Timeouts:           platform.DefaultTimeouts(),
+		ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 	}
 
 	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
@@ -738,6 +777,7 @@ func TestBuild_PRLabelVariations(t *testing.T) {
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
 		TokenEncryptionKey: tokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
+		ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 	}
 
 	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
@@ -830,6 +870,12 @@ func TestBuild_HasChangesRequestedDemotesFromReadyToMerge(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("mark PR #40 platform-authored: %v", err)
 	}
+	// Step 62 (§21.1/§21.2): PR #40 needs a Shippable=auto review_verdicts
+	// row at its own exact head sha too -- see seedAutoApprovedVerdict's
+	// own doc comment for why, WITHOUT this, HasChangesRequested would no
+	// longer be the ONLY thing this fixture demonstrates keeps a PR out
+	// of ready_to_merge (a missing verdict alone would already do that).
+	seedAutoApprovedVerdict(ctx, t, pool, "acme/widgets", 40, "sha40")
 
 	fakeSCM := &fakeDecisionInboxSourceControl{
 		openPRsByExternalID: map[string][]ports.OpenPR{
@@ -855,6 +901,7 @@ func TestBuild_HasChangesRequestedDemotesFromReadyToMerge(t *testing.T) {
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
 		TokenEncryptionKey: tokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
+		ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 	}
 
 	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
@@ -921,6 +968,7 @@ func TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead(t *testing.T) {
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
 		TokenEncryptionKey: tokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
+		ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 	}
 
 	if _, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now()); err != nil {
@@ -968,6 +1016,7 @@ func TestBuild_SCMFetchFailedSignal(t *testing.T) {
 			SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
 			TokenEncryptionKey: tokenKey,
 			Timeouts:           platform.DefaultTimeouts(),
+			ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 		}
 
 		result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
@@ -995,6 +1044,7 @@ func TestBuild_SCMFetchFailedSignal(t *testing.T) {
 			SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
 			TokenEncryptionKey: tokenKey,
 			Timeouts:           platform.DefaultTimeouts(),
+			ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 		}
 
 		result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
@@ -1064,6 +1114,7 @@ func TestBuild_SentinelFixStoreErrorDegradesTheReadButNeverPanics(t *testing.T) 
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
 		TokenEncryptionKey: tokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
+		ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 	}
 
 	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
@@ -1113,6 +1164,7 @@ func TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub(t *t
 		SCMCache:           decisioninbox.NewSCMCache(&fakeDecisionInboxSourceControl{}, platform.DefaultTimeouts()),
 		TokenEncryptionKey: tokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
+		ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
 	}
 
 	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())

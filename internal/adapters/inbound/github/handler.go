@@ -408,10 +408,22 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				m.CommentBody = alreadyAnswered + m.CommentBody
 			}
 		}
+		// fetchedHeadSHA (Step 62, §21.1) is captured OUTSIDE the block
+		// below so it survives to the post-CreateOrJoin persist call
+		// further down -- this mention's own pre-fetched diff was
+		// anchored to this SHA, so it is what review_verdicts.head_sha
+		// must eventually forward, once a verdict is posted for whatever
+		// session this mention resolves to.
+		var fetchedHeadSHA string
 		if cfg.DiffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(m.RepoFullName); ok {
-				prCtx := reviewcontext.Fetch(ctx, logger, cfg.DiffFetcher, cfg.Timeouts, owner, repo, m.PRNumber, cfg.BotToken, m.Stack)
+				knownHeadSHA := ""
+				if m.HeadSHA != nil {
+					knownHeadSHA = *m.HeadSHA
+				}
+				prCtx := reviewcontext.Fetch(ctx, logger, cfg.DiffFetcher, cfg.Timeouts, owner, repo, m.PRNumber, cfg.BotToken, m.Stack, knownHeadSHA)
 				m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
+				fetchedHeadSHA = prCtx.HeadSHA
 			} else {
 				logger.Warn("github: could not split repo_full_name into owner/repo, skipping pre-fetched review context",
 					"repo_full_name", m.RepoFullName, "pr_number", m.PRNumber)
@@ -546,6 +558,19 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			}
 			w.WriteHeader(http.StatusInternalServerError)
 			return
+		}
+
+		// Step 62 (§21.1): persist the head SHA this mention's own
+		// pre-fetched diff was anchored to -- best-effort, after
+		// CreateOrJoin has confirmed the github_pr_sessions row exists,
+		// never blocking or failing an already-successful mention over a
+		// bookkeeping write (mirrors triggerReleaseManifestCheckBestEffort's
+		// own identical "runs after the mention itself is fully
+		// processed" placement immediately below).
+		if fetchedHeadSHA != "" {
+			if err := coalescer.PRSessions.SetHeadSHA(ctx, m.RepoFullName, m.PRNumber, fetchedHeadSHA); err != nil {
+				logger.Warn("github: persist pending head sha failed", "error", err, "repo", m.RepoFullName, "pr_number", m.PRNumber)
+			}
 		}
 
 		// Step 50 ("release PR review", §15): only the WINNER (brand-new

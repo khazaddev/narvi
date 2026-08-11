@@ -58,7 +58,18 @@ type mention struct {
 	// therefore only ever means "that resolution itself failed" (logged,
 	// falls back to today's pre-fix behavior), never "issue_comment can't
 	// carry this".
-	HeadBranch  *string
+	HeadBranch *string
+	// HeadSHA (Step 62, §21.1) is the PR's head commit SHA AT THE MOMENT
+	// this mention's own event carried/resolved it -- nil exactly when
+	// HeadBranch is still nil-and-unresolved (issue_comment, before
+	// resolveIssueCommentHead runs), set together with HeadBranch by
+	// every other producer (parsePullRequestReviewComment,
+	// parsePullRequestLabeled, resolveIssueCommentHead). Threaded into
+	// internal/app/reviewcontext.Fetch's own knownHeadSHA parameter --
+	// see that function's own doc comment for why this avoids a second,
+	// redundant GetPullRequest call on every trigger path that already
+	// has this value in hand.
+	HeadSHA     *string
 	CommentBody string
 
 	// CommenterID/CommenterLogin are the GitHub user id/login of the real
@@ -116,6 +127,21 @@ type mention struct {
 }
 
 // parseMention dispatches on eventType and reports whether body is a
+// nonEmptyStringPtr returns nil for an empty s, &s otherwise -- Step 62's
+// own small helper for mention.HeadSHA's own "nil means genuinely
+// unresolved, never an empty-string placeholder" convention (mirrors
+// HeadBranch's own identical *string discipline elsewhere in this
+// package), used wherever a webhook payload's own head.sha field is
+// folded into a mention struct literal (a conditional assignment, unlike
+// headresolve.go's own imperative "if pr.HeadSHA != {}" form, is not
+// expressible inline inside a struct literal).
+func nonEmptyStringPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // genuine, actionable review-session trigger: a comment mentioning
 // reReviewLabel's own configured bot handle (mentionRE), or a
 // pull_request/"labeled" event naming reReviewLabel (Step 46, "review
@@ -239,6 +265,10 @@ type pullRequestReviewCommentPayload struct {
 		Number int32 `json:"number"`
 		Head   struct {
 			Ref string `json:"ref"`
+			// SHA (Step 62, §21.1) is this PR's own current head commit
+			// -- carried inline on this SAME payload, exactly like Ref,
+			// so no further API call is needed to learn it either.
+			SHA string `json:"sha"`
 			// Repo is a POINTER (L15 audit fix) -- GitHub's own webhook
 			// documentation states this field is nullable: null when the
 			// head repository has been deleted (e.g. a fork removed after
@@ -283,6 +313,7 @@ func parsePullRequestReviewComment(body []byte, mentionRE *regexp.Regexp) (menti
 		RepoFullName:   p.Repository.FullName, // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
 		PRNumber:       p.PullRequest.Number,
 		HeadBranch:     &headBranch,
+		HeadSHA:        nonEmptyStringPtr(p.PullRequest.Head.SHA),
 		CommentBody:    p.Comment.Body,
 		CommenterID:    p.Comment.User.ID,
 		CommenterLogin: p.Comment.User.Login,
@@ -350,7 +381,12 @@ type pullRequestPayload struct {
 	PullRequest struct {
 		Number int32 `json:"number"`
 		Head   struct {
-			Ref  string `json:"ref"`
+			Ref string `json:"ref"`
+			// SHA (Step 62, §21.1) is this PR's own current head
+			// commit -- carried inline on this SAME payload, exactly
+			// like Ref/Stack below, so no separate GetPullRequest
+			// call is needed for it either.
+			SHA  string `json:"sha"`
 			Repo *struct {
 				Name     string `json:"name"`
 				CloneURL string `json:"clone_url"`
@@ -412,6 +448,7 @@ func parsePullRequestLabeled(body []byte, reReviewLabel string) (mention, bool, 
 		RepoFullName:     p.Repository.FullName, // base/upstream repo -- the claim key (see mention.RepoFullName's own doc comment).
 		PRNumber:         p.PullRequest.Number,
 		HeadBranch:       &headBranch,
+		HeadSHA:          nonEmptyStringPtr(p.PullRequest.Head.SHA),
 		CommentBody:      labelRetriggerPromptText,
 		CommenterID:      p.Sender.ID,
 		CommenterLogin:   p.Sender.Login,

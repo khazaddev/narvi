@@ -1202,6 +1202,17 @@ func TestDefaultTimeouts_Step62StandaloneFields(t *testing.T) {
 		t.Errorf("DigestChannelDiscoveryLookback = %v, want %v", to.DigestChannelDiscoveryLookback, 30*24*time.Hour)
 	}
 
+	if to.DigestContentWindow <= 0 {
+		t.Errorf("DigestContentWindow = %v, want > 0", to.DigestContentWindow)
+	}
+	if to.DigestContentWindow != 24*time.Hour {
+		t.Errorf("DigestContentWindow = %v, want %v", to.DigestContentWindow, 24*time.Hour)
+	}
+	if to.DigestContentWindow >= to.DigestChannelDiscoveryLookback {
+		t.Errorf("DigestContentWindow = %v, want strictly less than DigestChannelDiscoveryLookback = %v (the daily rollup window must be narrower than the channel-relevance lookback)",
+			to.DigestContentWindow, to.DigestChannelDiscoveryLookback)
+	}
+
 	if err := to.Validate(); err != nil {
 		t.Fatalf("Validate() = %v, want nil (Step 62's additions must not disturb any invariant chain)", err)
 	}

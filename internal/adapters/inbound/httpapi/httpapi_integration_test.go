@@ -171,6 +171,10 @@ type testRig struct {
 	reviewFindings *narvipg.ReviewFindingStore
 	sentinelFixes  *narvipg.SentinelFixStore
 
+	// reviewVerdicts (Step 62, §21.1) backs the verdict-posting route's
+	// own review_verdicts insert (reviewverdict.go).
+	reviewVerdicts *narvipg.ReviewVerdictStore
+
 	// sourceControl backs the apply-suggestion route's own GetFileContent/
 	// UpdateFileContent calls -- defaults to nil (ApplySuggestion's own
 	// callers all fail closed on a nil port the same way every other
@@ -300,6 +304,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		botHandle:             "narvi-test-bot",
 		reviewFindings:        narvipg.NewReviewFindingStore(pool),
 		sentinelFixes:         narvipg.NewSentinelFixStore(pool),
+		reviewVerdicts:        narvipg.NewReviewVerdictStore(pool),
 		automations:           narvipg.NewAutomationStore(pool),
 		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
 		providerCredentials:   narvipg.NewProviderCredentialStore(pool),
@@ -425,7 +430,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2) is mounted
 	// the SAME way -- see reviewverdict.go's own doc comment.
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.botHandle))
+		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.reviewVerdicts, rig.botHandle))
 	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6)
 	// is mounted the SAME way -- see workflowstepoutcome.go's own doc
 	// comment.

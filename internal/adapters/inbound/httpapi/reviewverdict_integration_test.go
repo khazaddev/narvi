@@ -279,6 +279,82 @@ func TestPostReviewVerdict_Success_EnqueuesGitHubVerdictOutboxRow(t *testing.T) 
 	}
 }
 
+// TestPostReviewVerdict_PersistsReviewVerdictRow_WhenPendingHeadSHAKnown
+// is Step 62's own (§21.1) end-to-end persistence test: when
+// github_pr_sessions.pending_head_sha is on record (set here exactly the
+// way internal/app/reviewcontext's own two ingress callers set it, via
+// GitHubPRSessionStore.SetHeadSHA, never fabricated some other way), the
+// verdict POST appends a review_verdicts row forwarding EVERY field
+// verbatim -- repo/PR identity, head_sha, and the full Verdict, including
+// the server-computed (never client-trusted) Shippable.
+func TestPostReviewVerdict_PersistsReviewVerdictRow_WhenPendingHeadSHAKnown(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-persist", 55)
+
+	if err := rig.prSessions.SetHeadSHA(ctx, "acme/verdict-persist", 55, "sha-persist-abc123"); err != nil {
+		t.Fatalf("set pending head sha: %v", err)
+	}
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", validVerdictRequestJSON())
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var row sqlcgen.ReviewVerdict
+	if err := rig.pool.QueryRow(ctx, `SELECT repo_full_name, pr_number, head_sha, risk_level, premise, files_changed, tests_coverage, docs_drift, shippable FROM review_verdicts WHERE repo_full_name = $1 AND pr_number = $2`, "acme/verdict-persist", 55).
+		Scan(&row.RepoFullName, &row.PrNumber, &row.HeadSha, &row.RiskLevel, &row.Premise, &row.FilesChanged, &row.TestsCoverage, &row.DocsDrift, &row.Shippable); err != nil {
+		t.Fatalf("query review_verdicts row: %v", err)
+	}
+	if row.HeadSha != "sha-persist-abc123" {
+		t.Errorf("head_sha = %q, want %q (forwarded verbatim from pending_head_sha)", row.HeadSha, "sha-persist-abc123")
+	}
+	if row.RiskLevel != string(review.RiskLevelLow) {
+		t.Errorf("risk_level = %q, want %q", row.RiskLevel, review.RiskLevelLow)
+	}
+	if row.Premise != string(review.PremiseStateOK) {
+		t.Errorf("premise = %q, want %q", row.Premise, review.PremiseStateOK)
+	}
+	if row.FilesChanged != 3 {
+		t.Errorf("files_changed = %d, want 3", row.FilesChanged)
+	}
+	if row.TestsCoverage != string(review.TestsCoverageStateAdequate) {
+		t.Errorf("tests_coverage = %q, want %q", row.TestsCoverage, review.TestsCoverageStateAdequate)
+	}
+	if row.DocsDrift != string(review.DocsDriftStateNone) {
+		t.Errorf("docs_drift = %q, want %q", row.DocsDrift, review.DocsDriftStateNone)
+	}
+	if row.Shippable != string(review.ShippableAuto) {
+		t.Errorf("shippable = %q, want %q (server-computed from risk=low/premise=ok/coverage=adequate)", row.Shippable, review.ShippableAuto)
+	}
+}
+
+// TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoPendingHeadSHA
+// proves a PR with NO pending_head_sha on record (e.g. a review session
+// that predates Step 62, or whose own context fetch never resolved one)
+// still posts successfully -- review_verdicts persistence is best-effort
+// enrichment, never a precondition for this tool call to succeed (see
+// reviewverdict.go's own doc comment on this exact point).
+func TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoPendingHeadSHA(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-no-head-sha", 56)
+	// Deliberately no SetHeadSHA call -- this is the fact under test.
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", validVerdictRequestJSON())
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (a missing head sha must never fail the verdict post itself)", status, http.StatusCreated)
+	}
+
+	var count int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM review_verdicts WHERE repo_full_name = $1 AND pr_number = $2`, "acme/verdict-no-head-sha", 56).Scan(&count); err != nil {
+		t.Fatalf("count review_verdicts rows: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("review_verdicts row count = %d, want 0 (no head sha on record, insert must be skipped, never inserted with a fabricated/empty value)", count)
+	}
+}
+
 // TestPostReviewVerdict_ShippableNeverTrustsProposedShippable proves the
 // central security property end to end through the real HTTP surface:
 // the model's own ProposedShippable ("auto") never overrides the

@@ -230,6 +230,18 @@ type PlanDecidedPayload struct {
 	Text      string `json:"text"`
 }
 
+// DigestPayload is the JSON shape this package expects to find in an
+// outbox entry's own payload column for a ports.NotificationKindSlackDigest
+// row (Step 62, §21.3) -- enqueued by internal/app/digest.Pump. Text is
+// ALREADY fully rendered (internal/domain/digest.Render's own
+// deterministic output, Slack mrkdwn dialect) -- this package does no
+// further conversion/templating of it, unlike PlanApprovalPayload's own
+// Text field (which still goes through MarkdownToMrkdwn).
+type DigestPayload struct {
+	ChannelID string `json:"channel_id"`
+	Text      string `json:"text"`
+}
+
 // postMessageWithBlocksRequest is chat.postMessage's own real request body
 // shape when blocks are included -- Blocks is `[]any` (rather than a single
 // concrete block type) since Block Kit blocks are a heterogeneous union;
@@ -314,6 +326,29 @@ func (c *Client) PostPlanApprovalMessage(ctx context.Context, payload PlanApprov
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("slackapi: encode chat.postMessage (blocks) request: %w", err)
+	}
+
+	var parsed postMessageWithBlocksResponse
+	if err := c.doPost(ctx, "/chat.postMessage", reqBody, &parsed); err != nil {
+		return "", "", err
+	}
+	if !parsed.Ok {
+		return "", "", &DeliveryError{SlackError: parsed.Error}
+	}
+	return parsed.Channel, parsed.Ts, nil
+}
+
+// PostMessage posts plain text (already fully rendered mrkdwn, e.g.
+// internal/domain/digest.Render's own deterministic output, Step 62,
+// §21.3) to channel -- no Block Kit, no interactive elements, exactly
+// the shape a compliance/status artifact needs and nothing more. Reuses
+// postMessageWithBlocksRequest with Blocks left nil (its own `omitempty`
+// tag), never a second, parallel chat.postMessage request struct for
+// what is really the SAME endpoint with an optional field omitted.
+func (c *Client) PostMessage(ctx context.Context, channel, text string) (channelOut, ts string, err error) {
+	reqBody, err := json.Marshal(postMessageWithBlocksRequest{Channel: channel, Text: text})
+	if err != nil {
+		return "", "", fmt.Errorf("slackapi: encode chat.postMessage request: %w", err)
 	}
 
 	var parsed postMessageWithBlocksResponse

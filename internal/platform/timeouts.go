@@ -2100,6 +2100,15 @@ type Timeouts struct {
 	// DecisionInboxLatencyWindow above, for the same "a month is long
 	// enough to be representative, bounded per §21.1" reasoning.
 	DigestChannelDiscoveryLookback time.Duration
+
+	// DigestContentWindow bounds the digest's own ROLLUP content -- a
+	// DIFFERENT, much narrower window than DigestChannelDiscoveryLookback
+	// above (which only decides "is this channel still relevant", not
+	// "what to report"): §21.3 names this a DAILY digest, so this is one
+	// calendar day (24h) of review_verdicts/auto_approval_outcomes
+	// activity, exactly "yesterday's" worth, matching the mundane,
+	// expected meaning of "daily digest".
+	DigestContentWindow time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2279,6 +2288,7 @@ func DefaultTimeouts() Timeouts {
 		AutoMergeCandidateLookback:     7 * 24 * time.Hour,  // Step 62, §21.2; not specified, chosen generously -- every candidate is re-confirmed live regardless
 		DigestPumpInterval:             5 * time.Minute,     // Step 62, §21.3; not specified, chosen -- a digest fires at most once per channel per day, so coarse polling is ample
 		DigestChannelDiscoveryLookback: 30 * 24 * time.Hour, // Step 62, §21.3; not specified, mirrors ReviewVerdictAnalyticsWindow's own identical "a month, bounded" reasoning
+		DigestContentWindow:            24 * time.Hour,      // Step 62, §21.3, explicit ("a daily digest") -- one calendar day of rollup content, distinct from the channel-discovery lookback above
 	}
 }
 

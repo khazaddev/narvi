@@ -68,6 +68,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
@@ -132,6 +133,7 @@ func PostReviewVerdict(
 	reviewFindings *postgres.ReviewFindingStore,
 	sentinelFixes *postgres.SentinelFixStore,
 	outbox *postgres.OutboxStore,
+	reviewVerdicts *postgres.ReviewVerdictStore,
 	botHandle string,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -342,6 +344,33 @@ func PostReviewVerdict(
 				return
 			}
 			findingIdentityHashes = append(findingIdentityHashes, f.IdentityHash)
+		}
+
+		// Step 62 (§21.1): append one review_verdicts row, in the SAME
+		// transaction as the findings upserts/outbox write above -- pure
+		// storage of the verdict already computed above, forwarding
+		// head_sha verbatim from prSession.PendingHeadSha (populated at
+		// context-fetch time by every review-trigger ingress path, never
+		// re-derived or asked of the agent -- see migrations/
+		// 000068_github_pr_sessions_pending_head_sha.up.sql's own doc
+		// comment). A missing head SHA (nil -- e.g. a PR session that
+		// predates this Step, or whose own context fetch degraded to no
+		// diff at all) is logged and SKIPPED, never a reason to fail this
+		// tool call: review_verdicts existing reliably matters for the
+		// auto-approval engine, but that engine's own fail-CLOSED posture
+		// (internal/domain/autoapproval) already treats "no verdict on
+		// record" as ineligible, so a missing row here is a SAFE, not a
+		// dangerous, degradation. A genuine store error on the INSERT
+		// itself, by contrast, is treated exactly like a findings-upsert
+		// or outbox-create failure immediately above/below: it fails this
+		// whole request (500, rolled back), never silently proceeds with
+		// an unpersisted verdict.
+		if prSession.PendingHeadSha == nil || *prSession.PendingHeadSha == "" {
+			logger.Warn("httpapi: review-verdict: no pending head sha on record, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, *prSession.PendingHeadSha, sessionID, verdict); insertErr != nil {
+			logger.Error("httpapi: review-verdict: insert review_verdicts row failed", "error", insertErr)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 
 		if _, err := outbox.WithTx(tx).Create(ctx, sqlcgen.CreateOutboxEntryParams{

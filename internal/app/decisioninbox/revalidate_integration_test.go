@@ -23,7 +23,9 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // revalidateStores bundles the Postgres stores RevalidateForMerge itself
@@ -49,6 +51,16 @@ func newRevalidateStores(pool *pgxpool.Pool) *revalidateStores {
 			SentinelFixes:  narvipg.NewSentinelFixStore(pool),
 			Artifacts:      narvipg.NewArtifactStore(pool),
 			Identities:     narvipg.NewIdentityStore(pool),
+			// Step 62 (§21.1/§21.2): the REAL auto-approval eligibility
+			// engine's own store dependencies -- revalidateCore now reads
+			// review_verdicts/repo_settings through this bundle.
+			ReviewVerdict: appreviewverdict.Deps{
+				ReviewVerdicts:       narvipg.NewReviewVerdictStore(pool),
+				RepoSettings:         narvipg.NewRepoSettingsStore(pool),
+				ReviewFindings:       narvipg.NewReviewFindingStore(pool),
+				AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool),
+				Timeouts:             platform.DefaultTimeouts(),
+			},
 		},
 	}
 }
@@ -85,6 +97,12 @@ func (rs *revalidateStores) eligiblePR(ctx context.Context, t *testing.T, pool *
 	if err != nil {
 		t.Fatalf("create platform session: %v", err)
 	}
+	// Step 62 (§21.1/§21.2): a matching Shippable=auto review_verdicts
+	// row, at this exact head sha, is now REQUIRED before the real
+	// eligibility engine will ever say ok=true -- see
+	// seedAutoApprovedVerdict's own doc comment (aggregate_integration_test.go)
+	// for why every "eligible baseline" fixture in this package needs one.
+	seedAutoApprovedVerdict(ctx, t, pool, repoFullName, int32(prNumber), pr.HeadSHA)
 	if _, err := narvipg.NewArtifactStore(pool).Create(ctx, sqlcgen.CreateArtifactParams{
 		SessionID: session.ID, Type: sqlcgen.ArtifactTypePr, Url: htmlURL, Metadata: []byte("{}"),
 	}); err != nil {
@@ -286,20 +304,70 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// §60 review finding A6 (TEST BATCH, second round): classifyPRLabels
-	// must pick the MOST RESTRICTIVE risk label present, never
-	// "whichever happens to appear last in GitHub's own unordered labels
-	// array" -- a PR can genuinely carry both at once (a failed
-	// RemoveLabel call after AddLabels durably leaves the OLD and NEW
-	// risk labels both present, reachable via verdictnotifier's own
-	// Add-then-separate-Remove sequence). low-risk is deliberately LAST
-	// in this slice: a "last wins" regression would read this PR as
-	// low-risk (eligible, auto-approved), while the correct
-	// "most-restrictive-wins" rule must still refuse it as high-risk.
-	t.Run("MostRestrictiveRiskLabelWins_Refused", func(t *testing.T) {
-		const repoFullName = "acme/revalidate-mixed-risk-labels"
-		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 8)
-		pr.Labels = []string{"review:high-risk", "review:low-risk"}
+	// Step 62 (§21.2) note: classifyPRLabels' own "most restrictive risk
+	// label wins" property (§60 review finding A6) is no longer
+	// observable through RevalidateForMerge's own ok/refused OUTCOME --
+	// the real auto-approval eligibility engine (internal/domain/
+	// autoapproval) gates on the STORED verdict's own Shippable field,
+	// never on a PR's GitHub risk labels at all (those labels are now
+	// purely a display artifact synced FROM a past verdict, §8.2/Step 47,
+	// never fed back INTO eligibility). Coverage for classifyPRLabels'
+	// own precedence rule moved to labels_test.go's own
+	// TestClassifyPRLabels_MostRestrictiveRiskLabelWins, which asserts
+	// the returned riskLabel value directly rather than through this
+	// function's now-unrelated merge-eligibility outcome.
+
+	// Step 62 (§21.2): a PR with NO review_verdicts row at all must be
+	// refused -- the auto-approval engine fails CLOSED on "no verdict on
+	// record", never defaulting to eligible for lack of data.
+	t.Run("NoVerdictOnRecord_Refused", func(t *testing.T) {
+		const repoFullName = "acme/revalidate-no-verdict"
+		owner, repo, ok := reposource.SplitFullName(repoFullName)
+		if !ok {
+			t.Fatalf("malformed repoFullName %q", repoFullName)
+		}
+		htmlURL := "https://github.com/" + repoFullName + "/pull/30"
+		pr := ports.OpenPR{
+			Owner: owner, Repo: repo, Number: 30,
+			Title: "no verdict yet", HTMLURL: htmlURL, HeadSHA: "sha-30",
+			Assignees:    []ports.PRPerson{{ExternalID: actorGitHubID, Login: "actor"}},
+			CIConclusion: ports.CIConclusionSuccess,
+		}
+		rs.sourceControl.openPRsByExternalID[actorGitHubID] = append(rs.sourceControl.openPRsByExternalID[actorGitHubID], pr)
+		session, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceGithub})
+		if err != nil {
+			t.Fatalf("create platform session: %v", err)
+		}
+		if _, err := narvipg.NewArtifactStore(pool).Create(ctx, sqlcgen.CreateArtifactParams{
+			SessionID: session.ID, Type: sqlcgen.ArtifactTypePr, Url: htmlURL, Metadata: []byte("{}"),
+		}); err != nil {
+			t.Fatalf("create pr artifact: %v", err)
+		}
+		// Deliberately NO seedAutoApprovedVerdict call -- this is the
+		// fact under test.
+
+		ok2, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
+		if err != nil {
+			t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
+		}
+		if ok2 {
+			t.Fatal("RevalidateForMerge() ok = true, want false (no review_verdicts row exists for this PR)")
+		}
+		if reason == "" {
+			t.Error("reason is empty, want a human-readable explanation")
+		}
+	})
+
+	// Step 62 (§21.2): the stale-head-SHA guard -- a verdict on record
+	// whose own head_sha no longer matches the PR's LIVE current head
+	// must refuse, no matter how clean that verdict once looked.
+	t.Run("StaleVerdictHeadSHA_Refused", func(t *testing.T) {
+		const repoFullName = "acme/revalidate-stale-verdict"
+		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 31)
+		// A new commit landed after the verdict was posted -- the live
+		// PR's own head sha has moved on, but review_verdicts.head_sha
+		// (seeded by eligiblePR against the OLD pr.HeadSHA) has not.
+		pr.HeadSHA = "sha-31-newer-commit"
 		rs.replaceTargetPR(actorGitHubID, pr)
 
 		ok, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
@@ -307,7 +375,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 			t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
 		}
 		if ok {
-			t.Fatal("RevalidateForMerge() ok = true, want false (high-risk must win over low-risk regardless of label order)")
+			t.Fatal("RevalidateForMerge() ok = true, want false (the verdict on record was produced against an earlier commit)")
 		}
 		if reason == "" {
 			t.Error("reason is empty, want a human-readable explanation")

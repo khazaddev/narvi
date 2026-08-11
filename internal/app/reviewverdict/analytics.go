@@ -18,14 +18,16 @@ import (
 // ReviewVerdictAnalyticsWindow.
 const maxAnalyticsRows = 5000
 
-// windowRecords fetches repoFullName's own review_verdicts history
-// within deps.Timeouts.ReviewVerdictAnalyticsWindow of now, converted to
-// the pure domain shape -- the ONE Postgres read every rollup function
-// below shares, mirroring internal/domain/reviewverdict's own doc
-// comment ("caller fetches, pure package reduces").
-func windowRecords(ctx context.Context, deps Deps, repoFullName string, now time.Time) ([]reviewverdict.Record, error) {
-	since := now.Add(-deps.Timeouts.ReviewVerdictAnalyticsWindow)
-	rows, err := deps.ReviewVerdicts.ListInWindow(ctx, repoFullName, pgtype.Timestamptz{Time: since, Valid: true}, maxAnalyticsRows)
+// ListRecordsSince fetches repoFullName's own review_verdicts history
+// posted after sinceTime, converted to the pure domain shape -- the ONE
+// Postgres read every rollup function below shares, mirroring
+// internal/domain/reviewverdict's own doc comment ("caller fetches, pure
+// package reduces"). Exported (unlike an unexported windowRecords helper)
+// so a DIFFERENT caller with its own window -- internal/app/digest's own
+// much narrower one-day rollup, §21.3 -- can reuse the exact same
+// fetch-and-convert logic rather than re-deriving it.
+func ListRecordsSince(ctx context.Context, deps Deps, repoFullName string, sinceTime time.Time) ([]reviewverdict.Record, error) {
+	rows, err := deps.ReviewVerdicts.ListInWindow(ctx, repoFullName, pgtype.Timestamptz{Time: sinceTime, Valid: true}, maxAnalyticsRows)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +43,7 @@ func windowRecords(ctx context.Context, deps Deps, repoFullName string, now time
 // internal/domain/reviewverdict.Timeseries' own doc comment for the
 // "not yet computed" sentinel this forwards verbatim (ok=false).
 func Timeseries(ctx context.Context, deps Deps, repoFullName string, now time.Time) ([]reviewverdict.DayBucket, bool, error) {
-	records, err := windowRecords(ctx, deps, repoFullName, now)
+	records, err := ListRecordsSince(ctx, deps, repoFullName, now.Add(-deps.Timeouts.ReviewVerdictAnalyticsWindow))
 	if err != nil {
 		return nil, false, err
 	}
@@ -52,7 +54,7 @@ func Timeseries(ctx context.Context, deps Deps, repoFullName string, now time.Ti
 // TopRiskDrivers computes repoFullName's own §21.1 top-risk-driver
 // breakdown, bounded the same way Timeseries above is.
 func TopRiskDrivers(ctx context.Context, deps Deps, repoFullName string, now time.Time) ([]reviewverdict.TagCount, bool, error) {
-	records, err := windowRecords(ctx, deps, repoFullName, now)
+	records, err := ListRecordsSince(ctx, deps, repoFullName, now.Add(-deps.Timeouts.ReviewVerdictAnalyticsWindow))
 	if err != nil {
 		return nil, false, err
 	}

@@ -64,7 +64,7 @@ type Fetcher interface {
 //     surface triggered this particular review turn) than leaving it
 //     present only for the one ingress lane §17.6's own text happened to
 //     examine first.
-func Fetch(ctx context.Context, logger *slog.Logger, fetcher Fetcher, timeouts platform.Timeouts, owner, repo string, number int32, token string, knownStack *review.StackContext) review.PreFetchedContext {
+func Fetch(ctx context.Context, logger *slog.Logger, fetcher Fetcher, timeouts platform.Timeouts, owner, repo string, number int32, token string, knownStack *review.StackContext, knownHeadSHA string) review.PreFetchedContext {
 	diffCtx, cancel := context.WithTimeout(ctx, timeouts.GitHubPRDiffTimeout)
 	diff, truncated, err := fetcher.GetPullRequestDiff(diffCtx, owner, repo, number, token)
 	cancel()
@@ -76,19 +76,36 @@ func Fetch(ctx context.Context, logger *slog.Logger, fetcher Fetcher, timeouts p
 	}
 
 	stack := knownStack
-	if stack == nil {
+	headSHA := knownHeadSHA
+	// A single GetPullRequest call serves BOTH stack (when not already
+	// known) and head SHA (§21.1, Step 62; when not already known) --
+	// never two independent fallback fetches for two pieces of data this
+	// SAME endpoint already returns together. Mirrors this function's own
+	// pre-existing "a wasted round trip for data the caller already has
+	// in hand" avoidance (this file's own top doc comment) -- extended
+	// here to headSHA: the label-retrigger webhook path (the ONE trigger
+	// today that supplies knownStack non-nil) also always supplies
+	// knownHeadSHA non-empty from that SAME webhook payload, so this
+	// fallback fetch is skipped entirely on that path, exactly as before
+	// this Step.
+	if stack == nil || headSHA == "" {
 		prCtx, cancel := context.WithTimeout(ctx, timeouts.GitHubGetPRTimeout)
 		pr, err := fetcher.GetPullRequest(prCtx, owner, repo, number, token)
 		cancel()
 		if err != nil {
-			logger.Warn("reviewcontext: fetch pull request (for stack context) failed, review turn will carry no stack context",
+			logger.Warn("reviewcontext: fetch pull request (for stack context/head sha) failed, review turn will carry no stack context and this fetch's own review_verdicts row (if any) will have no head sha to record",
 				"error", err, "owner", owner, "repo", repo, "pr_number", number)
-		} else if pr.Stack != nil {
-			stack = &review.StackContext{
-				Position:        pr.Stack.Position,
-				Size:            pr.Stack.Size,
-				UltimateBaseRef: pr.Stack.BaseRef,
-				UltimateBaseSHA: pr.Stack.BaseSHA,
+		} else {
+			if stack == nil && pr.Stack != nil {
+				stack = &review.StackContext{
+					Position:        pr.Stack.Position,
+					Size:            pr.Stack.Size,
+					UltimateBaseRef: pr.Stack.BaseRef,
+					UltimateBaseSHA: pr.Stack.BaseSHA,
+				}
+			}
+			if headSHA == "" {
+				headSHA = pr.HeadSHA
 			}
 		}
 		// pr.Stack == nil, err == nil: an ordinary, non-stacked PR -- stack
@@ -96,5 +113,5 @@ func Fetch(ctx context.Context, logger *slog.Logger, fetcher Fetcher, timeouts p
 		// add" case.
 	}
 
-	return review.PreFetchedContext{Diff: diff, DiffTruncated: truncated, Stack: stack}
+	return review.PreFetchedContext{Diff: diff, DiffTruncated: truncated, Stack: stack, HeadSHA: headSHA}
 }

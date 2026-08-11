@@ -568,6 +568,12 @@ func (a *Adapter) doPost(ctx context.Context, path, token string, reqBody []byte
 type pullRequestResponse struct {
 	Head struct {
 		Ref string `json:"ref"`
+		// SHA (Step 62, §21.1) is this PR's own CURRENT head commit --
+		// review_verdicts.head_sha's own ultimate source when this
+		// response is the fallback fetch internal/app/reviewcontext.Fetch
+		// makes for a trigger path with no head SHA already in hand (see
+		// PullRequest.HeadSHA's own doc comment below).
+		SHA string `json:"sha"`
 		// Repo is a pointer -- GitHub's own webhook/REST documentation
 		// states this field is nullable: null when the head repository has
 		// been deleted (e.g. a fork removed after the PR was opened).
@@ -628,6 +634,12 @@ type PullRequest struct {
 	// HeadRef is the PR's real head branch name (GitHub's own
 	// "head.ref") -- never empty for a real, open GitHub pull request.
 	HeadRef string
+	// HeadSHA (Step 62, §21.1) is the PR's CURRENT head commit SHA
+	// (GitHub's own "head.sha") -- internal/app/reviewcontext.Fetch's own
+	// fallback source for review_verdicts.head_sha when the caller has
+	// no head SHA already in hand from its own trigger payload (see that
+	// package's own doc comment).
+	HeadSHA string
 	// HeadRepoName/HeadRepoCloneURL are the PR's real head repo (may be a
 	// fork) -- empty when GitHub's own "head.repo" was null (the head/fork
 	// repo has since been deleted). Callers MUST treat this exactly like
@@ -688,7 +700,7 @@ func (a *Adapter) GetPullRequest(ctx context.Context, owner, repo string, number
 		return PullRequest{}, fmt.Errorf("githubapi: decode pull request response: %w", err)
 	}
 
-	pr := PullRequest{HeadRef: parsed.Head.Ref, BaseRef: parsed.Base.Ref}
+	pr := PullRequest{HeadRef: parsed.Head.Ref, HeadSHA: parsed.Head.SHA, BaseRef: parsed.Base.Ref}
 	if parsed.Head.Repo != nil {
 		pr.HeadRepoName = parsed.Head.Repo.Name
 		pr.HeadRepoCloneURL = parsed.Head.Repo.CloneURL

@@ -33,6 +33,8 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
+	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -44,14 +46,39 @@ var decisionInboxTokenKey = []byte("01234567890123456789012345678901")
 // decisionInboxTestRig is this file's own small, self-contained fixture --
 // see this file's own top doc comment for why it does not reuse testRig.
 type decisionInboxTestRig struct {
-	pool         *pgxpool.Pool
-	users        *narvipg.UserStore
-	userSessions *narvipg.UserSessionStore
-	identities   *narvipg.IdentityStore
-	sessions     *narvipg.SessionStore
-	artifacts    *narvipg.ArtifactStore
-	auditLog     *narvipg.AuditLogStore
-	server       *httptest.Server
+	pool           *pgxpool.Pool
+	users          *narvipg.UserStore
+	userSessions   *narvipg.UserSessionStore
+	identities     *narvipg.IdentityStore
+	sessions       *narvipg.SessionStore
+	artifacts      *narvipg.ArtifactStore
+	auditLog       *narvipg.AuditLogStore
+	reviewVerdicts *narvipg.ReviewVerdictStore
+	server         *httptest.Server
+}
+
+// seedAutoApprovedVerdict inserts a Shippable=auto review_verdicts row at
+// headSHA -- Step 62 (§21.1/§21.2): the REAL auto-approval eligibility
+// engine now requires one before any PR classifies ready_to_merge or
+// re-validates eligible at merge/click time, mirroring internal/app/
+// decisioninbox's own identical seedAutoApprovedVerdict helper
+// (aggregate_integration_test.go) -- see that helper's own doc comment
+// for why this must be genuinely present, never assumed, in a fixture
+// this file claims is "otherwise fully eligible".
+func (rig *decisionInboxTestRig) seedAutoApprovedVerdict(ctx context.Context, t *testing.T, repoFullName string, prNumber int32, headSHA string) {
+	t.Helper()
+	verdict := review.Verdict{
+		RiskLevel:         review.RiskLevelLow,
+		Premise:           review.PremiseStateOK,
+		TestsCoverage:     review.TestsCoverageStateAdequate,
+		DocsDrift:         review.DocsDriftStateNone,
+		ProposedShippable: review.ProposedShippableAuto,
+		FilesChanged:      3,
+	}
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
+	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict); err != nil {
+		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
+	}
 }
 
 // fakeMergeSourceControl is a minimal test-only ports.SourceControl,
@@ -135,6 +162,8 @@ func newDecisionInboxTestRig(t *testing.T, sourceControl ports.SourceControl) *d
 	identities := narvipg.NewIdentityStore(pool)
 	sessions := narvipg.NewSessionStore(pool)
 	artifacts := narvipg.NewArtifactStore(pool)
+	reviewFindings := narvipg.NewReviewFindingStore(pool)
+	reviewVerdicts := narvipg.NewReviewVerdictStore(pool)
 
 	deps := decisioninbox.Deps{
 		Plans:              narvipg.NewPlanStore(pool),
@@ -142,13 +171,22 @@ func newDecisionInboxTestRig(t *testing.T, sourceControl ports.SourceControl) *d
 		Participants:       narvipg.NewParticipantStore(pool),
 		Automations:        narvipg.NewAutomationStore(pool),
 		Outbox:             narvipg.NewOutboxStore(pool),
-		ReviewFindings:     narvipg.NewReviewFindingStore(pool),
+		ReviewFindings:     reviewFindings,
 		SentinelFixes:      narvipg.NewSentinelFixStore(pool),
 		Artifacts:          artifacts,
 		Identities:         identities,
 		SCMCache:           decisioninbox.NewSCMCache(sourceControl, platform.DefaultTimeouts()),
 		TokenEncryptionKey: decisionInboxTokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
+		// Step 62 (§21.1/§21.2): the REAL auto-approval eligibility
+		// engine's own store dependencies.
+		ReviewVerdict: appreviewverdict.Deps{
+			ReviewVerdicts:       reviewVerdicts,
+			RepoSettings:         narvipg.NewRepoSettingsStore(pool),
+			ReviewFindings:       reviewFindings,
+			AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool),
+			Timeouts:             platform.DefaultTimeouts(),
+		},
 	}
 	auditLog := narvipg.NewAuditLogStore(pool)
 
@@ -164,7 +202,7 @@ func newDecisionInboxTestRig(t *testing.T, sourceControl ports.SourceControl) *d
 
 	return &decisionInboxTestRig{
 		pool: pool, users: users, userSessions: userSessions, identities: identities,
-		sessions: sessions, artifacts: artifacts, auditLog: auditLog, server: server,
+		sessions: sessions, artifacts: artifacts, auditLog: auditLog, reviewVerdicts: reviewVerdicts, server: server,
 	}
 }
 
@@ -297,6 +335,7 @@ func TestMergePullRequest_HappyPath(t *testing.T) {
 	user, token := rig.createAuthenticatedUser(ctx, t, sqlcgen.UserRoleMember)
 	rig.linkGitHub(ctx, t, user.ID, "9001")
 	rig.markPlatformAuthored(ctx, t, user.ID, htmlURL)
+	rig.seedAutoApprovedVerdict(ctx, t, "acme/widgets", 1204, "headsha1204")
 
 	body, err := json.Marshal(restdtos.MergePullRequestRequest{RepoFullName: "acme/widgets", PrNumber: 1204})
 	if err != nil {
@@ -454,6 +493,7 @@ func TestMergePullRequest_MergePRErrorStatusMapping(t *testing.T) {
 	user, token := rig.createAuthenticatedUser(ctx, t, sqlcgen.UserRoleMember)
 	rig.linkGitHub(ctx, t, user.ID, "9004")
 	rig.markPlatformAuthored(ctx, t, user.ID, htmlURL)
+	rig.seedAutoApprovedVerdict(ctx, t, repoFullName, prNumber, "headsha5001")
 
 	body, err := json.Marshal(restdtos.MergePullRequestRequest{RepoFullName: repoFullName, PrNumber: prNumber})
 	if err != nil {
@@ -608,6 +648,7 @@ func TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel(t 
 		},
 	}
 
+	reviewVerdicts := narvipg.NewReviewVerdictStore(pool)
 	deps := decisioninbox.Deps{
 		Plans:              narvipg.NewPlanStore(pool),
 		Sessions:           sessions,
@@ -621,6 +662,18 @@ func TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel(t 
 		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
 		TokenEncryptionKey: decisionInboxTokenKey,
 		Timeouts:           platform.DefaultTimeouts(),
+		// Step 62 (§21.1/§21.2): computeRealEligibility runs regardless of
+		// the findings-count failure above (never short-circuited by it),
+		// so this must be a real, non-nil store too -- no verdict exists
+		// for PR #1400 either way, so GetLatest reports ok=false
+		// (gracefully), never a nil-pointer panic.
+		ReviewVerdict: appreviewverdict.Deps{
+			ReviewVerdicts:       reviewVerdicts,
+			RepoSettings:         narvipg.NewRepoSettingsStore(pool),
+			ReviewFindings:       brokenReviewFindings,
+			AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool),
+			Timeouts:             platform.DefaultTimeouts(),
+		},
 	}
 
 	router := chi.NewRouter()
@@ -632,7 +685,7 @@ func TestListDecisionInbox_FindingsUnknownRendersNullNotTheFailClosedSentinel(t 
 	t.Cleanup(server.Close)
 	rig := &decisionInboxTestRig{
 		pool: pool, users: users, userSessions: userSessions, identities: identities,
-		sessions: sessions, artifacts: artifacts, server: server,
+		sessions: sessions, artifacts: artifacts, reviewVerdicts: reviewVerdicts, server: server,
 	}
 
 	user, token := rig.createAuthenticatedUser(ctx, t, sqlcgen.UserRoleMember)
