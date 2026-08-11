@@ -303,13 +303,33 @@ func splitRepositoryURL(repositoryURL string) (owner, repo string, ok bool) {
 // ONE field to its own honest zero-value/Unknown rather than excluding
 // the PR outright -- the SAME per-field-degrade discipline buildMergedPR
 // already establishes.
+// buildOpenPR fetches number's own detail and builds a full ports.OpenPR
+// -- ok=false means the detail fetch itself failed (any reason: not
+// found, transient, rate-limited -- this caller, ListOpenPRsForUser's
+// own per-candidate loop, treats every failure identically as "drop this
+// one row", so it has never needed to distinguish them). Step 62's own
+// GetOpenPR (getopenpr.go) below needs a FINER distinction (genuinely
+// not found vs. a real error worth propagating), so it calls
+// fetchOpenPRDetail itself and hands the result to buildOpenPRFromDetail
+// directly, rather than through this wrapper -- see that file's own doc
+// comment.
 func (a *Adapter) buildOpenPR(ctx context.Context, owner, repo string, number int, token string) (ports.OpenPR, bool) {
 	detail, err := a.fetchOpenPRDetail(ctx, owner, repo, number, token)
 	if err != nil {
 		return ports.OpenPR{}, false
 	}
+	return a.buildOpenPRFromDetail(ctx, owner, repo, detail, token), true
+}
 
-	hasApproving, hasChangesRequested := a.fetchReviewDecision(ctx, owner, repo, number, token)
+// buildOpenPRFromDetail is buildOpenPR's own construction half, taking an
+// ALREADY-FETCHED detail -- the one place both buildOpenPR (above) and
+// GetOpenPR (getopenpr.go) build a ports.OpenPR from, so the two never
+// drift into two independently-maintained constructions of the identical
+// shape.
+func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string, detail openPRDetailResponse, token string) ports.OpenPR {
+	number := detail.Number
+
+	hasApproving, hasChangesRequested, reviewDecisionDegraded := a.fetchReviewDecision(ctx, owner, repo, number, token)
 
 	ci := ports.CIConclusionUnknown
 	if detail.Head.SHA != "" {
@@ -369,6 +389,10 @@ func (a *Adapter) buildOpenPR(ctx context.Context, owner, repo string, number in
 
 		HasApprovingReview:  hasApproving,
 		HasChangesRequested: hasChangesRequested,
+		// §62 review finding C4: fetchReviewDecision's own third return --
+		// see that field's own doc comment (ports.OpenPR) for the full
+		// "why" and which callers must fail closed on it.
+		ReviewDecisionDegraded: reviewDecisionDegraded,
 
 		CIConclusion: ci,
 		Labels:       labels,
@@ -384,7 +408,7 @@ func (a *Adapter) buildOpenPR(ctx context.Context, owner, repo string, number in
 		pr.UpdatedAt = t
 	}
 
-	return pr, true
+	return pr
 }
 
 // fetchCIConclusionLive determines an OPEN PR's own CI conclusion AT ITS
@@ -533,7 +557,8 @@ func (a *Adapter) fetchOpenPRDetail(ctx context.Context, owner, repo string, num
 // page, per_page=100, mirroring fetchHasApprovingReview's own identical
 // bound) and reduces it to each REVIEWER's own LATEST decision before
 // reporting whether at least one carries state APPROVED and whether at
-// least one carries state CHANGES_REQUESTED (§60 review finding P1-1,
+// least one carries state CHANGES_REQUESTED (§62 review finding C4's own
+// third return, degraded, added below; §60 review finding P1-1,
 // second round -- replacing this function's own previous "any
 // CHANGES_REQUESTED review exists, ever" rule). GitHub's own review list
 // is APPEND-ONLY: a reviewer who requested changes and later re-reviewed
@@ -561,15 +586,37 @@ func (a *Adapter) fetchOpenPRDetail(ctx context.Context, owner, repo string, num
 // decision, so a reviewer who requested changes and LATER merely
 // commented has not thereby withdrawn that decision; only a LATER
 // APPROVED or CHANGES_REQUESTED review from that SAME reviewer does.
-func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repo string, number int, token string) (hasApproving, hasChangesRequested bool) {
+//
+// degraded (§62 review finding C4, BLOCKER, fixed) is true iff this fetch
+// itself failed (transient HTTP error OR a response that did not decode) --
+// BEFORE this fix, either failure silently returned (false, false),
+// indistinguishable from a genuine, confirmed "nobody has requested
+// changes" read. hasChangesRequested is this codebase's own HARD
+// unattended-merge blocker (decisioninbox.RevalidateForMerge, reused
+// unchanged by the auto-merge worker's own RevalidateForAutoMerge) -- a
+// degraded read that silently satisfies that block is a failure isolated
+// to ONE GitHub endpoint quietly widening what an unattended worker will
+// merge. buildOpenPRFromDetail (below) threads this onto ports.OpenPR.
+// ReviewDecisionDegraded; every caller of THAT field must fail closed
+// (treat a degraded read as equivalent to "changes requested", never as
+// "no changes requested") -- see revalidateCore's own doc comment
+// (internal/app/decisioninbox/revalidate.go) for where that fail-closed
+// direction is actually enforced on the unattended path, and
+// buildPROpenItem's own doc comment (aggregate.go) for the read-model
+// side. hasApproving/hasChangesRequested are both left false alongside a
+// true degraded (never a meaningful reading of either), exactly mirroring
+// RevertReviewStateUnknown/CIConclusionUnknown's own established
+// "degraded means the OTHER fields carry no signal at all" convention
+// elsewhere in this package.
+func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repo string, number int, token string) (hasApproving, hasChangesRequested, degraded bool) {
 	path := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews?per_page=100", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), number)
 	body, err := a.doGet(ctx, path, token)
 	if err != nil {
-		return false, false
+		return false, false, true
 	}
 	var reviews []reviewItemResponse
 	if err := json.Unmarshal(body, &reviews); err != nil {
-		return false, false
+		return false, false, true
 	}
 
 	latestDecisionByReviewer := make(map[int64]string, len(reviews))
@@ -591,7 +638,7 @@ func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repo string, n
 			hasChangesRequested = true
 		}
 	}
-	return hasApproving, hasChangesRequested
+	return hasApproving, hasChangesRequested, false
 }
 
 // fetchChangedFilePaths fetches number's own changed files (first page,

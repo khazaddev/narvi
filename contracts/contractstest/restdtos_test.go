@@ -1014,4 +1014,140 @@ func TestMergePullRequestResponseRoundTrip(t *testing.T) {
 	})
 }
 
+// TestRepoSettingsRoundTrip covers Step 62's own (§21.1/§21.2) extension
+// of this DTO -- two variants, mirroring this file's own established
+// "one t.Run per distinct nullable-field combination" discipline
+// (TestDecisionInboxItemRoundTrip's own doc comment): a repo with every
+// §21.2 field configured, and a freshly-created repo with none of them
+// configured yet (nil/zero-valued), so an accidental omitempty on any
+// ONE of the new nullable fields fails loudly regardless of which
+// variant happens to exercise it.
+func TestRepoSettingsRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/RepoSettings")
+
+	t.Run("FullyConfigured", func(t *testing.T) {
+		maxFiles := 20
+		tags := restdtos.RepoSettingsSensitiveBlastRadiusTags{
+			restdtos.RepoSettingsSensitiveBlastRadiusTagsElemAuth,
+			restdtos.RepoSettingsSensitiveBlastRadiusTagsElemMigrations,
+		}
+		percent := 12.5
+		roundTrip(t, sch, restdtos.RepoSettings{
+			RepoFullName:               "acme/widgets",
+			BlockOnHighRisk:            true,
+			SentinelAutofixEnabled:     false,
+			AutoMergeEnabled:           true,
+			MaxAutoApproveFilesChanged: &maxFiles,
+			SensitiveBlastRadiusTags:   &tags,
+			ContradictionRateComputed:  true,
+			ContradictionRatePercent:   &percent,
+			ContradictionSampleSize:    8,
+		})
+	})
+
+	t.Run("NotYetConfigured", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.RepoSettings{
+			RepoFullName:               "acme/never-configured",
+			BlockOnHighRisk:            false,
+			SentinelAutofixEnabled:     false,
+			AutoMergeEnabled:           false,
+			MaxAutoApproveFilesChanged: nil,
+			SensitiveBlastRadiusTags:   nil,
+			ContradictionRateComputed:  false,
+			ContradictionRatePercent:   nil,
+			ContradictionSampleSize:    0,
+		})
+	})
+}
+
+func TestUpdateAutoApprovalSettingsRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/UpdateAutoApprovalSettingsRequest")
+
+	t.Run("Configured", func(t *testing.T) {
+		maxFiles := 15
+		tags := restdtos.UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTags{
+			restdtos.UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemSecrets,
+		}
+		roundTrip(t, sch, restdtos.UpdateAutoApprovalSettingsRequest{
+			MaxAutoApproveFilesChanged: &maxFiles,
+			SensitiveBlastRadiusTags:   &tags,
+		})
+	})
+
+	t.Run("ClearedToDefault", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.UpdateAutoApprovalSettingsRequest{
+			MaxAutoApproveFilesChanged: nil,
+			SensitiveBlastRadiusTags:   nil,
+		})
+	})
+}
+
+func TestUpdateAutoMergeToggleRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/UpdateAutoMergeToggleRequest")
+
+	roundTrip(t, sch, restdtos.UpdateAutoMergeToggleRequest{Enabled: true})
+	roundTrip(t, sch, restdtos.UpdateAutoMergeToggleRequest{Enabled: false})
+}
+
+func TestReviewAnalyticsRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/ReviewAnalytics")
+
+	t.Run("NothingComputedYet", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.ReviewAnalytics{
+			RepoFullName:            "acme/brand-new",
+			TimeseriesComputed:      false,
+			Timeseries:              nil,
+			TopRiskDriversComputed:  false,
+			TopRiskDrivers:          nil,
+			FindingOutcomesComputed: false,
+			FindingOutcomes:         nil,
+		})
+	})
+
+	t.Run("FullyComputed", func(t *testing.T) {
+		day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+		series := restdtos.ReviewAnalyticsTimeseries{
+			{Day: day, AutoCount: 3, NeedsHumanCount: 1, BlockCount: 0},
+		}
+		drivers := restdtos.ReviewAnalyticsTopRiskDrivers{
+			{Tag: restdtos.ReviewAnalyticsTagCountTagAuth, Count: 2},
+			{Tag: restdtos.ReviewAnalyticsTagCountTagMigrations, Count: 1},
+		}
+		outcomes := restdtos.ReviewAnalyticsFindingOutcomes{
+			{Status: restdtos.ReviewAnalyticsFindingStatusCountStatusOpen, Count: 4},
+			{Status: restdtos.ReviewAnalyticsFindingStatusCountStatusRebutted, Count: 2},
+		}
+		roundTrip(t, sch, restdtos.ReviewAnalytics{
+			RepoFullName:            "acme/widgets",
+			TimeseriesComputed:      true,
+			Timeseries:              &series,
+			TopRiskDriversComputed:  true,
+			TopRiskDrivers:          &drivers,
+			FindingOutcomesComputed: true,
+			FindingOutcomes:         &outcomes,
+		})
+	})
+
+	// The one sentinel-vs-real-zero case unique to this DTO (§21.1):
+	// verdicts exist in the window (timeseriesComputed=true, a real
+	// bucket present) but NONE tagged a BlastRadius risk driver --
+	// topRiskDriversComputed=true with a genuinely EMPTY (but non-nil)
+	// array, never confused with the topRiskDriversComputed=false "no
+	// data at all" case above (which is nil, not merely empty).
+	t.Run("VerdictsExistButNoRiskDriversTagged", func(t *testing.T) {
+		day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+		series := restdtos.ReviewAnalyticsTimeseries{{Day: day, AutoCount: 1, NeedsHumanCount: 0, BlockCount: 0}}
+		emptyDrivers := restdtos.ReviewAnalyticsTopRiskDrivers{}
+		roundTrip(t, sch, restdtos.ReviewAnalytics{
+			RepoFullName:            "acme/quiet-week",
+			TimeseriesComputed:      true,
+			Timeseries:              &series,
+			TopRiskDriversComputed:  true,
+			TopRiskDrivers:          &emptyDrivers,
+			FindingOutcomesComputed: false,
+			FindingOutcomes:         nil,
+		})
+	})
+}
+
 func strPtr(s string) *string { return &s }

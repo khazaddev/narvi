@@ -167,7 +167,11 @@ var matrix = map[Action]actionRule{
 	ActionManageMembers:            {allow: roles(RoleAdmin)},
 	ActionToggleSentinelAutoFix:    {allow: roles(RoleAdmin)},
 	ActionConfigureBlockOnHighRisk: {allow: roles(RoleAdmin)},
-	ActionActivateWorkflowBinding:  {allow: roles(RoleAdmin)},
+	// Step 62 (§21.2): arming the per-repo auto-merge toggle -- same row,
+	// same reasoning as ActionToggleSentinelAutoFix immediately above
+	// (action.go's own doc comment).
+	ActionToggleAutoMerge:         {allow: roles(RoleAdmin)},
+	ActionActivateWorkflowBinding: {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against

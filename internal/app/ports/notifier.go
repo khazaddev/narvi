@@ -217,6 +217,39 @@ const (
 	// retry with no dedup logic of its own. Payload is
 	// {"key": "<the blob's own ports.BlobKey, as a plain string>"}.
 	NotificationKindBlobDelete NotificationKind = "blob_delete"
+
+	// NotificationKindSlackDigest is Step 62's own outbox kind (§21.3):
+	// enqueued by internal/app/digest.Pump once per (date, channel), only
+	// after that channel's own digest_send_state row has already been
+	// atomically claimed (SELECT ... FOR UPDATE SKIP LOCKED) -- routes to
+	// internal/app/outboxworker's own digest Slack notifier, a plain
+	// chat.postMessage of internal/domain/digest.Render's own
+	// deterministic, pre-rendered text (never a Block Kit interactive
+	// message -- a digest has no buttons to click). Payload is
+	// slackapi.DigestPayload{ChannelID, Text}.
+	NotificationKindSlackDigest NotificationKind = "slack_digest"
+
+	// NotificationKindLinearDigest is Step 62's own Linear sibling of
+	// NotificationKindSlackDigest above. UNLIKE every other Linear
+	// notification this codebase sends, this one has no existing
+	// AgentSession to post an AgentActivity into -- a digest is not a
+	// reply to any one agent invocation, and linearapi.Client exposes
+	// only AgentSession-scoped activity methods (CreateThoughtActivity/
+	// CreateResponseActivity/CreateErrorActivity), never an organization-
+	// level "post somewhere" capability. This kind is DELIBERATELY wired
+	// (channel discovery + claim-before-act both cover Linear
+	// organizations exactly like Slack channels) so the at-most-one-
+	// send-per-day guarantee is proven for both providers, but its own
+	// notifier (internal/app/outboxworker's own digestLinearNotifier)
+	// always returns a clear, typed error -- surfacing through this
+	// codebase's OWN existing outbox retry-then-dead-letter path
+	// (§5.1) into the decision inbox's own admin-only needs_attention
+	// row, never a silent no-op or a fabricated success. Real delivery
+	// needs a genuinely new Linear API capability this Step's own brief
+	// does not authorize inventing -- named here, not silently left a
+	// gap; see internal/app/outboxworker/digestlinearnotifier.go's own
+	// doc comment for the full "why".
+	NotificationKindLinearDigest NotificationKind = "linear_digest"
 )
 
 // Notification is what Notifier.Deliver needs to deliver ONE outbox entry

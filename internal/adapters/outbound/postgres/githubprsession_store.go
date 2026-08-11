@@ -77,3 +77,12 @@ func (s *GitHubPRSessionStore) SetSessionID(ctx context.Context, repoFullName st
 func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgtype.UUID) (sqlcgen.GithubPrSession, error) {
 	return s.q.GetGitHubPRSessionBySessionID(ctx, sessionID)
 }
+
+// SetHeadSHA is REMOVED as of migrations/000072_turns_review_head_sha.up.sql
+// (§62 review finding C2, CRITICAL, fixed) -- github_pr_sessions.
+// pending_head_sha (and this method) is superseded by turns.
+// review_head_sha, set once at turn-creation time
+// (internal/adapters/inbound/httpapi's createTurnLocked/CreateSessionOnTx)
+// and read back via TurnStore.GetProcessingTurnForSession -- see that
+// migration's own doc comment for the full "why a shared, mutable
+// per-(repo,PR) column was the wrong place for this fact".

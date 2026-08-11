@@ -315,6 +315,50 @@ func (ns NullAutomationTriggerType) Value() (driver.Value, error) {
 	return string(ns.AutomationTriggerType), nil
 }
 
+type DigestSendStatus string
+
+const (
+	DigestSendStatusPending DigestSendStatus = "pending"
+	DigestSendStatusSending DigestSendStatus = "sending"
+	DigestSendStatusSent    DigestSendStatus = "sent"
+	DigestSendStatusFailed  DigestSendStatus = "failed"
+)
+
+func (e *DigestSendStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = DigestSendStatus(s)
+	case string:
+		*e = DigestSendStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for DigestSendStatus: %T", src)
+	}
+	return nil
+}
+
+type NullDigestSendStatus struct {
+	DigestSendStatus DigestSendStatus `json:"digest_send_status"`
+	Valid            bool             `json:"valid"` // Valid is true if DigestSendStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullDigestSendStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.DigestSendStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.DigestSendStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullDigestSendStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.DigestSendStatus), nil
+}
+
 type IdentityLinkedVia string
 
 const (
@@ -1348,6 +1392,15 @@ type AuditLog struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type AutoApprovalOutcome struct {
+	ID           pgtype.UUID        `json:"id"`
+	RepoFullName string             `json:"repo_full_name"`
+	PrNumber     int32              `json:"pr_number"`
+	HeadSha      string             `json:"head_sha"`
+	Outcome      string             `json:"outcome"`
+	DecidedAt    pgtype.Timestamptz `json:"decided_at"`
+}
+
 type Automation struct {
 	ID                    pgtype.UUID                 `json:"id"`
 	Name                  string                      `json:"name"`
@@ -1412,6 +1465,18 @@ type ContractDriftSnapshot struct {
 	LastRepoSha              string             `json:"last_repo_sha"`
 	LastContractsFingerprint string             `json:"last_contracts_fingerprint"`
 	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DigestSendState struct {
+	ID              pgtype.UUID        `json:"id"`
+	SendDate        pgtype.Date        `json:"send_date"`
+	ChannelProvider string             `json:"channel_provider"`
+	ChannelID       string             `json:"channel_id"`
+	Status          DigestSendStatus   `json:"status"`
+	ClaimedAt       pgtype.Timestamptz `json:"claimed_at"`
+	SentAt          pgtype.Timestamptz `json:"sent_at"`
+	LastError       *string            `json:"last_error"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
 type Environment struct {
@@ -1587,6 +1652,9 @@ type RepoSetting struct {
 	RwxPreviewDispatchKey      *string            `json:"rwx_preview_dispatch_key"`
 	RwxPreviewEndpointTemplate *string            `json:"rwx_preview_endpoint_template"`
 	RwxPreviewOrgSlug          *string            `json:"rwx_preview_org_slug"`
+	AutoMergeEnabled           bool               `json:"auto_merge_enabled"`
+	MaxAutoApproveFilesChanged *int32             `json:"max_auto_approve_files_changed"`
+	SensitiveBlastRadiusTags   []byte             `json:"sensitive_blast_radius_tags"`
 }
 
 type ReviewFinding struct {
@@ -1608,6 +1676,23 @@ type ReviewFinding struct {
 	FixPrNumber       *int32             `json:"fix_pr_number"`
 	FirstSeenAt       pgtype.Timestamptz `json:"first_seen_at"`
 	LastSeenAt        pgtype.Timestamptz `json:"last_seen_at"`
+}
+
+type ReviewVerdict struct {
+	ID                pgtype.UUID        `json:"id"`
+	RepoFullName      string             `json:"repo_full_name"`
+	PrNumber          int32              `json:"pr_number"`
+	HeadSha           string             `json:"head_sha"`
+	RiskLevel         string             `json:"risk_level"`
+	Premise           string             `json:"premise"`
+	BlastRadius       []byte             `json:"blast_radius"`
+	FilesChanged      int32              `json:"files_changed"`
+	TestsCoverage     string             `json:"tests_coverage"`
+	DocsDrift         string             `json:"docs_drift"`
+	ProposedShippable string             `json:"proposed_shippable"`
+	Shippable         string             `json:"shippable"`
+	SessionID         pgtype.UUID        `json:"session_id"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 }
 
 type Sandbox struct {
@@ -1704,6 +1789,7 @@ type Turn struct {
 	ProgressNotifiedAt   pgtype.Timestamptz    `json:"progress_notified_at"`
 	Effort               *string               `json:"effort"`
 	EpistemicOutcome     *TurnEpistemicOutcome `json:"epistemic_outcome"`
+	ReviewHeadSha        *string               `json:"review_head_sha"`
 }
 
 type User struct {

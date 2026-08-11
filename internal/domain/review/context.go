@@ -65,6 +65,21 @@ type PreFetchedContext struct {
 	// itself failed/degraded, indistinguishable to this struct by design:
 	// either way there is nothing stack-shaped to add to the context).
 	Stack *StackContext
+	// HeadSHA (§21.1, Step 62) is the commit this context's own Diff was
+	// fetched against -- server-side bookkeeping ONLY, never rendered
+	// into the prompt text by RenderTurnPrompt below (an agent has no
+	// legitimate use for this value, and §21.2's stale-verdict guard
+	// depends on it being sourced independently of anything the model
+	// could see or influence, mirroring Shippable's own "never the
+	// model's self-report" discipline, domain/review's own top-level doc
+	// comment). The caller (internal/app/reviewcontext.Fetch, this
+	// struct's one real producer) persists this to github_pr_sessions.
+	// pending_head_sha, read back at verdict-post time
+	// (httpapi.PostReviewVerdict) -- never threaded through the turn/
+	// tool-call machinery at all. Empty when the fetch that produced Diff
+	// could not determine a head SHA (a degraded, best-effort outcome,
+	// exactly like Diff itself being empty on a failed fetch).
+	HeadSHA string
 }
 
 // diffContentDelimiter and stackContentDelimiter are the fixed tags

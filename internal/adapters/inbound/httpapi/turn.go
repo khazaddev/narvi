@@ -340,6 +340,23 @@ type CreateTurnOptions struct {
 	// (nil, "use the default") by all of them, exactly like Storage
 	// Configured. Only CreateTurn's own REST handler below ever sets it.
 	Effort *string
+
+	// ReviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is the
+	// commit SHA THIS turn's own pre-fetched review diff was anchored to
+	// -- non-nil ONLY for a review-session turn (reviewretrigger.go's own
+	// manual-retrigger path; the GitHub mention/label-retrigger path via
+	// CreateSessionOnTx's own ChildSessionOptions.ReviewHeadSHA, one turn
+	// earlier in a brand-new session's own lifecycle -- see that type's
+	// own doc comment, create.go). Stored verbatim onto turns.
+	// review_head_sha (migrations/000072_turns_review_head_sha.up.sql) at
+	// INSERT time below -- immutable for this turn's own lifetime, unlike
+	// the PREVIOUS github_pr_sessions.pending_head_sha design this fix
+	// replaces (a single, shared, mutable per-(repo,PR) column ANY
+	// later, unrelated turn's own context-fetch could silently
+	// overwrite -- see that migration's own doc comment for the full
+	// "why"). Every OTHER caller of this core (every non-review turn)
+	// leaves this nil, exactly like Effort/StorageConfigured above.
+	ReviewHeadSHA *string
 }
 
 // CreateTurnCore is everything CreateTurn's own doc comment above
@@ -490,10 +507,12 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	var attachmentIDs []pgtype.UUID
 	var storageConfigured bool
 	var effort *string
+	var reviewHeadSHA *string
 	if len(opts) > 0 {
 		attachmentIDs = opts[0].AttachmentIDs
 		storageConfigured = opts[0].StorageConfigured
 		effort = opts[0].Effort
+		reviewHeadSHA = opts[0].ReviewHeadSHA
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -746,12 +765,13 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-		SessionID: sessionID,
-		Status:    sqlcgen.TurnStatusPending,
-		Prompt:    &effectivePrompt,
-		ModelID:   effectiveModelID,
-		Effort:    effectiveEffort,
-		PlanMode:  planMode,
+		SessionID:     sessionID,
+		Status:        sqlcgen.TurnStatusPending,
+		Prompt:        &effectivePrompt,
+		ModelID:       effectiveModelID,
+		Effort:        effectiveEffort,
+		PlanMode:      planMode,
+		ReviewHeadSha: reviewHeadSHA,
 	})
 	if err != nil {
 		logger.Error("httpapi: create turn failed", "error", err)

@@ -1,25 +1,32 @@
 // Package decisioninbox holds the decision inbox's own pure decision
 // functions (Step 60, "decision inbox: read model + API", §16) -- item
-// taxonomy classification helpers, ranking, staleness, an interim auto-
-// approval-eligibility heuristic, assignment-provenance rendering, and the
-// decision-latency median. No I/O, no time.Now(), no randomness (CLAUDE.md/
-// §11): every function here is a pure transform of already-fetched data,
-// exactly like internal/domain/review's own Shippable computation. The
-// actual READ MODEL -- aggregating Postgres (plans, review sessions,
-// sessions, automations, outbox) plus live SourceControl data -- lives one
-// layer up, in internal/app/decisioninbox, which calls these functions but
-// never duplicates their logic.
+// taxonomy classification helpers, ranking, staleness, assignment-
+// provenance rendering, and the decision-latency median. No I/O, no
+// time.Now(), no randomness (CLAUDE.md/§11): every function here is a pure
+// transform of already-fetched data, exactly like internal/domain/review's
+// own Shippable computation. The actual READ MODEL -- aggregating Postgres
+// (plans, review sessions, sessions, automations, outbox) plus live
+// SourceControl data -- lives one layer up, in internal/app/decisioninbox,
+// which calls these functions but never duplicates their logic.
+//
+// This package originally also held an interim, label-driven auto-
+// approval-eligibility heuristic (eligibility.go) — deleted whole by Step
+// 62 (§21.2), which replaced it with a real, deterministic engine living
+// in its own sibling package, internal/domain/autoapproval, since that
+// engine's own criteria (verdict-driven, not label-driven) no longer have
+// anything to do with THIS package's own item-taxonomy/ranking/staleness
+// concerns. internal/app/decisioninbox.computeRealEligibility is the one
+// app-layer call site that bridges the two.
 //
 // # Why this package exists at all, distinct from internal/app/decisioninbox
 //
 // Every OTHER read model in this codebase computes its own classification
 // logic inline, at the app layer, because that logic is trivial (a single
 // status comparison). This one is not: the four-way taxonomy (§16.1),
-// decision-cost ranking, staleness, and (see eligibility.go) the interim
-// auto-approval signal are all real decision logic worth testing in
-// isolation, exhaustively, without spinning up Postgres or a fake GitHub
-// server -- the same reason domain/review carved Shippable out of
-// reviewpost's own posting-endpoint code.
+// decision-cost ranking, and staleness are all real decision logic worth
+// testing in isolation, exhaustively, without spinning up Postgres or a
+// fake GitHub server -- the same reason domain/review carved Shippable out
+// of reviewpost's own posting-endpoint code.
 package decisioninbox
 
 // Kind is one of the four §16.1 item taxonomy values -- a decision inbox
@@ -35,8 +42,8 @@ type Kind string
 
 const (
 	// KindReadyToMerge is an open PR authored by a platform session,
-	// auto-approved (see eligibility.go), CI green at head, and assigned
-	// to the user.
+	// auto-approved (internal/domain/autoapproval.ComputeEligible, Step
+	// 62/§21.2), CI green at head, and assigned to the user.
 	KindReadyToMerge Kind = "ready_to_merge"
 	// KindNeedsReview is a PR where the user is requested reviewer/code
 	// owner and the verdict is >= medium risk or a formal review is

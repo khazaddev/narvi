@@ -75,6 +75,25 @@ type ChildSessionOptions struct {
 	// same time (§17.2: "in the origin PR's own environment -- full
 	// access -- never a scoped prototyping environment").
 	ProvenanceTag *string
+
+	// ReviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is
+	// unrelated to every other field on this struct (none of which this
+	// function's OWN doc comment's "parent/child" framing describes) --
+	// bundled into this SAME trailing-variadic options struct anyway,
+	// mirroring httpapi.CreateTurnOptions' own identical "bundle a
+	// genuinely unrelated, optional, caller-supplied concern behind the
+	// one variadic slot a function already has, rather than a new
+	// parameter that would ripple into every OTHER call site" precedent
+	// (turn.go) -- CreateSessionOnTx is called from several packages
+	// (this one, internal/adapters/inbound/github's own coalesce.go),
+	// and only ONE of them (a brand-new GitHub PR review session's own
+	// FIRST turn) ever has a review head SHA to supply. Non-nil only for
+	// that ONE caller; every other caller (including this Step's own
+	// sentinel-auto-fix spawner) leaves it nil. Stored verbatim onto the
+	// new session's own first turn (turns.review_head_sha) at INSERT time
+	// below -- see CreateTurnOptions.ReviewHeadSHA's own doc comment
+	// (turn.go) for the full "why".
+	ReviewHeadSHA *string
 }
 
 // childSessionOptionsFrom returns opts[0] if the caller supplied one, or
@@ -667,12 +686,13 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// excludes per §20.3 exactly like every other caller.
 		firstTurnPrompt := turn.MaybeInjectEpistemicPreamble(epistemicCheckDefault, created.EpistemicCheckEnabled, req.PlanMode, *req.Prompt)
 		if _, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-			SessionID: created.ID,
-			Status:    sqlcgen.TurnStatusPending,
-			Prompt:    &firstTurnPrompt,
-			ModelID:   (*string)(req.ModelId),
-			Effort:    (*string)(req.Effort),
-			PlanMode:  req.PlanMode,
+			SessionID:     created.ID,
+			Status:        sqlcgen.TurnStatusPending,
+			Prompt:        &firstTurnPrompt,
+			ModelID:       (*string)(req.ModelId),
+			Effort:        (*string)(req.Effort),
+			PlanMode:      req.PlanMode,
+			ReviewHeadSha: opts.ReviewHeadSHA,
 		}); err != nil {
 			logger.Error("httpapi: create turn failed", "error", err)
 			return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}

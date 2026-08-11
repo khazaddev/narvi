@@ -33,6 +33,21 @@ const githubDeliveryProvider = "github"
 // digest.
 const signatureHeaderPrefix = "sha256="
 
+// diffFetcher is Config.DiffFetcher's own declared type -- the union of
+// reviewcontext.Fetcher (review-turn-context assembly, §62 review finding
+// C2's own narrower interface) and prDiffFetcher (pullrequestevent.go's
+// sentinel-fix merge-gate, a genuinely different consumer of the SAME
+// underlying *githubapi.Adapter) -- see Config.DiffFetcher's own doc
+// comment for why this ONE config field serves both. *githubapi.Adapter
+// satisfies this directly (GetPullRequest/GetCompareDiff/
+// GetPullRequestDiff are all real adapter methods); a fake in this
+// package's own tests only needs to implement whichever subset the test
+// actually exercises, plus stub the rest.
+type diffFetcher interface {
+	reviewcontext.Fetcher
+	prDiffFetcher
+}
+
 // Config bundles what NewHandler needs beyond the stores/registry already
 // bundled in a *SessionCoalescer -- both required in every stage, see
 // internal/platform/config.go's own gitHubWebhookSecretEnvVarName doc
@@ -92,13 +107,20 @@ type Config struct {
 	// §17.6) via internal/app/reviewcontext.Fetch -- folded into every
 	// review turn's own prompt text (review.RenderTurnPrompt) BEFORE
 	// coalescer.CreateOrJoin, so both the WINNER and REUSE branches get it
-	// identically without either needing its own copy of this logic.
-	// Nil-safe: nil (this package's own handler_test.go, or any other
-	// minimal wiring that doesn't care about this Step) simply skips the
-	// fetch entirely -- see this file's own call site doc comment.
-	// *githubapi.Adapter (the SAME instance PullRequests/Comments above
-	// already wire, cmd/control-plane/main.go) satisfies this directly.
-	DiffFetcher reviewcontext.Fetcher
+	// identically without either needing its own copy of this logic. This
+	// SAME field also backs pullrequestevent.go's own
+	// githubMergeGateDataSource.diffFetcher (Step 48's sentinel-fix
+	// merge-gate, a genuinely different consumer with a genuinely
+	// different need -- see prDiffFetcher's own doc comment,
+	// pullrequestevent.go) -- diffFetcher (below) is the union of both
+	// interfaces so this ONE config field can keep serving both, exactly
+	// as it always has. Nil-safe: nil (this package's own
+	// handler_test.go, or any other minimal wiring that doesn't care
+	// about this Step) simply skips the fetch entirely -- see this
+	// file's own call site doc comment. *githubapi.Adapter (the SAME
+	// instance PullRequests/Comments above already wire,
+	// cmd/control-plane/main.go) satisfies this directly.
+	DiffFetcher diffFetcher
 
 	// ReviewFindings (Step 48, "sentinels + suggestions", §22.1) fetches
 	// this PR's own currently open+rebutted review_findings rows
@@ -408,10 +430,30 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				m.CommentBody = alreadyAnswered + m.CommentBody
 			}
 		}
+		// fetchedHeadSHA (§62 review finding C2, CRITICAL, fixed) is
+		// captured OUTSIDE the block below so it survives to the
+		// CreateOrJoin call further down, which threads it onto the
+		// turn this mention actually creates/joins (turns.
+		// review_head_sha) -- see CreateOrJoin's own doc comment
+		// (coalesce.go) for the full "why" this is no longer a
+		// post-CreateOrJoin best-effort write to a shared
+		// github_pr_sessions column the way it was before this fix.
+		//
+		// m.HeadSHA (this mention's own webhook-payload-sourced head SHA,
+		// when the triggering event carries one -- payload.go/
+		// headresolve.go) is deliberately NOT consulted here anymore:
+		// reviewcontext.Fetch now unconditionally resolves its own
+		// HeadSHA fresh, immediately before pinning the diff fetch to it
+		// (that function's own doc comment explains why a webhook-sourced
+		// value is no longer trustworthy for that purpose) -- m.HeadSHA
+		// itself is left fully populated by its own existing parsing
+		// logic regardless, simply unread on this one path now.
+		var fetchedHeadSHA string
 		if cfg.DiffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(m.RepoFullName); ok {
 				prCtx := reviewcontext.Fetch(ctx, logger, cfg.DiffFetcher, cfg.Timeouts, owner, repo, m.PRNumber, cfg.BotToken, m.Stack)
 				m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
+				fetchedHeadSHA = prCtx.HeadSHA
 			} else {
 				logger.Warn("github: could not split repo_full_name into owner/repo, skipping pre-fetched review context",
 					"repo_full_name", m.RepoFullName, "pr_number", m.PRNumber)
@@ -466,7 +508,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor, m.IsLabelRetrigger, mentionText)
+		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor, m.IsLabelRetrigger, mentionText, fetchedHeadSHA)
 		if err != nil {
 			if errors.Is(err, ErrActorNotAuthorized) {
 				// ErrActorNotAuthorized fires for TWO distinct reasons
@@ -547,6 +589,16 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+
+		// §62 review finding C2 (CRITICAL, fixed): fetchedHeadSHA is
+		// already persisted onto the turn CreateOrJoin just created/joined
+		// (turns.review_head_sha, set atomically as part of that turn's
+		// own INSERT) -- no separate post-hoc write needed here anymore;
+		// the PREVIOUS best-effort github_pr_sessions.pending_head_sha
+		// write this comment used to describe is REMOVED by this fix (see
+		// migrations/000072_turns_review_head_sha.up.sql's own doc
+		// comment for the full "why" a shared, mutable per-(repo,PR)
+		// column was the wrong place for this fact).
 
 		// Step 50 ("release PR review", §15): only the WINNER (brand-new
 		// session) path ever triggers release detection/the manifest check

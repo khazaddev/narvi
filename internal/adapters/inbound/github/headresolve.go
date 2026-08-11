@@ -107,6 +107,15 @@ func resolveIssueCommentHead(ctx context.Context, logger *slog.Logger, resolver 
 
 	headBranch := pr.HeadRef
 	m.HeadBranch = &headBranch
+	// Step 62 (§21.1): the SAME already-in-flight GetPullRequest call
+	// also carries the PR's current head SHA -- captured here for free,
+	// mirroring m.Stack's own identical "one call already made for head-
+	// branch resolution, no second call just for this" reasoning
+	// immediately above.
+	if pr.HeadSHA != "" {
+		headSHA := pr.HeadSHA
+		m.HeadSHA = &headSHA
+	}
 	if pr.HeadRepoName != "" && pr.HeadRepoCloneURL != "" {
 		// The PR's real head repo (may be a fork; identical to what
 		// pull_request_review_comment's own payload already carries

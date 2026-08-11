@@ -568,6 +568,12 @@ func (a *Adapter) doPost(ctx context.Context, path, token string, reqBody []byte
 type pullRequestResponse struct {
 	Head struct {
 		Ref string `json:"ref"`
+		// SHA (Step 62, §21.1) is this PR's own CURRENT head commit --
+		// review_verdicts.head_sha's own ultimate source when this
+		// response is the fallback fetch internal/app/reviewcontext.Fetch
+		// makes for a trigger path with no head SHA already in hand (see
+		// PullRequest.HeadSHA's own doc comment below).
+		SHA string `json:"sha"`
 		// Repo is a pointer -- GitHub's own webhook/REST documentation
 		// states this field is nullable: null when the head repository has
 		// been deleted (e.g. a fork removed after the PR was opened).
@@ -628,6 +634,12 @@ type PullRequest struct {
 	// HeadRef is the PR's real head branch name (GitHub's own
 	// "head.ref") -- never empty for a real, open GitHub pull request.
 	HeadRef string
+	// HeadSHA (Step 62, §21.1) is the PR's CURRENT head commit SHA
+	// (GitHub's own "head.sha") -- internal/app/reviewcontext.Fetch's own
+	// fallback source for review_verdicts.head_sha when the caller has
+	// no head SHA already in hand from its own trigger payload (see that
+	// package's own doc comment).
+	HeadSHA string
 	// HeadRepoName/HeadRepoCloneURL are the PR's real head repo (may be a
 	// fork) -- empty when GitHub's own "head.repo" was null (the head/fork
 	// repo has since been deleted). Callers MUST treat this exactly like
@@ -688,7 +700,7 @@ func (a *Adapter) GetPullRequest(ctx context.Context, owner, repo string, number
 		return PullRequest{}, fmt.Errorf("githubapi: decode pull request response: %w", err)
 	}
 
-	pr := PullRequest{HeadRef: parsed.Head.Ref, BaseRef: parsed.Base.Ref}
+	pr := PullRequest{HeadRef: parsed.Head.Ref, HeadSHA: parsed.Head.SHA, BaseRef: parsed.Base.Ref}
 	if parsed.Head.Repo != nil {
 		pr.HeadRepoName = parsed.Head.Repo.Name
 		pr.HeadRepoCloneURL = parsed.Head.Repo.CloneURL
@@ -795,6 +807,84 @@ func (a *Adapter) GetPullRequestDiff(ctx context.Context, owner, repo string, nu
 		// SUCCESS response would have been a raw diff -- the Accept header
 		// only affects a 2xx body's shape, mirroring doGet's own identical
 		// error-envelope parsing.
+		message := "no error body"
+		var parsedErr githubErrorBody
+		if jsonErr := json.Unmarshal(body, &parsedErr); jsonErr == nil && parsedErr.Message != "" {
+			message = parsedErr.Message
+		} else if len(body) > 0 {
+			message = "error body did not match GitHub's expected error envelope"
+		}
+		return "", false, &APIError{Status: resp.StatusCode, Message: message}
+	}
+
+	if len(body) > maxPRDiffResponseBytes {
+		return string(body[:maxPRDiffResponseBytes]), true, nil
+	}
+	return string(body), false, nil
+}
+
+// GetCompareDiff fetches the unified diff between base and head -- EXACT
+// commit SHAs (or refs), never re-resolved by GitHub at request time --
+// via GitHub's own compare-two-commits endpoint (GET /repos/{owner}/
+// {repo}/compare/{base}...{head}), content-negotiated for the SAME diff
+// media type GetPullRequestDiff above uses (diffAcceptHeader): the
+// compare endpoint documents the identical custom-media-type family
+// (https://docs.github.com/rest/commits/commits#compare-two-commits,
+// "Custom media types" section lists "diff" among this endpoint's own
+// supported Accept values, fetched 2026-08-11) -- not a distinct diff
+// FORMAT, just a distinct RESOURCE, requested the same way. This
+// adapter's own ListMergedBetween (mergedbetween.go) already calls this
+// exact endpoint (in GitHub's default JSON shape, for commit discovery)
+// -- this method is the SAME URL family, content-negotiated for raw diff
+// text instead.
+//
+// §62 review finding C2 (CRITICAL, fixed): UNLIKE GetPullRequestDiff
+// (which always reflects the PR's CURRENT head, a moving target a slow
+// caller can race against), this PINS the diff to an EXACT head commit:
+// two calls a second apart against the identical (base, head) pair
+// return byte-identical results regardless of what has since been
+// pushed to the PR, because head here is never "whatever this PR's
+// current HEAD happens to be right now" the way GetPullRequestDiff's own
+// /pulls/{number} target implicitly is. internal/app/reviewcontext.Fetch
+// (this method's one real caller) relies on exactly this property: it
+// resolves head (via GetPullRequest) FIRST, then fetches the diff PINNED
+// to that SAME value, so the returned diff is, BY CONSTRUCTION, the diff
+// at the SHA the caller goes on to persist as review_verdicts.head_sha
+// -- never two independently-raceable reads that could silently
+// disagree about which commit either one reflects.
+//
+// truncated/error handling both mirror GetPullRequestDiff's own
+// identical discipline exactly (same size cap, same error-envelope
+// parsing, same plain-error convention) -- deliberately not
+// consolidated into one shared helper parameterized by URL: the two
+// target semantically different GitHub resources (a PR's own current
+// state vs. an explicit commit-range compare), and a future change to
+// one's own error handling should not silently ripple into the other
+// merely because they happened to share a helper today.
+func (a *Adapter) GetCompareDiff(ctx context.Context, owner, repo, base, head, token string) (diff string, truncated bool, err error) {
+	path := fmt.Sprintf("%s/repos/%s/%s/compare/%s...%s", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(base), url.PathEscape(head))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", false, fmt.Errorf("githubapi: build get compare diff request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", diffAcceptHeader)
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return "", false, fmt.Errorf("githubapi: get compare diff request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	// Same cap/off-by-one-avoidance discipline as GetPullRequestDiff above
+	// -- see that method's own doc comment for why one byte past the cap
+	// is read.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPRDiffResponseBytes+1))
+	if err != nil {
+		return "", false, fmt.Errorf("githubapi: read compare diff response: %w", err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		message := "no error body"
 		var parsedErr githubErrorBody
 		if jsonErr := json.Unmarshal(body, &parsedErr); jsonErr == nil && parsedErr.Message != "" {

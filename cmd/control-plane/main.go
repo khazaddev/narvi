@@ -45,9 +45,11 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/rwx"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/slackapi"
 	"github.com/khazaddev/narvi/internal/app/automation"
+	"github.com/khazaddev/narvi/internal/app/automerge"
 	"github.com/khazaddev/narvi/internal/app/chatgptlink"
 	"github.com/khazaddev/narvi/internal/app/chatgptrefresh"
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
+	"github.com/khazaddev/narvi/internal/app/digest"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
@@ -55,6 +57,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reconciler"
 	"github.com/khazaddev/narvi/internal/app/releasereview"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/app/uploadsweep"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -366,6 +369,30 @@ func serve() error {
 	// shared, never a second independently-constructed copy.
 	reviewFindingStore := postgres.NewReviewFindingStore(pool)
 	sentinelFixStore := postgres.NewSentinelFixStore(pool)
+	// reviewVerdictStore/autoApprovalOutcomeStore/digestSendStateStore
+	// (Step 62, "review verdict persistence, analytics, digest &
+	// automated approval", §21) back the verdict-posting tool's own
+	// review_verdicts insert (reviewverdict.go), the real auto-approval
+	// eligibility engine's own latest-verdict read (both decision-inbox
+	// call sites, internal/app/decisioninbox), the contradiction-rate
+	// calibration read model, and the daily digest -- one store each,
+	// shared, never a second independently-constructed copy.
+	reviewVerdictStore := postgres.NewReviewVerdictStore(pool)
+	autoApprovalOutcomeStore := postgres.NewAutoApprovalOutcomeStore(pool)
+	digestSendStateStore := postgres.NewDigestSendStateStore(pool)
+	reviewVerdictDeps := appreviewverdict.Deps{
+		ReviewVerdicts:       reviewVerdictStore,
+		RepoSettings:         repoSettingsStore,
+		ReviewFindings:       reviewFindingStore,
+		AutoApprovalOutcomes: autoApprovalOutcomeStore,
+		Timeouts:             cfg.Timeouts,
+	}
+	// digestChannelStore (Step 62, §21.3) backs internal/app/digest's own
+	// channel-discovery step -- constructed here, alongside its own
+	// sibling stores, though the digest.Deps/automerge.Deps bundles that
+	// actually use it are assembled further below, once decisionInboxDeps
+	// (automerge.Deps embeds the full decisioninbox.Deps) exists.
+	digestChannelStore := postgres.NewDigestChannelStore(pool)
 	// workflowStore (Step 55, "workflow execution engine", §25.6) backs
 	// the generic step-outcome-posting tool (workflowstepoutcome.go) --
 	// sessionactor's own Registry constructs its OWN WorkflowStore
@@ -558,7 +585,7 @@ func serve() error {
 	// reviewpost.RerunGuidance) is built to be recognized by that SAME
 	// regex (§5.2).
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, cfg.GitHubBotHandle))
+		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, reviewVerdictStore, turnStore, cfg.GitHubBotHandle))
 
 	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6):
 	// the GENERIC step-outcome-posting tool -- deliberately mounted
@@ -909,7 +936,33 @@ func serve() error {
 		SCMCache:           decisionInboxSCMCache,
 		TokenEncryptionKey: cfg.TokenEncryptionKey,
 		Timeouts:           cfg.Timeouts,
+		ReviewVerdict:      reviewVerdictDeps,
 	}
+
+	// automergeWorker/digestPump (Step 62, §21.2 stage 2/§21.3): both
+	// started below, alongside every other background loop, through the
+	// SAME errgroup (§11: no naked goroutine). automergeWorker reuses
+	// decisionInboxDeps in full (internal/app/decisioninbox.
+	// RevalidateForAutoMerge, its own re-validation call, needs every
+	// store that function already depends on) plus sourceControl/
+	// cfg.GitHubBotToken -- the bot credential, since a background
+	// worker has no clicking human's own token to reuse (see
+	// automerge.Deps' own doc comment).
+	automergeWorker := automerge.New(automerge.Deps{
+		DecisionInbox: decisionInboxDeps,
+		SourceControl: sourceControl,
+		AuditLog:      auditLogStore,
+		BotToken:      cfg.GitHubBotToken,
+		Timeouts:      cfg.Timeouts,
+	})
+	digestPump := digest.New(digest.Deps{
+		Channels:      digestChannelStore,
+		SendState:     digestSendStateStore,
+		Outbox:        outboxStore,
+		ReviewVerdict: reviewVerdictDeps,
+		Timeouts:      cfg.Timeouts,
+	})
+
 	router.Route("/api/decision-inbox", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.ListDecisionInbox(decisionInboxDeps))
@@ -1018,8 +1071,36 @@ func serve() error {
 	// configuring a setting, not the sandbox agent calling a tool).
 	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore))
+		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore, reviewVerdictDeps))
 		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore))
+	})
+
+	// /api/repos/{owner}/{repo}/auto-approval-settings,
+	// /api/repos/{owner}/{repo}/auto-merge (Step 62, §21.2): TWO further,
+	// separately-gated routes -- see httpapi/reposettings.go's own
+	// PutAutoApprovalSettings/PutAutoMergeToggle doc comments for why
+	// these are not folded into PUT /settings above (a maintainer
+	// authorized only for the auto-approval-config row, §13.3 row 5,
+	// must never be forced through that endpoint's own admin-only gates,
+	// row 6, just to reach it).
+	router.Route("/api/repos/{owner}/{repo}/auto-approval-settings", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutAutoApprovalSettings(repoSettingsStore, reviewVerdictDeps))
+	})
+	router.Route("/api/repos/{owner}/{repo}/auto-merge", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutAutoMergeToggle(repoSettingsStore, reviewVerdictDeps))
+	})
+
+	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):
+	// read-only GET over the three analytics rollups (timeseries,
+	// top-risk-driver breakdown, "Review finding outcomes" KPI) -- see
+	// httpapi/reviewanalytics.go's own doc comment. Gated by the existing
+	// authz.ActionViewAnalytics (§13.3 row 1: every role, including
+	// viewer), unlike every §21.2 write-side route above.
+	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps))
 	})
 
 	// /api/repos/{owner}/{repo}/provider-credentials,
@@ -1236,6 +1317,17 @@ func serve() error {
 		ports.NotificationKindSlackWorkflowDecision:  planSlackNotifier,
 		ports.NotificationKindLinearWorkflowDecision: linearNotifier,
 		ports.NotificationKindGitHubWorkflowDecision: githubNotifier,
+		// Step 62 ("review verdict persistence, analytics, digest &
+		// automated approval", §21.3): the deterministic daily digest's
+		// own two outbox kinds. digestSlackNotifier reuses the SAME
+		// *slackapi.Client every other Slack notifier above already
+		// uses; digestLinearNotifier takes no dependencies at all -- see
+		// that type's own doc comment (outboxworker/digestlinearnotifier.go)
+		// for why it always returns a clear, typed error rather than
+		// actually delivering anything (no organization-level Linear post
+		// capability exists in this codebase yet).
+		ports.NotificationKindSlackDigest:  outboxworker.NewDigestSlackNotifier(slackNotifier),
+		ports.NotificationKindLinearDigest: outboxworker.NewDigestLinearNotifier(),
 	}
 
 	// rwxPreviewNotifier/githubPreviewLinkNotifier (Step 57, "RWX provider
@@ -1403,6 +1495,30 @@ func serve() error {
 	group.Go(func() error {
 		if err := automationEngine.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
 			return fmt.Errorf("automation engine: %w", err)
+		}
+		return nil
+	})
+
+	// Step 62 (§21.2 stage 2, "auto-merge"): started/shut down through
+	// this SAME errgroup as every other background loop above -- no
+	// naked goroutine (§11) -- with the identical context.Canceled
+	// carve-out every other background loop already establishes for
+	// normal shutdown.
+	group.Go(func() error {
+		if err := automergeWorker.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("auto-merge worker: %w", err)
+		}
+		return nil
+	})
+
+	// Step 62 (§21.3, "deterministic daily digest"): started/shut down
+	// through this SAME errgroup as every other background loop above --
+	// no naked goroutine (§11) -- with the identical context.Canceled
+	// carve-out every other background loop already establishes for
+	// normal shutdown.
+	group.Go(func() error {
+		if err := digestPump.Run(groupCtx); err != nil && !errors.Is(err, context.Canceled) {
+			return fmt.Errorf("digest pump: %w", err)
 		}
 		return nil
 	})

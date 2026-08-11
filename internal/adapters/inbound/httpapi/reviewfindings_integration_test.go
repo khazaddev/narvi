@@ -352,6 +352,9 @@ func (f *applySuggestionFakeSourceControl) RegisterPRStack(context.Context, port
 func (f *applySuggestionFakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
 	return errors.New("not implemented")
 }
+func (f *applySuggestionFakeSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
+	return ports.OpenPR{}, false, errors.New("not implemented")
+}
 func (f *applySuggestionFakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	return nil, false, errors.New("not implemented")
 }

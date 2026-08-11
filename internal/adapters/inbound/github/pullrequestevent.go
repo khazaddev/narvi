@@ -62,7 +62,6 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/auditlog"
-	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/sentinelfix"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -111,11 +110,33 @@ func (notImplementedFixMerger) CherryPickAndMerge(context.Context, string, strin
 	return ErrCherryPickMergeNotImplemented
 }
 
+// prDiffFetcher is githubMergeGateDataSource's own narrow slice of
+// *githubapi.Adapter's real diff-fetching surface -- JUST
+// GetPullRequestDiff, the PR's own CURRENT diff (this file's ChangedFiles
+// below parses it for changed file paths, synchronously, at merge-gate-
+// evaluation time; there is no later cross-read this needs to stay
+// anchored against the way review_verdicts.head_sha does, so
+// GetPullRequestDiff's own "always reflects the PR's current head" shape
+// is exactly right here, unlike reviewcontext.Fetch's own now-different
+// need -- see that function's own doc comment, fetch.go). Deliberately
+// its OWN small interface (mirroring PullRequestResolver's own identical
+// "small interface over a real outbound call" precedent this file already
+// cites) rather than continuing to reuse reviewcontext.Fetcher for
+// convenience: §62 review finding C2 narrowed THAT interface to exactly
+// what review-turn-context assembly needs (GetPullRequest/GetCompareDiff),
+// which no longer includes GetPullRequestDiff at all -- this call site's
+// own need was always genuinely different, and borrowing a neighboring
+// interface only worked by coincidence until that interface's own shape
+// changed out from under it.
+type prDiffFetcher interface {
+	GetPullRequestDiff(ctx context.Context, owner, repo string, number int32, token string) (diff string, truncated bool, err error)
+}
+
 // mergeGateDataSource gathers the three REAL-WORLD facts sentinelfix.
 // EvaluateMergeGate's own pure policy needs, beyond the toggle (which the
 // caller reads directly from repo_settings) -- a narrow, injectable
 // interface so the orchestration below is testable with a fake, mirroring
-// this package's own established PullRequestResolver/reviewcontext.Fetcher
+// this package's own established PullRequestResolver/prDiffFetcher
 // precedent for "a small interface over a real outbound call."
 type mergeGateDataSource interface {
 	// ChangedFiles returns every file path the fix PR's own diff touches.
@@ -151,7 +172,7 @@ type mergeGateDataSource interface {
 // above); CIStatus/MergeableCleanly are a named, NOT-yet-implemented gap
 // (this file's own top doc comment) -- both fail closed.
 type githubMergeGateDataSource struct {
-	diffFetcher  reviewcontext.Fetcher
+	diffFetcher  prDiffFetcher
 	pullRequests PullRequestResolver
 	botToken     string
 	timeouts     platform.Timeouts

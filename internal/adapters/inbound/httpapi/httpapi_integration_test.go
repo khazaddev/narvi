@@ -50,6 +50,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/chatgptlink"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -170,6 +171,10 @@ type testRig struct {
 	// behavior (reviewverdict_integration_test.go).
 	reviewFindings *narvipg.ReviewFindingStore
 	sentinelFixes  *narvipg.SentinelFixStore
+
+	// reviewVerdicts (Step 62, §21.1) backs the verdict-posting route's
+	// own review_verdicts insert (reviewverdict.go).
+	reviewVerdicts *narvipg.ReviewVerdictStore
 
 	// sourceControl backs the apply-suggestion route's own GetFileContent/
 	// UpdateFileContent calls -- defaults to nil (ApplySuggestion's own
@@ -300,6 +305,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		botHandle:             "narvi-test-bot",
 		reviewFindings:        narvipg.NewReviewFindingStore(pool),
 		sentinelFixes:         narvipg.NewSentinelFixStore(pool),
+		reviewVerdicts:        narvipg.NewReviewVerdictStore(pool),
 		automations:           narvipg.NewAutomationStore(pool),
 		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
 		providerCredentials:   narvipg.NewProviderCredentialStore(pool),
@@ -425,7 +431,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2) is mounted
 	// the SAME way -- see reviewverdict.go's own doc comment.
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.botHandle))
+		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.reviewVerdicts, rig.turns, rig.botHandle))
 	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6)
 	// is mounted the SAME way -- see workflowstepoutcome.go's own doc
 	// comment.
@@ -456,10 +462,38 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// /api/repos/{owner}/{repo}/settings (Step 47) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
 	// (see reposettings.go's own doc comment).
+	//
+	// reviewVerdictDeps (Step 62, §21.1/§21.2) is built fresh here, from
+	// stores this rig already constructs elsewhere (rig.reviewVerdicts/
+	// rig.reviewFindings) plus two one-off stores no other route in this
+	// rig needs -- mirrors cmd/control-plane/main.go's own identical
+	// bundle, never a second, independently-maintained Deps shape.
+	reviewVerdictDeps := appreviewverdict.Deps{
+		ReviewVerdicts:       rig.reviewVerdicts,
+		RepoSettings:         rig.repoSettings,
+		ReviewFindings:       rig.reviewFindings,
+		AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(rig.pool),
+		Timeouts:             platform.DefaultTimeouts(),
+	}
 	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings))
+		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings, reviewVerdictDeps))
 		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings))
+	})
+	router.Route("/api/repos/{owner}/{repo}/auto-approval-settings", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Put("/", httpapi.PutAutoApprovalSettings(rig.repoSettings, reviewVerdictDeps))
+	})
+	router.Route("/api/repos/{owner}/{repo}/auto-merge", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Put("/", httpapi.PutAutoMergeToggle(rig.repoSettings, reviewVerdictDeps))
+	})
+	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1) --
+	// mounted behind auth.Middleware exactly like cmd/control-plane/
+	// main.go's own wiring (see reviewanalytics.go's own doc comment).
+	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps))
 	})
 	// /api/repos/{owner}/{repo}/provider-credentials,
 	// /api/environments/{environmentID}/provider-credentials,

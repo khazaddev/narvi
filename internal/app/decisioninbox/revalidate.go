@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	"github.com/khazaddev/narvi/internal/app/ports"
-	"github.com/khazaddev/narvi/internal/domain/decisioninbox"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
+	"github.com/khazaddev/narvi/internal/domain/autoapproval"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
 )
 
 // RevalidateForMerge re-checks, LIVE and never cached (§16.2, §5.2's own
@@ -21,40 +23,23 @@ import (
 // presented as live truth" -- an action endpoint is the one place "live
 // truth" is exactly what's required).
 //
-// Re-derives the EXACT SAME criteria buildPROpenItem used to classify
-// this PR as ready_to_merge in the first place (§17 exclusion, not a
-// draft, not a handoff PR, platform-authored, and this Step's own interim
-// ComputeAutoApprovalEligible), PLUS one fact the read model fetches but
-// never gates on (HasChangesRequested, immediately below) -- never a
-// narrower "just check CI is still green" shortcut, since ANY of these
-// facts (a new commit landed dropping CI red, a reviewer requested
-// changes, a needs-human label applied, the toggle...) could have
-// changed since the cached queue was last rendered.
+// Resolves the target PR via a live, actor-scoped ListOpenPRsForUser
+// search (the human path's own natural "is this PR genuinely assigned to
+// the clicking actor" proof, §60 review finding A4's own reasoning,
+// unchanged by this Step), then delegates every remaining check to
+// revalidateCore below -- the SAME core RevalidateForAutoMerge (§21.2
+// stage 2) shares, so a human-clicked confirm and a machine-initiated
+// merge are NEVER independently-maintained checks that could silently
+// drift apart (§21.2: "a deliberate reuse, not a parallel merge path").
 //
-// The "approval state" this function re-checks (§60 review finding A4) is
-// SPECIFICALLY GitHub's own HasChangesRequested -- treated as a hard
-// merge blocker, since nobody should be able to one-click merge a PR a
-// human explicitly requested changes on, and this fact is already fetched
-// for every OpenPR at no extra cost. It deliberately does NOT require
-// GitHub's own HasApprovingReview: §16.1 defines ready_to_merge's own
-// "approval" as auto-approval BY THE DETERMINISTIC ELIGIBILITY ENGINE
-// (ComputeAutoApprovalEligible below), not a human GitHub review --
-// requiring a human review here on top of that would silently redefine
-// what "auto-approved" means for exactly the population this endpoint
-// exists to fast-path. HasApprovingReview is surfaced to the actor as a
-// plain display field instead (Item.HasApprovingReview) -- read by
-// something, never fetched and then discarded.
-//
-// A store error from EITHER of the two structural/eligibility sub-checks
-// below (the §17 sentinel-fix exclusion, the open-findings count) is
-// propagated outright as err, refusing the merge (§60 review findings
-// A1/A3's own "fail CLOSED" requirement) -- neither is a legitimate
-// "this PR fails eligibility" domain answer the way every OTHER ok=false
-// return below is; both are infrastructure failures this function has no
-// safe way to interpret as "not blocking", so the caller (httpapi's
-// MergePullRequest) surfaces a 500 and the merge simply does not proceed,
-// exactly like a failure resolving actorGitHubID's own open-PR list
-// itself already does.
+// A store error from the §17 sentinel-fix exclusion or the open-findings
+// count (both inside revalidateCore) is propagated outright as err,
+// refusing the merge (§60 review findings A1/A3's own "fail CLOSED"
+// requirement) -- neither is a legitimate "this PR fails eligibility"
+// domain answer the way every OTHER ok=false return is; both are
+// infrastructure failures this function has no safe way to interpret as
+// "not blocking", so the caller (httpapi's MergePullRequest) surfaces a
+// 500 and the merge simply does not proceed.
 //
 // ok=true only when every check passes, in which case headSHA is the
 // PR's own CURRENT head SHA -- the caller passes this straight through to
@@ -90,6 +75,56 @@ func RevalidateForMerge(ctx context.Context, deps Deps, sourceControl ports.Sour
 		}
 		return false, "", "this pull request is no longer open, or no longer assigned to you", nil
 	}
+
+	return revalidateCore(ctx, deps, repoFullName, prNumber, *target)
+}
+
+// RevalidateForAutoMerge is RevalidateForMerge's own machine-initiated
+// sibling (§21.2 stage 2) -- internal/app/automerge's own worker calls
+// this instead, using the deployment's own bot token rather than any
+// particular human actor's, since a background worker has no "clicking
+// human" to scope a ListOpenPRsForUser search to (see ports.SourceControl.
+// GetOpenPR's own doc comment for the full "why a different discovery
+// primitive" reasoning). Every check AFTER target resolution is the
+// IDENTICAL revalidateCore both functions share -- §21.2: "reuses the
+// decision inbox's existing server-side re-validation-at-click contract
+// unchanged... a deliberate reuse, not a parallel merge path."
+//
+// found=false (GetOpenPR's own confirmed-404 signal) is reported as a
+// plain ok=false/reason, mirroring RevalidateForMerge's own "no longer
+// open" case above -- a PR closed/merged through some other path between
+// discovery and this call is an ordinary, expected race, never an error.
+func RevalidateForAutoMerge(ctx context.Context, deps Deps, sourceControl ports.SourceControl, repoFullName string, prNumber int, botToken string) (ok bool, headSHA string, reason string, err error) {
+	owner, repo, splitOK := reposource.SplitFullName(repoFullName)
+	if !splitOK {
+		return false, "", "", fmt.Errorf("decisioninbox: revalidate for auto-merge: repoFullName %q is not shaped owner/repo", repoFullName)
+	}
+
+	target, found, err := sourceControl.GetOpenPR(ctx, owner, repo, prNumber, botToken)
+	if err != nil {
+		return false, "", "", err
+	}
+	if !found {
+		return false, "", "this pull request is no longer open", nil
+	}
+
+	return revalidateCore(ctx, deps, repoFullName, prNumber, target)
+}
+
+// revalidateCore is the SHARED body of RevalidateForMerge/
+// RevalidateForAutoMerge -- every check both functions apply to an
+// already-resolved target OpenPR, so a human-clicked confirm and a
+// machine-initiated merge can never independently drift on what "still
+// eligible to merge" means. Re-derives the EXACT SAME criteria
+// buildPROpenItem used to classify this PR as ready_to_merge in the
+// first place (§17 exclusion, not a draft, not a handoff PR, platform-
+// authored, zero open findings, the REAL §21.2 auto-approval eligibility
+// engine), PLUS HasChangesRequested (§60 review finding A4) -- never a
+// narrower "just check CI is still green" shortcut, since ANY of these
+// facts (a new commit landed dropping CI red, a reviewer requested
+// changes, a needs-human label applied...) could have changed since the
+// cached queue was last rendered.
+func revalidateCore(ctx context.Context, deps Deps, repoFullName string, prNumber int, target ports.OpenPR) (ok bool, headSHA string, reason string, err error) {
 	if target.Draft {
 		return false, "", "this pull request is a draft", nil
 	}
@@ -102,11 +137,24 @@ func RevalidateForMerge(ctx context.Context, deps Deps, sourceControl ports.Sour
 		return false, "", "this pull request is a sentinel-auto-fix follow-up -- it merges automatically once its own checks pass, never through this endpoint", nil
 	}
 
-	hasNeedsHuman, riskLabel, isHandoffPR := classifyPRLabels(target.Labels)
+	hasNeedsHuman, _, isHandoffPR := classifyPRLabels(target.Labels)
 	if isHandoffPR {
 		return false, "", "this pull request is a handoff item, not an ordinary code-review merge decision", nil
 	}
 
+	// §62 review finding C4: a degraded review-decision read (GitHub's
+	// reviews endpoint itself failed) must never be indistinguishable from
+	// a clean "no changes requested" read -- checked BEFORE
+	// HasChangesRequested itself so a degraded read gets its own distinct,
+	// honest reason string rather than falsely claiming a reviewer
+	// requested changes. FAIL CLOSED: this function is reached by BOTH the
+	// human-clicked Merge endpoint AND (via RevalidateForAutoMerge, which
+	// shares this exact core) the UNATTENDED auto-merge worker -- "we
+	// could not tell" must block exactly like a confirmed changes-request
+	// would, never silently pass through as "no".
+	if target.ReviewDecisionDegraded {
+		return false, "", "this pull request's review decision could not be confirmed (a degraded GitHub read) -- failing closed rather than trusting an unconfirmed read", nil
+	}
 	if target.HasChangesRequested {
 		return false, "", "this pull request has changes requested by a reviewer", nil
 	}
@@ -119,17 +167,54 @@ func RevalidateForMerge(ctx context.Context, deps Deps, sourceControl ports.Sour
 	if findingsErr != nil {
 		return false, "", "", fmt.Errorf("decisioninbox: revalidate for merge: count open findings: %w", findingsErr)
 	}
+	if openFindings > 0 {
+		// Mirrors buildPROpenItem's own identical "kept as its own,
+		// separate AND-condition" reasoning (aggregate.go) -- never
+		// folded into the eligibility engine itself.
+		return false, "", "this pull request has an open, unresolved review finding", nil
+	}
 	ciGreen := target.CIConclusion == ports.CIConclusionSuccess
 
-	eligible := decisioninbox.ComputeAutoApprovalEligible(decisioninbox.EligibilityInput{
-		CIGreen:              ciGreen,
-		IsDraft:              target.Draft,
-		RiskLabel:            riskLabel,
-		HasNeedsHumanLabel:   hasNeedsHuman,
-		OpenBlockingFindings: openFindings,
-	})
+	record, hasVerdict, verdictErr := appreviewverdict.GetLatest(ctx, deps.ReviewVerdict, repoFullName, int32(prNumber))
+	if verdictErr != nil {
+		return false, "", "", fmt.Errorf("decisioninbox: revalidate for merge: get latest review verdict: %w", verdictErr)
+	}
+	if !hasVerdict {
+		return false, "", "this pull request has no review verdict of record", nil
+	}
+
+	// §62 review finding C3: a genuine repo_settings read error here means
+	// this repo's OWN configured policy (its diff-size threshold, its
+	// sensitive-tag list) cannot be established at all -- propagated
+	// outright as err, exactly like the §17 sentinel-fix exclusion/
+	// open-findings-count errors immediately above (this function's own
+	// top doc comment: "propagated outright as err, refusing the merge").
+	// FAIL CLOSED: an unattended-merge gate must never substitute the
+	// engine's own WIDER built-in defaults for a repo's own narrower
+	// configured policy merely because Postgres could not be read this
+	// instant.
+	cfg, cfgErr := appreviewverdict.LoadEligibilityConfig(ctx, deps.ReviewVerdict, repoFullName)
+	if cfgErr != nil {
+		return false, "", "", fmt.Errorf("decisioninbox: revalidate for merge: load eligibility config: %w", cfgErr)
+	}
+	// §62 review finding C1: ChangedFileCount/TouchedBlastRadius are BOTH
+	// derived here from target.ChangedFiles -- target is revalidateCore's
+	// own already-fetched, server-side ports.OpenPR (RevalidateForMerge's
+	// live ListOpenPRsForUser search, or RevalidateForAutoMerge's live
+	// GetOpenPR call), never the posted verdict's own self-reported
+	// FilesChanged/BlastRadius. No new I/O: ChangedFiles was already
+	// fetched by the SAME call that produced target.
+	eligible, eligReason := autoapproval.ComputeEligible(autoapproval.EligibilityInput{
+		Verdict:            record.Verdict,
+		VerdictHeadSHA:     record.HeadSHA,
+		CurrentHeadSHA:     target.HeadSHA,
+		CIGreen:            ciGreen,
+		HasNeedsHumanLabel: hasNeedsHuman,
+		ChangedFileCount:   len(target.ChangedFiles),
+		TouchedBlastRadius: autoapproval.ClassifyChangedPaths(target.ChangedFiles),
+	}, cfg)
 	if !eligible {
-		return false, "", "this pull request no longer meets the auto-approval eligibility criteria (CI, risk label, or open findings changed)", nil
+		return false, "", fmt.Sprintf("this pull request no longer meets the auto-approval eligibility criteria: %s", eligReason), nil
 	}
 
 	return true, target.HeadSHA, "", nil

@@ -75,7 +75,9 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/authz"
+	"github.com/khazaddev/narvi/internal/domain/autoapproval"
 	"github.com/khazaddev/narvi/internal/domain/automation"
 	"github.com/khazaddev/narvi/internal/domain/decisioninbox"
 	"github.com/khazaddev/narvi/internal/domain/handoff"
@@ -106,6 +108,15 @@ type Deps struct {
 
 	TokenEncryptionKey []byte
 	Timeouts           platform.Timeouts
+
+	// ReviewVerdict bundles the Step 62 (§21.1/§21.2) stores the REAL
+	// auto-approval eligibility engine needs -- review_verdicts history
+	// (the latest verdict per PR), repo_settings' own auto-approval
+	// config, and the contradiction-rate outcome table. Replaces Step
+	// 60's own interim internal/domain/decisioninbox.
+	// ComputeAutoApprovalEligible, deleted by this Step -- see
+	// buildPROpenItem/revalidateCore below for the two call sites.
+	ReviewVerdict appreviewverdict.Deps
 }
 
 // Result is Build's own return shape.
@@ -145,6 +156,12 @@ type Result struct {
 	//     erroring (P1-3): that ONE row is dropped (fails closed, excluded)
 	//     but the overall read is no longer a complete picture either.
 	//     SCMAsOf is set here too, same as (3).
+	//  5. A per-PR ports.OpenPR.ReviewDecisionDegraded (§62 review finding
+	//     C4): githubapi.fetchReviewDecision itself failed for that ONE
+	//     PR. Unlike (4), the row is NOT dropped -- buildPROpenItem still
+	//     renders it, demoted out of ready_to_merge (that field's own doc
+	//     comment) -- but the overall read is, again, no longer a complete
+	//     picture. SCMAsOf is set here too, same as (3)/(4).
 	//
 	// UNLIKE this field's own previous doc comment claimed, SCMAsOf
 	// non-nil and SCMFetchFailed true are NOT mutually exclusive as of
@@ -349,6 +366,17 @@ func buildPRItems(ctx context.Context, deps Deps, actorGitHubID, token string, n
 			continue // §17 structural exclusion -- never a row, regardless of any other criterion.
 		}
 
+		if pr.ReviewDecisionDegraded {
+			// §62 review finding C4: a per-PR degraded review-decision read
+			// (githubapi.fetchReviewDecision itself failed for this ONE PR)
+			// means HasChangesRequested is not a confirmed fact for this
+			// row -- buildPROpenItem (below) already fails this row closed
+			// (demoted out of ready_to_merge, see its own doc comment), and
+			// the OVERALL read is no longer a complete picture either,
+			// mirroring producers (3)/(4) on Result.SCMFetchFailed's own
+			// doc comment (a per-row degrade still marks the whole batch).
+			degraded = true
+		}
 		item := buildPROpenItem(ctx, deps, pr, repoFullName, actorGitHubID, token, now, budget)
 		items = append(items, item)
 	}
@@ -414,13 +442,7 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 		item.Kind = decisioninbox.KindAwaitingApproval
 	default:
 		platformAuthored := isPlatformAuthored(ctx, deps, pr.HTMLURL)
-		eligible := decisioninbox.ComputeAutoApprovalEligible(decisioninbox.EligibilityInput{
-			CIGreen:              ciGreen,
-			IsDraft:              pr.Draft,
-			RiskLabel:            riskLabel,
-			HasNeedsHumanLabel:   hasNeedsHuman,
-			OpenBlockingFindings: openFindings,
-		})
+		eligible := computeRealEligibility(ctx, deps, repoFullName, pr, ciGreen, hasNeedsHuman)
 		// §60 review finding P1-4 (second round): HasChangesRequested is
 		// a HARD merge blocker at RevalidateForMerge (revalidate.go) but,
 		// before this fix, was never consulted HERE -- so such a PR sat
@@ -429,7 +451,32 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 		// needs_review instead, mirroring RevalidateForMerge's own
 		// identical, already-established gate, so the read model and the
 		// merge gate never disagree about what "ready to merge" means.
-		if platformAuthored && eligible && !pr.HasChangesRequested {
+		//
+		// openFindings > 0 is ALSO kept as its own, separate AND-condition
+		// here, deliberately never folded into computeRealEligibility
+		// itself -- §21.2's own criteria list names Shippable/CI/floors/
+		// diff-size/sensitive-path/head-SHA-freshness, and nothing about
+		// per-finding status; review.Verdict carries no Finding data at
+		// all (domain/review's own doc.go design call #4), so an open,
+		// unresolved finding is a fact the verdict's own Shippable value
+		// could be silently inconsistent with (a model reporting
+		// RiskLevel=low while ALSO reporting a real, unresolved finding
+		// via the SEPARATE findings array). Step 60's own interim engine
+		// already treated this as a hard exclusion; keeping it here,
+		// exactly like HasChangesRequested, preserves that safety
+		// property without stretching §21.2's own literal criteria list
+		// to cover something it never named.
+		// §62 review finding C4: !pr.ReviewDecisionDegraded is its own,
+		// separate AND-condition here, mirroring !pr.HasChangesRequested
+		// immediately beside it -- a degraded review-decision read is not
+		// a confirmed "no changes requested", so it must demote this row
+		// out of ready_to_merge exactly like a confirmed changes-request
+		// would, never render an unconfirmed read as the all-clear a
+		// ready_to_merge row promises. RevalidateForMerge/
+		// RevalidateForAutoMerge (revalidate.go) enforce the SAME fact as
+		// a hard block at click/auto-merge time regardless of what this
+		// read-model row shows.
+		if platformAuthored && eligible && !pr.HasChangesRequested && !pr.ReviewDecisionDegraded && openFindings == 0 {
 			item.Kind = decisioninbox.KindReadyToMerge
 		} else {
 			item.Kind = decisioninbox.KindNeedsReview
@@ -437,6 +484,120 @@ func buildPROpenItem(ctx context.Context, deps Deps, pr ports.OpenPR, repoFullNa
 	}
 
 	return item
+}
+
+// computeRealEligibility runs §21.2 stage 1's real auto-approval
+// eligibility engine (internal/domain/autoapproval.ComputeEligible) for
+// pr -- replacing Step 60's own interim internal/domain/decisioninbox.
+// ComputeAutoApprovalEligible (deleted by this Step). Fails CLOSED
+// (returns false) on every degraded path: no verdict ever posted for
+// this PR (reviewverdict.GetLatest's own ok=false), or a genuine store
+// error reading either the verdict or this repo's own eligibility
+// config -- an auto-approval decision this codebase cannot fully
+// evaluate must never default to "eligible" (this Step's own "fail
+// direction matters here" requirement, mirroring isPlatformAuthored/
+// countOpenFindings' own identical fail-closed precedent in this same
+// file).
+//
+// ALSO records the §21.2 stage 2 "overridden" contradiction-rate signal
+// (best-effort, never blocking this read) -- see reviewverdict.
+// RecordOverridden's own doc comment: this fires when the verdict would
+// have been eligible on every OTHER criterion but a human already
+// disagreed (HasChangesRequested, or a needs-human label), computed here
+// because this call site already has every fact needed at zero extra
+// cost.
+func computeRealEligibility(ctx context.Context, deps Deps, repoFullName string, pr ports.OpenPR, ciGreen, hasNeedsHuman bool) bool {
+	record, hasVerdict, err := appreviewverdict.GetLatest(ctx, deps.ReviewVerdict, repoFullName, int32(pr.Number))
+	if err != nil {
+		platform.Logger(ctx).Error("decisioninbox: get latest review verdict failed -- failing closed (not eligible)", "error", err, "repo", repoFullName, "pr_number", pr.Number)
+		return false
+	}
+	if !hasVerdict {
+		return false
+	}
+
+	// §62 review finding C3: a genuine repo_settings read error means this
+	// repo's own configured policy cannot be established -- FAIL CLOSED
+	// (not eligible), mirroring this function's own existing
+	// GetLatest-error handling immediately above (a degraded READ-MODEL
+	// row, never a hard failure of the whole Build call: this is a
+	// best-effort aggregation, unlike revalidateCore's own action-endpoint
+	// propagation for the identical error).
+	cfg, cfgErr := appreviewverdict.LoadEligibilityConfig(ctx, deps.ReviewVerdict, repoFullName)
+	if cfgErr != nil {
+		platform.Logger(ctx).Error("decisioninbox: load eligibility config failed -- failing closed (not eligible)", "error", cfgErr, "repo", repoFullName, "pr_number", pr.Number)
+		return false
+	}
+
+	// §62 review finding C1: ChangedFileCount/TouchedBlastRadius are BOTH
+	// derived here from pr.ChangedFiles -- pr is this call's own
+	// already-fetched, server-side ports.OpenPR (buildPRItems' own live
+	// SCMCache.ListOpenPRsForUser read), never the posted verdict's own
+	// self-reported FilesChanged/BlastRadius. No new I/O.
+	changedFileCount := len(pr.ChangedFiles)
+	touchedBlastRadius := autoapproval.ClassifyChangedPaths(pr.ChangedFiles)
+
+	// §62 review finding T1 (BLOCKER, also a genuine correctness bug,
+	// fixed): computed ONCE, ignoring BOTH human-disagreement signals --
+	// HasNeedsHumanLabel here, and pr.HasChangesRequested, which is not
+	// even a ComputeEligible INPUT at all (it is enforced entirely
+	// OUTSIDE this engine: this file's own Kind-classification
+	// AND-condition above, and revalidateCore's own hard block,
+	// revalidate.go). This answers "would the engine's own real criteria
+	// have approved this PR at all, on its own facts". eligible (this
+	// function's own return value) is then ALGEBRAICALLY exactly this
+	// same result, additionally gated on hasNeedsHuman --
+	// ComputeEligible's own HasNeedsHumanLabel check (eligibility.go) is
+	// unconditional and evaluated FIRST, independent of every other
+	// criterion, so `eligible == eligibleIgnoringHumanSignals &&
+	// !hasNeedsHuman` holds in every case -- deriving it this way calls
+	// the engine exactly ONCE per PR instead of the previous, always-TWO-call
+	// version, and closes the bug below at the same time.
+	//
+	// THE BUG THIS FIXES: the PREVIOUS version computed `eligible` FIRST
+	// (with HasNeedsHumanLabel: hasNeedsHuman as a real input), then only
+	// entered the RecordOverridden check when `!eligible`. But since
+	// pr.HasChangesRequested is not a ComputeEligible input at all, a PR
+	// with hasNeedsHuman == false, HasChangesRequested == true, and every
+	// OTHER real criterion satisfied produced `eligible == true` from
+	// that first call (nothing inside ComputeEligible could see
+	// HasChangesRequested to disagree) -- so `!eligible` was FALSE and
+	// the whole RecordOverridden block was skipped, unconditionally, for
+	// every PR in exactly the population §21.2's own "contested" metric
+	// most needs to see: the engine said yes, a human requesting changes
+	// said no. RecordOverridden could only ever fire for the
+	// HasNeedsHumanLabel half of "contested", never the
+	// HasChangesRequested half -- the contradiction-rate read model's own
+	// "overridden" count silently under-counted from day one, no matter
+	// how many PRs a human overrode via changes-requested specifically.
+	// The fix below no longer gates entry to the RecordOverridden check
+	// on `eligible`/`!eligible` at all -- it gates directly on
+	// eligibleIgnoringHumanSignals, which is exactly "would the engine
+	// have approved this on its own criteria", independent of which
+	// human-disagreement signal (if any) is ALSO present.
+	eligibleIgnoringHumanSignals, _ := autoapproval.ComputeEligible(autoapproval.EligibilityInput{
+		Verdict:            record.Verdict,
+		VerdictHeadSHA:     record.HeadSHA,
+		CurrentHeadSHA:     pr.HeadSHA,
+		CIGreen:            ciGreen,
+		HasNeedsHumanLabel: false,
+		ChangedFileCount:   changedFileCount,
+		TouchedBlastRadius: touchedBlastRadius,
+	}, cfg)
+	eligible := eligibleIgnoringHumanSignals && !hasNeedsHuman
+
+	// "Contested": the engine would have approved this PR on every
+	// criterion it actually checks, but a human signal -- a needs-human
+	// label, OR a reviewer requesting changes -- means it was NOT
+	// actually auto-approved. reviewverdict.RecordOverridden's own doc
+	// comment: recorded the first time this is observed for this (repo,
+	// PR, head_sha), never re-recorded on every subsequent read (its own
+	// idempotent ON CONFLICT DO NOTHING write).
+	if eligibleIgnoringHumanSignals && (hasNeedsHuman || pr.HasChangesRequested) {
+		appreviewverdict.RecordOverridden(ctx, deps.ReviewVerdict, repoFullName, int32(pr.Number), record.HeadSHA)
+	}
+
+	return eligible
 }
 
 // resolvePRProvenance determines WHY pr is assigned to actorGitHubID --

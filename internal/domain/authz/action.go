@@ -152,33 +152,49 @@ const (
 	// handlers.
 	ActionManageWorkflowDefinitions Action = "manage_workflow_definitions"
 
-	// -- Row 5: "Edit review verdicts; re-trigger reviews; label-driven
-	// auto-approve config" — admin, maintainer only. No caller exists yet
-	// (§15's own "release PR review" capability is a later Step).
+	// -- Row 5: "Edit review verdicts; re-trigger reviews; auto-approval
+	// eligibility config" — admin, maintainer only.
 
 	// ActionEditReviewVerdict covers overriding a rendered review
 	// verdict.
 	ActionEditReviewVerdict Action = "edit_review_verdict"
 	// ActionRetriggerReview covers re-running an automated review.
 	ActionRetriggerReview Action = "retrigger_review"
-	// ActionConfigureAutoApprove covers label-driven auto-approve rule
-	// configuration.
+	// ActionConfigureAutoApprove covers §21.2 stage 1's auto-approval
+	// eligibility CONFIG (repo_settings.max_auto_approve_files_changed/
+	// sensitive_blast_radius_tags, migrations/000069_repo_settings_auto_
+	// approval.up.sql -- internal/adapters/inbound/httpapi/reposettings.go's
+	// own PutRepoSettings). Originally reserved (Step 47) for a label-
+	// driven auto-approve rule config that §21.2 (Step 62) supersedes
+	// entirely -- see internal/domain/review's own doc comment on why
+	// auto-approval is now a deterministic, criteria-driven engine with
+	// no per-PR human label in the loop at all; the CONFIGURATION of that
+	// engine's own two per-repo-tunable criteria (diff-size threshold,
+	// sensitive-path tag list) is what this action gates, never a
+	// per-PR decision. Deliberately NOT the same action as
+	// ActionToggleAutoMerge below (row 6, admin only) -- arming the
+	// auto-merge toggle ends in an UNATTENDED merge, a stricter
+	// consequence than tuning the eligibility criteria themselves, so it
+	// sits one row down at admin-only, mirroring
+	// ActionToggleSentinelAutoFix's own identical split from this row.
 	ActionConfigureAutoApprove Action = "configure_auto_approve"
 
 	// -- Row 6: "Integrations, global secrets, prompt-template
-	// activation, members & roles, sentinel auto-fix toggle" — admin
-	// only. §13.3's own parenthetical singles out the sentinel toggle as
-	// "stricter than label-driven auto-approve since it ends in an
-	// unattended merge, not a human Merge click" — exactly why it sits in
-	// this admin-only row and ActionConfigureAutoApprove above sits one
-	// row up, at maintainer. No caller exists yet for four of these five
-	// (integrations/global-secrets/template-activation/sentinel are later
-	// Steps) — ActionManageMembers is the exception: this SAME Step's own
-	// "members API" deliverable (internal/adapters/inbound/httpapi/
-	// members.go) gates every one of its endpoints (list members,
-	// role-change, manual link/unlink, and the audit-log read endpoint)
-	// behind this exact Action, per §13.3's own single, bundled "members &
-	// roles" row (no separate read-vs-write Action was invented for it).
+	// activation, members & roles, sentinel auto-fix toggle, per-repo
+	// auto-merge toggle" — admin only. §13.3's own parenthetical singles
+	// out the sentinel toggle (and, by the SAME reasoning, the auto-merge
+	// toggle below) as ending in an unattended merge with no human Merge
+	// click, unlike row 5's per-PR-judgment actions — exactly why both
+	// sit in this admin-only row and ActionConfigureAutoApprove above
+	// sits one row up, at maintainer. No caller exists yet for four of
+	// these six (integrations/global-secrets/template-activation/
+	// sentinel are later Steps) — ActionManageMembers is the exception:
+	// this SAME Step's own "members API" deliverable (internal/adapters/
+	// inbound/httpapi/members.go) gates every one of its endpoints (list
+	// members, role-change, manual link/unlink, and the audit-log read
+	// endpoint) behind this exact Action, per §13.3's own single, bundled
+	// "members & roles" row (no separate read-vs-write Action was
+	// invented for it).
 
 	// ActionManageIntegrations covers connecting/disconnecting a
 	// third-party integration (Slack/Linear workspace, etc).
@@ -208,6 +224,22 @@ const (
 	// (§13.3's own parenthetical on that row), never a per-PR human
 	// judgment call the way row 5's actions are.
 	ActionConfigureBlockOnHighRisk Action = "configure_block_on_high_risk"
+	// ActionToggleAutoMerge covers §21.2 stage 2's own per-repo auto-merge
+	// toggle (repo_settings.auto_merge_enabled, migrations/
+	// 000069_repo_settings_auto_approval.up.sql -- internal/adapters/
+	// inbound/httpapi/reposettings.go's own PutRepoSettings). Admin only,
+	// this SAME row as ActionToggleSentinelAutoFix, by the identical
+	// reasoning that action's own doc comment already states: arming this
+	// toggle is what turns an already-computed auto-approval into an
+	// UNATTENDED merge (internal/app/automerge's own worker, machine-
+	// initiated, no human Merge click) -- never a maintainer-level,
+	// per-PR judgment call the way row 5's ActionConfigureAutoApprove is.
+	// While this toggle is off (every repo's own starting state,
+	// DEFAULT false), an auto-approved PR still only ever merges via a
+	// human's own 1-click confirm through the EXISTING, unchanged
+	// ActionMergePR gate (row 2) -- this action governs ARMING the
+	// unattended path, never the merge action itself.
+	ActionToggleAutoMerge Action = "toggle_auto_merge"
 	// ActionActivateWorkflowBinding covers binding a (repo, lane) — or
 	// the global (org-wide, repo_full_name = NULL) scope; the SAME
 	// action gates both, per §25.11 — to a specific workflow definition
@@ -251,5 +283,6 @@ var AllActions = []Action{
 	ActionManageMembers,
 	ActionToggleSentinelAutoFix,
 	ActionConfigureBlockOnHighRisk,
+	ActionToggleAutoMerge,
 	ActionActivateWorkflowBinding,
 }

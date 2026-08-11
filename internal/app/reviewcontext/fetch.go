@@ -16,9 +16,18 @@ import (
 // a fake with no real HTTP round trip. *githubapi.Adapter satisfies this
 // directly, with no adapter-side change beyond what this Step already adds
 // to it.
+//
+// GetCompareDiff (§62 review finding C2, CRITICAL, fixed) replaces the
+// PREVIOUS GetPullRequestDiff here -- see Fetch's own doc comment for the
+// full "why": GetPullRequestDiff always reflects a PR's CURRENT, moving
+// head, which is exactly the property that let Diff and HeadSHA
+// (independently fetched, before this fix) disagree about which commit
+// either one actually reflected. GetPullRequestDiff itself is UNCHANGED
+// and still exists on *githubapi.Adapter -- it simply has no caller
+// through this narrower interface anymore.
 type Fetcher interface {
 	GetPullRequest(ctx context.Context, owner, repo string, number int32, token string) (githubapi.PullRequest, error)
-	GetPullRequestDiff(ctx context.Context, owner, repo string, number int32, token string) (diff string, truncated bool, err error)
+	GetCompareDiff(ctx context.Context, owner, repo, base, head, token string) (diff string, truncated bool, err error)
 }
 
 // Fetch builds review.PreFetchedContext for owner/repo#number -- the ONE
@@ -27,74 +36,98 @@ type Fetcher interface {
 // calls before building its own review turn's prompt via
 // review.RenderTurnPrompt.
 //
-// Two independent outbound calls, each best-effort (doc.go's own top-level
-// section):
+// # §62 review finding C2 (CRITICAL, fixed): Diff and HeadSHA now come
+// # from one dependency chain, never two independently-raceable reads
 //
-//  1. GetPullRequestDiff always runs -- the diff itself is what every
-//     trigger path needs pre-fetched, regardless of how the PR's stack
-//     context (if any) was learned.
-//  2. Stack context: knownStack, when non-nil, is used AS-IS with NO
-//     second network call -- the label-retrigger webhook path already has
-//     GitHub's own stack object inline in its OWN payload (a native
-//     pull_request event, §17.6: "only the dedicated pull_request event
-//     type is confirmed to [carry stack]"), so re-deriving it via a
-//     redundant GetPullRequest call would be a wasted round trip for data
-//     the caller already has in hand. knownStack == nil (every OTHER
-//     trigger path today: issue_comment/pull_request_review_comment
-//     mentions, and the manual REST retrigger button, none of which carry
-//     a native pull_request event's own payload) falls back to a fresh
-//     GetPullRequest call -- the SAME call issue_comment's own head-branch
-//     resolution already makes elsewhere (headresolve.go), extended by
-//     this Step to also decode Stack (§17.6's own "incremental addition to
-//     a call this ingress already makes" framing) -- but here, unlike that
-//     one call site, invoked as a STANDALONE stack-only lookup for every
-//     trigger path that doesn't already have the answer for free. This is
-//     a deliberately broader reading than §17.6's own narrowest-scoped
-//     text (which stops at "extend the ALREADY-existing issue_comment
-//     call, don't invent a new one just for stack") -- see this package's
-//     own doc comment and this Step's PR description for why: every one
-//     of these OTHER trigger paths already pays for a fresh outbound call
-//     to fetch the diff (cost item 1 above is mandatory regardless), so
-//     paying for one more GetPullRequest call to also learn stack context
-//     is a small, bounded addition to a request that is already making a
-//     network round trip, not "inventing a new call just for stack" in
-//     the sense §17.6 was narrowing against -- and a reviewer's own
-//     pre-fetched context is more USEFULLY consistent (stack context
-//     present whenever a PR genuinely has one, regardless of which
-//     surface triggered this particular review turn) than leaving it
-//     present only for the one ingress lane §17.6's own text happened to
-//     examine first.
+// BEFORE this fix, Diff (via GetPullRequestDiff, always reflecting a PR's
+// CURRENT, moving head) and HeadSHA (via a SEPARATE GetPullRequest call,
+// sometimes skipped when already known) were two independent network
+// reads with no ordering guarantee between them -- a commit landing on
+// the PR in the gap between the two could make the returned HeadSHA name
+// a DIFFERENT commit than the one Diff's own content actually reflects,
+// silently defeating §21.2's stale-verdict guard once that HeadSHA is
+// later persisted as review_verdicts.head_sha and compared against the
+// PR's real current head (which, after this exact race, would already
+// equal the WRONG, too-new SHA this function reported).
+//
+// The fix: resolve pr.HeadSHA (and pr.BaseRef, and Stack) via ONE
+// GetPullRequest call FIRST, unconditionally, then fetch the diff via
+// GetCompareDiff PINNED to that exact (pr.BaseRef, pr.HeadSHA) pair (the
+// compare API, unlike the PR-resource diff endpoint, never re-resolves
+// "head" to whatever is current at request time -- see GetCompareDiff's
+// own doc comment, githubapi/adapter.go). Diff, when successfully
+// fetched, is therefore GUARANTEED -- by construction of the call itself,
+// not by two reads happening to agree -- to be the diff AT pr.HeadSHA:
+// the SAME value this function returns as HeadSHA and the SAME value its
+// caller goes on to persist. There is no longer a "two independent
+// sources" question to ask.
+//
+// This deliberately gives up the PREVIOUS optimization of skipping the
+// GetPullRequest call entirely when a caller's own webhook payload
+// already supplied stack/head-sha inline (the label-retrigger path,
+// historically this function's only such caller) -- correctness now
+// requires this call unconditionally, since pr.BaseRef (needed to pin
+// the compare call) was never available from that shortcut anyway, and a
+// SHA sourced from an earlier webhook delivery is no longer trustworthy
+// as "the commit the diff fetched moments later actually reflects" once
+// Diff itself must be provably anchored to whatever SHA this function
+// reports. One extra GitHub API call on that one ingress path is an
+// acceptable, bounded cost for closing a hazard that could otherwise let
+// an unattended worker merge code nobody's verdict actually examined.
+//
+// knownStack (still accepted) is used AS-IS when supplied, in preference
+// to re-deriving it from this call's own pr.Stack -- the label-retrigger
+// webhook path already has GitHub's own stack object inline in its OWN
+// payload (a native pull_request event, §17.6), and preferring data a
+// caller already handed over is this function's own established
+// convention; both sources report the identical fact for the same PR
+// either way, so this is a preference, never a correctness difference.
 func Fetch(ctx context.Context, logger *slog.Logger, fetcher Fetcher, timeouts platform.Timeouts, owner, repo string, number int32, token string, knownStack *review.StackContext) review.PreFetchedContext {
-	diffCtx, cancel := context.WithTimeout(ctx, timeouts.GitHubPRDiffTimeout)
-	diff, truncated, err := fetcher.GetPullRequestDiff(diffCtx, owner, repo, number, token)
+	prCtx, cancel := context.WithTimeout(ctx, timeouts.GitHubGetPRTimeout)
+	pr, err := fetcher.GetPullRequest(prCtx, owner, repo, number, token)
 	cancel()
 	if err != nil {
-		logger.Warn("reviewcontext: fetch pull request diff failed, review turn will carry no pre-fetched diff",
+		logger.Warn("reviewcontext: fetch pull request (for head sha/base ref, needed to pin the diff fetch) failed, review turn will carry no pre-fetched diff and no head sha to record",
 			"error", err, "owner", owner, "repo", repo, "pr_number", number)
-		diff = ""
-		truncated = false
+		// No confirmed CURRENT head: nothing safe to pin a diff fetch to,
+		// and nothing safe to persist as review_verdicts.head_sha either
+		// -- Diff/HeadSHA both stay at their own honest zero value,
+		// mirroring this function's own pre-existing "a failed fetch
+		// degrades gracefully, never fails the review turn's own
+		// creation" precedent. knownStack, if the caller already had it
+		// from its own webhook payload, is still worth keeping -- it cost
+		// this call nothing and remains genuine, valid context.
+		return review.PreFetchedContext{Stack: knownStack}
 	}
 
 	stack := knownStack
-	if stack == nil {
-		prCtx, cancel := context.WithTimeout(ctx, timeouts.GitHubGetPRTimeout)
-		pr, err := fetcher.GetPullRequest(prCtx, owner, repo, number, token)
-		cancel()
-		if err != nil {
-			logger.Warn("reviewcontext: fetch pull request (for stack context) failed, review turn will carry no stack context",
-				"error", err, "owner", owner, "repo", repo, "pr_number", number)
-		} else if pr.Stack != nil {
-			stack = &review.StackContext{
-				Position:        pr.Stack.Position,
-				Size:            pr.Stack.Size,
-				UltimateBaseRef: pr.Stack.BaseRef,
-				UltimateBaseSHA: pr.Stack.BaseSHA,
-			}
+	if stack == nil && pr.Stack != nil {
+		stack = &review.StackContext{
+			Position:        pr.Stack.Position,
+			Size:            pr.Stack.Size,
+			UltimateBaseRef: pr.Stack.BaseRef,
+			UltimateBaseSHA: pr.Stack.BaseSHA,
 		}
-		// pr.Stack == nil, err == nil: an ordinary, non-stacked PR -- stack
-		// stays nil, exactly like knownStack's own "nothing stack-shaped to
-		// add" case.
+	}
+	// pr.Stack == nil, knownStack == nil: an ordinary, non-stacked PR --
+	// stack stays nil.
+
+	diffCtx, cancel := context.WithTimeout(ctx, timeouts.GitHubPRDiffTimeout)
+	diff, truncated, err := fetcher.GetCompareDiff(diffCtx, owner, repo, pr.BaseRef, pr.HeadSHA, token)
+	cancel()
+	if err != nil {
+		logger.Warn("reviewcontext: fetch compare diff failed, review turn will carry no pre-fetched diff",
+			"error", err, "owner", owner, "repo", repo, "pr_number", number, "head_sha", pr.HeadSHA)
+		diff, truncated = "", false
 	}
 
-	return review.PreFetchedContext{Diff: diff, DiffTruncated: truncated, Stack: stack}
+	// HeadSHA is reported here regardless of whether the diff fetch above
+	// itself succeeded -- pr.HeadSHA is still an honest fact (the PR's
+	// real head at THIS moment) even on a diff-fetch failure, mirroring
+	// this function's own pre-existing behavior (HeadSHA and Diff have
+	// always degraded independently on their own respective failure,
+	// never coupled into a single all-or-nothing outcome) -- only now,
+	// whenever Diff IS non-empty, it is provably anchored to this exact
+	// value (this function's own top doc comment).
+	return review.PreFetchedContext{Diff: diff, DiffTruncated: truncated, Stack: stack, HeadSHA: pr.HeadSHA}
 }

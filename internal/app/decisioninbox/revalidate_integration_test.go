@@ -17,13 +17,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // revalidateStores bundles the Postgres stores RevalidateForMerge itself
@@ -49,6 +53,16 @@ func newRevalidateStores(pool *pgxpool.Pool) *revalidateStores {
 			SentinelFixes:  narvipg.NewSentinelFixStore(pool),
 			Artifacts:      narvipg.NewArtifactStore(pool),
 			Identities:     narvipg.NewIdentityStore(pool),
+			// Step 62 (§21.1/§21.2): the REAL auto-approval eligibility
+			// engine's own store dependencies -- revalidateCore now reads
+			// review_verdicts/repo_settings through this bundle.
+			ReviewVerdict: appreviewverdict.Deps{
+				ReviewVerdicts:       narvipg.NewReviewVerdictStore(pool),
+				RepoSettings:         narvipg.NewRepoSettingsStore(pool),
+				ReviewFindings:       narvipg.NewReviewFindingStore(pool),
+				AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool),
+				Timeouts:             platform.DefaultTimeouts(),
+			},
 		},
 	}
 }
@@ -85,6 +99,12 @@ func (rs *revalidateStores) eligiblePR(ctx context.Context, t *testing.T, pool *
 	if err != nil {
 		t.Fatalf("create platform session: %v", err)
 	}
+	// Step 62 (§21.1/§21.2): a matching Shippable=auto review_verdicts
+	// row, at this exact head sha, is now REQUIRED before the real
+	// eligibility engine will ever say ok=true -- see
+	// seedAutoApprovedVerdict's own doc comment (aggregate_integration_test.go)
+	// for why every "eligible baseline" fixture in this package needs one.
+	seedAutoApprovedVerdict(ctx, t, pool, repoFullName, int32(prNumber), pr.HeadSHA)
 	if _, err := narvipg.NewArtifactStore(pool).Create(ctx, sqlcgen.CreateArtifactParams{
 		SessionID: session.ID, Type: sqlcgen.ArtifactTypePr, Url: htmlURL, Metadata: []byte("{}"),
 	}); err != nil {
@@ -145,6 +165,34 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 		if ok {
 			t.Fatal("RevalidateForMerge() ok = true, want false (CI is red)")
+		}
+		if reason == "" {
+			t.Error("reason is empty, want a human-readable explanation")
+		}
+	})
+
+	// §62 review finding C4 (BLOCKER, fixed): a degraded review-decision
+	// read (GitHub's own reviews endpoint failed) must refuse the merge
+	// exactly like a CONFIRMED changes-request would -- "we could not
+	// tell" must never silently satisfy this gate. This is the ONE
+	// subtest that exercises the unattended-merge-reachable half of C4's
+	// fix directly (revalidateCore is shared by RevalidateForAutoMerge,
+	// the auto-merge worker's own entry point).
+	t.Run("ReviewDecisionDegraded_Refused", func(t *testing.T) {
+		const repoFullName = "acme/revalidate-review-decision-degraded"
+		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 100)
+		pr.ReviewDecisionDegraded = true
+		// HasChangesRequested stays false (its own honest zero value) --
+		// proving this refusal fires on ReviewDecisionDegraded alone, not
+		// on a coincidentally-true HasChangesRequested.
+		rs.replaceTargetPR(actorGitHubID, pr)
+
+		ok, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
+		if err != nil {
+			t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
+		}
+		if ok {
+			t.Fatal("RevalidateForMerge() ok = true, want false (the review-decision read was degraded -- must fail closed)")
 		}
 		if reason == "" {
 			t.Error("reason is empty, want a human-readable explanation")
@@ -286,20 +334,70 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
-	// §60 review finding A6 (TEST BATCH, second round): classifyPRLabels
-	// must pick the MOST RESTRICTIVE risk label present, never
-	// "whichever happens to appear last in GitHub's own unordered labels
-	// array" -- a PR can genuinely carry both at once (a failed
-	// RemoveLabel call after AddLabels durably leaves the OLD and NEW
-	// risk labels both present, reachable via verdictnotifier's own
-	// Add-then-separate-Remove sequence). low-risk is deliberately LAST
-	// in this slice: a "last wins" regression would read this PR as
-	// low-risk (eligible, auto-approved), while the correct
-	// "most-restrictive-wins" rule must still refuse it as high-risk.
-	t.Run("MostRestrictiveRiskLabelWins_Refused", func(t *testing.T) {
-		const repoFullName = "acme/revalidate-mixed-risk-labels"
-		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 8)
-		pr.Labels = []string{"review:high-risk", "review:low-risk"}
+	// Step 62 (§21.2) note: classifyPRLabels' own "most restrictive risk
+	// label wins" property (§60 review finding A6) is no longer
+	// observable through RevalidateForMerge's own ok/refused OUTCOME --
+	// the real auto-approval eligibility engine (internal/domain/
+	// autoapproval) gates on the STORED verdict's own Shippable field,
+	// never on a PR's GitHub risk labels at all (those labels are now
+	// purely a display artifact synced FROM a past verdict, §8.2/Step 47,
+	// never fed back INTO eligibility). Coverage for classifyPRLabels'
+	// own precedence rule moved to labels_test.go's own
+	// TestClassifyPRLabels_MostRestrictiveRiskLabelWins, which asserts
+	// the returned riskLabel value directly rather than through this
+	// function's now-unrelated merge-eligibility outcome.
+
+	// Step 62 (§21.2): a PR with NO review_verdicts row at all must be
+	// refused -- the auto-approval engine fails CLOSED on "no verdict on
+	// record", never defaulting to eligible for lack of data.
+	t.Run("NoVerdictOnRecord_Refused", func(t *testing.T) {
+		const repoFullName = "acme/revalidate-no-verdict"
+		owner, repo, ok := reposource.SplitFullName(repoFullName)
+		if !ok {
+			t.Fatalf("malformed repoFullName %q", repoFullName)
+		}
+		htmlURL := "https://github.com/" + repoFullName + "/pull/30"
+		pr := ports.OpenPR{
+			Owner: owner, Repo: repo, Number: 30,
+			Title: "no verdict yet", HTMLURL: htmlURL, HeadSHA: "sha-30",
+			Assignees:    []ports.PRPerson{{ExternalID: actorGitHubID, Login: "actor"}},
+			CIConclusion: ports.CIConclusionSuccess,
+		}
+		rs.sourceControl.openPRsByExternalID[actorGitHubID] = append(rs.sourceControl.openPRsByExternalID[actorGitHubID], pr)
+		session, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceGithub})
+		if err != nil {
+			t.Fatalf("create platform session: %v", err)
+		}
+		if _, err := narvipg.NewArtifactStore(pool).Create(ctx, sqlcgen.CreateArtifactParams{
+			SessionID: session.ID, Type: sqlcgen.ArtifactTypePr, Url: htmlURL, Metadata: []byte("{}"),
+		}); err != nil {
+			t.Fatalf("create pr artifact: %v", err)
+		}
+		// Deliberately NO seedAutoApprovedVerdict call -- this is the
+		// fact under test.
+
+		ok2, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
+		if err != nil {
+			t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
+		}
+		if ok2 {
+			t.Fatal("RevalidateForMerge() ok = true, want false (no review_verdicts row exists for this PR)")
+		}
+		if reason == "" {
+			t.Error("reason is empty, want a human-readable explanation")
+		}
+	})
+
+	// Step 62 (§21.2): the stale-head-SHA guard -- a verdict on record
+	// whose own head_sha no longer matches the PR's LIVE current head
+	// must refuse, no matter how clean that verdict once looked.
+	t.Run("StaleVerdictHeadSHA_Refused", func(t *testing.T) {
+		const repoFullName = "acme/revalidate-stale-verdict"
+		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 31)
+		// A new commit landed after the verdict was posted -- the live
+		// PR's own head sha has moved on, but review_verdicts.head_sha
+		// (seeded by eligiblePR against the OLD pr.HeadSHA) has not.
+		pr.HeadSHA = "sha-31-newer-commit"
 		rs.replaceTargetPR(actorGitHubID, pr)
 
 		ok, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
@@ -307,7 +405,7 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 			t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
 		}
 		if ok {
-			t.Fatal("RevalidateForMerge() ok = true, want false (high-risk must win over low-risk regardless of label order)")
+			t.Fatal("RevalidateForMerge() ok = true, want false (the verdict on record was produced against an earlier commit)")
 		}
 		if reason == "" {
 			t.Error("reason is empty, want a human-readable explanation")
@@ -341,4 +439,158 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 			t.Errorf("reason = %q, want empty (this is an error return, not a domain refusal reason)", reason)
 		}
 	})
+}
+
+// TestRevalidateForMerge_EligibilityConfigStoreError_FailsClosed is the C3
+// regression test (§62 review, BLOCKER, fixed): a GENUINE repo_settings
+// read error (never pgx.ErrNoRows) resolving this repo's own §21.2
+// eligibility config must refuse the merge outright (a propagated error,
+// mirroring this function's own existing §17 sentinel-fix-exclusion/
+// open-findings-count error propagation) -- BEFORE this fix,
+// LoadEligibilityConfig silently substituted the engine's own WIDER
+// built-in defaults here, which could turn a genuinely-ineligible PR (one
+// this repo's own narrower configured threshold/tag list would refuse)
+// into an apparently-eligible one purely because Postgres could not be
+// read this instant. Uses the SAME "already-rolled-back-tx fault
+// injection" this package's own aggregate_integration_test.go already
+// establishes (TestBuild_CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub)
+// -- every query through a dead tx fails with a real pgx error, never
+// pgx.ErrNoRows, with no need for a second container or a real outage.
+func TestRevalidateForMerge_EligibilityConfigStoreError_FailsClosed(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	rs := newRevalidateStores(pool)
+	const actorGitHubID = "revalidate-actor-c3"
+	const repoFullName = "acme/revalidate-eligibility-config-error"
+
+	pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 101)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback tx: %v", err)
+	}
+	// brokenRepoSettings wraps the now-dead tx above -- every query through
+	// it (including the one LoadEligibilityConfig issues) fails immediately
+	// with a real pgx error, never pgx.ErrNoRows.
+	rs.deps.ReviewVerdict.RepoSettings = narvipg.NewRepoSettingsStore(pool).WithTx(tx)
+
+	ok, headSHA, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
+	if err == nil {
+		t.Fatal("RevalidateForMerge() error = nil, want a non-nil error -- a genuine eligibility-config store error must fail CLOSED (refuse), never silently fall back to the engine's own wider defaults")
+	}
+	if ok {
+		t.Error("RevalidateForMerge() ok = true, want false")
+	}
+	if headSHA != "" {
+		t.Errorf("headSHA = %q, want empty on an error return", headSHA)
+	}
+	if reason != "" {
+		t.Errorf("reason = %q, want empty (this is an error return, not a domain refusal reason)", reason)
+	}
+}
+
+// TestRevalidateForMerge_LyingVerdictAgainstReal300FileSensitivePR is the
+// C1 regression test (§62 review, CRITICAL, fixed) at the FULL
+// system level -- the exact attack the reviewers verified reproducible
+// end to end: a review agent (whose own input includes the untrusted PR
+// diff, §5.2) posts riskLevel=low/premise=ok/testsCoverage=adequate (so
+// the server-computed Shippable legitimately computes to auto), PLUS
+// filesChanged=1 and an empty blastRadius, for a PR that in REALITY
+// rewrites 300 files under migrations/ and internal/domain/authz/. Both
+// gates (diff-size, sensitive-path) must independently refuse eligibility
+// once server-derived facts (ports.OpenPR.ChangedFiles, fetched via
+// GitHub's own Pull Request Files API) gate them instead of the posted
+// verdict's own self-report -- exercised here through RevalidateForMerge,
+// the SAME core (revalidateCore) RevalidateForAutoMerge shares with the
+// UNATTENDED auto-merge worker, so this proves the attack fails on
+// exactly the path where it would otherwise merge code unattended.
+func TestRevalidateForMerge_LyingVerdictAgainstReal300FileSensitivePR(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	rs := newRevalidateStores(pool)
+	const actorGitHubID = "revalidate-actor-c1-attack"
+	const repoFullName = "acme/revalidate-c1-attack"
+	const prNumber = 200
+	const headSHA = "sha-attack"
+	htmlURL := "https://github.com/" + repoFullName + "/pull/200"
+
+	// Platform-authored (an artifacts row of type 'pr' at this URL) --
+	// mirrors eligiblePR's own recipe.
+	session, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceGithub})
+	if err != nil {
+		t.Fatalf("create platform session: %v", err)
+	}
+	if _, err := narvipg.NewArtifactStore(pool).Create(ctx, sqlcgen.CreateArtifactParams{
+		SessionID: session.ID, Type: sqlcgen.ArtifactTypePr, Url: htmlURL, Metadata: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("create pr artifact: %v", err)
+	}
+
+	// THE ATTACK: a verdict whose self-reported fields lie about the
+	// diff's real shape, but whose OTHER fields legitimately compute
+	// Shippable=auto -- exactly the reviewers' own verified-reproducible
+	// payload shape.
+	lyingVerdict := review.Verdict{
+		RiskLevel:         review.RiskLevelLow,
+		Premise:           review.PremiseStateOK,
+		TestsCoverage:     review.TestsCoverageStateAdequate,
+		DocsDrift:         review.DocsDriftStateNone,
+		ProposedShippable: review.ProposedShippableAuto,
+		FilesChanged:      1,   // LIE: claims a trivial, one-file diff
+		BlastRadius:       nil, // LIE: claims nothing sensitive touched
+	}
+	lyingVerdict.Shippable = review.ComputeShippable(lyingVerdict.RiskLevel, lyingVerdict.TestsCoverage, lyingVerdict.Premise)
+	if lyingVerdict.Shippable != review.ShippableAuto {
+		t.Fatalf("test setup: lyingVerdict.Shippable = %v, want auto", lyingVerdict.Shippable)
+	}
+	if _, err := appreviewverdict.Insert(ctx, rs.deps.ReviewVerdict.ReviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, lyingVerdict); err != nil {
+		t.Fatalf("seed lying review_verdicts row: %v", err)
+	}
+
+	// THE TRUTH: GitHub's own Pull Request Files API reports 300 changed
+	// files, including real migrations/ and internal/domain/authz/ paths --
+	// this is what ports.OpenPR.ChangedFiles carries in production,
+	// server-fetched, never something the reviewing agent's own POST body
+	// can influence.
+	changedFiles := make([]string, 0, 300)
+	changedFiles = append(changedFiles, "migrations/000099_rewrite_everything.up.sql", "internal/domain/authz/rbac.go")
+	for i := len(changedFiles); i < 300; i++ {
+		changedFiles = append(changedFiles, "internal/app/widget/file"+strconv.Itoa(i)+".go")
+	}
+
+	pr := ports.OpenPR{
+		Owner: "acme", Repo: "revalidate-c1-attack", Number: prNumber,
+		Title: "innocuous-looking title", HTMLURL: htmlURL, HeadSHA: headSHA,
+		Assignees:    []ports.PRPerson{{ExternalID: actorGitHubID, Login: "actor"}},
+		CIConclusion: ports.CIConclusionSuccess,
+		Labels:       []string{"review:low-risk"},
+		ChangedFiles: changedFiles,
+	}
+	rs.sourceControl.openPRsByExternalID[actorGitHubID] = append(rs.sourceControl.openPRsByExternalID[actorGitHubID], pr)
+
+	ok, headSHAGot, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, prNumber, "tok")
+	if err != nil {
+		t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
+	}
+	if ok {
+		t.Fatal("RevalidateForMerge() ok = true -- THE ATTACK SUCCEEDED: a lying verdict (filesChanged=1, blastRadius=[]) against a real 300-file diff touching migrations/ and authz/ was judged eligible for an unattended merge")
+	}
+	if headSHAGot != "" {
+		t.Errorf("headSHA = %q, want empty on a refusal", headSHAGot)
+	}
+	// Both the diff-size AND sensitive-path criteria independently refuse
+	// this PR -- ComputeEligible returns the FIRST criterion it hits
+	// (diff size is checked before sensitive path, eligibility.go), so
+	// the reason names diff size specifically; the sensitive-path half of
+	// the fix is separately, directly pinned by
+	// TestComputeEligible_IgnoresModelSelfReportedFilesChangedAndBlastRadius
+	// (eligibility_test.go) in isolation (ChangedFileCount held small
+	// there, so ONLY the sensitive-path criterion can fire).
+	if reason == "" {
+		t.Error("reason is empty, want a human-readable explanation")
+	}
+	t.Logf("attack correctly refused: %s", reason)
 }

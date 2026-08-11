@@ -23,28 +23,34 @@ import (
 // fakeReviewContextFetcher is a test-only reviewcontext.Fetcher -- no real
 // HTTP round trip, mirroring internal/adapters/inbound/github's own
 // identically-named fixture (handler_integration_test.go) exactly.
-// diffOwner/diffRepo/diffNumber/diffToken (audit fix, test-coverage
-// finding) record GetPullRequestDiff's own last call args: this endpoint's
-// own diffFetcher call site (reviewretrigger.go) previously had NO
-// integration coverage at all with a non-nil diffFetcher wired in (this
-// rig's own default leaves it nil) -- an owner/repo swap there would have
-// been invisible to every test in the repo, unit or integration.
+// diffOwner/diffRepo/diffBase/diffHead/diffToken (audit fix, test-coverage
+// finding, updated for §62 review finding C2) record GetCompareDiff's own
+// last call args: this endpoint's own diffFetcher call site
+// (reviewretrigger.go) previously had NO integration coverage at all with
+// a non-nil diffFetcher wired in (this rig's own default leaves it nil)
+// -- an owner/repo swap there would have been invisible to every test in
+// the repo, unit or integration. pr's own HeadSHA/BaseRef (below) are
+// what GetCompareDiff must be pinned to -- the C2 fix's own core
+// property.
 type fakeReviewContextFetcher struct {
+	pr githubapi.PullRequest
+
 	diff          string
 	diffTruncated bool
 
-	diffOwner  string
-	diffRepo   string
-	diffNumber int32
-	diffToken  string
+	diffOwner string
+	diffRepo  string
+	diffBase  string
+	diffHead  string
+	diffToken string
 }
 
 func (f *fakeReviewContextFetcher) GetPullRequest(_ context.Context, _, _ string, _ int32, _ string) (githubapi.PullRequest, error) {
-	return githubapi.PullRequest{}, nil
+	return f.pr, nil
 }
 
-func (f *fakeReviewContextFetcher) GetPullRequestDiff(_ context.Context, owner, repo string, number int32, token string) (string, bool, error) {
-	f.diffOwner, f.diffRepo, f.diffNumber, f.diffToken = owner, repo, number, token
+func (f *fakeReviewContextFetcher) GetCompareDiff(_ context.Context, owner, repo, base, head, token string) (string, bool, error) {
+	f.diffOwner, f.diffRepo, f.diffBase, f.diffHead, f.diffToken = owner, repo, base, head, token
 	return f.diff, f.diffTruncated, nil
 }
 
@@ -204,7 +210,13 @@ func TestRetriggerReview_Success(t *testing.T) {
 // call site specifically would have been invisible to every test in the
 // repo.
 func TestRetriggerReview_PreFetchesReviewContext_CorrectOwnerRepoArgs(t *testing.T) {
-	fetcher := &fakeReviewContextFetcher{diff: "diff --git a/x b/x\n+hello\n"}
+	fetcher := &fakeReviewContextFetcher{
+		diff: "diff --git a/x b/x\n+hello\n",
+		// §62 review finding C2: HeadSHA/BaseRef are what GetCompareDiff
+		// must be pinned to -- a zero-value fixture would only prove the
+		// degenerate empty-base/empty-head case.
+		pr: githubapi.PullRequest{HeadSHA: "resolved-head-sha", BaseRef: "main"},
+	}
 	rig := newTestRig(t, func(r *testRig) {
 		r.diffFetcher = fetcher
 		r.botToken = "test-bot-token"
@@ -222,10 +234,26 @@ func TestRetriggerReview_PreFetchesReviewContext_CorrectOwnerRepoArgs(t *testing
 
 	// owner ("acme") and repo ("prefetch-retrigger-repo") are deliberately
 	// distinguishable strings -- a swapped-argument regression at this
-	// call site would fail this assertion.
-	if fetcher.diffOwner != "acme" || fetcher.diffRepo != "prefetch-retrigger-repo" || fetcher.diffNumber != 42 || fetcher.diffToken != "test-bot-token" {
-		t.Errorf("GetPullRequestDiff args = (%q, %q, %d, %q), want (%q, %q, %d, %q)",
-			fetcher.diffOwner, fetcher.diffRepo, fetcher.diffNumber, fetcher.diffToken, "acme", "prefetch-retrigger-repo", 42, "test-bot-token")
+	// call site would fail this assertion. diffBase/diffHead additionally
+	// prove the C2 fix's own core property: pinned to EXACTLY what
+	// GetPullRequest reported.
+	if fetcher.diffOwner != "acme" || fetcher.diffRepo != "prefetch-retrigger-repo" || fetcher.diffBase != "main" || fetcher.diffHead != "resolved-head-sha" || fetcher.diffToken != "test-bot-token" {
+		t.Errorf("GetCompareDiff args = (%q, %q, base=%q, head=%q, %q), want (%q, %q, base=%q, head=%q, %q)",
+			fetcher.diffOwner, fetcher.diffRepo, fetcher.diffBase, fetcher.diffHead, fetcher.diffToken, "acme", "prefetch-retrigger-repo", "main", "resolved-head-sha", "test-bot-token")
+	}
+
+	// §62 review finding C2: the turn's own persisted review_head_sha
+	// must equal exactly the SHA the diff above was pinned to.
+	var reviewHeadSHA *string
+	if err := rig.pool.QueryRow(ctx, `SELECT review_head_sha FROM turns WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1`, session.ID).Scan(&reviewHeadSHA); err != nil {
+		t.Fatalf("query turn review_head_sha: %v", err)
+	}
+	if reviewHeadSHA == nil || *reviewHeadSHA != "resolved-head-sha" {
+		got := "<nil>"
+		if reviewHeadSHA != nil {
+			got = *reviewHeadSHA
+		}
+		t.Errorf("turns.review_head_sha = %s, want %q", got, "resolved-head-sha")
 	}
 
 	var prompt string

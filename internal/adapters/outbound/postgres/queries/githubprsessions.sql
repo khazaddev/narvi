@@ -50,3 +50,11 @@ WHERE repo_full_name = $1 AND pr_number = $2;
 -- notification entirely rather than fabricating one.
 SELECT * FROM github_pr_sessions
 WHERE session_id = $1;
+
+-- SetGitHubPRSessionHeadSHA (and pending_head_sha, migrations/000068) is
+-- REMOVED as of migrations/000072_turns_review_head_sha.up.sql (§62
+-- review finding C2, CRITICAL, fixed) -- superseded by turns.
+-- review_head_sha, set once at turn-creation time and read back via
+-- TurnStore.GetProcessingTurnForSession, never a shared per-(repo,PR)
+-- column any later, unrelated turn's own context-fetch could overwrite.
+-- See that migration's own doc comment for the full "why".

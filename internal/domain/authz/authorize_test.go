@@ -246,6 +246,22 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot toggle sentinel auto-fix", authz.RoleMaintainer, authz.ActionToggleSentinelAutoFix, false, false},
 		{"member cannot toggle sentinel auto-fix", authz.RoleMember, authz.ActionToggleSentinelAutoFix, false, false},
 		{"viewer cannot toggle sentinel auto-fix", authz.RoleViewer, authz.ActionToggleSentinelAutoFix, false, false},
+		// Backfilling a pre-existing gap found while adding Step 62's own
+		// row-6 action below: ActionConfigureBlockOnHighRisk (Step 47/48)
+		// had a matrix row but no exhaustive four-role coverage here.
+		{"admin configures block-on-high-risk", authz.RoleAdmin, authz.ActionConfigureBlockOnHighRisk, false, true},
+		{"maintainer cannot configure block-on-high-risk", authz.RoleMaintainer, authz.ActionConfigureBlockOnHighRisk, false, false},
+		{"member cannot configure block-on-high-risk", authz.RoleMember, authz.ActionConfigureBlockOnHighRisk, false, false},
+		{"viewer cannot configure block-on-high-risk", authz.RoleViewer, authz.ActionConfigureBlockOnHighRisk, false, false},
+		// Step 62 (§21.2): arming the per-repo auto-merge toggle is admin
+		// ONLY, same row and reasoning as ActionToggleSentinelAutoFix
+		// above -- asserted with ownedOrJoined=true too, to prove the
+		// ownership escape hatch does not exist for this row at all.
+		{"admin toggles auto-merge", authz.RoleAdmin, authz.ActionToggleAutoMerge, false, true},
+		{"maintainer cannot toggle auto-merge", authz.RoleMaintainer, authz.ActionToggleAutoMerge, false, false},
+		{"maintainer cannot toggle auto-merge even if ownedOrJoined", authz.RoleMaintainer, authz.ActionToggleAutoMerge, true, false},
+		{"member cannot toggle auto-merge", authz.RoleMember, authz.ActionToggleAutoMerge, false, false},
+		{"viewer cannot toggle auto-merge", authz.RoleViewer, authz.ActionToggleAutoMerge, false, false},
 		// Step 54 (§25.11): workflow-binding activation is admin ONLY,
 		// in this SAME row as ActionActivatePromptTemplate -- not even
 		// maintainer, and no own/joined escape hatch (asserted with

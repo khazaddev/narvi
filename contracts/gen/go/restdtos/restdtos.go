@@ -3877,6 +3877,13 @@ func (j *RebutFindingRequest) UnmarshalJSON(value []byte) error {
 // 61's automatic-re-review opt-in) are each expected to add a further boolean
 // property here, never a bespoke DTO of their own.
 type RepoSettings struct {
+	// Step 62, §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an
+	// auto-approved PR merges unattended (internal/app/automerge.Worker) instead of
+	// surfacing in the decision inbox for a human's 1-click confirm. Gated by
+	// authz.ActionToggleAutoMerge, the SAME admin-only row as sentinelAutofixEnabled,
+	// never maintainer-level ActionConfigureAutoApprove.
+	AutoMergeEnabled bool `json:"autoMergeEnabled" yaml:"autoMergeEnabled" mapstructure:"autoMergeEnabled"`
+
 	// §21.2: an admin, per-repo, strict-boolean setting that reuses the
 	// verdict-posting tool's SAME formal-review submission path and carries no
 	// independent permission of its own -- see
@@ -3884,9 +3891,39 @@ type RepoSettings struct {
 	// exact effect.
 	BlockOnHighRisk bool `json:"blockOnHighRisk" yaml:"blockOnHighRisk" mapstructure:"blockOnHighRisk"`
 
+	// Step 62, §21.2 stage 2: false means no auto-approval outcome (confirmed or
+	// overridden) has been recorded for this repo yet in the calibration window --
+	// distinct from a real, computed 0% rate (§21.1's own 'not yet computed' sentinel
+	// discipline, mirroring ListDecisionInboxResponse.decisionLatencyComputed's own
+	// identical triple below).
+	ContradictionRateComputed bool `json:"contradictionRateComputed" yaml:"contradictionRateComputed" mapstructure:"contradictionRateComputed"`
+
+	// Null iff contradictionRateComputed is false. The fraction of auto-approved PRs
+	// a human later disagreed with, as a 0-100 percentage -- the figure an admin uses
+	// to decide whether to arm autoMergeEnabled.
+	ContradictionRatePercent RepoSettingsContradictionRatePercent `json:"contradictionRatePercent" yaml:"contradictionRatePercent" mapstructure:"contradictionRatePercent"`
+
+	// How many auto-approval outcomes contradictionRatePercent was computed over -- 0
+	// whenever contradictionRateComputed is false.
+	ContradictionSampleSize int `json:"contradictionSampleSize" yaml:"contradictionSampleSize" mapstructure:"contradictionSampleSize"`
+
+	// Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility
+	// threshold. Null means 'not configured -- the auto-approval engine's own
+	// built-in default applies'
+	// (internal/domain/autoapproval.DefaultEligibilityConfig), never a magic sentinel
+	// number. Gated by authz.ActionConfigureAutoApprove (maintainer+).
+	MaxAutoApproveFilesChanged RepoSettingsMaxAutoApproveFilesChanged `json:"maxAutoApproveFilesChanged" yaml:"maxAutoApproveFilesChanged" mapstructure:"maxAutoApproveFilesChanged"`
+
 	// The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own
 	// shape.
 	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list
+	// (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured
+	// -- the auto-approval engine's own default list applies (migrations, auth,
+	// contracts)', never an empty-list claim that this repo deliberately has zero
+	// sensitive tags. Gated by authz.ActionConfigureAutoApprove (maintainer+).
+	SensitiveBlastRadiusTags *RepoSettingsSensitiveBlastRadiusTags `json:"sensitiveBlastRadiusTags" yaml:"sensitiveBlastRadiusTags" mapstructure:"sensitiveBlastRadiusTags"`
 
 	// §17.1: admin-only, per-repo, off by default -- enables the sentinel-auto-fix
 	// flow (coverage/doc-drift findings spawn a child session that opens its own
@@ -3895,17 +3932,96 @@ type RepoSettings struct {
 	SentinelAutofixEnabled bool `json:"sentinelAutofixEnabled" yaml:"sentinelAutofixEnabled" mapstructure:"sentinelAutofixEnabled"`
 }
 
+// Null iff contradictionRateComputed is false. The fraction of auto-approved PRs a
+// human later disagreed with, as a 0-100 percentage -- the figure an admin uses to
+// decide whether to arm autoMergeEnabled.
+type RepoSettingsContradictionRatePercent *float64
+
+// Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility
+// threshold. Null means 'not configured -- the auto-approval engine's own built-in
+// default applies' (internal/domain/autoapproval.DefaultEligibilityConfig), never
+// a magic sentinel number. Gated by authz.ActionConfigureAutoApprove
+// (maintainer+).
+type RepoSettingsMaxAutoApproveFilesChanged *int
+
+// Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list
+// (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured
+// -- the auto-approval engine's own default list applies (migrations, auth,
+// contracts)', never an empty-list claim that this repo deliberately has zero
+// sensitive tags. Gated by authz.ActionConfigureAutoApprove (maintainer+).
+type RepoSettingsSensitiveBlastRadiusTags []RepoSettingsSensitiveBlastRadiusTagsElem
+
+type RepoSettingsSensitiveBlastRadiusTagsElem string
+
+const RepoSettingsSensitiveBlastRadiusTagsElemAuth RepoSettingsSensitiveBlastRadiusTagsElem = "auth"
+const RepoSettingsSensitiveBlastRadiusTagsElemContracts RepoSettingsSensitiveBlastRadiusTagsElem = "contracts"
+const RepoSettingsSensitiveBlastRadiusTagsElemDataLayer RepoSettingsSensitiveBlastRadiusTagsElem = "data_layer"
+const RepoSettingsSensitiveBlastRadiusTagsElemDependencies RepoSettingsSensitiveBlastRadiusTagsElem = "dependencies"
+const RepoSettingsSensitiveBlastRadiusTagsElemInfra RepoSettingsSensitiveBlastRadiusTagsElem = "infra"
+const RepoSettingsSensitiveBlastRadiusTagsElemMigrations RepoSettingsSensitiveBlastRadiusTagsElem = "migrations"
+const RepoSettingsSensitiveBlastRadiusTagsElemPublicApi RepoSettingsSensitiveBlastRadiusTagsElem = "public_api"
+const RepoSettingsSensitiveBlastRadiusTagsElemSecrets RepoSettingsSensitiveBlastRadiusTagsElem = "secrets"
+
+var enumValues_RepoSettingsSensitiveBlastRadiusTagsElem = []interface{}{
+	"auth",
+	"migrations",
+	"contracts",
+	"secrets",
+	"infra",
+	"public_api",
+	"data_layer",
+	"dependencies",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *RepoSettingsSensitiveBlastRadiusTagsElem) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_RepoSettingsSensitiveBlastRadiusTagsElem {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_RepoSettingsSensitiveBlastRadiusTagsElem, v)
+	}
+	*j = RepoSettingsSensitiveBlastRadiusTagsElem(v)
+	return nil
+}
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["autoMergeEnabled"]; raw != nil && !ok {
+		return fmt.Errorf("field autoMergeEnabled in RepoSettings: required")
+	}
 	if _, ok := raw["blockOnHighRisk"]; raw != nil && !ok {
 		return fmt.Errorf("field blockOnHighRisk in RepoSettings: required")
 	}
+	if _, ok := raw["contradictionRateComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field contradictionRateComputed in RepoSettings: required")
+	}
+	if _, ok := raw["contradictionRatePercent"]; raw != nil && !ok {
+		return fmt.Errorf("field contradictionRatePercent in RepoSettings: required")
+	}
+	if _, ok := raw["contradictionSampleSize"]; raw != nil && !ok {
+		return fmt.Errorf("field contradictionSampleSize in RepoSettings: required")
+	}
+	if _, ok := raw["maxAutoApproveFilesChanged"]; raw != nil && !ok {
+		return fmt.Errorf("field maxAutoApproveFilesChanged in RepoSettings: required")
+	}
 	if _, ok := raw["repoFullName"]; raw != nil && !ok {
 		return fmt.Errorf("field repoFullName in RepoSettings: required")
+	}
+	if _, ok := raw["sensitiveBlastRadiusTags"]; raw != nil && !ok {
+		return fmt.Errorf("field sensitiveBlastRadiusTags in RepoSettings: required")
 	}
 	if _, ok := raw["sentinelAutofixEnabled"]; raw != nil && !ok {
 		return fmt.Errorf("field sentinelAutofixEnabled in RepoSettings: required")
@@ -3916,6 +4032,312 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = RepoSettings(plain)
+	return nil
+}
+
+// GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) --
+// the three analytics rollups named in that section's own scope, each bounded to
+// platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and
+// carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0%
+// dismiss rate and a repo with no data yet must never render identically' (§21.1).
+// Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role
+// including viewer.
+type ReviewAnalytics struct {
+	// Every reviewpost.FindingStatus present in the window, sorted by count
+	// descending then status ascending. Null iff findingOutcomesComputed is false --
+	// like timeseries above, a real, computed result can never itself be an empty
+	// array (every counted status is non-empty by construction), so null is
+	// unambiguous here too.
+	FindingOutcomes *ReviewAnalyticsFindingOutcomes `json:"findingOutcomes" yaml:"findingOutcomes" mapstructure:"findingOutcomes"`
+
+	// False iff no review_findings row exists for this repo within the window --
+	// reads a DIFFERENT table than the two rollups above (review_findings, Step 48's
+	// mutable per-finding status history, never review_verdicts' own append-only rows
+	// -- internal/domain/reviewverdict.FindingOutcomes' own doc comment).
+	FindingOutcomesComputed bool `json:"findingOutcomesComputed" yaml:"findingOutcomesComputed" mapstructure:"findingOutcomesComputed"`
+
+	// The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own
+	// shape.
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// One entry per UTC calendar day that had at least one posted verdict within the
+	// window, oldest first. Null iff timeseriesComputed is false -- a real, computed
+	// timeseries can never itself be an empty array (every posted verdict belongs to
+	// some day, so any real data produces at least one bucket), so null is an
+	// unambiguous, redundant-with-the-boolean signal here, never a magic
+	// empty-vs-absent distinction a client must reason about on its own.
+	Timeseries *ReviewAnalyticsTimeseries `json:"timeseries" yaml:"timeseries" mapstructure:"timeseries"`
+
+	// False iff no review_verdicts row exists for this repo within the window --
+	// timeseries is then empty. Unlike topRiskDriversComputed below, this can never
+	// be true with an empty timeseries: every posted verdict belongs to some UTC
+	// calendar day, so any real data produces at least one bucket
+	// (internal/domain/reviewverdict.Timeseries' own doc comment).
+	TimeseriesComputed bool `json:"timeseriesComputed" yaml:"timeseriesComputed" mapstructure:"timeseriesComputed"`
+
+	// Every review.Tag that appeared in at least one verdict's BlastRadius within the
+	// window, sorted by count descending then tag ascending (a fixed, deterministic
+	// order -- never Go map iteration order). Null iff topRiskDriversComputed is
+	// false. A non-null EMPTY array with topRiskDriversComputed true is the one
+	// genuinely ambiguous-looking case this DTO can render, and it is deliberate:
+	// real verdicts exist, none tagged a risk driver -- the boolean, never array
+	// nullness/emptiness alone, is what a client must branch on.
+	TopRiskDrivers *ReviewAnalyticsTopRiskDrivers `json:"topRiskDrivers" yaml:"topRiskDrivers" mapstructure:"topRiskDrivers"`
+
+	// False iff no review_verdicts row exists for this repo within the window. UNLIKE
+	// timeseriesComputed, true with an EMPTY (but non-null) topRiskDrivers array
+	// below is itself a real, distinct, computed answer -- verdicts exist in the
+	// window but none tagged any BlastRadius risk driver
+	// (internal/domain/reviewverdict.TopRiskDrivers' own doc comment on why this is
+	// never confused with the ok=false sentinel above it).
+	TopRiskDriversComputed bool `json:"topRiskDriversComputed" yaml:"topRiskDriversComputed" mapstructure:"topRiskDriversComputed"`
+}
+
+// One UTC calendar day's own Shippable-classification counts --
+// ReviewAnalytics.timeseries' own per-day row
+// (internal/domain/reviewverdict.DayBucket).
+type ReviewAnalyticsDayBucket struct {
+	// How many verdicts posted this day carried Shippable == auto.
+	AutoCount int `json:"autoCount" yaml:"autoCount" mapstructure:"autoCount"`
+
+	// How many verdicts posted this day carried Shippable == block.
+	BlockCount int `json:"blockCount" yaml:"blockCount" mapstructure:"blockCount"`
+
+	// Midnight UTC of this bucket's own calendar day.
+	Day time.Time `json:"day" yaml:"day" mapstructure:"day"`
+
+	// How many verdicts posted this day carried Shippable == needs_human.
+	NeedsHumanCount int `json:"needsHumanCount" yaml:"needsHumanCount" mapstructure:"needsHumanCount"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsDayBucket) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["autoCount"]; raw != nil && !ok {
+		return fmt.Errorf("field autoCount in ReviewAnalyticsDayBucket: required")
+	}
+	if _, ok := raw["blockCount"]; raw != nil && !ok {
+		return fmt.Errorf("field blockCount in ReviewAnalyticsDayBucket: required")
+	}
+	if _, ok := raw["day"]; raw != nil && !ok {
+		return fmt.Errorf("field day in ReviewAnalyticsDayBucket: required")
+	}
+	if _, ok := raw["needsHumanCount"]; raw != nil && !ok {
+		return fmt.Errorf("field needsHumanCount in ReviewAnalyticsDayBucket: required")
+	}
+	type Plain ReviewAnalyticsDayBucket
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewAnalyticsDayBucket(plain)
+	return nil
+}
+
+// Every reviewpost.FindingStatus present in the window, sorted by count descending
+// then status ascending. Null iff findingOutcomesComputed is false -- like
+// timeseries above, a real, computed result can never itself be an empty array
+// (every counted status is non-empty by construction), so null is unambiguous here
+// too.
+type ReviewAnalyticsFindingOutcomes []ReviewAnalyticsFindingStatusCount
+
+// One reviewpost.FindingStatus's own occurrence count across the window's
+// review_findings rows -- ReviewAnalytics.findingOutcomes' own per-status row
+// (internal/domain/reviewverdict.FindingStatusCount).
+type ReviewAnalyticsFindingStatusCount struct {
+	// Count corresponds to the JSON schema field "count".
+	Count int `json:"count" yaml:"count" mapstructure:"count"`
+
+	// Status corresponds to the JSON schema field "status".
+	Status ReviewAnalyticsFindingStatusCountStatus `json:"status" yaml:"status" mapstructure:"status"`
+}
+
+type ReviewAnalyticsFindingStatusCountStatus string
+
+const ReviewAnalyticsFindingStatusCountStatusFixApplied ReviewAnalyticsFindingStatusCountStatus = "fix_applied"
+const ReviewAnalyticsFindingStatusCountStatusFixMerged ReviewAnalyticsFindingStatusCountStatus = "fix_merged"
+const ReviewAnalyticsFindingStatusCountStatusFixOpen ReviewAnalyticsFindingStatusCountStatus = "fix_open"
+const ReviewAnalyticsFindingStatusCountStatusFixPending ReviewAnalyticsFindingStatusCountStatus = "fix_pending"
+const ReviewAnalyticsFindingStatusCountStatusOpen ReviewAnalyticsFindingStatusCountStatus = "open"
+const ReviewAnalyticsFindingStatusCountStatusRebutted ReviewAnalyticsFindingStatusCountStatus = "rebutted"
+
+var enumValues_ReviewAnalyticsFindingStatusCountStatus = []interface{}{
+	"open",
+	"rebutted",
+	"fix_pending",
+	"fix_open",
+	"fix_merged",
+	"fix_applied",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsFindingStatusCountStatus) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewAnalyticsFindingStatusCountStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewAnalyticsFindingStatusCountStatus, v)
+	}
+	*j = ReviewAnalyticsFindingStatusCountStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsFindingStatusCount) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["count"]; raw != nil && !ok {
+		return fmt.Errorf("field count in ReviewAnalyticsFindingStatusCount: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in ReviewAnalyticsFindingStatusCount: required")
+	}
+	type Plain ReviewAnalyticsFindingStatusCount
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewAnalyticsFindingStatusCount(plain)
+	return nil
+}
+
+// One review.Tag's own occurrence count across the window's verdicts --
+// ReviewAnalytics.topRiskDrivers' own per-tag row
+// (internal/domain/reviewverdict.TagCount).
+type ReviewAnalyticsTagCount struct {
+	// Count corresponds to the JSON schema field "count".
+	Count int `json:"count" yaml:"count" mapstructure:"count"`
+
+	// Tag corresponds to the JSON schema field "tag".
+	Tag ReviewAnalyticsTagCountTag `json:"tag" yaml:"tag" mapstructure:"tag"`
+}
+
+type ReviewAnalyticsTagCountTag string
+
+const ReviewAnalyticsTagCountTagAuth ReviewAnalyticsTagCountTag = "auth"
+const ReviewAnalyticsTagCountTagContracts ReviewAnalyticsTagCountTag = "contracts"
+const ReviewAnalyticsTagCountTagDataLayer ReviewAnalyticsTagCountTag = "data_layer"
+const ReviewAnalyticsTagCountTagDependencies ReviewAnalyticsTagCountTag = "dependencies"
+const ReviewAnalyticsTagCountTagInfra ReviewAnalyticsTagCountTag = "infra"
+const ReviewAnalyticsTagCountTagMigrations ReviewAnalyticsTagCountTag = "migrations"
+const ReviewAnalyticsTagCountTagPublicApi ReviewAnalyticsTagCountTag = "public_api"
+const ReviewAnalyticsTagCountTagSecrets ReviewAnalyticsTagCountTag = "secrets"
+
+var enumValues_ReviewAnalyticsTagCountTag = []interface{}{
+	"auth",
+	"migrations",
+	"contracts",
+	"secrets",
+	"infra",
+	"public_api",
+	"data_layer",
+	"dependencies",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsTagCountTag) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ReviewAnalyticsTagCountTag {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ReviewAnalyticsTagCountTag, v)
+	}
+	*j = ReviewAnalyticsTagCountTag(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalyticsTagCount) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["count"]; raw != nil && !ok {
+		return fmt.Errorf("field count in ReviewAnalyticsTagCount: required")
+	}
+	if _, ok := raw["tag"]; raw != nil && !ok {
+		return fmt.Errorf("field tag in ReviewAnalyticsTagCount: required")
+	}
+	type Plain ReviewAnalyticsTagCount
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewAnalyticsTagCount(plain)
+	return nil
+}
+
+// One entry per UTC calendar day that had at least one posted verdict within the
+// window, oldest first. Null iff timeseriesComputed is false -- a real, computed
+// timeseries can never itself be an empty array (every posted verdict belongs to
+// some day, so any real data produces at least one bucket), so null is an
+// unambiguous, redundant-with-the-boolean signal here, never a magic
+// empty-vs-absent distinction a client must reason about on its own.
+type ReviewAnalyticsTimeseries []ReviewAnalyticsDayBucket
+
+// Every review.Tag that appeared in at least one verdict's BlastRadius within the
+// window, sorted by count descending then tag ascending (a fixed, deterministic
+// order -- never Go map iteration order). Null iff topRiskDriversComputed is
+// false. A non-null EMPTY array with topRiskDriversComputed true is the one
+// genuinely ambiguous-looking case this DTO can render, and it is deliberate: real
+// verdicts exist, none tagged a risk driver -- the boolean, never array
+// nullness/emptiness alone, is what a client must branch on.
+type ReviewAnalyticsTopRiskDrivers []ReviewAnalyticsTagCount
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ReviewAnalytics) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["findingOutcomes"]; raw != nil && !ok {
+		return fmt.Errorf("field findingOutcomes in ReviewAnalytics: required")
+	}
+	if _, ok := raw["findingOutcomesComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field findingOutcomesComputed in ReviewAnalytics: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in ReviewAnalytics: required")
+	}
+	if _, ok := raw["timeseries"]; raw != nil && !ok {
+		return fmt.Errorf("field timeseries in ReviewAnalytics: required")
+	}
+	if _, ok := raw["timeseriesComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field timeseriesComputed in ReviewAnalytics: required")
+	}
+	if _, ok := raw["topRiskDrivers"]; raw != nil && !ok {
+		return fmt.Errorf("field topRiskDrivers in ReviewAnalytics: required")
+	}
+	if _, ok := raw["topRiskDriversComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field topRiskDriversComputed in ReviewAnalytics: required")
+	}
+	type Plain ReviewAnalytics
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ReviewAnalytics(plain)
 	return nil
 }
 
@@ -4470,6 +4892,122 @@ func (j *ShadowComparisonTurn) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Request body for PUT /api/repos/{owner}/{repo}/auto-approval-settings (Step 62,
+// §21.2 stage 1) -- the auto-approval eligibility engine's own two
+// per-repo-tunable criteria. A SEPARATE endpoint from UpdateRepoSettingsRequest's
+// own PUT /settings, gated SOLELY by authz.ActionConfigureAutoApprove
+// (maintainer+, §13.3 row 5) -- see that DTO's own doc comment for why. Always the
+// full, current desired state for these two fields specifically (never a partial
+// patch) -- the handler read-modify-writes repo_settings.auto_merge_enabled (a
+// DIFFERENT row, gated by a DIFFERENT action) unchanged alongside whichever of
+// these two this call sets.
+type UpdateAutoApprovalSettingsRequest struct {
+	// Null means 'use the auto-approval engine's own built-in default'.
+	MaxAutoApproveFilesChanged UpdateAutoApprovalSettingsRequestMaxAutoApproveFilesChanged `json:"maxAutoApproveFilesChanged" yaml:"maxAutoApproveFilesChanged" mapstructure:"maxAutoApproveFilesChanged"`
+
+	// Null means 'use the auto-approval engine's own built-in default list
+	// (migrations, auth, contracts)'.
+	SensitiveBlastRadiusTags *UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTags `json:"sensitiveBlastRadiusTags" yaml:"sensitiveBlastRadiusTags" mapstructure:"sensitiveBlastRadiusTags"`
+}
+
+// Null means 'use the auto-approval engine's own built-in default'.
+type UpdateAutoApprovalSettingsRequestMaxAutoApproveFilesChanged *int
+
+// Null means 'use the auto-approval engine's own built-in default list
+// (migrations, auth, contracts)'.
+type UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTags []UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem
+
+type UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem string
+
+const UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemAuth UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = "auth"
+const UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemContracts UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = "contracts"
+const UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemDataLayer UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = "data_layer"
+const UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemDependencies UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = "dependencies"
+const UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemInfra UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = "infra"
+const UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemMigrations UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = "migrations"
+const UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemPublicApi UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = "public_api"
+const UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemSecrets UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = "secrets"
+
+var enumValues_UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem = []interface{}{
+	"auth",
+	"migrations",
+	"contracts",
+	"secrets",
+	"infra",
+	"public_api",
+	"data_layer",
+	"dependencies",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem, v)
+	}
+	*j = UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElem(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateAutoApprovalSettingsRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["maxAutoApproveFilesChanged"]; raw != nil && !ok {
+		return fmt.Errorf("field maxAutoApproveFilesChanged in UpdateAutoApprovalSettingsRequest: required")
+	}
+	if _, ok := raw["sensitiveBlastRadiusTags"]; raw != nil && !ok {
+		return fmt.Errorf("field sensitiveBlastRadiusTags in UpdateAutoApprovalSettingsRequest: required")
+	}
+	type Plain UpdateAutoApprovalSettingsRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpdateAutoApprovalSettingsRequest(plain)
+	return nil
+}
+
+// Request body for PUT /api/repos/{owner}/{repo}/auto-merge (Step 62, §21.2 stage
+// 2) -- arms/disarms the per-repo unattended-merge toggle. A SEPARATE endpoint,
+// gated SOLELY by authz.ActionToggleAutoMerge (admin only, §13.3 row 6) -- see
+// UpdateRepoSettingsRequest's own doc comment for why this is not folded into the
+// shared PUT /settings endpoint.
+type UpdateAutoMergeToggleRequest struct {
+	// Enabled corresponds to the JSON schema field "enabled".
+	Enabled bool `json:"enabled" yaml:"enabled" mapstructure:"enabled"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateAutoMergeToggleRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["enabled"]; raw != nil && !ok {
+		return fmt.Errorf("field enabled in UpdateAutoMergeToggleRequest: required")
+	}
+	type Plain UpdateAutoMergeToggleRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpdateAutoMergeToggleRequest(plain)
+	return nil
+}
+
 // PATCH /api/members/{userID}/role's own request body. role is deliberately
 // modeled as an unconstrained string, not an enum matching user_role -- it is
 // validated against that closed set at the application layer instead (members.go's
@@ -4543,7 +5081,15 @@ func (j *UpdateProviderCredentialRequest) UnmarshalJSON(value []byte) error {
 // blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always
 // the full desired state' semantics mean an old caller that omits this key simply
 // (re)sets it to its own safe default (false) alongside whatever it DOES specify,
-// never a partial-patch surprise.
+// never a partial-patch surprise. Step 62's own §21.2 fields
+// (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are
+// DELIBERATELY NOT on this shared request: this endpoint's own handler requires
+// EVERY permission its fields collectively need (PutRepoSettings' own doc comment,
+// httpapi/reposettings.go), which would force a maintainer authorized only for the
+// auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates
+// (row 6) too -- see
+// UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its
+// own endpoint with its own single, correctly-scoped gate.
 type UpdateRepoSettingsRequest struct {
 	// BlockOnHighRisk corresponds to the JSON schema field "blockOnHighRisk".
 	BlockOnHighRisk bool `json:"blockOnHighRisk" yaml:"blockOnHighRisk" mapstructure:"blockOnHighRisk"`

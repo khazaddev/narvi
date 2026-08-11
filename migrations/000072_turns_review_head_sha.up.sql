@@ -1,0 +1,78 @@
+-- turns.review_head_sha (Step 62 follow-up, §21.1/§21.2, §62 review
+-- finding C2, CRITICAL, fixed): the commit SHA a REVIEW turn's own
+-- pre-fetched diff was anchored to -- superseding
+-- github_pr_sessions.pending_head_sha (migrations/000068), dropped by
+-- this SAME migration below.
+--
+-- # Why pending_head_sha was wrong: a shared, mutable column has no turn
+--
+-- github_pr_sessions is keyed by (repo_full_name, pr_number), ONE row
+-- reused across a PR's ENTIRE review-session lifetime (Step 46's own
+-- per-PR session-reuse design) -- so pending_head_sha was a single,
+-- shared, mutable slot, overwritten by EVERY fresh context fetch
+-- (internal/app/reviewcontext.Fetch), regardless of which turn that
+-- fetch was for. A concrete, reproducible race this enabled: turn N
+-- fetches context (diff anchored to SHA_N, pending_head_sha := SHA_N),
+-- is dispatched, and starts running; BEFORE its own agent posts a
+-- verdict, a second trigger (a new push landing mid-review, another
+-- @mention, a label re-trigger) enqueues turn N+1 on the SAME session,
+-- whose OWN context-fetch runs immediately (at ingress time, before
+-- turn N+1 is even dispatched -- see reviewretrigger.go/github/
+-- handler.go, both of which call reviewcontext.Fetch synchronously in
+-- the HTTP/webhook handler itself) and overwrites
+-- pending_head_sha := SHA_N+1. Turn N's agent, still working against
+-- the diff it was ACTUALLY shown (anchored to SHA_N), eventually posts
+-- its verdict -- httpapi.PostReviewVerdict reads pending_head_sha at
+-- THAT moment and gets SHA_N+1, a commit turn N's own agent never saw
+-- at all. The resulting review_verdicts.head_sha row claims a verdict
+-- was produced against a commit it never examined -- directly defeating
+-- §21.2's own stale-verdict guard (internal/domain/autoapproval.
+-- ComputeEligible: VerdictHeadSHA == CurrentHeadSHA), the criterion
+-- §21.2 itself calls decisive ("a verdict computed against an earlier
+-- commit is stale by definition and must never itself satisfy
+-- eligibility").
+--
+-- # The fix: bind the SHA to the TURN that examined it, not the PR
+--
+-- review_head_sha lives on turns instead -- one row per turn (migrations/
+-- 000005_turns.up.sql), so this column is INHERENTLY scoped to exactly
+-- the ONE review that fetched it, immune to a LATER turn's own,
+-- unrelated context-fetch overwriting it. Set ONCE, at turn-creation
+-- time (the same INSERT ... turns.Create call that persists the turn's
+-- own prompt -- internal/adapters/inbound/httpapi's createTurnLocked/
+-- CreateSessionOnTx), never updated afterward -- immutable for the
+-- lifetime of the row, unlike pending_head_sha's own "overwritten on
+-- every fresh context fetch" design.
+--
+-- httpapi.PostReviewVerdict (Step 47) now resolves "which turn is
+-- POSTing this verdict" via turns_one_processing_per_session (migrations/
+-- 000005_turns.up.sql) -- the SAME "resolve the session's own CURRENTLY
+-- live turn from a sandbox-authenticated session id alone" primitive
+-- Step 61's own epistemic-outcome-posting endpoint already established
+-- (TurnStore.GetProcessingTurnForSession, queries/turns.sql): a review
+-- agent calls the verdict-posting endpoint WHILE its own turn is
+-- actively processing, and the partial unique index guarantees at most
+-- one turn can be 'processing' for a given session at any instant -- so
+-- this lookup is unambiguous by construction, no new turn-id threading
+-- through the sandbox WS protocol or the verdict-posting tool's own URL/
+-- headers required.
+--
+-- Nullable: only ever set for a REVIEW turn (a build turn, a plan-mode
+-- turn, etc. never has one) -- NULL here means exactly what a NULL
+-- pending_head_sha used to mean ("no head sha known for this turn"),
+-- handled by PostReviewVerdict identically: logged, and the
+-- review_verdicts insert (that table's own NOT NULL head_sha column,
+-- migrations/000067) is skipped, never blocking the verdict POST
+-- itself.
+ALTER TABLE turns ADD COLUMN review_head_sha TEXT;
+
+-- github_pr_sessions.pending_head_sha is now dead: httpapi.
+-- PostReviewVerdict was its ONE real reader (this migration's own doc
+-- comment above), and that call site is switched, in the SAME commit
+-- that adds this migration, to turns.review_head_sha instead. Dropped
+-- outright rather than left unread -- a superseded, provably-unreliable
+-- column left in place is an attractive nuisance for a future caller to
+-- mistakenly read again (SetGitHubPRSessionHeadSHA/GitHubPRSessionStore.
+-- SetHeadSHA are removed in this same commit, so nothing can even write
+-- it going forward either).
+ALTER TABLE github_pr_sessions DROP COLUMN pending_head_sha;

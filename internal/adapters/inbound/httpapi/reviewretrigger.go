@@ -143,10 +143,23 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 				prompt = alreadyAnswered + prompt
 			}
 		}
+		// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is
+		// captured here and threaded into CreateTurnCore below via
+		// CreateTurnOptions.ReviewHeadSHA -- persisted onto THIS turn's
+		// own row (turns.review_head_sha, set once at creation), never
+		// written to a shared, mutable per-(repo,PR) column a LATER,
+		// unrelated turn's own context-fetch could overwrite (the
+		// previous github_pr_sessions.pending_head_sha design this fix
+		// replaces -- see migrations/000072_turns_review_head_sha.up.sql's
+		// own doc comment for the full "why").
+		var reviewHeadSHA *string
 		if diffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(prSession.RepoFullName); ok {
 				prCtx := reviewcontext.Fetch(ctx, logger, diffFetcher, timeouts, owner, repo, prSession.PrNumber, botToken, nil)
 				prompt = review.RenderTurnPrompt(prompt, prCtx)
+				if prCtx.HeadSHA != "" {
+					reviewHeadSHA = &prCtx.HeadSHA
+				}
 			} else {
 				logger.Warn("httpapi: could not split repo_full_name into owner/repo, skipping pre-fetched review context",
 					"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
@@ -172,7 +185,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// it (a review-retrigger turn is always planMode=false, never
 		// true), so this call site is EXCLUDED at the source rather than
 		// relying on some other gate downstream.
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue)
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
 		if cerr != nil {
 			logger.Error("httpapi: retrigger review (create turn) failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)

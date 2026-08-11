@@ -23,6 +23,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/auditlog"
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -371,6 +372,28 @@ func MergePullRequest(deps decisioninbox.Deps, sourceControl ports.SourceControl
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+
+		// §62 review finding T1/M5 (fixed): this is the human 1-click
+		// merge-completion path §21.2 stage 2's own contradiction-rate
+		// metric names as ONE of its two 'confirmed' producers ("the
+		// engine's own judgment stood") -- outcomes.go's own
+		// RecordConfirmed doc comment, and migration 000070's own doc
+		// comment, both ALREADY documented this call as existing here;
+		// it did not, until this fix. Before this fix, RecordConfirmed's
+		// ONLY real caller was the ARMED auto-merge worker
+		// (internal/app/automerge/worker.go) -- so during the ENTIRE
+		// toggle-off calibration window (the exact period this metric
+		// exists to inform, §21.2: "an admin arms the auto-merge toggle
+		// only once this data justifies it"), only 'overridden' rows
+		// were EVER written, pinning the contradiction rate at 100% or
+		// "not yet computed" for every repo that had not yet armed
+		// auto-merge -- exactly the repos this metric is supposed to
+		// help an admin decide FOR. Best-effort, mirroring
+		// automerge.Worker.mergeCandidate's own identical placement
+		// (after the merge succeeds, before the audit-log write): a
+		// failure here must never claim the already-succeeded GitHub
+		// merge failed.
+		appreviewverdict.RecordConfirmed(ctx, deps.ReviewVerdict, req.RepoFullName, int32(req.PrNumber), headSHA)
 
 		if err := auditlog.Record(ctx, auditLog, actorUserID, "merge_pr", "pull_request", fmt.Sprintf("%s#%d", req.RepoFullName, req.PrNumber), map[string]any{
 			"repo_full_name":   req.RepoFullName,
