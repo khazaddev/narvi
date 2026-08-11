@@ -29,17 +29,44 @@ func TestGetRepoSettings_MemberDenied(t *testing.T) {
 	}
 }
 
-// TestGetRepoSettings_MaintainerDenied proves even a MAINTAINER is denied
-// -- this row is stricter than row 5 (which maintainers DO get), matching
-// the sentinel-auto-fix-toggle precedent's own admin-only reasoning.
-func TestGetRepoSettings_MaintainerDenied(t *testing.T) {
+// TestGetRepoSettings_MaintainerAllowed_ButPutStillAdminOnly is Step 62's
+// own update to what was TestGetRepoSettings_MaintainerDenied: a
+// maintainer is now ALLOWED to read settings (they hold
+// authz.ActionConfigureAutoApprove, §13.3 row 5, and GetRepoSettings'
+// own gate is authorizeAny across every action any part of this resource
+// needs, reposettings.go's own doc comment) -- but PUT /settings itself
+// (blockOnHighRisk/sentinelAutofixEnabled, both admin-only row 6) is
+// UNCHANGED and still denies them, proving this is a READ-side widening
+// only, never a write-side one.
+func TestGetRepoSettings_MaintainerAllowed_ButPutStillAdminOnly(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
 
 	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/widgets/settings", nil, nil, token)
+	if status != http.StatusOK {
+		t.Errorf("GET status = %d, want %d (a maintainer holds authz.ActionConfigureAutoApprove, §13.3 row 5, sufficient to READ this endpoint since Step 62)", status, http.StatusOK)
+	}
+
+	status = rig.doJSON(t, http.MethodPut, "/api/repos/acme/widgets/settings", []byte(`{"blockOnHighRisk":true}`), nil, token)
 	if status != http.StatusForbidden {
-		t.Errorf("status = %d, want %d (admin only, no maintainer carve-out)", status, http.StatusForbidden)
+		t.Errorf("PUT status = %d, want %d (blockOnHighRisk/sentinelAutofixEnabled remain admin-only, row 6, unaffected by the read-side widening)", status, http.StatusForbidden)
+	}
+}
+
+// TestGetRepoSettings_MemberStillDenied proves an ordinary member (who
+// holds NEITHER row-5 nor row-6 actions) is still denied read access --
+// the authorizeAny widening above is scoped to exactly the two roles
+// §13.3 actually grants SOME action on this resource to, never a general
+// "any authenticated user" opening.
+func TestGetRepoSettings_MemberStillDenied(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t) // default role: member.
+
+	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/widgets/settings", nil, nil, token)
+	if status != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (a plain member holds none of ActionConfigureBlockOnHighRisk/ActionConfigureAutoApprove/ActionToggleAutoMerge)", status, http.StatusForbidden)
 	}
 }
 

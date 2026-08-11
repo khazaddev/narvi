@@ -58,7 +58,13 @@ func (p *Pump) Run(ctx context.Context) error {
 // implements.
 func (p *Pump) PumpOnce(ctx context.Context, now time.Time) error {
 	logger := platform.Logger(ctx)
-	sendDate := pgtype.Date{Time: now.UTC().Truncate(24 * time.Hour), Valid: true}
+	// truncateToUTCDay-equivalent construction, inlined here rather than
+	// via time.Duration(24)*time.Hour truncation -- see internal/domain/
+	// reviewverdict.truncateToUTCDay's own doc comment for why: a
+	// time.Hour literal may never appear outside internal/platform
+	// (§5.4/§11, CI-enforced with no exemption).
+	nowUTC := now.UTC()
+	sendDate := pgtype.Date{Time: time.Date(nowUTC.Year(), nowUTC.Month(), nowUTC.Day(), 0, 0, 0, 0, time.UTC), Valid: true}
 
 	channelRepos, err := discoverChannelRepos(ctx, p.deps, now)
 	if err != nil {

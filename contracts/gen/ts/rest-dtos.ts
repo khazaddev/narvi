@@ -620,9 +620,34 @@ export interface RepoSettings {
    * §17.1: admin-only, per-repo, off by default -- enables the sentinel-auto-fix flow (coverage/doc-drift findings spawn a child session that opens its own merge-gated follow-up PR). A stricter gate than blockOnHighRisk/the criteria-driven auto-approval config, since it ends in an unattended merge.
    */
   sentinelAutofixEnabled: boolean;
+  /**
+   * Step 62, §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an auto-approved PR merges unattended (internal/app/automerge.Worker) instead of surfacing in the decision inbox for a human's 1-click confirm. Gated by authz.ActionToggleAutoMerge, the SAME admin-only row as sentinelAutofixEnabled, never maintainer-level ActionConfigureAutoApprove.
+   */
+  autoMergeEnabled: boolean;
+  /**
+   * Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility threshold. Null means 'not configured -- the auto-approval engine's own built-in default applies' (internal/domain/autoapproval.DefaultEligibilityConfig), never a magic sentinel number. Gated by authz.ActionConfigureAutoApprove (maintainer+).
+   */
+  maxAutoApproveFilesChanged: number | null;
+  /**
+   * Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured -- the auto-approval engine's own default list applies (migrations, auth, contracts)', never an empty-list claim that this repo deliberately has zero sensitive tags. Gated by authz.ActionConfigureAutoApprove (maintainer+).
+   */
+  sensitiveBlastRadiusTags:
+    ('auth' | 'migrations' | 'contracts' | 'secrets' | 'infra' | 'public_api' | 'data_layer' | 'dependencies')[] | null;
+  /**
+   * Step 62, §21.2 stage 2: false means no auto-approval outcome (confirmed or overridden) has been recorded for this repo yet in the calibration window -- distinct from a real, computed 0% rate (§21.1's own 'not yet computed' sentinel discipline, mirroring ListDecisionInboxResponse.decisionLatencyComputed's own identical triple below).
+   */
+  contradictionRateComputed: boolean;
+  /**
+   * Null iff contradictionRateComputed is false. The fraction of auto-approved PRs a human later disagreed with, as a 0-100 percentage -- the figure an admin uses to decide whether to arm autoMergeEnabled.
+   */
+  contradictionRatePercent: number | null;
+  /**
+   * How many auto-approval outcomes contradictionRatePercent was computed over -- 0 whenever contradictionRateComputed is false.
+   */
+  contradictionSampleSize: number;
 }
 /**
- * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise.
+ * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise. Step 62's own §21.2 fields (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are DELIBERATELY NOT on this shared request: this endpoint's own handler requires EVERY permission its fields collectively need (PutRepoSettings' own doc comment, httpapi/reposettings.go), which would force a maintainer authorized only for the auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates (row 6) too -- see UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its own endpoint with its own single, correctly-scoped gate.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "UpdateRepoSettingsRequest".
@@ -630,6 +655,32 @@ export interface RepoSettings {
 export interface UpdateRepoSettingsRequest {
   blockOnHighRisk: boolean;
   sentinelAutofixEnabled?: boolean;
+}
+/**
+ * Request body for PUT /api/repos/{owner}/{repo}/auto-approval-settings (Step 62, §21.2 stage 1) -- the auto-approval eligibility engine's own two per-repo-tunable criteria. A SEPARATE endpoint from UpdateRepoSettingsRequest's own PUT /settings, gated SOLELY by authz.ActionConfigureAutoApprove (maintainer+, §13.3 row 5) -- see that DTO's own doc comment for why. Always the full, current desired state for these two fields specifically (never a partial patch) -- the handler read-modify-writes repo_settings.auto_merge_enabled (a DIFFERENT row, gated by a DIFFERENT action) unchanged alongside whichever of these two this call sets.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateAutoApprovalSettingsRequest".
+ */
+export interface UpdateAutoApprovalSettingsRequest {
+  /**
+   * Null means 'use the auto-approval engine's own built-in default'.
+   */
+  maxAutoApproveFilesChanged: number | null;
+  /**
+   * Null means 'use the auto-approval engine's own built-in default list (migrations, auth, contracts)'.
+   */
+  sensitiveBlastRadiusTags:
+    ('auth' | 'migrations' | 'contracts' | 'secrets' | 'infra' | 'public_api' | 'data_layer' | 'dependencies')[] | null;
+}
+/**
+ * Request body for PUT /api/repos/{owner}/{repo}/auto-merge (Step 62, §21.2 stage 2) -- arms/disarms the per-repo unattended-merge toggle. A SEPARATE endpoint, gated SOLELY by authz.ActionToggleAutoMerge (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateAutoMergeToggleRequest".
+ */
+export interface UpdateAutoMergeToggleRequest {
+  enabled: boolean;
 }
 /**
  * Same shape as CreateSessionRequest's own inline repos item (name/url/branch) -- a REAL top-level $def here (unlike CreateSessionRequest.repos' own inline item schema, which go-jsonschema cannot be $ref'd across sibling $defs) so Automation/CreateAutomationRequest can both reference it directly.

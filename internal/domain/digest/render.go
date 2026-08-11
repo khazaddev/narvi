@@ -14,6 +14,7 @@ import (
 // "closed vocabulary lives in Go" precedent).
 type Provider string
 
+// The two Provider values Render accepts.
 const (
 	ProviderSlack  Provider = "slack"
 	ProviderLinear Provider = "linear"

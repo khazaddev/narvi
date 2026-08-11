@@ -15,14 +15,14 @@ import (
 // precedent over a native Postgres array type). A nil/empty tags always
 // marshals to "[]", never a JSON null -- both review_verdicts.blast_radius
 // (NOT NULL DEFAULT '[]'::jsonb) and this package's own readers expect a
-// present, empty array to mean "no tags", not an absent column.
+// present, empty array to mean "no tags", not an absent column. make's
+// own "always non-nil, even at length zero" guarantee is what makes this
+// true with no further nil-check needed: json.Marshal renders a non-nil,
+// zero-length []string as "[]", never "null".
 func marshalTags(tags []review.Tag) ([]byte, error) {
 	strs := make([]string, len(tags))
 	for i, t := range tags {
 		strs[i] = string(t)
-	}
-	if strs == nil {
-		strs = []string{}
 	}
 	return json.Marshal(strs)
 }

@@ -1,5 +1,22 @@
-// This file (digestlinearnotifier.go) implements Step 62's own (§21.3)
-// Linear digest notifier -- ports.NotificationKindLinearDigest rows.
+package outboxworker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/khazaddev/narvi/internal/app/ports"
+)
+
+// ErrLinearDigestNotImplemented is digestLinearNotifier.Deliver's own
+// permanent failure -- errors.Is-checkable, so a future Step that adds
+// real Linear digest delivery has one obvious sentinel to replace,
+// rather than a bare string a caller could not distinguish from a
+// transient failure.
+var ErrLinearDigestNotImplemented = errors.New("outboxworker: linear digest delivery is not yet implemented -- no organization-level Linear post capability exists in this codebase (see ports.NotificationKindLinearDigest's own doc comment)")
+
+// digestLinearNotifier implements ports.Notifier for Step 62's own
+// (§21.3) ports.NotificationKindLinearDigest rows.
 //
 // UNLIKE every other notifier in this package, Deliver here NEVER
 // actually delivers anything: it always returns a clear, typed error.
@@ -25,25 +42,6 @@
 // needs_attention row -- rather than either a silent no-op (the digest
 // simply never arrives, with no signal anywhere that it didn't) or a
 // fabricated success.
-package outboxworker
-
-import (
-	"context"
-	"errors"
-	"fmt"
-
-	"github.com/khazaddev/narvi/internal/app/ports"
-)
-
-// ErrLinearDigestNotImplemented is digestLinearNotifier.Deliver's own
-// permanent failure -- errors.Is-checkable, so a future Step that adds
-// real Linear digest delivery has one obvious sentinel to replace,
-// rather than a bare string a caller could not distinguish from a
-// transient failure.
-var ErrLinearDigestNotImplemented = errors.New("outboxworker: linear digest delivery is not yet implemented -- no organization-level Linear post capability exists in this codebase (see ports.NotificationKindLinearDigest's own doc comment)")
-
-// digestLinearNotifier implements ports.Notifier for
-// ports.NotificationKindLinearDigest rows.
 type digestLinearNotifier struct{}
 
 var _ ports.Notifier = (*digestLinearNotifier)(nil)

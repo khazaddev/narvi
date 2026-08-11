@@ -93,6 +93,9 @@ type EligibilityInput struct {
 // not (yet) qualifying), never a failure this package failed to handle.
 type Reason string
 
+// The Reason values ComputeEligible returns -- ReasonNone accompanies
+// eligible=true; every other value accompanies eligible=false and names
+// exactly which criterion failed.
 const (
 	ReasonNone                 Reason = ""
 	ReasonNeedsHumanLabel      Reason = "review:needs-human label is present"

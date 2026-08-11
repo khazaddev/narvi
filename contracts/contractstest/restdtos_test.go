@@ -1014,4 +1014,79 @@ func TestMergePullRequestResponseRoundTrip(t *testing.T) {
 	})
 }
 
+// TestRepoSettingsRoundTrip covers Step 62's own (§21.1/§21.2) extension
+// of this DTO -- two variants, mirroring this file's own established
+// "one t.Run per distinct nullable-field combination" discipline
+// (TestDecisionInboxItemRoundTrip's own doc comment): a repo with every
+// §21.2 field configured, and a freshly-created repo with none of them
+// configured yet (nil/zero-valued), so an accidental omitempty on any
+// ONE of the new nullable fields fails loudly regardless of which
+// variant happens to exercise it.
+func TestRepoSettingsRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/RepoSettings")
+
+	t.Run("FullyConfigured", func(t *testing.T) {
+		maxFiles := 20
+		tags := restdtos.RepoSettingsSensitiveBlastRadiusTags{
+			restdtos.RepoSettingsSensitiveBlastRadiusTagsElemAuth,
+			restdtos.RepoSettingsSensitiveBlastRadiusTagsElemMigrations,
+		}
+		percent := 12.5
+		roundTrip(t, sch, restdtos.RepoSettings{
+			RepoFullName:               "acme/widgets",
+			BlockOnHighRisk:            true,
+			SentinelAutofixEnabled:     false,
+			AutoMergeEnabled:           true,
+			MaxAutoApproveFilesChanged: &maxFiles,
+			SensitiveBlastRadiusTags:   &tags,
+			ContradictionRateComputed:  true,
+			ContradictionRatePercent:   &percent,
+			ContradictionSampleSize:    8,
+		})
+	})
+
+	t.Run("NotYetConfigured", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.RepoSettings{
+			RepoFullName:               "acme/never-configured",
+			BlockOnHighRisk:            false,
+			SentinelAutofixEnabled:     false,
+			AutoMergeEnabled:           false,
+			MaxAutoApproveFilesChanged: nil,
+			SensitiveBlastRadiusTags:   nil,
+			ContradictionRateComputed:  false,
+			ContradictionRatePercent:   nil,
+			ContradictionSampleSize:    0,
+		})
+	})
+}
+
+func TestUpdateAutoApprovalSettingsRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/UpdateAutoApprovalSettingsRequest")
+
+	t.Run("Configured", func(t *testing.T) {
+		maxFiles := 15
+		tags := restdtos.UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTags{
+			restdtos.UpdateAutoApprovalSettingsRequestSensitiveBlastRadiusTagsElemSecrets,
+		}
+		roundTrip(t, sch, restdtos.UpdateAutoApprovalSettingsRequest{
+			MaxAutoApproveFilesChanged: &maxFiles,
+			SensitiveBlastRadiusTags:   &tags,
+		})
+	})
+
+	t.Run("ClearedToDefault", func(t *testing.T) {
+		roundTrip(t, sch, restdtos.UpdateAutoApprovalSettingsRequest{
+			MaxAutoApproveFilesChanged: nil,
+			SensitiveBlastRadiusTags:   nil,
+		})
+	})
+}
+
+func TestUpdateAutoMergeToggleRequestRoundTrip(t *testing.T) {
+	sch := compileSchema(t, restDTOsSchemaPath, "#/$defs/UpdateAutoMergeToggleRequest")
+
+	roundTrip(t, sch, restdtos.UpdateAutoMergeToggleRequest{Enabled: true})
+	roundTrip(t, sch, restdtos.UpdateAutoMergeToggleRequest{Enabled: false})
+}
+
 func strPtr(s string) *string { return &s }

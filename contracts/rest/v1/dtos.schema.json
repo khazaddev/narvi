@@ -572,7 +572,7 @@
       "type": "object",
       "additionalProperties": false,
       "description": "GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: future Steps (58's auto-merge toggle, 61's automatic-re-review opt-in) are each expected to add a further boolean property here, never a bespoke DTO of their own.",
-      "required": ["repoFullName", "blockOnHighRisk", "sentinelAutofixEnabled"],
+      "required": ["repoFullName", "blockOnHighRisk", "sentinelAutofixEnabled", "autoMergeEnabled", "maxAutoApproveFilesChanged", "sensitiveBlastRadiusTags", "contradictionRateComputed", "contradictionRatePercent", "contradictionSampleSize"],
       "properties": {
         "repoFullName": { "type": "string", "description": "The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own shape." },
         "blockOnHighRisk": {
@@ -582,17 +582,71 @@
         "sentinelAutofixEnabled": {
           "type": "boolean",
           "description": "§17.1: admin-only, per-repo, off by default -- enables the sentinel-auto-fix flow (coverage/doc-drift findings spawn a child session that opens its own merge-gated follow-up PR). A stricter gate than blockOnHighRisk/the criteria-driven auto-approval config, since it ends in an unattended merge."
+        },
+        "autoMergeEnabled": {
+          "type": "boolean",
+          "description": "Step 62, §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an auto-approved PR merges unattended (internal/app/automerge.Worker) instead of surfacing in the decision inbox for a human's 1-click confirm. Gated by authz.ActionToggleAutoMerge, the SAME admin-only row as sentinelAutofixEnabled, never maintainer-level ActionConfigureAutoApprove."
+        },
+        "maxAutoApproveFilesChanged": {
+          "type": ["integer", "null"],
+          "description": "Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility threshold. Null means 'not configured -- the auto-approval engine's own built-in default applies' (internal/domain/autoapproval.DefaultEligibilityConfig), never a magic sentinel number. Gated by authz.ActionConfigureAutoApprove (maintainer+)."
+        },
+        "sensitiveBlastRadiusTags": {
+          "type": ["array", "null"],
+          "description": "Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured -- the auto-approval engine's own default list applies (migrations, auth, contracts)', never an empty-list claim that this repo deliberately has zero sensitive tags. Gated by authz.ActionConfigureAutoApprove (maintainer+).",
+          "items": {
+            "type": "string",
+            "enum": ["auth", "migrations", "contracts", "secrets", "infra", "public_api", "data_layer", "dependencies"]
+          }
+        },
+        "contradictionRateComputed": {
+          "type": "boolean",
+          "description": "Step 62, §21.2 stage 2: false means no auto-approval outcome (confirmed or overridden) has been recorded for this repo yet in the calibration window -- distinct from a real, computed 0% rate (§21.1's own 'not yet computed' sentinel discipline, mirroring ListDecisionInboxResponse.decisionLatencyComputed's own identical triple below)."
+        },
+        "contradictionRatePercent": {
+          "type": ["number", "null"],
+          "description": "Null iff contradictionRateComputed is false. The fraction of auto-approved PRs a human later disagreed with, as a 0-100 percentage -- the figure an admin uses to decide whether to arm autoMergeEnabled."
+        },
+        "contradictionSampleSize": {
+          "type": "integer",
+          "description": "How many auto-approval outcomes contradictionRatePercent was computed over -- 0 whenever contradictionRateComputed is false."
         }
       }
     },
     "UpdateRepoSettingsRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise.",
+      "description": "Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise. Step 62's own §21.2 fields (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are DELIBERATELY NOT on this shared request: this endpoint's own handler requires EVERY permission its fields collectively need (PutRepoSettings' own doc comment, httpapi/reposettings.go), which would force a maintainer authorized only for the auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates (row 6) too -- see UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its own endpoint with its own single, correctly-scoped gate.",
       "required": ["blockOnHighRisk"],
       "properties": {
         "blockOnHighRisk": { "type": "boolean" },
         "sentinelAutofixEnabled": { "type": "boolean", "default": false }
+      }
+    },
+    "UpdateAutoApprovalSettingsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request body for PUT /api/repos/{owner}/{repo}/auto-approval-settings (Step 62, §21.2 stage 1) -- the auto-approval eligibility engine's own two per-repo-tunable criteria. A SEPARATE endpoint from UpdateRepoSettingsRequest's own PUT /settings, gated SOLELY by authz.ActionConfigureAutoApprove (maintainer+, §13.3 row 5) -- see that DTO's own doc comment for why. Always the full, current desired state for these two fields specifically (never a partial patch) -- the handler read-modify-writes repo_settings.auto_merge_enabled (a DIFFERENT row, gated by a DIFFERENT action) unchanged alongside whichever of these two this call sets.",
+      "required": ["maxAutoApproveFilesChanged", "sensitiveBlastRadiusTags"],
+      "properties": {
+        "maxAutoApproveFilesChanged": { "type": ["integer", "null"], "description": "Null means 'use the auto-approval engine's own built-in default'." },
+        "sensitiveBlastRadiusTags": {
+          "type": ["array", "null"],
+          "description": "Null means 'use the auto-approval engine's own built-in default list (migrations, auth, contracts)'.",
+          "items": {
+            "type": "string",
+            "enum": ["auth", "migrations", "contracts", "secrets", "infra", "public_api", "data_layer", "dependencies"]
+          }
+        }
+      }
+    },
+    "UpdateAutoMergeToggleRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request body for PUT /api/repos/{owner}/{repo}/auto-merge (Step 62, §21.2 stage 2) -- arms/disarms the per-repo unattended-merge toggle. A SEPARATE endpoint, gated SOLELY by authz.ActionToggleAutoMerge (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint.",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" }
       }
     },
     "AutomationReposElem": {

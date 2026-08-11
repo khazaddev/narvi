@@ -40,7 +40,7 @@ func Timeseries(records []Record) ([]DayBucket, bool) {
 	byDay := make(map[time.Time]map[review.Shippable]int)
 	var order []time.Time
 	for _, r := range records {
-		day := r.CreatedAt.UTC().Truncate(24 * time.Hour)
+		day := truncateToUTCDay(r.CreatedAt)
 		counts, ok := byDay[day]
 		if !ok {
 			counts = make(map[review.Shippable]int)
@@ -114,4 +114,20 @@ func TopRiskDrivers(records []Record) ([]TagCount, bool) {
 		return result[i].Tag < result[j].Tag
 	})
 	return result, true
+}
+
+// truncateToUTCDay returns midnight UTC of t's own UTC calendar day --
+// Timeseries' own per-day bucketing key. Deliberately built via
+// time.Date's own explicit (year, month, day, 0,0,0,0, UTC) construction
+// rather than t.UTC().Truncate(24*time.Hour): the latter would need a
+// time.Hour literal, which this package (outside internal/platform) may
+// never contain (§5.4/§11, CI-enforced by tools/lint/narvichecks/
+// notimeliteral with no exemption) -- and this construction is more
+// directly what "this timestamp's own calendar day" means anyway, never
+// relying on Truncate's own "since the Unix epoch" rounding behavior
+// coinciding with calendar-day boundaries (true for UTC, since UTC has
+// no DST, but never spelled out as an assumption this way).
+func truncateToUTCDay(t time.Time) time.Time {
+	t = t.UTC()
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }

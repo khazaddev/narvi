@@ -1071,8 +1071,25 @@ func serve() error {
 	// configuring a setting, not the sandbox agent calling a tool).
 	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore))
+		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore, reviewVerdictDeps))
 		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore))
+	})
+
+	// /api/repos/{owner}/{repo}/auto-approval-settings,
+	// /api/repos/{owner}/{repo}/auto-merge (Step 62, §21.2): TWO further,
+	// separately-gated routes -- see httpapi/reposettings.go's own
+	// PutAutoApprovalSettings/PutAutoMergeToggle doc comments for why
+	// these are not folded into PUT /settings above (a maintainer
+	// authorized only for the auto-approval-config row, §13.3 row 5,
+	// must never be forced through that endpoint's own admin-only gates,
+	// row 6, just to reach it).
+	router.Route("/api/repos/{owner}/{repo}/auto-approval-settings", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutAutoApprovalSettings(repoSettingsStore, reviewVerdictDeps))
+	})
+	router.Route("/api/repos/{owner}/{repo}/auto-merge", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutAutoMergeToggle(repoSettingsStore, reviewVerdictDeps))
 	})
 
 	// /api/repos/{owner}/{repo}/provider-credentials,

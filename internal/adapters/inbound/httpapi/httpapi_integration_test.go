@@ -50,6 +50,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/chatgptlink"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -461,10 +462,31 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// /api/repos/{owner}/{repo}/settings (Step 47) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
 	// (see reposettings.go's own doc comment).
+	//
+	// reviewVerdictDeps (Step 62, §21.1/§21.2) is built fresh here, from
+	// stores this rig already constructs elsewhere (rig.reviewVerdicts/
+	// rig.reviewFindings) plus two one-off stores no other route in this
+	// rig needs -- mirrors cmd/control-plane/main.go's own identical
+	// bundle, never a second, independently-maintained Deps shape.
+	reviewVerdictDeps := appreviewverdict.Deps{
+		ReviewVerdicts:       rig.reviewVerdicts,
+		RepoSettings:         rig.repoSettings,
+		ReviewFindings:       rig.reviewFindings,
+		AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(rig.pool),
+		Timeouts:             platform.DefaultTimeouts(),
+	}
 	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings))
+		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings, reviewVerdictDeps))
 		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings))
+	})
+	router.Route("/api/repos/{owner}/{repo}/auto-approval-settings", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Put("/", httpapi.PutAutoApprovalSettings(rig.repoSettings, reviewVerdictDeps))
+	})
+	router.Route("/api/repos/{owner}/{repo}/auto-merge", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Put("/", httpapi.PutAutoMergeToggle(rig.repoSettings, reviewVerdictDeps))
 	})
 	// /api/repos/{owner}/{repo}/provider-credentials,
 	// /api/environments/{environmentID}/provider-credentials,
