@@ -205,8 +205,16 @@ func (a *Adapter) fetchMergedPRDetail(ctx context.Context, owner, repo string, n
 // reviewItemResponse is the subset of one entry in GitHub's real GET
 // /repos/{owner}/{repo}/pulls/{number}/reviews response this adapter
 // needs (https://docs.github.com/rest/pulls/reviews#list-reviews-for-a-pull-request).
+// User identifies WHICH reviewer submitted this review -- needed by
+// listopenprs.go's own fetchReviewDecision (§60 review finding P1-1,
+// second round) to reduce GitHub's own append-only review list down to
+// each reviewer's LATEST decision; fetchHasApprovingReview immediately
+// below has no analogous need for it (a bare "does at least one APPROVED
+// review exist anywhere in this PR's history" is that function's own,
+// deliberately coarser, already-accepted question) and simply ignores it.
 type reviewItemResponse struct {
-	State string `json:"state"`
+	State string              `json:"state"`
+	User  *simpleUserResponse `json:"user"`
 }
 
 // fetchHasApprovingReview reports whether number carries at least one
@@ -292,8 +300,22 @@ func (a *Adapter) branchRequiresApprovingReview(ctx context.Context, owner, repo
 // (https://docs.github.com/rest/commits/statuses#get-the-combined-status-for-a-specific-reference)
 // -- GitHub's own LEGACY Status API surface (statuses created via POST
 // .../statuses), state is one of "success"/"pending"/"failure"/"error".
+// TotalCount is GitHub's own documented count of individual statuses this
+// combined result rolls up (§60 review finding P0, second round): GitHub's
+// own docs for this exact endpoint state the rule verbatim -- "pending if
+// there are no statuses or a context is pending" -- so state=="pending"
+// ALONE can never be read as "a status is genuinely still in flight": a
+// repo with ZERO legacy commit statuses ever posted (e.g. one whose CI
+// runs exclusively through GitHub Actions check-runs -- the SEPARATE
+// surface checkRunsResponse below reports, and the dominant modern CI
+// configuration) reports this SAME state=="pending" forever, for a
+// completely different reason. See fetchCIConclusionLive's own doc
+// comment (listopenprs.go) for where this distinction is load-bearing;
+// fetchCIConclusion (this file, below) never inspects state=="pending" at
+// all, so it has no analogous need for this field.
 type combinedStatusResponse struct {
-	State string `json:"state"`
+	State      string `json:"state"`
+	TotalCount int    `json:"total_count"`
 }
 
 // checkRunsResponse is the subset of GitHub's real GET

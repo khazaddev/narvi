@@ -414,6 +414,14 @@ func (a *Adapter) buildOpenPR(ctx context.Context, owner, repo string, number in
 // wins over an incomplete one (both already mean "not green" for
 // ComputeAutoApprovalEligible's own purposes, but Failure is the more
 // specific, more useful fact to report when both are true at once).
+//
+// The combined-status "pending" branch below additionally requires
+// TotalCount > 0 before treating it as an incomplete signal (§60 review
+// finding P0, second round) -- see combinedStatusResponse's own doc
+// comment (mergedbetween.go) and the inline comment at that branch for
+// the full "why": GitHub reports state=="pending" both for a genuinely
+// in-flight legacy status AND for a repo with no legacy statuses at all,
+// and only TotalCount can tell the two apart.
 func (a *Adapter) fetchCIConclusionLive(ctx context.Context, owner, repo, headSHA, token string) ports.CIConclusion {
 	sawFailure := false
 	sawSuccess := false
@@ -429,10 +437,36 @@ func (a *Adapter) fetchCIConclusionLive(ctx context.Context, owner, repo, headSH
 			case "success":
 				sawSuccess = true
 			case "pending":
-				// The legacy Status API's own "not yet concluded" state --
-				// the combined-status surface's exact analogue of the
-				// Checks API's Conclusion == nil below.
-				sawIncomplete = true
+				// §60 review finding P0 (BLOCKER, second round). The
+				// comment previously here claimed "pending" was "the
+				// combined-status surface's exact analogue of the Checks
+				// API's Conclusion == nil below" -- factually wrong:
+				// Conclusion == nil only ever exists once a check run
+				// genuinely exists and simply has not concluded yet, but
+				// GitHub's own documented rule for THIS endpoint is
+				// "pending if there are no statuses or a context is
+				// pending" -- so "pending" ALSO fires when nothing was
+				// ever posted here at all. A repo whose CI runs
+				// exclusively through GitHub Actions check-runs (the
+				// SEPARATE surface read immediately below -- the dominant
+				// modern CI configuration, including this repo's own) has
+				// ZERO legacy commit statuses, so this endpoint reports
+				// state=="pending", total_count==0 for every commit,
+				// forever. Reading that alone as sawIncomplete meant
+				// fetchCIConclusionLive could NEVER report Success on such
+				// a repo no matter how green its real CI was: ciGreen
+				// would always be false downstream (aggregate.go),
+				// ComputeAutoApprovalEligible would always refuse, and
+				// RevalidateForMerge would 409 every single merge --
+				// making the headline ready_to_merge feature entirely
+				// non-functional on the dominant modern CI setup. Only
+				// treat "pending" as a genuinely in-flight legacy status
+				// when TotalCount confirms at least one status actually
+				// exists here; a statusless "pending" carries no signal at
+				// all and is left for the check-runs loop below to decide.
+				if status.TotalCount > 0 {
+					sawIncomplete = true
+				}
 			}
 		}
 	}
@@ -497,14 +531,36 @@ func (a *Adapter) fetchOpenPRDetail(ctx context.Context, owner, repo string, num
 
 // fetchReviewDecision scans EVERY review GitHub reports for number (first
 // page, per_page=100, mirroring fetchHasApprovingReview's own identical
-// bound) and reports whether at least one carries state APPROVED and
-// whether at least one carries state CHANGES_REQUESTED. Deliberately does
-// NOT reduce to "the latest review per reviewer" (a reviewer who requested
-// changes and later approved would report both flags true here) --
-// mirrors fetchHasApprovingReview's own identical, already-accepted level
-// of rigor in this package for the same informational, non-merge-gating
-// purpose (§16.2's own Merge endpoint re-validates independently server-
-// side at click time regardless of what this advisory read reports).
+// bound) and reduces it to each REVIEWER's own LATEST decision before
+// reporting whether at least one carries state APPROVED and whether at
+// least one carries state CHANGES_REQUESTED (§60 review finding P1-1,
+// second round -- replacing this function's own previous "any
+// CHANGES_REQUESTED review exists, ever" rule). GitHub's own review list
+// is APPEND-ONLY: a reviewer who requested changes and later re-reviewed
+// and approved leaves the OLD CHANGES_REQUESTED row in place forever,
+// alongside the new APPROVED one, both returned by this SAME endpoint.
+// Since A4 (first review round) promoted HasChangesRequested to a HARD
+// merge blocker (decisioninbox.RevalidateForMerge), the naive "any
+// CHANGES_REQUESTED row, ever" rule made a legitimately re-approved PR
+// PERMANENTLY unmergeable through Narvi. GitHub's own real review-decision
+// semantics (what the "Changes requested"/"Approved" banner on a real PR
+// page reflects) is exactly each reviewer's OWN most recent decision,
+// independent of every other reviewer and independent of that SAME
+// reviewer's own earlier reviews.
+//
+// Reviews are grouped by reviewer (User.ID; a review with no User at all
+// -- should not happen for a real submitted review, but defensively
+// skipped rather than crashing) and the LATEST one GitHub returns for each
+// is kept, in the SAME order GitHub itself returns this list
+// (chronological, oldest first -- GitHub's own documented, stable order
+// for this endpoint), so simply overwriting a running per-reviewer map
+// while scanning forward always leaves that reviewer's most recent
+// decision standing. A COMMENTED review (GitHub's own "left comments
+// without an approve/reject decision" state) never overwrites a
+// reviewer's own standing decision -- it does not itself carry a
+// decision, so a reviewer who requested changes and LATER merely
+// commented has not thereby withdrawn that decision; only a LATER
+// APPROVED or CHANGES_REQUESTED review from that SAME reviewer does.
 func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repo string, number int, token string) (hasApproving, hasChangesRequested bool) {
 	path := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews?per_page=100", a.apiBaseURL, url.PathEscape(owner), url.PathEscape(repo), number)
 	body, err := a.doGet(ctx, path, token)
@@ -515,8 +571,20 @@ func (a *Adapter) fetchReviewDecision(ctx context.Context, owner, repo string, n
 	if err := json.Unmarshal(body, &reviews); err != nil {
 		return false, false
 	}
+
+	latestDecisionByReviewer := make(map[int64]string, len(reviews))
 	for _, r := range reviews {
+		if r.User == nil {
+			continue
+		}
 		switch r.State {
+		case "APPROVED", "CHANGES_REQUESTED":
+			latestDecisionByReviewer[r.User.ID] = r.State
+		}
+	}
+
+	for _, state := range latestDecisionByReviewer {
+		switch state {
 		case "APPROVED":
 			hasApproving = true
 		case "CHANGES_REQUESTED":

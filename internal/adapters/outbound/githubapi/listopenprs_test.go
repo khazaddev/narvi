@@ -62,7 +62,7 @@ func TestListOpenPRsForUser_FullScenario(t *testing.T) {
 				"requested_teams":     []map[string]any{},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/1204/reviews":
-			_ = json.NewEncoder(w).Encode([]map[string]any{{"state": "APPROVED"}})
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"state": "APPROVED", "user": map[string]any{"id": 7001, "login": "reviewer-1204"}}})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/commits/headsha1204/status":
 			_ = json.NewEncoder(w).Encode(map[string]any{"state": "success"})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/commits/headsha1204/check-runs":
@@ -84,7 +84,7 @@ func TestListOpenPRsForUser_FullScenario(t *testing.T) {
 				"requested_teams":     []map[string]any{{"slug": "payroll-team"}},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/payroll-api/pulls/1187/reviews":
-			_ = json.NewEncoder(w).Encode([]map[string]any{{"state": "CHANGES_REQUESTED"}})
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"state": "CHANGES_REQUESTED", "user": map[string]any{"id": 7002, "login": "reviewer-1187"}}})
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/payroll-api/commits/headsha1187/status":
 			w.WriteHeader(http.StatusNotFound)
 		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/payroll-api/commits/headsha1187/check-runs":
@@ -303,6 +303,208 @@ func TestListOpenPRsForUser_QueuedOrCancelledCheckIsNotGreen(t *testing.T) {
 			}
 			if prs[0].CIConclusion != tc.want {
 				t.Errorf("CIConclusion = %v, want %v", prs[0].CIConclusion, tc.want)
+			}
+		})
+	}
+}
+
+// TestListOpenPRsForUser_PendingCombinedStatusRequiresARealStatus is the
+// P0 (BLOCKER) regression test for the second §60 review round. GitHub's
+// own documented rule for the combined-status endpoint is "pending if
+// there are no statuses or a context is pending" -- a repo whose CI runs
+// exclusively through GitHub Actions check-runs (the dominant modern CI
+// configuration, including this repo's own) has ZERO legacy commit
+// statuses, so a VALID commit at that repo returns 200
+// {"state":"pending","statuses":[],"total_count":0} forever, never a 404
+// (the previous test suite's own stub, which the review correctly called
+// out as unrealistic). Before the fix, fetchCIConclusionLive read
+// state=="pending" alone as "a legacy status is still in flight"
+// (sawIncomplete=true), which outranks sawSuccess in the final switch --
+// so CIConclusion could NEVER be Success on such a repo no matter how
+// green every real check-run was: ciGreen would always be false
+// (aggregate.go), ComputeAutoApprovalEligible would always refuse, and
+// RevalidateForMerge would 409 every merge -- the headline ready_to_merge
+// feature would be entirely non-functional. A genuinely in-flight legacy
+// status (total_count > 0) must still correctly block green.
+func TestListOpenPRsForUser_PendingCombinedStatusRequiresARealStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		statusTotalCount int
+		checkRuns        []map[string]any
+		want             ports.CIConclusion
+	}{
+		{
+			name:             "Actions-only repo: statusless pending is not an incomplete signal",
+			statusTotalCount: 0,
+			checkRuns: []map[string]any{
+				{"conclusion": "success"},
+				{"conclusion": "neutral"},
+			},
+			want: ports.CIConclusionSuccess,
+		},
+		{
+			name:             "a genuinely in-flight legacy status still blocks green",
+			statusTotalCount: 1,
+			checkRuns: []map[string]any{
+				{"conclusion": "success"},
+			},
+			want: ports.CIConclusionUnknown,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.URL.Path == "/user/1":
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "login": "octocat"})
+				case r.URL.Path == "/search/issues" && strings.Contains(r.URL.Query().Get("q"), "assignee:octocat"):
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"items": []map[string]any{{"number": 5, "repository_url": "https://api.github.com/repos/acme/widgets"}},
+					})
+				case r.URL.Path == "/search/issues" && strings.Contains(r.URL.Query().Get("q"), "review-requested:octocat"):
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{}})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"number": 5, "title": "x", "html_url": "u", "head": map[string]any{"sha": "s"}, "base": map[string]any{"ref": "main"},
+					})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5/reviews":
+					_ = json.NewEncoder(w).Encode([]map[string]any{})
+				case r.URL.Path == "/repos/acme/widgets/commits/s/status":
+					// The realistic shape a VALID commit always returns
+					// (200, never 404): an Actions-only repo's own combined
+					// status is state=="pending" with zero statuses, not an
+					// absent resource.
+					_ = json.NewEncoder(w).Encode(map[string]any{"state": "pending", "statuses": []map[string]any{}, "total_count": tc.statusTotalCount})
+				case r.URL.Path == "/repos/acme/widgets/commits/s/check-runs":
+					_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": tc.checkRuns})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5/files":
+					_ = json.NewEncoder(w).Encode([]map[string]any{})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			adapter := githubapi.New(server.Client(), server.URL)
+
+			prs, _, err := adapter.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1", Token: "tok"})
+			if err != nil {
+				t.Fatalf("ListOpenPRsForUser() error = %v, want nil", err)
+			}
+			if len(prs) != 1 {
+				t.Fatalf("ListOpenPRsForUser() returned %d PRs, want 1", len(prs))
+			}
+			if prs[0].CIConclusion != tc.want {
+				t.Errorf("CIConclusion = %v, want %v", prs[0].CIConclusion, tc.want)
+			}
+		})
+	}
+}
+
+// TestListOpenPRsForUser_ReviewDecisionReducesToLatestPerReviewer is the
+// P1-1 regression test (§60 review, second round): fetchReviewDecision
+// must reduce GitHub's own append-only review list to each reviewer's
+// LATEST decision. A reviewer whose CHANGES_REQUESTED review is followed
+// by their own later APPROVED review must read as approved, never
+// changes-requested -- the naive "any CHANGES_REQUESTED row, ever" rule
+// would make a legitimately re-approved PR permanently unmergeable
+// (HasChangesRequested is a hard merge gate at RevalidateForMerge). The
+// reverse order (approved, then later changes-requested by the SAME
+// reviewer) must still correctly read as changes-requested. A later
+// COMMENTED review must never reset a reviewer's own standing decision.
+func TestListOpenPRsForUser_ReviewDecisionReducesToLatestPerReviewer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                 string
+		reviews              []map[string]any
+		wantApproving        bool
+		wantChangesRequested bool
+	}{
+		{
+			name: "changes requested then later approved by the same reviewer reads as approved",
+			reviews: []map[string]any{
+				{"state": "CHANGES_REQUESTED", "user": map[string]any{"id": 42, "login": "reviewer"}},
+				{"state": "APPROVED", "user": map[string]any{"id": 42, "login": "reviewer"}},
+			},
+			wantApproving:        true,
+			wantChangesRequested: false,
+		},
+		{
+			name: "approved then later changes requested by the same reviewer reads as changes requested",
+			reviews: []map[string]any{
+				{"state": "APPROVED", "user": map[string]any{"id": 42, "login": "reviewer"}},
+				{"state": "CHANGES_REQUESTED", "user": map[string]any{"id": 42, "login": "reviewer"}},
+			},
+			wantApproving:        false,
+			wantChangesRequested: true,
+		},
+		{
+			name: "a later COMMENTED review never withdraws a standing changes-requested decision",
+			reviews: []map[string]any{
+				{"state": "CHANGES_REQUESTED", "user": map[string]any{"id": 42, "login": "reviewer"}},
+				{"state": "COMMENTED", "user": map[string]any{"id": 42, "login": "reviewer"}},
+			},
+			wantApproving:        false,
+			wantChangesRequested: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.URL.Path == "/user/1":
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "login": "octocat"})
+				case r.URL.Path == "/search/issues" && strings.Contains(r.URL.Query().Get("q"), "assignee:octocat"):
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"items": []map[string]any{{"number": 5, "repository_url": "https://api.github.com/repos/acme/widgets"}},
+					})
+				case r.URL.Path == "/search/issues" && strings.Contains(r.URL.Query().Get("q"), "review-requested:octocat"):
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{}})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"number": 5, "title": "x", "html_url": "u", "head": map[string]any{"sha": "s"}, "base": map[string]any{"ref": "main"},
+					})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5/reviews":
+					_ = json.NewEncoder(w).Encode(tc.reviews)
+				case r.URL.Path == "/repos/acme/widgets/commits/s/status":
+					_ = json.NewEncoder(w).Encode(map[string]any{"state": "success"})
+				case r.URL.Path == "/repos/acme/widgets/commits/s/check-runs":
+					_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{}})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5/files":
+					_ = json.NewEncoder(w).Encode([]map[string]any{})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			adapter := githubapi.New(server.Client(), server.URL)
+
+			prs, _, err := adapter.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1", Token: "tok"})
+			if err != nil {
+				t.Fatalf("ListOpenPRsForUser() error = %v, want nil", err)
+			}
+			if len(prs) != 1 {
+				t.Fatalf("ListOpenPRsForUser() returned %d PRs, want 1", len(prs))
+			}
+			if prs[0].HasApprovingReview != tc.wantApproving {
+				t.Errorf("HasApprovingReview = %v, want %v", prs[0].HasApprovingReview, tc.wantApproving)
+			}
+			if prs[0].HasChangesRequested != tc.wantChangesRequested {
+				t.Errorf("HasChangesRequested = %v, want %v", prs[0].HasChangesRequested, tc.wantChangesRequested)
 			}
 		})
 	}
