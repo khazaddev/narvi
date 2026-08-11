@@ -119,6 +119,30 @@ func TestPostEpistemicOutcome_GenMismatch_Forbidden(t *testing.T) {
 	}
 }
 
+// TestPostEpistemicOutcome_DeadSandbox_Gone is F2's own addition
+// (adversarial review, Step 61): proves a terminalized sandbox (status
+// stopped/failed/stale) can never post an epistemic outcome -- mirrors
+// TestPostReviewVerdict_DeadSandbox_Gone (reviewverdict_integration_test.go)
+// exactly, the sibling this endpoint's own doc comment already names as
+// its model. Before this test existed, deleting epistemicoutcome.go's own
+// dead-sandbox 410 guard (the sandbox.IsDeadSandboxStatus check) failed
+// nothing -- a terminalized sandbox could still write an outcome onto a
+// turn nobody could possibly still be legitimately executing from.
+func TestPostEpistemicOutcome_DeadSandbox_Gone(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := bareSessionWithSandbox(ctx, t, rig, "epistemic-dead")
+
+	if _, err := rig.pool.Exec(ctx, `UPDATE sandboxes SET status = 'stopped' WHERE session_id = $1`, session.ID); err != nil {
+		t.Fatalf("mark sandbox stopped: %v", err)
+	}
+
+	status, _ := postEpistemicOutcome(t, rig, session.ID.String(), "epistemic-dead", "1", validEpistemicOutcomeRequestJSON("none"))
+	if status != http.StatusGone {
+		t.Errorf("status = %d, want %d", status, http.StatusGone)
+	}
+}
+
 // TestPostEpistemicOutcome_MalformedBody_BadRequest proves an outcome
 // value outside the closed {none, minor, strong} vocabulary is rejected
 // at decode time (restdtos.PostEpistemicOutcomeRequest's own generated
@@ -211,15 +235,35 @@ func TestPostEpistemicOutcome_AbsentUntilPosted(t *testing.T) {
 // and an agent calls this endpoint anyway, the server refuses rather than
 // recording an outcome for a turn class the epistemic check never applies
 // to in the first place.
+//
+// F5 (adversarial review): asserting ONLY status == 400 here is not
+// enough, because the no-processing-turn refusal (TestPostEpistemicOutcome_
+// NoProcessingTurn_BadRequest above) returns that SAME status for a
+// completely different reason. A regression that reordered this handler's
+// checks -- moving the guarded SetEpistemicOutcome UPDATE above the
+// plan-mode check -- would record a REAL outcome onto this plan-mode turn,
+// violating the exact §20.3 invariant this test exists to defend, while
+// the response stayed 400 and a status-only assertion kept passing. Scans
+// epistemic_outcome into a *string and asserts nil, exactly like
+// TestPostEpistemicOutcome_AbsentUntilPosted already does for the
+// never-dispatched case, so that regression fails here instead.
 func TestPostEpistemicOutcome_PlanModeProcessingTurn_BadRequest(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	session := bareSessionWithSandbox(ctx, t, rig, "epistemic-planmode")
-	createProcessingTurn(ctx, t, rig, session.ID, true)
+	turn := createProcessingTurn(ctx, t, rig, session.ID, true)
 
 	status, _ := postEpistemicOutcome(t, rig, session.ID.String(), "epistemic-planmode", "1", validEpistemicOutcomeRequestJSON("none"))
 	if status != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", status, http.StatusBadRequest)
+	}
+
+	var gotOutcome *string
+	if err := rig.pool.QueryRow(ctx, `SELECT epistemic_outcome FROM turns WHERE id = $1`, turn.ID).Scan(&gotOutcome); err != nil {
+		t.Fatalf("query turn: %v", err)
+	}
+	if gotOutcome != nil {
+		t.Errorf("turns.epistemic_outcome = %q, want still NULL (the plan-mode refusal must never reach the guarded UPDATE)", *gotOutcome)
 	}
 }
 
@@ -263,6 +307,56 @@ func TestPostEpistemicOutcome_SecondCallAfterTurnFinished_BadRequest(t *testing.
 	}
 	if gotOutcome != "minor" {
 		t.Errorf("turns.epistemic_outcome = %q, want %q (first post's own value, unclobbered)", gotOutcome, "minor")
+	}
+}
+
+// TestSetEpistemicOutcome_GuardedUpdate_LastWriteWins is the test-wiring
+// bundle's own addition (adversarial review): proves
+// queries/turns.sql's own SetTurnEpistemicOutcome doc comment directly --
+// "Unguarded by 'AND epistemic_outcome IS NULL' -- deliberately... an
+// agent that calls this endpoint more than once for the same
+// still-processing turn ... gets last-write-wins, not a rejected second
+// call." Calls the guarded UPDATE TWICE on the SAME turn while it is
+// STILL processing between calls (never forced terminal, unlike every
+// other test in this file that exercises the write-time guard) -- both
+// calls must affect exactly 1 row, and the turn's own final
+// epistemic_outcome must be the SECOND call's value, not the first's. A
+// regression that added "AND epistemic_outcome IS NULL" back onto the SQL
+// guard (silently reintroducing the rejected-second-call semantics the
+// doc comment explicitly disclaims) would make the second call's own
+// rowsAffected come back 0 and leave the first value in place -- this
+// test fails on either symptom.
+func TestSetEpistemicOutcome_GuardedUpdate_LastWriteWins(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := bareSessionWithSandbox(ctx, t, rig, "epistemic-last-write-wins")
+	turn := createProcessingTurn(ctx, t, rig, session.ID, false)
+
+	firstRows, err := rig.turns.SetEpistemicOutcome(ctx, turn.ID, sqlcgen.TurnEpistemicOutcomeMinor)
+	if err != nil {
+		t.Fatalf("SetEpistemicOutcome (first): %v", err)
+	}
+	if firstRows != 1 {
+		t.Fatalf("SetEpistemicOutcome (first) rowsAffected = %d, want 1", firstRows)
+	}
+
+	// The turn is still 'processing' -- neither call above touches its
+	// status, mirroring the real endpoint's own behavior (PostEpistemicOutcome
+	// never transitions the turn itself).
+	secondRows, err := rig.turns.SetEpistemicOutcome(ctx, turn.ID, sqlcgen.TurnEpistemicOutcomeStrong)
+	if err != nil {
+		t.Fatalf("SetEpistemicOutcome (second): %v", err)
+	}
+	if secondRows != 1 {
+		t.Fatalf("SetEpistemicOutcome (second) rowsAffected = %d, want 1 (last-write-wins: a second call on a STILL-processing turn must succeed, never be rejected as if the turn already had an outcome)", secondRows)
+	}
+
+	var gotOutcome string
+	if err := rig.pool.QueryRow(ctx, `SELECT epistemic_outcome FROM turns WHERE id = $1`, turn.ID).Scan(&gotOutcome); err != nil {
+		t.Fatalf("query turn: %v", err)
+	}
+	if gotOutcome != string(sqlcgen.TurnEpistemicOutcomeStrong) {
+		t.Errorf("turns.epistemic_outcome = %q, want %q (the SECOND call's own value must win, last-write-wins)", gotOutcome, sqlcgen.TurnEpistemicOutcomeStrong)
 	}
 }
 

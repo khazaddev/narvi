@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
@@ -402,7 +403,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	auditLog := narvipg.NewAuditLogStore(pool)
 
 	commander := &fakeTurnCommander{}
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -528,6 +529,18 @@ type epistemicCheckTestRig struct {
 	server    *httptest.Server
 	sessionID pgtype.UUID
 	token     string
+	// pool (test-wiring bundle, adversarial review) is exposed so
+	// TestCreateTurnCore_EpistemicCheckSessionOverride_* below can force
+	// sessions.epistemic_check_enabled directly via SQL -- every one of
+	// this rig's three ORIGINAL callers leaves the column NULL (the
+	// zero-value CreateSessionParams below never sets it), so the session-
+	// override half of §20.4's own precedence ("session override wins when
+	// set, global default otherwise") was never actually exercised above
+	// the pure function it's implemented in
+	// (internal/domain/turn.ResolveEpistemicCheckEnabled, already covered
+	// directly by that package's own unit test) -- only the platform-
+	// default half was.
+	pool *pgxpool.Pool
 }
 
 func newEpistemicCheckTestRig(t *testing.T, epistemicCheckDefault bool) epistemicCheckTestRig {
@@ -546,7 +559,7 @@ func newEpistemicCheckTestRig(t *testing.T, epistemicCheckDefault bool) epistemi
 	auditLog := narvipg.NewAuditLogStore(pool)
 
 	commander := &fakeTurnCommander{}
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -599,7 +612,7 @@ func newEpistemicCheckTestRig(t *testing.T, epistemicCheckDefault bool) epistemi
 		t.Fatalf("move sandbox to ready: %v", err)
 	}
 
-	return epistemicCheckTestRig{commander: commander, server: server, sessionID: session.ID, token: token}
+	return epistemicCheckTestRig{commander: commander, server: server, sessionID: session.ID, token: token, pool: pool}
 }
 
 // dispatchAndCapturePrompt POSTs body to rig's own turns endpoint and
@@ -694,5 +707,65 @@ func TestCreateTurnCore_EpistemicCheckOn_PlanModeTurn_NoPreamble(t *testing.T) {
 
 	if gotText != "make a plan for this" {
 		t.Fatalf("dispatched Prompt.Text = %q, want %q (plan-mode turns never get the preamble, §20.3, even with the check enabled)", gotText, "make a plan for this")
+	}
+}
+
+// setEpistemicCheckOverride forces sessions.epistemic_check_enabled to
+// override directly via SQL -- the ONE thing rig's own CreateSessionParams
+// (newEpistemicCheckTestRig) never sets, exactly like every other
+// integration test in this package that forces a column no production
+// insert path in THIS test's own scenario would otherwise reach (e.g.
+// epistemicoutcome_integration_test.go's own `UPDATE turns SET status =
+// ...` calls).
+func setEpistemicCheckOverride(ctx context.Context, t *testing.T, rig epistemicCheckTestRig, override bool) {
+	t.Helper()
+	if _, err := rig.pool.Exec(ctx, `UPDATE sessions SET epistemic_check_enabled = $1 WHERE id = $2`, override, rig.sessionID); err != nil {
+		t.Fatalf("force session epistemic_check_enabled override: %v", err)
+	}
+}
+
+// TestCreateTurnCore_EpistemicCheckSessionOverride_FalseBeatsGlobalTrue is
+// the test-wiring bundle's own addition (adversarial review): proves §20.4's
+// "session override wins when set, global default otherwise" precedence at
+// the SAME wire-level fidelity as the three tests above, with the session's
+// own override column actually SET (every other test in this file leaves it
+// NULL) -- before this test existed, createTurnLocked's own consultation of
+// sessionRow.EpistemicCheckEnabled (turn.go) was exercised only by internal/
+// domain/turn.ResolveEpistemicCheckEnabled's own pure-function unit test,
+// never above it -- so the session-override wiring itself (SessionStore.Get
+// actually returning the column, createTurnLocked actually reading it) could
+// have been silently replaced by "always use the platform default" and
+// nothing here would have caught it.
+func TestCreateTurnCore_EpistemicCheckSessionOverride_FalseBeatsGlobalTrue(t *testing.T) {
+	rig := newEpistemicCheckTestRig(t, true) // platform default: ON
+	setEpistemicCheckOverride(context.Background(), t, rig, false)
+
+	body := []byte(`{"prompt": "implement the feature", "modelId": null, "effort": null, "planMode": false}`)
+	gotText := dispatchAndCapturePrompt(t, rig, body)
+
+	if gotText != "implement the feature" {
+		t.Fatalf("dispatched Prompt.Text = %q, want %q (session override=false must beat platform default=true)", gotText, "implement the feature")
+	}
+}
+
+// TestCreateTurnCore_EpistemicCheckSessionOverride_TrueBeatsGlobalFalse is
+// TestCreateTurnCore_EpistemicCheckSessionOverride_FalseBeatsGlobalTrue's
+// own mirror, the other direction: session override=true must beat a
+// platform default of false (CreateTurn's own real-world default,
+// §20.4's own "off by default" -- this is the direction that actually
+// lets an operator's per-session opt-in take effect at all).
+func TestCreateTurnCore_EpistemicCheckSessionOverride_TrueBeatsGlobalFalse(t *testing.T) {
+	rig := newEpistemicCheckTestRig(t, false) // platform default: OFF
+	setEpistemicCheckOverride(context.Background(), t, rig, true)
+
+	body := []byte(`{"prompt": "implement the feature", "modelId": null, "effort": null, "planMode": false}`)
+	gotText := dispatchAndCapturePrompt(t, rig, body)
+
+	wantPrefix := turn.RenderEpistemicPreamble()
+	if !strings.HasPrefix(gotText, wantPrefix) {
+		t.Fatalf("dispatched Prompt.Text does not start with RenderEpistemicPreamble()'s own text (session override=true must beat platform default=false)\ngot:  %q\nwant prefix: %q", gotText, wantPrefix)
+	}
+	if !strings.HasSuffix(gotText, "implement the feature") {
+		t.Fatalf("dispatched Prompt.Text does not end with the caller's own original prompt text, verbatim\ngot: %q", gotText)
 	}
 }

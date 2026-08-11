@@ -136,6 +136,14 @@ type Actor struct {
 	// cache as "always miss, always check live" (see imageresolve.go).
 	repoAccessCache *repoAccessCache
 
+	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// platform.Config.EpistemicCheckDefault value every Actor this
+	// Registry hydrates shares (registry.go's own field doc comment) --
+	// threaded into workflowengine.Deps.EpistemicCheckDefault at each of
+	// this Actor's own three OnTurnCompleted call sites (pushpr.go,
+	// dispatch.go, timerfired.go).
+	epistemicCheckDefault bool
+
 	// pendingBroadcast queues each event appended (via appendEvent/
 	// appendRawEvent) during the CURRENT transact attempt, in order. Safe
 	// unsynchronized: Actor.handle processes exactly one command at a time

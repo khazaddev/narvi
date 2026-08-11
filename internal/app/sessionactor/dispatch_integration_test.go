@@ -291,7 +291,7 @@ func (f *fakeSendCommander) lastPayload() json.RawMessage {
 // ws-scheme derivation).
 func newDispatchTestRegistry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, provider ports.SandboxProvider, commander ports.SandboxCommander) *Registry {
 	t.Helper()
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, provider, "http://localhost:8080", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, commander, provider, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -2076,7 +2076,7 @@ func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t
 
 	// --- Step 2: pod A hydrates and genuinely owns this session. ---
 	providerA := &fakeSpawnProvider{resumeSupported: true, resumeBlock: make(chan struct{})}
-	registryA, err := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil, "", nil)
+	registryA, err := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -2118,7 +2118,7 @@ func TestResilience_ConcurrentResumeAcrossActors_ResumeSandboxCalledAtMostOnce(t
 	// --- Step 5: pod B, a genuinely fresh pool, hydrates its own actor
 	// for the SAME session. ---
 	providerB := &fakeSpawnProvider{resumeSupported: true}
-	registryB, err := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil, "", nil)
+	registryB, err := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -2250,7 +2250,7 @@ func TestResilience_ConcurrentPlainSpawnAcrossActors_CreateSandboxCalledAtMostOn
 
 	// --- Step 2: pod A hydrates and genuinely owns this session. ---
 	providerA := &fakeSpawnProvider{createBlock: make(chan struct{})}
-	registryA, err := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil, "", nil)
+	registryA, err := NewRegistry(ctx, poolA, platform.DefaultTimeouts(), nil, nil, providerA, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -2292,7 +2292,7 @@ func TestResilience_ConcurrentPlainSpawnAcrossActors_CreateSandboxCalledAtMostOn
 	// --- Step 6: pod B, a genuinely fresh pool, hydrates its own actor for
 	// the SAME session, with its own fresh fake provider. ---
 	providerB := &fakeSpawnProvider{}
-	registryB, err := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil, "", nil)
+	registryB, err := NewRegistry(ctx, poolB, platform.DefaultTimeouts(), nil, nil, providerB, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

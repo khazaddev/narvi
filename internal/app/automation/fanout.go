@@ -191,7 +191,7 @@ func (e *Engine) createRunAndSession(ctx context.Context, logger *slog.Logger, i
 	// this codebase already has (sessions.created_by's own nullability,
 	// migrations/000004_sessions.up.sql: "bot/automation-created sessions
 	// may have no direct human user").
-	session, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, e.sessions, e.turns, e.environments, e.auditLog, req, pgtype.UUID{})
+	session, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, e.sessions, e.turns, e.environments, e.auditLog, req, pgtype.UUID{}, e.epistemicCheckDefault)
 	if cerr != nil {
 		logger.Warn("automation: create session for target failed", "error", cerr, "target", target.Name)
 		e.createFailedRun(ctx, logger, inv, target)

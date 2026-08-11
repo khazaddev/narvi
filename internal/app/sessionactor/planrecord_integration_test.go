@@ -130,7 +130,7 @@ func TestCompleteProcessingTurn_PlanModeTurn_CreatesExactlyOnePlanRow(t *testing
 	planModel := "anthropic/claude-opus-4-8"
 	turn1 := createProcessingTurnWithPlanMode(ctx, t, turnStore, sessionID, true, &planModel)
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestCompleteProcessingTurn_NonPlanModeTurn_CreatesNoPlanRow(t *testing.T) {
 	turnStore := narvipg.NewTurnStore(pool)
 	createProcessingTurnWithPlanMode(ctx, t, turnStore, sessionID, false, nil)
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestCompleteProcessingTurn_PlanModeTurn_FailedOrCancelled_CreatesNoPlanRow(
 			turnStore := narvipg.NewTurnStore(pool)
 			createProcessingTurnWithPlanMode(ctx, t, turnStore, sessionID, true, nil)
 
-			r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+			r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 			if err != nil {
 				t.Fatalf("NewRegistry: %v", err)
 			}
@@ -272,7 +272,7 @@ func TestCompleteProcessingTurn_SecondPlanModeTurn_SupersedesPriorAwaitingApprov
 
 	turnStore := narvipg.NewTurnStore(pool)
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestCompleteProcessingTurn_Supersede_WithSlackRef_RecordsAuditLogAndEnqueue
 	turnStore := narvipg.NewTurnStore(pool)
 	plans := narvipg.NewPlanStore(pool)
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -516,7 +516,7 @@ func TestCompleteProcessingTurn_Supersede_WithoutSlackRef_NoOutboxRow(t *testing
 
 	turnStore := narvipg.NewTurnStore(pool)
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

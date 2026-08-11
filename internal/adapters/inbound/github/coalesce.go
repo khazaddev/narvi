@@ -101,13 +101,36 @@ type SessionCoalescer struct {
 	Users        *postgres.UserStore
 	Participants *postgres.ParticipantStore
 
-	// EpistemicCheckDefault (Step 61, "builder epistemic pre-action
-	// check", §20.4) is threaded through to the REUSE path's own
-	// httpapi.CreateTurnForBot call below exactly like every other
-	// createTurnLocked-reaching caller now gets -- production wiring
-	// (cmd/control-plane/main.go) passes the SAME platform.Config.
-	// EpistemicCheckDefault value every other caller does.
-	EpistemicCheckDefault bool
+	// F7 correction (adversarial review, Step 61): this struct used to
+	// carry its own EpistemicCheckDefault bool field, threaded through to
+	// the REUSE path's own httpapi.CreateTurnForBot call below, with a doc
+	// comment claiming that matched "every other createTurnLocked-reaching
+	// caller" in this codebase. That claim was already false when written
+	// (the functionally identical REST path, reviewretrigger.go, has
+	// always deliberately hardcoded false instead, with its own documented
+	// rationale) -- passing the real, operator-configured default there
+	// let the builder-only devil's-advocate preamble (§20) get prepended
+	// in front of a PR REVIEW turn's own review.RenderTurnPrompt
+	// verdict-tool block, handing the review agent two competing
+	// structured-reporting endpoints and polluting turns.epistemic_outcome
+	// (gated only on plan_mode, never on "is this actually a build turn")
+	// with review-turn rows.
+	//
+	// The fix is not a corrected field -- it is TWO hardcoded `false`
+	// literals, at both this package's own httpapi.CreateSessionOnTx
+	// (WINNER path, below) and httpapi.CreateTurnForBot (REUSE path,
+	// below) call sites, each with its own doc comment mirroring
+	// reviewretrigger.go's exact reasoning: internal/adapters/inbound/
+	// github is EXCLUSIVELY a PR-review ingress (CreateOrJoin's own doc
+	// comment; every session this package ever creates or joins is a
+	// review session, verified via handler.go's own DeterministicTarget:
+	// intentdomain.TargetReview), so there is no live case where this
+	// package should ever consult the platform's real epistemic-check
+	// default -- keeping a field for a value neither call site may
+	// legitimately use would just be the next version of this exact bug,
+	// waiting for a future edit to "fix" the field back into use. Removed
+	// entirely rather than left unread; cmd/control-plane/main.go no
+	// longer sets it either.
 }
 
 // CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
@@ -363,7 +386,17 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// is the SAME already-resolved commenter identity passed to the
 		// authz checks above (Valid iff linked, invalid/bot-attributed
 		// otherwise), never a second, independently-resolved actor.
-		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, c.EpistemicCheckDefault, actor)
+		//
+		// epistemicCheckDefault: hardcoded false (F7, adversarial review),
+		// mirroring reviewretrigger.go's own identical, deliberate
+		// carve-out -- see SessionCoalescer's own doc comment (the removed
+		// EpistemicCheckDefault field, above) for the full "why". This
+		// REUSE branch always creates a turn on an EXISTING PR
+		// review session (a second @mention or a review-label re-trigger),
+		// never a build turn; passing the real platform default here would
+		// prepend the builder-only devil's-advocate preamble in front of
+		// review.RenderTurnPrompt's own verdict-tool block.
+		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, false, actor)
 		if err != nil {
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}
@@ -408,7 +441,16 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// today's existing bot-attribution behavior) otherwise -- mirrors
 	// Slack's resolveOrClaimSession / Linear's handleCreated passing their
 	// own resolved creator through to CreateSessionCore identically.
-	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor)
+	// epistemicCheckDefault: hardcoded false (F7, adversarial review) --
+	// see SessionCoalescer's own doc comment (the removed EpistemicCheckDefault
+	// field, above) for the full "why". This WINNER branch creates a
+	// brand-new session's FIRST turn, and every
+	// session this package ever creates is a PR review session (this
+	// function's own doc comment; handler.go's own DeterministicTarget:
+	// intentdomain.TargetReview below confirms it deterministically), so
+	// this is never a build turn either, for the identical reason the
+	// REUSE branch's own CreateTurnForBot call (below) hardcodes false.
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor, false)
 	if cerr != nil {
 		return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create session: %w", cerr)
 	}

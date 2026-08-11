@@ -640,12 +640,16 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	effectivePrompt, effectiveModelID, effectiveEffort := prompt, modelID, effort
-	// epistemicCheckEnabled (Step 61, §20.2/§20.4) starts false -- the same
+	// epistemicCheckOverride/epistemicCheckSessionKnown (Step 61,
+	// §20.2/§20.4): epistemicCheckSessionKnown starts false -- the same
 	// safe, off-by-default fallback the sessErr != nil branch below already
 	// applies to workflow-engine resolution, reused here rather than a
 	// second, differently-reasoned fallback for a second concern that reads
-	// the SAME session row.
-	epistemicCheckEnabled := false
+	// the SAME session row -- so the MaybeInjectEpistemicPreamble call
+	// below never even runs (effectivePrompt is left exactly as workflow-
+	// engine resolution set it) when the session row could not be read.
+	var epistemicCheckOverride *bool
+	epistemicCheckSessionKnown := false
 	workflows := postgres.NewWorkflowStore(pool).WithTx(tx)
 	var resolution workflowengine.Resolution
 	if sessionRow, sessErr := sessions.WithTx(tx).Get(ctx, sessionID); sessErr != nil {
@@ -653,13 +657,8 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	} else {
 		resolution = workflowengine.ResolveStepForNewTurn(ctx, workflows, sessionRow, prompt, modelID, effort)
 		effectivePrompt, effectiveModelID, effectiveEffort = resolution.Prompt, resolution.ModelID, resolution.Effort
-		// Step 61 (§20.4): session override wins when set, platform
-		// default otherwise -- internal/domain/turn.
-		// ResolveEpistemicCheckEnabled is the one pure function deciding
-		// this; see its own doc comment for the verified precedent this
-		// mirrors (sessions.build_model_id/build_effort, NOT turns.
-		// plan_mode itself, despite §20.4's own wording).
-		epistemicCheckEnabled = turn.ResolveEpistemicCheckEnabled(epistemicCheckDefault, sessionRow.EpistemicCheckEnabled)
+		epistemicCheckOverride = sessionRow.EpistemicCheckEnabled
+		epistemicCheckSessionKnown = true
 	}
 
 	// Step 58 (§28.5): the attachment block (deterministic per-attachment
@@ -725,16 +724,25 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// prepended, never appended -- onto the turn's own FULLY assembled
 	// prompt (after workflow-template resolution and the attachment/
 	// upload-tool blocks above, so it is the very first thing the agent
-	// reads), exactly when ShouldInjectEpistemicPreamble reports true --
+	// reads), exactly when turn.MaybeInjectEpistemicPreamble decides to --
 	// the ONE place §20.3's plan-mode exclusion is enforced, structural
 	// and impossible to silently drop (that function's own doc comment).
-	// With epistemicCheckEnabled always false (feature off, the default,
-	// §20.4) this condition is always false and effectivePrompt is
-	// UNCHANGED versus every prior Step -- the required byte-for-byte
-	// no-op (pinned by TestCreateTurnCore_EpistemicCheckOff_ByteForByteNoOp,
+	// F6 (adversarial review): this now calls the SAME shared helper
+	// httpapi/create.go's CreateSessionOnTx, workflowengine's
+	// dispatchNextAttempt, and DecidePlanOnTx also route through, rather
+	// than each (including this, the ORIGINAL site) keeping its own
+	// hand-written copy of the resolve/exclude/render/prepend sequence --
+	// "duplication is exactly how the fifth site gets forgotten" (F6's own
+	// words). epistemicCheckSessionKnown guards the call exactly like the
+	// inline version this replaced did (skip entirely, never guess, when
+	// the session row above could not be read). With epistemicCheckDefault
+	// always false (feature off, the default, §20.4) and no session
+	// override, this is always a no-op and effectivePrompt is UNCHANGED
+	// versus every prior Step -- the required byte-for-byte no-op (pinned
+	// by TestCreateTurnCore_EpistemicCheckOff_ByteForByteNoOp,
 	// turn_integration_test.go).
-	if turn.ShouldInjectEpistemicPreamble(epistemicCheckEnabled, planMode) {
-		effectivePrompt = turn.RenderEpistemicPreamble() + effectivePrompt
+	if epistemicCheckSessionKnown {
+		effectivePrompt = turn.MaybeInjectEpistemicPreamble(epistemicCheckDefault, epistemicCheckOverride, planMode, effectivePrompt)
 	}
 
 	created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{

@@ -54,13 +54,13 @@ func newFixture(t *testing.T) *testFixture {
 	// a logged, non-fatal warning with no real SandboxProvider, which is
 	// exactly what these tests want (a run's own session/turn is created
 	// for real; nothing here needs a real sandbox to ever actually spawn).
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
 	t.Cleanup(func() { _ = registry.Shutdown() })
 
-	engine := automation.NewEngine(automations, invocations, runs, sessions, turns, environments, auditLog, pool, registry, platform.DefaultTimeouts())
+	engine := automation.NewEngine(automations, invocations, runs, sessions, turns, environments, auditLog, pool, registry, platform.DefaultTimeouts(), false)
 
 	return &testFixture{
 		pool: pool, automations: automations, invocations: invocations, runs: runs,

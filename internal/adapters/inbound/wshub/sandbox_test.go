@@ -86,7 +86,7 @@ func TestSandboxHandler_HandshakeRejections(t *testing.T) {
 	sessionID := createTestSession(ctx, t, pool)
 	createTestSandbox(ctx, t, pool, sessionID) // gen 1, Pending
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestSandboxHandler_SessionNotFound(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestSandboxHandler_DeadSandboxStatus(t *testing.T) {
 	createTestSandbox(ctx, t, pool, sessionID)
 	moveSandboxStatus(ctx, t, pool, sessionID, sqlcgen.SandboxStatusFailed)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestSandboxHandler_GenMismatch(t *testing.T) {
 	sessionID := createTestSession(ctx, t, pool)
 	createTestSandbox(ctx, t, pool, sessionID) // gen 1
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestSandboxHandler_BadToken(t *testing.T) {
 	createTestSandbox(ctx, t, pool, sessionID)
 	setSandboxTokenHash(ctx, t, pool, sessionID, wshub.HashSandboxToken("correct-token"))
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestSandboxHandler_ValidHandshakeUpgrades(t *testing.T) {
 	sessionID := createTestSession(ctx, t, pool)
 	createTestSandbox(ctx, t, pool, sessionID)
 
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

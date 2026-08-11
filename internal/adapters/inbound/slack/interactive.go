@@ -609,7 +609,7 @@ func (deps InteractiveDeps) decideAndUpdateMessage(ctx context.Context, logger *
 		return
 	}
 
-	outcome, err := httpapi.DecidePlan(decideCtx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, verdict, decidedBy)
+	outcome, err := httpapi.DecidePlan(decideCtx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, verdict, decidedBy, deps.EpistemicCheckDefault)
 
 	var text string
 	switch {

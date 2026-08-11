@@ -143,7 +143,7 @@ func TestHandoffSentinel_ScopedPR_DriftAndTODOs_PostsCommentAndLabel(t *testing.
 			"+// TODO: wire this up to the real backend once it exists\n",
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestHandoffSentinel_ScopedPR_Clean_PostsNothing(t *testing.T) {
 		nextFingerprintExists: true,
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestHandoffSentinel_OrdinaryPR_CompletelyUntouched(t *testing.T) {
 		nextDiff:              "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,1 +1,2 @@\n line1\n+// TODO: should never be scanned\n",
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestHandoffSentinel_Idempotent_RunningTwiceDoesNotDuplicate(t *testing.T) {
 		nextDiff:              "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,1 +1,2 @@\n line1\n+// TODO: duplicate-safe\n",
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -477,7 +477,7 @@ func TestHandoffSentinel_ScopedPR_OwnCommitsAlone_NeverFalselyReportsDrift(t *te
 		nextFingerprintExists: true,
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", sourceControl, testTokenEncryptionKey, "", sourceControl, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

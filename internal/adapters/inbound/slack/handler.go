@@ -872,7 +872,7 @@ func (deps Deps) handlePlanVerdict(ctx context.Context, ack *ackClient, logger *
 		return handleEventResult{OK: false}
 	}
 
-	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), actorUserID)
+	outcome, err := httpapi.DecidePlan(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.Outbox, deps.LinearAgentSessions, deps.AuditLog, deps.Registry, sessionID, planID, httpapi.PlanVerdict(verdict), actorUserID, deps.EpistemicCheckDefault)
 
 	var text string
 	switch {
@@ -992,7 +992,7 @@ func resolveOrClaimSession(ctx context.Context, deps Deps, ack *ackClient, logge
 		Repos: []restdtos.CreateSessionRequestReposElem{
 			{Name: deps.DefaultRepoName, Url: deps.DefaultRepoURL},
 		},
-	}, creator)
+	}, creator, deps.EpistemicCheckDefault)
 	if cerr != nil {
 		logger.Error("slack: create bare session failed", "status", cerr.Status, "message", cerr.Message)
 		return sessionResolution{}, false

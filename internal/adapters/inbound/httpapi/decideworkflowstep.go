@@ -107,6 +107,7 @@ func DecideWorkflowStep(
 	githubPRSessions *postgres.GitHubPRSessionStore,
 	outbox *postgres.OutboxStore,
 	registry *sessionactor.Registry,
+	epistemicCheckDefault bool,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -244,12 +245,13 @@ func DecideWorkflowStep(
 		}
 
 		deps := workflowengine.Deps{
-			Workflows:           txWorkflows,
-			Turns:               turns.WithTx(tx),
-			SlackThreadSessions: slackThreadSessions.WithTx(tx),
-			LinearAgentSessions: linearAgentSessions.WithTx(tx),
-			GitHubPRSessions:    githubPRSessions.WithTx(tx),
-			Outbox:              outbox.WithTx(tx),
+			Workflows:             txWorkflows,
+			Turns:                 turns.WithTx(tx),
+			SlackThreadSessions:   slackThreadSessions.WithTx(tx),
+			LinearAgentSessions:   linearAgentSessions.WithTx(tx),
+			GitHubPRSessions:      githubPRSessions.WithTx(tx),
+			Outbox:                outbox.WithTx(tx),
+			EpistemicCheckDefault: epistemicCheckDefault,
 		}
 
 		var runStatus, stepRunStatus string

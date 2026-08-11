@@ -352,7 +352,7 @@ func TestResilience_KillPodMidTurn_TurnFailsWithReason_NoStuckProcessing(t *test
 
 	// --- Step 2: pod A hydrates and genuinely owns this session (a real
 	// advisory lock on a real poolA connection). ---
-	registryA, err := NewRegistry(ctx, poolA, timeouts, nil, nil, nil, "", nil, nil, "", nil)
+	registryA, err := NewRegistry(ctx, poolA, timeouts, nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -397,7 +397,7 @@ func TestResilience_KillPodMidTurn_TurnFailsWithReason_NoStuckProcessing(t *test
 	// blocks until every checked-out connection is returned, but actor
 	// B's lock connection is never returned until its own run() loop
 	// exits via Shutdown.
-	registryB, err := NewRegistry(ctx, poolB, timeouts, nil, nil, nil, "", nil, nil, "", nil)
+	registryB, err := NewRegistry(ctx, poolB, timeouts, nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

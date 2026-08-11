@@ -83,7 +83,7 @@ func TestMaybeEnqueueLinearProgress_LinearOrigin_FirstToolCall_EnqueuesExactlyOn
 	createProcessingTurn(ctx, t, turnStore, sessionID)
 	claimLinearAgentSessionForTest(ctx, t, pool, sessionID, "agent-session-1", "org-1")
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestMaybeEnqueueLinearProgress_ResentDuplicateToolCall_DoesNotEnqueueSecond
 	createProcessingTurn(ctx, t, turnStore, sessionID)
 	claimLinearAgentSessionForTest(ctx, t, pool, sessionID, "agent-session-1", "org-1")
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestMaybeEnqueueLinearProgress_SecondDistinctToolCallSameTurn_DoesNotEnqueu
 	createProcessingTurn(ctx, t, turnStore, sessionID)
 	claimLinearAgentSessionForTest(ctx, t, pool, sessionID, "agent-session-1", "org-1")
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestMaybeEnqueueLinearProgress_SlackOrigin_ToolCall_EnqueuesNothing(t *test
 		t.Fatalf("claim slack thread session: ok=%v err=%v", ok, err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestMaybeEnqueueLinearProgress_GitHubOrigin_ToolCall_EnqueuesNothing(t *tes
 		t.Fatalf("set github pr session id: %v", err)
 	}
 
-	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil)
+	r, err := NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

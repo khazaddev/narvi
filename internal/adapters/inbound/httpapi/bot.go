@@ -34,8 +34,16 @@ import (
 // direct human creator, exactly CreateSessionCore's own doc comment and
 // createcore_integration_test.go's own TestCreateSessionCore_NilCreator_*
 // tests already establish and cover.
-func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest) (sqlcgen.Session, error) {
-	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, pgtype.UUID{})
+//
+// epistemicCheckDefault (F6, adversarial review, Step 61) mirrors
+// CreateSessionCore's own identical required parameter -- see that
+// function's own doc comment. This function has no real production caller
+// today (coalesce.go's own doc comment explains why GitHub's own ingress
+// deliberately calls CreateSessionOnTx directly instead, for connection-
+// pool safety) -- kept parameter-complete/consistent regardless, exactly
+// like every other createTurnLocked-adjacent entry point in this package.
+func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, environments *postgres.EnvironmentStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, req restdtos.CreateSessionRequest, epistemicCheckDefault bool) (sqlcgen.Session, error) {
+	created, cerr := CreateSessionCore(ctx, pool, sessions, turns, environments, auditLog, registry, req, pgtype.UUID{}, epistemicCheckDefault)
 	if cerr != nil {
 		return sqlcgen.Session{}, cerr
 	}

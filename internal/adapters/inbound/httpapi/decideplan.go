@@ -96,6 +96,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	plandomain "github.com/khazaddev/narvi/internal/domain/plan"
+	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -183,6 +184,22 @@ func planDecisionOutcomeText(verdict PlanVerdict) string {
 // cross-channel-notify outbox rows (enqueuePlanDecisionNotifications
 // below), inside this SAME transaction, so they are visible if and only if
 // the whole decision itself commits.
+// epistemicCheckDefault (F6, adversarial review, Step 61) is a REQUIRED
+// parameter, exactly mirroring createTurnLocked's own identical parameter
+// (turn.go's own doc comment on why) -- closes F6's own verified gap: the
+// Approve verdict's own implementation-turn insert below used to bypass
+// turn.MaybeInjectEpistemicPreamble entirely (dispatched directly via
+// turns.Create, never createTurnLocked/CreateTurnCore, mirroring
+// workflowengine's own dispatchNextAttempt precedent, this function's own
+// doc comment), so the post-plan-approval turn that actually edits files
+// never got the devil's-advocate preamble regardless of platform/session
+// config. F6's own decision overrules the argument that plan mode's HITL
+// approval already covers this turn: a human approves a PLAN, not each
+// premise the implementation rests on while carrying it out -- exactly
+// what this check exists to catch. Every caller passes its own real,
+// operator-configured platform.Config.EpistemicCheckDefault: DecidePlanOnTx
+// is reached only for an ordinary (never review-session) plan-mode
+// session, so no F7-style hardcoded-false carve-out applies here.
 func DecidePlanOnTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -196,6 +213,7 @@ func DecidePlanOnTx(
 	planID pgtype.UUID,
 	verdict PlanVerdict,
 	decidedBy pgtype.UUID,
+	epistemicCheckDefault bool,
 ) (DecidePlanOutcome, error) {
 	logger := platform.Logger(ctx)
 
@@ -301,7 +319,13 @@ func DecidePlanOnTx(
 	}
 
 	if verdict == PlanVerdictApprove {
-		prompt := implementPlanPrompt
+		// F6 (adversarial review, Step 61): the SAME shared gate
+		// createTurnLocked/CreateSessionOnTx/dispatchNextAttempt also route
+		// through (internal/domain/turn.MaybeInjectEpistemicPreamble).
+		// planMode is passed literally false, matching CreateTurnParams.
+		// PlanMode below -- this is deliberately the POST-approval
+		// implementation turn, never itself a plan-mode turn.
+		prompt := turn.MaybeInjectEpistemicPreamble(epistemicCheckDefault, sessionRow.EpistemicCheckEnabled, false, implementPlanPrompt)
 		createdTurn, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
 			SessionID: sessionRow.ID,
 			Status:    sqlcgen.TurnStatusPending,
@@ -493,6 +517,7 @@ func DecidePlan(
 	sessionID, planID pgtype.UUID,
 	verdict PlanVerdict,
 	decidedBy pgtype.UUID,
+	epistemicCheckDefault bool,
 ) (DecidePlanOutcome, error) {
 	logger := platform.Logger(ctx)
 
@@ -507,7 +532,7 @@ func DecidePlan(
 		return DecidePlanOutcome{}, fmt.Errorf("httpapi: get session for plan decision: %w", err)
 	}
 
-	outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, verdict, decidedBy)
+	outcome, err := DecidePlanOnTx(ctx, tx, sessions, turns, plans, outbox, linearAgentSessions, auditLog, sessionRow, planID, verdict, decidedBy, epistemicCheckDefault)
 	if err != nil {
 		return DecidePlanOutcome{}, err
 	}

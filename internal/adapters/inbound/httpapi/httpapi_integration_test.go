@@ -268,7 +268,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// the full spawn/dispatch decision tree then does with it --
 	// internal/app/sessionactor's own dispatch_integration_test.go covers
 	// that decision tree exhaustively.
-	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, platform.DefaultTimeouts(), nil, nil, nil, "http://localhost:8080", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
@@ -329,7 +329,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.environments, rig.auditLog, rig.registry, nil))
+		r.Post("/", httpapi.CreateSession(rig.pool, rig.sessions, rig.turns, rig.environments, rig.auditLog, rig.registry, nil, false))
 		r.Get("/{sessionID}", httpapi.GetSession(rig.sessions))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(rig.sessions, rig.events))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(rig.sessions, rig.artifacts))
@@ -342,8 +342,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Get("/{sessionID}/uploads/{uploadID}/content", httpapi.UploadContentAPI(rig.sessions, rig.artifacts, rig.blobStore, rig.objCfg, platform.DefaultTimeouts()))
 		r.Post("/{sessionID}/ws-token", httpapi.MintWSToken(rig.sessions, rig.wsTokens, platform.DefaultTimeouts()))
 		r.Post("/{sessionID}/turns", httpapi.CreateTurn(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.auditLog, rig.registry, rig.objCfg, false))
-		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry))
-		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog))
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, rig.registry, false))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(rig.pool, rig.sessions, rig.turns, rig.plans, rig.participants, rig.outbox, rig.linearAgentSessions, rig.auditLog, false))
 		// Audit-fix batch (completeness/discoverability, M3) -- see
 		// httpapi/plans.go's own doc comment.
 		r.Get("/{sessionID}/plans", httpapi.ListPlans(rig.sessions, rig.plans))
@@ -451,7 +451,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// wiring (see decideworkflowstep.go's own doc comment).
 	router.Route("/api/workflow-runs", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(rig.pool, rig.sessions, rig.turns, rig.participants, rig.workflows, rig.slackThreadSession, rig.linearAgentSessions, rig.prSessions, rig.outbox, rig.registry))
+		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(rig.pool, rig.sessions, rig.turns, rig.participants, rig.workflows, rig.slackThreadSession, rig.linearAgentSessions, rig.prSessions, rig.outbox, rig.registry, false))
 	})
 	// /api/repos/{owner}/{repo}/settings (Step 47) -- mounted behind
 	// auth.Middleware, exactly like cmd/control-plane/main.go's own wiring
@@ -1043,6 +1043,93 @@ func TestCreateSession_WebSpawnSource_PersistsAsWeb(t *testing.T) {
 	if persisted != "web" {
 		t.Errorf("persisted spawn_source = %q, want %q", persisted, "web")
 	}
+}
+
+// TestCreateSession_EpistemicCheckEnabled_PersistsToPostgres is the
+// test-wiring bundle's own addition (adversarial review): proves the REST
+// epistemicCheckEnabled field (§20.4, Step 61) actually reaches
+// sessions.epistemic_check_enabled -- before this test existed, mutating
+// CreateSessionOnTx's own EpistemicCheckEnabled: (*bool)(req.
+// EpistemicCheckEnabled) to nil (create.go's own CreateSessionParams
+// literal) failed nothing, mirroring TestCreateSession_WebSpawnSource_
+// PersistsAsWeb's own identical shape for spawn_source. Also proves the
+// negative: an ABSENT epistemicCheckEnabled field persists NULL (§20.4's
+// own "session's own nullable override, unset means never opted in"), not
+// a coerced false -- see internal/domain/turn.ResolveEpistemicCheckEnabled's
+// own doc comment for why NULL vs. false is a real, load-bearing
+// distinction here, not a cosmetic one.
+func TestCreateSession_EpistemicCheckEnabled_PersistsToPostgres(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+
+	t.Run("true carries through", func(t *testing.T) {
+		_, token := rig.createAuthenticatedUser(ctx, t)
+
+		body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"effort":null,"planMode":false,"epistemicCheckEnabled":true}`)
+		var got restdtos.Session
+		status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+		if status != http.StatusCreated {
+			t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+		}
+
+		var sessionID pgtype.UUID
+		if err := sessionID.Scan(got.Id); err != nil {
+			t.Fatalf("scan session id: %v", err)
+		}
+		var persisted *bool
+		if err := rig.pool.QueryRow(ctx, `SELECT epistemic_check_enabled FROM sessions WHERE id = $1`, sessionID).Scan(&persisted); err != nil {
+			t.Fatalf("query persisted epistemic_check_enabled: %v", err)
+		}
+		if persisted == nil || !*persisted {
+			t.Errorf("persisted epistemic_check_enabled = %v, want true", persisted)
+		}
+	})
+
+	t.Run("false carries through", func(t *testing.T) {
+		_, token := rig.createAuthenticatedUser(ctx, t)
+
+		body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"effort":null,"planMode":false,"epistemicCheckEnabled":false}`)
+		var got restdtos.Session
+		status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+		if status != http.StatusCreated {
+			t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+		}
+
+		var sessionID pgtype.UUID
+		if err := sessionID.Scan(got.Id); err != nil {
+			t.Fatalf("scan session id: %v", err)
+		}
+		var persisted *bool
+		if err := rig.pool.QueryRow(ctx, `SELECT epistemic_check_enabled FROM sessions WHERE id = $1`, sessionID).Scan(&persisted); err != nil {
+			t.Fatalf("query persisted epistemic_check_enabled: %v", err)
+		}
+		if persisted == nil || *persisted {
+			t.Errorf("persisted epistemic_check_enabled = %v, want false", persisted)
+		}
+	})
+
+	t.Run("absent leaves NULL, not coerced false", func(t *testing.T) {
+		_, token := rig.createAuthenticatedUser(ctx, t)
+
+		body := []byte(`{"spawnSource":"web","title":null,"prompt":null,"repos":[{"name":"narvi","url":"https://example.com","branch":null}],"modelId":null,"effort":null,"planMode":false}`)
+		var got restdtos.Session
+		status := rig.doJSON(t, http.MethodPost, "/api/sessions", body, &got, token)
+		if status != http.StatusCreated {
+			t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+		}
+
+		var sessionID pgtype.UUID
+		if err := sessionID.Scan(got.Id); err != nil {
+			t.Fatalf("scan session id: %v", err)
+		}
+		var persisted *bool
+		if err := rig.pool.QueryRow(ctx, `SELECT epistemic_check_enabled FROM sessions WHERE id = $1`, sessionID).Scan(&persisted); err != nil {
+			t.Fatalf("query persisted epistemic_check_enabled: %v", err)
+		}
+		if persisted != nil {
+			t.Errorf("persisted epistemic_check_enabled = %v, want NULL (absent means no override, never coerced to false)", *persisted)
+		}
+	})
 }
 
 // --- CreateSession: pathScope / Environment (row 10, "domain: Environment

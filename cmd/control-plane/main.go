@@ -210,7 +210,7 @@ func serve() error {
 	// reviewcontext.Fetcher below (DiffFetcher: sourceControl) -- never a
 	// second, independently-constructed client.
 	registry, err := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
-		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, sourceControl, cfg.GitHubBotToken)
+		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, sourceControl, cfg.EpistemicCheckDefault, cfg.GitHubBotToken)
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
 	}
@@ -459,7 +459,7 @@ func serve() error {
 	automationEngine := automation.NewEngine(
 		automationStore, automationInvocationStore, automationRunStore,
 		sessionStore, turnStore, environmentStore, auditLogStore,
-		pool, registry, cfg.Timeouts,
+		pool, registry, cfg.Timeouts, cfg.EpistemicCheckDefault,
 	)
 
 	// The 3 stores backing Step 20's ("auth v1", §13.1/§13.4) own GitHub
@@ -721,10 +721,14 @@ func serve() error {
 			// instance every other caller above already uses -- threaded
 			// through to CreateTurnForBot's own awaiting-plan gate.
 			Plans: planStore,
-			// EpistemicCheckDefault (Step 61, §20.4): the SAME
-			// platform.Config value every other CreateTurnCore/
-			// CreateTurnForBot-reaching caller above also receives.
-			EpistemicCheckDefault: cfg.EpistemicCheckDefault,
+			// F7 correction (adversarial review, Step 61): SessionCoalescer
+			// no longer has an EpistemicCheckDefault field -- both of its
+			// own CreateSessionOnTx/CreateTurnForBot call sites now
+			// hardcode false instead (coalesce.go's own doc comment on the
+			// removed field explains the full "why": every session/turn
+			// this package creates or joins is a PR review session, never a
+			// build turn, so the platform's real epistemic-check default
+			// must never reach it).
 		},
 		webhookDeliveryStore,
 		githubingress.Config{
@@ -943,7 +947,7 @@ func serve() error {
 	// Authorization header.
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc))
+		r.Post("/", httpapi.CreateSession(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, intentClassifierSvc, cfg.EpistemicCheckDefault))
 		r.Get("/{sessionID}", httpapi.GetSession(sessionStore))
 		r.Get("/{sessionID}/events", httpapi.ListEvents(sessionStore, eventStore))
 		r.Get("/{sessionID}/artifacts", httpapi.ListArtifacts(sessionStore, artifactStore))
@@ -968,8 +972,8 @@ func serve() error {
 		// doc comment for the full sequencing. outboxStore/
 		// linearAgentSessionStore (Step 38, "plan mode, cross-channel") feed
 		// DecidePlanOnTx's own cross-channel-notify step (decideplan.go).
-		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, registry))
-		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore))
+		r.Post("/{sessionID}/plans/{planId}/approve", httpapi.ApprovePlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, registry, cfg.EpistemicCheckDefault))
+		r.Post("/{sessionID}/plans/{planId}/reject", httpapi.RejectPlan(pool, sessionStore, turnStore, planStore, participantStore, outboxStore, linearAgentSessionStore, auditLogStore, cfg.EpistemicCheckDefault))
 		// Audit-fix batch (completeness/discoverability, M3): the read half
 		// plans/{planId}/approve|reject above was always missing -- a web
 		// client had no way to ever discover a planId to approve. See
@@ -1003,7 +1007,7 @@ func serve() error {
 	// never a second, independently-constructed copy.
 	router.Route("/api/workflow-runs", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(pool, sessionStore, turnStore, participantStore, workflowStore, slackThreadSessionStore, linearAgentSessionStore, githubPRSessionStore, outboxStore, registry))
+		r.Post("/{runId}/steps/{stepRunId}/decide", httpapi.DecideWorkflowStep(pool, sessionStore, turnStore, participantStore, workflowStore, slackThreadSessionStore, linearAgentSessionStore, githubPRSessionStore, outboxStore, registry, cfg.EpistemicCheckDefault))
 	})
 
 	// /api/repos/{owner}/{repo}/settings (Step 47, "server-side verdict",
@@ -1193,7 +1197,7 @@ func serve() error {
 	// sentinelAutoFixNotifier (Step 48, "sentinels + suggestions", §17.2)
 	// spawns the child session -- reviewFindingStore/sentinelFixStore are
 	// the SAME instances every other caller above already uses.
-	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts)
+	sentinelAutoFixNotifier := outboxworker.NewSentinelAutoFixNotifier(pool, sessionStore, turnStore, environmentStore, auditLogStore, registry, sentinelFixStore, reviewFindingStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts, cfg.EpistemicCheckDefault)
 	// handoffNotifier (Step 49, "handoff-readiness sentinel", §14.4) posts
 	// the handoff-readiness comment and applies the "handoff" label on a
 	// scoped session's PR -- the SAME sourceControl/cfg.GitHubBotToken

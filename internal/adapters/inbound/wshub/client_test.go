@@ -86,7 +86,7 @@ func newClientTestRigImpl(t *testing.T, timeouts platform.Timeouts, wireBroadcas
 	if wireBroadcaster {
 		broadcaster = hub
 	}
-	registry, err := sessionactor.NewRegistry(ctx, pool, timeouts, broadcaster, nil, nil, "", nil, nil, "", nil)
+	registry, err := sessionactor.NewRegistry(ctx, pool, timeouts, broadcaster, nil, nil, "", nil, nil, "", nil, false)
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}

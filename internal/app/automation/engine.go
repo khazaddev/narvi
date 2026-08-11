@@ -45,6 +45,13 @@ type Engine struct {
 	pool         *pgxpool.Pool
 	registry     *sessionactor.Registry
 	timeouts     platform.Timeouts
+	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
+	// platform.Config.EpistemicCheckDefault value every other
+	// CreateSessionOnTx-reaching caller in this codebase now threads
+	// through -- createRunAndSession (fanout.go) is this Engine's own ONE
+	// caller, an ordinary (never review-session) build turn, so no F7-style
+	// hardcoded-false carve-out applies here.
+	epistemicCheckDefault bool
 }
 
 // NewEngine builds an Engine backed by the given stores/pool (pool is
@@ -67,18 +74,20 @@ func NewEngine(
 	pool *pgxpool.Pool,
 	registry *sessionactor.Registry,
 	timeouts platform.Timeouts,
+	epistemicCheckDefault bool,
 ) *Engine {
 	return &Engine{
-		automations:  automations,
-		invocations:  invocations,
-		runs:         runs,
-		sessions:     sessions,
-		turns:        turns,
-		environments: environments,
-		auditLog:     auditLog,
-		pool:         pool,
-		registry:     registry,
-		timeouts:     timeouts,
+		automations:           automations,
+		invocations:           invocations,
+		runs:                  runs,
+		sessions:              sessions,
+		turns:                 turns,
+		environments:          environments,
+		auditLog:              auditLog,
+		pool:                  pool,
+		registry:              registry,
+		timeouts:              timeouts,
+		epistemicCheckDefault: epistemicCheckDefault,
 	}
 }
 

@@ -135,6 +135,36 @@ const epistemicPreamble = "" +
 	"}\n\n" +
 	"Use \"none\" when nothing rose to either tier. Do not skip this call regardless of outcome -- your reply's own wording is advisory only and is never re-read as the outcome of record; this call is.\n\n"
 
+// MaybeInjectEpistemicPreamble is F6's own shared gate (adversarial
+// review, Step 61): composes ResolveEpistemicCheckEnabled,
+// ShouldInjectEpistemicPreamble, and RenderEpistemicPreamble into the ONE
+// three-line sequence every raw turn-insert call site now routes through,
+// rather than each duplicating it inline -- "duplication is exactly how
+// the fifth site gets forgotten" (F6's own words). Mirrors createTurnLocked's
+// own original inline sequence (httpapi/turn.go) byte-for-byte: resolve
+// §20.4's precedence (session override wins when set, platformDefault
+// otherwise), exclude any planMode==true turn per §20.3 regardless of how
+// checkEnabled resolved, and -- only when injecting -- PRECEDE the
+// preamble onto prompt (prepended, never appended, exactly like §20.1
+// requires).
+//
+// Every caller of this function (httpapi's createTurnLocked/
+// CreateSessionOnTx/DecidePlanOnTx, workflowengine's dispatchNextAttempt)
+// is itself responsible for deciding what to pass as platformDefault --
+// the real, operator-configured platform.Config.EpistemicCheckDefault for
+// an ordinary build turn, or a hardcoded false for a turn this function's
+// own caller knows is NOT a build turn (a review-session turn, F7) --
+// exactly the same "every call site compile-time-decides" discipline
+// epistemicCheckDefault already has as a required (never defaulted)
+// parameter throughout this codebase.
+func MaybeInjectEpistemicPreamble(platformDefault bool, sessionOverride *bool, planMode bool, prompt string) string {
+	enabled := ResolveEpistemicCheckEnabled(platformDefault, sessionOverride)
+	if ShouldInjectEpistemicPreamble(enabled, planMode) {
+		return RenderEpistemicPreamble() + prompt
+	}
+	return prompt
+}
+
 // RenderEpistemicPreamble returns §20.1's own fixed devil's-advocate
 // preamble text, to be PRECEDED -- prepended, never appended -- onto a
 // build turn's own fully-assembled prompt text (§20.1: "the turn prompt
