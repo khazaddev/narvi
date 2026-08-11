@@ -353,6 +353,21 @@ func TestMergePullRequest_HappyPath(t *testing.T) {
 	if len(fakeSCM.mergeCalls) != 1 || fakeSCM.mergeCalls[0].HeadSHA != "headsha1204" {
 		t.Errorf("MergePR calls = %+v, want exactly one call with HeadSHA=headsha1204 (the freshly revalidated head, never a stale/client-supplied one)", fakeSCM.mergeCalls)
 	}
+
+	// §62 review findings T1/M5 (fixed): this human 1-click merge path
+	// must now record a 'confirmed' auto-approval outcome -- BEFORE this
+	// fix, RecordConfirmed's only real caller was the armed auto-merge
+	// worker, so this endpoint (the ONE merge path every unarmed repo
+	// actually uses, for the entire calibration window §21.2 names this
+	// metric as existing to inform) never contributed a single
+	// 'confirmed' row.
+	total, contested, err := narvipg.NewAutoApprovalOutcomeStore(rig.pool).CountInWindow(ctx, "acme/widgets", pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true})
+	if err != nil {
+		t.Fatalf("count auto-approval outcomes: %v", err)
+	}
+	if total != 1 || contested != 0 {
+		t.Errorf("outcome counts = (total=%d, contested=%d), want (1, 0) -- the human 1-click merge must record a 'confirmed' outcome (§62 review findings T1/M5)", total, contested)
+	}
 }
 
 func TestMergePullRequest_NotAssignedToCaller(t *testing.T) {

@@ -21,6 +21,17 @@ import (
 // happened, a logging failure must never claim otherwise" posture for
 // its audit-log write, applied here to this SAME class of post-merge
 // bookkeeping.
+//
+// §62 review findings T1/M5 (fixed): this doc comment (and migration
+// 000070_auto_approval_outcomes.up.sql's own identical claim) previously
+// described httpapi.MergePullRequest as ALREADY calling this -- it did
+// not; the ONLY real caller was the armed auto-merge worker. During the
+// ENTIRE toggle-off calibration window -- the exact period §21.2 says
+// this metric exists to inform an admin's own decision to arm auto-merge
+// -- only 'overridden' rows were ever written, pinning every unarmed
+// repo's own contradiction rate at 100% or "not yet computed". Both
+// claims are now accurate: httpapi.MergePullRequest (decisioninbox.go)
+// calls this immediately after a successful merge.
 func RecordConfirmed(ctx context.Context, deps Deps, repoFullName string, prNumber int32, headSHA string) {
 	recordOutcome(ctx, deps, repoFullName, prNumber, headSHA, reviewverdict.OutcomeConfirmed)
 }

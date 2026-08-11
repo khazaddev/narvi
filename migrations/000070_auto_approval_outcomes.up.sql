@@ -30,6 +30,16 @@
 -- httpapi.MergePullRequest and internal/app/automerge's own worker -- for
 -- 'confirmed') -- never a new polling/reconciliation job of its own.
 --
+-- Correction (§62 review findings T1/M5): this comment's own claim that
+-- httpapi.MergePullRequest already called RecordConfirmed was false when
+-- first written -- only the armed auto-merge worker did, so during the
+-- entire toggle-off calibration window this metric exists to inform,
+-- only 'overridden' rows were ever recorded. Fixed in the same commit
+-- that added this correction (httpapi/decisioninbox.go now calls
+-- RecordConfirmed on the human 1-click merge-completion path too) -- see
+-- internal/app/reviewverdict/outcomes.go's own RecordConfirmed doc
+-- comment for the full "why".
+--
 -- Not an ENUM: mirrors review_findings.sentinel_kind/status's own
 -- established "closed vocabulary lives in Go, not the schema" precedent
 -- (migrations/000046) for a column whose sibling Go package
