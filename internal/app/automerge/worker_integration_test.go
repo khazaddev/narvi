@@ -7,6 +7,7 @@ package automerge_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -372,5 +373,94 @@ func TestPumpOnce_CandidateNoLongerOpen_NeverErrors(t *testing.T) {
 	}
 	if got := sc.mergeCallCount(); got != 0 {
 		t.Fatalf("MergePR call count = %d, want 0", got)
+	}
+}
+
+// TestPumpOnce_Armed_GetOpenPRErrors_NeverMergesNeverPanics is the T2
+// regression test (§62 review, fixed) for fakeAutoMergeSourceControl.
+// getErr: before this fix, that field was wired into the fake but set by
+// NO test in this file, leaving RevalidateForAutoMerge's own genuine-
+// error branch (mergeCandidate's `if err != nil { logger.Error(...);
+// return }`) completely uncovered -- a worker tested only on the happy
+// path is unacceptable for the one component that merges without a
+// human. A transient GitHub error resolving the candidate's own live
+// state (rate limit, timeout, 5xx) must be logged and skipped, never
+// panic, never merge, and never abort the tick.
+func TestPumpOnce_Armed_GetOpenPRErrors_NeverMergesNeverPanics(t *testing.T) {
+	rig := newAutomergeTestRig(t)
+	ctx := context.Background()
+	const repoFullName = "acme/automerge-getopenpr-errors"
+
+	rig.seedEligiblePR(ctx, t, repoFullName, 6, "sha-6")
+	if _, err := rig.repoSettings.UpsertAutoMergeToggle(ctx, repoFullName, true); err != nil {
+		t.Fatalf("upsert auto-approval settings: %v", err)
+	}
+
+	sc := &fakeAutoMergeSourceControl{getErr: errors.New("github: rate limited")}
+	worker := automerge.New(rig.deps(sc))
+
+	if err := worker.PumpOnce(ctx, time.Now()); err != nil {
+		t.Fatalf("PumpOnce() error = %v, want nil (a per-candidate GetOpenPR error must degrade, never fail, the whole tick)", err)
+	}
+	if got := sc.mergeCallCount(); got != 0 {
+		t.Fatalf("MergePR call count = %d, want 0 (a candidate whose live state could not be confirmed must never merge)", got)
+	}
+
+	total, contested, err := narvipg.NewAutoApprovalOutcomeStore(rig.pool).CountInWindow(ctx, repoFullName, pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true})
+	if err != nil {
+		t.Fatalf("count auto-approval outcomes: %v", err)
+	}
+	if total != 0 || contested != 0 {
+		t.Errorf("outcome counts = (total=%d, contested=%d), want (0, 0) -- RecordConfirmed must never fire for a candidate that was never actually merged", total, contested)
+	}
+}
+
+// TestPumpOnce_Armed_MergeFails_NeverPanics_NoConfirmedOutcomeRecorded is
+// T2's own sibling for fakeAutoMergeSourceControl.mergeErr -- also wired
+// into the fake but set by no test before this fix, leaving
+// mergeCandidate's own merge-failed branch (`if err != nil {
+// logger.Error(...); return }`, AFTER RevalidateForAutoMerge already
+// said ok=true) completely uncovered. A genuinely eligible candidate
+// whose real GitHub MergePR call itself fails (branch protection newly
+// blocking it, a concurrent conflicting change, a transient 5xx) must be
+// logged and skipped -- critically, RecordConfirmed must NEVER fire for
+// a merge that did not actually happen (the ONE outcome-recording bug
+// this test guards against: a naive refactor that moved the
+// RecordConfirmed call BEFORE the MergePR error check would silently
+// mis-record failed merges as confirmed).
+func TestPumpOnce_Armed_MergeFails_NeverPanics_NoConfirmedOutcomeRecorded(t *testing.T) {
+	rig := newAutomergeTestRig(t)
+	ctx := context.Background()
+	const repoFullName = "acme/automerge-merge-fails"
+
+	htmlURL := rig.seedEligiblePR(ctx, t, repoFullName, 7, "sha-7")
+	if _, err := rig.repoSettings.UpsertAutoMergeToggle(ctx, repoFullName, true); err != nil {
+		t.Fatalf("upsert auto-approval settings: %v", err)
+	}
+
+	sc := &fakeAutoMergeSourceControl{
+		prsByKey: map[string]ports.OpenPR{
+			"acme/automerge-merge-fails#7": {
+				Owner: "acme", Repo: "automerge-merge-fails", Number: 7, HTMLURL: htmlURL,
+				HeadSHA: "sha-7", CIConclusion: ports.CIConclusionSuccess,
+			},
+		},
+		mergeErr: &ports.MergePRError{Status: http.StatusMethodNotAllowed, Message: "not mergeable"},
+	}
+	worker := automerge.New(rig.deps(sc))
+
+	if err := worker.PumpOnce(ctx, time.Now()); err != nil {
+		t.Fatalf("PumpOnce() error = %v, want nil (a per-candidate MergePR error must degrade, never fail, the whole tick)", err)
+	}
+	if got := sc.mergeCallCount(); got != 1 {
+		t.Fatalf("MergePR call count = %d, want 1 (the merge WAS attempted -- this test proves the FAILURE path, not that it was skipped)", got)
+	}
+
+	total, contested, err := narvipg.NewAutoApprovalOutcomeStore(rig.pool).CountInWindow(ctx, repoFullName, pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true})
+	if err != nil {
+		t.Fatalf("count auto-approval outcomes: %v", err)
+	}
+	if total != 0 || contested != 0 {
+		t.Errorf("outcome counts = (total=%d, contested=%d), want (0, 0) -- RecordConfirmed must never fire when the MergePR call itself failed", total, contested)
 	}
 }
