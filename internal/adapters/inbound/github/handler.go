@@ -133,6 +133,34 @@ type Config struct {
 	// plane/main.go) satisfies this directly.
 	ReviewFindings reviewcontext.FindingsFetcher
 
+	// FalsePositivePatterns (Step 63, "review: learned false-positive
+	// patterns", §22.3) fetches this repo's own currently-active learned
+	// false-positive patterns and renders them as an advisory content
+	// block, prepended to every review turn's own prompt exactly like
+	// ReviewFindings' own already-answered-facts block immediately above
+	// -- "injected into every review pass, first pass and re-review
+	// alike" applies identically to a brand-new mention (this handler's
+	// own WINNER path) and a coalesced second mention (REUSE path), since
+	// both build a turn prompt through this SAME code path. Nil-safe: nil
+	// (this package's own handler_test.go) simply skips this fetch
+	// entirely. *postgres.FalsePositivePatternStore (cmd/control-plane/
+	// main.go) satisfies this directly.
+	FalsePositivePatterns reviewcontext.FalsePositivePatternsFetcher
+
+	// FalsePositivePatternCapture (Step 63, §22.2) is this handler's own
+	// dispatch-before-router capture surface -- see
+	// falsepositivecapture.go's own doc comment for the full "why before
+	// parseMention" reasoning. Nil-safe: nil (this package's own
+	// handler_test.go, or any other minimal wiring that doesn't care
+	// about this Step) simply skips capture detection entirely, falling
+	// through to the ordinary mention pipeline exactly as if every
+	// comment were an ordinary one. The SAME *postgres.
+	// FalsePositivePatternStore instance as FalsePositivePatterns above
+	// satisfies this directly (a structurally different interface --
+	// read vs. write -- but one concrete store, cmd/control-plane/
+	// main.go).
+	FalsePositivePatternCapture FalsePositivePatternCapturer
+
 	// Comments (Step 37/38 follow-up fix, Finding 1) posts the honest
 	// planAwaitingApprovalReplyText reply (planawaitingreply.go) back to a
 	// PR thread when coalesce.go's CreateOrJoin declines to enqueue a build
@@ -296,6 +324,38 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
+		// Step 63 (§22.2): a `false positive: <reason>` capture command is
+		// dispatched HERE, BEFORE parseMention -- dispatch-before-router,
+		// mirroring the pull_request/"closed" merge-gating check above
+		// exactly (this file's own doc comment on that check). Checked
+		// only for the two comment-bearing event types parseMention would
+		// otherwise interpret as a possible mention; cfg.
+		// FalsePositivePatternCapture == nil (this package's own
+		// handler_test.go, or any other minimal wiring that doesn't care
+		// about this Step) falls through to the ordinary pipeline
+		// unchanged, exactly like every other nil-safe Config field above.
+		if cfg.FalsePositivePatternCapture != nil && (eventType == eventTypeIssueComment || eventType == eventTypePullRequestReviewComment) {
+			switch tryCaptureFalsePositivePattern(ctx, logger, coalescer.Identities, coalescer.Users, coalescer.AuditLog, cfg.FalsePositivePatternCapture, eventType, body) {
+			case falsePositiveHandled:
+				w.WriteHeader(http.StatusOK)
+				return
+			case falsePositiveFailed:
+				// Mirrors parseMention's own error-path precedent below:
+				// this delivery was claimed but never actually acted on,
+				// so release the claim so a human-triggered GitHub
+				// redelivery (L4's own "manual-only" precedent) can retry
+				// once the backend recovers.
+				if releaseErr := deliveries.Release(ctx, githubDeliveryProvider, deliveryID); releaseErr != nil {
+					logger.Error("github: release webhook delivery claim failed", "error", releaseErr, "delivery_id", deliveryID)
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			case falsePositiveNotApplicable:
+				// Not a capture command -- fall through to the ordinary
+				// mention pipeline below, completely unaffected.
+			}
+		}
+
 		m, ok, err := parseMention(eventType, body, mentionRE, cfg.ReReviewLabel)
 		if err != nil {
 			logger.Error("github: parse webhook payload failed", "error", err, "event_type", eventType, "delivery_id", deliveryID)
@@ -425,6 +485,18 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// BEFORE the diff/stack/tool-instructions blocks below -- prepended
 		// to, never replacing, the mention's own prose text captured as
 		// mentionText above.
+		// Step 63 (§22.3): prepend this repo's own currently-active
+		// learned false-positive patterns FIRST (broadest, repo-wide
+		// context), before the PR-specific already-answered facts below --
+		// "injected into every review pass, first pass and re-review
+		// alike" applies to every mention this handler ever processes,
+		// coalesced or not, since both CreateOrJoin branches share this
+		// SAME prompt-building code, upstream of the branch itself.
+		if cfg.FalsePositivePatterns != nil {
+			if advisory := reviewcontext.FetchFalsePositivePatterns(ctx, logger, cfg.FalsePositivePatterns, m.RepoFullName); advisory != "" {
+				m.CommentBody = advisory + m.CommentBody
+			}
+		}
 		if cfg.ReviewFindings != nil {
 			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, cfg.ReviewFindings, m.RepoFullName, m.PRNumber); alreadyAnswered != "" {
 				m.CommentBody = alreadyAnswered + m.CommentBody
