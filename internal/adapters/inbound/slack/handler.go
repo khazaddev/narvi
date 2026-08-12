@@ -722,7 +722,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		logger.Info("slack: revise: reply had empty feedback, blocked by awaiting-approval plan guard", "session_id", res.SessionID)
 	} else {
 		var err error
-		createdTurn, created, err = addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, deps.EpistemicCheckDefault, actorUserID)
+		createdTurn, created, err = addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.IntentClassifier, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, deps.EpistemicCheckDefault, actorUserID)
 		if err != nil {
 			if !errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
 				logger.Error("slack: add turn failed", "error", err)

@@ -871,7 +871,15 @@ func (deps InteractiveDeps) handleViewSubmission(ctx context.Context, w http.Res
 		return
 	}
 
-	if _, _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, sessionID, feedback, nil, true, deps.EpistemicCheckDefault, actorUserID, httpapi.RejectIfOpen); cerr != nil {
+	// intentSvc: nil here, not deps.IntentClassifier -- this call always
+	// passes planMode=true (this endpoint IS the Request-changes modal
+	// submission, i.e. already a plan-revision turn by construction), so
+	// createTurnLocked's own plan_followup block (turn.go, guarded on
+	// !planMode) never runs regardless of what's passed. InteractiveDeps
+	// carries no IntentClassifier field at all (unlike Deps, handler.go) --
+	// adding one purely to thread an argument that would never be consulted
+	// here would be dead plumbing.
+	if _, _, cerr := httpapi.CreateTurnCore(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, nil, deps.AuditLog, deps.Registry, sessionID, feedback, nil, true, deps.EpistemicCheckDefault, actorUserID, httpapi.RejectIfOpen); cerr != nil {
 		logger.Error("slack: interactivity: create request-changes turn failed", "status", cerr.Status, "message", cerr.Message, "session_id", sessionIDStr)
 	}
 	w.WriteHeader(http.StatusOK)

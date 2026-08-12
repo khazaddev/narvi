@@ -33,6 +33,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
@@ -80,7 +81,7 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // this Action regardless, per Resource's own doc comment on fields an
 // Action doesn't consult), avoiding a wasted Postgres participants read on
 // every call.
-func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
+func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -196,7 +197,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// it (a review-retrigger turn is always planMode=false, never
 		// true), so this call site is EXCLUDED at the source rather than
 		// relying on some other gate downstream.
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
 		if cerr != nil {
 			logger.Error("httpapi: retrigger review (create turn) failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)

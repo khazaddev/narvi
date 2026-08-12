@@ -1804,6 +1804,7 @@ type Turn struct {
 	Effort               *string               `json:"effort"`
 	EpistemicOutcome     *TurnEpistemicOutcome `json:"epistemic_outcome"`
 	ReviewHeadSha        *string               `json:"review_head_sha"`
+	AnswerOnly           *bool                 `json:"answer_only"`
 }
 
 type User struct {

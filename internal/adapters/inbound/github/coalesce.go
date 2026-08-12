@@ -410,7 +410,7 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// never a build turn; passing the real platform default here would
 		// prepend the builder-only devil's-advocate preamble in front of
 		// review.RenderTurnPrompt's own verdict-tool block.
-		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, false, actor, reviewHeadSHAPtr)
+		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.IntentClassifier, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, false, actor, reviewHeadSHAPtr)
 		if err != nil {
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}

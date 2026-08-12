@@ -13,9 +13,9 @@ import (
 
 const createTurn = `-- name: CreateTurn :one
 
-INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only
 `
 
 type CreateTurnParams struct {
@@ -26,6 +26,7 @@ type CreateTurnParams struct {
 	PlanMode      bool        `json:"plan_mode"`
 	Effort        *string     `json:"effort"`
 	ReviewHeadSha *string     `json:"review_head_sha"`
+	AnswerOnly    *bool       `json:"answer_only"`
 }
 
 // Queries backing TurnStore (§4.3). Just enough to prove the pipeline end
@@ -54,6 +55,13 @@ type CreateTurnParams struct {
 // CreateSessionOnTx) with the commit SHA that turn's own pre-fetched
 // diff was anchored to. See that migration's own doc comment for the
 // full "why".
+//
+// answer_only (migrations/000074_plan_followup.up.sql, Step 64, §23.2)
+// mirrors review_head_sha's own identical shape one column further --
+// nil/absent for every existing call site (every CreateTurnParams
+// literal that predates this Step), set exactly once, at creation, by
+// createTurnLocked's own plan_followup gate (turn.go). See that
+// migration's own doc comment for the full "why NULL vs FALSE" split.
 func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, error) {
 	row := q.db.QueryRow(ctx, createTurn,
 		arg.SessionID,
@@ -63,6 +71,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		arg.PlanMode,
 		arg.Effort,
 		arg.ReviewHeadSha,
+		arg.AnswerOnly,
 	)
 	var i Turn
 	err := row.Scan(
@@ -81,12 +90,13 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.Effort,
 		&i.EpistemicOutcome,
 		&i.ReviewHeadSha,
+		&i.AnswerOnly,
 	)
 	return i, err
 }
 
 const getProcessingTurnForSession = `-- name: GetProcessingTurnForSession :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only FROM turns
 WHERE session_id = $1 AND status = 'processing'
 `
 
@@ -118,12 +128,13 @@ func (q *Queries) GetProcessingTurnForSession(ctx context.Context, sessionID pgt
 		&i.Effort,
 		&i.EpistemicOutcome,
 		&i.ReviewHeadSha,
+		&i.AnswerOnly,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only FROM turns
 WHERE id = $1
 `
 
@@ -146,12 +157,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.Effort,
 		&i.EpistemicOutcome,
 		&i.ReviewHeadSha,
+		&i.AnswerOnly,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -184,6 +196,7 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.Effort,
 			&i.EpistemicOutcome,
 			&i.ReviewHeadSha,
+			&i.AnswerOnly,
 		); err != nil {
 			return nil, err
 		}
@@ -264,7 +277,7 @@ SET status = $2,
     completed_at = COALESCE($4, completed_at),
     dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only
 `
 
 type UpdateTurnStatusParams struct {
@@ -318,6 +331,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.Effort,
 		&i.EpistemicOutcome,
 		&i.ReviewHeadSha,
+		&i.AnswerOnly,
 	)
 	return i, err
 }

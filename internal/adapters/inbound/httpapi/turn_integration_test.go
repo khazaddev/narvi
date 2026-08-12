@@ -412,7 +412,7 @@ func TestCreateTurn_CarriesExistingConversationID(t *testing.T) {
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessions, users))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry, nil, false))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry, nil, nil, false))
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
@@ -568,7 +568,7 @@ func newEpistemicCheckTestRig(t *testing.T, epistemicCheckDefault bool) epistemi
 	router := chi.NewRouter()
 	router.Route("/api/sessions", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessions, users))
-		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry, nil, epistemicCheckDefault))
+		r.Post("/{sessionID}/turns", httpapi.CreateTurn(pool, sessions, turns, plans, participants, auditLog, registry, nil, nil, epistemicCheckDefault))
 	})
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
