@@ -359,6 +359,34 @@ type CreateTurnOptions struct {
 	// "why"). Every OTHER caller of this core (every non-review turn)
 	// leaves this nil, exactly like Effort/StorageConfigured above.
 	ReviewHeadSHA *string
+
+	// ClassifyText (Step 64 follow-up fix, review Finding 1) is the raw,
+	// unprefixed human reply text the plan_followup block below (just
+	// before tx.Begin) should classify -- mirrors github/coalesce.go's own
+	// pre-existing classifyText parameter for the Step 36 classifier
+	// (that function's own doc comment: "Audit fix: this used to be
+	// *req.Prompt directly, which ... already had ... the entire PR diff
+	// ... appended -- feeding the classifier's LLM call the entire PR
+	// diff instead of just the triggering comment ... text"). The SAME
+	// bug class existed here for ClassifyPlanFollowup: github/coalesce.go's
+	// REUSE-path call to CreateTurnForBot, and reviewretrigger.go's own
+	// call to CreateTurnCore, both used to hand createTurnLocked a
+	// `prompt` value ALREADY folded with review.RenderTurnPrompt's own
+	// full diff/stack/verdict-tool-instructions text -- inflating the
+	// classifier's own LLM call cost/latency by orders of magnitude and
+	// risking exceeding the model's context window, exactly like the
+	// Step 36 finding.
+	//
+	// nil (every caller other than github/coalesce.go's REUSE-path
+	// CreateTurnForBot call) means "no raw text was captured separately
+	// for this call site" -- createTurnLocked falls back to classifying
+	// `prompt` itself, correct for every caller where prompt genuinely IS
+	// the human's own raw words with nothing folded in (REST's own
+	// CreateTurn, Slack's addTurn/interactive.go, Linear's webhook.go).
+	// Non-nil means the caller captured a raw text distinct from the
+	// (possibly enriched) prompt this turn will actually dispatch with --
+	// *ClassifyText, not prompt, is what gets classified.
+	ClassifyText *string
 }
 
 // CreateTurnCore is everything CreateTurn's own doc comment above
@@ -522,11 +550,13 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	var storageConfigured bool
 	var effort *string
 	var reviewHeadSHA *string
+	var classifyText *string
 	if len(opts) > 0 {
 		attachmentIDs = opts[0].AttachmentIDs
 		storageConfigured = opts[0].StorageConfigured
 		effort = opts[0].Effort
 		reviewHeadSHA = opts[0].ReviewHeadSHA
+		classifyText = opts[0].ClassifyText
 	}
 
 	// Step 64 ("plan mode: follow-up intent classification", §23.1/§23.2):
@@ -558,6 +588,26 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	// unlocked read errors (logged, non-fatal -- the locked re-check's own
 	// existing fail-safe default still protects correctness), or no
 	// awaiting_approval plan is found here at all.
+	//
+	// F6 (review synthesis, deliberate no-op): classification also runs
+	// BEFORE the open-turn/busy check further down (DropIfOpen/RejectIfOpen),
+	// so a paid LLM call can be made and thrown away when the turn is about
+	// to be dropped/rejected for being busy -- accepted deliberately, not an
+	// oversight: moving classification behind an unlocked busy probe would
+	// make the skip decision RACY in the harmful direction (a legitimate
+	// confident-amend reply could get incorrectly held instead of promoted
+	// if the in-flight turn's own state changes between that probe and the
+	// lock), which is strictly worse than occasionally paying for a call
+	// whose result goes unused.
+	//
+	// classifyText (F1, Step 64 follow-up fix, review Finding 1) is used
+	// here INSTEAD OF prompt when non-nil -- see CreateTurnOptions.
+	// ClassifyText's own doc comment for the full "why": prompt itself may
+	// already carry review.RenderTurnPrompt's own diff/stack/verdict-tool
+	// text folded in (github/coalesce.go's REUSE path; reviewretrigger.go's
+	// own manual-retrigger prompt), which must never reach this classifier
+	// call -- only the reply's own raw, unprefixed body may
+	// (ClassifyPlanFollowup's own doc comment, planfollowup.go).
 	var answerOnly *bool
 	if !planMode && plans != nil && intentSvc != nil {
 		summaries, err := plans.ListSummariesForSession(ctx, sessionID)
@@ -566,7 +616,11 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		} else {
 			for _, s := range summaries {
 				if s.Status == sqlcgen.PlanStatusAwaitingApproval {
-					decision := intentSvc.ClassifyPlanFollowup(ctx, prompt)
+					textToClassify := prompt
+					if classifyText != nil {
+						textToClassify = *classifyText
+					}
+					decision := intentSvc.ClassifyPlanFollowup(ctx, textToClassify)
 					ao := intentdomain.ResolveAnswerOnly(decision.Source, decision.Target, decision.Confidence)
 					answerOnly = &ao
 					break

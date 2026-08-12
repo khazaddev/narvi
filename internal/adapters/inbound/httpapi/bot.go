@@ -124,8 +124,20 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // always has a real value (or an honest nil) to supply -- there is no
 // "every other caller safely ignores this" population the way those two
 // REST-only fields have.
-func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, reviewHeadSHA *string) (sqlcgen.Turn, error) {
-	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
+//
+// classifyText (F1, Step 64 follow-up fix, review Finding 1) mirrors
+// reviewHeadSHA's own "this function's one real caller always has a real
+// value to supply" shape -- github/coalesce.go's REUSE-path caller always
+// has its own already-captured, raw, un-enriched mention text in scope
+// (that function's own classifyText parameter, the SAME raw text its
+// WINNER-path ClassifyAndRecord call already uses) to pass through here.
+// Threaded into createTurnLocked's own CreateTurnOptions.ClassifyText --
+// see that field's own doc comment (turn.go) for the full "why": prompt
+// itself, by the time it reaches this function, already carries
+// review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool text,
+// which must never reach the plan_followup classifier.
+func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, reviewHeadSHA *string, classifyText *string) (sqlcgen.Turn, error) {
+	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, ClassifyText: classifyText})
 	if cerr != nil {
 		// %w, NOT %s (Step 37/38 follow-up fix, Finding 1): cerr's own
 		// Error() method returns exactly cerr.Message, so this produces the

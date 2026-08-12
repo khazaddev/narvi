@@ -414,3 +414,68 @@ func TestRetriggerReview_AlreadyAnsweredFacts_PrependedNeverReplacingProse(t *te
 		t.Errorf("already-answered facts appear at index %d, prose fallback at index %d -- want facts PREPENDED (before), not appended after", factsIdx, proseIdx)
 	}
 }
+
+// TestRetriggerReview_AwaitingPlanAlwaysDeclines_NeverClassifies is F1's
+// own regression test (Step 64 follow-up fix, review Finding 1) for this
+// endpoint: a manual re-review click carries no human reply for the
+// plan_followup classifier (ClassifyPlanFollowup) to legitimately read --
+// reviewretrigger.go no longer even accepts an *intentclassifier.Service
+// parameter at all (removed by this fix), so CreateTurnCore is always
+// called with a literal nil intentSvc here, which -- per createTurnLocked's
+// own nil-safe "skip classification entirely" contract (turn.go) --
+// degrades this endpoint to the SAME safe, deterministic pre-Step-64
+// "always decline while a plan is awaiting approval" outcome, structurally
+// incapable of ever promoting a re-trigger into a plan-revision turn based
+// on a misread of manualRetriggerPromptText or the pre-fetched diff. This
+// wires a real diffFetcher (so review.RenderTurnPrompt's own diff/verdict-
+// tool text IS folded into the prompt CreateTurnCore receives) specifically
+// to prove the decline holds even then -- the exact scenario that, before
+// this fix, would have fed that enriched text to the classifier instead of
+// skipping it.
+func TestRetriggerReview_AwaitingPlanAlwaysDeclines_NeverClassifies(t *testing.T) {
+	fetcher := &fakeReviewContextFetcher{
+		diff: "diff --git a/x b/x\n+hello\n",
+		pr:   githubapi.PullRequest{HeadSHA: "resolved-head-sha", BaseRef: "main"},
+	}
+	rig := newTestRig(t, func(r *testRig) {
+		r.diffFetcher = fetcher
+		r.botToken = "test-bot-token"
+	})
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	session := rig.createOwnedGitHubReviewSession(ctx, t, owner.ID, "acme/awaiting-plan-retrigger-repo", 909)
+
+	// Seed a producing turn (Completed, plan_mode true) and an
+	// awaiting_approval plans row atop the session -- mirrors
+	// planfollowupgate_integration_test.go's own seedAwaitingApprovalPlan
+	// precedent (that file lives in package httpapi, unreachable from here;
+	// this is this file's own inline equivalent).
+	producingTurn, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	if _, err := rig.plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: session.ID, TurnID: producingTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval}); err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+
+	var errResp errorResponseForTest
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/review/retrigger", nil, &errResp, token)
+	if status != http.StatusConflict {
+		t.Fatalf("status = %d, want %d (a re-trigger must always decline while a plan is awaiting approval -- there is no classifier wired here to promote it)", status, http.StatusConflict)
+	}
+	if !strings.Contains(errResp.Error, "awaiting approval") {
+		t.Errorf("error body = %q, want it to mention the plan is awaiting approval", errResp.Error)
+	}
+
+	// Only the seeded producing turn -- the decline must not have inserted
+	// a new turn (revision or otherwise).
+	var turnCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM turns WHERE session_id = $1`, session.ID).Scan(&turnCount); err != nil {
+		t.Fatalf("count turns: %v", err)
+	}
+	if turnCount != 1 {
+		t.Errorf("turn count = %d, want 1 (only the seeded producing turn -- the decline must never enqueue a new turn)", turnCount)
+	}
+}

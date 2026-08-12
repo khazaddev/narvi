@@ -264,6 +264,16 @@ type SessionCoalescer struct {
 // matching IntentClassifierInput.Text's own documented contract ("a
 // session's initial prompt, a Slack message, a GitHub comment body").
 //
+// F1 (Step 64 follow-up fix, review Finding 1): this SAME raw text is now
+// ALSO threaded through to the REUSE branch's own httpapi.CreateTurnForBot
+// call below (its classifyText parameter), for the identical reason --
+// that call's own `prompt` local is built from req.Prompt too, so without
+// this it would classify the SAME diff-enriched text against the
+// plan_followup category (ClassifyPlanFollowup, gated on an
+// awaiting-approval plan) that Step 36's classifier was already fixed to
+// avoid. Reused verbatim, never recaptured: both categories classify the
+// EXACT same raw mention text.
+//
 // reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is the commit
 // SHA handler.go's own reviewcontext.Fetch call just anchored req.Prompt's
 // own pre-fetched diff to (empty when that fetch failed/never ran) --
@@ -410,7 +420,15 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// never a build turn; passing the real platform default here would
 		// prepend the builder-only devil's-advocate preamble in front of
 		// review.RenderTurnPrompt's own verdict-tool block.
-		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.IntentClassifier, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, false, actor, reviewHeadSHAPtr)
+		//
+		// classifyText (F1, Step 64 follow-up fix): &classifyText, the SAME
+		// raw, un-enriched mention text the WINNER path's own
+		// ClassifyAndRecord call below uses -- see this function's own doc
+		// comment on the classifyText parameter for the full "why" this
+		// must never be `prompt` (which, unlike here, already carries
+		// review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool
+		// text once cfg.DiffFetcher is wired).
+		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.IntentClassifier, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, false, actor, reviewHeadSHAPtr, &classifyText)
 		if err != nil {
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}
