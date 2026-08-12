@@ -13,9 +13,11 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/app/workflowengine"
 	"github.com/khazaddev/narvi/internal/domain/authz"
+	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 	domainupload "github.com/khazaddev/narvi/internal/domain/upload"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -94,7 +96,7 @@ func hasOpenTurn(turns []sqlcgen.Turn) bool {
 // checks) -- never consulted for anything else here; nil is a completely
 // valid, ordinary value (a deployment with no object storage configured
 // at all), never a caller error.
-func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, objCfg *platform.ObjectStorageConfig, epistemicCheckDefault bool) http.HandlerFunc {
+func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, participants *postgres.ParticipantStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, intentSvc *intentclassifier.Service, objCfg *platform.ObjectStorageConfig, epistemicCheckDefault bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -173,7 +175,7 @@ func CreateTurn(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *post
 			attachmentIDs = append(attachmentIDs, id)
 		}
 
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, epistemicCheckDefault, actorUserID, RejectIfOpen, CreateTurnOptions{
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, req.Prompt, (*string)(req.ModelId), req.PlanMode, epistemicCheckDefault, actorUserID, RejectIfOpen, CreateTurnOptions{
 			AttachmentIDs:     attachmentIDs,
 			StorageConfigured: objCfg != nil,
 			Effort:            (*string)(req.Effort),
@@ -357,6 +359,34 @@ type CreateTurnOptions struct {
 	// "why"). Every OTHER caller of this core (every non-review turn)
 	// leaves this nil, exactly like Effort/StorageConfigured above.
 	ReviewHeadSHA *string
+
+	// ClassifyText (Step 64 follow-up fix, review Finding 1) is the raw,
+	// unprefixed human reply text the plan_followup block below (just
+	// before tx.Begin) should classify -- mirrors github/coalesce.go's own
+	// pre-existing classifyText parameter for the Step 36 classifier
+	// (that function's own doc comment: "Audit fix: this used to be
+	// *req.Prompt directly, which ... already had ... the entire PR diff
+	// ... appended -- feeding the classifier's LLM call the entire PR
+	// diff instead of just the triggering comment ... text"). The SAME
+	// bug class existed here for ClassifyPlanFollowup: github/coalesce.go's
+	// REUSE-path call to CreateTurnForBot, and reviewretrigger.go's own
+	// call to CreateTurnCore, both used to hand createTurnLocked a
+	// `prompt` value ALREADY folded with review.RenderTurnPrompt's own
+	// full diff/stack/verdict-tool-instructions text -- inflating the
+	// classifier's own LLM call cost/latency by orders of magnitude and
+	// risking exceeding the model's context window, exactly like the
+	// Step 36 finding.
+	//
+	// nil (every caller other than github/coalesce.go's REUSE-path
+	// CreateTurnForBot call) means "no raw text was captured separately
+	// for this call site" -- createTurnLocked falls back to classifying
+	// `prompt` itself, correct for every caller where prompt genuinely IS
+	// the human's own raw words with nothing folded in (REST's own
+	// CreateTurn, Slack's addTurn/interactive.go, Linear's webhook.go).
+	// Non-nil means the caller captured a raw text distinct from the
+	// (possibly enriched) prompt this turn will actually dispatch with --
+	// *ClassifyText, not prompt, is what gets classified.
+	ClassifyText *string
 }
 
 // CreateTurnCore is everything CreateTurn's own doc comment above
@@ -432,7 +462,7 @@ type CreateTurnOptions struct {
 // travel together into createTurnLocked's own turn.ResolveEpistemicCheck
 // Enabled/turn.ShouldInjectEpistemicPreamble calls (see that function's
 // own doc comment).
-func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
+func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	if _, err := sessions.Get(ctx, sessionID); err != nil {
@@ -443,7 +473,7 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 		return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusInternalServerError, Message: "internal error"}
 	}
 
-	return createTurnLocked(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, policy, opts...)
+	return createTurnLocked(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, policy, opts...)
 }
 
 // createTurnLocked is the genuinely shared core every one of this batch's
@@ -496,7 +526,19 @@ func CreateTurnCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.
 // is never forced to wire one up. Every real production caller
 // (cmd/control-plane/main.go) always passes the SAME, real *postgres.
 // PlanStore, so this is never nil outside tests.
-func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
+//
+// intentSvc (Step 64, §23.1/§23.2) is this function's own plan_followup
+// classifier collaborator -- nil-safe exactly like plans immediately
+// above (a nil intentSvc, or a nil plans, skips classification entirely
+// and falls back to the pre-Step-64 "always decline" awaiting-plan gate
+// behavior, never a panic). Every real production caller
+// (cmd/control-plane/main.go) passes the SAME, real *intentclassifier.
+// Service every OTHER intentSvc-consuming caller in this codebase does
+// (create.go's own CreateSession/CreateSessionCore), never a second,
+// independently-constructed copy. See the plan_followup block below (just
+// before tx.Begin) and the awaiting-plan gate further down for how this is
+// actually consulted.
+func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, policy CreateTurnPolicy, opts ...CreateTurnOptions) (sqlcgen.Turn, bool, *CreateTurnError) {
 	logger := platform.Logger(ctx)
 
 	// opts is a trailing variadic (CreateTurnOptions' own doc comment)
@@ -508,11 +550,83 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	var storageConfigured bool
 	var effort *string
 	var reviewHeadSHA *string
+	var classifyText *string
 	if len(opts) > 0 {
 		attachmentIDs = opts[0].AttachmentIDs
 		storageConfigured = opts[0].StorageConfigured
 		effort = opts[0].Effort
 		reviewHeadSHA = opts[0].ReviewHeadSHA
+		classifyText = opts[0].ClassifyText
+	}
+
+	// Step 64 ("plan mode: follow-up intent classification", §23.1/§23.2):
+	// plan_followup classification, gated STRICTLY on "planMode is false
+	// AND sessionID currently has a plan sitting in plan.
+	// StatusAwaitingApproval" (§23.1: "the classifier is never invoked for
+	// this purpose outside that state"). Runs BEFORE tx.Begin below, UNLOCKED
+	// -- a real outbound LLM call must never hold a Postgres transaction/row
+	// lock open (mirrors intentclassifier.Service.ClassifyAndRecord's own
+	// identical rule, doc comment: "a real outbound LLM call must never hold
+	// one open"). This unlocked read is deliberately NOT authoritative on its
+	// own -- mirrors CreateTurnCore's own "sessions.Get" (unlocked
+	// pre-check) vs "GetActorEpochForUpdate" (locked re-check) precedent,
+	// this file's own top doc comment: the awaiting-plan gate below,
+	// running INSIDE the transaction on the SAME already-locked session
+	// row every other check in this function uses, re-verifies plan state
+	// and is what actually enforces the invariant. A plan approved/
+	// rejected, or newly created, in the narrow window between this read
+	// and that locked re-check simply means this call's own classification
+	// goes unused -- the gate below treats that exactly like classification
+	// never having run at all (§23.3's own fail-open floor).
+	//
+	// answerOnly stays nil (never computed, "classification did not apply")
+	// whenever: planMode is already true (a revise:-prefixed reply, a
+	// Request-changes modal submission, or any other explicit
+	// planMode=true caller -- §23 intro: "the revise: prefix stays as a
+	// deterministic override that bypasses classification entirely"),
+	// plans or intentSvc is nil (never true in production wiring), the
+	// unlocked read errors (logged, non-fatal -- the locked re-check's own
+	// existing fail-safe default still protects correctness), or no
+	// awaiting_approval plan is found here at all.
+	//
+	// F6 (review synthesis, deliberate no-op): classification also runs
+	// BEFORE the open-turn/busy check further down (DropIfOpen/RejectIfOpen),
+	// so a paid LLM call can be made and thrown away when the turn is about
+	// to be dropped/rejected for being busy -- accepted deliberately, not an
+	// oversight: moving classification behind an unlocked busy probe would
+	// make the skip decision RACY in the harmful direction (a legitimate
+	// confident-amend reply could get incorrectly held instead of promoted
+	// if the in-flight turn's own state changes between that probe and the
+	// lock), which is strictly worse than occasionally paying for a call
+	// whose result goes unused.
+	//
+	// classifyText (F1, Step 64 follow-up fix, review Finding 1) is used
+	// here INSTEAD OF prompt when non-nil -- see CreateTurnOptions.
+	// ClassifyText's own doc comment for the full "why": prompt itself may
+	// already carry review.RenderTurnPrompt's own diff/stack/verdict-tool
+	// text folded in (github/coalesce.go's REUSE path; reviewretrigger.go's
+	// own manual-retrigger prompt), which must never reach this classifier
+	// call -- only the reply's own raw, unprefixed body may
+	// (ClassifyPlanFollowup's own doc comment, planfollowup.go).
+	var answerOnly *bool
+	if !planMode && plans != nil && intentSvc != nil {
+		summaries, err := plans.ListSummariesForSession(ctx, sessionID)
+		if err != nil {
+			logger.Warn("httpapi: list plan summaries for plan_followup pre-check failed; classification skipped", "error", err, "session_id", sessionID.String())
+		} else {
+			for _, s := range summaries {
+				if s.Status == sqlcgen.PlanStatusAwaitingApproval {
+					textToClassify := prompt
+					if classifyText != nil {
+						textToClassify = *classifyText
+					}
+					decision := intentSvc.ClassifyPlanFollowup(ctx, textToClassify)
+					ao := intentdomain.ResolveAnswerOnly(decision.Source, decision.Target, decision.Confidence)
+					answerOnly = &ao
+					break
+				}
+			}
+		}
 	}
 
 	tx, err := pool.Begin(ctx)
@@ -562,24 +676,24 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		}
 	}
 
-	// Awaiting-plan gate (this batch's own follow-up fix, §8.1): an
-	// ordinary (planMode == false) turn must never dispatch while sessionID
-	// has a plan sitting in StatusAwaitingApproval -- that plan is work a
-	// human has not yet approved, and BEFORE this fix, any reply matching
-	// neither plandomain.MatchVerdict nor plandomain.MatchRevise silently
-	// fell through into exactly this ordinary-turn path, starting
-	// unapproved work. Runs INSIDE this same locked transaction (the
-	// session row is already held above), reusing PlanStore.
-	// ListSummariesForSession -- the SAME minimal query internal/adapters/
-	// inbound/linear's own findAwaitingApprovalPlanID (webhook.go) already
-	// scans identically, so no new PlanStore method is needed. A
-	// planMode == true turn (the request-changes flow, whether reached via
-	// Slack's "Request changes" modal, Linear/Slack's revise: prefix, or a
-	// web client setting planMode directly) is NEVER gated here -- see
-	// CreateTurnPolicy's own doc comment for why plan_mode turns stay
-	// unconditionally allowed. Only reached when the open-turn check above
-	// did NOT already return (Finding 3): if a turn is already open/in
-	// flight, that is always the more accurate reply, regardless of
+	// Awaiting-plan gate (this batch's own follow-up fix, §8.1; extended by
+	// Step 64, §23.2/§23.3): an ordinary (planMode == false) turn must never
+	// dispatch while sessionID has a plan sitting in StatusAwaitingApproval
+	// -- that plan is work a human has not yet approved, and BEFORE the
+	// original fix, any reply matching neither plandomain.MatchVerdict nor
+	// plandomain.MatchRevise silently fell through into exactly this
+	// ordinary-turn path, starting unapproved work. Runs INSIDE this same
+	// locked transaction (the session row is already held above), reusing
+	// PlanStore.ListSummariesForSession -- the SAME minimal query
+	// internal/adapters/inbound/linear's own findAwaitingApprovalPlanID
+	// (webhook.go) already scans identically, so no new PlanStore method is
+	// needed. A planMode == true turn (the request-changes flow, whether
+	// reached via Slack's "Request changes" modal, Linear/Slack's revise:
+	// prefix, or a web client setting planMode directly) is NEVER gated
+	// here -- see CreateTurnPolicy's own doc comment for why plan_mode
+	// turns stay unconditionally allowed. Only reached when the open-turn
+	// check above did NOT already return (Finding 3): if a turn is already
+	// open/in flight, that is always the more accurate reply, regardless of
 	// whether sessionID also happens to have a plan awaiting approval right
 	// now (the common overlap case being an in-flight revise turn itself,
 	// which has not yet superseded the very plan row this gate would
@@ -592,8 +706,36 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		}
 		for _, s := range summaries {
 			if s.Status == sqlcgen.PlanStatusAwaitingApproval {
-				logger.Info("httpapi: ordinary turn creation blocked by awaiting-approval plan", "session_id", sessionID.String(), "plan_id", s.ID.String())
-				return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusConflict, Message: planAwaitingApprovalMessage, sentinel: ErrPlanAwaitingApproval}
+				// Step 64 (§23.2/§23.3): consult the PRE-COMPUTED
+				// plan_followup classification (answerOnly, computed above,
+				// before tx.Begin) -- never re-run the classifier here,
+				// inside the transaction/row lock. answerOnly == nil
+				// (classification never ran, for any of the reasons listed
+				// at that block's own doc comment) is treated EXACTLY like
+				// answerOnly == true: fail open to this gate's own
+				// pre-existing hold-and-clarify behavior (§23.3's own
+				// floor -- "a classifier failure must never let a build
+				// turn dispatch against an unapproved plan, under any
+				// failure mode").
+				if answerOnly == nil || *answerOnly {
+					logger.Info("httpapi: ordinary turn creation blocked by awaiting-approval plan", "session_id", sessionID.String(), "plan_id", s.ID.String(), "answer_only_unknown", answerOnly == nil)
+					return sqlcgen.Turn{}, false, &CreateTurnError{Status: http.StatusConflict, Message: planAwaitingApprovalMessage, sentinel: ErrPlanAwaitingApproval}
+				}
+				// answerOnly != nil && *answerOnly == false: a confident
+				// "amend" verdict (§23.1) -- promote this turn to a REAL
+				// plan-revision turn, exactly like a revise:-prefixed reply
+				// already is (plandomain.RevisePrefix's own doc comment,
+				// verdict.go: "a future Step is expected to replace
+				// prefix-detection with a real amend-vs-answer LLM
+				// classifier for the common case"). Reassigning planMode
+				// itself (not a separate "effective" variable) so every
+				// OTHER planMode-gated branch below in this SAME function
+				// (the epistemic-preamble exclusion, the turns.plan_mode
+				// column write) sees the SAME promoted value consistently,
+				// with no second place that could disagree about it.
+				logger.Info("httpapi: ordinary turn promoted to plan-revision turn by plan_followup classification", "session_id", sessionID.String(), "plan_id", s.ID.String())
+				planMode = true
+				break
 			}
 		}
 	}
@@ -772,6 +914,14 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 		Effort:        effectiveEffort,
 		PlanMode:      planMode,
 		ReviewHeadSha: reviewHeadSHA,
+		// answerOnly (Step 64, §23.2) is nil ("classification did not
+		// apply") for every turn that predates this Step, or that never hit
+		// the plan_followup block above -- see that block's own doc
+		// comment for the full enumeration. By construction, the only real
+		// value it can hold here is a pointer to false: the awaiting-plan
+		// gate above already returned early (no row ever inserted) for
+		// every case answerOnly points to true.
+		AnswerOnly: answerOnly,
 	})
 	if err != nil {
 		logger.Error("httpapi: create turn failed", "error", err)

@@ -26,8 +26,15 @@
 -- CreateSessionOnTx) with the commit SHA that turn's own pre-fetched
 -- diff was anchored to. See that migration's own doc comment for the
 -- full "why".
-INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+--
+-- answer_only (migrations/000074_plan_followup.up.sql, Step 64, §23.2)
+-- mirrors review_head_sha's own identical shape one column further --
+-- nil/absent for every existing call site (every CreateTurnParams
+-- literal that predates this Step), set exactly once, at creation, by
+-- createTurnLocked's own plan_followup gate (turn.go). See that
+-- migration's own doc comment for the full "why NULL vs FALSE" split.
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- name: GetTurn :one

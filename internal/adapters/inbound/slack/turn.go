@@ -27,6 +27,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/inbound/httpapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 )
 
@@ -55,8 +56,14 @@ import (
 // column (migrations/000005_turns.up.sql), so this mirrors handleEvent's
 // own already-resolved actorUserID, which previously had nowhere at all to
 // flow into for a reply on an existing thread.
-func addTurn(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID) (turn sqlcgen.Turn, created bool, err error) {
-	turnRow, wasCreated, cerr := httpapi.CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, nil, planMode, epistemicCheckDefault, actorUserID, httpapi.DropIfOpen)
+//
+// intentSvc (Step 64, §23.1/§23.2) is threaded straight through to
+// httpapi.CreateTurnCore's own plan_followup block, exactly like plans
+// immediately before it -- handleEvent's own caller passes the SAME
+// deps.IntentClassifier every other classification use in this package
+// already does (handler.go).
+func addTurn(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID) (turn sqlcgen.Turn, created bool, err error) {
+	turnRow, wasCreated, cerr := httpapi.CreateTurnCore(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, nil, planMode, epistemicCheckDefault, actorUserID, httpapi.DropIfOpen)
 	if cerr != nil {
 		return sqlcgen.Turn{}, false, cerr
 	}

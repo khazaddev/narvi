@@ -722,7 +722,7 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 		logger.Info("slack: revise: reply had empty feedback, blocked by awaiting-approval plan guard", "session_id", res.SessionID)
 	} else {
 		var err error
-		createdTurn, created, err = addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, deps.EpistemicCheckDefault, actorUserID)
+		createdTurn, created, err = addTurn(ctx, deps.Pool, deps.Sessions, deps.Turns, deps.Plans, deps.IntentClassifier, deps.AuditLog, deps.Registry, res.SessionID, prompt, planMode, deps.EpistemicCheckDefault, actorUserID)
 		if err != nil {
 			if !errors.Is(err, httpapi.ErrPlanAwaitingApproval) {
 				logger.Error("slack: add turn failed", "error", err)
@@ -752,7 +752,15 @@ func handleEvent(ctx context.Context, deps Deps, ack *ackClient, logger *slog.Lo
 	// was already logged, but the POSITIVE re-routing decision was not.
 	if !gatedByAwaitingPlan {
 		if created {
-			logger.Info("slack: added turn", "session_id", res.SessionID, "turn_id", createdTurn.ID, "plan_mode", planMode)
+			// createdTurn.PlanMode (not the local planMode variable computed
+			// above addTurn's own call) -- F2 audit fix: planMode is captured
+			// BEFORE addTurn/createTurnLocked ever runs, so it never reflects
+			// createTurnLocked's own Step 64 promotion of planMode=true when
+			// the plan_followup classifier returns a confident "amend" (see
+			// that function's own doc comment, turn.go). Logging the stale
+			// local variable here would silently misreport a promoted turn
+			// as plan_mode=false.
+			logger.Info("slack: added turn", "session_id", res.SessionID, "turn_id", createdTurn.ID, "plan_mode", createdTurn.PlanMode)
 		} else {
 			logger.Warn("slack: session already has an open turn, dropping message", "session_id", res.SessionID)
 		}

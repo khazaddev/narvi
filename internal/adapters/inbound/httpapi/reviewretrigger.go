@@ -80,6 +80,26 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // this Action regardless, per Resource's own doc comment on fields an
 // Action doesn't consult), avoiding a wasted Postgres participants read on
 // every call.
+//
+// No intentSvc parameter (F1, Step 64 follow-up fix, review Finding 1):
+// this endpoint used to thread the platform's real *intentclassifier.
+// Service straight through to CreateTurnCore below, which meant a plan
+// sitting in StatusAwaitingApproval on this session made createTurnLocked's
+// own plan_followup block (turn.go) classify manualRetriggerPromptText
+// (plus review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool
+// text once diffFetcher is wired) as if it were a human's own amend-vs-
+// answer reply -- but a manual re-review button click is a deterministic
+// system command, never a reply to the plan at all; there is no human
+// text here for that classifier to legitimately read. CreateTurnCore is
+// now always called with a literal nil intentSvc below, which -- per that
+// function's own nil-safe contract (turn.go's own doc comment: "a nil
+// intentSvc ... skips classification entirely and falls back to the
+// pre-Step-64 'always decline' awaiting-plan gate behavior") -- degrades
+// this endpoint to the SAME safe, deterministic "decline while a plan is
+// awaiting approval" outcome every pre-Step-64 caller already got, with no
+// outbound LLM call spent classifying text that was never a reply to
+// begin with (the fail-safe direction Step 64's own review batch requires:
+// "when in doubt, skip classification rather than guess").
 func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
@@ -196,7 +216,16 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// it (a review-retrigger turn is always planMode=false, never
 		// true), so this call site is EXCLUDED at the source rather than
 		// relying on some other gate downstream.
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
+		//
+		// intentSvc: literal nil, deliberately never a real
+		// *intentclassifier.Service -- see this function's own top doc
+		// comment ("No intentSvc parameter") for the full "why": a manual
+		// re-review click carries no human reply for the plan_followup
+		// classifier to legitimately read, so this path always falls open
+		// to the safe, deterministic pre-Step-64 "decline while a plan is
+		// awaiting approval" behavior instead of guessing from
+		// manualRetriggerPromptText/the pre-fetched diff.
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, nil, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
 		if cerr != nil {
 			logger.Error("httpapi: retrigger review (create turn) failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)
