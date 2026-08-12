@@ -67,7 +67,9 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	"github.com/khazaddev/narvi/internal/app/findingposition"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
@@ -136,6 +138,31 @@ func PostReviewVerdict(
 	reviewVerdicts *postgres.ReviewVerdictStore,
 	turns *postgres.TurnStore,
 	botHandle string,
+	// botToken (Step 63, §22.1.1) is the SAME GitHub bot credential
+	// platform.Config.GitHubBotToken already supplies to every other
+	// diff-fetching call site (internal/app/reviewcontext.Fetch's own
+	// callers, handler.go/reviewretrigger.go) -- distinct from botHandle
+	// above (a plain username string, never a credential): this handler
+	// needs a REAL token to authenticate FetchDiffAt's own GitHub API
+	// calls, which botHandle alone cannot provide.
+	botToken string,
+	// diffFetcher/positionResolver/timeouts (Step 63, §22.1.1) back this
+	// handler's OWN content-anchored positioning: diffFetcher re-fetches
+	// (internal/app/reviewcontext.FetchDiffAt) the SAME diff a review
+	// turn's own prompt was anchored to, pinned to the resolved
+	// verdictHeadSHA; positionResolver is the non-agentic §4.3 LLM-port
+	// relocation fallback (internal/app/findingposition) consulted only
+	// when reviewpost.MatchPosition's own pure sliding-window match
+	// fails. Both are nil-safe: diffFetcher == nil (this package's own
+	// *_test.go minimal wiring) simply skips the whole positioning step,
+	// leaving every finding at its own honest StartLine=0/EndLine=0
+	// default; positionResolver == nil (no usable LLM credential
+	// configured) skips only the relocation fallback specifically --
+	// findingposition.ResolveAll's own doc comment covers the exact
+	// degradation either way.
+	diffFetcher reviewcontext.Fetcher,
+	positionResolver *findingposition.Resolver,
+	timeouts platform.Timeouts,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -235,6 +262,74 @@ func PostReviewVerdict(
 		verdict := reviewpost.BuildVerdict(input)
 		findings := reviewpost.BuildFindings(input)
 
+		// §62 review finding C2 (CRITICAL, fixed): resolve the head SHA
+		// THIS session's own CURRENTLY-PROCESSING turn was anchored to --
+		// never prSession.PendingHeadSha (github_pr_sessions' own shared,
+		// mutable per-(repo,PR) column, REMOVED by this fix; see
+		// migrations/000072_turns_review_head_sha.up.sql's own doc
+		// comment for the full "why" that design let a LATER, unrelated
+		// turn's own context-fetch silently overwrite the value THIS
+		// verdict eventually forwards). The review agent calling THIS
+		// endpoint is, by construction, the one whose own turn is right
+		// now 'processing' for sessionID -- turns_one_processing_per_session
+		// (migrations/000005_turns.up.sql) guarantees at most one such
+		// row can ever exist, mirroring Step 61's own epistemic-outcome-
+		// posting endpoint's identical "resolve the session's own
+		// CURRENTLY live turn from a sandbox-authenticated session id
+		// alone" precedent (TurnStore.GetProcessingTurnForSession,
+		// queries/turns.sql).
+		//
+		// Both a genuine store error AND a not-found (ErrNoRows -- a
+		// genuine race: the turn already completed/failed/was cancelled
+		// between this agent's own HTTP call landing and this read)
+		// degrade IDENTICALLY: logged, verdictHeadSHA stays "", and (per
+		// the existing skip branch below, unchanged by this fix) the
+		// review_verdicts insert is skipped -- never a reason to fail
+		// this whole tool call. Mirrors this handler's own pre-existing
+		// "a missing head SHA is a SAFE, not dangerous, degradation"
+		// reasoning below exactly: the auto-approval engine's own
+		// fail-CLOSED posture already treats "no verdict on record" as
+		// ineligible, so this lookup failing open (in the sense of "the
+		// verdict POST itself still succeeds") introduces no eligibility
+		// hazard -- it is not the SAME kind of "fail open" this whole
+		// review round exists to close.
+		//
+		// Moved EARLIER than its own pre-Step-63 position (this handler's
+		// own history) so §22.1.1's own position-resolution step, below,
+		// can use it to pin a fresh diff refetch to the EXACT commit the
+		// reviewing agent's own turn was anchored to -- never the PR's
+		// current, possibly-since-moved-on head.
+		var verdictHeadSHA string
+		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
+			if errors.Is(turnErr, pgx.ErrNoRows) {
+				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			} else {
+				logger.Error("httpapi: review-verdict: get processing turn for session failed, skipping review_verdicts insert", "error", turnErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			}
+		} else if processingTurn.ReviewHeadSha != nil {
+			verdictHeadSHA = *processingTurn.ReviewHeadSha
+		}
+
+		// §22.1.1's own content-anchored positioning: resolved ONCE, here,
+		// before RenderVerdictComment ever renders findings -- "no second
+		// pass, by construction" (every finding already present in this
+		// SAME payload, Step 45's structured-verdict invariant). Skipped
+		// entirely (every finding stays at its own honest StartLine=0/
+		// EndLine=0 zero value, reviewpost.BuildFindings' own default) when
+		// there is nothing to anchor against at all: no findings, or no
+		// confirmed head sha to pin a diff refetch to -- mirrors this
+		// handler's own pre-existing "a missing head SHA is a safe,
+		// non-fatal degradation" posture exactly, applied here to position
+		// resolution instead of the review_verdicts insert.
+		if len(findings) > 0 && verdictHeadSHA != "" && diffFetcher != nil {
+			if diff, ok := reviewcontext.FetchDiffAt(ctx, logger, diffFetcher, timeouts, owner, repo, prSession.PrNumber, botToken, verdictHeadSHA); ok {
+				findings = findingposition.ResolveAll(ctx, positionResolver, findings, diff, timeouts)
+			} else {
+				logger.Warn("httpapi: review-verdict: fetch diff for position anchoring failed, every finding stays unanchored",
+					"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			}
+		}
+
 		// blockOnHighRisk/sentinelAutofixEnabled (§21.2, §17.1): both
 		// admin, per-repo, strict-boolean settings -- a missing row OR any
 		// read error defaults BOTH to false (fail-closed, mirroring
@@ -316,48 +411,6 @@ func PostReviewVerdict(
 				repoName = repos[0].Name
 				repoCloneURL = repos[0].Url
 			}
-		}
-
-		// §62 review finding C2 (CRITICAL, fixed): resolve the head SHA
-		// THIS session's own CURRENTLY-PROCESSING turn was anchored to --
-		// never prSession.PendingHeadSha (github_pr_sessions' own shared,
-		// mutable per-(repo,PR) column, REMOVED by this fix; see
-		// migrations/000072_turns_review_head_sha.up.sql's own doc
-		// comment for the full "why" that design let a LATER, unrelated
-		// turn's own context-fetch silently overwrite the value THIS
-		// verdict eventually forwards). The review agent calling THIS
-		// endpoint is, by construction, the one whose own turn is right
-		// now 'processing' for sessionID -- turns_one_processing_per_session
-		// (migrations/000005_turns.up.sql) guarantees at most one such
-		// row can ever exist, mirroring Step 61's own epistemic-outcome-
-		// posting endpoint's identical "resolve the session's own
-		// CURRENTLY live turn from a sandbox-authenticated session id
-		// alone" precedent (TurnStore.GetProcessingTurnForSession,
-		// queries/turns.sql).
-		//
-		// Both a genuine store error AND a not-found (ErrNoRows -- a
-		// genuine race: the turn already completed/failed/was cancelled
-		// between this agent's own HTTP call landing and this read)
-		// degrade IDENTICALLY: logged, verdictHeadSHA stays "", and (per
-		// the existing skip branch below, unchanged by this fix) the
-		// review_verdicts insert is skipped -- never a reason to fail
-		// this whole tool call. Mirrors this handler's own pre-existing
-		// "a missing head SHA is a SAFE, not dangerous, degradation"
-		// reasoning below exactly: the auto-approval engine's own
-		// fail-CLOSED posture already treats "no verdict on record" as
-		// ineligible, so this lookup failing open (in the sense of "the
-		// verdict POST itself still succeeds") introduces no eligibility
-		// hazard -- it is not the SAME kind of "fail open" this whole
-		// review round exists to close.
-		var verdictHeadSHA string
-		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
-			if errors.Is(turnErr, pgx.ErrNoRows) {
-				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-			} else {
-				logger.Error("httpapi: review-verdict: get processing turn for session failed, skipping review_verdicts insert", "error", turnErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-			}
-		} else if processingTurn.ReviewHeadSha != nil {
-			verdictHeadSHA = *processingTurn.ReviewHeadSha
 		}
 
 		tx, err := pool.Begin(ctx)

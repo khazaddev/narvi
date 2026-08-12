@@ -223,6 +223,19 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer configures auto-approve", authz.RoleMaintainer, authz.ActionConfigureAutoApprove, false, true},
 		{"member cannot configure auto-approve", authz.RoleMember, authz.ActionConfigureAutoApprove, false, false},
 		{"viewer cannot configure auto-approve", authz.RoleViewer, authz.ActionConfigureAutoApprove, false, false},
+		// Step 63 (§22.2): teaching a learned false-positive pattern --
+		// same row, no member own/joined carve-out (repo-scoped, not
+		// session-scoped).
+		{"admin teaches false-positive pattern", authz.RoleAdmin, authz.ActionTeachFalsePositivePattern, false, true},
+		{"maintainer teaches false-positive pattern", authz.RoleMaintainer, authz.ActionTeachFalsePositivePattern, false, true},
+		{"member cannot teach false-positive pattern", authz.RoleMember, authz.ActionTeachFalsePositivePattern, false, false},
+		{"viewer cannot teach false-positive pattern", authz.RoleViewer, authz.ActionTeachFalsePositivePattern, false, false},
+		// Step 63 (§22.4): retiring a pattern / reading the audit view --
+		// same row.
+		{"admin manages false-positive patterns", authz.RoleAdmin, authz.ActionManageFalsePositivePatterns, false, true},
+		{"maintainer manages false-positive patterns", authz.RoleMaintainer, authz.ActionManageFalsePositivePatterns, false, true},
+		{"member cannot manage false-positive patterns", authz.RoleMember, authz.ActionManageFalsePositivePatterns, false, false},
+		{"viewer cannot manage false-positive patterns", authz.RoleViewer, authz.ActionManageFalsePositivePatterns, false, false},
 
 		// Row 6: integrations/global secrets/template activation/members
 		// & roles/sentinel toggle -- admin ONLY, not even maintainer.

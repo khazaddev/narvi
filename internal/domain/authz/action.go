@@ -178,6 +178,37 @@ const (
 	// sits one row down at admin-only, mirroring
 	// ActionToggleSentinelAutoFix's own identical split from this row.
 	ActionConfigureAutoApprove Action = "configure_auto_approve"
+	// ActionTeachFalsePositivePattern covers §22.2's own capture command
+	// (Step 63, "review: learned false-positive patterns"): a maintainer+
+	// teaches a repo-scoped false-positive pattern via an explicit
+	// `false positive: <reason>` PR-thread command
+	// (internal/domain/falsepositive.Match), dispatched BEFORE the
+	// ordinary mention/session router (internal/adapters/inbound/github's
+	// own capture handler) -- reusing THIS SAME §13.3 gate directly,
+	// never a parallel permission model invented for this one command.
+	// Placed in THIS row (maintainer+, no member own/joined carve-out --
+	// a taught pattern is repo-scoped, not session-scoped, so there is no
+	// "owned" resource to carve out at all), the same reasoning
+	// ActionEditReviewVerdict/ActionRetriggerReview immediately above
+	// already establish for a maintainer-level review-adjacent write.
+	ActionTeachFalsePositivePattern Action = "teach_false_positive_pattern"
+	// ActionManageFalsePositivePatterns covers §22.4's own lifecycle
+	// surface (Step 63): retiring an already-taught pattern and reading
+	// the per-repo audit view (list every pattern, active or retired) --
+	// ONE action gating both, mirroring ActionManageMembers' own
+	// identical "one action gates every read+write endpoint of this
+	// lifecycle-management surface" precedent (row 6, action.go's own
+	// doc comment there: "gates every one of its endpoints... including
+	// the audit-log read endpoint"). Deliberately a SEPARATE action from
+	// ActionTeachFalsePositivePattern above even though both sit in this
+	// SAME maintainer+ row today: capture is a PR-thread command with no
+	// REST surface at all, retire/audit-view are REST endpoints with no
+	// PR-thread surface -- two structurally distinct call sites are
+	// exactly the kind of split this codebase names a distinct Action
+	// for elsewhere (e.g. ActionMergePR vs. ActionPromptSession, both
+	// this same row 2 shape, still two names) rather than merging into
+	// one action whose meaning would depend on which caller invoked it.
+	ActionManageFalsePositivePatterns Action = "manage_false_positive_patterns"
 
 	// -- Row 6: "Integrations, global secrets, prompt-template
 	// activation, members & roles, sentinel auto-fix toggle, per-repo
@@ -277,6 +308,8 @@ var AllActions = []Action{
 	ActionEditReviewVerdict,
 	ActionRetriggerReview,
 	ActionConfigureAutoApprove,
+	ActionTeachFalsePositivePattern,
+	ActionManageFalsePositivePatterns,
 	ActionManageIntegrations,
 	ActionManageGlobalSecrets,
 	ActionActivatePromptTemplate,

@@ -48,6 +48,7 @@ import (
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/chatgptlink"
+	"github.com/khazaddev/narvi/internal/app/findingposition"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
@@ -153,6 +154,16 @@ type testRig struct {
 	diffFetcher reviewcontext.Fetcher
 	botToken    string
 
+	// positionResolver (Step 63, §22.1.1) is review/verdict's own
+	// relocation-fallback dependency -- nil by default (this rig's own
+	// pre-Step-63 tests never care about it, and a nil resolver is a
+	// fully nil-safe, legitimate value: findingposition.ResolveAll's own
+	// doc comment). A test that specifically wants to prove the
+	// relocation fallback's own wiring overrides this via newTestRig's
+	// own mutate func, mirroring diffFetcher's identical precedent
+	// immediately above.
+	positionResolver *findingposition.Resolver
+
 	// repoSettings/botHandle (Step 47, "server-side verdict", §8.2/§21.2)
 	// back this rig's own verdict-posting-tool route (review/verdict,
 	// reviewverdict_integration_test.go) and the admin repo-settings routes
@@ -171,6 +182,12 @@ type testRig struct {
 	// behavior (reviewverdict_integration_test.go).
 	reviewFindings *narvipg.ReviewFindingStore
 	sentinelFixes  *narvipg.SentinelFixStore
+
+	// falsePositivePatterns (Step 63, "review: learned false-positive
+	// patterns", §22.2/§22.3/§22.4) backs this rig's own advisory-
+	// injection/lifecycle behavior on the retrigger and verdict-posting
+	// routes.
+	falsePositivePatterns *narvipg.FalsePositivePatternStore
 
 	// reviewVerdicts (Step 62, §21.1) backs the verdict-posting route's
 	// own review_verdicts insert (reviewverdict.go).
@@ -305,6 +322,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		botHandle:             "narvi-test-bot",
 		reviewFindings:        narvipg.NewReviewFindingStore(pool),
 		sentinelFixes:         narvipg.NewSentinelFixStore(pool),
+		falsePositivePatterns: narvipg.NewFalsePositivePatternStore(pool),
 		reviewVerdicts:        narvipg.NewReviewVerdictStore(pool),
 		automations:           narvipg.NewAutomationStore(pool),
 		automationInvocations: narvipg.NewAutomationInvocationStore(pool),
@@ -358,7 +376,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		// comment. rig.diffFetcher/rig.botToken default nil/"" -- see this
 		// rig's own diffFetcher field doc comment for why, and for how a
 		// test overrides them.
-		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.reviewFindings, rig.botToken, platform.DefaultTimeouts()))
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.reviewFindings, rig.falsePositivePatterns, rig.botToken, platform.DefaultTimeouts()))
 		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48)
 		// -- see reviewfindings.go's own doc comment.
 		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(rig.sessions, rig.prSessions, rig.reviewFindings, rig.auditLog))
@@ -431,7 +449,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// review/verdict (Step 47, "server-side verdict", §8.2/§5.2) is mounted
 	// the SAME way -- see reviewverdict.go's own doc comment.
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.reviewVerdicts, rig.turns, rig.botHandle))
+		httpapi.PostReviewVerdict(rig.pool, rig.sandboxes, rig.sessions, rig.prSessions, rig.repoSettings, rig.reviewFindings, rig.sentinelFixes, rig.outbox, rig.reviewVerdicts, rig.turns, rig.botHandle, rig.botToken, rig.diffFetcher, rig.positionResolver, platform.DefaultTimeouts()))
 	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6)
 	// is mounted the SAME way -- see workflowstepoutcome.go's own doc
 	// comment.
@@ -479,6 +497,15 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings, reviewVerdictDeps))
 		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings))
+	})
+	// /api/repos/{owner}/{repo}/false-positive-patterns (Step 63, §22.4) --
+	// mounted behind auth.Middleware, exactly like cmd/control-plane/
+	// main.go's own wiring (see falsepositivepatterns.go's own doc
+	// comment).
+	router.Route("/api/repos/{owner}/{repo}/false-positive-patterns", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Get("/", httpapi.ListFalsePositivePatterns(rig.falsePositivePatterns))
+		r.Post("/{patternID}/retire", httpapi.RetireFalsePositivePattern(rig.falsePositivePatterns, rig.auditLog))
 	})
 	router.Route("/api/repos/{owner}/{repo}/auto-approval-settings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))

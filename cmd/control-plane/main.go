@@ -50,6 +50,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/chatgptrefresh"
 	"github.com/khazaddev/narvi/internal/app/decisioninbox"
 	"github.com/khazaddev/narvi/internal/app/digest"
+	"github.com/khazaddev/narvi/internal/app/findingposition"
 	"github.com/khazaddev/narvi/internal/app/identitylink"
 	"github.com/khazaddev/narvi/internal/app/imagebuild"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
@@ -369,6 +370,12 @@ func serve() error {
 	// shared, never a second independently-constructed copy.
 	reviewFindingStore := postgres.NewReviewFindingStore(pool)
 	sentinelFixStore := postgres.NewSentinelFixStore(pool)
+	// falsePositivePatternStore (Step 63, "review: learned false-positive
+	// patterns", §22.2/§22.3/§22.4) backs the GitHub capture command, the
+	// advisory-injection fetch (internal/app/reviewcontext), and the
+	// audit-view/retire REST endpoints -- one store, shared, never a
+	// second independently-constructed copy.
+	falsePositivePatternStore := postgres.NewFalsePositivePatternStore(pool)
 	// reviewVerdictStore/autoApprovalOutcomeStore/digestSendStateStore
 	// (Step 62, "review verdict persistence, analytics, digest &
 	// automated approval", §21) back the verdict-posting tool's own
@@ -437,6 +444,17 @@ func serve() error {
 		sessionStore,
 		cfg.IntentClassifierActiveSurfaces,
 	)
+
+	// findingRelocationResolver is Step 63's own §22.1.1 relocation
+	// fallback (internal/app/findingposition) -- reuses intentLLM (the
+	// SAME already-constructed ports.LLM client/config intentClassifierSvc
+	// above uses, never a second, independently-configured adapter) and
+	// the SAME cfg.IntentClassifierProvider/Model values, per that
+	// package's own doc comment: both this call and intent classification
+	// are small, structured, non-agentic utility calls, the identical
+	// KIND of call, so there is no reason to introduce a second
+	// provider/model configuration surface for it.
+	findingRelocationResolver := findingposition.New(intentLLM, cfg.IntentClassifierProvider, cfg.IntentClassifierModel)
 
 	// recon is Step 25's ("reconciler + GC", §5.3) process-wide
 	// provider-reconciliation/orphan-GC loop, run below via the errgroup
@@ -585,7 +603,7 @@ func serve() error {
 	// reviewpost.RerunGuidance) is built to be recognized by that SAME
 	// regex (§5.2).
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, reviewVerdictStore, turnStore, cfg.GitHubBotHandle))
+		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, reviewVerdictStore, turnStore, cfg.GitHubBotHandle, cfg.GitHubBotToken, sourceControl, findingRelocationResolver, cfg.Timeouts))
 
 	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6):
 	// the GENERIC step-outcome-posting tool -- deliberately mounted
@@ -772,6 +790,15 @@ func serve() error {
 			// ReviewFindings (Step 48, §22.1): the SAME reviewFindingStore
 			// instance every other caller above already uses.
 			ReviewFindings: reviewFindingStore,
+			// FalsePositivePatterns (Step 63, §22.3): the SAME
+			// falsePositivePatternStore instance every other caller
+			// (RetriggerReview, the capture/lifecycle endpoints below)
+			// already uses.
+			FalsePositivePatterns: falsePositivePatternStore,
+			// FalsePositivePatternCapture (Step 63, §22.2): the SAME
+			// falsePositivePatternStore instance, satisfying this
+			// structurally different (write) interface.
+			FalsePositivePatternCapture: falsePositivePatternStore,
 			// BotToken/PullRequests (batch fix/audit-github-pr-payload-
 			// correctness, H5 audit fix): resolve an issue_comment
 			// mention's TRUE head branch/repo via one authenticated
@@ -1038,7 +1065,7 @@ func serve() error {
 		// sourceControl/cfg.GitHubBotToken are the SAME instances the
 		// GitHub webhook ingress wiring above already constructs, never a
 		// second, independently-constructed copy.
-		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, reviewFindingStore, cfg.GitHubBotToken, cfg.Timeouts))
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, reviewFindingStore, falsePositivePatternStore, cfg.GitHubBotToken, cfg.Timeouts))
 		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48,
 		// "sentinels + suggestions", §12.2 item 2/§22.1) -- maintainer+
 		// only (authz.ActionEditReviewVerdict, checked inside each
@@ -1073,6 +1100,21 @@ func serve() error {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore, reviewVerdictDeps))
 		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore))
+	})
+
+	// /api/repos/{owner}/{repo}/false-positive-patterns (Step 63, "review:
+	// learned false-positive patterns", §22.4): the audit-view/retire
+	// lifecycle surface -- see httpapi/falsepositivepatterns.go's own doc
+	// comment. Capture itself (§22.2) has no REST route at all; it is the
+	// GitHub webhook's own dispatch-before-router `false positive:
+	// <reason>` command instead. Gated by authz.
+	// ActionManageFalsePositivePatterns (maintainer+, §13.3 row 5) and
+	// mounted behind auth.Middleware, mirroring every other browser-facing
+	// REST route in this package.
+	router.Route("/api/repos/{owner}/{repo}/false-positive-patterns", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.ListFalsePositivePatterns(falsePositivePatternStore))
+		r.Post("/{patternID}/retire", httpapi.RetireFalsePositivePattern(falsePositivePatternStore, auditLogStore))
 	})
 
 	// /api/repos/{owner}/{repo}/auto-approval-settings,

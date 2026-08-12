@@ -80,7 +80,7 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // this Action regardless, per Resource's own doc comment on fields an
 // Action doesn't consult), avoiding a wasted Postgres participants read on
 // every call.
-func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
+func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -133,6 +133,17 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		}
 
 		prompt := manualRetriggerPromptText
+		// Step 63 (§22.3): prepend this repo's own currently-active
+		// learned false-positive patterns BEFORE the already-answered
+		// facts below -- "injected into every review pass, first pass and
+		// re-review alike": a manual re-trigger is exactly a re-review
+		// pass. Independent of diffFetcher (a review turn can still carry
+		// the advisory block even with no diff fetcher wired).
+		if falsePositivePatterns != nil {
+			if advisory := reviewcontext.FetchFalsePositivePatterns(ctx, logger, falsePositivePatterns, prSession.RepoFullName); advisory != "" {
+				prompt = advisory + prompt
+			}
+		}
 		// Step 48 (§22.1): prepend this PR's own already-answered facts
 		// (open+rebutted review_findings) BEFORE calling RenderTurnPrompt
 		// -- prepended to, never replacing, the prose fallback above.

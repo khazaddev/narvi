@@ -195,6 +195,12 @@ type issueCommentPayload struct {
 		} `json:"pull_request"`
 	} `json:"issue"`
 	Comment struct {
+		// ID (Step 63, §22.2) is this comment's own globally-unique
+		// GitHub id -- "the triggering comment id" a false-positive-
+		// pattern capture command is keyed on (falsepositivecapture.go),
+		// never used by ordinary mention detection/parseIssueComment
+		// itself.
+		ID   int64  `json:"id"`
 		Body string `json:"body"`
 		// User is "who actually wrote this comment" -- GitHub's own real
 		// issue_comment webhook shape (comment.user.{id,login}), verified
@@ -251,6 +257,9 @@ func parseIssueComment(body []byte, mentionRE *regexp.Regexp) (mention, bool, er
 type pullRequestReviewCommentPayload struct {
 	Action  string `json:"action"`
 	Comment struct {
+		// ID (Step 63, §22.2) mirrors issueCommentPayload.Comment.ID's own
+		// identical doc comment -- see that field's own comment.
+		ID   int64  `json:"id"`
 		Body string `json:"body"`
 		// User mirrors issueCommentPayload.Comment.User exactly -- GitHub
 		// uses the IDENTICAL comment.user.{id,login} shape for both event

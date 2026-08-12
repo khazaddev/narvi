@@ -65,3 +65,82 @@ func TestRenderVerdictComment_EmptyBlastRadiusOmitsLine(t *testing.T) {
 		t.Errorf("RenderVerdictComment() rendered a Blast radius line for an empty BlastRadius:\n%s", got)
 	}
 }
+
+// TestRenderVerdictComment_AnchoredFindingRendersStartEndLine proves an
+// anchored finding (§22.1.1) renders using StartLine/EndLine, never the
+// model's own self-reported Line.
+func TestRenderVerdictComment_AnchoredFindingRendersStartEndLine(t *testing.T) {
+	v := review.Verdict{
+		RiskLevel: review.RiskLevelLow, Premise: review.PremiseStateOK,
+		TestsCoverage: review.TestsCoverageStateAdequate, DocsDrift: review.DocsDriftStateNone,
+		Shippable: review.ShippableAuto,
+	}
+	modelLine := 999
+	finding := reviewpost.Finding{
+		Severity: review.RiskLevelMedium, FilePath: "main.go", Description: "off-by-one",
+		Line:      &modelLine,
+		StartLine: 10, EndLine: 12,
+	}
+
+	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if !strings.Contains(got, "main.go:10-12") {
+		t.Errorf("RenderVerdictComment() missing anchored range %q in:\n%s", "main.go:10-12", got)
+	}
+	if strings.Contains(got, "main.go:999") {
+		t.Errorf("RenderVerdictComment() rendered the model's own unverified Line (999) instead of the anchored StartLine/EndLine:\n%s", got)
+	}
+}
+
+// TestRenderVerdictComment_AnchoredSingleLineFindingOmitsRange proves a
+// single-line anchor (StartLine == EndLine) renders as "file:N", never
+// "file:N-N".
+func TestRenderVerdictComment_AnchoredSingleLineFindingOmitsRange(t *testing.T) {
+	v := review.Verdict{
+		RiskLevel: review.RiskLevelLow, Premise: review.PremiseStateOK,
+		TestsCoverage: review.TestsCoverageStateAdequate, DocsDrift: review.DocsDriftStateNone,
+		Shippable: review.ShippableAuto,
+	}
+	finding := reviewpost.Finding{
+		Severity: review.RiskLevelMedium, FilePath: "main.go", Description: "off-by-one",
+		StartLine: 10, EndLine: 10,
+	}
+
+	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if !strings.Contains(got, "main.go:10`") {
+		t.Errorf("RenderVerdictComment() missing single-line anchor %q in:\n%s", "main.go:10`", got)
+	}
+	if strings.Contains(got, "main.go:10-10") {
+		t.Errorf("RenderVerdictComment() rendered a redundant range (10-10) for a single-line anchor:\n%s", got)
+	}
+}
+
+// TestRenderVerdictComment_UnanchoredFindingNeverRendersAGuessedLine is
+// this Step's own central proof for the rendering side of §22.1.1: an
+// unanchored finding (StartLine == 0) must NEVER render ANY line
+// reference at all -- not the anchored range (there is none), and NOT
+// the model's own self-reported Line either (that would be exactly the
+// "plausible-looking wrong answer" §22.1.1 says is worse than nothing).
+func TestRenderVerdictComment_UnanchoredFindingNeverRendersAGuessedLine(t *testing.T) {
+	v := review.Verdict{
+		RiskLevel: review.RiskLevelLow, Premise: review.PremiseStateOK,
+		TestsCoverage: review.TestsCoverageStateAdequate, DocsDrift: review.DocsDriftStateNone,
+		Shippable: review.ShippableAuto,
+	}
+	modelLine := 42
+	finding := reviewpost.Finding{
+		Severity: review.RiskLevelMedium, FilePath: "main.go", Description: "some finding",
+		Line:      &modelLine, // the model's own self-report -- must be ignored
+		StartLine: 0, EndLine: 0,
+	}
+
+	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if strings.Contains(got, "main.go:42") {
+		t.Errorf("RenderVerdictComment() rendered the model's own unverified Line (42) for an UNANCHORED finding -- must render no line at all:\n%s", got)
+	}
+	if !strings.Contains(got, "`main.go`") {
+		t.Errorf("RenderVerdictComment() should still render the bare file path for an unanchored finding:\n%s", got)
+	}
+}
