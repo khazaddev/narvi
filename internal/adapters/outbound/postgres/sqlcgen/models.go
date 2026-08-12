@@ -1657,6 +1657,19 @@ type RepoSetting struct {
 	SensitiveBlastRadiusTags   []byte             `json:"sensitive_blast_radius_tags"`
 }
 
+type ReviewFalsePositivePattern struct {
+	ID           pgtype.UUID        `json:"id"`
+	RepoFullName string             `json:"repo_full_name"`
+	CommentID    int64              `json:"comment_id"`
+	Reason       string             `json:"reason"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	HitCount     int32              `json:"hit_count"`
+	LastHitAt    pgtype.Timestamptz `json:"last_hit_at"`
+	RetiredAt    pgtype.Timestamptz `json:"retired_at"`
+	RetiredBy    pgtype.UUID        `json:"retired_by"`
+}
+
 type ReviewFinding struct {
 	ID                pgtype.UUID        `json:"id"`
 	RepoFullName      string             `json:"repo_full_name"`

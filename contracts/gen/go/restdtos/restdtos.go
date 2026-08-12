@@ -1817,6 +1817,84 @@ func (j *EventsResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One review_false_positive_patterns row's own REST wire shape (Step 63, 'review:
+// learned false-positive patterns', §22.2/§22.4,
+// migrations/000073_review_false_positive_patterns.up.sql) -- returned by the
+// audit-view GET and the retire POST so a caller can confirm the resulting state.
+// Capture itself has no REST shape at all: it happens exclusively via the `false
+// positive: <reason>` PR-thread command (§22.2, internal/adapters/inbound/github's
+// own dispatch-before-router capture handler), never through this API.
+type FalsePositivePattern struct {
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// §22.4's own usage-signal bookkeeping: how many review passes have included this
+	// pattern in their own advisory block since it was taught (or since it was last
+	// retired-and-untouched -- retiring does not reset this count). Never a claim
+	// that any of those passes actually acted on it (§22.3: advisory, never a
+	// filter).
+	HitCount int `json:"hitCount" yaml:"hitCount" mapstructure:"hitCount"`
+
+	// Id corresponds to the JSON schema field "id".
+	Id string `json:"id" yaml:"id" mapstructure:"id"`
+
+	// Null iff hitCount is 0 -- this pattern has never yet been injected into a
+	// review pass. goJSONSchema forces the literal *time.Time type -- see
+	// Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently
+	// breaks encoding/json here.
+	LastHitAt *time.Time `json:"lastHitAt" yaml:"lastHitAt" mapstructure:"lastHitAt"`
+
+	// The maintainer's own free-text pattern description, captured verbatim at teach
+	// time.
+	Reason string `json:"reason" yaml:"reason" mapstructure:"reason"`
+
+	// RepoFullName corresponds to the JSON schema field "repoFullName".
+	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
+
+	// Null means active (still injected into future review passes); non-null means a
+	// maintainer+ has explicitly retired it (§22.4) -- excluded from injection from
+	// that point on, but never deleted. goJSONSchema forces the literal *time.Time
+	// type -- see Plan.decidedAt's own doc comment for why a named pointer-type
+	// wrapper silently breaks encoding/json here.
+	RetiredAt *time.Time `json:"retiredAt" yaml:"retiredAt" mapstructure:"retiredAt"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *FalsePositivePattern) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in FalsePositivePattern: required")
+	}
+	if _, ok := raw["hitCount"]; raw != nil && !ok {
+		return fmt.Errorf("field hitCount in FalsePositivePattern: required")
+	}
+	if _, ok := raw["id"]; raw != nil && !ok {
+		return fmt.Errorf("field id in FalsePositivePattern: required")
+	}
+	if _, ok := raw["lastHitAt"]; raw != nil && !ok {
+		return fmt.Errorf("field lastHitAt in FalsePositivePattern: required")
+	}
+	if _, ok := raw["reason"]; raw != nil && !ok {
+		return fmt.Errorf("field reason in FalsePositivePattern: required")
+	}
+	if _, ok := raw["repoFullName"]; raw != nil && !ok {
+		return fmt.Errorf("field repoFullName in FalsePositivePattern: required")
+	}
+	if _, ok := raw["retiredAt"]; raw != nil && !ok {
+		return fmt.Errorf("field retiredAt in FalsePositivePattern: required")
+	}
+	type Plain FalsePositivePattern
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = FalsePositivePattern(plain)
+	return nil
+}
+
 // One linked-identity row's own REST wire shape (§13.2/§13.3 members API) --
 // returned both standalone (POST/DELETE .../identities) and nested inside
 // Member.identities. provider/linkedVia enums match the Postgres
@@ -2114,6 +2192,32 @@ func (j *ListDecisionInboxResponse) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ListDecisionInboxResponse(plain)
+	return nil
+}
+
+// GET /api/repos/{owner}/{repo}/false-positive-patterns's own response body (Step
+// 63, §22.4's own audit view) -- EVERY pattern for this repo, active or retired,
+// newest-first.
+type ListFalsePositivePatternsResponse struct {
+	// Patterns corresponds to the JSON schema field "patterns".
+	Patterns []FalsePositivePattern `json:"patterns" yaml:"patterns" mapstructure:"patterns"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ListFalsePositivePatternsResponse) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["patterns"]; raw != nil && !ok {
+		return fmt.Errorf("field patterns in ListFalsePositivePatternsResponse: required")
+	}
+	type Plain ListFalsePositivePatternsResponse
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ListFalsePositivePatternsResponse(plain)
 	return nil
 }
 

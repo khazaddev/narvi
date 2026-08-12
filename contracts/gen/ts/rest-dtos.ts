@@ -1479,3 +1479,39 @@ export interface MergePullRequestResponse {
   mergeCommitSha: string;
   message: string;
 }
+/**
+ * One review_false_positive_patterns row's own REST wire shape (Step 63, 'review: learned false-positive patterns', §22.2/§22.4, migrations/000073_review_false_positive_patterns.up.sql) -- returned by the audit-view GET and the retire POST so a caller can confirm the resulting state. Capture itself has no REST shape at all: it happens exclusively via the `false positive: <reason>` PR-thread command (§22.2, internal/adapters/inbound/github's own dispatch-before-router capture handler), never through this API.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "FalsePositivePattern".
+ */
+export interface FalsePositivePattern {
+  id: string;
+  repoFullName: string;
+  /**
+   * The maintainer's own free-text pattern description, captured verbatim at teach time.
+   */
+  reason: string;
+  createdAt: string;
+  /**
+   * §22.4's own usage-signal bookkeeping: how many review passes have included this pattern in their own advisory block since it was taught (or since it was last retired-and-untouched -- retiring does not reset this count). Never a claim that any of those passes actually acted on it (§22.3: advisory, never a filter).
+   */
+  hitCount: number;
+  /**
+   * Null iff hitCount is 0 -- this pattern has never yet been injected into a review pass. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
+   */
+  lastHitAt: string | null;
+  /**
+   * Null means active (still injected into future review passes); non-null means a maintainer+ has explicitly retired it (§22.4) -- excluded from injection from that point on, but never deleted. goJSONSchema forces the literal *time.Time type -- see Plan.decidedAt's own doc comment for why a named pointer-type wrapper silently breaks encoding/json here.
+   */
+  retiredAt: string | null;
+}
+/**
+ * GET /api/repos/{owner}/{repo}/false-positive-patterns's own response body (Step 63, §22.4's own audit view) -- EVERY pattern for this repo, active or retired, newest-first.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "ListFalsePositivePatternsResponse".
+ */
+export interface ListFalsePositivePatternsResponse {
+  patterns: FalsePositivePattern[];
+}
