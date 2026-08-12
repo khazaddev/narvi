@@ -116,12 +116,31 @@ func extractFileNewLines(diff, filePath string) []newFileLine {
 			inTargetFile = false
 			newLineNo = 0
 			continue
-		case strings.HasPrefix(line, "+++ "):
-			if m := diffFileHeaderRE.FindStringSubmatch(line); m != nil {
-				inTargetFile = normalizeFindingFilePath(m[1]) == want
-			} else {
-				inTargetFile = false
-			}
+		case diffFileHeaderRE.MatchString(line):
+			// A REAL "+++ b/path" file header -- checked by actually
+			// matching the anchored regex here (never merely
+			// strings.HasPrefix(line, "+++ ")), because an ADDED source
+			// line whose own CONTENT starts with "++ " (e.g. a literal
+			// "++ counter;") produces a diff line "+++ counter;", which
+			// also starts with "+++ " but is NOT a file header at all --
+			// mistaking it for one (the bug this case exists to prevent)
+			// would zero inTargetFile/newLineNo mid-file, silently
+			// truncating extraction for the rest of that file and every
+			// later hunk of it. Falling through to the ordinary added-line
+			// handling below is exactly right for that case: line[1:]
+			// strips only the diff's own leading '+' marker, correctly
+			// recovering "++ counter;" as the real source text.
+			m := diffFileHeaderRE.FindStringSubmatch(line)
+			inTargetFile = normalizeFindingFilePath(m[1]) == want
+			newLineNo = 0
+			continue
+		case line == "+++ /dev/null":
+			// The diff's own "this file was deleted" marker -- matches
+			// diffFileHeaderRE's own doc comment (no "b/" prefix, so the
+			// case above never catches it) but must still reset
+			// inTargetFile explicitly rather than falling through to be
+			// treated as literal new-file content.
+			inTargetFile = false
 			newLineNo = 0
 			continue
 		case strings.HasPrefix(line, "--- "):
@@ -305,6 +324,28 @@ func MatchPosition(filePath, snippet, diff string) (startLine, endLine int) {
 	bestScore := -1.0
 	bestStart := -1
 	for start := 0; start+windowSize <= len(candidates); start++ {
+		// extractFileNewLines returns a FLAT, non-contiguous list: a hunk
+		// boundary just resets the running line counter with no marker of
+		// its own, so two candidates adjacent in SLICE INDEX can be
+		// hundreds of real lines apart (different hunks, possibly
+		// different vicinities of the file entirely). A window sliding
+		// over slice indices alone, with no contiguity check, can
+		// therefore straddle a hunk boundary and report a StartLine/
+		// EndLine range spanning text that was never actually contiguous
+		// -- or even present together -- in the diff at all. Reject any
+		// window whose own candidate line numbers are not truly
+		// consecutive; only a window fully inside ONE hunk is eligible.
+		contiguous := true
+		for i := 1; i < windowSize; i++ {
+			if candidates[start+i].LineNo != candidates[start].LineNo+i {
+				contiguous = false
+				break
+			}
+		}
+		if !contiguous {
+			continue
+		}
+
 		var sum float64
 		for i := 0; i < windowSize; i++ {
 			sum += lineScore(snippetLines[i], candidates[start+i].Text)
@@ -321,4 +362,86 @@ func MatchPosition(filePath, snippet, diff string) (startLine, endLine int) {
 	}
 
 	return candidates[bestStart].LineNo, candidates[bestStart+windowSize-1].LineNo
+}
+
+// SliceFileDiff returns just filePath's own "diff --git ..." section of
+// diff (that file's own file-header lines through the last line before the
+// NEXT "diff --git " section, or diff's end) -- discarding every other
+// file's own hunks entirely. Returns "" when filePath never appears as a
+// "+++ b/..." target in diff at all, mirroring extractFileNewLines' own
+// "nothing to match against" degradation.
+//
+// internal/app/findingposition.ResolveAll's own relocation fallback uses
+// this to narrow the LLM's own prompt to exactly the one file its own
+// system prompt already claims it is given (schema.go's own
+// relocationSystemPrompt: "You are given one file's own diff hunk") --
+// before this fix, ResolveAll instead passed the WHOLE multi-file PR diff,
+// so that claim was false, and a relocation answer could name a line
+// number that only exists in, or only makes sense for, a DIFFERENT file
+// entirely. Narrowing the prompt here is the first of two independent
+// safeguards against that failure mode; FileNewLineBounds below is the
+// second (defense in depth: even a model that ignores/misreads a
+// correctly-scoped prompt is still caught by the bounds check).
+func SliceFileDiff(diff, filePath string) string {
+	if diff == "" {
+		return ""
+	}
+	want := normalizeFindingFilePath(filePath)
+	lines := strings.Split(diff, "\n")
+
+	sectionStart := -1
+	for i, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") {
+			sectionStart = i
+			continue
+		}
+		if sectionStart < 0 || !diffFileHeaderRE.MatchString(line) {
+			continue
+		}
+		m := diffFileHeaderRE.FindStringSubmatch(line)
+		if normalizeFindingFilePath(m[1]) != want {
+			continue
+		}
+		end := len(lines)
+		for j := sectionStart + 1; j < len(lines); j++ {
+			if strings.HasPrefix(lines[j], "diff --git ") {
+				end = j
+				break
+			}
+		}
+		return strings.Join(lines[sectionStart:end], "\n")
+	}
+	return ""
+}
+
+// FileNewLineBounds reports the minimum and maximum new-file line numbers
+// filePath's own hunks in diff actually cover -- ok=false when filePath has
+// no lines in diff at all (mirrors extractFileNewLines' own "nothing to
+// match against" degradation).
+//
+// internal/app/findingposition.ResolveAll's own relocation fallback uses
+// this to REJECT a relocation answer whose StartLine/EndLine falls outside
+// filePath's own diff -- most importantly, a line number that belongs to a
+// DIFFERENT file entirely, from the same multi-file diff the model was
+// (pre-SliceFileDiff) or could still mistakenly be shown. This is exactly
+// the guarantee MatchPosition's own filePath argument already gives the
+// pure-match path (see this file's own top doc comment): a relocation
+// answer failing this check is rejected to (0, 0), never trusted verbatim
+// -- §22.1.1's own "0, never a guess" mandate, extended to the relocation
+// fallback, never only the pure match.
+func FileNewLineBounds(diff, filePath string) (minLine, maxLine int, ok bool) {
+	lines := extractFileNewLines(diff, filePath)
+	if len(lines) == 0 {
+		return 0, 0, false
+	}
+	minLine, maxLine = lines[0].LineNo, lines[0].LineNo
+	for _, l := range lines[1:] {
+		if l.LineNo < minLine {
+			minLine = l.LineNo
+		}
+		if l.LineNo > maxLine {
+			maxLine = l.LineNo
+		}
+	}
+	return minLine, maxLine, true
 }

@@ -45,21 +45,25 @@ func TestMatchPosition_ExactWordOverlapMatchesRightFileAndLine(t *testing.T) {
 	}
 
 	// Independently verify the returned line number is the ACTUAL new-file
-	// line of the matched source text, by re-deriving it from
-	// extractFileNewLines directly rather than hard-coding a magic number
-	// that would silently drift if sampleDiff's own hunk header changes.
-	candidates := extractFileNewLines(sampleDiff, "main.go")
-	var wantLine int
-	for _, c := range candidates {
-		if c.Text == "\tfor i := 0; i < len(items); i++ {" {
-			wantLine = c.LineNo
-		}
-	}
-	if wantLine == 0 {
-		t.Fatalf("test setup: expected line not found in sampleDiff's own main.go hunk")
-	}
+	// line of the matched source text -- HARD-CODED as a literal, never
+	// re-derived from extractFileNewLines itself: that function is exactly
+	// what this test exists to catch a line-numbering bug in, and deriving
+	// "the expected answer" from the SAME function under test makes the
+	// assertion tautological -- a bookkeeping bug there (e.g. a removed
+	// line incorrectly advancing the counter) would move BOTH sides of the
+	// comparison together, so it could never fail (confirmed by a live
+	// mutation: this exact bug left this test, and the whole package,
+	// green). sampleDiff is a package-level const in this SAME file, so
+	// this literal carries no drift risk of its own: hand-derived from its
+	// own hunk header ("@@ -8,5 +10,6 @@", new-file lines start at 10) --
+	// logger (10), items (11), the matched "for" line is the third
+	// new-file line (the removed "for i := range items {" occupies no
+	// position at all) -> 12. TestExtractFileNewLines_LineNumbersAreSequential
+	// below is the DEDICATED test for extractFileNewLines' own bookkeeping
+	// correctness -- this test deliberately does not try to double as that.
+	const wantLine = 12
 	if startLine != wantLine {
-		t.Errorf("MatchPosition() startLine = %d, want %d (the actual new-file line of the matched text)", startLine, wantLine)
+		t.Errorf("MatchPosition() startLine = %d, want %d (the actual new-file line of the matched text, hand-derived from sampleDiff's own hunk header)", startLine, wantLine)
 	}
 }
 
@@ -180,6 +184,94 @@ index 1111111..2222222 100644
 	}
 }
 
+// TestMatchPosition_RejectsWindowStraddlingHunkBoundary is Fix B's own
+// regression proof. extractFileNewLines returns a FLAT, non-contiguous
+// list of new-file lines -- a hunk boundary just resets the running line
+// counter with no marker of its own, so two candidates adjacent in SLICE
+// INDEX can be hundreds of real lines apart. twoHunkDiff below has one
+// hunk at new-file line 9-10 and a second, unrelated hunk at new-file line
+// 400-401 -- candidates end up as [{9,"alpha bravo"}, {10,"charlie
+// delta"}, {400,"echo foxtrot"}, {401,"golf hotel"}].
+//
+// The two-line snippet below is deliberately chosen so its first line
+// matches candidates[1] ("charlie delta") perfectly and its second line
+// matches candidates[3] ("golf hotel") perfectly, with zero overlap
+// otherwise -- BOTH the (index 1, index 2) window and the (index 2, index
+// 3) window score identically (0.5 average). Pre-fix, ties break toward
+// the EARLIEST index, so the naive sliding window selects (index 1, index
+// 2) -- which straddles the hunk boundary and reports (10, 400): a range
+// that was never contiguous text in the diff at all (this exact (10, 400)
+// shape is what a live repro against this bug confirmed). Post-fix, that
+// window is rejected for non-contiguity (candidates[2].LineNo=400 !=
+// candidates[1].LineNo+1=11) and the OTHER, fully-in-hunk-2 window
+// (index 2, index 3; LineNo 400-401, contiguous) wins instead.
+func TestMatchPosition_RejectsWindowStraddlingHunkBoundary(t *testing.T) {
+	t.Parallel()
+
+	const twoHunkDiff = `diff --git a/main.go b/main.go
+index 1111111..2222222 100644
+--- a/main.go
++++ b/main.go
+@@ -8,2 +9,2 @@
+ alpha bravo
++charlie delta
+@@ -399,2 +400,2 @@
+ echo foxtrot
++golf hotel
+`
+
+	startLine, endLine := MatchPosition("main.go", "charlie delta\ngolf hotel", twoHunkDiff)
+
+	if startLine != 400 || endLine != 401 {
+		t.Errorf("MatchPosition() = (%d, %d), want (400, 401) -- either the in-hunk-2 window should win, or (never both) the straddling window (which would report (10, 400), text never actually contiguous in the diff)", startLine, endLine)
+	}
+}
+
+// TestExtractFileNewLines_AddedLineStartingWithPlusPlusIsNotMistakenForFileHeader
+// is Fix E's own regression proof. An added SOURCE line whose own content
+// happens to start with "++ " (e.g. a literal "++ counter;") produces a
+// diff line "+++ counter;" -- this starts with the same "+++ " prefix as a
+// real "+++ b/path" file-header line, but is NOT one. Before this fix, the
+// switch matched on the "+++ " PREFIX first and only THEN checked the
+// anchored diffFileHeaderRE regex, falling to an else branch that
+// incorrectly reset inTargetFile=false/newLineNo=0 -- silently truncating
+// extraction for the rest of the file (and every later hunk of it) the
+// instant a line like this was seen. This diff's own hunk deliberately
+// places a normal added line BEFORE the "+++ counter;" line and another
+// normal added line AFTER it, so a regression here shows up as either the
+// wrong TOTAL count or the AFTER line going missing entirely.
+func TestExtractFileNewLines_AddedLineStartingWithPlusPlusIsNotMistakenForFileHeader(t *testing.T) {
+	t.Parallel()
+
+	const diff = `diff --git a/main.go b/main.go
+index 1111111..2222222 100644
+--- a/main.go
++++ b/main.go
+@@ -1,1 +1,4 @@
+ package main
++counter := 0
++++ counter;
++fmt.Println(counter)
+`
+
+	got := extractFileNewLines(diff, "main.go")
+	want := []newFileLine{
+		{LineNo: 1, Text: "package main"},
+		{LineNo: 2, Text: "counter := 0"},
+		{LineNo: 3, Text: "++ counter;"},
+		{LineNo: 4, Text: "fmt.Println(counter)"},
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("extractFileNewLines() returned %d lines, want %d: got=%v want=%v", len(got), len(want), got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("extractFileNewLines()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestExtractFileNewLines_SkipsRemovedLines(t *testing.T) {
 	t.Parallel()
 
@@ -191,17 +283,78 @@ func TestExtractFileNewLines_SkipsRemovedLines(t *testing.T) {
 	}
 }
 
+// TestExtractFileNewLines_LineNumbersAreSequential checks
+// extractFileNewLines' own line-numbering bookkeeping against HARD-CODED,
+// hand-derived expected values (not merely "each LineNo is one more than
+// the previous") -- against BOTH a hunk with no deletions (helper.go) and
+// one that DOES contain a deleted line (main.go). The main.go case is
+// deliberate and load-bearing: a purely RELATIVE "sequential" check (as
+// this test used to be) can never catch a bug where a removed line
+// incorrectly ALSO advances the running new-file line counter, because
+// that bug shifts every SUBSEQUENT LineNo by a constant offset while
+// leaving the deltas BETWEEN consecutive appended lines unchanged at 1 --
+// only an exact, absolute comparison against hand-derived values (as
+// below) actually observes that kind of uniform shift (confirmed by a
+// live mutation against this exact bug class).
 func TestExtractFileNewLines_LineNumbersAreSequential(t *testing.T) {
 	t.Parallel()
 
-	candidates := extractFileNewLines(sampleDiff, "helper.go")
-	if len(candidates) == 0 {
-		t.Fatalf("extractFileNewLines() returned nothing for helper.go")
+	tests := []struct {
+		name     string
+		filePath string
+		want     []newFileLine
+	}{
+		{
+			name:     "hunk with no deletions (helper.go)",
+			filePath: "helper.go",
+			want: []newFileLine{
+				{LineNo: 1, Text: "package helper"},
+				{LineNo: 2, Text: "// validateBounds checks the index is within range."},
+				{LineNo: 3, Text: "func validateBounds(i int, items []int) bool {"},
+				{LineNo: 4, Text: "\treturn i >= 0 && i < len(items)"},
+				{LineNo: 5, Text: "}"},
+			},
+		},
+		{
+			name:     "hunk WITH a deleted line (main.go)",
+			filePath: "main.go",
+			want: []newFileLine{
+				{LineNo: 10, Text: "\tlogger := setupLogger()"},
+				{LineNo: 11, Text: "\titems := fetchItems()"},
+				{LineNo: 12, Text: "\tfor i := 0; i < len(items); i++ {"},
+				{LineNo: 13, Text: "\t\tvalidateBounds(i, items)"},
+				{LineNo: 14, Text: "\t\tprocess(items[i])"},
+				{LineNo: 15, Text: "\t}"},
+			},
+		},
 	}
-	for i := 1; i < len(candidates); i++ {
-		if candidates[i].LineNo != candidates[i-1].LineNo+1 {
-			t.Errorf("extractFileNewLines()[%d].LineNo = %d, want %d (sequential from the previous line)", i, candidates[i].LineNo, candidates[i-1].LineNo+1)
-		}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := extractFileNewLines(sampleDiff, tc.filePath)
+			if len(got) != len(tc.want) {
+				t.Fatalf("extractFileNewLines(%q) returned %d lines, want %d: got=%v want=%v", tc.filePath, len(got), len(tc.want), got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("extractFileNewLines(%q)[%d] = %+v, want %+v", tc.filePath, i, got[i], tc.want[i])
+				}
+			}
+
+			// The relative check too, kept as an additional sanity
+			// assertion the absolute comparison above already implies when
+			// it passes -- not load-bearing on its own (see this test's
+			// own doc comment for why), but a clear, minimal repro if it
+			// ever regresses independently.
+			for i := 1; i < len(got); i++ {
+				if got[i].LineNo != got[i-1].LineNo+1 {
+					t.Errorf("extractFileNewLines(%q)[%d].LineNo = %d, want %d (sequential from the previous line)", tc.filePath, i, got[i].LineNo, got[i-1].LineNo+1)
+				}
+			}
+		})
 	}
 }
 
