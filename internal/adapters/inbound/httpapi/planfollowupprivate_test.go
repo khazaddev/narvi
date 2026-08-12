@@ -146,3 +146,50 @@ func TestPlanFollowupClassifier_LivesUnderInternalApp(t *testing.T) {
 		t.Errorf("expected internal/app/intentclassifier/planfollowup.go to exist (§23.4: structurally private to internal/app/): %v", err)
 	}
 }
+
+// TestPlanFollowupClassifier_SingleCallSite proves §23.1's own cheapest
+// invariant -- "there is a single call site" -- directly: ClassifyPlanFollowup
+// is called from exactly ONE non-test .go file anywhere in this repo
+// outside internal/app/intentclassifier itself (today: turn.go's own
+// createTurnLocked). Reuses this file's own grepGoFiles helper across the
+// WHOLE repo root, then excludes hits under internal/app/intentclassifier
+// -- that package's own defining file (planfollowup.go) matches the
+// "ClassifyPlanFollowup(" needle too (its own func signature), which is not
+// a call site at all; excluding the directory rather than special-casing
+// that one file also means a hypothetical SECOND method/helper added
+// inside that same package that itself calls ClassifyPlanFollowup would
+// correctly stay unflagged (an internal implementation detail of the
+// classifier's own package, not a new external caller).
+//
+// This closes two gaps at once (F4, adversarial review): §23.1's own
+// single-call-site invariant had no test at all before this one, and
+// §23.4's "never a public surface" guarantee only had the three
+// structural/heuristic checks above it -- none of which would catch a
+// smuggled SECOND call site added anywhere else in the repo, regardless of
+// what that new call site is named or how it's wired (confirmed by
+// mutation: adding a real dedicated HTTP route that calls
+// ClassifyPlanFollowup directly left all three pre-existing tests in this
+// file green).
+func TestPlanFollowupClassifier_SingleCallSite(t *testing.T) {
+	root := repoRootForTest(t)
+	hits := grepGoFiles(t, root, []string{"ClassifyPlanFollowup("})
+
+	excludeDir := filepath.Join(root, "internal", "app", "intentclassifier") + string(filepath.Separator)
+	var callSites []string
+	for _, hit := range hits {
+		path := strings.SplitN(hit, ": ", 2)[0]
+		if strings.HasPrefix(path, excludeDir) {
+			continue
+		}
+		callSites = append(callSites, hit)
+	}
+
+	if len(callSites) != 1 {
+		t.Fatalf("ClassifyPlanFollowup( called from %d non-test call site(s) outside internal/app/intentclassifier, want exactly 1 (§23.1's own single-call-site invariant); found:\n%s", len(callSites), strings.Join(callSites, "\n"))
+	}
+
+	const wantSuffix = "httpapi/turn.go: ClassifyPlanFollowup("
+	if !strings.HasSuffix(filepath.ToSlash(callSites[0]), wantSuffix) {
+		t.Errorf("the one call site = %q, want it to end with %q (createTurnLocked, turn.go)", callSites[0], wantSuffix)
+	}
+}
