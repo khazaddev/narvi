@@ -155,6 +155,25 @@ func TestService_ClassifyPlanFollowup_NeverThrows(t *testing.T) {
 			wantReason: ports.FallbackReasonInvalidOutput,
 		},
 		{
+			// F7/H1 (adversarial review): planFollowupStructuredOutput.valid()
+			// (schema_planfollowup.go) checks target THEN confidence, via two
+			// SEQUENTIAL switch statements -- every other case in this table
+			// pairs a valid target with a valid confidence, or an invalid
+			// target (caught by the FIRST switch before confidence is ever
+			// reached), so the confidence-enum check itself was never actually
+			// exercised by this suite (confirmed by mutation: deleting that
+			// second switch left every pre-existing test here green). This
+			// case pairs a VALID target with an out-of-enum confidence value
+			// ("very high", not one of high/medium/low) specifically to
+			// exercise that second switch -- promoted from a stray, untracked
+			// probe file (zztmp_probe_test.go) left behind by the review pass,
+			// now deleted.
+			name:       "llm returns a schema-shaped but out-of-enum confidence",
+			llm:        &fakeLLM{response: successPlanFollowupResponse(intentdomain.TargetAmend, "very high", "x")},
+			templates:  validPlanFollowupTemplates(),
+			wantReason: ports.FallbackReasonInvalidOutput,
+		},
+		{
 			name:       "llm returns empty structured output",
 			llm:        &fakeLLM{response: json.RawMessage(`{}`)},
 			templates:  validPlanFollowupTemplates(),
