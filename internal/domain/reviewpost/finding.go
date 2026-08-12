@@ -129,6 +129,37 @@ type Finding struct {
 	Line         *int
 	Description  string
 	SuggestedFix *string
+
+	// StartLine/EndLine are §22.1.1's own content-anchored position --
+	// computed server-side by MatchPosition (position.go), or by the
+	// non-agentic LLM-port relocation fallback when that match fails
+	// (internal/app/findingposition, §4.3), NEVER by the reviewing model
+	// itself. Both are the explicit, typed "unanchored" zero value (0)
+	// until BuildFindings' own caller (httpapi.PostReviewVerdict) resolves
+	// them -- BuildFinding/BuildFindings below never populate these two
+	// fields, exactly like they never populate IdentityHash from anything
+	// but ComputeFindingIdentity: position resolution is a SEPARATE step,
+	// run once, after a Finding already exists, with the diff in hand
+	// (§22.1.1: "resolved once, together, at render time" -- no second
+	// pass, by construction).
+	//
+	// Deliberately plain ints, not *int like Line above: for Line, nil
+	// distinguishes "the model reported no line at all" from a real line
+	// number -- but for StartLine/EndLine, 0 IS the sentinel itself ("not
+	// found"), never a value MatchPosition or the relocation fallback
+	// could legitimately return for a genuine match (both source line
+	// numbers are always >= 1), so a pointer would only add an
+	// indirection with no extra information to carry.
+	//
+	// Deliberately NOT persisted to review_findings (no migration for
+	// these two fields, §22.1.1's own explicit instruction): a finding's
+	// position is a function of THIS diff, rendered fresh at THIS
+	// posting -- storing yesterday's position would reintroduce exactly
+	// the staleness problem content-anchored positioning exists to solve
+	// the moment the diff moves again. reviewverdict.go's own upsert loop
+	// (UpsertReviewFindingParams) never reads either field.
+	StartLine int
+	EndLine   int
 }
 
 // The errors ValidateFindingInput returns -- one per rejected field,

@@ -58,9 +58,22 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, summary, botHand
 			if f.SentinelKind != nil {
 				kind = string(*f.SentinelKind)
 			}
-			if f.Line != nil {
-				fmt.Fprintf(&b, "- [%s/%s] `%s:%d`: %s\n", kind, f.Severity, f.FilePath, *f.Line, f.Description)
-			} else {
+			// §22.1.1: StartLine/EndLine (server-computed, content-anchored
+			// -- position.go) are the ONLY position ever rendered here once
+			// they exist. f.Line (the model's own self-reported, UNVERIFIED
+			// pointer) is deliberately never used as a rendering fallback
+			// when StartLine is 0 (unanchored): rendering it anyway would
+			// hand a maintainer exactly the "plausible-looking wrong
+			// answer" §22.1.1 says is worse than no position at all --
+			// StartLine==0 renders as no line reference whatsoever, an
+			// honest "position not found", never a guess dressed up as a
+			// real one.
+			switch {
+			case f.StartLine != 0 && f.StartLine == f.EndLine:
+				fmt.Fprintf(&b, "- [%s/%s] `%s:%d`: %s\n", kind, f.Severity, f.FilePath, f.StartLine, f.Description)
+			case f.StartLine != 0:
+				fmt.Fprintf(&b, "- [%s/%s] `%s:%d-%d`: %s\n", kind, f.Severity, f.FilePath, f.StartLine, f.EndLine, f.Description)
+			default:
 				fmt.Fprintf(&b, "- [%s/%s] `%s`: %s\n", kind, f.Severity, f.FilePath, f.Description)
 			}
 		}
