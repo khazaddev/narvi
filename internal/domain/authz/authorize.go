@@ -150,10 +150,16 @@ var matrix = map[Action]actionRule{
 	ActionManageWorkflowDefinitions: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 5: review verdicts/re-trigger/auto-approve config --
-	// admin/maintainer.
-	ActionEditReviewVerdict:    {allow: roles(RoleAdmin, RoleMaintainer)},
-	ActionRetriggerReview:      {allow: roles(RoleAdmin, RoleMaintainer)},
-	ActionConfigureAutoApprove: {allow: roles(RoleAdmin, RoleMaintainer)},
+	// admin/maintainer. Step 63 (§22.2/§22.4) adds the learned
+	// false-positive pattern capture/lifecycle actions to this SAME row,
+	// no member own/joined carve-out -- see action.go's own doc comment
+	// on each ("a taught pattern is repo-scoped, not session-scoped, so
+	// there is no 'owned' resource to carve out at all").
+	ActionEditReviewVerdict:           {allow: roles(RoleAdmin, RoleMaintainer)},
+	ActionRetriggerReview:             {allow: roles(RoleAdmin, RoleMaintainer)},
+	ActionConfigureAutoApprove:        {allow: roles(RoleAdmin, RoleMaintainer)},
+	ActionTeachFalsePositivePattern:   {allow: roles(RoleAdmin, RoleMaintainer)},
+	ActionManageFalsePositivePatterns: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 6: integrations/global secrets/template activation/members &
 	// roles/sentinel toggle/blockOnHighRisk -- admin only. Step 54
