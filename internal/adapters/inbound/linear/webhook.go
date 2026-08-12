@@ -859,7 +859,16 @@ func (deps Deps) handlePrompted(ctx context.Context, payload agentSessionEventWe
 	// build turn -- the negative branch (the ErrPlanAwaitingApproval log
 	// line above) was already logged, but the POSITIVE re-routing decision
 	// was not.
-	logger.Info("linear: added turn", "session_id", sessionID, "turn_id", createdTurn.ID, "plan_mode", planMode)
+	//
+	// createdTurn.PlanMode (not the local planMode variable computed above
+	// the CreateTurnCore call) -- F2 audit fix: planMode is captured BEFORE
+	// CreateTurnCore/createTurnLocked ever runs, so it never reflects
+	// createTurnLocked's own Step 64 promotion of planMode=true when the
+	// plan_followup classifier returns a confident "amend" (see that
+	// function's own doc comment, turn.go). Logging the stale local
+	// variable here would silently misreport a promoted turn as
+	// plan_mode=false.
+	logger.Info("linear: added turn", "session_id", sessionID, "turn_id", createdTurn.ID, "plan_mode", createdTurn.PlanMode)
 
 	// turns carries no per-row actor column at all (migrations/
 	// 000005_turns.up.sql) -- unlike sessions.created_by/plans.decided_by,
