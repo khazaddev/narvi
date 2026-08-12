@@ -4,31 +4,38 @@
 -- comment for the table's full design.
 
 -- name: UpsertFalsePositivePattern :one
--- Idempotent create keyed on comment_id (§22.2: "keyed on the triggering
--- comment id") -- mirrors ClaimWebhookDelivery's own "(xmax = 0) AS
--- inserted" self-referential-no-op-update idiom (webhookdeliveries.sql)
--- exactly, NOT UpsertReviewFinding's "refresh one bookkeeping column on
--- conflict" idiom: unlike a finding, which is legitimately re-reported
--- on every later commit, a taught pattern is captured EXACTLY ONCE, by
--- its own triggering comment -- a redelivered webhook or a retried
--- command for the SAME comment_id must leave every column (most
--- importantly retired_at/hit_count, this row's own mutable lifecycle
--- state) completely untouched, never reset back to "just taught,
--- active, zero hits". Inserted (via "xmax = 0") lets the caller log
--- whether this call captured a genuinely NEW pattern or just re-observed
--- an already-known comment_id, without a second SELECT.
-INSERT INTO review_false_positive_patterns (repo_full_name, comment_id, reason, created_by)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (comment_id) DO UPDATE SET repo_full_name = review_false_positive_patterns.repo_full_name
+-- Idempotent create keyed on (comment_id, comment_type) (§22.2: "keyed on
+-- the triggering comment id" -- comment_type joins that key because
+-- comment_id ALONE is not globally unique across GitHub's own
+-- issue_comment vs pull_request_review_comment id sequences, see this
+-- table's own migration doc comment) -- mirrors ClaimWebhookDelivery's
+-- own "(xmax = 0) AS inserted" self-referential-no-op-update idiom
+-- (webhookdeliveries.sql) exactly, NOT UpsertReviewFinding's "refresh one
+-- bookkeeping column on conflict" idiom: unlike a finding, which is
+-- legitimately re-reported on every later commit, a taught pattern is
+-- captured EXACTLY ONCE, by its own triggering comment -- a redelivered
+-- webhook or a retried command for the SAME (comment_id, comment_type)
+-- must leave every column (most importantly retired_at/hit_count, this
+-- row's own mutable lifecycle state) completely untouched, never reset
+-- back to "just taught, active, zero hits". Inserted (via "xmax = 0")
+-- lets the caller log whether this call captured a genuinely NEW pattern
+-- or just re-observed an already-known (comment_id, comment_type) pair,
+-- without a second SELECT.
+INSERT INTO review_false_positive_patterns (repo_full_name, comment_id, comment_type, reason, created_by)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (comment_id, comment_type) DO UPDATE SET repo_full_name = review_false_positive_patterns.repo_full_name
 RETURNING *, (xmax = 0) AS inserted;
 
 -- name: GetFalsePositivePattern :one
 -- Looked up by the retire endpoint (patternID comes straight off the URL
--- path) -- pgx.ErrNoRows means no such pattern exists at all, distinct
--- from "exists but already retired" (RetireFalsePositivePattern's own
--- guarded UPDATE reports that case separately -- see its own doc
--- comment).
-SELECT * FROM review_false_positive_patterns WHERE id = $1;
+-- path, repoFullName off the route) -- SCOPED to repoFullName (audit fix:
+-- previously keyed on id alone, letting a pattern belonging to a
+-- DIFFERENT repo be retrieved through the wrong repo's URL) -- pgx.
+-- ErrNoRows means no such pattern exists IN THIS REPO at all, distinct
+-- from "exists (in this repo) but already retired"
+-- (RetireFalsePositivePattern's own guarded UPDATE reports that case
+-- separately -- see its own doc comment).
+SELECT * FROM review_false_positive_patterns WHERE id = $1 AND repo_full_name = $2;
 
 -- name: ListActiveFalsePositivePatterns :many
 -- §22.3's own advisory-injection read: every currently-active (not
@@ -55,16 +62,23 @@ LIMIT $2;
 
 -- name: RetireFalsePositivePattern :one
 -- §22.4's own retirement write: a maintainer+ permanently excludes a
--- stale/wrong pattern from future advisory injection. Guarded (WHERE
--- retired_at IS NULL, CLAUDE.md/§11's own "guarded UPDATE ... WHERE for
--- cross-writer transitions" rule) so retiring an ALREADY-retired pattern
--- is a no-op that returns pgx.ErrNoRows (never a second, silently
--- overwriting retired_at/retired_by) -- the caller (httpapi) tells "never
--- existed" apart from "already retired" via a follow-up
--- GetFalsePositivePattern read on this same ErrNoRows path.
+-- stale/wrong pattern from future advisory injection. SCOPED to
+-- repo_full_name (audit fix: previously keyed on id alone -- the
+-- handler's own doc comment promises a 404 "if no pattern with this id
+-- exists in this repo at all", but that was unreachable: a pattern
+-- belonging to a DIFFERENT repo was happily retired through the wrong
+-- repo's URL, a real API-contract violation and a silent wrong-repo
+-- mutation via a stale UI id) AND guarded (WHERE retired_at IS NULL,
+-- CLAUDE.md/§11's own "guarded UPDATE ... WHERE for cross-writer
+-- transitions" rule) so retiring an ALREADY-retired pattern is a no-op
+-- that returns pgx.ErrNoRows (never a second, silently overwriting
+-- retired_at/retired_by) -- the caller (httpapi) tells "never existed in
+-- this repo" apart from "exists in this repo but already retired" via a
+-- follow-up GetFalsePositivePattern (also repo-scoped) read on this same
+-- ErrNoRows path.
 UPDATE review_false_positive_patterns
 SET retired_at = now(), retired_by = $2
-WHERE id = $1 AND retired_at IS NULL
+WHERE id = $1 AND repo_full_name = $3 AND retired_at IS NULL
 RETURNING *;
 
 -- name: IncrementFalsePositivePatternHitCount :exec

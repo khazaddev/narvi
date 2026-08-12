@@ -21,17 +21,33 @@
 -- comment_id is "the triggering comment id" (§22.2) -- the GitHub
 -- issue_comment/pull_request_review_comment id whose body carried the
 -- capturing `false positive: <reason>` command
--- (internal/domain/falsepositive.Match). UNIQUE on its own: a GitHub
--- comment id is globally unique across the whole platform (never
--- reused, never scoped to one repo), so it is -- exactly like
--- webhook_deliveries' (provider, delivery_id) and github_pr_sessions'
--- (repo_full_name, pr_number) before it (migrations/000027,
--- migrations/000028) -- the natural idempotency key: a redelivered
--- webhook or a retried command for the SAME comment must never
--- double-insert a second pattern row. repo_full_name is still stored (and
--- indexed) separately, never derived from comment_id, because every real
--- read this table serves (the advisory-injection fetch, the per-repo
--- audit view) is scoped by repo, not by comment.
+-- (internal/domain/falsepositive.Match). comment_id ALONE is NOT globally
+-- unique: this feature captures BOTH GitHub `issue_comment` and
+-- `pull_request_review_comment` events into this SAME column, and GitHub
+-- allocates those two event types' own ids from two SEPARATE, currently-
+-- overlapping numeric sequences (verified live against the real GitHub
+-- API) -- so a plain UNIQUE (comment_id) risks a cross-event-type
+-- collision silently no-oping the upsert (ON CONFLICT returning the
+-- OTHER row) and corrupting the audit log with the wrong repo/reason
+-- attributed to the wrong pattern id. comment_type records which of the
+-- two event types actually carried this comment (the exact eventType
+-- string, "issue_comment" or "pull_request_review_comment" --
+-- internal/adapters/inbound/github's own eventTypeIssueComment/
+-- eventTypePullRequestReviewComment constants, payload.go), and the
+-- UNIQUE constraint is on the PAIR (comment_id, comment_type), never
+-- comment_id alone -- exactly like webhook_deliveries' (provider,
+-- delivery_id) and github_pr_sessions' (repo_full_name, pr_number)
+-- before it (migrations/000027, migrations/000028), this pair is the
+-- real, collision-free idempotency key: a redelivered webhook or a
+-- retried command for the SAME (comment_id, comment_type) must never
+-- double-insert a second pattern row. Deliberately NOT
+-- (repo_full_name, comment_id) either -- that would still allow a
+-- same-repo issue-vs-review-comment collision, since the two event
+-- types' id sequences overlap WITHIN a single repo too, not merely
+-- across repos. repo_full_name is still stored (and indexed) separately,
+-- never derived from comment_id, because every real read this table
+-- serves (the advisory-injection fetch, the per-repo audit view) is
+-- scoped by repo, not by comment.
 --
 -- Lifecycle columns (§22.4, shipped in this SAME migration, never a
 -- deferred follow-up):
@@ -51,6 +67,11 @@ CREATE TABLE review_false_positive_patterns (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     repo_full_name TEXT NOT NULL,
     comment_id     BIGINT NOT NULL,
+    -- comment_type is the GitHub webhook event type that carried the
+    -- triggering comment -- "issue_comment" or "pull_request_review_comment"
+    -- (see this table's own top doc comment for why this, paired with
+    -- comment_id, is the real idempotency key, not comment_id alone).
+    comment_type   TEXT NOT NULL,
     -- reason is the maintainer's own free-text pattern description, taken
     -- verbatim from the text after the `false positive:` prefix
     -- (internal/domain/falsepositive.Match) -- untrusted, PR-thread-
@@ -73,7 +94,7 @@ CREATE TABLE review_false_positive_patterns (
     retired_at     TIMESTAMPTZ,
     retired_by     UUID REFERENCES users(id) ON DELETE SET NULL,
 
-    UNIQUE (comment_id)
+    UNIQUE (comment_id, comment_type)
 );
 
 -- The one read query the advisory-injection path needs (§22.3): every

@@ -148,15 +148,22 @@ func RetireFalsePositivePattern(patterns *postgres.FalsePositivePatternStore, au
 			return
 		}
 
-		updated, err := patterns.Retire(ctx, patternID, actorUserID)
+		updated, err := patterns.Retire(ctx, patternID, actorUserID, repoFullName)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				// Guarded UPDATE's own WHERE retired_at IS NULL clause
-				// rejected this write -- distinguish "never existed" (404)
-				// from "exists but already retired" (409) with a
-				// follow-up read, mirroring FalsePositivePatternStore.
-				// Retire's own doc comment.
-				_, getErr := patterns.Get(ctx, patternID)
+				// rejected this write -- distinguish "never existed in this
+				// repo" (404) from "exists in this repo but already
+				// retired" (409) with a follow-up read, mirroring
+				// FalsePositivePatternStore.Retire's own doc comment. Both
+				// Retire and this follow-up Get are scoped to repoFullName
+				// (audit fix: previously id alone, letting a pattern
+				// belonging to a DIFFERENT repo be retrieved/retired
+				// through the wrong repo's own URL) -- a cross-repo
+				// mismatch now falls into this SAME "never existed" 404
+				// path, matching this handler's own doc comment's already-
+				// documented contract.
+				_, getErr := patterns.Get(ctx, patternID, repoFullName)
 				if getErr != nil {
 					if errors.Is(getErr, pgx.ErrNoRows) {
 						writeError(w, http.StatusNotFound, "no false-positive pattern with this id")
@@ -174,8 +181,12 @@ func RetireFalsePositivePattern(patterns *postgres.FalsePositivePatternStore, au
 			return
 		}
 
+		// repo_full_name comes from the RESOLVED row, never the URL --
+		// they are now guaranteed equal (Retire's own query is scoped to
+		// repoFullName), but taking it from the row is the more honest
+		// source of truth for what was actually mutated.
 		if err := recordAuditLog(ctx, auditLog, actorUserID, "false_positive_pattern.retire", "false_positive_pattern", patternID.String(), map[string]any{
-			"repo_full_name": repoFullName,
+			"repo_full_name": updated.RepoFullName,
 		}); err != nil {
 			logger.Error("httpapi: record false_positive_pattern.retire audit log failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "internal error")

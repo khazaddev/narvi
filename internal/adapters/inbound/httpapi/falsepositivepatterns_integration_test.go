@@ -24,7 +24,11 @@ import (
 // integration_test.go).
 func seedFalsePositivePattern(ctx context.Context, t *testing.T, rig testRig, repoFullName, reason string, commentID int64) sqlcgen.ReviewFalsePositivePattern {
 	t.Helper()
-	row, _, err := rig.falsePositivePatterns.Upsert(ctx, repoFullName, commentID, reason, pgtype.UUID{})
+	// commentType is fixed to "issue_comment" here -- none of this file's
+	// own tests exercise comment-type-collision behavior (that is
+	// falsepositivecapture_integration_test.go's own job); this helper
+	// just needs SOME valid, non-empty value for the NOT NULL column.
+	row, _, err := rig.falsePositivePatterns.Upsert(ctx, repoFullName, commentID, "issue_comment", reason, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("seed false-positive pattern: %v", err)
 	}
@@ -82,7 +86,7 @@ func TestListFalsePositivePatterns_IncludesRetired(t *testing.T) {
 
 	const repoFullName = "acme/fp-list-retired-repo"
 	row := seedFalsePositivePattern(ctx, t, rig, repoFullName, "will be retired", 810003)
-	if _, err := rig.falsePositivePatterns.Retire(ctx, row.ID, admin.ID); err != nil {
+	if _, err := rig.falsePositivePatterns.Retire(ctx, row.ID, admin.ID, repoFullName); err != nil {
 		t.Fatalf("retire: %v", err)
 	}
 
@@ -116,7 +120,7 @@ func TestRetireFalsePositivePattern_MaintainerAllowed(t *testing.T) {
 		t.Error("RetiredAt = nil, want a real timestamp")
 	}
 
-	fresh, err := rig.falsePositivePatterns.Get(ctx, row.ID)
+	fresh, err := rig.falsePositivePatterns.Get(ctx, row.ID, repoFullName)
 	if err != nil {
 		t.Fatalf("Get after retire: %v", err)
 	}
@@ -138,7 +142,7 @@ func TestRetireFalsePositivePattern_MemberDenied(t *testing.T) {
 		t.Errorf("status = %d, want %d", status, http.StatusForbidden)
 	}
 
-	fresh, err := rig.falsePositivePatterns.Get(ctx, row.ID)
+	fresh, err := rig.falsePositivePatterns.Get(ctx, row.ID, repoFullName)
 	if err != nil {
 		t.Fatalf("Get after denied retire: %v", err)
 	}
@@ -182,6 +186,38 @@ func TestRetireFalsePositivePattern_NotFound(t *testing.T) {
 	}
 }
 
+// TestRetireFalsePositivePattern_CrossRepo_NotFound is Fix D's own
+// regression proof: this handler's own doc comment promises a 404 "if no
+// pattern with this id exists in this repo at all" -- before this fix,
+// that was unreachable, because the underlying Get/Retire store methods
+// and SQL queries were keyed on the pattern UUID ALONE, with no
+// repo_full_name predicate anywhere. A pattern seeded under one repo,
+// retired through a DIFFERENT repo's own URL, must now 404 (matching the
+// documented contract) instead of succeeding and silently mutating the
+// wrong repo's audit trail.
+func TestRetireFalsePositivePattern_CrossRepo_NotFound(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	const realRepo = "acme/fp-crossrepo-real-repo"
+	const otherRepo = "acme/fp-crossrepo-other-repo"
+	row := seedFalsePositivePattern(ctx, t, rig, realRepo, "belongs to realRepo only", 810008)
+
+	status := rig.doJSON(t, http.MethodPost, fmt.Sprintf("/api/repos/acme/fp-crossrepo-other-repo/false-positive-patterns/%s/retire", row.ID.String()), nil, nil, token)
+	if status != http.StatusNotFound {
+		t.Errorf("status = %d, want %d -- a pattern belonging to %q must 404 when retired through %q's own URL, never succeed", status, http.StatusNotFound, realRepo, otherRepo)
+	}
+
+	fresh, err := rig.falsePositivePatterns.Get(ctx, row.ID, realRepo)
+	if err != nil {
+		t.Fatalf("Get (via the real repo) after cross-repo retire attempt: %v", err)
+	}
+	if fresh.RetiredAt.Valid {
+		t.Error("RetiredAt.Valid = true after a CROSS-REPO retire attempt -- must remain active, never mutated via the wrong repo's URL")
+	}
+}
+
 // TestFalsePositivePatternStore_IncrementHitCount is the store-level
 // proof for §22.4's own hit-count bookkeeping -- internal/app/
 // reviewcontext's own unit tests already prove FetchFalsePositivePatterns
@@ -195,7 +231,7 @@ func TestFalsePositivePatternStore_IncrementHitCount(t *testing.T) {
 	const repoFullName = "acme/fp-hitcount-repo"
 	row := seedFalsePositivePattern(ctx, t, rig, repoFullName, "hit-counted pattern", 810007)
 
-	before, err := rig.falsePositivePatterns.Get(ctx, row.ID)
+	before, err := rig.falsePositivePatterns.Get(ctx, row.ID, repoFullName)
 	if err != nil {
 		t.Fatalf("Get before increment: %v", err)
 	}
@@ -207,7 +243,7 @@ func TestFalsePositivePatternStore_IncrementHitCount(t *testing.T) {
 		t.Fatalf("IncrementHitCount: %v", err)
 	}
 
-	after, err := rig.falsePositivePatterns.Get(ctx, row.ID)
+	after, err := rig.falsePositivePatterns.Get(ctx, row.ID, repoFullName)
 	if err != nil {
 		t.Fatalf("Get after increment: %v", err)
 	}
@@ -222,7 +258,7 @@ func TestFalsePositivePatternStore_IncrementHitCount(t *testing.T) {
 	if err := rig.falsePositivePatterns.IncrementHitCount(ctx, []pgtype.UUID{row.ID}); err != nil {
 		t.Fatalf("second IncrementHitCount: %v", err)
 	}
-	twice, err := rig.falsePositivePatterns.Get(ctx, row.ID)
+	twice, err := rig.falsePositivePatterns.Get(ctx, row.ID, repoFullName)
 	if err != nil {
 		t.Fatalf("Get after second increment: %v", err)
 	}

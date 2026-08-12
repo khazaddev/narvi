@@ -44,7 +44,7 @@ import (
 // (cmd/control-plane/main.go), never two independently-constructed
 // copies.
 type FalsePositivePatternCapturer interface {
-	Upsert(ctx context.Context, repoFullName string, commentID int64, reason string, createdBy pgtype.UUID) (sqlcgen.ReviewFalsePositivePattern, bool, error)
+	Upsert(ctx context.Context, repoFullName string, commentID int64, commentType, reason string, createdBy pgtype.UUID) (sqlcgen.ReviewFalsePositivePattern, bool, error)
 }
 
 // falsePositiveCandidate is the small, common shape both event-type
@@ -53,6 +53,7 @@ type FalsePositivePatternCapturer interface {
 type falsePositiveCandidate struct {
 	RepoFullName   string
 	CommentID      int64
+	CommentType    string
 	CommenterID    int64
 	CommenterLogin string
 	Body           string
@@ -68,6 +69,15 @@ type falsePositiveCandidate struct {
 // commit-scoped). ok=false means "not a real, action=created comment on a
 // pull request" -- the caller falls through to the ordinary mention
 // pipeline exactly as if this file did not exist.
+//
+// CommentType is set to the exact eventType this candidate was parsed
+// from -- threaded all the way to FalsePositivePatternCapturer.Upsert's
+// own commentType parameter, since GitHub's own issue_comment and
+// pull_request_review_comment id sequences are NOT globally unique
+// against each other (verified live against the real GitHub API): without
+// this, a same-numbered id from the two different event types would
+// collide on review_false_positive_patterns' own idempotency key (see
+// that table's own migration doc comment).
 func parseFalsePositiveCandidate(eventType string, body []byte) (falsePositiveCandidate, bool, error) {
 	switch eventType {
 	case eventTypeIssueComment:
@@ -81,6 +91,7 @@ func parseFalsePositiveCandidate(eventType string, body []byte) (falsePositiveCa
 		return falsePositiveCandidate{
 			RepoFullName:   p.Repository.FullName,
 			CommentID:      p.Comment.ID,
+			CommentType:    eventTypeIssueComment,
 			CommenterID:    p.Comment.User.ID,
 			CommenterLogin: p.Comment.User.Login,
 			Body:           p.Comment.Body,
@@ -96,6 +107,7 @@ func parseFalsePositiveCandidate(eventType string, body []byte) (falsePositiveCa
 		return falsePositiveCandidate{
 			RepoFullName:   p.Repository.FullName,
 			CommentID:      p.Comment.ID,
+			CommentType:    eventTypePullRequestReviewComment,
 			CommenterID:    p.Comment.User.ID,
 			CommenterLogin: p.Comment.User.Login,
 			Body:           p.Comment.Body,
@@ -174,15 +186,16 @@ func tryCaptureFalsePositivePattern(ctx context.Context, logger *slog.Logger, id
 		return falsePositiveHandled
 	}
 
-	row, inserted, err := patterns.Upsert(ctx, candidate.RepoFullName, candidate.CommentID, reason, actor)
+	row, inserted, err := patterns.Upsert(ctx, candidate.RepoFullName, candidate.CommentID, candidate.CommentType, reason, actor)
 	if err != nil {
-		logger.Error("github: false-positive capture: upsert pattern failed", "error", err, "repo", candidate.RepoFullName, "comment_id", candidate.CommentID)
+		logger.Error("github: false-positive capture: upsert pattern failed", "error", err, "repo", candidate.RepoFullName, "comment_id", candidate.CommentID, "comment_type", candidate.CommentType)
 		return falsePositiveFailed
 	}
 
 	if err := auditlog.Record(ctx, auditLog, actor, "false_positive_pattern.teach", "false_positive_pattern", row.ID.String(), map[string]any{
 		"repo_full_name": candidate.RepoFullName,
 		"comment_id":     candidate.CommentID,
+		"comment_type":   candidate.CommentType,
 		"reason":         reason,
 		"inserted":       inserted,
 	}); err != nil {

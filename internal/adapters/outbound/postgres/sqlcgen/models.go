@@ -1661,6 +1661,7 @@ type ReviewFalsePositivePattern struct {
 	ID           pgtype.UUID        `json:"id"`
 	RepoFullName string             `json:"repo_full_name"`
 	CommentID    int64              `json:"comment_id"`
+	CommentType  string             `json:"comment_type"`
 	Reason       string             `json:"reason"`
 	CreatedBy    pgtype.UUID        `json:"created_by"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`

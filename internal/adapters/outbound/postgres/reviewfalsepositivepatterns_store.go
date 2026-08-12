@@ -37,17 +37,24 @@ func (s *FalsePositivePatternStore) WithTx(tx pgx.Tx) *FalsePositivePatternStore
 }
 
 // Upsert creates-or-updates one review_false_positive_patterns row keyed on
-// commentID -- see UpsertFalsePositivePattern's own generated doc comment
-// for why every column but the INSERT's own initial values is preserved on
-// a redelivered/retried capture of the SAME comment id. inserted reports
-// whether this call captured a genuinely new pattern (true) or observed an
-// already-known comment id (false) -- callers use it purely for
-// logging/observability, mirroring ClaimWebhookDelivery's identical
-// Inserted-is-log-only convention.
-func (s *FalsePositivePatternStore) Upsert(ctx context.Context, repoFullName string, commentID int64, reason string, createdBy pgtype.UUID) (row sqlcgen.ReviewFalsePositivePattern, inserted bool, err error) {
+// (commentID, commentType) -- see UpsertFalsePositivePattern's own
+// generated doc comment for why the PAIR, not commentID alone, is the real
+// idempotency key (GitHub's own issue_comment/pull_request_review_comment
+// id sequences are not globally unique against each other), and for why
+// every column but the INSERT's own initial values is preserved on a
+// redelivered/retried capture of the SAME (comment id, comment type) pair.
+// commentType is the exact eventType string the caller received the
+// triggering webhook as (internal/adapters/inbound/github's own
+// eventTypeIssueComment/eventTypePullRequestReviewComment constants).
+// inserted reports whether this call captured a genuinely new pattern
+// (true) or observed an already-known (comment id, comment type) pair
+// (false) -- callers use it purely for logging/observability, mirroring
+// ClaimWebhookDelivery's identical Inserted-is-log-only convention.
+func (s *FalsePositivePatternStore) Upsert(ctx context.Context, repoFullName string, commentID int64, commentType, reason string, createdBy pgtype.UUID) (row sqlcgen.ReviewFalsePositivePattern, inserted bool, err error) {
 	r, err := s.q.UpsertFalsePositivePattern(ctx, sqlcgen.UpsertFalsePositivePatternParams{
 		RepoFullName: repoFullName,
 		CommentID:    commentID,
+		CommentType:  commentType,
 		Reason:       reason,
 		CreatedBy:    createdBy,
 	})
@@ -58,6 +65,7 @@ func (s *FalsePositivePatternStore) Upsert(ctx context.Context, repoFullName str
 		ID:           r.ID,
 		RepoFullName: r.RepoFullName,
 		CommentID:    r.CommentID,
+		CommentType:  r.CommentType,
 		Reason:       r.Reason,
 		CreatedBy:    r.CreatedBy,
 		CreatedAt:    r.CreatedAt,
@@ -68,10 +76,12 @@ func (s *FalsePositivePatternStore) Upsert(ctx context.Context, repoFullName str
 	}, r.Inserted, nil
 }
 
-// Get fetches one pattern by id -- pgx.ErrNoRows (unwrapped) means no such
-// pattern was ever taught.
-func (s *FalsePositivePatternStore) Get(ctx context.Context, id pgtype.UUID) (sqlcgen.ReviewFalsePositivePattern, error) {
-	return s.q.GetFalsePositivePattern(ctx, id)
+// Get fetches one pattern by id, SCOPED to repoFullName (audit fix: id
+// alone previously let a pattern belonging to a DIFFERENT repo be
+// retrieved through the wrong repo's own caller) -- pgx.ErrNoRows
+// (unwrapped) means no such pattern was ever taught IN THIS REPO.
+func (s *FalsePositivePatternStore) Get(ctx context.Context, id pgtype.UUID, repoFullName string) (sqlcgen.ReviewFalsePositivePattern, error) {
+	return s.q.GetFalsePositivePattern(ctx, sqlcgen.GetFalsePositivePatternParams{ID: id, RepoFullName: repoFullName})
 }
 
 // ListActive returns every currently-active (not retired) pattern for
@@ -90,16 +100,21 @@ func (s *FalsePositivePatternStore) List(ctx context.Context, repoFullName strin
 	})
 }
 
-// Retire records a maintainer+'s explicit retirement of pattern id (§22.4)
+// Retire records a maintainer+'s explicit retirement of pattern id (§22.4),
+// SCOPED to repoFullName (audit fix: id alone previously let a pattern
+// belonging to a DIFFERENT repo be retired through the wrong repo's own
+// caller, a real API-contract violation and a silent wrong-repo mutation)
 // -- pgx.ErrNoRows (unwrapped) means EITHER no pattern with this id exists
-// at all, OR it exists but is already retired (the guarded UPDATE's own
-// WHERE retired_at IS NULL clause -- see RetireFalsePositivePattern's own
-// generated doc comment); callers distinguish the two with a follow-up Get
-// on this same error path.
-func (s *FalsePositivePatternStore) Retire(ctx context.Context, id, retiredBy pgtype.UUID) (sqlcgen.ReviewFalsePositivePattern, error) {
+// IN THIS REPO at all, OR it exists in this repo but is already retired
+// (the guarded UPDATE's own WHERE retired_at IS NULL clause -- see
+// RetireFalsePositivePattern's own generated doc comment); callers
+// distinguish the two with a follow-up Get (also repo-scoped) on this same
+// error path.
+func (s *FalsePositivePatternStore) Retire(ctx context.Context, id, retiredBy pgtype.UUID, repoFullName string) (sqlcgen.ReviewFalsePositivePattern, error) {
 	return s.q.RetireFalsePositivePattern(ctx, sqlcgen.RetireFalsePositivePatternParams{
-		ID:        id,
-		RetiredBy: retiredBy,
+		ID:           id,
+		RetiredBy:    retiredBy,
+		RepoFullName: repoFullName,
 	})
 }
 
