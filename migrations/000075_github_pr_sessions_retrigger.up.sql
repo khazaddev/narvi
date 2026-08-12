@@ -1,0 +1,80 @@
+-- github_pr_sessions gains three columns for Step 65's ("review:
+-- automatic re-review on new commits", §24) trailing-edge debounce and
+-- per-PR budget.
+--
+-- pending_retrigger_head_sha (§24.2): the most recent `pull_request`/
+-- `synchronize` webhook event's own reported head SHA for this PR,
+-- upserted (overwritten, not appended) by the ingress handler
+-- (internal/adapters/inbound/github/pullrequestsynchronize.go) on EVERY
+-- such event -- read back, once, when the review_retrigger_debounce
+-- named timer (session_timers, §2) fires, and compared against
+-- review_verdicts.head_sha (migrations/000067) for this PR's own latest
+-- posted verdict (ReviewVerdictStore.GetLatest) to decide whether a
+-- fresh push is still unreviewed.
+--
+-- # Deliberately NOT reusing the name `pending_head_sha`
+--
+-- An EARLIER, differently-scoped column of that exact name lived on this
+-- SAME table (migrations/000068_github_pr_sessions_pending_head_sha.up.
+-- sql), and was deliberately DROPPED again (migrations/
+-- 000072_turns_review_head_sha.up.sql, §62 review finding C2, CRITICAL)
+-- because a single, shared, mutable per-(repo,PR) column raced across
+-- concurrent review TURNS on the same session: that migration's own doc
+-- comment calls a column like that, left in place, "an attractive
+-- nuisance for a future caller to mistakenly read again."
+--
+-- This column does NOT have that problem, but reusing the retired name on
+-- the same table would be exactly that nuisance in the other direction: a
+-- future reader grepping for `pending_head_sha` would find two
+-- incompatible eras of meaning under the same identifier, and might
+-- reintroduce the very bug 000072 fixed by assuming this column can feed
+-- review_verdicts.head_sha the way its predecessor briefly did.
+-- pending_retrigger_head_sha is a genuinely different fact: it is NEVER
+-- forwarded into review_verdicts.head_sha (turns.review_head_sha,
+-- migrations/000072, remains the ONLY source for that -- every automatic
+-- re-review turn resolves its own review_head_sha via a fresh
+-- reviewcontext.Fetch call at turn-creation time, exactly like the manual
+-- retrigger path, never by trusting this column's value directly); it is
+-- written by exactly one caller (the synchronize webhook handler, never a
+-- review turn's own context-fetch); and it is read by exactly one caller
+-- (the review_retrigger_debounce timer's own fire handler, sessionactor.
+-- handleReviewRetriggerDebounceTimer), which clears it (via a guarded
+-- UPDATE ... WHERE, CLAUDE.md/§11's own "cross-writer transitions" idiom)
+-- immediately after reading it. There is no turn-scoped race to reproduce
+-- here because no turn ever reads or writes this column.
+--
+-- Nullable: NULL means "no synchronize event pending a debounced
+-- re-review" -- the steady state for every PR, and the value both a
+-- successful re-review dispatch and a "heads already match" no-op reset
+-- it to (§24.3 steps 3-4).
+ALTER TABLE github_pr_sessions ADD COLUMN pending_retrigger_head_sha TEXT;
+
+-- auto_retrigger_count (§24.6): incremented once per PR each time the
+-- review_retrigger_debounce timer's own fire handler actually enqueues an
+-- automatic re-review turn (never on a manual label/button re-trigger,
+-- Step 46 -- that track is untouched by this counter, by design: a
+-- human's manual re-trigger always works regardless of this count).
+-- Compared against a per-deployment budget
+-- (sessionactor.reviewAutoRetriggerBudget, mirroring how a proposed-not-
+-- specified default elsewhere in this plan is documented) to break an
+-- automated-fix-triggers-automated-review loop (§17's sentinel auto-fix
+-- pushing a commit that itself triggers this same feature).
+--
+-- NOT NULL DEFAULT 0: every PR starts, and stays until its first
+-- automatic re-review actually dispatches, at a real, well-defined zero
+-- -- never a NULL a caller would have to special-case as "zero".
+ALTER TABLE github_pr_sessions ADD COLUMN auto_retrigger_count INTEGER NOT NULL DEFAULT 0;
+
+-- auto_retrigger_budget_notice_sent_at (§24.6): NULL until the FIRST time
+-- the debounce timer's fire handler observes the budget already
+-- exhausted for this PR, at which point it posts one server-side
+-- verdict-tool notice (never a raw comment, §5.2) and records that instant
+-- here -- every LATER firing that finds the budget still exhausted reads
+-- this as non-NULL and skips posting a second notice, satisfying §24.6's
+-- own "a one-time event, not repeated on every subsequent firing" rule
+-- without a separate claim table: this column IS the claim, guarded the
+-- same "UPDATE ... WHERE column IS NULL" way every other single-writer
+-- guarded transition in this codebase already is (only this PR's own
+-- session actor ever writes it, serialized by construction, §2's "one
+-- goroutine per active session").
+ALTER TABLE github_pr_sessions ADD COLUMN auto_retrigger_budget_notice_sent_at TIMESTAMPTZ;

@@ -86,3 +86,54 @@ func (s *GitHubPRSessionStore) GetBySessionID(ctx context.Context, sessionID pgt
 // and read back via TurnStore.GetProcessingTurnForSession -- see that
 // migration's own doc comment for the full "why a shared, mutable
 // per-(repo,PR) column was the wrong place for this fact".
+
+// UpsertPendingRetriggerHeadSHA is Step 65's own actor-bypassing write
+// (§24.1's 4th cost item, internal/adapters/inbound/github/
+// pullrequestsynchronize.go): guarded on session_id IS NOT NULL, so
+// pgx.ErrNoRows (unwrapped) means exactly "no row, or a row with
+// session_id still NULL -- no review session to re-trigger", the SAME
+// acknowledge-and-ignore outcome as today's "no mention" case. See
+// UpsertPendingRetriggerHeadSHA's own generated doc comment.
+func (s *GitHubPRSessionStore) UpsertPendingRetriggerHeadSHA(ctx context.Context, repoFullName string, prNumber int32, headSHA string) (sqlcgen.GithubPrSession, error) {
+	return s.q.UpsertPendingRetriggerHeadSHA(ctx, sqlcgen.UpsertPendingRetriggerHeadSHAParams{
+		RepoFullName:            repoFullName,
+		PrNumber:                prNumber,
+		PendingRetriggerHeadSha: &headSHA,
+	})
+}
+
+// ClearPendingRetriggerHeadSHA is the review_retrigger_debounce timer's
+// own guarded clear (§24.3 steps 3-4) -- expectedHeadSHA must still equal
+// the column's CURRENT value for the clear to apply; pgx.ErrNoRows
+// (unwrapped) means a newer synchronize event already overwrote it (see
+// ClearPendingRetriggerHeadSHA's own generated doc comment for the full
+// race this guards against), which the caller treats as harmless -- the
+// newer event's own timer re-arm already covers the newer push.
+func (s *GitHubPRSessionStore) ClearPendingRetriggerHeadSHA(ctx context.Context, repoFullName string, prNumber int32, expectedHeadSHA string) (sqlcgen.GithubPrSession, error) {
+	return s.q.ClearPendingRetriggerHeadSHA(ctx, sqlcgen.ClearPendingRetriggerHeadSHAParams{
+		RepoFullName:            repoFullName,
+		PrNumber:                prNumber,
+		PendingRetriggerHeadSha: &expectedHeadSHA,
+	})
+}
+
+// IncrementAutoRetriggerCount is §24.6's own budget-counter increment --
+// called exactly once per automatically-enqueued re-review turn, never
+// for a manual label/button re-trigger.
+func (s *GitHubPRSessionStore) IncrementAutoRetriggerCount(ctx context.Context, repoFullName string, prNumber int32) (sqlcgen.GithubPrSession, error) {
+	return s.q.IncrementAutoRetriggerCount(ctx, sqlcgen.IncrementAutoRetriggerCountParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+	})
+}
+
+// MarkAutoRetriggerBudgetNoticeSent is §24.6's own "post the notice
+// exactly once" claim -- guarded on auto_retrigger_budget_notice_sent_at
+// IS NULL; pgx.ErrNoRows (unwrapped) means this PR was already notified,
+// so the caller must not post a second notice.
+func (s *GitHubPRSessionStore) MarkAutoRetriggerBudgetNoticeSent(ctx context.Context, repoFullName string, prNumber int32) (sqlcgen.GithubPrSession, error) {
+	return s.q.MarkAutoRetriggerBudgetNoticeSent(ctx, sqlcgen.MarkAutoRetriggerBudgetNoticeSentParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+	})
+}

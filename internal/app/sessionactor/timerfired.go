@@ -4,7 +4,13 @@
 // for every actual decision -- this file's own job is orchestration
 // (reading current state, calling the right decision function, writing
 // the result back transactionally) and never reimplementing a decision
-// those packages already make.
+// those packages already make. Step 65 ("review: automatic re-review on
+// new commits", §24) adds a 6th named timer, review_retrigger_debounce --
+// its own fire handler, handleReviewRetriggerDebounceTimer, is dispatched
+// from the SAME switch below but implemented in reviewretrigger.go, not
+// this file, since it is armed from OUTSIDE the actor entirely (see that
+// file's own top comment) rather than by any of this file's own handlers,
+// unlike the 5 timers this file's rest describes.
 //
 // All 5 named timers' RE-ARM/handling logic is fully wired here -- none
 // needed a SandboxProvider or AgentRuntime (neither exists until Step
@@ -97,6 +103,8 @@ func (a *Actor) handleTimerFired(ctx context.Context, cmd TimerFired) error {
 		return a.handleTerminalGraceTimer(ctx)
 	case TimerTurnDeadline:
 		return a.handleTurnDeadlineTimer(ctx)
+	case TimerReviewRetriggerDebounce:
+		return a.handleReviewRetriggerDebounceTimer(ctx)
 	default:
 		// TEXT column, not an enum (§2) -- an unrecognized name is
 		// handled defensively (deny-list-not-allow-list, same convention

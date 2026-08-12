@@ -602,7 +602,7 @@ export interface PostEpistemicOutcomeResponse {
   turnId: string;
 }
 /**
- * GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: future Steps (58's auto-merge toggle, 61's automatic-re-review opt-in) are each expected to add a further boolean property here, never a bespoke DTO of their own.
+ * GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: Step 62's auto-merge toggle and Step 65's automatic-re-review opt-in (§24.5) each added a further boolean property here, never a bespoke DTO of their own -- future toggles are expected to follow the same pattern.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "RepoSettings".
@@ -645,6 +645,10 @@ export interface RepoSettings {
    * How many auto-approval outcomes contradictionRatePercent was computed over -- 0 whenever contradictionRateComputed is false.
    */
   contradictionSampleSize: number;
+  /**
+   * Step 65, §24.5: admin-only, per-repo, off by default -- once armed, a new commit pushed to a PR with an existing review session automatically enqueues a fresh review turn (after a trailing-edge debounce quiet period, §24.2) instead of waiting for a human's manual re-trigger. Gated by authz.ActionToggleAutoRetriggerReview, the SAME admin-only row as sentinelAutofixEnabled/autoMergeEnabled -- this automation never auto-approves anything on its own, it only ever enqueues an ordinary review turn.
+   */
+  autoRetriggerReviewEnabled: boolean;
 }
 /**
  * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise. Step 62's own §21.2 fields (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are DELIBERATELY NOT on this shared request: this endpoint's own handler requires EVERY permission its fields collectively need (PutRepoSettings' own doc comment, httpapi/reposettings.go), which would force a maintainer authorized only for the auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates (row 6) too -- see UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its own endpoint with its own single, correctly-scoped gate.
@@ -680,6 +684,15 @@ export interface UpdateAutoApprovalSettingsRequest {
  * via the `definition` "UpdateAutoMergeToggleRequest".
  */
 export interface UpdateAutoMergeToggleRequest {
+  enabled: boolean;
+}
+/**
+ * Request body for PUT /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5) -- arms/disarms the per-repo automatic-re-review-on-new-commits opt-in. A SEPARATE endpoint, gated SOLELY by authz.ActionToggleAutoRetriggerReview (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateAutoRetriggerReviewToggleRequest".
+ */
+export interface UpdateAutoRetriggerReviewToggleRequest {
   enabled: boolean;
 }
 /**

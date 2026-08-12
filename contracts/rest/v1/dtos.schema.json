@@ -571,8 +571,8 @@
     "RepoSettings": {
       "type": "object",
       "additionalProperties": false,
-      "description": "GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: future Steps (58's auto-merge toggle, 61's automatic-re-review opt-in) are each expected to add a further boolean property here, never a bespoke DTO of their own.",
-      "required": ["repoFullName", "blockOnHighRisk", "sentinelAutofixEnabled", "autoMergeEnabled", "maxAutoApproveFilesChanged", "sensitiveBlastRadiusTags", "contradictionRateComputed", "contradictionRatePercent", "contradictionSampleSize"],
+      "description": "GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: Step 62's auto-merge toggle and Step 65's automatic-re-review opt-in (§24.5) each added a further boolean property here, never a bespoke DTO of their own -- future toggles are expected to follow the same pattern.",
+      "required": ["repoFullName", "blockOnHighRisk", "sentinelAutofixEnabled", "autoMergeEnabled", "maxAutoApproveFilesChanged", "sensitiveBlastRadiusTags", "contradictionRateComputed", "contradictionRatePercent", "contradictionSampleSize", "autoRetriggerReviewEnabled"],
       "properties": {
         "repoFullName": { "type": "string", "description": "The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own shape." },
         "blockOnHighRisk": {
@@ -610,6 +610,10 @@
         "contradictionSampleSize": {
           "type": "integer",
           "description": "How many auto-approval outcomes contradictionRatePercent was computed over -- 0 whenever contradictionRateComputed is false."
+        },
+        "autoRetriggerReviewEnabled": {
+          "type": "boolean",
+          "description": "Step 65, §24.5: admin-only, per-repo, off by default -- once armed, a new commit pushed to a PR with an existing review session automatically enqueues a fresh review turn (after a trailing-edge debounce quiet period, §24.2) instead of waiting for a human's manual re-trigger. Gated by authz.ActionToggleAutoRetriggerReview, the SAME admin-only row as sentinelAutofixEnabled/autoMergeEnabled -- this automation never auto-approves anything on its own, it only ever enqueues an ordinary review turn."
         }
       }
     },
@@ -644,6 +648,15 @@
       "type": "object",
       "additionalProperties": false,
       "description": "Request body for PUT /api/repos/{owner}/{repo}/auto-merge (Step 62, §21.2 stage 2) -- arms/disarms the per-repo unattended-merge toggle. A SEPARATE endpoint, gated SOLELY by authz.ActionToggleAutoMerge (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint.",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "UpdateAutoRetriggerReviewToggleRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request body for PUT /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5) -- arms/disarms the per-repo automatic-re-review-on-new-commits opt-in. A SEPARATE endpoint, gated SOLELY by authz.ActionToggleAutoRetriggerReview (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint.",
       "required": ["enabled"],
       "properties": {
         "enabled": { "type": "boolean" }

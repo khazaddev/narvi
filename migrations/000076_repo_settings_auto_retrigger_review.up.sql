@@ -1,0 +1,23 @@
+-- auto_retrigger_review_enabled: Step 65's own admin-only, per-repo
+-- opt-in toggle (§24.5: "off by default, enabled per repository,
+-- Settings, admin-only -- the same row as the auto-merge and
+-- sentinel-auto-fix toggles"). Added as a further column on the SAME
+-- repo_settings table Step 47 already shaped for exactly this
+-- (migrations/000044_repo_settings.up.sql's own doc comment: "§24's
+-- future per-repo automatic-re-review opt-in toggle" was named there by
+-- name) -- NOT a new table, NOT a new endpoint family (internal/adapters/
+-- inbound/httpapi/reposettings.go gets one further column-scoped PUT
+-- handler, mirroring PutAutoMergeToggle exactly, not a parallel
+-- mechanism).
+--
+-- DEFAULT false: a repo's own settings row (or its total absence, this
+-- table's own established fail-closed-on-missing-row precedent) always
+-- means this automation is OFF unless an admin has explicitly armed it --
+-- matching block_on_high_risk/sentinel_autofix_enabled/auto_merge_enabled's
+-- own identical default-false precedent. §24.5 is emphatic that an
+-- unreadable setting must ALSO fail closed to OFF, never guessed open --
+-- internal/app/sessionactor's own reader of this column (Step 65) mirrors
+-- appreviewverdict.AutoMergeEnabled's exact fail-closed shape: a missing
+-- row or a genuine read error both return false, only a genuine read
+-- error is logged.
+ALTER TABLE repo_settings ADD COLUMN auto_retrigger_review_enabled BOOLEAN NOT NULL DEFAULT false;

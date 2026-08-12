@@ -13,6 +13,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -139,6 +140,16 @@ type storeBundle struct {
 	// mirroring how createPRBestEffort already reads sessionRow via a
 	// plain a.stores.session.Get before ever opening one.
 	repoSettings *postgres.RepoSettingsStore
+
+	// reviewVerdict is Step 65's ("review: automatic re-review on new
+	// commits", §24.3) own addition -- handleReviewRetriggerDebounceTimer
+	// (reviewretrigger.go) reads GetLatest to compare this PR's own
+	// latest posted verdict head_sha against pending_retrigger_head_sha,
+	// the same GetLatestReviewVerdict/DISTINCT-ON-per-PR reduction §21.1
+	// already defines and every other caller of "the latest verdict for
+	// this PR" (the auto-approval eligibility engine, the decision inbox)
+	// already reuses -- never a second, independently-derived reduction.
+	reviewVerdict *postgres.ReviewVerdictStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
@@ -165,6 +176,7 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		handoffSentinelRuns: postgres.NewHandoffSentinelStore(pool),
 		workflow:            postgres.NewWorkflowStore(pool),
 		repoSettings:        postgres.NewRepoSettingsStore(pool),
+		reviewVerdict:       postgres.NewReviewVerdictStore(pool),
 	}
 }
 
@@ -257,6 +269,38 @@ type Registry struct {
 	// treats a nil diffFetcher as "no diff available", degrading to a
 	// TODO-scan of nothing, never a panic.
 	diffFetcher PRDiffFetcher
+
+	// reviewDiffFetcher is Step 65's ("review: automatic re-review on new
+	// commits", §24.3) own addition, threaded through to every Actor this
+	// Registry hydrates exactly like diffFetcher above -- a DIFFERENT,
+	// wider interface than PRDiffFetcher (reviewcontext.Fetcher's own
+	// GetPullRequest+GetCompareDiff pair, not GetPullRequestDiff alone),
+	// since handleReviewRetriggerDebounceTimer needs the SAME "diff
+	// providably anchored to a live-fetched head sha" guarantee every
+	// OTHER review-trigger path already gets via internal/app/
+	// reviewcontext.Fetch (§62 review finding C2's own fix) -- see that
+	// package's own doc comment. *githubapi.Adapter (the SAME instance
+	// diffFetcher/sourceControl above already wire) satisfies this
+	// directly, with no adapter-side change. May be nil (tests that never
+	// exercise the automatic-re-review path) --
+	// handleReviewRetriggerDebounceTimer treats a nil reviewDiffFetcher as
+	// "no diff fetcher configured", logging and declining to enqueue a
+	// turn it could not honestly anchor to a real head sha, never a
+	// panic.
+	reviewDiffFetcher reviewcontext.Fetcher
+
+	// githubBotHandle is Step 65's own further addition -- the SAME
+	// configured bot/app username internal/adapters/inbound/github's own
+	// mention-pattern compiler already matches comment bodies against
+	// (platform.Config.GitHubBotHandle) --
+	// handleReviewRetriggerDebounceTimer's own budget-exhausted notice
+	// (§24.6) embeds reviewpost.RerunGuidance(botHandle), the SAME
+	// server-side, deterministic re-run phrasing every OTHER posted
+	// verdict already carries (§5.2), which needs this handle to render
+	// an "@botHandle review" mention. May be empty (tests that never
+	// exercise the budget-exhausted notice path) -- RerunGuidance("")
+	// still renders a (degenerate but harmless) string.
+	githubBotHandle string
 
 	// contractDriftDetected is Step 27's ("mocking + contract drift", §14.3)
 	// own OTel counter, constructed exactly once here (NewRegistry), then
@@ -351,6 +395,15 @@ type Registry struct {
 // can (an invalid/misconfigured MeterProvider), and that failure is
 // propagated up through whatever already handles Reconciler/Builder
 // construction errors today (cmd/control-plane/main.go).
+//
+// opts is a trailing variadic of RegistryOptions (Step 48's own
+// githubBotToken started this "one small options struct, not more
+// positional parameters" pattern as a bare `...string`; Step 65 widens it
+// into a real struct since it needs to add two further optional fields
+// of DIFFERENT types) -- every real caller passes at most one; only the
+// first is read. This means adding a new optional field here NEVER
+// requires touching NewRegistry's ~40 existing call sites across this
+// codebase's test suite, which simply omit opts entirely.
 func NewRegistry(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -364,7 +417,7 @@ func NewRegistry(
 	openCodeRuntimeVersion string,
 	diffFetcher PRDiffFetcher,
 	epistemicCheckDefault bool,
-	githubBotToken ...string,
+	opts ...RegistryOptions,
 ) (*Registry, error) {
 	meter := otel.Meter(meterName)
 
@@ -377,9 +430,9 @@ func NewRegistry(
 		return nil, fmt.Errorf("sessionactor: construct contract_drift_detected counter: %w", err)
 	}
 
-	var botToken string
-	if len(githubBotToken) > 0 {
-		botToken = githubBotToken[0]
+	var opt RegistryOptions
+	if len(opts) > 0 {
+		opt = opts[0]
 	}
 
 	lifecycleCtx, cancel := context.WithCancel(ctx)
@@ -396,13 +449,34 @@ func NewRegistry(
 		tokenEncryptionKey:     tokenEncryptionKey,
 		openCodeRuntimeVersion: openCodeRuntimeVersion,
 		diffFetcher:            diffFetcher,
-		githubBotToken:         botToken,
+		reviewDiffFetcher:      opt.ReviewDiffFetcher,
+		githubBotHandle:        opt.GitHubBotHandle,
+		githubBotToken:         opt.GitHubBotToken,
 		contractDriftDetected:  contractDriftDetected,
 		repoAccessCache:        newRepoAccessCache(),
 		epistemicCheckDefault:  epistemicCheckDefault,
 		lifecycleCtx:           lifecycleCtx,
 		cancel:                 cancel,
 	}, nil
+}
+
+// RegistryOptions bundles NewRegistry's own less-frequently-set,
+// nil/empty-safe additions -- see NewRegistry's own doc comment for why
+// this is a trailing variadic struct rather than more required
+// positional parameters.
+type RegistryOptions struct {
+	// GitHubBotToken is Step 48's ("sentinels + suggestions", §17.2) own
+	// addition: the SAME static bot credential (platform.Config.
+	// GitHubBotToken) pushpr.go's own createSentinelFixPRBestEffort uses
+	// to open a sentinel-auto-fix child session's own fix PR. May be
+	// empty (tests that never exercise the sentinel-fix PR path).
+	GitHubBotToken string
+	// GitHubBotHandle is Step 65's own addition -- see Registry.
+	// githubBotHandle's own doc comment.
+	GitHubBotHandle string
+	// ReviewDiffFetcher is Step 65's own addition -- see Registry.
+	// reviewDiffFetcher's own doc comment.
+	ReviewDiffFetcher reviewcontext.Fetcher
 }
 
 // GetOrSpawn returns the live local Actor for sessionID if this process

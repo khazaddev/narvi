@@ -119,8 +119,13 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 		// ActionConfigureAutoApprove (row 5) must still be able to read
 		// this repo's own settings -- not just the admin-only row 6
 		// actions this endpoint originally gated on alone (see
-		// authorizeAny's own doc comment above).
-		if !authorizeAny(w, r, authz.Resource{}, authz.ActionConfigureBlockOnHighRisk, authz.ActionConfigureAutoApprove, authz.ActionToggleAutoMerge) {
+		// authorizeAny's own doc comment above). Step 65 (§24.5) adds
+		// ActionToggleAutoRetriggerReview to this SAME "any one of these
+		// suffices to read" list -- the same admin-only row as
+		// ActionToggleAutoMerge, so this changes nothing about who could
+		// already read this endpoint, only documents the new toggle's own
+		// read gate explicitly.
+		if !authorizeAny(w, r, authz.Resource{}, authz.ActionConfigureBlockOnHighRisk, authz.ActionConfigureAutoApprove, authz.ActionToggleAutoMerge, authz.ActionToggleAutoRetriggerReview) {
 			return
 		}
 
@@ -146,6 +151,7 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 			resp.BlockOnHighRisk = settings.BlockOnHighRisk
 			resp.SentinelAutofixEnabled = settings.SentinelAutofixEnabled
 			resp.AutoMergeEnabled = settings.AutoMergeEnabled
+			resp.AutoRetriggerReviewEnabled = settings.AutoRetriggerReviewEnabled
 			if settings.MaxAutoApproveFilesChanged != nil {
 				v := int(*settings.MaxAutoApproveFilesChanged)
 				resp.MaxAutoApproveFilesChanged = &v
@@ -366,6 +372,70 @@ func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictD
 		}
 
 		writeJSON(w, http.StatusOK, autoApprovalSettingsToRepoSettingsDTO(ctx, repoSettings, repoFullName, updated))
+	}
+}
+
+// PutAutoRetriggerReviewToggle backs PUT
+// /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5) --
+// arms/disarms the per-repo automatic-re-review-on-new-commits opt-in.
+// Gated SOLELY by authz.ActionToggleAutoRetriggerReview (admin only,
+// §13.3 row 6) -- see UpdateAutoRetriggerReviewToggleRequest's own doc
+// comment for why this is a separate endpoint from PutRepoSettings above,
+// mirroring PutAutoMergeToggle's own identical reasoning.
+//
+// COLUMN-SCOPED write, via postgres.RepoSettingsStore.
+// UpsertAutoRetriggerReviewToggle -- touches ONLY
+// auto_retrigger_review_enabled, never any other repo_settings column
+// (§62 review finding C5's own column-scoped-write discipline, applied
+// here from the start rather than as a later fix). Unlike
+// PutAutoMergeToggle, this store method already returns the FULL,
+// just-written repo_settings row, so no follow-up Get call is needed to
+// render every OTHER field on the response.
+func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionToggleAutoRetriggerReview, authz.Resource{}) {
+			return
+		}
+
+		repoFullName, ok := repoFullNameFromRoute(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		var req restdtos.UpdateAutoRetriggerReviewToggleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "malformed request body")
+			return
+		}
+
+		settings, err := repoSettings.UpsertAutoRetriggerReviewToggle(ctx, repoFullName, req.Enabled)
+		if err != nil {
+			logger.Error("httpapi: upsert auto-retrigger-review toggle failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		resp := restdtos.RepoSettings{
+			RepoFullName:               repoFullName,
+			BlockOnHighRisk:            settings.BlockOnHighRisk,
+			SentinelAutofixEnabled:     settings.SentinelAutofixEnabled,
+			AutoMergeEnabled:           settings.AutoMergeEnabled,
+			AutoRetriggerReviewEnabled: settings.AutoRetriggerReviewEnabled,
+		}
+		if settings.MaxAutoApproveFilesChanged != nil {
+			v := int(*settings.MaxAutoApproveFilesChanged)
+			resp.MaxAutoApproveFilesChanged = &v
+		}
+		if tags := autoApprovalTagsFromJSON(settings.SensitiveBlastRadiusTags); tags != nil {
+			resp.SensitiveBlastRadiusTags = &tags
+		}
+
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 

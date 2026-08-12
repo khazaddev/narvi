@@ -74,6 +74,22 @@ ON CONFLICT (repo_full_name)
 DO UPDATE SET max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_changed, sensitive_blast_radius_tags = EXCLUDED.sensitive_blast_radius_tags, updated_at = now()
 RETURNING *;
 
+-- name: UpsertAutoRetriggerReviewToggle :one
+-- Step 65's own admin-only, per-repo opt-in (§24.5, migrations/
+-- 000076_repo_settings_auto_retrigger_review.up.sql) -- idempotent
+-- create-or-update of ONLY auto_retrigger_review_enabled, mirroring
+-- UpsertAutoMergeToggle's own identical column-scoped shape immediately
+-- above (§62 review finding C5's fix, generalized to this further,
+-- independently-gated toggle): every other repo_settings column is left
+-- COMPLETELY untouched, so a concurrent write to any of them (an admin's
+-- PutRepoSettings, PutAutoMergeToggle, or PutAutoApprovalSettings call)
+-- can never race with this one at the database level.
+INSERT INTO repo_settings (repo_full_name, auto_retrigger_review_enabled, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET auto_retrigger_review_enabled = EXCLUDED.auto_retrigger_review_enabled, updated_at = now()
+RETURNING *;
+
 -- name: ListAutoMergeEnabledRepos :many
 -- internal/app/automerge's own per-tick repo enumeration (§21.2 stage
 -- 2): every repo an admin has armed -- mirrors this table's own

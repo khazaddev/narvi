@@ -178,6 +178,11 @@ var matrix = map[Action]actionRule{
 	// (action.go's own doc comment).
 	ActionToggleAutoMerge:         {allow: roles(RoleAdmin)},
 	ActionActivateWorkflowBinding: {allow: roles(RoleAdmin)},
+	// Step 65 (§24.5): arming the per-repo automatic-re-review opt-in --
+	// same row, same reasoning as ActionToggleSentinelAutoFix/
+	// ActionToggleAutoMerge immediately above (action.go's own doc
+	// comment).
+	ActionToggleAutoRetriggerReview: {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against
