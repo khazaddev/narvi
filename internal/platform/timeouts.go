@@ -2109,6 +2109,32 @@ type Timeouts struct {
 	// activity, exactly "yesterday's" worth, matching the mundane,
 	// expected meaning of "daily digest".
 	DigestContentWindow time.Duration
+
+	// -- Step 63 fix ("review: learned false-positive patterns" /
+	// content-anchored finding positioning, §22.1.1) -- no ordering
+	// relationship with either invariant chain above (or with any prior
+	// Step's standalone additions), so -- per those additions' own
+	// precedent -- a plain field with a sensible default, not wired into
+	// a fake invariant link.
+
+	// FindingPositionResolveAllTimeout bounds internal/app/findingposition.
+	// ResolveAll's own WHOLE relocation-fallback loop (every unmatched
+	// finding's own resolver.Resolve call, run serially), NOT a single
+	// call -- Resolver.Resolve's own doc comment is explicit that ONE call
+	// deliberately relies on the underlying ports.LLM client's own
+	// configured request timeout (the SAME client/config
+	// IntentClassifierLLMTimeout already bounds at 10s, cmd/control-plane/
+	// main.go), never a second, redundant per-call wrap. Without an
+	// aggregate ceiling on the LOOP, N unmatched findings could block
+	// httpapi.PostReviewVerdict's own synchronous, pre-transaction
+	// verdict-POST handler for up to N times that per-call budget, and a
+	// client cancelling mid-loop would then lose the WHOLE verdict, not
+	// just its position data. Not specified in the plan (this fix
+	// postdates it); chosen as 45s -- generous enough for roughly four
+	// full per-finding relocation calls at IntentClassifierLLMTimeout's
+	// own 10s ceiling, while keeping the worst-case added latency on this
+	// synchronous request path well short of a full minute.
+	FindingPositionResolveAllTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2289,6 +2315,8 @@ func DefaultTimeouts() Timeouts {
 		DigestPumpInterval:             5 * time.Minute,     // Step 62, §21.3; not specified, chosen -- a digest fires at most once per channel per day, so coarse polling is ample
 		DigestChannelDiscoveryLookback: 30 * 24 * time.Hour, // Step 62, §21.3; not specified, mirrors ReviewVerdictAnalyticsWindow's own identical "a month, bounded" reasoning
 		DigestContentWindow:            24 * time.Hour,      // Step 62, §21.3, explicit ("a daily digest") -- one calendar day of rollup content, distinct from the channel-discovery lookback above
+
+		FindingPositionResolveAllTimeout: 45 * time.Second, // Step 63 fix; not specified, chosen -- generous for several per-finding relocation calls (10s each) while bounding the worst case on a synchronous verdict-POST handler path
 	}
 }
 

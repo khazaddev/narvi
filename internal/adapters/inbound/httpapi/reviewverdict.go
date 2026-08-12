@@ -323,7 +323,7 @@ func PostReviewVerdict(
 		// resolution instead of the review_verdicts insert.
 		if len(findings) > 0 && verdictHeadSHA != "" && diffFetcher != nil {
 			if diff, ok := reviewcontext.FetchDiffAt(ctx, logger, diffFetcher, timeouts, owner, repo, prSession.PrNumber, botToken, verdictHeadSHA); ok {
-				findings = findingposition.ResolveAll(ctx, positionResolver, findings, diff)
+				findings = findingposition.ResolveAll(ctx, positionResolver, findings, diff, timeouts)
 			} else {
 				logger.Warn("httpapi: review-verdict: fetch diff for position anchoring failed, every finding stays unanchored",
 					"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
