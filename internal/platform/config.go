@@ -307,6 +307,26 @@ const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 // whichever the deploying operator provisions) -- never logged anywhere.
 const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 
+// reviewModelDeepEnvVarName configures Step 68's ("review triage:
+// deterministic light/deep routing", §26.3) own deep-path model override,
+// read from NARVI_REVIEW_MODEL_DEEP. §26.3 states "depth drives model/
+// effort ... deep = frontier tier + high effort", but this codebase has
+// no existing per-purpose model-tier config anywhere (grepped directly:
+// the only comparable precedent, IntentClassifierModel above, configures
+// the CLASSIFIER's own internal LLM call, an unrelated concern) -- so
+// this is the ONE new config knob this Step adds. Deliberately OPTIONAL,
+// unlike IntentClassifierModel (Step 36's own load-bearing, required
+// feature): reviewtriage.ModelAndEffort's own doc comment (internal/
+// domain/reviewtriage/modeleffort.go) explains why leaving this unset
+// still forces high effort unconditionally on the deep path (safe on any
+// model, no config needed) while simply leaving the model id itself
+// unset (inheriting whatever this deployment's OpenCode-side default
+// model already is, exactly like every review turn today) -- an operator
+// who wants a genuinely different, more capable model on the deep path
+// opts in by setting this; one who does not keeps booting with zero new
+// required configuration.
+const reviewModelDeepEnvVarName = "NARVI_REVIEW_MODEL_DEEP"
+
 // gitHubReReviewLabelEnvVarName configures Step 46's ("review sessions",
 // §8.2) own manual re-trigger-via-label lane (internal/adapters/inbound/
 // github's new pull_request/"labeled" handling): the exact label NAME a
@@ -886,6 +906,13 @@ type Config struct {
 	// OPTIONAL and how it differs from GitHubBotToken. Never logged.
 	GitHubImageBuildToken string
 
+	// ReviewModelDeep is Step 68's own optional deep-path model override,
+	// read from NARVI_REVIEW_MODEL_DEEP -- empty string means "not
+	// configured" (see reviewModelDeepEnvVarName's own doc comment for
+	// the full "why this is optional and how the deep path degrades when
+	// it is unset").
+	ReviewModelDeep string
+
 	// PublicBaseURL is this control plane's own externally-reachable base
 	// URL (e.g. "http://localhost:8080" in development, a real https://
 	// URL in production), read from NARVI_PUBLIC_BASE_URL. Required — used
@@ -1206,6 +1233,12 @@ func Load() (*Config, error) {
 	// configuration, not a boot-time failure.
 	gitHubImageBuildToken := os.Getenv(gitHubImageBuildTokenEnvVarName)
 
+	// reviewModelDeep (Step 68, §26.3): OPTIONAL, no default -- an empty
+	// value here is a valid, expected, degraded-gracefully configuration
+	// (reviewModelDeepEnvVarName's own doc comment), not a boot-time
+	// failure.
+	reviewModelDeep := os.Getenv(reviewModelDeepEnvVarName)
+
 	var tokenEncryptionKey []byte
 	rawTokenEncryptionKey := os.Getenv(tokenEncryptionKeyEnvVarName)
 	if rawTokenEncryptionKey == "" {
@@ -1438,6 +1471,7 @@ func Load() (*Config, error) {
 		GitHubReleaseBranchPattern: gitHubReleaseBranchPattern,
 		GitHubBotToken:             gitHubBotToken,
 		GitHubImageBuildToken:      gitHubImageBuildToken,
+		ReviewModelDeep:            reviewModelDeep,
 		PublicBaseURL:              publicBaseURL,
 		TokenEncryptionKey:         tokenEncryptionKey,
 		AllowedEmailDomains:        allowedEmailDomains,

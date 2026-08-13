@@ -34,9 +34,11 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -126,7 +128,7 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 		// ActionToggleAutoMerge, so this changes nothing about who could
 		// already read this endpoint, only documents each new toggle's
 		// own read gate explicitly.
-		if !authorizeAny(w, r, authz.Resource{}, authz.ActionConfigureBlockOnHighRisk, authz.ActionConfigureAutoApprove, authz.ActionToggleAutoMerge, authz.ActionToggleAutoRetriggerReview, authz.ActionToggleDescriptionAutofix) {
+		if !authorizeAny(w, r, authz.Resource{}, authz.ActionConfigureBlockOnHighRisk, authz.ActionConfigureAutoApprove, authz.ActionToggleAutoMerge, authz.ActionToggleAutoRetriggerReview, authz.ActionToggleDescriptionAutofix, authz.ActionConfigureReviewDepth) {
 			return
 		}
 
@@ -161,6 +163,7 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 			if tags := autoApprovalTagsFromJSON(settings.SensitiveBlastRadiusTags); tags != nil {
 				resp.SensitiveBlastRadiusTags = &tags
 			}
+			resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
 		}
 
 		rate, _, sampleSize, computed, err := appreviewverdict.ContradictionRate(ctx, reviewVerdictDeps, repoFullName, time.Now())
@@ -195,6 +198,25 @@ func autoApprovalTagsFromJSON(raw []byte) restdtos.RepoSettingsSensitiveBlastRad
 		out[i] = restdtos.RepoSettingsSensitiveBlastRadiusTagsElem(t)
 	}
 	return out
+}
+
+// reviewDepthFieldsFromRow renders settings' own review_depth_mode/
+// review_depth_deep_paths columns (Step 68, §26.3) into RepoSettings'
+// own two wire fields -- shared by every restdtos.RepoSettings
+// construction site in this file so none of them independently drifts
+// from GetRepoSettings' own field-by-field rendering, mirroring
+// autoApprovalTagsFromJSON's own identical "one shared conversion, many
+// call sites" precedent.
+func reviewDepthFieldsFromRow(settings sqlcgen.RepoSetting) (mode restdtos.RepoSettingsReviewDepthMode, deepPaths *restdtos.RepoSettingsReviewDepthDeepPaths) {
+	mode = restdtos.RepoSettingsReviewDepthMode(settings.ReviewDepthMode)
+	if len(settings.ReviewDepthDeepPaths) > 0 {
+		var paths []string
+		if err := json.Unmarshal(settings.ReviewDepthDeepPaths, &paths); err == nil && len(paths) > 0 {
+			p := restdtos.RepoSettingsReviewDepthDeepPaths(paths)
+			deepPaths = &p
+		}
+	}
+	return mode, deepPaths
 }
 
 // reviewTagsFromJSON decodes a JSON array of tag strings (the SAME wire
@@ -261,10 +283,13 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc 
 			return
 		}
 
+		mode, deepPaths := reviewDepthFieldsFromRow(settings)
 		writeJSON(w, http.StatusOK, restdtos.RepoSettings{
 			RepoFullName:           repoFullName,
 			BlockOnHighRisk:        settings.BlockOnHighRisk,
 			SentinelAutofixEnabled: settings.SentinelAutofixEnabled,
+			ReviewDepthMode:        mode,
+			ReviewDepthDeepPaths:   deepPaths,
 		})
 	}
 }
@@ -437,6 +462,7 @@ func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore) http
 		if tags := autoApprovalTagsFromJSON(settings.SensitiveBlastRadiusTags); tags != nil {
 			resp.SensitiveBlastRadiusTags = &tags
 		}
+		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
 
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -503,6 +529,7 @@ func PutDescriptionAutofixToggle(repoSettings *postgres.RepoSettingsStore) http.
 		if tags := autoApprovalTagsFromJSON(settings.SensitiveBlastRadiusTags); tags != nil {
 			resp.SensitiveBlastRadiusTags = &tags
 		}
+		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
 
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -532,9 +559,121 @@ func autoApprovalSettingsToRepoSettingsDTO(ctx context.Context, repoSettings *po
 	if settings, err := repoSettings.Get(ctx, repoFullName); err == nil {
 		resp.BlockOnHighRisk = settings.BlockOnHighRisk
 		resp.SentinelAutofixEnabled = settings.SentinelAutofixEnabled
+		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		platform.Logger(ctx).Error("httpapi: read back block-on-high-risk/sentinel-autofix fields failed", "error", err)
 	}
 
 	return resp
+}
+
+// reviewDepthModeString validates req's own optional mode string against
+// internal/domain/reviewtriage.Mode's own three legal values (application-
+// side, not schema-level -- see RepoSettings.reviewDepthMode's own doc
+// comment, contracts/rest/v1/dtos.schema.json, for why a nullable-enum
+// wire field is deliberately avoided). nil/empty is always legal ("use
+// the built-in default"); a non-empty, unrecognized string is rejected
+// with a 400 rather than silently stored and silently reinterpreted as
+// "auto" later (reviewtriage.Mode's own fail-conservative-at-READ-time
+// policy is for a value ALREADY on record, e.g. one written by an older
+// version of this check -- this is the one place a NEW value is still
+// rejectable outright, and doing so here is strictly more helpful to the
+// admin submitting it than a silent, unexplained no-op would be).
+func reviewDepthModeString(mode restdtos.UpdateReviewDepthConfigRequestMode) (*string, bool) {
+	if mode == nil {
+		return nil, true
+	}
+	s := string(*mode)
+	switch reviewtriage.Mode(s) {
+	case reviewtriage.ModeAuto, reviewtriage.ModeAlwaysLight, reviewtriage.ModeAlwaysDeep:
+		return &s, true
+	default:
+		return nil, false
+	}
+}
+
+// PutReviewDepthConfig backs PUT /api/repos/{owner}/{repo}/review-depth
+// (Step 68, §26.3) -- (re)configures this repo's own reviewDepth mode/
+// deepPaths. Gated SOLELY by authz.ActionConfigureReviewDepth (admin
+// only, §13.3 row 6) -- see UpdateReviewDepthConfigRequest's own doc
+// comment (contracts/rest/v1/dtos.schema.json) for why this is a
+// separate endpoint from PutRepoSettings above, mirroring
+// PutAutoRetriggerReviewToggle/PutDescriptionAutofixToggle's own
+// identical reasoning.
+//
+// COLUMN-SCOPED write, via postgres.RepoSettingsStore.
+// UpsertReviewDepthConfig -- touches ONLY review_depth_mode/
+// review_depth_deep_paths, never any other repo_settings column (§62
+// review finding C5's own column-scoped-write discipline, applied here
+// from the start). This store method already returns the FULL,
+// just-written repo_settings row, so no follow-up Get call is needed to
+// render every OTHER field on the response, exactly like
+// PutAutoRetriggerReviewToggle/PutDescriptionAutofixToggle above.
+func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionConfigureReviewDepth, authz.Resource{}) {
+			return
+		}
+
+		repoFullName, ok := repoFullNameFromRoute(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		var req restdtos.UpdateReviewDepthConfigRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "malformed request body")
+			return
+		}
+
+		mode, ok := reviewDepthModeString(req.Mode)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "mode must be one of auto/always_light/always_deep, or omitted/null")
+			return
+		}
+
+		var deepPathsJSON []byte
+		var paths []string
+		if req.DeepPaths != nil {
+			paths = []string(*req.DeepPaths)
+		}
+		marshaled, err := json.Marshal(paths)
+		if err != nil {
+			logger.Error("httpapi: marshal review-depth deep paths failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		deepPathsJSON = marshaled
+
+		settings, err := repoSettings.UpsertReviewDepthConfig(ctx, repoFullName, mode, deepPathsJSON)
+		if err != nil {
+			logger.Error("httpapi: upsert review-depth config failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		resp := restdtos.RepoSettings{
+			RepoFullName:               repoFullName,
+			BlockOnHighRisk:            settings.BlockOnHighRisk,
+			SentinelAutofixEnabled:     settings.SentinelAutofixEnabled,
+			AutoMergeEnabled:           settings.AutoMergeEnabled,
+			AutoRetriggerReviewEnabled: settings.AutoRetriggerReviewEnabled,
+			DescriptionAutofixEnabled:  settings.DescriptionAutofixEnabled,
+		}
+		if settings.MaxAutoApproveFilesChanged != nil {
+			v := int(*settings.MaxAutoApproveFilesChanged)
+			resp.MaxAutoApproveFilesChanged = &v
+		}
+		if tags := autoApprovalTagsFromJSON(settings.SensitiveBlastRadiusTags); tags != nil {
+			resp.SensitiveBlastRadiusTags = &tags
+		}
+		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
+
+		writeJSON(w, http.StatusOK, resp)
+	}
 }

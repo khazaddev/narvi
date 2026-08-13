@@ -13,21 +13,22 @@ import (
 
 const createTurn = `-- name: CreateTurn :one
 
-INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only, review_depth)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only, review_depth, review_depth_decision)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision
 `
 
 type CreateTurnParams struct {
-	SessionID     pgtype.UUID `json:"session_id"`
-	Status        TurnStatus  `json:"status"`
-	Prompt        *string     `json:"prompt"`
-	ModelID       *string     `json:"model_id"`
-	PlanMode      bool        `json:"plan_mode"`
-	Effort        *string     `json:"effort"`
-	ReviewHeadSha *string     `json:"review_head_sha"`
-	AnswerOnly    *bool       `json:"answer_only"`
-	ReviewDepth   *string     `json:"review_depth"`
+	SessionID           pgtype.UUID `json:"session_id"`
+	Status              TurnStatus  `json:"status"`
+	Prompt              *string     `json:"prompt"`
+	ModelID             *string     `json:"model_id"`
+	PlanMode            bool        `json:"plan_mode"`
+	Effort              *string     `json:"effort"`
+	ReviewHeadSha       *string     `json:"review_head_sha"`
+	AnswerOnly          *bool       `json:"answer_only"`
+	ReviewDepth         *string     `json:"review_depth"`
+	ReviewDepthDecision []byte      `json:"review_depth_decision"`
 }
 
 // Queries backing TurnStore (§4.3). Just enough to prove the pipeline end
@@ -68,6 +69,11 @@ type CreateTurnParams struct {
 // §26.3) mirrors review_head_sha's own identical shape one column
 // further -- nil/absent for every non-review turn, set exactly once, at
 // creation, by every review-turn-creation path.
+//
+// review_depth_decision (migrations/000083_turns_review_depth_decision.up.sql,
+// Step 68, §18.4's own precedent) is review_depth's own richer sibling --
+// the full internal/domain/reviewtriage.DecisionRecord, JSON-marshaled by
+// the caller (this query does no encoding of its own).
 func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, error) {
 	row := q.db.QueryRow(ctx, createTurn,
 		arg.SessionID,
@@ -79,6 +85,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		arg.ReviewHeadSha,
 		arg.AnswerOnly,
 		arg.ReviewDepth,
+		arg.ReviewDepthDecision,
 	)
 	var i Turn
 	err := row.Scan(
@@ -99,12 +106,13 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.ReviewHeadSha,
 		&i.AnswerOnly,
 		&i.ReviewDepth,
+		&i.ReviewDepthDecision,
 	)
 	return i, err
 }
 
 const getProcessingTurnForSession = `-- name: GetProcessingTurnForSession :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision FROM turns
 WHERE session_id = $1 AND status = 'processing'
 `
 
@@ -138,12 +146,13 @@ func (q *Queries) GetProcessingTurnForSession(ctx context.Context, sessionID pgt
 		&i.ReviewHeadSha,
 		&i.AnswerOnly,
 		&i.ReviewDepth,
+		&i.ReviewDepthDecision,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision FROM turns
 WHERE id = $1
 `
 
@@ -168,12 +177,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.ReviewHeadSha,
 		&i.AnswerOnly,
 		&i.ReviewDepth,
+		&i.ReviewDepthDecision,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -208,6 +218,7 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.ReviewHeadSha,
 			&i.AnswerOnly,
 			&i.ReviewDepth,
+			&i.ReviewDepthDecision,
 		); err != nil {
 			return nil, err
 		}
@@ -288,7 +299,7 @@ SET status = $2,
     completed_at = COALESCE($4, completed_at),
     dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision
 `
 
 type UpdateTurnStatusParams struct {
@@ -344,6 +355,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.ReviewHeadSha,
 		&i.AnswerOnly,
 		&i.ReviewDepth,
+		&i.ReviewDepthDecision,
 	)
 	return i, err
 }

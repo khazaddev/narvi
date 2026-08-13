@@ -1,0 +1,21 @@
+-- turns.review_depth_decision (Step 68, §26.3, §18.4's own precedent):
+-- "recorded on the routing decision record, following §18.4's existing
+-- precedent for how classifier/routing decisions get recorded" --
+-- sessions.intent_decision (migrations/000037_sessions_intent_decision.up.sql,
+-- Step 36's own IntentDecisionRecord, internal/domain/intent/record.go)
+-- is that precedent: a structured JSONB blob capturing not just the
+-- final decision but the reasoning/signals behind it, write-once at
+-- decision time.
+--
+-- This Step's own decision is PER REVIEW TURN, not per session (a
+-- review session is reused across many pushes, Step 46, and each one
+-- gets its own fresh depth re-evaluation, §26.3's own re-review clause)
+-- -- so this record rides turns.review_depth_decision rather than a
+-- session-level column the way IntentDecisionRecord does. Nullable
+-- JSONB, NULL for every non-review turn, set exactly once, at creation,
+-- alongside review_depth (migrations/000080) -- see internal/domain/
+-- reviewtriage.DecisionRecord for the exact shape stored (depth, reason,
+-- matched sensitive tags, changed lines, distinct roots, config mode,
+-- and whether §24's re-review floor is what actually determined the
+-- final depth).
+ALTER TABLE turns ADD COLUMN review_depth_decision JSONB;

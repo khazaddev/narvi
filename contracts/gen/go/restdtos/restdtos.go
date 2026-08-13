@@ -4234,6 +4234,26 @@ type RepoSettings struct {
 	// shape.
 	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
 
+	// Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered
+	// on top of (never replacing) the engine's own fixed sensitive-glob set
+	// (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep
+	// paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same
+	// row as reviewDepthMode).
+	ReviewDepthDeepPaths *RepoSettingsReviewDepthDeepPaths `json:"reviewDepthDeepPaths" yaml:"reviewDepthDeepPaths" mapstructure:"reviewDepthDeepPaths"`
+
+	// Step 68, §26.3: this repo's own reviewDepth routing mode -- one of
+	// "auto"/"always_light"/"always_deep" when set (validated application-side
+	// against internal/domain/reviewtriage.Mode's own closed vocabulary, never
+	// enforced at the schema level to avoid a nullable-enum's own awkward generated
+	// wrapper type). Null means 'not configured -- the engine's own built-in default
+	// applies' (internal/domain/reviewtriage.DefaultConfig, mode "auto"), never a
+	// magic sentinel string. Gated by authz.ActionConfigureReviewDepth (admin only,
+	// §13.3 row 6) -- arming always_deep/always_light changes what runs UNATTENDED on
+	// every future PR review (which model/effort tier, and how much cost, every
+	// automated review incurs), the same reasoning every sibling toggle in this row
+	// already carries.
+	ReviewDepthMode RepoSettingsReviewDepthMode `json:"reviewDepthMode" yaml:"reviewDepthMode" mapstructure:"reviewDepthMode"`
+
 	// Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list
 	// (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured
 	// -- the auto-approval engine's own default list applies (migrations, auth,
@@ -4259,6 +4279,26 @@ type RepoSettingsContradictionRatePercent *float64
 // a magic sentinel number. Gated by authz.ActionConfigureAutoApprove
 // (maintainer+).
 type RepoSettingsMaxAutoApproveFilesChanged *int
+
+// Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered
+// on top of (never replacing) the engine's own fixed sensitive-glob set
+// (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep
+// paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same
+// row as reviewDepthMode).
+type RepoSettingsReviewDepthDeepPaths []string
+
+// Step 68, §26.3: this repo's own reviewDepth routing mode -- one of
+// "auto"/"always_light"/"always_deep" when set (validated application-side against
+// internal/domain/reviewtriage.Mode's own closed vocabulary, never enforced at the
+// schema level to avoid a nullable-enum's own awkward generated wrapper type).
+// Null means 'not configured -- the engine's own built-in default applies'
+// (internal/domain/reviewtriage.DefaultConfig, mode "auto"), never a magic
+// sentinel string. Gated by authz.ActionConfigureReviewDepth (admin only, §13.3
+// row 6) -- arming always_deep/always_light changes what runs UNATTENDED on every
+// future PR review (which model/effort tier, and how much cost, every automated
+// review incurs), the same reasoning every sibling toggle in this row already
+// carries.
+type RepoSettingsReviewDepthMode *string
 
 // Step 62, §21.2 stage 1: this repo's own configured sensitive-path tag list
 // (internal/domain/review.Tag's own fixed vocabulary). Null means 'not configured
@@ -4341,6 +4381,12 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["repoFullName"]; raw != nil && !ok {
 		return fmt.Errorf("field repoFullName in RepoSettings: required")
+	}
+	if _, ok := raw["reviewDepthDeepPaths"]; raw != nil && !ok {
+		return fmt.Errorf("field reviewDepthDeepPaths in RepoSettings: required")
+	}
+	if _, ok := raw["reviewDepthMode"]; raw != nil && !ok {
+		return fmt.Errorf("field reviewDepthMode in RepoSettings: required")
 	}
 	if _, ok := raw["sensitiveBlastRadiusTags"]; raw != nil && !ok {
 		return fmt.Errorf("field sensitiveBlastRadiusTags in RepoSettings: required")
@@ -5496,6 +5542,52 @@ func (j *UpdateRepoSettingsRequest) UnmarshalJSON(value []byte) error {
 		plain.SentinelAutofixEnabled = false
 	}
 	*j = UpdateRepoSettingsRequest(plain)
+	return nil
+}
+
+// Request body for PUT /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3) --
+// (re)configures this repo's own reviewDepth mode/deepPaths. A SEPARATE endpoint,
+// gated SOLELY by authz.ActionConfigureReviewDepth (admin only, §13.3 row 6) --
+// see UpdateRepoSettingsRequest's own doc comment for why this is not folded into
+// the shared PUT /settings endpoint. Always the full, current desired state for
+// these two fields specifically (never a partial patch).
+type UpdateReviewDepthConfigRequest struct {
+	// Null means 'no repo-specific deep paths'.
+	DeepPaths *UpdateReviewDepthConfigRequestDeepPaths `json:"deepPaths" yaml:"deepPaths" mapstructure:"deepPaths"`
+
+	// One of "auto"/"always_light"/"always_deep" when set (validated
+	// application-side, see RepoSettings.reviewDepthMode's own doc comment for why
+	// not at the schema level). Null means 'use the engine's own built-in default
+	// (auto)'.
+	Mode UpdateReviewDepthConfigRequestMode `json:"mode" yaml:"mode" mapstructure:"mode"`
+}
+
+// Null means 'no repo-specific deep paths'.
+type UpdateReviewDepthConfigRequestDeepPaths []string
+
+// One of "auto"/"always_light"/"always_deep" when set (validated application-side,
+// see RepoSettings.reviewDepthMode's own doc comment for why not at the schema
+// level). Null means 'use the engine's own built-in default (auto)'.
+type UpdateReviewDepthConfigRequestMode *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateReviewDepthConfigRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["deepPaths"]; raw != nil && !ok {
+		return fmt.Errorf("field deepPaths in UpdateReviewDepthConfigRequest: required")
+	}
+	if _, ok := raw["mode"]; raw != nil && !ok {
+		return fmt.Errorf("field mode in UpdateReviewDepthConfigRequest: required")
+	}
+	type Plain UpdateReviewDepthConfigRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpdateReviewDepthConfigRequest(plain)
 	return nil
 }
 

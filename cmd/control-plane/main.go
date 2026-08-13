@@ -1176,6 +1176,14 @@ func serve() error {
 		r.Put("/", httpapi.PutDescriptionAutofixToggle(repoSettingsStore))
 	})
 
+	// /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3): a further,
+	// separately-gated route mirroring description-autofix above -- see
+	// httpapi/reposettings.go's own PutReviewDepthConfig doc comment.
+	router.Route("/api/repos/{owner}/{repo}/review-depth", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutReviewDepthConfig(repoSettingsStore))
+	})
+
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):
 	// read-only GET over the three analytics rollups (timeseries,
 	// top-risk-driver breakdown, "Review finding outcomes" KPI) -- see

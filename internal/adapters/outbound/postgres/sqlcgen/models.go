@@ -1821,6 +1821,7 @@ type Turn struct {
 	ReviewHeadSha        *string               `json:"review_head_sha"`
 	AnswerOnly           *bool                 `json:"answer_only"`
 	ReviewDepth          *string               `json:"review_depth"`
+	ReviewDepthDecision  []byte                `json:"review_depth_decision"`
 }
 
 type User struct {

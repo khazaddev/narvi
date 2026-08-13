@@ -38,8 +38,13 @@
 -- §26.3) mirrors review_head_sha's own identical shape one column
 -- further -- nil/absent for every non-review turn, set exactly once, at
 -- creation, by every review-turn-creation path.
-INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only, review_depth)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+--
+-- review_depth_decision (migrations/000083_turns_review_depth_decision.up.sql,
+-- Step 68, §18.4's own precedent) is review_depth's own richer sibling --
+-- the full internal/domain/reviewtriage.DecisionRecord, JSON-marshaled by
+-- the caller (this query does no encoding of its own).
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only, review_depth, review_depth_decision)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING *;
 
 -- name: GetTurn :one

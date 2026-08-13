@@ -710,6 +710,14 @@ export interface RepoSettings {
    * Step 67, §26.2: admin-only, per-repo, off by default -- once armed, a Narvi-authored PR's own description-adequacy floor firing (drift/misleading) may result in this repo's own PR bodies being automatically rewritten (original preserved in a collapsed block), delivered via the outbox. The drift/misleading precondition is enforced at ENQUEUE time (a verdict reporting descriptionAdequacy "ok" never enqueues a rewrite candidate at all, regardless of proposedBody); Narvi-authorship and this flag are independently re-verified FRESH server-side at DELIVERY time, with descriptionAdequacy itself re-asserted a third time from the same verdict (a fact fixed at verdict time, carried rather than re-derived) -- never trusted from the posting agent alone. Gated by authz.ActionToggleDescriptionAutofix, the SAME admin-only row as sentinelAutofixEnabled/autoMergeEnabled/autoRetriggerReviewEnabled -- arming this changes what runs UNATTENDED on a repo's own PRs (an automatic body rewrite, no human in the loop), the same reasoning every sibling toggle in this row already carries. Human-authored PRs are never affected regardless of this flag -- they only ever get a rendered suggestion (Digest.proposedBody), never a write.
    */
   descriptionAutofixEnabled: boolean;
+  /**
+   * Step 68, §26.3: this repo's own reviewDepth routing mode -- one of "auto"/"always_light"/"always_deep" when set (validated application-side against internal/domain/reviewtriage.Mode's own closed vocabulary, never enforced at the schema level to avoid a nullable-enum's own awkward generated wrapper type). Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultConfig, mode "auto"), never a magic sentinel string. Gated by authz.ActionConfigureReviewDepth (admin only, §13.3 row 6) -- arming always_deep/always_light changes what runs UNATTENDED on every future PR review (which model/effort tier, and how much cost, every automated review incurs), the same reasoning every sibling toggle in this row already carries.
+   */
+  reviewDepthMode: string | null;
+  /**
+   * Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered on top of (never replacing) the engine's own fixed sensitive-glob set (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same row as reviewDepthMode).
+   */
+  reviewDepthDeepPaths: string[] | null;
 }
 /**
  * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise. Step 62's own §21.2 fields (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are DELIBERATELY NOT on this shared request: this endpoint's own handler requires EVERY permission its fields collectively need (PutRepoSettings' own doc comment, httpapi/reposettings.go), which would force a maintainer authorized only for the auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates (row 6) too -- see UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its own endpoint with its own single, correctly-scoped gate.
@@ -764,6 +772,22 @@ export interface UpdateAutoRetriggerReviewToggleRequest {
  */
 export interface UpdateDescriptionAutofixToggleRequest {
   enabled: boolean;
+}
+/**
+ * Request body for PUT /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3) -- (re)configures this repo's own reviewDepth mode/deepPaths. A SEPARATE endpoint, gated SOLELY by authz.ActionConfigureReviewDepth (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint. Always the full, current desired state for these two fields specifically (never a partial patch).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateReviewDepthConfigRequest".
+ */
+export interface UpdateReviewDepthConfigRequest {
+  /**
+   * One of "auto"/"always_light"/"always_deep" when set (validated application-side, see RepoSettings.reviewDepthMode's own doc comment for why not at the schema level). Null means 'use the engine's own built-in default (auto)'.
+   */
+  mode: string | null;
+  /**
+   * Null means 'no repo-specific deep paths'.
+   */
+  deepPaths: string[] | null;
 }
 /**
  * GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.
