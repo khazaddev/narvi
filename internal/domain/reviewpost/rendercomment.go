@@ -118,8 +118,7 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 		fmt.Fprintf(&b, "- **Blast radius**: %s\n", strings.Join(tags, ", "))
 	}
 	if stackRisks != "" {
-		b.WriteString(stackRisks)
-		b.WriteString("\n")
+		fmt.Fprintf(&b, "- **Stack risks**: %s\n", stackRisks)
 	}
 	if unverifiedLimits != "" {
 		fmt.Fprintf(&b, "- **Not verified**: %s\n", unverifiedLimits)
@@ -158,13 +157,14 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 			// StartLine==0 renders as no line reference whatsoever, an
 			// honest "position not found", never a guess dressed up as a
 			// real one.
+			description := escapeFindingDescription(f.Description)
 			switch {
 			case f.StartLine != 0 && f.StartLine == f.EndLine:
-				fmt.Fprintf(&b, "- [%s/%s] `%s:%d`: %s\n", kind, f.Severity, f.FilePath, f.StartLine, f.Description)
+				fmt.Fprintf(&b, "- [%s/%s] `%s:%d`: %s\n", kind, f.Severity, f.FilePath, f.StartLine, description)
 			case f.StartLine != 0:
-				fmt.Fprintf(&b, "- [%s/%s] `%s:%d-%d`: %s\n", kind, f.Severity, f.FilePath, f.StartLine, f.EndLine, f.Description)
+				fmt.Fprintf(&b, "- [%s/%s] `%s:%d-%d`: %s\n", kind, f.Severity, f.FilePath, f.StartLine, f.EndLine, description)
 			default:
-				fmt.Fprintf(&b, "- [%s/%s] `%s`: %s\n", kind, f.Severity, f.FilePath, f.Description)
+				fmt.Fprintf(&b, "- [%s/%s] `%s`: %s\n", kind, f.Severity, f.FilePath, description)
 			}
 		}
 	}
@@ -191,4 +191,28 @@ func renderArchDecision(ad ArchDecision) string {
 	fmt.Fprintf(&b, "  **Alternative rejected**: %s\n", strings.TrimSpace(ad.RejectedAlternative))
 	fmt.Fprintf(&b, "  **Convention conformance**: %s\n", strings.TrimSpace(ad.ConventionConformance))
 	return b.String()
+}
+
+// findingDescriptionEscaper escapes '<' and '>' in a Finding's own
+// Description before it is interpolated into the rendered comment body.
+// Description is model-authored free text (finding.go's own doc comment)
+// and can legitimately contain generics, tags, or comparisons (e.g.
+// "List<int>", "a < b") -- left unescaped, GitHub's own markdown renderer
+// would read an unescaped '<' as the start of a literal HTML tag rather
+// than the model's own text, silently dropping or mangling it. Narrower
+// than html.EscapeString on purpose: '<'/'>' are the only characters that
+// can change how GitHub parses the SURROUNDING markdown structure here;
+// '&' (which html.EscapeString would also escape) has no equivalent
+// structural effect in this context, so leaving it alone avoids turning
+// ordinary prose like "fetch & retry" into "fetch &amp; retry" for no
+// safety benefit.
+var findingDescriptionEscaper = strings.NewReplacer("<", "&lt;", ">", "&gt;")
+
+// escapeFindingDescription applies findingDescriptionEscaper to s -- the
+// one call site every Description interpolation in this file goes
+// through, so the escaping discipline can never be forgotten at a new
+// call site the way an inline strings.NewReplacer call at each site
+// could be.
+func escapeFindingDescription(s string) string {
+	return findingDescriptionEscaper.Replace(s)
 }

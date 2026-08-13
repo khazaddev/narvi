@@ -163,6 +163,46 @@ func TestRenderVerdictComment_UnanchoredFindingNeverRendersAGuessedLine(t *testi
 	}
 }
 
+// TestRenderVerdictComment_FindingDescriptionEscapesAngleBrackets proves a
+// finding's own Description (model-authored free text -- finding.go's own
+// doc comment -- that can legitimately contain generics/tags/comparisons
+// like "List<int>" or "a < b") is HTML-escaped before it lands in the
+// rendered comment body: an unescaped '<'/'>' would otherwise be read by
+// GitHub's own markdown renderer as literal HTML rather than the model's
+// own text. Exercised across all three finding-rendering branches
+// (single-line anchor, range anchor, unanchored) since each has its own
+// fmt.Fprintf interpolation site in RenderVerdictComment.
+func TestRenderVerdictComment_FindingDescriptionEscapesAngleBrackets(t *testing.T) {
+	v := baseVerdict()
+	findings := []reviewpost.Finding{
+		{Severity: review.RiskLevelMedium, FilePath: "a.go", Description: "Use List<int> instead of List<Object>", StartLine: 5, EndLine: 5},
+		{Severity: review.RiskLevelMedium, FilePath: "b.go", Description: "off-by-one when a < b", StartLine: 10, EndLine: 12},
+		{Severity: review.RiskLevelMedium, FilePath: "c.go", Description: "compares Foo<T> unanchored"},
+	}
+	digest := reviewpost.Digest{Summary: "No changes of note."}
+
+	got := reviewpost.RenderVerdictComment(v, findings, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if strings.Contains(got, "List<int>") || strings.Contains(got, "List<Object>") {
+		t.Errorf("RenderVerdictComment() rendered an unescaped '<'/'>' from a single-line-anchored finding's Description:\n%s", got)
+	}
+	if !strings.Contains(got, "List&lt;int&gt; instead of List&lt;Object&gt;") {
+		t.Errorf("RenderVerdictComment() missing the escaped single-line-anchored finding Description in:\n%s", got)
+	}
+	if strings.Contains(got, "a < b") {
+		t.Errorf("RenderVerdictComment() rendered an unescaped '<' from a range-anchored finding's Description:\n%s", got)
+	}
+	if !strings.Contains(got, "off-by-one when a &lt; b") {
+		t.Errorf("RenderVerdictComment() missing the escaped range-anchored finding Description in:\n%s", got)
+	}
+	if strings.Contains(got, "Foo<T>") {
+		t.Errorf("RenderVerdictComment() rendered an unescaped '<'/'>' from an unanchored finding's Description:\n%s", got)
+	}
+	if !strings.Contains(got, "compares Foo&lt;T&gt; unanchored") {
+		t.Errorf("RenderVerdictComment() missing the escaped unanchored finding Description in:\n%s", got)
+	}
+}
+
 // baseVerdict is the minimal valid review.Verdict the digest-section tests
 // below share, mutating only what each test cares about.
 func baseVerdict() review.Verdict {
@@ -245,7 +285,15 @@ func TestRenderVerdictComment_EmptyArchDecisionsRendersHonestFallback(t *testing
 
 // TestRenderVerdictComment_StackRisksSectionRendersBlastRadiusAndProse
 // proves "Risks to the stack" carries BOTH the verdict's own existing
-// BlastRadius tags AND the digest's own StackRisks/UnverifiedLimits prose.
+// BlastRadius tags AND the digest's own StackRisks/UnverifiedLimits prose
+// -- as three PEER bullets, each on its own line. Bounded to the section's
+// own slice (heading up to the following "<details>") and asserted on
+// exact, non-blank lines rather than mere substring containment: plain
+// containment cannot tell "StackRisks rendered as its own block" apart
+// from "StackRisks absorbed into the preceding \"- **Blast radius**: ...\"
+// bullet via CommonMark/GFM lazy continuation" (no blank line between
+// them) -- exactly the failure mode that shipped once already, because a
+// containment-only version of this test could not distinguish the two.
 func TestRenderVerdictComment_StackRisksSectionRendersBlastRadiusAndProse(t *testing.T) {
 	v := baseVerdict()
 	v.BlastRadius = []review.Tag{review.TagMigrations}
@@ -258,14 +306,57 @@ func TestRenderVerdictComment_StackRisksSectionRendersBlastRadiusAndProse(t *tes
 	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
 
 	riskHeadingIdx := strings.Index(got, "### Risks to the stack")
-	if riskHeadingIdx == -1 {
-		t.Fatalf("missing \"### Risks to the stack\" heading in:\n%s", got)
+	detailsIdx := strings.Index(got, "<details>")
+	if riskHeadingIdx == -1 || detailsIdx == -1 {
+		t.Fatalf("missing \"### Risks to the stack\" heading or <details> block in:\n%s", got)
 	}
-	section := got[riskHeadingIdx:]
-	for _, want := range []string{string(review.TagMigrations), "two-phase deploy", "Not verified", "production-sized table"} {
-		if !strings.Contains(section, want) {
-			t.Errorf("RenderVerdictComment() \"Risks to the stack\" section missing %q in:\n%s", want, section)
+	section := got[riskHeadingIdx:detailsIdx]
+
+	var lines []string
+	for _, line := range strings.Split(section, "\n") {
+		if line != "" {
+			lines = append(lines, line)
 		}
+	}
+
+	want := []string{
+		"### Risks to the stack",
+		"- **Blast radius**: " + string(review.TagMigrations),
+		"- **Stack risks**: Requires a two-phase deploy: migration lands first, code follows.",
+		"- **Not verified**: Did not test against a production-sized table.",
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("\"Risks to the stack\" section = %d non-blank lines %q, want %d %q (full section:\n%s)", len(lines), lines, len(want), want, section)
+	}
+	for i, w := range want {
+		if lines[i] != w {
+			t.Errorf("\"Risks to the stack\" section line %d = %q, want %q (full section:\n%s)", i, lines[i], w, section)
+		}
+	}
+}
+
+// TestRenderVerdictComment_StackRisksProseIsALabeledBulletEvenWithoutBlastRadius
+// covers the branch TestRenderVerdictComment_StackRisksSectionRendersBlastRadiusAndProse
+// above cannot exercise: v.BlastRadius EMPTY, so there is no preceding
+// "- **Blast radius**: ..." bullet for StackRisks prose to run into via lazy
+// continuation. StackRisks must still render as its own labeled
+// "- **Stack risks**: ..." bullet, immediately after the heading's blank
+// line -- not bare prose glued directly under the heading. This is the
+// case a bare-blank-line fix (b.WriteString("\n")) would still get wrong
+// when BlastRadius is empty (an extra stray blank line, still no label);
+// the labeled-bullet form gets both branches right by construction.
+func TestRenderVerdictComment_StackRisksProseIsALabeledBulletEvenWithoutBlastRadius(t *testing.T) {
+	v := baseVerdict() // empty BlastRadius
+	digest := reviewpost.Digest{
+		Summary:    "No changes of note.",
+		StackRisks: "Requires a two-phase deploy: migration lands first, code follows.",
+	}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	want := "### Risks to the stack\n\n- **Stack risks**: Requires a two-phase deploy: migration lands first, code follows.\n"
+	if !strings.Contains(got, want) {
+		t.Errorf("RenderVerdictComment() StackRisks prose (empty BlastRadius) not rendered as its own labeled bullet immediately after the heading, want to contain %q, got:\n%s", want, got)
 	}
 }
 
