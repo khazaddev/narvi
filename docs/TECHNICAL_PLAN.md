@@ -1288,18 +1288,25 @@ trust agent judgment for routing; deterministic fallbacks throughout, §18):
   (migrations, auth surfaces, infra-as-code, CI workflows) mapped deterministically onto the same
   `BlastRadius` tags the verdict uses; cross-cutting dispersion (number of distinct top-level path
   roots); provenance (Narvi-authored vs human, and the authoring model); the PR's own verdict
-  history (Step 62 — a prior `high` verdict routes deep); existing risk labels.
-- **v1 rules** (initial thresholds, per-repo-tunable): any sensitive-glob hit → always deep; >600
-  changed lines or ≥3 distinct top-level path roots → deep; otherwise light. **No LLM tie-break in
-  v1** — a `review_depth` surface on the unified classifier (§18) remains a v2 option only if
-  per-path analytics show a real grey zone (the classifier consumes free text today, so this would
-  be new surface area, not a config flip).
+  history (Step 62); the `review:needs-human` label — human-owned and never bot-synced, unlike
+  `review:low/medium/high-risk`, which `ComputeLabelSync` overwrites on every posted verdict and is
+  therefore not a stable routing input, so those three are deliberately not among these signals; a
+  hand-applied risk label would just be clobbered by the next verdict regardless.
+- **v1 rules** (initial thresholds): any sensitive-glob hit → always deep; >600 changed lines or
+  ≥3 distinct top-level path roots → deep; a prior `high` verdict on this PR (Step 62) → deep; a
+  `review:needs-human` label → deep; otherwise light. **No LLM tie-break in v1** — a `review_depth`
+  surface on the unified classifier (§18) remains a v2 option only if per-path analytics show a
+  real grey zone (the classifier consumes free text today, so this would be new surface area, not
+  a config flip).
 - **Output**: `reviewDepth: light|deep`, threaded into review-session creation; recorded on the
   routing decision record (§18.4's precedent); persisted as `review_path` on the verdict row (Step
-  62) so **cost and precision become measurable per path**. Depth drives model/effort through the
-  existing dedicated review-model selection (§8 item 2): light = balanced tier, deep = frontier
-  tier + high effort. Depth composes with cross-family counter-review (§26.4): the family comes
-  from provenance, the tier from depth.
+  62) so **cost and precision become measurable per path**. Depth drives model/effort: light is the
+  deployment's own default review model, unchanged; deep is a per-deployment override plus forced
+  high effort. No dedicated review-model-selection mechanism predates this Step — §8 item 2 names
+  "dedicated review model selection" as a feature-set line, not a built mechanism — so Step 68 is
+  what introduces it, as an optional operator override rather than a catalog-driven tiering system;
+  document it alongside this deployment's other operator-level knobs. Depth composes with
+  cross-family counter-review (§26.4): the family comes from provenance, the tier from depth.
 - **Per-repo config**: `reviewDepth: {mode: auto|always_light|always_deep, deepPaths: [...]}`
   alongside the other per-repo review settings. **Any triage error fails open to light** — a
   review must never be blocked by its own router.
