@@ -247,12 +247,13 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// query outside any transaction, accepted for reusing the
 			// SAME shared entry point every other trigger path calls
 			// rather than a bespoke variant just for this one caller.
-			triageDeps := appreviewtriage.Deps{RepoSettings: a.stores.repoSettings, ReviewVerdicts: a.stores.reviewVerdict}
+			triageDeps := appreviewtriage.Deps{RepoSettings: a.stores.repoSettings, ReviewVerdicts: a.stores.reviewVerdict, Artifacts: a.stores.artifact, Sessions: a.stores.session}
 			triageDecision, triageConfig := appreviewtriage.ComputeDecision(ctx, triageDeps, decision.repoFullName, decision.prNumber, reviewCtx)
+			triageProvenance := appreviewtriage.ResolveProvenance(ctx, triageDeps, decision.repoFullName, decision.prNumber)
 			flooredDepth := domainreviewtriage.Floor(triageDecision.Depth, domainreviewtriage.ReviewDepth(decision.latestVerdictReviewPath))
 			decision.finalReviewDepth = string(flooredDepth)
 			decision.triageModelID, decision.triageEffort = domainreviewtriage.ModelAndEffort(flooredDepth, a.reviewModelDeep)
-			if recordJSON, marshalErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth)); marshalErr != nil {
+			if recordJSON, marshalErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance)); marshalErr != nil {
 				a.logger.Warn("sessionactor: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", marshalErr, "repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
 			} else {
 				decision.reviewDepthDecisionJSON = recordJSON

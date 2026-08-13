@@ -319,10 +319,11 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// ComputeDecision never errors (its own doc comment) -- there is no
 	// failure path here for CreateOrJoin to propagate.
 	triageDecision, triageConfig := appreviewtriage.ComputeDecision(ctx, c.ReviewTriage, repoFullName, prNumber, prCtx)
+	triageProvenance := appreviewtriage.ResolveProvenance(ctx, c.ReviewTriage, repoFullName, prNumber)
 	reviewDepthStr := string(triageDecision.Depth)
 	reviewDepthPtr := &reviewDepthStr
 	triageModelID, triageEffort := domainreviewtriage.ModelAndEffort(triageDecision.Depth, c.ReviewModelDeep)
-	triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, triageDecision.Depth))
+	triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, triageDecision.Depth, triageProvenance))
 	if triageRecordErr != nil {
 		logger.Warn("github: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo", repoFullName, "pr_number", prNumber)
 		triageRecordJSON = nil

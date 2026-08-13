@@ -13,7 +13,7 @@ func TestNewDecisionRecord(t *testing.T) {
 	decision := reviewtriage.Decide(sig, cfg)
 
 	t.Run("not floored", func(t *testing.T) {
-		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth)
+		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{})
 		want := reviewtriage.DecisionRecord{
 			Depth:                "deep",
 			Reason:               string(reviewtriage.ReasonSensitiveGlob),
@@ -33,7 +33,7 @@ func TestNewDecisionRecord(t *testing.T) {
 		lightDecision := reviewtriage.Decide(lightSig, cfg)
 		floored := reviewtriage.Floor(lightDecision.Depth, reviewtriage.DepthDeep)
 
-		got := reviewtriage.NewDecisionRecord(lightDecision, cfg, floored)
+		got := reviewtriage.NewDecisionRecord(lightDecision, cfg, floored, reviewtriage.Provenance{})
 		if got.Depth != "deep" {
 			t.Errorf("Depth = %q, want deep", got.Depth)
 		}

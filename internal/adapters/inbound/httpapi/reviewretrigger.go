@@ -221,9 +221,10 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// (and, when reviewModelDeep is configured, a specific frontier
 		// model).
 		triageDecision, triageConfig := appreviewtriage.ComputeDecision(ctx, reviewTriageDeps, prSession.RepoFullName, prSession.PrNumber, prCtx)
+		triageProvenance := appreviewtriage.ResolveProvenance(ctx, reviewTriageDeps, prSession.RepoFullName, prSession.PrNumber)
 		reviewDepthStr := string(triageDecision.Depth)
 		triageModelID, triageEffort := domainreviewtriage.ModelAndEffort(triageDecision.Depth, reviewModelDeep)
-		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, triageDecision.Depth))
+		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, triageDecision.Depth, triageProvenance))
 		if triageRecordErr != nil {
 			logger.Warn("httpapi: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 			triageRecordJSON = nil

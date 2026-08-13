@@ -11,8 +11,21 @@
 package reviewtriage
 
 import (
+	"strconv"
+
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 )
+
+// pullRequestHTMLURL builds the SAME deterministic "https://github.com/
+// {owner}/{repo}/pull/{number}" shape GitHub's own REST API always
+// returns as html_url -- duplicated here rather than exporting internal/
+// app/outboxworker's own private identical helper, mirroring this
+// codebase's own established "one small function, duplicated at each
+// call site rather than exported purely for this" convention (e.g.
+// internal/adapters/inbound/httpapi's own reviewTagsFromJSON).
+func pullRequestHTMLURL(repoFullName string, prNumber int32) string {
+	return "https://github.com/" + repoFullName + "/pull/" + strconv.Itoa(int(prNumber))
+}
 
 // Deps bundles every dependency ComputeDepth needs -- constructed once at
 // process wiring time (cmd/control-plane/main.go), mirroring every other
@@ -21,4 +34,14 @@ import (
 type Deps struct {
 	RepoSettings   *postgres.RepoSettingsStore
 	ReviewVerdicts *postgres.ReviewVerdictStore
+	// Artifacts/Sessions (§26.3's own "provenance: Narvi-authored vs
+	// human, and the authoring model" signal) back ResolveProvenance
+	// (provenance.go) -- the SAME two stores internal/app/outboxworker's
+	// own isPlatformAuthored helper and internal/app/decisioninbox's own
+	// identical twin already use for "which session, if any, pushed and
+	// opened this exact PR". Nil-safe: a nil Artifacts (this package's
+	// own tests that don't care about provenance) degrades ResolveProvenance
+	// to Provenance{} -- never a panic.
+	Artifacts *postgres.ArtifactStore
+	Sessions  *postgres.SessionStore
 }

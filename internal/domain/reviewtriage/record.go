@@ -27,14 +27,34 @@ type DecisionRecord struct {
 	// depth on record; false means Depth is exactly what Decide computed
 	// from this turn's own fresh signals alone.
 	Floored bool `json:"floored"`
+
+	// NarviAuthored/AuthoringModel (§26.3's own "provenance: Narvi-
+	// authored vs human, and the authoring model" signal) are captured
+	// here but NEVER consulted by Decide -- v1's own five rules (doc.go)
+	// do not include provenance. Recorded now so Step 69 (§26.4's
+	// cross-family counter-review, "the family comes from provenance,
+	// the tier from depth") does not have to re-derive it later.
+	// AuthoringModel is empty whenever NarviAuthored is false, or when a
+	// Narvi-authored session never had an explicit build model set.
+	NarviAuthored  bool   `json:"narviAuthored"`
+	AuthoringModel string `json:"authoringModel,omitempty"`
+}
+
+// Provenance is ComputeDecision's own third return value (internal/app/
+// reviewtriage) -- see DecisionRecord.NarviAuthored/AuthoringModel's own
+// doc comment for why this is captured but not routed on.
+type Provenance struct {
+	NarviAuthored  bool
+	AuthoringModel string
 }
 
 // NewDecisionRecord builds a DecisionRecord from decision (Decide's own
-// output), cfg (the resolved per-repo config Decide was called with), and
+// output), cfg (the resolved per-repo config Decide was called with),
 // finalDepth (decision.Depth after Floor has been applied, if this is a
 // re-review path -- callers with no floor to apply pass decision.Depth
-// itself unchanged).
-func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth) DecisionRecord {
+// itself unchanged), and provenance (internal/app/reviewtriage's own
+// best-effort authorship lookup).
+func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, provenance Provenance) DecisionRecord {
 	tags := make([]string, len(decision.MatchedSensitiveTags))
 	for i, t := range decision.MatchedSensitiveTags {
 		tags[i] = string(t)
@@ -47,5 +67,7 @@ func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth) De
 		DistinctRoots:        decision.DistinctRoots,
 		Mode:                 string(resolveMode(cfg.Mode)),
 		Floored:              finalDepth != decision.Depth,
+		NarviAuthored:        provenance.NarviAuthored,
+		AuthoringModel:       provenance.AuthoringModel,
 	}
 }
