@@ -506,7 +506,12 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		RepoSettings:         rig.repoSettings,
 		ReviewFindings:       rig.reviewFindings,
 		AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(rig.pool),
-		Timeouts:             platform.DefaultTimeouts(),
+		// DigestSectionFeedback (Step 69, §26.5) backs
+		// appreviewverdict.DigestContestationRate -- the SAME one-off
+		// "constructed inline, no dedicated rig field" treatment
+		// AutoApprovalOutcomes immediately above already gets.
+		DigestSectionFeedback: narvipg.NewReviewDigestSectionFeedbackStore(rig.pool),
+		Timeouts:              platform.DefaultTimeouts(),
 	}
 	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))

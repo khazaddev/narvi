@@ -797,8 +797,8 @@
     "ReviewAnalytics": {
       "type": "object",
       "additionalProperties": false,
-      "description": "GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.",
-      "required": ["repoFullName", "timeseriesComputed", "timeseries", "topRiskDriversComputed", "topRiskDrivers", "findingOutcomesComputed", "findingOutcomes"],
+      "description": "GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Step 69, §26.5 adds a fourth rollup, digestContestationRatePercent -- the 'digest precision (contestation rate)' KPI that section names, the SAME 'own independent not-yet-computed sentinel' discipline as the original three. Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.",
+      "required": ["repoFullName", "timeseriesComputed", "timeseries", "topRiskDriversComputed", "topRiskDrivers", "findingOutcomesComputed", "findingOutcomes", "digestContestationRateComputed", "digestContestationRatePercent"],
       "properties": {
         "repoFullName": { "type": "string", "description": "The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own shape." },
         "timeseriesComputed": {
@@ -827,6 +827,14 @@
           "type": ["array", "null"],
           "description": "Every reviewpost.FindingStatus present in the window, sorted by count descending then status ascending. Null iff findingOutcomesComputed is false -- like timeseries above, a real, computed result can never itself be an empty array (every counted status is non-empty by construction), so null is unambiguous here too.",
           "items": { "$ref": "#/$defs/ReviewAnalyticsFindingStatusCount" }
+        },
+        "digestContestationRateComputed": {
+          "type": "boolean",
+          "description": "Step 69, §26.5: false means zero deep-path verdicts have been posted for this repo within the window (only a deep-path review ever produces an arch recap at all, §26.4/§26.9) -- distinct from a real, computed 0% rate, the SAME 'not yet computed' sentinel discipline as RepoSettings.contradictionRateComputed (reposettings.go)."
+        },
+        "digestContestationRatePercent": {
+          "type": ["number", "null"],
+          "description": "Null iff digestContestationRateComputed is false. The fraction of this window's deep-path arch-recap digest sections a maintainer contested (via the §26.5 'arch recap wrong: <reason>' command), as a 0-100 percentage -- §26.5's own 'digest precision (contestation rate)' KPI."
         }
       }
     },

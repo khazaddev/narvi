@@ -4588,9 +4588,25 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 // platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and
 // carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0%
 // dismiss rate and a repo with no data yet must never render identically' (§21.1).
-// Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role
-// including viewer.
+// Step 69, §26.5 adds a fourth rollup, digestContestationRatePercent -- the
+// 'digest precision (contestation rate)' KPI that section names, the SAME 'own
+// independent not-yet-computed sentinel' discipline as the original three. Gated
+// by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including
+// viewer.
 type ReviewAnalytics struct {
+	// Step 69, §26.5: false means zero deep-path verdicts have been posted for this
+	// repo within the window (only a deep-path review ever produces an arch recap at
+	// all, §26.4/§26.9) -- distinct from a real, computed 0% rate, the SAME 'not yet
+	// computed' sentinel discipline as RepoSettings.contradictionRateComputed
+	// (reposettings.go).
+	DigestContestationRateComputed bool `json:"digestContestationRateComputed" yaml:"digestContestationRateComputed" mapstructure:"digestContestationRateComputed"`
+
+	// Null iff digestContestationRateComputed is false. The fraction of this window's
+	// deep-path arch-recap digest sections a maintainer contested (via the §26.5
+	// 'arch recap wrong: <reason>' command), as a 0-100 percentage -- §26.5's own
+	// 'digest precision (contestation rate)' KPI.
+	DigestContestationRatePercent ReviewAnalyticsDigestContestationRatePercent `json:"digestContestationRatePercent" yaml:"digestContestationRatePercent" mapstructure:"digestContestationRatePercent"`
+
 	// Every reviewpost.FindingStatus present in the window, sorted by count
 	// descending then status ascending. Null iff findingOutcomesComputed is false --
 	// like timeseries above, a real, computed result can never itself be an empty
@@ -4684,6 +4700,12 @@ func (j *ReviewAnalyticsDayBucket) UnmarshalJSON(value []byte) error {
 	*j = ReviewAnalyticsDayBucket(plain)
 	return nil
 }
+
+// Null iff digestContestationRateComputed is false. The fraction of this window's
+// deep-path arch-recap digest sections a maintainer contested (via the §26.5 'arch
+// recap wrong: <reason>' command), as a 0-100 percentage -- §26.5's own 'digest
+// precision (contestation rate)' KPI.
+type ReviewAnalyticsDigestContestationRatePercent *float64
 
 // Every reviewpost.FindingStatus present in the window, sorted by count descending
 // then status ascending. Null iff findingOutcomesComputed is false -- like
@@ -4858,6 +4880,12 @@ func (j *ReviewAnalytics) UnmarshalJSON(value []byte) error {
 	var raw map[string]interface{}
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
+	}
+	if _, ok := raw["digestContestationRateComputed"]; raw != nil && !ok {
+		return fmt.Errorf("field digestContestationRateComputed in ReviewAnalytics: required")
+	}
+	if _, ok := raw["digestContestationRatePercent"]; raw != nil && !ok {
+		return fmt.Errorf("field digestContestationRatePercent in ReviewAnalytics: required")
 	}
 	if _, ok := raw["findingOutcomes"]; raw != nil && !ok {
 		return fmt.Errorf("field findingOutcomes in ReviewAnalytics: required")
