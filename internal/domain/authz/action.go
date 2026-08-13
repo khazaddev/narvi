@@ -328,6 +328,30 @@ const (
 	// human PRs only ever get a rendered suggestion, never a write) --
 	// this action governs ONLY the Narvi-authored, unattended-write path.
 	ActionToggleDescriptionAutofix Action = "toggle_description_autofix"
+	// ActionConfigureReviewDepth covers Step 68's own per-repo reviewDepth
+	// config (§26.3: "reviewDepth: {mode: auto|always_light|always_deep,
+	// deepPaths: [...]}", repo_settings.review_depth_mode/
+	// review_depth_deep_paths, migrations/
+	// 000082_repo_settings_review_depth.up.sql -- internal/adapters/
+	// inbound/httpapi/reposettings.go's own PutReviewDepthConfig). Admin
+	// only, this SAME row as ActionToggleSentinelAutoFix/
+	// ActionToggleAutoMerge/ActionToggleAutoRetriggerReview/
+	// ActionToggleDescriptionAutofix immediately above, by the identical
+	// reasoning those actions' own doc comments already state: §26.3
+	// names no RBAC tier for this config either, but arming
+	// mode=always_deep (or a deepPaths list) changes what runs UNATTENDED
+	// on a repo's own PRs -- which model/effort tier and how much cost
+	// every automated review incurs, with no human in the loop -- never a
+	// maintainer-level, per-PR judgment call the way row 5's actions are.
+	// mode=always_light is the SAME action gate even though it could only
+	// ever REDUCE unattended cost/rigor, not raise it: this is still a
+	// system-posture change to what runs unattended on every future PR,
+	// not a per-PR judgment call, so it belongs on this row for the same
+	// reason ActionToggleAutoRetriggerReview does even though arming IT
+	// also never auto-approves anything by itself (action.go's own doc
+	// comment on that action) -- "changes unattended behavior" is the
+	// admin-only trigger here, not "necessarily makes things riskier".
+	ActionConfigureReviewDepth Action = "configure_review_depth"
 )
 
 // AllActions is every recognized Action, in this file's own declaration
@@ -366,4 +390,5 @@ var AllActions = []Action{
 	ActionActivateWorkflowBinding,
 	ActionToggleAutoRetriggerReview,
 	ActionToggleDescriptionAutofix,
+	ActionConfigureReviewDepth,
 }

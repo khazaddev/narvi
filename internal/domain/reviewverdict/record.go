@@ -5,6 +5,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // Record is one review_verdicts row (§21.1) -- an envelope around an
@@ -39,4 +40,12 @@ type Record struct {
 	// but the agent reported nothing", by construction (this migration's
 	// own doc comment).
 	Digest reviewpost.Digest
+	// ReviewPath is Step 68's own light/deep routing decision (§26.3),
+	// persisted verbatim from the posting turn's own turns.review_depth
+	// column (migrations/000081_review_verdicts_review_path.up.sql) --
+	// the zero value (empty ReviewDepth("")) is what a pre-Step-68 row
+	// reads back as, or a verdict whose own turn never resolved a depth
+	// at all, mirroring Digest's own identical "zero value means not yet
+	// recorded" precedent immediately above.
+	ReviewPath reviewtriage.ReviewDepth
 }

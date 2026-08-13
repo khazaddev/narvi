@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // VerdictInput is the shape of a review-verdict-posting-tool call's own
@@ -56,6 +57,18 @@ type VerdictInput struct {
 	// for the full "why", and this field's own struct type for why it
 	// lives here rather than as a new review.Verdict field.
 	Digest Digest
+
+	// ReviewDepth (Step 68, §26.3) is the posting turn's own resolved
+	// light/deep routing decision (turns.review_depth) -- threaded
+	// through by the caller (internal/adapters/inbound/httpapi/
+	// reviewverdict.go), never accepted from the agent's own POST body
+	// (mirrors Shippable's own "server-computed only" contract: the
+	// AGENT never gets to claim which path it ran on). The zero value
+	// (reviewtriage.ReviewDepth("")) means "no resolvable depth for this
+	// turn" -- ValidateVerdictInput below treats that identically to
+	// DepthLight (never requiring the full digest), since a turn with no
+	// recorded depth was never routed deep by construction.
+	ReviewDepth reviewtriage.ReviewDepth
 }
 
 // The errors ValidateVerdictInput returns -- one per rejected field, named
@@ -94,6 +107,20 @@ var (
 	// "missing and garbled are the identical failure" posture, for the
 	// tri-state's own required one-line explanation.
 	ErrEmptyAdequacyExplanation = errors.New("reviewpost: digest.adequacyExplanation must not be empty")
+	// ErrEmptyDigestArchDecisions/ErrEmptyDigestStackRisks/
+	// ErrEmptyDigestUnverifiedLimits are Step 68's own addition (§26.3,
+	// via §26.1's own forward reference: "the full digest ... becomes
+	// schema-required on the deep path once §26.3 defines it") -- the
+	// three digest fields §26.1/Step 66 requested but deliberately left
+	// unenforced ("explicit future work, §26.3/Step 68, once a 'deep
+	// path' exists for it to attach to", reviewpost/digest.go's own doc
+	// comment) are now REQUIRED, but ONLY when in.ReviewDepth ==
+	// reviewtriage.DepthDeep -- see ValidateVerdictInput's own check
+	// below. Each mirrors ErrEmptyDigestSummary's identical "missing and
+	// garbled are the identical failure" empty/whitespace-only check.
+	ErrEmptyDigestArchDecisions    = errors.New("reviewpost: digest.archDecisions must not be empty on a deep-path review")
+	ErrEmptyDigestStackRisks       = errors.New("reviewpost: digest.stackRisks must not be empty on a deep-path review")
+	ErrEmptyDigestUnverifiedLimits = errors.New("reviewpost: digest.unverifiedLimits must not be empty on a deep-path review")
 )
 
 // ValidateVerdictInput rejects a malformed or partial verdict-posting-tool
@@ -204,6 +231,27 @@ func ValidateVerdictInput(in VerdictInput) error {
 	// failure" treatment for a free-text narrative field.
 	if strings.TrimSpace(in.Digest.AdequacyExplanation) == "" {
 		return ErrEmptyAdequacyExplanation
+	}
+
+	// Digest.ArchDecisions/StackRisks/UnverifiedLimits (Step 68, §26.3,
+	// via §26.1's own forward reference): schema-required ONLY on the
+	// deep path -- checked LAST, after every field the light path already
+	// requires, so a light-path or pre-Step-68 (ReviewDepth == "") caller
+	// keeps failing on exactly the SAME first error it always did (this
+	// function's own "fixed order" discipline, top doc comment). The
+	// posting endpoint's own reject-don't-repair posture (§26.1) means
+	// the agent re-submits with a real digest rather than this package
+	// ever repairing/fabricating one.
+	if in.ReviewDepth == reviewtriage.DepthDeep {
+		if len(in.Digest.ArchDecisions) == 0 {
+			return ErrEmptyDigestArchDecisions
+		}
+		if strings.TrimSpace(in.Digest.StackRisks) == "" {
+			return ErrEmptyDigestStackRisks
+		}
+		if strings.TrimSpace(in.Digest.UnverifiedLimits) == "" {
+			return ErrEmptyDigestUnverifiedLimits
+		}
 	}
 
 	// Findings (Step 48, additive): each one validated by

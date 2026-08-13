@@ -626,6 +626,16 @@ type pullRequestResponse struct {
 	// key at all, which unmarshals a Go pointer field to nil rather than a
 	// zero-valued, misleadingly-present struct.
 	Stack *stackResponse `json:"stack"`
+
+	// Additions/Deletions/ChangedFiles (§26.3, Step 68) are GitHub's own
+	// top-level "additions"/"deletions"/"changed_files" integers on this
+	// SAME "Get a pull request" response -- already arriving on the wire
+	// alongside every other field this response already decodes, simply
+	// unparsed until this Step. See PullRequest.Additions' own doc
+	// comment below for what consumes them.
+	Additions    int `json:"additions"`
+	Deletions    int `json:"deletions"`
+	ChangedFiles int `json:"changed_files"`
 }
 
 // stackResponse is the subset of GitHub's own "stack" object shape (§17.6)
@@ -705,6 +715,17 @@ type PullRequest struct {
 	// itself stays domain-agnostic, mirroring how it already never imports
 	// internal/adapters/inbound/github's own mention type.
 	Stack *StackInfo
+
+	// Additions/Deletions/ChangedFiles (§26.3, Step 68) are this PR's own
+	// server-reported diff-size facts, forwarded verbatim from GitHub's
+	// own "Get a pull request" response (pullRequestResponse.Additions/
+	// Deletions/ChangedFiles above) -- internal/app/reviewcontext.Fetch's
+	// own one real consumer, carrying these onto review.
+	// PreFetchedContext.Additions/Deletions/ChangedFilesCount for Step
+	// 68's own light/deep triage decision (internal/domain/reviewtriage).
+	Additions    int
+	Deletions    int
+	ChangedFiles int
 }
 
 // StackInfo is GetPullRequest's own stack-context return shape (§17.6) --
@@ -746,7 +767,15 @@ func (a *Adapter) GetPullRequest(ctx context.Context, owner, repo string, number
 		return PullRequest{}, fmt.Errorf("githubapi: decode pull request response: %w", err)
 	}
 
-	pr := PullRequest{Title: parsed.Title, HeadRef: parsed.Head.Ref, HeadSHA: parsed.Head.SHA, BaseRef: parsed.Base.Ref}
+	pr := PullRequest{
+		Title:        parsed.Title,
+		HeadRef:      parsed.Head.Ref,
+		HeadSHA:      parsed.Head.SHA,
+		BaseRef:      parsed.Base.Ref,
+		Additions:    parsed.Additions,
+		Deletions:    parsed.Deletions,
+		ChangedFiles: parsed.ChangedFiles,
+	}
 	if parsed.Body != nil {
 		pr.Body = *parsed.Body
 	}

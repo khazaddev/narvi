@@ -11,7 +11,7 @@ import (
 
 const getRepoSettings = `-- name: GetRepoSettings :one
 
-SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled FROM repo_settings WHERE repo_full_name = $1
+SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths FROM repo_settings WHERE repo_full_name = $1
 `
 
 // Queries backing RepoSettingsStore (§8.2/Step 47, §21.2): a small,
@@ -38,12 +38,14 @@ func (q *Queries) GetRepoSettings(ctx context.Context, repoFullName string) (Rep
 		&i.SensitiveBlastRadiusTags,
 		&i.AutoRetriggerReviewEnabled,
 		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
 	)
 	return i, err
 }
 
 const listAutoMergeEnabledRepos = `-- name: ListAutoMergeEnabledRepos :many
-SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled FROM repo_settings WHERE auto_merge_enabled = true
+SELECT repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths FROM repo_settings WHERE auto_merge_enabled = true
 `
 
 // internal/app/automerge's own per-tick repo enumeration (§21.2 stage
@@ -77,6 +79,8 @@ func (q *Queries) ListAutoMergeEnabledRepos(ctx context.Context) ([]RepoSetting,
 			&i.SensitiveBlastRadiusTags,
 			&i.AutoRetriggerReviewEnabled,
 			&i.DescriptionAutofixEnabled,
+			&i.ReviewDepthMode,
+			&i.ReviewDepthDeepPaths,
 		); err != nil {
 			return nil, err
 		}
@@ -93,7 +97,7 @@ INSERT INTO repo_settings (repo_full_name, max_auto_approve_files_changed, sensi
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET max_auto_approve_files_changed = EXCLUDED.max_auto_approve_files_changed, sensitive_blast_radius_tags = EXCLUDED.sensitive_blast_radius_tags, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths
 `
 
 type UpsertAutoApprovalEligibilityParams struct {
@@ -126,6 +130,8 @@ func (q *Queries) UpsertAutoApprovalEligibility(ctx context.Context, arg UpsertA
 		&i.SensitiveBlastRadiusTags,
 		&i.AutoRetriggerReviewEnabled,
 		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
 	)
 	return i, err
 }
@@ -136,7 +142,7 @@ INSERT INTO repo_settings (repo_full_name, auto_merge_enabled, updated_at)
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET auto_merge_enabled = EXCLUDED.auto_merge_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths
 `
 
 type UpsertAutoMergeToggleParams struct {
@@ -189,6 +195,8 @@ func (q *Queries) UpsertAutoMergeToggle(ctx context.Context, arg UpsertAutoMerge
 		&i.SensitiveBlastRadiusTags,
 		&i.AutoRetriggerReviewEnabled,
 		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
 	)
 	return i, err
 }
@@ -198,7 +206,7 @@ INSERT INTO repo_settings (repo_full_name, auto_retrigger_review_enabled, update
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET auto_retrigger_review_enabled = EXCLUDED.auto_retrigger_review_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths
 `
 
 type UpsertAutoRetriggerReviewToggleParams struct {
@@ -232,6 +240,8 @@ func (q *Queries) UpsertAutoRetriggerReviewToggle(ctx context.Context, arg Upser
 		&i.SensitiveBlastRadiusTags,
 		&i.AutoRetriggerReviewEnabled,
 		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
 	)
 	return i, err
 }
@@ -241,7 +251,7 @@ INSERT INTO repo_settings (repo_full_name, description_autofix_enabled, updated_
 VALUES ($1, $2, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET description_autofix_enabled = EXCLUDED.description_autofix_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths
 `
 
 type UpsertDescriptionAutofixToggleParams struct {
@@ -274,6 +284,8 @@ func (q *Queries) UpsertDescriptionAutofixToggle(ctx context.Context, arg Upsert
 		&i.SensitiveBlastRadiusTags,
 		&i.AutoRetriggerReviewEnabled,
 		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
 	)
 	return i, err
 }
@@ -283,7 +295,7 @@ INSERT INTO repo_settings (repo_full_name, rwx_preview_dispatch_key, rwx_preview
 VALUES ($1, $2, $3, $4, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET rwx_preview_dispatch_key = EXCLUDED.rwx_preview_dispatch_key, rwx_preview_endpoint_template = EXCLUDED.rwx_preview_endpoint_template, rwx_preview_org_slug = EXCLUDED.rwx_preview_org_slug, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths
 `
 
 type UpsertRWXPreviewSettingsParams struct {
@@ -324,6 +336,8 @@ func (q *Queries) UpsertRWXPreviewSettings(ctx context.Context, arg UpsertRWXPre
 		&i.SensitiveBlastRadiusTags,
 		&i.AutoRetriggerReviewEnabled,
 		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
 	)
 	return i, err
 }
@@ -333,7 +347,7 @@ INSERT INTO repo_settings (repo_full_name, block_on_high_risk, sentinel_autofix_
 VALUES ($1, $2, $3, now())
 ON CONFLICT (repo_full_name)
 DO UPDATE SET block_on_high_risk = EXCLUDED.block_on_high_risk, sentinel_autofix_enabled = EXCLUDED.sentinel_autofix_enabled, updated_at = now()
-RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths
 `
 
 type UpsertRepoSettingsParams struct {
@@ -367,6 +381,54 @@ func (q *Queries) UpsertRepoSettings(ctx context.Context, arg UpsertRepoSettings
 		&i.SensitiveBlastRadiusTags,
 		&i.AutoRetriggerReviewEnabled,
 		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
+	)
+	return i, err
+}
+
+const upsertReviewDepthConfig = `-- name: UpsertReviewDepthConfig :one
+INSERT INTO repo_settings (repo_full_name, review_depth_mode, review_depth_deep_paths, updated_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET review_depth_mode = EXCLUDED.review_depth_mode, review_depth_deep_paths = EXCLUDED.review_depth_deep_paths, updated_at = now()
+RETURNING repo_full_name, block_on_high_risk, created_at, updated_at, sentinel_autofix_enabled, rwx_preview_dispatch_key, rwx_preview_endpoint_template, rwx_preview_org_slug, auto_merge_enabled, max_auto_approve_files_changed, sensitive_blast_radius_tags, auto_retrigger_review_enabled, description_autofix_enabled, review_depth_mode, review_depth_deep_paths
+`
+
+type UpsertReviewDepthConfigParams struct {
+	RepoFullName         string  `json:"repo_full_name"`
+	ReviewDepthMode      *string `json:"review_depth_mode"`
+	ReviewDepthDeepPaths []byte  `json:"review_depth_deep_paths"`
+}
+
+// Step 68's own admin-only, per-repo reviewDepth config (§26.3,
+// migrations/000082_repo_settings_review_depth.up.sql) -- idempotent
+// create-or-update of ONLY review_depth_mode/review_depth_deep_paths,
+// mirroring UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
+// UpsertDescriptionAutofixToggle's own identical column-scoped shape
+// above (§62 review finding C5's fix, generalized to this further,
+// independently-gated config): every other repo_settings column is left
+// COMPLETELY untouched, so a concurrent write to any of them can never
+// race with this one at the database level.
+func (q *Queries) UpsertReviewDepthConfig(ctx context.Context, arg UpsertReviewDepthConfigParams) (RepoSetting, error) {
+	row := q.db.QueryRow(ctx, upsertReviewDepthConfig, arg.RepoFullName, arg.ReviewDepthMode, arg.ReviewDepthDeepPaths)
+	var i RepoSetting
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.BlockOnHighRisk,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SentinelAutofixEnabled,
+		&i.RwxPreviewDispatchKey,
+		&i.RwxPreviewEndpointTemplate,
+		&i.RwxPreviewOrgSlug,
+		&i.AutoMergeEnabled,
+		&i.MaxAutoApproveFilesChanged,
+		&i.SensitiveBlastRadiusTags,
+		&i.AutoRetriggerReviewEnabled,
+		&i.DescriptionAutofixEnabled,
+		&i.ReviewDepthMode,
+		&i.ReviewDepthDeepPaths,
 	)
 	return i, err
 }

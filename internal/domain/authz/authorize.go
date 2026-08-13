@@ -189,6 +189,13 @@ var matrix = map[Action]actionRule{
 	// above (action.go's own doc comment: §26.2 names no tier itself,
 	// reasoned here to match every sibling unattended-write toggle).
 	ActionToggleDescriptionAutofix: {allow: roles(RoleAdmin)},
+	// Step 68 (§26.3): configuring the per-repo reviewDepth mode/
+	// deepPaths -- same row, same reasoning as ActionToggleSentinelAutoFix/
+	// ActionToggleAutoMerge/ActionToggleAutoRetriggerReview/
+	// ActionToggleDescriptionAutofix immediately above (action.go's own
+	// doc comment: §26.3 names no tier itself, reasoned here to match
+	// every sibling unattended-behavior config).
+	ActionConfigureReviewDepth: {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against

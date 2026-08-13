@@ -1,0 +1,11 @@
+-- review_verdicts.review_path (Step 68, §26.3): "persisted as review_path
+-- on the verdict row (Step 62) so cost and precision become measurable
+-- per path from day one" -- the SAME light/deep value
+-- (internal/domain/reviewtriage.ReviewDepth) turns.review_depth
+-- (migrations/000080) recorded at this verdict's own turn-creation time,
+-- forwarded verbatim by internal/app/reviewverdict.Insert. Nullable TEXT,
+-- mirroring every OTHER review_verdicts column added after the original
+-- table (migrations/000077_review_verdicts_digest.up.sql,
+-- 000078_review_verdicts_description_adequacy.up.sql): NULL means "posted
+-- before Step 68 existed", never a fabricated depth for an old row.
+ALTER TABLE review_verdicts ADD COLUMN review_path TEXT;

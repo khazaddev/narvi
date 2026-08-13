@@ -130,6 +130,25 @@ func (s *RepoSettingsStore) UpsertDescriptionAutofixToggle(ctx context.Context, 
 	})
 }
 
+// UpsertReviewDepthConfig idempotently creates-or-updates repoFullName's
+// §26.3 reviewDepth config -- COLUMN-SCOPED (mirrors
+// UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle/
+// UpsertDescriptionAutofixToggle's own identical shape, §62 review
+// finding C5's pattern generalized to this further, independently-gated
+// config): touches ONLY review_depth_mode/review_depth_deep_paths,
+// leaving every other repo_settings column completely untouched.
+// deepPathsJSON is pre-marshaled JSON bytes (a JSON array of glob-pattern
+// strings) -- this store does no JSON encoding of its own, mirroring
+// UpsertAutoApprovalEligibility's own identical "caller owns the
+// encoding" convention.
+func (s *RepoSettingsStore) UpsertReviewDepthConfig(ctx context.Context, repoFullName string, mode *string, deepPathsJSON []byte) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertReviewDepthConfig(ctx, sqlcgen.UpsertReviewDepthConfigParams{
+		RepoFullName:         repoFullName,
+		ReviewDepthMode:      mode,
+		ReviewDepthDeepPaths: deepPathsJSON,
+	})
+}
+
 // ListAutoMergeEnabled returns every repo_settings row with
 // auto_merge_enabled = true -- internal/app/automerge's own per-tick
 // repo enumeration (see ListAutoMergeEnabledRepos' own generated doc

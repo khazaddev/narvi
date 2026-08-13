@@ -113,6 +113,41 @@ type PreFetchedContext struct {
 	// fetched.
 	Title string
 	Body  string
+
+	// Additions/Deletions/ChangedFilesCount (§26.3, Step 68) are this
+	// PR's own server-reported diff-size facts -- GitHub's "Get a pull
+	// request" response (the SAME GetPullRequest call this struct's one
+	// producer, internal/app/reviewcontext.Fetch, already makes to
+	// resolve HeadSHA/BaseRef/Stack/Title/Body above) already carries
+	// "additions"/"deletions"/"changed_files" as top-level integers on
+	// that SAME response -- server-side bookkeeping ONLY, mirroring
+	// HeadSHA's own "never rendered into the prompt text" contract: an
+	// agent has no legitimate use for these as instructions, they exist
+	// purely to feed internal/domain/reviewtriage.Decide (Step 68's own
+	// light/deep routing decision). All three are 0 for a failed
+	// GetPullRequest fetch, indistinguishable from a genuinely empty
+	// diff -- reviewtriage's own "any triage error fails open to light"
+	// posture (internal/app/reviewtriage) makes this ambiguity safe: a
+	// diff that looks empty because the fetch failed can only ever route
+	// LIGHT, never miss a deep-routing signal that was actually there.
+	Additions         int
+	Deletions         int
+	ChangedFilesCount int
+	// ChangedPaths (§26.3, Step 68) is Diff's own changed-file-path
+	// listing, parsed deterministically by reviewtriage.
+	// ExtractChangedPaths -- never rendered into the prompt (mirrors
+	// HeadSHA), computed once by this struct's one producer so every
+	// review-trigger path shares the identical parse rather than
+	// re-parsing Diff at its own call site. nil when Diff itself is
+	// empty (a failed or never-attempted fetch).
+	ChangedPaths []string
+	// Labels (§26.3, Step 68) is this PR's own current GitHub label set
+	// -- bookkeeping only, mirrors HeadSHA -- sourced from the SAME
+	// GetPullRequest call (githubapi.PullRequest.Labels, already
+	// resolved for Step 50's release detection) rather than a new fetch.
+	// Feeds reviewtriage's own "existing risk labels" signal
+	// (specifically, reviewpost.LabelNeedsHuman's presence).
+	Labels []string
 }
 
 // diffContentDelimiter, stackContentDelimiter, and

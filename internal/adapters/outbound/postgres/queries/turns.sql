@@ -33,8 +33,13 @@
 -- literal that predates this Step), set exactly once, at creation, by
 -- createTurnLocked's own plan_followup gate (turn.go). See that
 -- migration's own doc comment for the full "why NULL vs FALSE" split.
-INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+--
+-- review_depth (migrations/000080_turns_review_depth.up.sql, Step 68,
+-- §26.3) mirrors review_head_sha's own identical shape one column
+-- further -- nil/absent for every non-review turn, set exactly once, at
+-- creation, by every review-turn-creation path.
+INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only, review_depth)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: GetTurn :one

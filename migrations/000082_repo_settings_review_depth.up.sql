@@ -1,0 +1,48 @@
+-- reviewDepth per-repo config (Step 68, §26.3: "reviewDepth: {mode:
+-- auto|always_light|always_deep, deepPaths: [...]} alongside the other
+-- per-repo review settings"). Two further columns on the SAME
+-- repo_settings table Step 47 already shaped for exactly this
+-- (migrations/000044_repo_settings.up.sql's own doc comment) -- NOT a
+-- new table, NOT a new endpoint family (internal/adapters/inbound/httpapi/
+-- reposettings.go gets one further column-scoped PUT handler, mirroring
+-- PutDescriptionAutofixToggle exactly, not a parallel mechanism).
+--
+-- RBAC tier (§26.3 does not itself name one -- reasoned here, matching
+-- CLAUDE.md's own "state your reasoning" instruction for an
+-- underspecified call, the same way Step 67 reasoned
+-- description_autofix_enabled's own tier, migrations/
+-- 000079_repo_settings_description_autofix.up.sql): admin-only
+-- (authz.ActionConfigureReviewDepth, internal/domain/authz/action.go),
+-- the SAME row as sentinel_autofix_enabled/auto_merge_enabled/
+-- auto_retrigger_review_enabled/description_autofix_enabled -- every one
+-- of those four sibling toggles is admin-only for the identical,
+-- explicitly-stated reason (each one's own doc comment): "arming this
+-- toggle changes what runs UNATTENDED on a repo's own PRs... never a
+-- maintainer-level, per-PR judgment call the way row 5's actions are".
+-- Configuring reviewDepth is a textbook match: it changes which
+-- model/effort tier -- and how much cost -- every future automated
+-- review incurs unattended, the same class of system-posture change as
+-- the four siblings, never a per-PR judgment call a maintainer makes
+-- about ONE specific PR (row 5's own shape, e.g.
+-- ActionEditReviewVerdict/ActionRetriggerReview).
+--
+-- review_depth_mode: NULLABLE TEXT. NULL means "use the engine's own
+-- built-in default" (internal/domain/reviewtriage.DefaultConfig, mode
+-- "auto") -- mirrors max_auto_approve_files_changed's own identical
+-- "NULL = use the built-in default, never a magic sentinel value"
+-- precedent (migrations/000069_repo_settings_auto_approval.up.sql).
+-- Validated application-side against reviewtriage.Mode's own three legal
+-- values (auto/always_light/always_deep) -- an unrecognized stored value
+-- degrades to "auto" too (reviewtriage.Mode's own doc comment), never a
+-- read failure.
+--
+-- review_depth_deep_paths: JSONB, a JSON array of glob-pattern strings
+-- (internal/domain/reviewtriage.Config.DeepPaths) -- mirrors
+-- sensitive_blast_radius_tags' own identical choice (migrations/000069)
+-- of a plain JSON array over a native Postgres array type, this
+-- codebase's own established precedent for every per-repo string-list
+-- column. NULL/absent means no repo-specific deep-routing paths beyond
+-- the fixed, built-in sensitive-glob set (internal/domain/reviewtriage's
+-- own migrations/auth/infra-as-code/CI-workflow defaults).
+ALTER TABLE repo_settings ADD COLUMN review_depth_mode TEXT;
+ALTER TABLE repo_settings ADD COLUMN review_depth_deep_paths JSONB;
