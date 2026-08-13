@@ -447,7 +447,7 @@ func TestReviewRetriggerDebounceTimer_FlooredDeep_PromptReflectsDeepPath(t *test
 	if strings.Contains(prompt, `"archDecisions": [zero or more of the following object -- REQUESTED, not required`) {
 		t.Errorf("prompt still describes archDecisions as merely REQUESTED on a deep-floored turn: %s", prompt)
 	}
-	if !strings.Contains(prompt, "\"counterReview\" is REQUIRED on this deep-path review") {
+	if !strings.Contains(prompt, "\"counterReview\": \"done\" | \"skipped\" (REQUIRED on this deep-path review") {
 		t.Errorf("prompt does not tell the agent counterReview is required on a deep-floored turn: %s", prompt)
 	}
 }
