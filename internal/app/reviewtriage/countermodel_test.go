@@ -20,6 +20,7 @@ func TestResolveCounterReviewerModel(t *testing.T) {
 		{"openai authoring model opposes to a non-openai provider", "openai/gpt-5.4", false, "openai"},
 		{"google authoring model opposes to a non-google provider", "google/gemini-2.5-flash", false, "google"},
 		{"unrecognized provider in authoring model still opposes (no provider to skip)", "unknown-provider/some-model", false, ""},
+		{"mixed-case authoring provider still excludes its own family (B10)", "Anthropic/claude-opus-4-5", false, "anthropic"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

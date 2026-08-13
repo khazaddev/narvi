@@ -29,15 +29,24 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // Returns "" (no override -- the counter-reviewer sub-task then simply
 // inherits whatever model the deep-path turn's own dispatch already
 // resolved, reviewtriage.ModelAndEffort's own deep-tier choice) when
-// authoringModel is empty or names a provider this catalog does not
-// recognize. This is the COMMON case, not a degraded one: opposition is
-// only a meaningful concept for a Narvi-authored PR with a KNOWN authoring
-// model (provenance.NarviAuthored, session.build_model_id) -- the
-// overwhelming majority of PRs are human-authored, with no "authoring
-// model" to oppose in the first place, and §26.4's own wording ("family
-// opposed to the PR's authoring model") presupposes one exists. This
-// function does not invent a family to oppose when there is nothing on
-// record to oppose.
+// authoringModel is empty or has no "provider/model" shape at all (no "/",
+// or a blank provider before it) -- the COMMON case, not a degraded one:
+// opposition is only a meaningful concept for a Narvi-authored PR with a
+// KNOWN authoring model (provenance.NarviAuthored, session.build_model_id)
+// -- the overwhelming majority of PRs are human-authored, with no
+// "authoring model" to oppose in the first place, and §26.4's own wording
+// ("family opposed to the PR's authoring model") presupposes one exists.
+// This function does not invent a family to oppose when there is nothing
+// on record to oppose.
+//
+// An authoringModel naming a provider OUTSIDE this catalog's own three
+// (counterReviewerProviderPreference) is deliberately NOT a third "return
+// no override" case: such a provider can never equal any of the three
+// preference entries below, so none of them is ever excluded, and this
+// function still returns a real opposing-family pick -- any of the three
+// known providers is, by construction, a different family from an
+// unrecognized one. "Opposition" only needs a provider ID to compare
+// against, never catalog membership of the authoring side itself.
 //
 // "tier from depth (§26.3, already shipped)": this function is only ever
 // called for a deep-path review (counter-review never runs on light,
@@ -55,7 +64,8 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // deterministic and never depends on map/slice iteration order.
 func ResolveCounterReviewerModel(authoringModel string) string {
 	authoringProvider, _, ok := strings.Cut(authoringModel, "/")
-	if !ok || strings.TrimSpace(authoringProvider) == "" {
+	authoringProvider = strings.ToLower(strings.TrimSpace(authoringProvider))
+	if !ok || authoringProvider == "" {
 		return ""
 	}
 
