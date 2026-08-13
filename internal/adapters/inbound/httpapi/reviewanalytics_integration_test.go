@@ -81,14 +81,14 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 		ProposedShippable: review.ProposedShippableAuto,
 		FilesChanged:      2,
 	}
-	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
 	seededDigest := reviewpost.Digest{
 		Summary: "Test-seeded verdict.",
 		ArchDecisions: []reviewpost.ArchDecision{
 			{Decision: "Use a shared retry helper.", RejectedAlternative: "Inline retry logic per call site.", ConventionConformance: "Matches internal/platform's existing retry helper pattern."},
 		},
 	}
-	insertedRecord, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict, seededDigest, "")
+	insertedRecord, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict, seededDigest, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0)
 	if err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}

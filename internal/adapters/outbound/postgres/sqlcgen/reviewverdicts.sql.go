@@ -12,7 +12,7 @@ import (
 )
 
 const getLatestReviewVerdict = `-- name: GetLatestReviewVerdict :one
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path FROM review_verdicts
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM review_verdicts
 WHERE repo_full_name = $1 AND pr_number = $2
 ORDER BY created_at DESC
 LIMIT 1
@@ -58,6 +58,10 @@ func (q *Queries) GetLatestReviewVerdict(ctx context.Context, arg GetLatestRevie
 		&i.DigestAdequacyExplanation,
 		&i.DigestProposedBody,
 		&i.ReviewPath,
+		&i.CounterReview,
+		&i.FactCheck,
+		&i.FactCheckKilled,
+		&i.DigestContestedPoints,
 	)
 	return i, err
 }
@@ -70,10 +74,11 @@ INSERT INTO review_verdicts (
     proposed_shippable, shippable, session_id,
     digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits,
     digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body,
-    review_path
+    review_path,
+    counter_review, fact_check, fact_check_killed, digest_contested_points
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-RETURNING id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+RETURNING id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points
 `
 
 type InsertReviewVerdictParams struct {
@@ -97,6 +102,10 @@ type InsertReviewVerdictParams struct {
 	DigestAdequacyExplanation *string     `json:"digest_adequacy_explanation"`
 	DigestProposedBody        *string     `json:"digest_proposed_body"`
 	ReviewPath                *string     `json:"review_path"`
+	CounterReview             *string     `json:"counter_review"`
+	FactCheck                 *string     `json:"fact_check"`
+	FactCheckKilled           *int32      `json:"fact_check_killed"`
+	DigestContestedPoints     *string     `json:"digest_contested_points"`
 }
 
 // Queries backing ReviewVerdictStore (Step 62, §21.1) -- see
@@ -123,6 +132,15 @@ type InsertReviewVerdictParams struct {
 // existed, or whose own turn never had a resolvable depth (the SAME
 // "safe, not dangerous, degradation" posture head_sha's own resolution
 // already has, reviewverdict.go).
+//
+// counter_review/fact_check/fact_check_killed/digest_contested_points
+// (Step 69, §26.4/§26.6, migrations/
+// 000084_review_verdicts_counter_review.up.sql) forward internal/domain/
+// review.CounterReviewStatus, internal/domain/reviewpost.FactCheckStatus/
+// FactCheckKilled/Digest.ContestedPoints verbatim -- see that migration's
+// own doc comment for why all four stay nullable at the schema level
+// despite fact_check being APPLICATION-required, unconditionally, on
+// every new post (unlike counter_review, deep-path-only-required).
 func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdictParams) (ReviewVerdict, error) {
 	row := q.db.QueryRow(ctx, insertReviewVerdict,
 		arg.RepoFullName,
@@ -145,6 +163,10 @@ func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdi
 		arg.DigestAdequacyExplanation,
 		arg.DigestProposedBody,
 		arg.ReviewPath,
+		arg.CounterReview,
+		arg.FactCheck,
+		arg.FactCheckKilled,
+		arg.DigestContestedPoints,
 	)
 	var i ReviewVerdict
 	err := row.Scan(
@@ -170,13 +192,17 @@ func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdi
 		&i.DigestAdequacyExplanation,
 		&i.DigestProposedBody,
 		&i.ReviewPath,
+		&i.CounterReview,
+		&i.FactCheck,
+		&i.FactCheckKilled,
+		&i.DigestContestedPoints,
 	)
 	return i, err
 }
 
 const listLatestAutoApprovedInRepo = `-- name: ListLatestAutoApprovedInRepo :many
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path FROM (
-    SELECT DISTINCT ON (repo_full_name, pr_number) id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM (
+    SELECT DISTINCT ON (repo_full_name, pr_number) id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points
     FROM review_verdicts
     WHERE repo_full_name = $1 AND created_at > $2
     ORDER BY repo_full_name, pr_number, created_at DESC
@@ -239,6 +265,10 @@ func (q *Queries) ListLatestAutoApprovedInRepo(ctx context.Context, arg ListLate
 			&i.DigestAdequacyExplanation,
 			&i.DigestProposedBody,
 			&i.ReviewPath,
+			&i.CounterReview,
+			&i.FactCheck,
+			&i.FactCheckKilled,
+			&i.DigestContestedPoints,
 		); err != nil {
 			return nil, err
 		}
@@ -251,7 +281,7 @@ func (q *Queries) ListLatestAutoApprovedInRepo(ctx context.Context, arg ListLate
 }
 
 const listReviewVerdictsInWindow = `-- name: ListReviewVerdictsInWindow :many
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path FROM review_verdicts
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body, review_path, counter_review, fact_check, fact_check_killed, digest_contested_points FROM review_verdicts
 WHERE repo_full_name = $1 AND created_at > $2
 ORDER BY created_at ASC
 LIMIT $3
@@ -303,6 +333,10 @@ func (q *Queries) ListReviewVerdictsInWindow(ctx context.Context, arg ListReview
 			&i.DigestAdequacyExplanation,
 			&i.DigestProposedBody,
 			&i.ReviewPath,
+			&i.CounterReview,
+			&i.FactCheck,
+			&i.FactCheckKilled,
+			&i.DigestContestedPoints,
 		); err != nil {
 			return nil, err
 		}

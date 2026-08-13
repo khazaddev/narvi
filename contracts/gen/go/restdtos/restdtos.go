@@ -1854,6 +1854,15 @@ type Digest struct {
 	// exact conditional rule this schema alone cannot express.
 	ArchDecisions []ArchDecision `json:"archDecisions,omitempty,omitzero" yaml:"archDecisions,omitempty" mapstructure:"archDecisions,omitempty"`
 
+	// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+	// free-text prose naming where the primary reviewer's own findings/digest and the
+	// counter-reviewer sub-task's own adjudication genuinely disagreed --
+	// 'inter-agent disagreement is precisely the signal that a human must decide'.
+	// OPTIONAL, not validation-enforced, on every path -- most deep reviews produce
+	// no disagreement at all, and there is no counter-reviewer on the light path to
+	// disagree with anything (§26.9).
+	ContestedPoints DigestContestedPoints `json:"contestedPoints,omitempty,omitzero" yaml:"contestedPoints,omitempty" mapstructure:"contestedPoints,omitempty"`
+
 	// Step 67's own addition (§26.2): the agent's own comparison of THIS SAME
 	// digest's summary (written from the diff) against the pull request's own
 	// title+body -- which stay untrusted input throughout, consumed by this
@@ -1892,6 +1901,15 @@ type Digest struct {
 	// turn, mirroring archDecisions above (Step 68, §26.3).
 	UnverifiedLimits DigestUnverifiedLimits `json:"unverifiedLimits,omitempty,omitzero" yaml:"unverifiedLimits,omitempty" mapstructure:"unverifiedLimits,omitempty"`
 }
+
+// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+// free-text prose naming where the primary reviewer's own findings/digest and the
+// counter-reviewer sub-task's own adjudication genuinely disagreed -- 'inter-agent
+// disagreement is precisely the signal that a human must decide'. OPTIONAL, not
+// validation-enforced, on every path -- most deep reviews produce no disagreement
+// at all, and there is no counter-reviewer on the light path to disagree with
+// anything (§26.9).
+type DigestContestedPoints *string
 
 type DigestDescriptionAdequacy string
 
@@ -3367,17 +3385,61 @@ func (j *PostEpistemicOutcomeResponse) UnmarshalJSON(value []byte) error {
 // internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself,
 // which this endpoint always recomputes server-side (review.ComputeShippable) and
 // NEVER accepts from a caller -- see that package's own Verdict.Shippable doc
-// comment (verdict.go) for why.
+// comment (verdict.go) for why. factCheck/factCheckKilled and counterReview are
+// Step 69's own additions (§26.4/§26.6, 'review deep path: adversarial
+// counter-review + readout measurement') -- see those two properties' own doc
+// comments below.
 type PostReviewVerdictRequest struct {
 	// Matches internal/domain/review.Tag's own fixed, closed vocabulary exactly -- an
 	// empty array is legal (the reviewer found no tagged area touched).
 	BlastRadius []PostReviewVerdictRequestBlastRadiusElem `json:"blastRadius" yaml:"blastRadius" mapstructure:"blastRadius"`
+
+	// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+	// whether the primary reviewer's orchestration spawned and adjudicated the
+	// counter-reviewer sub-task (§7.1's engine-native fan-out) before posting this
+	// verdict. One of 'done'/'skipped' when present, matching
+	// internal/domain/review.CounterReviewStatus's own two values -- deliberately
+	// modeled as an unconstrained nullable string here, not a schema-level enum
+	// (mirroring PostedFinding.sentinelKind's own identical precedent immediately
+	// above, itself mirroring UpdateMemberRoleRequest.role's precedent): null/absent
+	// is legal on every path (the light path never runs a counter-reviewer at all,
+	// §26.9), and the closed vocabulary plus the CONDITIONAL requirement
+	// (application-level REQUIRED whenever this session's own server-resolved
+	// review-depth is 'deep') are both enforced at the application layer
+	// (internal/domain/reviewpost.ValidateVerdictInput's own
+	// ErrInvalidCounterReview), which this JSON Schema cannot express (review-depth
+	// lives on the turn, not on this payload -- mirrors
+	// digest.archDecisions/stackRisks/unverifiedLimits' own identical
+	// conditional-requirement shape, Step 68). 'skipped' raises the server-computed
+	// Shippable floor to needs_human (review.CounterReviewFloor) -- the deliberate,
+	// load-bearing difference from factCheck above, which never raises anything.
+	CounterReview PostReviewVerdictRequestCounterReview `json:"counterReview,omitempty,omitzero" yaml:"counterReview,omitempty" mapstructure:"counterReview,omitempty"`
 
 	// Digest corresponds to the JSON schema field "digest".
 	Digest Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
 
 	// Matches internal/domain/review.DocsDriftState's own three values exactly.
 	DocsDrift PostReviewVerdictRequestDocsDrift `json:"docsDrift" yaml:"docsDrift" mapstructure:"docsDrift"`
+
+	// Step 69's own addition (§26.6, 'diff-only fact-check pass, both paths'):
+	// whether the primary reviewer's orchestration spawned the diff-only fact-check
+	// sub-task (§7.1's engine-native fan-out, no tool access) before posting this
+	// verdict. Matches internal/domain/reviewpost.FactCheckStatus's own two values
+	// exactly. REQUIRED UNCONDITIONALLY -- both paths, not merely deep, since the
+	// fact-check pass itself runs on every review regardless of depth. Never an input
+	// to the server-computed Shippable -- 'skipped' can only mean published findings
+	// were not additionally pruned of provably-wrong ones, never that a real defect
+	// went unverified (the deliberate, load-bearing difference from counterReview
+	// below).
+	FactCheck PostReviewVerdictRequestFactCheck `json:"factCheck" yaml:"factCheck" mapstructure:"factCheck"`
+
+	// Step 69's own addition (§26.6): the count of findings the fact-check pass
+	// actually removed as provably wrong from the diff alone. REQUIRED
+	// UNCONDITIONALLY, alongside factCheck above -- MUST be 0 when factCheck is
+	// 'skipped' (a skipped pass, by construction, removed nothing;
+	// internal/domain/reviewpost.ValidateVerdictInput's own ErrFactCheckKilledOnSkip
+	// rejects any other combination).
+	FactCheckKilled int `json:"factCheckKilled" yaml:"factCheckKilled" mapstructure:"factCheckKilled"`
 
 	// FilesChanged corresponds to the JSON schema field "filesChanged".
 	FilesChanged int `json:"filesChanged" yaml:"filesChanged" mapstructure:"filesChanged"`
@@ -3454,6 +3516,27 @@ func (j *PostReviewVerdictRequestBlastRadiusElem) UnmarshalJSON(value []byte) er
 	return nil
 }
 
+// Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'):
+// whether the primary reviewer's orchestration spawned and adjudicated the
+// counter-reviewer sub-task (§7.1's engine-native fan-out) before posting this
+// verdict. One of 'done'/'skipped' when present, matching
+// internal/domain/review.CounterReviewStatus's own two values -- deliberately
+// modeled as an unconstrained nullable string here, not a schema-level enum
+// (mirroring PostedFinding.sentinelKind's own identical precedent immediately
+// above, itself mirroring UpdateMemberRoleRequest.role's precedent): null/absent
+// is legal on every path (the light path never runs a counter-reviewer at all,
+// §26.9), and the closed vocabulary plus the CONDITIONAL requirement
+// (application-level REQUIRED whenever this session's own server-resolved
+// review-depth is 'deep') are both enforced at the application layer
+// (internal/domain/reviewpost.ValidateVerdictInput's own ErrInvalidCounterReview),
+// which this JSON Schema cannot express (review-depth lives on the turn, not on
+// this payload -- mirrors digest.archDecisions/stackRisks/unverifiedLimits' own
+// identical conditional-requirement shape, Step 68). 'skipped' raises the
+// server-computed Shippable floor to needs_human (review.CounterReviewFloor) --
+// the deliberate, load-bearing difference from factCheck above, which never raises
+// anything.
+type PostReviewVerdictRequestCounterReview *string
+
 type PostReviewVerdictRequestDocsDrift string
 
 const PostReviewVerdictRequestDocsDriftFound PostReviewVerdictRequestDocsDrift = "found"
@@ -3483,6 +3566,36 @@ func (j *PostReviewVerdictRequestDocsDrift) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictRequestDocsDrift, v)
 	}
 	*j = PostReviewVerdictRequestDocsDrift(v)
+	return nil
+}
+
+type PostReviewVerdictRequestFactCheck string
+
+const PostReviewVerdictRequestFactCheckDone PostReviewVerdictRequestFactCheck = "done"
+const PostReviewVerdictRequestFactCheckSkipped PostReviewVerdictRequestFactCheck = "skipped"
+
+var enumValues_PostReviewVerdictRequestFactCheck = []interface{}{
+	"done",
+	"skipped",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PostReviewVerdictRequestFactCheck) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PostReviewVerdictRequestFactCheck {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PostReviewVerdictRequestFactCheck, v)
+	}
+	*j = PostReviewVerdictRequestFactCheck(v)
 	return nil
 }
 
@@ -3629,6 +3742,12 @@ func (j *PostReviewVerdictRequest) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["docsDrift"]; raw != nil && !ok {
 		return fmt.Errorf("field docsDrift in PostReviewVerdictRequest: required")
 	}
+	if _, ok := raw["factCheck"]; raw != nil && !ok {
+		return fmt.Errorf("field factCheck in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["factCheckKilled"]; raw != nil && !ok {
+		return fmt.Errorf("field factCheckKilled in PostReviewVerdictRequest: required")
+	}
 	if _, ok := raw["filesChanged"]; raw != nil && !ok {
 		return fmt.Errorf("field filesChanged in PostReviewVerdictRequest: required")
 	}
@@ -3651,6 +3770,9 @@ func (j *PostReviewVerdictRequest) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if 0 > plain.FactCheckKilled {
+		return fmt.Errorf("field %s: must be >= %v", "factCheckKilled", 0)
 	}
 	if 0 > plain.FilesChanged {
 		return fmt.Errorf("field %s: must be >= %v", "filesChanged", 0)

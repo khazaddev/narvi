@@ -79,9 +79,48 @@ func recordFromRow(row sqlcgen.ReviewVerdict) reviewverdict.Record {
 			ProposedShippable: review.ProposedShippable(row.ProposedShippable),
 			Shippable:         review.Shippable(row.Shippable),
 		},
-		Digest:     digestFromRow(row),
-		ReviewPath: reviewPathFromRow(row),
+		Digest:          digestFromRow(row),
+		ReviewPath:      reviewPathFromRow(row),
+		CounterReview:   counterReviewFromRow(row),
+		FactCheck:       factCheckFromRow(row),
+		FactCheckKilled: factCheckKilledFromRow(row),
 	}
+}
+
+// counterReviewFromRow reads row's own counter_review column (Step 69,
+// §26.4) into review.CounterReviewStatus -- row.CounterReview == nil (a
+// pre-Step-69 row, or any light-path row -- §26.9) degrades to the zero
+// value, mirroring reviewPathFromRow's own identical "absent column ->
+// zero value" precedent immediately above.
+func counterReviewFromRow(row sqlcgen.ReviewVerdict) review.CounterReviewStatus {
+	if row.CounterReview == nil {
+		return ""
+	}
+	return review.CounterReviewStatus(*row.CounterReview)
+}
+
+// factCheckFromRow reads row's own fact_check column (Step 69, §26.6)
+// into reviewpost.FactCheckStatus -- row.FactCheck == nil (a pre-Step-69
+// row) degrades to the zero value, mirroring counterReviewFromRow's own
+// identical precedent immediately above.
+func factCheckFromRow(row sqlcgen.ReviewVerdict) reviewpost.FactCheckStatus {
+	if row.FactCheck == nil {
+		return ""
+	}
+	return reviewpost.FactCheckStatus(*row.FactCheck)
+}
+
+// factCheckKilledFromRow reads row's own fact_check_killed column (Step
+// 69, §26.6) -- row.FactCheckKilled == nil (a pre-Step-69 row) degrades
+// to 0, indistinguishable from a real fact-check pass that killed
+// nothing (the SAME "0 either way" ambiguity §26.6's own FactCheckKilled
+// doc comment already accepts for a skipped pass -- neither case is a
+// safety-relevant distinction this package's readers need to make).
+func factCheckKilledFromRow(row sqlcgen.ReviewVerdict) int {
+	if row.FactCheckKilled == nil {
+		return 0
+	}
+	return int(*row.FactCheckKilled)
 }
 
 // reviewPathFromRow reads row's own review_path column (Step 68, §26.3)
@@ -97,9 +136,11 @@ func reviewPathFromRow(row sqlcgen.ReviewVerdict) reviewtriage.ReviewDepth {
 	return reviewtriage.ReviewDepth(*row.ReviewPath)
 }
 
-// digestFromRow builds reviewverdict.Record.Digest from row's own seven
+// digestFromRow builds reviewverdict.Record.Digest from row's own eight
 // digest_* columns (migrations/000077_review_verdicts_digest.up.sql,
-// 000078_review_verdicts_description_adequacy.up.sql) -- row.DigestSummary
+// 000078_review_verdicts_description_adequacy.up.sql,
+// 000084_review_verdicts_counter_review.up.sql's own
+// digest_contested_points) -- row.DigestSummary
 // == nil means either "posted before Step 66 existed" or (in principle,
 // never in practice once ValidateVerdictInput's own ErrEmptyDigestSummary
 // check is live) "no digest recorded" -- either way this returns the
@@ -129,6 +170,9 @@ func digestFromRow(row sqlcgen.ReviewVerdict) reviewpost.Digest {
 	}
 	if row.DigestProposedBody != nil {
 		d.ProposedBody = *row.DigestProposedBody
+	}
+	if row.DigestContestedPoints != nil {
+		d.ContestedPoints = *row.DigestContestedPoints
 	}
 	d.ArchDecisions = unmarshalArchDecisions(row.DigestArchDecisions)
 	return d

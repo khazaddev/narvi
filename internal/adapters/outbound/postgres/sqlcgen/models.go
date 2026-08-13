@@ -1722,6 +1722,10 @@ type ReviewVerdict struct {
 	DigestAdequacyExplanation *string            `json:"digest_adequacy_explanation"`
 	DigestProposedBody        *string            `json:"digest_proposed_body"`
 	ReviewPath                *string            `json:"review_path"`
+	CounterReview             *string            `json:"counter_review"`
+	FactCheck                 *string            `json:"fact_check"`
+	FactCheckKilled           *int32             `json:"fact_check_killed"`
+	DigestContestedPoints     *string            `json:"digest_contested_points"`
 }
 
 type Sandbox struct {

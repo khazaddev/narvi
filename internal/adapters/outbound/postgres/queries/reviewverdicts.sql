@@ -24,15 +24,25 @@
 -- existed, or whose own turn never had a resolvable depth (the SAME
 -- "safe, not dangerous, degradation" posture head_sha's own resolution
 -- already has, reviewverdict.go).
+--
+-- counter_review/fact_check/fact_check_killed/digest_contested_points
+-- (Step 69, §26.4/§26.6, migrations/
+-- 000084_review_verdicts_counter_review.up.sql) forward internal/domain/
+-- review.CounterReviewStatus, internal/domain/reviewpost.FactCheckStatus/
+-- FactCheckKilled/Digest.ContestedPoints verbatim -- see that migration's
+-- own doc comment for why all four stay nullable at the schema level
+-- despite fact_check being APPLICATION-required, unconditionally, on
+-- every new post (unlike counter_review, deep-path-only-required).
 INSERT INTO review_verdicts (
     repo_full_name, pr_number, head_sha,
     risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift,
     proposed_shippable, shippable, session_id,
     digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits,
     digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body,
-    review_path
+    review_path,
+    counter_review, fact_check, fact_check_killed, digest_contested_points
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 RETURNING *;
 
 -- name: GetLatestReviewVerdict :one

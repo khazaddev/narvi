@@ -1,0 +1,42 @@
+-- review_verdicts counter-review/fact-check/contested-points columns
+-- (Step 69, §26.4/§26.6: "review deep path: adversarial counter-review +
+-- readout measurement") -- one further column group on the SAME
+-- append-only history (migrations/000067_review_verdicts.up.sql), one
+-- column per new internal/domain/review.CounterReviewStatus /
+-- internal/domain/reviewpost.FactCheckStatus/Digest.ContestedPoints
+-- field, mirroring this table's own established "one column per typed
+-- field, verbatim" convention (migrations/000077, 000078, 000081).
+--
+-- counter_review/fact_check are both NULLABLE TEXT, exactly like every
+-- other digest_*/review_path column added since migrations/000077 --
+-- NULL means "posted before Step 69 existed" (or, for counter_review
+-- ONLY, "a light-path verdict, which never populates this field at all",
+-- §26.9 -- see internal/domain/reviewpost.ValidateVerdictInput's own
+-- doc comment for why this field is validated ONLY on the deep path).
+-- fact_check, unlike counter_review, is schema-required UNCONDITIONALLY
+-- at the posting endpoint (§26.6: "both paths, not just deep") -- every
+-- row INSERTed from this Step forward on EITHER path DOES carry a
+-- non-empty fact_check value, but the NOT NULL constraint is
+-- intentionally left off anyway, matching turns.review_head_sha's own
+-- identical "nullable column, non-null in practice, enforced at the app
+-- layer, not the schema layer" precedent (migrations/000072).
+--
+-- fact_check_killed is a plain INTEGER, NULLABLE (mirrors files_changed's
+-- own shape one column over, but nullable like every other Step-66-and-
+-- later addition on this table) -- NULL means "posted before Step 69
+-- existed", 0 means "a real fact-check pass that killed nothing, or a
+-- skipped one" (internal/domain/reviewpost.ValidateVerdictInput's own
+-- ErrFactCheckKilledOnSkip already guarantees 0 whenever fact_check is
+-- 'skipped').
+--
+-- digest_contested_points is free-text TEXT, exactly like
+-- digest_stack_risks/digest_unverified_limits one migration over --
+-- REQUESTED, never required, on every path (internal/domain/reviewpost.
+-- Digest.ContestedPoints' own doc comment: "most deep reviews produce NO
+-- disagreement at all"). An empty string and a NULL both mean "no
+-- contested points reported", from any reader's perspective, mirroring
+-- digest_stack_risks/digest_unverified_limits' own identical treatment.
+ALTER TABLE review_verdicts ADD COLUMN counter_review TEXT;
+ALTER TABLE review_verdicts ADD COLUMN fact_check TEXT;
+ALTER TABLE review_verdicts ADD COLUMN fact_check_killed INTEGER;
+ALTER TABLE review_verdicts ADD COLUMN digest_contested_points TEXT;
