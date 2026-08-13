@@ -451,6 +451,43 @@ func TestBuildVerdict_CounterReviewFloorInertOnLightPath(t *testing.T) {
 	}
 }
 
+// TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath
+// is B11's own regression test: unlike the BLANK/unset CounterReview the
+// test immediately above pins as correctly inert on the light path, a
+// verdict that EXPLICITLY carries CounterReview: "skipped" -- legal input
+// there, since ValidateVerdictInput never checks this field at all when
+// in.ReviewDepth != reviewtriage.DepthDeep -- must still float Shippable
+// to needs_human, the SAME floor TestBuildVerdict_CounterReviewSkippedRaisesShippable
+// above already pins for the deep path. Before the B11 fix, BuildVerdict's
+// own unconditional light-path substitution silently rewrote this
+// explicit self-report into CounterReviewDone, erasing exactly the signal
+// §26.4 says must raise the floor.
+// Mutation coverage: reverting BuildVerdict's own added
+// `&& in.CounterReview != review.CounterReviewSkipped` clause (back to the
+// bare `if in.ReviewDepth != reviewtriage.DepthDeep` this test's own
+// sibling above still covers) makes this test fail, since it would then
+// recompute Shippable as auto instead.
+func TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath(t *testing.T) {
+	in := validInput()
+	in.RiskLevel = review.RiskLevelLow
+	in.Premise = review.PremiseStateOK
+	in.TestsCoverage = review.TestsCoverageStateAdequate
+	in.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	// in.ReviewDepth is left at its own zero value (never DepthDeep) --
+	// the light-path/unresolved-depth case, exactly like the sibling test
+	// above -- but CounterReview is EXPLICITLY reported skipped this time.
+	in.CounterReview = review.CounterReviewSkipped
+
+	if err := reviewpost.ValidateVerdictInput(in); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput() = %v, want nil (CounterReview is never validated on the light path, so an explicit \"skipped\" is legal input there)", err)
+	}
+
+	got := reviewpost.BuildVerdict(in)
+	if got.Shippable != review.ShippableNeedsHuman {
+		t.Errorf("Shippable = %q, want %q (an EXPLICIT CounterReview: skipped must still raise Shippable, even on a verdict this function cannot confirm is genuinely deep-path)", got.Shippable, review.ShippableNeedsHuman)
+	}
+}
+
 // TestComputeShippable_FactCheckSkippedNeverRaisesShippable is §26.6's
 // own deliberate, load-bearing DIFFERENCE from
 // TestBuildVerdict_CounterReviewSkippedRaisesShippable above: FactCheck

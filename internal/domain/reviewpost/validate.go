@@ -443,19 +443,41 @@ func hasNonBlankArchDecision(decisions []ArchDecision) bool {
 // never runs a counter-reviewer sub-task (§26.9), so in.CounterReview is
 // whatever zero-value/unset field an agent that was never asked to
 // populate it happens to submit -- review.CounterReviewFloor's own
-// fail-conservative policy would otherwise read that as
-// CounterReviewSkipped and floor EVERY light-path verdict to needs_human,
-// silently defeating light-path auto-approval entirely. This function is
-// the one place VerdictInput's own depth is in scope (reviewpost already
-// imports both review and reviewtriage; review itself cannot, doc.go's own
-// "zero external imports" convention) and therefore the one place this
+// fail-conservative policy would otherwise read that blank value via its
+// own default branch and floor EVERY light-path verdict to needs_human,
+// silently defeating light-path auto-approval entirely.
+//
+// B11 fix: the substitution is skipped -- in.CounterReview is forwarded
+// as-is instead -- when in.CounterReview is EXPLICITLY
+// review.CounterReviewSkipped, even on a verdict this function cannot
+// confirm is genuinely deep-path. An agent reporting "skipped" is an
+// honest, explicit self-report that an adversarial counter-review did not
+// happen, for WHATEVER reason (§26.7's own "each field's already-decided
+// Shippable consequence applies unchanged and un-special-cased" wording,
+// review.CounterReviewStatus's own doc comment) -- silently laundering
+// that explicit signal into CounterReviewDone here, solely because
+// in.ReviewDepth did not read back as DepthDeep (which could be the
+// verdict's own genuine light-path status, but could just as easily be a
+// misrouted/blank ReviewDepth on what was actually meant to be an
+// adversarially-reviewed PR), would erase the SAME "did not get an
+// adversarial counter-review" signal §26.4 says must float the floor to
+// needs_human. This carve-out can only ever make a verdict's own
+// Shippable MORE conservative than the unconditional substitution did,
+// never less -- it does not touch the blank/unset case the substitution
+// exists for in the first place (blank != CounterReviewSkipped, so that
+// case still substitutes exactly as before). This function is the one
+// place VerdictInput's own depth is in scope (reviewpost already imports
+// both review and reviewtriage; review itself cannot, doc.go's own "zero
+// external imports" convention) and therefore the one place this
 // substitution belongs -- see review.CounterReviewStatus's own doc comment
 // for why CounterReviewFloor itself stays a plain, depth-unaware pure
 // function rather than growing a parameter for this. Pinned by
-// TestBuildVerdict_CounterReviewFloorInertOnLightPath (validate_test.go).
+// TestBuildVerdict_CounterReviewFloorInertOnLightPath and
+// TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath
+// (validate_test.go).
 func BuildVerdict(in VerdictInput) review.Verdict {
 	counterReviewForFloor := in.CounterReview
-	if in.ReviewDepth != reviewtriage.DepthDeep {
+	if in.ReviewDepth != reviewtriage.DepthDeep && in.CounterReview != review.CounterReviewSkipped {
 		counterReviewForFloor = review.CounterReviewDone
 	}
 	return review.Verdict{
