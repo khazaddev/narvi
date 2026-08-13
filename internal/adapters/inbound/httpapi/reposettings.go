@@ -745,8 +745,19 @@ func PutReviewCostBudget(repoSettings *postgres.RepoSettingsStore) http.HandlerF
 
 		lightUSD := (*float64)(req.LightUsd)
 		deepUSD := (*float64)(req.DeepUsd)
-		if (lightUSD != nil && *lightUSD < 0) || (deepUSD != nil && *deepUSD < 0) {
-			writeError(w, http.StatusBadRequest, "lightUsd and deepUsd must be non-negative, or null to use the built-in default")
+		// <= 0, not < 0: reviewtriage.CostBudget's own zero value means "no
+		// ceiling configured" (ShouldSkipOptionalPass, internal/domain/
+		// reviewtriage/costbudget.go's own doc comment: "a zero ceilingUSD
+		// ... NEVER skips"), so an explicit lightUsd/deepUsd of 0 stored
+		// here would silently collide with that "unconfigured" sentinel and
+		// resolve to UNLIMITED spend -- the opposite of what an operator
+		// setting an explicit 0 almost certainly intends. Rejecting it with
+		// a 400 (rather than silently accepting and reinterpreting it) is
+		// the SAME "never silently reinterpret a value the caller
+		// explicitly set" discipline reviewDepthModeString already applies
+		// to an unrecognized mode string, immediately below.
+		if (lightUSD != nil && *lightUSD <= 0) || (deepUSD != nil && *deepUSD <= 0) {
+			writeError(w, http.StatusBadRequest, "lightUsd and deepUsd must be positive (zero would collide with the built-in 'no ceiling configured' sentinel and silently mean unlimited), or null to use the built-in default")
 			return
 		}
 

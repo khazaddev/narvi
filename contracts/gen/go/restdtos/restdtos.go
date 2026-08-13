@@ -5761,20 +5761,30 @@ func (j *UpdateRepoSettingsRequest) UnmarshalJSON(value []byte) error {
 // desired state for these two fields specifically (never a partial patch).
 type UpdateReviewCostBudgetRequest struct {
 	// Null means 'use the engine's own built-in default ($5.00)'. Validated
-	// application-side as non-negative.
+	// application-side as strictly positive, the SAME 'zero collides with the
+	// unconfigured sentinel' reasoning as lightUsd above.
 	DeepUsd UpdateReviewCostBudgetRequestDeepUsd `json:"deepUsd" yaml:"deepUsd" mapstructure:"deepUsd"`
 
 	// Null means 'use the engine's own built-in default ($0.50)'. Validated
-	// application-side as non-negative.
+	// application-side as strictly POSITIVE -- an explicit 0 is rejected 400, never
+	// silently stored: internal/domain/reviewtriage.CostBudget's own zero value means
+	// 'no ceiling configured', so a stored 0 here would collide with that sentinel
+	// and resolve to unlimited spend, the opposite of an explicit-zero operator's
+	// likely intent.
 	LightUsd UpdateReviewCostBudgetRequestLightUsd `json:"lightUsd" yaml:"lightUsd" mapstructure:"lightUsd"`
 }
 
 // Null means 'use the engine's own built-in default ($5.00)'. Validated
-// application-side as non-negative.
+// application-side as strictly positive, the SAME 'zero collides with the
+// unconfigured sentinel' reasoning as lightUsd above.
 type UpdateReviewCostBudgetRequestDeepUsd *float64
 
 // Null means 'use the engine's own built-in default ($0.50)'. Validated
-// application-side as non-negative.
+// application-side as strictly POSITIVE -- an explicit 0 is rejected 400, never
+// silently stored: internal/domain/reviewtriage.CostBudget's own zero value means
+// 'no ceiling configured', so a stored 0 here would collide with that sentinel and
+// resolve to unlimited spend, the opposite of an explicit-zero operator's likely
+// intent.
 type UpdateReviewCostBudgetRequestLightUsd *float64
 
 // UnmarshalJSON implements json.Unmarshaler.

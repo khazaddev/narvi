@@ -564,6 +564,18 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutReviewDepthConfig(rig.repoSettings))
 	})
+	// /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7) --
+	// mounted behind auth.Middleware, exactly like cmd/control-plane/
+	// main.go's own wiring (see reposettings.go's own PutReviewCostBudget
+	// doc comment). B9 fix: this route was NOT mounted in this test rig at
+	// all before this fix -- the SAME "zero test coverage anywhere in this
+	// codebase" gap review-depth had before its own D8 fix immediately
+	// above, which is exactly how the <0-vs-<=0 zero-ceiling defect this
+	// Step's own review round found went unnoticed.
+	router.Route("/api/repos/{owner}/{repo}/review-cost-budget", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Put("/", httpapi.PutReviewCostBudget(rig.repoSettings))
+	})
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1) --
 	// mounted behind auth.Middleware exactly like cmd/control-plane/
 	// main.go's own wiring (see reviewanalytics.go's own doc comment).
