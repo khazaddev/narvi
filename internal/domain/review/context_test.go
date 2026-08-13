@@ -606,6 +606,53 @@ func TestRenderTurnPrompt_CostBudget_NeverGatesThePrimaryPass(t *testing.T) {
 	}
 }
 
+// TestRenderTurnPrompt_CostBudget_CounterReviewClausesOnlyOnDeep is B6's
+// own regression test: the cost-budget paragraph's own fact-check-vs-
+// counter-review tradeoff sentence ("err toward running fact-check ...
+// before skipping counter-review") and the "counterReview" field-name
+// mention in the "report the affected field(s)" clause both reference a
+// sub-task light path never runs at all (§26.9) -- nonsense there, since
+// fact-check is light's own ONLY optional pass, with nothing to weigh it
+// against. Both must render on deep, and NEITHER must render on light,
+// even though light still renders the rest of the cost-budget paragraph
+// (TestRenderTurnPrompt_CostBudget_RenderedOnlyWhenConfigured above
+// already pins that much).
+func TestRenderTurnPrompt_CostBudget_CounterReviewClausesOnlyOnDeep(t *testing.T) {
+	t.Parallel()
+
+	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5})
+	if !strings.Contains(deep, "err toward running fact-check") {
+		t.Errorf("deep-path cost-budget guidance is missing the fact-check-vs-counter-review tradeoff sentence:\n%s", deep)
+	}
+	if !strings.Contains(deep, "\"factCheck\"/\"counterReview\"") {
+		t.Errorf("deep-path cost-budget guidance does not list counterReview among the fields a skip may be reported on:\n%s", deep)
+	}
+
+	light := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false, ReviewCostBudgetUSD: 0.5})
+	budgetIdx := strings.Index(light, "Cost budget:")
+	if budgetIdx < 0 {
+		t.Fatalf("light-path prompt does not render the cost-budget paragraph at all:\n%s", light)
+	}
+	// Isolate just the cost-budget paragraph (up to the next blank-line
+	// break) -- "counterReview" legitimately appears ELSEWHERE in a
+	// light-path prompt too (the JSON-body instructions telling the agent
+	// to omit that field entirely), so a whole-prompt substring check
+	// would false-negative against that unrelated, correct mention.
+	budgetParagraph := light[budgetIdx:]
+	if end := strings.Index(budgetParagraph, "\n\n"); end >= 0 {
+		budgetParagraph = budgetParagraph[:end]
+	}
+	if !strings.Contains(budgetParagraph, "\"factCheck\"") {
+		t.Fatalf("light-path cost-budget paragraph does not mention \"factCheck\" at all:\n%s", budgetParagraph)
+	}
+	if strings.Contains(budgetParagraph, "err toward running fact-check") {
+		t.Errorf("light-path cost-budget paragraph renders the fact-check-vs-counter-review tradeoff sentence, which is nonsense on a path with no counter-review sub-task at all:\n%s", budgetParagraph)
+	}
+	if strings.Contains(budgetParagraph, "counterReview") {
+		t.Errorf("light-path cost-budget paragraph mentions \"counterReview\" at all, want it omitted entirely (light never runs that sub-task, §26.9):\n%s", budgetParagraph)
+	}
+}
+
 // TestRenderTurnPrompt_CounterReviewOmittedOnLightRequiredOnDeep is §26.4's
 // own field-level pin, one layer up from reviewpost.ValidateVerdictInput's
 // own equivalent check: the JSON-body instructions must tell a light-path

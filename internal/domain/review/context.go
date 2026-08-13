@@ -552,7 +552,21 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64) string 
 			"3. Counter-review (subagent_type \"" + CounterReviewerAgentName + "\", deep path only, AFTER fact-check has already pruned your findings): spawn this sub-task with your own SURVIVING findings (post-fact-check) and your digest, and ask it to try to REFUTE each one and to surface anything you missed. It has read/tool access to the repo (it may need to verify a claim against real files) but must not edit anything. It may itself surface genuinely NEW findings -- these are NOT re-run through fact-check (a tool-equipped, full-context adversarial pass is by construction at least as rigorous as a diff-only check). Publish only the findings that SURVIVE this adjudication -- drop anything it convincingly refutes. Where it disagreed with you and you did not simply defer to it, name that disagreement in \"digest.contestedPoints\" -- agent disagreement is precisely the signal a human should weigh in on. Report \"counterReview\": \"done\". If this sub-task errors, times out, or returns something you cannot parse, publish your findings exactly as they stood after fact-check, and report \"counterReview\": \"skipped\" -- this alone raises your verdict's own shippable classification to needs_human, so do not treat a skip as routine.\n"
 	}
 	if costBudgetUSD > 0 {
-		out += "\nCost budget: this review has an approximate ceiling of $" + formatUSD(costBudgetUSD) + " for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\"/\"counterReview\") as \"skipped\" with the reason noted in your own free-text summary. This is a judgment call on your part, not something this system measures for you mid-review -- err toward running fact-check (cheap, and it only ever prunes noise) before skipping counter-review (the more expensive pass) if you must choose.\n"
+		out += "\nCost budget: this review has an approximate ceiling of $" + formatUSD(costBudgetUSD) + " for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\""
+		if deep {
+			out += "/\"counterReview\""
+		}
+		out += ") as \"skipped\" with the reason noted in your own free-text summary.\n"
+		// B6 fix: the fact-check-vs-counter-review tradeoff sentence below
+		// only makes sense when BOTH exist to choose between -- light has
+		// no counter-review sub-task at all (§26.9), so "err toward running
+		// fact-check before skipping counter-review" would be nonsense
+		// there (there is nothing to weigh fact-check against; it is
+		// already the ONLY optional pass light ever runs, CostBudget.Light's
+		// own "a degenerate, one-checkpoint case" doc comment, costbudget.go).
+		if deep {
+			out += "This is a judgment call on your part, not something this system measures for you mid-review -- err toward running fact-check (cheap, and it only ever prunes noise) before skipping counter-review (the more expensive pass) if you must choose.\n"
+		}
 	}
 	return out
 }
