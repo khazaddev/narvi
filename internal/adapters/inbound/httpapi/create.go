@@ -94,6 +94,13 @@ type ChildSessionOptions struct {
 	// below -- see CreateTurnOptions.ReviewHeadSHA's own doc comment
 	// (turn.go) for the full "why".
 	ReviewHeadSHA *string
+
+	// ReviewDepth/ReviewDepthDecision (Step 68, §26.3) mirror
+	// ReviewHeadSHA's own identical shape immediately above -- see
+	// CreateTurnOptions.ReviewDepth/ReviewDepthDecision's own doc comment
+	// (turn.go) for the full "why".
+	ReviewDepth         *string
+	ReviewDepthDecision []byte
 }
 
 // childSessionOptionsFrom returns opts[0] if the caller supplied one, or
@@ -686,13 +693,15 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// excludes per §20.3 exactly like every other caller.
 		firstTurnPrompt := turn.MaybeInjectEpistemicPreamble(epistemicCheckDefault, created.EpistemicCheckEnabled, req.PlanMode, *req.Prompt)
 		if _, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-			SessionID:     created.ID,
-			Status:        sqlcgen.TurnStatusPending,
-			Prompt:        &firstTurnPrompt,
-			ModelID:       (*string)(req.ModelId),
-			Effort:        (*string)(req.Effort),
-			PlanMode:      req.PlanMode,
-			ReviewHeadSha: opts.ReviewHeadSHA,
+			SessionID:           created.ID,
+			Status:              sqlcgen.TurnStatusPending,
+			Prompt:              &firstTurnPrompt,
+			ModelID:             (*string)(req.ModelId),
+			Effort:              (*string)(req.Effort),
+			PlanMode:            req.PlanMode,
+			ReviewHeadSha:       opts.ReviewHeadSHA,
+			ReviewDepth:         opts.ReviewDepth,
+			ReviewDepthDecision: opts.ReviewDepthDecision,
 		}); err != nil {
 			logger.Error("httpapi: create turn failed", "error", err)
 			return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}

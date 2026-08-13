@@ -25,6 +25,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -34,10 +35,12 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	domainreviewtriage "github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -100,7 +103,10 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // outbound LLM call spent classifying text that was never a reply to
 // begin with (the fail-safe direction Step 64's own review batch requires:
 // "when in doubt, skip classification rather than guess").
-func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
+// reviewTriageDeps/reviewModelDeep (Step 68, §26.3) mirror internal/
+// adapters/inbound/github's own identical SessionCoalescer.ReviewTriage/
+// ReviewModelDeep fields -- see that struct's own doc comment.
+func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts, reviewTriageDeps appreviewtriage.Deps, reviewModelDeep string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -183,11 +189,29 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// previous github_pr_sessions.pending_head_sha design this fix
 		// replaces -- see migrations/000072_turns_review_head_sha.up.sql's
 		// own doc comment for the full "why").
+		// prCtx (Step 68, §26.3) is hoisted to this outer scope -- the
+		// WHOLE struct is needed further down to compute this manual
+		// re-trigger's own light/deep triage decision, mirroring
+		// internal/adapters/inbound/github's own identical hoist
+		// (handler.go). review.PreFetchedContext{} (every field its own
+		// honest zero value) is exactly what a nil diffFetcher, or a
+		// repo_full_name that fails to split, degrades to --
+		// internal/app/reviewtriage.ComputeDecision's own fail-open
+		// posture already treats an all-zero Signals as "route light".
+		// havePrCtx (D2's own fix) tracks whether prCtx below was actually
+		// populated by a real Fetch call -- exactly the SAME condition
+		// that used to gate the (now-moved) RenderTurnPrompt call inline,
+		// preserved here so a nil diffFetcher or a repo_full_name that
+		// fails to split keeps degrading identically to before this fix:
+		// no RenderTurnPrompt call at all, prompt stays the plain fixed
+		// text with no diff/verdict-tool-instructions block appended.
 		var reviewHeadSHA *string
+		var prCtx review.PreFetchedContext
+		havePrCtx := false
 		if diffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(prSession.RepoFullName); ok {
-				prCtx := reviewcontext.Fetch(ctx, logger, diffFetcher, timeouts, owner, repo, prSession.PrNumber, botToken, nil)
-				prompt = review.RenderTurnPrompt(prompt, prCtx)
+				prCtx = reviewcontext.Fetch(ctx, logger, diffFetcher, timeouts, owner, repo, prSession.PrNumber, botToken, nil)
+				havePrCtx = true
 				if prCtx.HeadSHA != "" {
 					reviewHeadSHA = &prCtx.HeadSHA
 				}
@@ -195,6 +219,75 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 				logger.Warn("httpapi: could not split repo_full_name into owner/repo, skipping pre-fetched review context",
 					"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 			}
+		}
+
+		// Step 68 (§26.3): the depth decision, computed from prCtx above.
+		// Adversarial-review fix D2 ("deep-path digest requirement
+		// contradicts the prompt the agent actually receives"): this MUST
+		// run, and be floored (D1, immediately below), BEFORE
+		// review.RenderTurnPrompt is called -- prCtx.DeepPath (set right
+		// below) is the ONE fact that makes RenderTurnPrompt's own
+		// verdictToolInstructions tell the agent the truth about whether
+		// digest.archDecisions/stackRisks/unverifiedLimits are REQUIRED
+		// for THIS turn. Getting this ordering wrong (as this handler used
+		// to: rendering the prompt first, computing/flooring the depth
+		// only afterward) is exactly what let an agent be told "requested,
+		// not required" on a turn the server was about to persist -- and
+		// later validate -- as deep.
+		//
+		// D1 (adversarial-review fix, "re-review depth floor applied at
+		// only 1 of 3 lanes"): this handler used to feed the FRESH,
+		// unfloored triageDecision.Depth straight through, never applying
+		// §24's re-review floor (domainreviewtriage.Floor) at all -- a
+		// single unfloored light re-review through this lane would
+		// silently erase the floor's own guarantee for every OTHER lane
+		// reading review_verdicts.review_path back (readReviewRetriggerState,
+		// internal/app/sessionactor/reviewretrigger.go). ComputeDecision's
+		// own third return value (priorReviewDepth) is the SAME
+		// review_verdicts.GetLatest read that function already performs
+		// for its "prior high verdict" signal -- no second query.
+		//
+		// This handler always targets an ALREADY-EXISTING session/PR (this
+		// file's own top doc comment: "this handler never creates a
+		// brand-new review session"), so Floor is applied unconditionally
+		// here -- unlike coalesce.go's own WINNER branch, there is no
+		// "brand-new session, nothing to floor against" case to skip it
+		// for.
+		//
+		// D9 (adversarial-review fix): the SAME
+		// ReasonAlwaysLightConfig guard internal/app/sessionactor/
+		// reviewretrigger.go now applies -- an explicit admin
+		// reviewDepth.mode=always_light override must outrank this
+		// history-based floor here too, for the identical reason (see
+		// domainreviewtriage.Floor's own doc comment, depth.go).
+		triageDecision, triageConfig, priorReviewDepth := appreviewtriage.ComputeDecision(ctx, reviewTriageDeps, prSession.RepoFullName, prSession.PrNumber, prCtx)
+		triageProvenance := appreviewtriage.ResolveProvenance(ctx, reviewTriageDeps, prSession.RepoFullName, prSession.PrNumber)
+		flooredDepth := triageDecision.Depth
+		if triageDecision.Reason != domainreviewtriage.ReasonAlwaysLightConfig {
+			flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, priorReviewDepth)
+		}
+		prCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
+		if havePrCtx {
+			prompt = review.RenderTurnPrompt(prompt, prCtx)
+		}
+		reviewDepthStr := string(flooredDepth)
+		triageModelID, triageEffort := domainreviewtriage.ModelAndEffort(flooredDepth, reviewModelDeep)
+		// D4 (nice-to-have adversarial-review fix): a deep-routed turn
+		// whose deep-tier model override is inert (platform.Config.
+		// ReviewModelDeep, an OPTIONAL env var, was never configured for
+		// this deployment) gets ONLY the forced-high-effort half of
+		// "deep = frontier tier + high effort" -- the model-tier half
+		// silently does nothing. This is not a bug (ModelAndEffort's own
+		// doc comment: the turn simply inherits today's default model),
+		// but an operator otherwise has no signal that this is happening
+		// at all.
+		if flooredDepth == domainreviewtriage.DepthDeep && reviewModelDeep == "" {
+			logger.Info("httpapi: review routed deep but no deep-tier model configured (NARVI_REVIEW_MODEL_DEEP unset), dispatching with the default model at forced high effort", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+		}
+		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort))
+		if triageRecordErr != nil {
+			logger.Warn("httpapi: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			triageRecordJSON = nil
 		}
 
 		// AlwaysQueue, NOT CreateTurn's own RejectIfOpen -- see this file's
@@ -225,7 +318,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// to the safe, deterministic pre-Step-64 "decline while a plan is
 		// awaiting approval" behavior instead of guessing from
 		// manualRetriggerPromptText/the pre-fetched diff.
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, nil, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, nil, auditLog, registry, sessionID, prompt, triageModelID, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, Effort: triageEffort, ReviewDepth: &reviewDepthStr, ReviewDepthDecision: triageRecordJSON})
 		if cerr != nil {
 			logger.Error("httpapi: retrigger review (create turn) failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)

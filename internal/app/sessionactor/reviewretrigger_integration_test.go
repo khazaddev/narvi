@@ -4,6 +4,7 @@ package sessionactor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -166,6 +167,31 @@ func (f *autoRetriggerFixture) insertVerdict(ctx context.Context, t *testing.T, 
 		SessionID:         f.sessionID,
 	}); err != nil {
 		t.Fatalf("insert review verdict: %v", err)
+	}
+}
+
+// insertVerdictWithReviewPath mirrors insertVerdict, additionally seeding
+// review_path -- the D9/D1 test below needs a PRIOR verdict with a REAL
+// review_path on record (§24's own re-review floor input) that
+// insertVerdict's own callers never needed before this Step.
+func (f *autoRetriggerFixture) insertVerdictWithReviewPath(ctx context.Context, t *testing.T, headSHA, riskLevel, reviewPath string) {
+	t.Helper()
+	if _, err := f.reviewVerdicts.Insert(ctx, sqlcgen.InsertReviewVerdictParams{
+		RepoFullName:      f.repoFullName,
+		PrNumber:          f.prNumber,
+		HeadSha:           headSHA,
+		RiskLevel:         riskLevel,
+		Premise:           "ok",
+		BlastRadius:       []byte(`[]`),
+		FilesChanged:      1,
+		TestsCoverage:     "adequate",
+		DocsDrift:         "none",
+		ProposedShippable: "auto",
+		Shippable:         "auto",
+		SessionID:         f.sessionID,
+		ReviewPath:        &reviewPath,
+	}); err != nil {
+		t.Fatalf("insert review verdict with review_path: %v", err)
 	}
 }
 
@@ -719,5 +745,78 @@ func TestReviewRetriggerDebounceTimer_MarkAutoRetriggerBudgetNoticeSent_GuardsAg
 	row := f.getPRSession(ctx, t)
 	if !row.AutoRetriggerBudgetNoticeSentAt.Valid {
 		t.Error("auto_retrigger_budget_notice_sent_at is NULL, want set by the first (successful) mark")
+	}
+}
+
+// TestReviewRetriggerDebounceTimer_AlwaysLightConfig_SkipsFloor_StaysLight
+// is D9's own regression test (adversarial-review fix): a PR that
+// previously went deep (a prior verdict on record with review_path
+// "deep") would, before this fix, be floored back to deep on EVERY
+// subsequent automatic re-review FOREVER, even after an admin explicitly
+// set this repo's reviewDepth.mode to always_light -- silently defeating
+// that explicit admin cost-control override, and persisting a self-
+// contradictory decision record (mode "always_light" alongside depth
+// "deep"). With the fix, an always_light-configured repo's fresh
+// decision (ReasonAlwaysLightConfig, checked first in Decide's own fixed
+// order -- decide.go) is used AS-IS, never floored against the PR's own
+// deep history.
+func TestReviewRetriggerDebounceTimer_AlwaysLightConfig_SkipsFloor_StaysLight(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	f := newAutoRetriggerFixture(ctx, t, pool)
+	if _, err := f.repoSettings.UpsertAutoRetriggerReviewToggle(ctx, f.repoFullName, true); err != nil {
+		t.Fatalf("enable auto-retrigger-review: %v", err)
+	}
+	alwaysLight := "always_light"
+	if _, err := f.repoSettings.UpsertReviewDepthConfig(ctx, f.repoFullName, &alwaysLight, []byte(`[]`)); err != nil {
+		t.Fatalf("configure reviewDepth.mode=always_light: %v", err)
+	}
+	// A PRIOR verdict that already went deep -- exactly the state that
+	// used to permanently pin every later auto-retrigger to deep too,
+	// pre-fix.
+	f.insertVerdictWithReviewPath(ctx, t, "sha-prior-deep", "low", "deep")
+	f.setPendingHeadSHA(ctx, t, "sha-pending-always-light")
+	f.armDebounceTimer(ctx, t)
+
+	// A light-looking delta (small diff, no sensitive path) -- with the
+	// repo forced to always_light, this is irrelevant to the outcome
+	// either way, but chosen deliberately unremarkable so this test proves
+	// the MODE override, not some OTHER deep-routing signal.
+	diffFetcher := &fakeReviewDiffFetcher{nextHeadSHA: "sha-live-always-light", nextBaseRef: "main", nextDiff: "+ trivial line changed"}
+	r := newAutoRetriggerRegistry(ctx, t, pool, diffFetcher)
+	fireDebounceTimer(ctx, t, r, f)
+
+	turns, err := f.turns.ListForSession(ctx, f.sessionID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turns created = %d, want 1", len(turns))
+	}
+	got := turns[0]
+	if got.ReviewDepth == nil || *got.ReviewDepth != "light" {
+		t.Errorf("turns.review_depth = %v, want %q (an explicit always_light admin override must outrank the re-review floor)", got.ReviewDepth, "light")
+	}
+
+	if got.ReviewDepthDecision == nil {
+		t.Fatalf("turns.review_depth_decision is nil, want a recorded decision")
+	}
+	var record struct {
+		Depth string `json:"depth"`
+		Mode  string `json:"mode"`
+	}
+	if err := json.Unmarshal(got.ReviewDepthDecision, &record); err != nil {
+		t.Fatalf("unmarshal review_depth_decision: %v", err)
+	}
+	if record.Depth != "light" {
+		t.Errorf("review_depth_decision.depth = %q, want %q", record.Depth, "light")
+	}
+	if record.Mode != "always_light" {
+		t.Errorf("review_depth_decision.mode = %q, want %q", record.Mode, "always_light")
+	}
+	// The self-contradiction this fix closes: mode/depth must never
+	// disagree on their own face.
+	if record.Mode == "always_light" && record.Depth == "deep" {
+		t.Errorf("review_depth_decision = %+v, self-contradictory: mode always_light alongside depth deep", record)
 	}
 }

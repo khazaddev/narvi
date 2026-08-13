@@ -15,6 +15,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/actorauthz"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
@@ -131,6 +132,22 @@ type SessionCoalescer struct {
 	// waiting for a future edit to "fix" the field back into use. Removed
 	// entirely rather than left unread; cmd/control-plane/main.go no
 	// longer sets it either.
+
+	// ReviewTriage (Step 68, §26.3) bundles the two stores internal/app/
+	// reviewtriage.ComputeDecision needs (repo_settings, for the
+	// per-repo reviewDepth config; review_verdicts, for the "prior high
+	// verdict" signal) -- constructed once at wiring time (cmd/control-
+	// plane/main.go), mirroring every other Deps-shaped field this
+	// struct already carries. Consulted on BOTH the WINNER (brand-new
+	// session) and REUSE (existing session, new turn) paths below: every
+	// review turn gets its own fresh depth decision, not just a
+	// session's first one.
+	ReviewTriage appreviewtriage.Deps
+	// ReviewModelDeep (Step 68, §26.3) is platform.Config.ReviewModelDeep,
+	// threaded through for domainreviewtriage.ModelAndEffort -- empty
+	// means "not configured", see that function's own doc comment
+	// (internal/domain/reviewtriage/modeleffort.go).
+	ReviewModelDeep string
 }
 
 // CreateOrJoin is Step 32's own per-PR coalescing entry point -- see
@@ -283,12 +300,39 @@ type SessionCoalescer struct {
 // path's CreateTurnForBot call), so it lands on THAT turn's own row
 // (turns.review_head_sha) at creation time -- see that column's own
 // migration doc comment for the full "why".
-func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID, isLabelRetrigger bool, classifyText string, reviewHeadSHA string) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
+//
+// reviewDepth/triageModelID/triageEffort/triageRecordJSON (Step 68,
+// §26.3) are the ALREADY-RESOLVED light/deep routing outcome -- computed
+// by THIS function's own caller, handler.go, via appreviewtriage.
+// ComputeDecision (plus domainreviewtriage.Floor/ModelAndEffort/
+// NewDecisionRecord), BEFORE handler.go calls review.RenderTurnPrompt on
+// req.Prompt and BEFORE this function is ever invoked (adversarial-review
+// fix D2: "deep-path digest requirement contradicts the prompt the agent
+// actually receives"). This function used to compute this itself, inline,
+// AFTER handler.go had already rendered the prompt -- which meant the
+// text an agent actually read could never honestly reflect the depth this
+// function was about to persist. CreateOrJoin no longer computes triage
+// at all: it just persists what its caller already decided, applied
+// identically to BOTH the WINNER and REUSE branches below, mirroring
+// reviewHeadSHA's own identical "resolved upstream, just threaded through
+// and persisted here" shape. See handler.go's own call site for the full
+// "why here, once, before rendering" reasoning, and for why applying the
+// SAME (unfloored-for-WINNER, floored-for-REUSE) value to both branches
+// uniformly is safe: review_verdicts can only ever carry a row for a PR
+// that already has a github_pr_sessions claim row (every verdict-posting
+// turn is created via one of this package's own two branches, or the
+// manual/auto-retrigger lanes, all of which require an EXISTING claim
+// row), so the WINNER branch (no existing claim row) can never actually
+// have a prior verdict/depth to floor against in practice -- Floor(fresh,
+// "") is a no-op by construction (domainreviewtriage.Floor's own doc
+// comment) regardless.
+func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID, isLabelRetrigger bool, classifyText string, reviewHeadSHA string, reviewDepth *string, triageModelID *string, triageEffort *string, triageRecordJSON []byte) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
 	var reviewHeadSHAPtr *string
 	if reviewHeadSHA != "" {
 		reviewHeadSHAPtr = &reviewHeadSHA
 	}
 	logger := platform.Logger(ctx)
+	reviewDepthPtr := reviewDepth
 
 	// Resolved BEFORE any transaction opens -- see this function's own
 	// doc comment above for why. Only actually consulted by the WINNER
@@ -428,7 +472,14 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 		// must never be `prompt` (which, unlike here, already carries
 		// review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool
 		// text once cfg.DiffFetcher is wired).
-		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.IntentClassifier, c.AuditLog, c.Registry, existing, prompt, (*string)(req.ModelId), req.PlanMode, false, actor, reviewHeadSHAPtr, &classifyText)
+		// triageModelID/triageEffort (Step 68, §26.3): a GitHub-sourced
+		// req never sets ModelId itself (this package's own request-
+		// building code, handler.go, never populates it), so the
+		// triage-computed override is the only model/effort signal this
+		// REUSE-path turn ever gets -- light leaves both nil (today's
+		// unchanged behavior), deep forces high effort (and, when
+		// c.ReviewModelDeep is configured, a specific frontier model).
+		createdTurn, err := httpapi.CreateTurnForBot(ctx, c.Pool, c.Sessions, c.Turns, c.Plans, c.IntentClassifier, c.AuditLog, c.Registry, existing, prompt, triageModelID, req.PlanMode, false, actor, reviewHeadSHAPtr, &classifyText, triageEffort, reviewDepthPtr, triageRecordJSON)
 		if err != nil {
 			return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create turn on existing session: %w", err)
 		}
@@ -482,7 +533,18 @@ func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string
 	// intentdomain.TargetReview below confirms it deterministically), so
 	// this is never a build turn either, for the identical reason the
 	// REUSE branch's own CreateTurnForBot call (below) hardcodes false.
-	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor, false, httpapi.ChildSessionOptions{ReviewHeadSHA: reviewHeadSHAPtr})
+	// triageModelID/triageEffort (Step 68, §26.3): a GitHub-sourced req
+	// never sets ModelId/Effort itself (this package's own request-
+	// building code, handler.go, never populates either) -- overwriting
+	// them here, on this function's own local copy of req, is therefore
+	// exactly equivalent to CreateSessionOnTx's own turn insert (which
+	// reads req.ModelId/req.Effort directly) picking up the triage-
+	// computed override with no further plumbing. See the REUSE branch's
+	// own identical comment above for the "light leaves both nil, deep
+	// forces high effort" summary.
+	req.ModelId = restdtos.CreateSessionRequestModelId(triageModelID)
+	req.Effort = restdtos.CreateSessionRequestEffort(triageEffort)
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, c.Sessions, c.Turns, c.Environments, c.AuditLog, req, actor, false, httpapi.ChildSessionOptions{ReviewHeadSHA: reviewHeadSHAPtr, ReviewDepth: reviewDepthPtr, ReviewDepthDecision: triageRecordJSON})
 	if cerr != nil {
 		return sqlcgen.Session{}, sqlcgen.Turn{}, false, fmt.Errorf("github: create session: %w", cerr)
 	}

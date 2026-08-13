@@ -1,0 +1,21 @@
+-- turns.review_depth (Step 68, §26.3): the light/deep routing decision
+-- (internal/domain/reviewtriage.ReviewDepth) THIS review turn was
+-- dispatched with -- mirrors review_head_sha's own identical shape one
+-- column further (migrations/000072_turns_review_head_sha.up.sql):
+-- nullable TEXT, NULL/absent for every non-review turn (every existing
+-- call site before this Step), set exactly once, at creation, by every
+-- review-turn-creation path (internal/adapters/inbound/httpapi's
+-- createTurnLocked/CreateSessionOnTx, internal/app/sessionactor's own
+-- automatic re-review turn insert).
+--
+-- Read back at verdict-post time (internal/adapters/inbound/httpapi/
+-- reviewverdict.go's own turns.GetProcessingTurnForSession call, the SAME
+-- read review_head_sha already needs) so the depth THIS turn actually ran
+-- at can be (a) enforced (the deep-path digest-completeness requirement,
+-- internal/domain/reviewpost.ValidateVerdictInput) and (b) persisted onto
+-- review_verdicts.review_path (migrations/000081) for per-path cost/
+-- precision analytics (§26.3: "cost and precision become measurable per
+-- path from day one") -- never re-derived from the PR's current state at
+-- verdict-post time, which could have moved on since this turn's own
+-- dispatch.
+ALTER TABLE turns ADD COLUMN review_depth TEXT;

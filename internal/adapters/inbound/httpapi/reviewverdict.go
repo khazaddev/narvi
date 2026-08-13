@@ -76,6 +76,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -239,9 +240,58 @@ func PostReviewVerdict(
 			return
 		}
 
+		// §62 review finding C2 (CRITICAL, fixed): resolve the head SHA
+		// THIS session's own CURRENTLY-PROCESSING turn was anchored to --
+		// never prSession.PendingHeadSha (github_pr_sessions' own shared,
+		// mutable per-(repo,PR) column, REMOVED by this fix; see
+		// migrations/000072_turns_review_head_sha.up.sql's own doc
+		// comment for the full "why" that design let a LATER, unrelated
+		// turn's own context-fetch silently overwrite the value THIS
+		// verdict eventually forwards). The review agent calling THIS
+		// endpoint is, by construction, the one whose own turn is right
+		// now 'processing' for sessionID -- turns_one_processing_per_session
+		// (migrations/000005_turns.up.sql) guarantees at most one such
+		// row can ever exist.
+		//
+		// Moved here (Step 68, §26.3 -- one step EARLIER than the
+		// Step-63-era "before §22.1.1's own position-resolution step"
+		// position this fetch previously held) so reviewDepth, below, is
+		// available BEFORE ValidateVerdictInput runs: the deep-path
+		// digest-completeness check (validate.go, this Step's own
+		// addition) needs it. verdictHeadSHA's own downstream uses
+		// (position resolution, the review_verdicts insert) are
+		// unaffected -- it is computed once, here, and simply read
+		// later, exactly as before.
+		//
+		// Both a genuine store error AND a not-found (ErrNoRows -- a
+		// genuine race: the turn already completed/failed/was cancelled
+		// between this agent's own HTTP call landing and this read)
+		// degrade IDENTICALLY: logged, verdictHeadSHA/reviewDepth both
+		// stay at their own zero value, and (per the existing skip branch
+		// further down, unchanged by this fix) the review_verdicts
+		// insert is skipped -- never a reason to fail this whole tool
+		// call.
+		var verdictHeadSHA string
+		var reviewDepth reviewtriage.ReviewDepth
+		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
+			if errors.Is(turnErr, pgx.ErrNoRows) {
+				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			} else {
+				logger.Error("httpapi: review-verdict: get processing turn for session failed, skipping review_verdicts insert", "error", turnErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			}
+		} else {
+			if processingTurn.ReviewHeadSha != nil {
+				verdictHeadSHA = *processingTurn.ReviewHeadSha
+			}
+			if processingTurn.ReviewDepth != nil {
+				reviewDepth = reviewtriage.ReviewDepth(*processingTurn.ReviewDepth)
+			}
+		}
+
 		input := reviewpost.VerdictInput{
 			RiskLevel:         review.RiskLevel(req.RiskLevel),
 			Premise:           review.PremiseState(req.Premise),
+			ReviewDepth:       reviewDepth,
 			FilesChanged:      req.FilesChanged,
 			TestsCoverage:     review.TestsCoverageState(req.TestsCoverage),
 			DocsDrift:         review.DocsDriftState(req.DocsDrift),
@@ -264,54 +314,14 @@ func PostReviewVerdict(
 		verdict := reviewpost.BuildVerdict(input)
 		findings := reviewpost.BuildFindings(input)
 
-		// §62 review finding C2 (CRITICAL, fixed): resolve the head SHA
-		// THIS session's own CURRENTLY-PROCESSING turn was anchored to --
-		// never prSession.PendingHeadSha (github_pr_sessions' own shared,
-		// mutable per-(repo,PR) column, REMOVED by this fix; see
-		// migrations/000072_turns_review_head_sha.up.sql's own doc
-		// comment for the full "why" that design let a LATER, unrelated
-		// turn's own context-fetch silently overwrite the value THIS
-		// verdict eventually forwards). The review agent calling THIS
-		// endpoint is, by construction, the one whose own turn is right
-		// now 'processing' for sessionID -- turns_one_processing_per_session
-		// (migrations/000005_turns.up.sql) guarantees at most one such
-		// row can ever exist, mirroring Step 61's own epistemic-outcome-
-		// posting endpoint's identical "resolve the session's own
-		// CURRENTLY live turn from a sandbox-authenticated session id
-		// alone" precedent (TurnStore.GetProcessingTurnForSession,
-		// queries/turns.sql).
+		// verdictHeadSHA/reviewDepth (§62 review finding C2 / Step 68,
+		// §26.3) were both already resolved above, before
+		// ValidateVerdictInput ran -- see that block's own doc comment
+		// for the full "why" (the deep-path digest check needs
+		// reviewDepth before validation, and this is simply the earliest
+		// point verdictHeadSHA's own pre-existing Step-63-era move
+		// already established).
 		//
-		// Both a genuine store error AND a not-found (ErrNoRows -- a
-		// genuine race: the turn already completed/failed/was cancelled
-		// between this agent's own HTTP call landing and this read)
-		// degrade IDENTICALLY: logged, verdictHeadSHA stays "", and (per
-		// the existing skip branch below, unchanged by this fix) the
-		// review_verdicts insert is skipped -- never a reason to fail
-		// this whole tool call. Mirrors this handler's own pre-existing
-		// "a missing head SHA is a SAFE, not dangerous, degradation"
-		// reasoning below exactly: the auto-approval engine's own
-		// fail-CLOSED posture already treats "no verdict on record" as
-		// ineligible, so this lookup failing open (in the sense of "the
-		// verdict POST itself still succeeds") introduces no eligibility
-		// hazard -- it is not the SAME kind of "fail open" this whole
-		// review round exists to close.
-		//
-		// Moved EARLIER than its own pre-Step-63 position (this handler's
-		// own history) so §22.1.1's own position-resolution step, below,
-		// can use it to pin a fresh diff refetch to the EXACT commit the
-		// reviewing agent's own turn was anchored to -- never the PR's
-		// current, possibly-since-moved-on head.
-		var verdictHeadSHA string
-		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
-			if errors.Is(turnErr, pgx.ErrNoRows) {
-				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-			} else {
-				logger.Error("httpapi: review-verdict: get processing turn for session failed, skipping review_verdicts insert", "error", turnErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-			}
-		} else if processingTurn.ReviewHeadSha != nil {
-			verdictHeadSHA = *processingTurn.ReviewHeadSha
-		}
-
 		// §22.1.1's own content-anchored positioning: resolved ONCE, here,
 		// before RenderVerdictComment ever renders findings -- "no second
 		// pass, by construction" (every finding already present in this
@@ -464,7 +474,7 @@ func PostReviewVerdict(
 		// an unpersisted verdict.
 		if verdictHeadSHA == "" {
 			logger.Warn("httpapi: review-verdict: no review head sha on record, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict, input.Digest); insertErr != nil {
+		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict, input.Digest, reviewDepth); insertErr != nil {
 			logger.Error("httpapi: review-verdict: insert review_verdicts row failed", "error", insertErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return

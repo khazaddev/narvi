@@ -1660,6 +1660,8 @@ type RepoSetting struct {
 	SensitiveBlastRadiusTags   []byte             `json:"sensitive_blast_radius_tags"`
 	AutoRetriggerReviewEnabled bool               `json:"auto_retrigger_review_enabled"`
 	DescriptionAutofixEnabled  bool               `json:"description_autofix_enabled"`
+	ReviewDepthMode            *string            `json:"review_depth_mode"`
+	ReviewDepthDeepPaths       []byte             `json:"review_depth_deep_paths"`
 }
 
 type ReviewFalsePositivePattern struct {
@@ -1719,6 +1721,7 @@ type ReviewVerdict struct {
 	DigestDescriptionAdequacy *string            `json:"digest_description_adequacy"`
 	DigestAdequacyExplanation *string            `json:"digest_adequacy_explanation"`
 	DigestProposedBody        *string            `json:"digest_proposed_body"`
+	ReviewPath                *string            `json:"review_path"`
 }
 
 type Sandbox struct {
@@ -1817,6 +1820,8 @@ type Turn struct {
 	EpistemicOutcome     *TurnEpistemicOutcome `json:"epistemic_outcome"`
 	ReviewHeadSha        *string               `json:"review_head_sha"`
 	AnswerOnly           *bool                 `json:"answer_only"`
+	ReviewDepth          *string               `json:"review_depth"`
+	ReviewDepthDecision  []byte                `json:"review_depth_decision"`
 }
 
 type User struct {

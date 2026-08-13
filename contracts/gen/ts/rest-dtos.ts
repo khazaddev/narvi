@@ -481,7 +481,7 @@ export interface PostedFinding {
   suggestedFix?: string | null;
 }
 /**
- * Step 66's own additive extension (§26.1, 'review digest: verdict as merge readout'): the merge-readout's typed content -- 'what this PR does', architecture choices, and risks to the stack -- that fronts the rendered verdict, ahead of the pre-existing findings/coverage/docs-drift content (now collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment). Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with descriptionAdequacy/adequacyExplanation/proposedBody below. REQUIRED on the request as a whole (unlike findings above): summary/descriptionAdequacy/adequacyExplanation within it are the fields this Step hard-requires (internal/domain/reviewpost.ValidateVerdictInput); archDecisions/stackRisks/unverifiedLimits/proposedBody are requested (the review-turn prompt asks the agent to fill them, internal/domain/review.RenderTurnPrompt) but NOT validation-enforced -- the full digest becomes schema-required only once a later Step (§26.3) defines the deep path this endpoint does not implement yet.
+ * Step 66's own additive extension (§26.1, 'review digest: verdict as merge readout'): the merge-readout's typed content -- 'what this PR does', architecture choices, and risks to the stack -- that fronts the rendered verdict, ahead of the pre-existing findings/coverage/docs-drift content (now collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment). Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with descriptionAdequacy/adequacyExplanation/proposedBody below, and by Step 68 (§26.3, light/deep review-depth triage) with a CONDITIONAL requirement on three more fields. REQUIRED on the request as a whole (unlike findings above): summary/descriptionAdequacy/adequacyExplanation within it are ALWAYS hard-required (internal/domain/reviewpost.ValidateVerdictInput); archDecisions/stackRisks/unverifiedLimits are requested on every review (the review-turn prompt asks the agent to fill them, internal/domain/review.RenderTurnPrompt) and are ADDITIONALLY hard-required -- rejected when empty/blank -- whenever this session's own review-depth routing decision (turns.review_depth, resolved server-side, never a field on this request body) is 'deep'. This JSON Schema cannot express that condition itself (review-depth lives on the turn, not on this payload) -- see ValidateVerdictInput's own doc comment (validate.go) for the exact, application-level enforced rule. proposedBody remains requested but never required, on every path.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "Digest".
@@ -492,15 +492,15 @@ export interface Digest {
    */
   summary: string;
   /**
-   * Zero or more structural decisions the diff makes -- OPTIONAL, absent/empty is legal (not yet validation-enforced, see this object's own description).
+   * Zero or more structural decisions the diff makes -- schema-optional at this JSON Schema level (absent/empty always decodes fine), but application-level REQUIRED (at least one entry with real, non-blank content) whenever this session's own server-resolved review-depth is 'deep' (Step 68, §26.3) -- see this object's own description, and internal/domain/reviewpost.ValidateVerdictInput's own doc comment, for the exact conditional rule this schema alone cannot express.
    */
   archDecisions?: ArchDecision[];
   /**
-   * Free-text prose: coupling and deployment risks (migrations, multi-phase deploys, image rebuilds) and reversibility -- rendered alongside the verdict's own existing blastRadius. OPTIONAL.
+   * Free-text prose: coupling and deployment risks (migrations, multi-phase deploys, image rebuilds) and reversibility -- rendered alongside the verdict's own existing blastRadius. Schema-optional; application-level REQUIRED non-blank on a 'deep' review-depth turn, mirroring archDecisions above (Step 68, §26.3).
    */
   stackRisks?: string | null;
   /**
-   * Free-text prose: what was explicitly NOT verified (honest limits). OPTIONAL.
+   * Free-text prose: what was explicitly NOT verified (honest limits). Schema-optional; application-level REQUIRED non-blank on a 'deep' review-depth turn, mirroring archDecisions above (Step 68, §26.3).
    */
   unverifiedLimits?: string | null;
   /**
@@ -517,7 +517,7 @@ export interface Digest {
   proposedBody?: string | null;
 }
 /**
- * One structural decision the diff makes (Digest.archDecisions, §26.1's own 'Architecture choices' section): what was decided, the alternative implicitly rejected, and conformance to the repo's own conventions (its agent instructions file -- CLAUDE.md/AGENTS.md -- and its established patterns, already visible to the reviewing agent via its own sandbox checkout, never fetched or injected by this endpoint). No field here is REQUIRED (no minLength, no 'required' array): this Step requests the full digest but validation-enforces only Digest.summary above -- internal/domain/reviewpost's own doc comment (digest.go) is explicit that a submitted-but-incomplete ArchDecision is rendered honestly (its blank field(s) render as empty, never silently dropped) rather than rejected, since a stricter per-field requirement here is explicitly deferred to a later Step (§26.3/Step 68, once the deep path this endpoint does not implement yet is defined).
+ * One structural decision the diff makes (Digest.archDecisions, §26.1's own 'Architecture choices' section): what was decided, the alternative implicitly rejected, and conformance to the repo's own conventions (its agent instructions file -- CLAUDE.md/AGENTS.md -- and its established patterns, already visible to the reviewing agent via its own sandbox checkout, never fetched or injected by this endpoint). No individual field here is REQUIRED at the schema level (no minLength, no 'required' array on THIS object) -- internal/domain/reviewpost's own doc comment (digest.go) is explicit that a submitted-but-incomplete ArchDecision is rendered honestly (its blank field(s) render as empty, never silently dropped) rather than rejected. Digest.archDecisions as a WHOLE, however, is application-level required to contain at least one entry with real, non-blank content in ANY of these three fields whenever this session's own review-depth is 'deep' (Step 68, §26.3, now implemented) -- see Digest.archDecisions' own description, and internal/domain/reviewpost.ValidateVerdictInput's own hasNonBlankArchDecision check, for the exact rule this per-object schema cannot itself express.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "ArchDecision".
@@ -710,6 +710,14 @@ export interface RepoSettings {
    * Step 67, §26.2: admin-only, per-repo, off by default -- once armed, a Narvi-authored PR's own description-adequacy floor firing (drift/misleading) may result in this repo's own PR bodies being automatically rewritten (original preserved in a collapsed block), delivered via the outbox. The drift/misleading precondition is enforced at ENQUEUE time (a verdict reporting descriptionAdequacy "ok" never enqueues a rewrite candidate at all, regardless of proposedBody); Narvi-authorship and this flag are independently re-verified FRESH server-side at DELIVERY time, with descriptionAdequacy itself re-asserted a third time from the same verdict (a fact fixed at verdict time, carried rather than re-derived) -- never trusted from the posting agent alone. Gated by authz.ActionToggleDescriptionAutofix, the SAME admin-only row as sentinelAutofixEnabled/autoMergeEnabled/autoRetriggerReviewEnabled -- arming this changes what runs UNATTENDED on a repo's own PRs (an automatic body rewrite, no human in the loop), the same reasoning every sibling toggle in this row already carries. Human-authored PRs are never affected regardless of this flag -- they only ever get a rendered suggestion (Digest.proposedBody), never a write.
    */
   descriptionAutofixEnabled: boolean;
+  /**
+   * Step 68, §26.3: this repo's own reviewDepth routing mode -- one of "auto"/"always_light"/"always_deep" when set (validated application-side against internal/domain/reviewtriage.Mode's own closed vocabulary, never enforced at the schema level to avoid a nullable-enum's own awkward generated wrapper type). Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultConfig, mode "auto"), never a magic sentinel string. Gated by authz.ActionConfigureReviewDepth (admin only, §13.3 row 6) -- arming always_deep/always_light changes what runs UNATTENDED on every future PR review (which model/effort tier, and how much cost, every automated review incurs), the same reasoning every sibling toggle in this row already carries.
+   */
+  reviewDepthMode: string | null;
+  /**
+   * Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered on top of (never replacing) the engine's own fixed sensitive-glob set (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same row as reviewDepthMode).
+   */
+  reviewDepthDeepPaths: string[] | null;
 }
 /**
  * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise. Step 62's own §21.2 fields (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are DELIBERATELY NOT on this shared request: this endpoint's own handler requires EVERY permission its fields collectively need (PutRepoSettings' own doc comment, httpapi/reposettings.go), which would force a maintainer authorized only for the auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates (row 6) too -- see UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its own endpoint with its own single, correctly-scoped gate.
@@ -764,6 +772,22 @@ export interface UpdateAutoRetriggerReviewToggleRequest {
  */
 export interface UpdateDescriptionAutofixToggleRequest {
   enabled: boolean;
+}
+/**
+ * Request body for PUT /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3) -- (re)configures this repo's own reviewDepth mode/deepPaths. A SEPARATE endpoint, gated SOLELY by authz.ActionConfigureReviewDepth (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint. Always the full, current desired state for these two fields specifically (never a partial patch).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateReviewDepthConfigRequest".
+ */
+export interface UpdateReviewDepthConfigRequest {
+  /**
+   * One of "auto"/"always_light"/"always_deep" when set (validated application-side, see RepoSettings.reviewDepthMode's own doc comment for why not at the schema level). Null means 'use the engine's own built-in default (auto)'.
+   */
+  mode: string | null;
+  /**
+   * Null means 'no repo-specific deep paths'.
+   */
+  deepPaths: string[] | null;
 }
 /**
  * GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.

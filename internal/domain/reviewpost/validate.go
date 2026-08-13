@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // VerdictInput is the shape of a review-verdict-posting-tool call's own
@@ -49,13 +50,27 @@ type VerdictInput struct {
 	// Digest is Step 66's own additive extension (§26.1): the merge-
 	// readout's typed content -- restdtos.PostReviewVerdictRequest.digest
 	// is REQUIRED (unlike Findings above), and Digest.Summary within it is
-	// the one field ValidateVerdictInput below actually enforces this
-	// Step; ArchDecisions/StackRisks/UnverifiedLimits are requested (the
-	// review-turn prompt, review/context.go, asks the agent to fill them)
-	// but not yet validation-enforced -- see digest.go's own doc comment
-	// for the full "why", and this field's own struct type for why it
-	// lives here rather than as a new review.Verdict field.
+	// unconditionally enforced by ValidateVerdictInput below; Digest.
+	// ArchDecisions/StackRisks/UnverifiedLimits are requested on every
+	// review (the review-turn prompt, review/context.go, asks the agent
+	// to fill them), and (Step 68, §26.3) become REQUIRED as well whenever
+	// this VerdictInput's own ReviewDepth is reviewtriage.DepthDeep -- see
+	// digest.go's own doc comment for the full "why", and this field's
+	// own struct type for why it lives here rather than as a new
+	// review.Verdict field.
 	Digest Digest
+
+	// ReviewDepth (Step 68, §26.3) is the posting turn's own resolved
+	// light/deep routing decision (turns.review_depth) -- threaded
+	// through by the caller (internal/adapters/inbound/httpapi/
+	// reviewverdict.go), never accepted from the agent's own POST body
+	// (mirrors Shippable's own "server-computed only" contract: the
+	// AGENT never gets to claim which path it ran on). The zero value
+	// (reviewtriage.ReviewDepth("")) means "no resolvable depth for this
+	// turn" -- ValidateVerdictInput below treats that identically to
+	// DepthLight (never requiring the full digest), since a turn with no
+	// recorded depth was never routed deep by construction.
+	ReviewDepth reviewtriage.ReviewDepth
 }
 
 // The errors ValidateVerdictInput returns -- one per rejected field, named
@@ -94,6 +109,20 @@ var (
 	// "missing and garbled are the identical failure" posture, for the
 	// tri-state's own required one-line explanation.
 	ErrEmptyAdequacyExplanation = errors.New("reviewpost: digest.adequacyExplanation must not be empty")
+	// ErrEmptyDigestArchDecisions/ErrEmptyDigestStackRisks/
+	// ErrEmptyDigestUnverifiedLimits are Step 68's own addition (§26.3,
+	// via §26.1's own forward reference: "the full digest ... becomes
+	// schema-required on the deep path once §26.3 defines it") -- the
+	// three digest fields §26.1/Step 66 requested but deliberately left
+	// unenforced ("explicit future work, §26.3/Step 68, once a 'deep
+	// path' exists for it to attach to", reviewpost/digest.go's own doc
+	// comment) are now REQUIRED, but ONLY when in.ReviewDepth ==
+	// reviewtriage.DepthDeep -- see ValidateVerdictInput's own check
+	// below. Each mirrors ErrEmptyDigestSummary's identical "missing and
+	// garbled are the identical failure" empty/whitespace-only check.
+	ErrEmptyDigestArchDecisions    = errors.New("reviewpost: digest.archDecisions must not be empty on a deep-path review")
+	ErrEmptyDigestStackRisks       = errors.New("reviewpost: digest.stackRisks must not be empty on a deep-path review")
+	ErrEmptyDigestUnverifiedLimits = errors.New("reviewpost: digest.unverifiedLimits must not be empty on a deep-path review")
 )
 
 // ValidateVerdictInput rejects a malformed or partial verdict-posting-tool
@@ -103,16 +132,19 @@ var (
 // here, never a parallel vocabulary invented independently). Checked in a
 // fixed order (RiskLevel, Premise, TestsCoverage, DocsDrift,
 // ProposedShippable, BlastRadius, FilesChanged, Summary, Digest.Summary,
-// Digest.DescriptionAdequacy, Digest.AdequacyExplanation) so a caller
+// Digest.DescriptionAdequacy, Digest.AdequacyExplanation, and -- Step 68,
+// §26.3, LAST of all -- Digest.ArchDecisions/StackRisks/UnverifiedLimits,
+// but ONLY when in.ReviewDepth == reviewtriage.DepthDeep) so a caller
 // presenting more than one bad field always gets the SAME, deterministic
 // first error rather than one that depends on map iteration order or
-// similar. Digest.Summary is checked next-to-last (Step 66, §26.1's own
-// new required field), and Digest.DescriptionAdequacy/
-// Digest.AdequacyExplanation are checked LAST (§26.2/Step 67's own new
-// required fields) -- each added at the end of the existing fixed order
-// rather than interleaved earlier, so neither Step ever changes which
-// error an EXISTING malformed payload (one that already fails an
-// earlier-checked field) was already reporting before it shipped.
+// similar. Digest.Summary is checked next (Step 66, §26.1's own new
+// required field), Digest.DescriptionAdequacy/Digest.AdequacyExplanation
+// follow (§26.2/Step 67's own new required fields), and the three
+// deep-path-only digest checks are checked LAST of all (Step 68) -- each
+// added at the end of the existing fixed order rather than interleaved
+// earlier, so no Step ever changes which error an EXISTING malformed
+// payload (one that already fails an earlier-checked field) was already
+// reporting before it shipped.
 //
 // Every one of review's four "closed enum" types has a Go zero value
 // ("") that is deliberately not a legal member (review/doc.go's own
@@ -172,12 +204,12 @@ func ValidateVerdictInput(in VerdictInput) error {
 	}
 
 	// Digest.Summary (Step 66, §26.1): "required on every review from
-	// Step 66 on" -- the ONE digest field this Step hard-requires.
-	// ArchDecisions/StackRisks/UnverifiedLimits are deliberately NOT
-	// checked here at all -- requested via the prompt (review/context.go),
-	// not validation-enforced, until §26.3 (a later Step) defines the deep
-	// path this package does not implement yet (digest.go's own doc
-	// comment).
+	// Step 66 on" -- the ONE digest field required on EVERY review,
+	// light and deep alike. ArchDecisions/StackRisks/UnverifiedLimits are
+	// NOT checked here -- they are requested via the prompt (review/
+	// context.go) on every review, and validation-enforced separately,
+	// below, but ONLY on the deep path (Step 68, §26.3) -- see that
+	// check's own doc comment further down for the full "why".
 	if strings.TrimSpace(in.Digest.Summary) == "" {
 		return ErrEmptyDigestSummary
 	}
@@ -189,9 +221,9 @@ func ValidateVerdictInput(in VerdictInput) error {
 	// third raise-only floor (review.AdequacyFloor), so an unvalidated
 	// value here would let a garbled/missing assessment silently reach
 	// that computation instead of being rejected up front. REQUIRED on
-	// every review from this Step on -- see digest.go's own doc comment
-	// for why this is NOT deferred behind a future light/deep distinction
-	// the way ArchDecisions/StackRisks/UnverifiedLimits still are.
+	// EVERY review, light and deep alike -- unlike ArchDecisions/
+	// StackRisks/UnverifiedLimits below, this was never deferred behind
+	// the light/deep distinction Step 68 later added.
 	switch in.Digest.DescriptionAdequacy {
 	case review.DescriptionAdequacyOK, review.DescriptionAdequacyDrift, review.DescriptionAdequacyMisleading:
 	default:
@@ -206,6 +238,39 @@ func ValidateVerdictInput(in VerdictInput) error {
 		return ErrEmptyAdequacyExplanation
 	}
 
+	// Digest.ArchDecisions/StackRisks/UnverifiedLimits (Step 68, §26.3,
+	// via §26.1's own forward reference): schema-required ONLY on the
+	// deep path -- checked LAST, after every field the light path already
+	// requires, so a light-path or pre-Step-68 (ReviewDepth == "") caller
+	// keeps failing on exactly the SAME first error it always did (this
+	// function's own "fixed order" discipline, top doc comment). The
+	// posting endpoint's own reject-don't-repair posture (§26.1) means
+	// the agent re-submits with a real digest rather than this package
+	// ever repairing/fabricating one. review.RenderTurnPrompt's own
+	// verdictToolInstructions(deep) (context.go, D2's own fix) is what
+	// tells a deep-path agent these three fields are REQUIRED rather than
+	// merely requested -- this check is that promise's enforcement half.
+	//
+	// hasNonBlankArchDecision (adversarial-review fix, D2's own "hollow
+	// check" aggravator): ArchDecisions is checked for at least one
+	// entry carrying real content, NOT merely len() > 0. A bare
+	// len(in.Digest.ArchDecisions) == 0 check would pass a payload
+	// carrying exactly one ArchDecision{} with all three fields blank --
+	// technically a non-empty slice, but exactly as uninformative as
+	// submitting none at all, and indistinguishable from a caller padding
+	// the array purely to slip past this check.
+	if in.ReviewDepth == reviewtriage.DepthDeep {
+		if !hasNonBlankArchDecision(in.Digest.ArchDecisions) {
+			return ErrEmptyDigestArchDecisions
+		}
+		if strings.TrimSpace(in.Digest.StackRisks) == "" {
+			return ErrEmptyDigestStackRisks
+		}
+		if strings.TrimSpace(in.Digest.UnverifiedLimits) == "" {
+			return ErrEmptyDigestUnverifiedLimits
+		}
+	}
+
 	// Findings (Step 48, additive): each one validated by
 	// ValidateFindingInput, in order -- first bad finding wins, mirroring
 	// this function's own fixed-order, first-error-wins discipline above.
@@ -218,6 +283,25 @@ func ValidateVerdictInput(in VerdictInput) error {
 	}
 
 	return nil
+}
+
+// hasNonBlankArchDecision reports whether decisions contains at least one
+// ArchDecision with a real (non-blank, after trimming) value in ANY of its
+// three fields -- ValidateVerdictInput's own deep-path ArchDecisions check
+// calls this instead of a bare len() > 0 test (see that call site's own
+// doc comment for the "hollow check" this closes). An entry whose
+// Decision/RejectedAlternative/ConventionConformance are ALL blank
+// contributes nothing a human merge-readout reader could use, so a slice
+// containing only such entries is treated exactly like an empty slice --
+// nil/empty decisions trivially returns false, the loop below simply never
+// running.
+func hasNonBlankArchDecision(decisions []ArchDecision) bool {
+	for _, d := range decisions {
+		if strings.TrimSpace(d.Decision) != "" || strings.TrimSpace(d.RejectedAlternative) != "" || strings.TrimSpace(d.ConventionConformance) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // BuildVerdict is the ONE sanctioned way this package turns an

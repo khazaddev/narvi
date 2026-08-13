@@ -269,6 +269,52 @@ func TestRenderTurnPrompt_VerdictToolInstructionsAlwaysLast(t *testing.T) {
 	}
 }
 
+// TestRenderTurnPrompt_DeepPathRequiresDigestFields pins D2's own fix: on
+// the light path (DeepPath false, the zero value) the three deep-path
+// digest fields still read "REQUESTED, not required", exactly as every
+// pre-Step-68 review turn's prompt always has -- but on the deep path
+// (DeepPath true) the SAME three fields now read as REQUIRED, matching
+// reviewpost.ValidateVerdictInput's own deep-path digest-completeness
+// check to the letter. A mutation that hardcodes verdictToolInstructions
+// back to the light-path wording regardless of ctx.DeepPath must fail
+// this test.
+func TestRenderTurnPrompt_DeepPathRequiresDigestFields(t *testing.T) {
+	t.Parallel()
+
+	light := review.RenderTurnPrompt("review this", review.PreFetchedContext{})
+	if !strings.Contains(light, "REQUESTED, not required") {
+		t.Errorf("light-path prompt = %q, want it to still describe archDecisions/stackRisks/unverifiedLimits as REQUESTED, not required", light)
+	}
+	if strings.Contains(light, "REQUIRED on this deep-path review") {
+		t.Errorf("light-path prompt = %q, want no deep-path-only REQUIRED wording", light)
+	}
+
+	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+	if strings.Contains(deep, `"archDecisions": [zero or more of the following object -- REQUESTED, not required`) {
+		t.Errorf("deep-path prompt = %q, want archDecisions no longer described as REQUESTED, not required", deep)
+	}
+	if strings.Contains(deep, `"stackRisks": "<REQUESTED, not required`) {
+		t.Errorf("deep-path prompt = %q, want stackRisks no longer described as REQUESTED, not required", deep)
+	}
+	if strings.Contains(deep, `"unverifiedLimits": "<REQUESTED, not required`) {
+		t.Errorf("deep-path prompt = %q, want unverifiedLimits no longer described as REQUESTED, not required", deep)
+	}
+	for _, field := range []string{`"archDecisions"`, `"stackRisks"`, `"unverifiedLimits"`} {
+		if !strings.Contains(deep, field) {
+			t.Errorf("deep-path prompt missing field %s entirely", field)
+		}
+	}
+	if !strings.Contains(deep, "REQUIRED on this deep-path review") {
+		t.Errorf("deep-path prompt = %q, want the deep-path REQUIRED wording present", deep)
+	}
+	// proposedBody stays requested-but-optional on every path, deep
+	// included -- §26.2 never made it required, and this Step must not
+	// change that.
+	if !strings.Contains(deep, "\"proposedBody\": \"<REQUESTED, not required") {
+		t.Errorf("deep-path prompt = %q, want proposedBody to remain requested-but-optional even on the deep path", deep)
+	}
+}
+
 // TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract is the
 // cross-package regression test verdictToolInstructions' own doc comment
 // (context.go) promises: every field name and enum value the rendered

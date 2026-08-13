@@ -6,6 +6,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
 )
 
@@ -78,8 +79,22 @@ func recordFromRow(row sqlcgen.ReviewVerdict) reviewverdict.Record {
 			ProposedShippable: review.ProposedShippable(row.ProposedShippable),
 			Shippable:         review.Shippable(row.Shippable),
 		},
-		Digest: digestFromRow(row),
+		Digest:     digestFromRow(row),
+		ReviewPath: reviewPathFromRow(row),
 	}
+}
+
+// reviewPathFromRow reads row's own review_path column (Step 68, §26.3)
+// into reviewtriage.ReviewDepth -- row.ReviewPath == nil (a pre-Step-68
+// row, or a verdict whose own turn never resolved a depth) degrades to
+// the zero value ReviewDepth(""), mirroring digestFromRow's own identical
+// "absent column -> zero value" precedent immediately above, never a
+// fabricated depth.
+func reviewPathFromRow(row sqlcgen.ReviewVerdict) reviewtriage.ReviewDepth {
+	if row.ReviewPath == nil {
+		return ""
+	}
+	return reviewtriage.ReviewDepth(*row.ReviewPath)
 }
 
 // digestFromRow builds reviewverdict.Record.Digest from row's own seven

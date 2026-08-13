@@ -10,6 +10,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
 )
 
@@ -41,7 +42,13 @@ import (
 // function does not itself re-validate that -- exactly like it does not
 // re-validate verdict's own fields, trusting its one caller
 // (httpapi.PostReviewVerdict) to have already done so.
-func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullName string, prNumber int32, headSHA string, sessionID pgtype.UUID, verdict review.Verdict, digest reviewpost.Digest) (reviewverdict.Record, error) {
+// reviewPath (Step 68, §26.3) is the posting turn's own turns.
+// review_depth, forwarded verbatim -- empty ("", reviewtriage.ReviewDepth
+// zero value) is a legitimate, common value (a verdict whose own turn
+// never resolved a depth, or a caller that predates this Step), persisted
+// as a genuine SQL NULL, never the literal string "" (nonEmptyStringPtr
+// below).
+func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullName string, prNumber int32, headSHA string, sessionID pgtype.UUID, verdict review.Verdict, digest reviewpost.Digest, reviewPath reviewtriage.ReviewDepth) (reviewverdict.Record, error) {
 	if headSHA == "" {
 		return reviewverdict.Record{}, fmt.Errorf("reviewverdict: insert: refusing to persist a verdict with no known head sha for %s#%d", repoFullName, prNumber)
 	}
@@ -76,6 +83,7 @@ func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullNam
 		DigestDescriptionAdequacy: nonEmptyStringPtr(string(digest.DescriptionAdequacy)),
 		DigestAdequacyExplanation: nonEmptyStringPtr(digest.AdequacyExplanation),
 		DigestProposedBody:        nonEmptyStringPtr(digest.ProposedBody),
+		ReviewPath:                nonEmptyStringPtr(string(reviewPath)),
 	})
 	if err != nil {
 		return reviewverdict.Record{}, err

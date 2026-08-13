@@ -17,14 +17,22 @@
 -- despite digest_summary/digest_description_adequacy/
 -- digest_adequacy_explanation being APPLICATION-required on every new
 -- post.
+--
+-- review_path (Step 68, §26.3, migrations/
+-- 000081_review_verdicts_review_path.up.sql) forwards turns.review_depth
+-- verbatim -- nullable, NULL for a verdict posted before this Step
+-- existed, or whose own turn never had a resolvable depth (the SAME
+-- "safe, not dangerous, degradation" posture head_sha's own resolution
+-- already has, reviewverdict.go).
 INSERT INTO review_verdicts (
     repo_full_name, pr_number, head_sha,
     risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift,
     proposed_shippable, shippable, session_id,
     digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits,
-    digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body
+    digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body,
+    review_path
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 RETURNING *;
 
 -- name: GetLatestReviewVerdict :one

@@ -58,6 +58,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reconciler"
 	"github.com/khazaddev/narvi/internal/app/releasereview"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/app/uploadsweep"
@@ -226,6 +227,7 @@ func serve() error {
 			GitHubBotToken:    cfg.GitHubBotToken,
 			GitHubBotHandle:   cfg.GitHubBotHandle,
 			ReviewDiffFetcher: sourceControl,
+			ReviewModelDeep:   cfg.ReviewModelDeep,
 		})
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
@@ -786,6 +788,17 @@ func serve() error {
 			// instance every other caller above already uses -- threaded
 			// through to CreateTurnForBot's own awaiting-plan gate.
 			Plans: planStore,
+			// ReviewTriage/ReviewModelDeep (Step 68, §26.3): the SAME
+			// repoSettingsStore/reviewVerdictStore instances every other
+			// caller above already uses, never a second, independently-
+			// constructed copy.
+			ReviewTriage: appreviewtriage.Deps{
+				RepoSettings:   repoSettingsStore,
+				ReviewVerdicts: reviewVerdictStore,
+				Artifacts:      artifactStore,
+				Sessions:       sessionStore,
+			},
+			ReviewModelDeep: cfg.ReviewModelDeep,
 			// F7 correction (adversarial review, Step 61): SessionCoalescer
 			// no longer has an EpistemicCheckDefault field -- both of its
 			// own CreateSessionOnTx/CreateTurnForBot call sites now
@@ -1089,7 +1102,7 @@ func serve() error {
 		// sourceControl/cfg.GitHubBotToken are the SAME instances the
 		// GitHub webhook ingress wiring above already constructs, never a
 		// second, independently-constructed copy.
-		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, reviewFindingStore, falsePositivePatternStore, cfg.GitHubBotToken, cfg.Timeouts))
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(pool, sessionStore, turnStore, planStore, auditLogStore, registry, githubPRSessionStore, sourceControl, reviewFindingStore, falsePositivePatternStore, cfg.GitHubBotToken, cfg.Timeouts, appreviewtriage.Deps{RepoSettings: repoSettingsStore, ReviewVerdicts: reviewVerdictStore, Artifacts: artifactStore, Sessions: sessionStore}, cfg.ReviewModelDeep))
 		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48,
 		// "sentinels + suggestions", §12.2 item 2/§22.1) -- maintainer+
 		// only (authz.ActionEditReviewVerdict, checked inside each
@@ -1174,6 +1187,14 @@ func serve() error {
 	router.Route("/api/repos/{owner}/{repo}/description-autofix", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Put("/", httpapi.PutDescriptionAutofixToggle(repoSettingsStore))
+	})
+
+	// /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3): a further,
+	// separately-gated route mirroring description-autofix above -- see
+	// httpapi/reposettings.go's own PutReviewDepthConfig doc comment.
+	router.Route("/api/repos/{owner}/{repo}/review-depth", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutReviewDepthConfig(repoSettingsStore))
 	})
 
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):

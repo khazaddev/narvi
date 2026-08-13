@@ -88,7 +88,7 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 			{Decision: "Use a shared retry helper.", RejectedAlternative: "Inline retry logic per call site.", ConventionConformance: "Matches internal/platform's existing retry helper pattern."},
 		},
 	}
-	insertedRecord, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict, seededDigest)
+	insertedRecord, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict, seededDigest, "")
 	if err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}

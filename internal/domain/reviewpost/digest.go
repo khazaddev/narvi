@@ -22,11 +22,12 @@ import "github.com/khazaddev/narvi/internal/domain/review"
 // VerdictInput.Summary/FindingInput.Description already are -- rendered
 // once (rendercomment.go) and never parsed back out of anything posted,
 // matching review/doc.go's own "nothing here even imports a markdown
-// parser, on principle" stance. Not validation-enforced in this Step:
-// §26.1's own "Enforcement" section states the full digest (this type
-// included) becomes schema-required only "once §26.3 defines the deep
-// path" (Step 68, not yet built) -- see Digest's own doc comment below for
-// the one field ahead of that.
+// parser, on principle" stance. Requested on every review; validation-
+// enforced (at least one entry with real, non-blank content -- see
+// validate.go's own hasNonBlankArchDecision) ONLY when the posting
+// VerdictInput's own ReviewDepth is reviewtriage.DepthDeep (Step 68,
+// §26.3, which now exists and defines that deep path) -- see Digest's own
+// doc comment below for the full "Enforcement" picture.
 type ArchDecision struct {
 	// Decision is what the diff actually decided -- e.g. "introduced a new
 	// retry queue table rather than reusing the existing outbox".
@@ -70,30 +71,32 @@ type ArchDecision struct {
 // been (migrations/000067_review_verdicts.up.sql carries no summary
 // column at all, and never will; see that table's own doc comment).
 //
-// # Enforcement -- Summary/DescriptionAdequacy/AdequacyExplanation required now, the rest requested but not yet enforced
+// # Enforcement -- Summary/DescriptionAdequacy/AdequacyExplanation always required; ArchDecisions/StackRisks/UnverifiedLimits required too, but only on the deep path; ProposedBody never required
 //
 // §26.1's own "Enforcement" section, and IMPLEMENTATION_PLAN.md's Step 66
 // row verbatim: "Summary required on every review from day one, full
 // digest schema-required on the deep path once Step 68 defines it
 // (reject-don't-repair at the posting endpoint)". Step 68 (§26.3, the
-// light/deep triage) does not exist yet -- there is no "deep path" for a
-// fuller requirement to attach to today. So THIS Step hard-requires only
-// Summary (ValidateVerdictInput's own ErrEmptyDigestSummary check,
-// validate.go), plus §26.2/Step 67's own DescriptionAdequacy/
-// AdequacyExplanation (ErrInvalidDescriptionAdequacy/
-// ErrEmptyAdequacyExplanation, same file) -- the description-adequacy
-// check is a normal, always-on part of every review from this Step on,
+// light/deep triage) now exists and defines that deep path. Summary
+// (ValidateVerdictInput's own ErrEmptyDigestSummary check, validate.go)
+// and §26.2/Step 67's own DescriptionAdequacy/AdequacyExplanation
+// (ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation, same file)
+// are hard-required on EVERY review, light and deep alike -- the
+// description-adequacy check is a normal, always-on part of every review,
 // never a deep-path-only requirement, matching how Premise/RiskLevel/
 // TestsCoverage were never gated behind a light/deep distinction either.
-// ArchDecisions/StackRisks/UnverifiedLimits/ProposedBody are REQUESTED
+// ArchDecisions/StackRisks/UnverifiedLimits are REQUESTED on every review
 // (review.RenderTurnPrompt's own verdictToolInstructions asks the agent to
-// fill them) but never rejected when empty/nil, exactly mirroring
-// VerdictInput.Findings' own "additive, optional, nil/empty is always
-// legal" precedent (validate.go's own doc comment on that field) --
-// building a light/deep distinction, or the future hard-requirement, is
-// explicitly Step 68's job, not this one's (this Step's own brief: "do not
-// attempt to build any light/deep path distinction -- that doesn't exist
-// yet either").
+// fill them), and additionally REQUIRED -- rejected when empty/blank,
+// ValidateVerdictInput's own ErrEmptyDigestArchDecisions/
+// ErrEmptyDigestStackRisks/ErrEmptyDigestUnverifiedLimits -- whenever the
+// posting VerdictInput's own ReviewDepth is reviewtriage.DepthDeep.
+// ProposedBody (§26.2/Step 67) stays REQUESTED-but-never-required on
+// every path, deep included -- unlike the other three, §26.3 never made
+// it deep-path-mandatory (most reviews, light or deep, propose no PR-body
+// rewrite at all), mirroring VerdictInput.Findings' own "additive,
+// optional, nil/empty is always legal" precedent (validate.go's own doc
+// comment on that field).
 type Digest struct {
 	// Summary is "What this PR does" -- 2-4 sentences written from the
 	// diff, never copied from the PR's own title/body. REQUIRED: see this
@@ -101,10 +104,12 @@ type Digest struct {
 	// ErrEmptyDigestSummary for the check.
 	Summary string
 	// ArchDecisions is zero or more structural decisions the diff makes
-	// (§26.1 item 3) -- nil/empty is legal (a PR with no structural
-	// decision worth naming, e.g. a pure bugfix), never rejected by
-	// ValidateVerdictInput, exactly like VerdictInput.Findings' own
-	// "nil/empty is always a legitimate value" precedent.
+	// (§26.1 item 3) -- nil/empty is legal on the LIGHT path (a PR with no
+	// structural decision worth naming, e.g. a pure bugfix), but REQUIRED
+	// (at least one entry with real, non-blank content) on the DEEP path
+	// (Step 68, §26.3) -- see ValidateVerdictInput's own
+	// ErrEmptyDigestArchDecisions check and hasNonBlankArchDecision
+	// (validate.go) for the exact rule.
 	ArchDecisions []ArchDecision
 	// StackRisks is free-text prose covering coupling and deployment
 	// risks (migrations, multi-phase deploys, image rebuilds) and
@@ -112,16 +117,17 @@ type Digest struct {
 	// pre-existing, typed BlastRadius []review.Tag (review.Verdict,
 	// unchanged by this Step), which covers the SAME section's own "blast
 	// radius in the existing fixed vocabulary" requirement. Empty string
-	// is legal (not validation-enforced in this Step, see this type's own
-	// doc comment above) -- rendered only when non-blank
-	// (rendercomment.go).
+	// is legal on the LIGHT path, but REQUIRED non-blank on the DEEP path
+	// (Step 68, §26.3, ValidateVerdictInput's own ErrEmptyDigestStackRisks)
+	// -- rendered only when non-blank (rendercomment.go).
 	StackRisks string
 	// UnverifiedLimits is the readout's own explicit, honest "what was
 	// NOT verified" (§26.1 item 4's own closing clause) -- e.g. "did not
 	// run the migration against a production-sized table; did not verify
 	// the new retry path under actual network partition". Empty string is
-	// legal (not validation-enforced in this Step) -- rendered only when
-	// non-blank.
+	// legal on the LIGHT path, but REQUIRED non-blank on the DEEP path
+	// (Step 68, §26.3, ValidateVerdictInput's own
+	// ErrEmptyDigestUnverifiedLimits) -- rendered only when non-blank.
 	UnverifiedLimits string
 
 	// DescriptionAdequacy/AdequacyExplanation/ProposedBody (§26.2, Step

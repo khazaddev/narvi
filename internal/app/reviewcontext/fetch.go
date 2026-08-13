@@ -6,6 +6,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -136,5 +137,26 @@ func Fetch(ctx context.Context, logger *slog.Logger, fetcher Fetcher, timeouts p
 	// no separate fetch. Reported even when the diff fetch below failed,
 	// exactly like HeadSHA, since pr itself was already successfully
 	// resolved by this point regardless of what happens to the diff.
-	return review.PreFetchedContext{Diff: diff, DiffTruncated: truncated, Stack: stack, HeadSHA: pr.HeadSHA, Title: pr.Title, Body: pr.Body}
+	//
+	// Additions/Deletions/ChangedFilesCount/Labels (§26.3, Step 68) are
+	// likewise forwarded verbatim from the SAME GetPullRequest call --
+	// reported even when the diff fetch below failed, exactly like Title/
+	// Body. ChangedPaths is parsed from diff itself (reviewtriage.
+	// ExtractChangedPaths), so it is empty exactly when diff is (a failed
+	// or never-attempted diff fetch) -- reviewtriage's own fail-open-to-
+	// light posture makes that degradation safe (this file's own doc
+	// comment on review.PreFetchedContext.Additions).
+	return review.PreFetchedContext{
+		Diff:              diff,
+		DiffTruncated:     truncated,
+		Stack:             stack,
+		HeadSHA:           pr.HeadSHA,
+		Title:             pr.Title,
+		Body:              pr.Body,
+		Additions:         pr.Additions,
+		Deletions:         pr.Deletions,
+		ChangedFilesCount: pr.ChangedFiles,
+		ChangedPaths:      reviewtriage.ExtractChangedPaths(diff),
+		Labels:            pr.Labels,
+	}
 }

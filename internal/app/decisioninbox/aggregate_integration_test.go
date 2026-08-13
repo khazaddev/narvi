@@ -248,7 +248,7 @@ func seedAutoApprovedVerdict(ctx context.Context, t *testing.T, pool *pgxpool.Po
 		FilesChanged:      3,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
-	if _, err := appreviewverdict.Insert(ctx, store, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}); err != nil {
+	if _, err := appreviewverdict.Insert(ctx, store, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, ""); err != nil {
 		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
 	}
 }
