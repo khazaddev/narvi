@@ -737,7 +737,7 @@ func TestRenderTurnPrompt_CounterReviewOmittedOnLightRequiredOnDeep(t *testing.T
 	}
 
 	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
-	if !strings.Contains(deep, `"counterReview" is REQUIRED on this deep-path review`) {
+	if !strings.Contains(deep, `"counterReview": "done" | "skipped" (REQUIRED on this deep-path review`) {
 		t.Errorf("deep-path prompt does not instruct counterReview as required:\n%s", deep)
 	}
 }

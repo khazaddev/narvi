@@ -463,8 +463,15 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 	// context_test.go) -- empty string on light, appended only when deep.
 	archDecisionsGuidance := ""
 	contestedPointsGuidance := "Omit entirely on this light-path review -- there is no adversarial pass here to disagree with anything"
-	counterReviewClause := "\"counterReview\" is OMITTED entirely on this light-path review -- that adversarial pass never runs on this path (§26.9), so do not include this field at all"
-	counterReviewWhenPresentClause := "(this field is never present on a light-path review, see above)"
+	// counterReviewLine (B7 fix: reshaped to "key": <spec>, matching every
+	// sibling field's own line shape immediately above it -- factCheck/
+	// factCheckKilled -- rather than the two-clause prose sentence this
+	// used to be split across ("X is REQUIRED... When present, Y")) is the
+	// one line in this template whose SHAPE differs by path, not merely
+	// its content: on light, the field does not exist at all, so there is
+	// no "key": <spec> to write -- prose explaining its absence is still
+	// the correct shape there.
+	counterReviewLine := "\"counterReview\" is OMITTED entirely on this light-path review -- that adversarial pass never runs on this path (§26.9), so do not include this field at all"
 	if deep {
 		digestRequiredFieldsClause = "\"archDecisions\"/\"stackRisks\"/\"unverifiedLimits\" are ALSO REQUIRED on this deep-path review (§26.3) -- only \"proposedBody\"/\"contestedPoints\" remain requested but optional"
 		archDecisionsRequirement = "REQUIRED on this deep-path review -- at least one entry, with a real (non-blank) decision/rejectedAlternative/conventionConformance, not an empty array or an all-blank placeholder"
@@ -472,8 +479,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 		unverifiedLimitsRequirement = "REQUIRED on this deep-path review, non-blank"
 		archDecisionsGuidance = " This should be informed by (though you may edit/supplement) the " + ArchitectureScribeAgentName + " sub-task's own recap, see the orchestration guidance above."
 		contestedPointsGuidance = "Omit entirely if the " + CounterReviewerAgentName + " sub-task raised nothing"
-		counterReviewClause = "\"counterReview\" is REQUIRED on this deep-path review (§26.4)"
-		counterReviewWhenPresentClause = "one of \"done\" | \"skipped\" (\"done\" means you actually spawned and adjudicated the " + CounterReviewerAgentName + " sub-task; \"skipped\" means a genuine sub-task error/timeout, or the cost budget already having been reached before it would have been dispatched -- \"skipped\" raises this verdict's own shippable classification to needs_human no matter how low-risk everything else looks, so do not report \"done\" unless the sub-task genuinely ran)"
+		counterReviewLine = "\"counterReview\": \"done\" | \"skipped\" (REQUIRED on this deep-path review (§26.4) -- \"done\" means you actually spawned and adjudicated the " + CounterReviewerAgentName + " sub-task; \"skipped\" means a genuine sub-task error/timeout, or the cost budget already having been reached before it would have been dispatched -- \"skipped\" raises this verdict's own shippable classification to needs_human no matter how low-risk everything else looks, so do not report \"done\" unless the sub-task genuinely ran)"
 	}
 
 	return subAgentOrchestrationInstructions(deep, costBudgetUSD, costBudgetSafetyMarginPercent) +
@@ -521,7 +527,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 		"  },\n" +
 		"  \"factCheck\": \"done\" | \"skipped\" (REQUIRED, on EVERY review, light or deep -- see the orchestration guidance above for when this is \"skipped\": a genuine sub-task error/timeout, or the cost budget already having been reached),\n" +
 		"  \"factCheckKilled\": <integer, REQUIRED, count of findings the fact-check sub-task actually removed as provably wrong from the diff alone -- MUST be 0 when \"factCheck\" is \"skipped\">,\n" +
-		"  " + counterReviewClause + ". When present, " + counterReviewWhenPresentClause + "\n" +
+		"  " + counterReviewLine + "\n" +
 		"}\n\n" +
 		"A 201 response confirms the verdict was recorded and posted; the server -- never you -- computes the authoritative shippable classification, the formal GitHub review event, the synced review:*-risk label, and (when \"findings\" names a sentinelKind and this repo's own sentinel-auto-fix toggle is on) whether an automated fix session is triggered, from these fields."
 }
