@@ -376,6 +376,15 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		// ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation.
 		`"descriptionAdequacy"`, string(restdtos.DigestDescriptionAdequacyOk), string(restdtos.DigestDescriptionAdequacyDrift), string(restdtos.DigestDescriptionAdequacyMisleading),
 		`"adequacyExplanation"`, `"proposedBody"`,
+		// Step 69 (§26.4/§26.6): "factCheck"/"factCheckKilled" (REQUIRED,
+		// both paths) and "counterReview" (deep-path only) were completely
+		// absent from this template before this Step -- an agent following
+		// only the pre-Step-69 template could never emit them, and
+		// PostReviewVerdictRequest.factCheck/factCheckKilled are now
+		// REQUIRED, so every such call would be rejected 400 by
+		// reviewpost.ValidateVerdictInput's own ErrInvalidFactCheck.
+		`"factCheck"`, string(restdtos.PostReviewVerdictRequestFactCheckDone), string(restdtos.PostReviewVerdictRequestFactCheckSkipped),
+		`"factCheckKilled"`, `"counterReview"`, `"contestedPoints"`,
 	}
 	for _, want := range fieldsAndEnums {
 		if !strings.Contains(got, want) {
@@ -405,10 +414,17 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 	*unverifiedLimits = "example unverified limits"
 	proposedBody := restdtos.DigestProposedBody(new(string))
 	*proposedBody = "example proposed body"
+	contestedPoints := restdtos.DigestContestedPoints(new(string))
+	*contestedPoints = "example contested points"
+	counterReview := restdtos.PostReviewVerdictRequestCounterReview(new(string))
+	*counterReview = string(restdtos.PostReviewVerdictRequestFactCheckDone)
 	example := restdtos.PostReviewVerdictRequest{
-		BlastRadius:  []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
-		DocsDrift:    restdtos.PostReviewVerdictRequestDocsDriftNone,
-		FilesChanged: 1,
+		BlastRadius:     []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
+		DocsDrift:       restdtos.PostReviewVerdictRequestDocsDriftNone,
+		FilesChanged:    1,
+		FactCheck:       restdtos.PostReviewVerdictRequestFactCheckDone,
+		FactCheckKilled: 2,
+		CounterReview:   counterReview,
 		Findings: []restdtos.PostedFinding{
 			{
 				Description:  "example finding",
@@ -433,6 +449,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 			DescriptionAdequacy: restdtos.DigestDescriptionAdequacyOk,
 			AdequacyExplanation: "example adequacy explanation",
 			ProposedBody:        proposedBody,
+			ContestedPoints:     contestedPoints,
 		},
 	}
 	raw, err := json.Marshal(example)
@@ -443,9 +460,154 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		`"riskLevel"`, `"premise"`, `"filesChanged"`, `"testsCoverage"`, `"docsDrift"`, `"proposedShippable"`, `"blastRadius"`, `"summary"`, `"findings"`,
 		`"digest"`, `"archDecisions"`, `"decision"`, `"rejectedAlternative"`, `"conventionConformance"`, `"stackRisks"`, `"unverifiedLimits"`,
 		`"descriptionAdequacy"`, `"adequacyExplanation"`, `"proposedBody"`,
+		`"factCheck"`, `"factCheckKilled"`, `"counterReview"`, `"contestedPoints"`,
 	} {
 		if !strings.Contains(string(raw), wantKey) {
 			t.Errorf("marshaled restdtos.PostReviewVerdictRequest = %s, want it to contain key %q", raw, wantKey)
 		}
+	}
+}
+
+// TestRenderTurnPrompt_FactCheckOrchestrationOnBothPaths is §26.6's own
+// pin: "runs on the light path too" -- the fact-check sub-task's own
+// orchestration guidance (naming review.FactCheckAgentName as the
+// "subagent_type" to spawn) must appear on EVERY rendered prompt,
+// regardless of ctx.DeepPath.
+func TestRenderTurnPrompt_FactCheckOrchestrationOnBothPaths(t *testing.T) {
+	t.Parallel()
+
+	for _, deep := range []bool{false, true} {
+		got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: deep})
+		if !strings.Contains(got, review.FactCheckAgentName) {
+			t.Errorf("DeepPath=%v: prompt does not mention %q, want the fact-check sub-task orchestrated on both paths", deep, review.FactCheckAgentName)
+		}
+	}
+}
+
+// TestRenderTurnPrompt_ArchitectureScribeAndCounterReviewerOnlyOnDeepPath
+// is §26.9's own invariant, stated for the orchestration guidance
+// specifically: "the light path's behavior remains exactly today's review
+// ... no scribe, no counter-reviewer on light" -- neither
+// review.ArchitectureScribeAgentName nor review.CounterReviewerAgentName
+// may appear anywhere in a light-path prompt.
+func TestRenderTurnPrompt_ArchitectureScribeAndCounterReviewerOnlyOnDeepPath(t *testing.T) {
+	t.Parallel()
+
+	light := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false})
+	if strings.Contains(light, review.ArchitectureScribeAgentName) {
+		t.Errorf("light-path prompt mentions %q, want it absent entirely (§26.9: no scribe on light)", review.ArchitectureScribeAgentName)
+	}
+	if strings.Contains(light, review.CounterReviewerAgentName) {
+		t.Errorf("light-path prompt mentions %q, want it absent entirely (§26.9: no counter-reviewer on light)", review.CounterReviewerAgentName)
+	}
+
+	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+	if !strings.Contains(deep, review.ArchitectureScribeAgentName) {
+		t.Errorf("deep-path prompt does not mention %q, want architecture-scribe orchestrated", review.ArchitectureScribeAgentName)
+	}
+	if !strings.Contains(deep, review.CounterReviewerAgentName) {
+		t.Errorf("deep-path prompt does not mention %q, want counter-reviewer orchestrated", review.CounterReviewerAgentName)
+	}
+}
+
+// TestRenderTurnPrompt_FunnelOrdering_FactCheckBeforeCounterReview is
+// §26.6's own explicit pin, one of this Step's own named mutation-test
+// targets: "fact-check running before counter-review in the funnel" --
+// proven here as a textual ordering property of the rendered deep-path
+// prompt itself, since that ordering IS the mechanism this system has for
+// conveying the funnel to the agent (§7's own anti-corruption-layer
+// boundary: the control plane cannot itself sequence sub-task dispatch
+// inside an already-running turn, see subAgentOrchestrationInstructions'
+// own doc comment for the full "why"). A mutation that reordered the two
+// sections in context.go's own subAgentOrchestrationInstructions would
+// fail this test.
+func TestRenderTurnPrompt_FunnelOrdering_FactCheckBeforeCounterReview(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+
+	factCheckIdx := strings.Index(got, review.FactCheckAgentName)
+	counterReviewerIdx := strings.Index(got, review.CounterReviewerAgentName)
+	if factCheckIdx < 0 {
+		t.Fatalf("prompt does not mention %q at all", review.FactCheckAgentName)
+	}
+	if counterReviewerIdx < 0 {
+		t.Fatalf("prompt does not mention %q at all", review.CounterReviewerAgentName)
+	}
+	if factCheckIdx >= counterReviewerIdx {
+		t.Errorf("fact-check (subagent_type %q) is not instructed BEFORE counter-review (subagent_type %q) in the rendered prompt -- funnel ordering violated:\n%s", review.FactCheckAgentName, review.CounterReviewerAgentName, got)
+	}
+}
+
+// TestRenderTurnPrompt_OrchestrationGuidancePrecedesVerdictToolInstructions
+// proves the orchestration guidance (subAgentOrchestrationInstructions)
+// renders BEFORE the verdict-posting JSON-body instructions
+// (verdictToolInstructions) in the FINAL assembled prompt -- an agent must
+// learn HOW to gather/adjudicate findings before it is told the shape to
+// report them in. Uses the POST line (present in every rendered prompt,
+// verdictToolInstructions' own unconditional text) as the verdict-tool
+// section's own marker.
+func TestRenderTurnPrompt_OrchestrationGuidancePrecedesVerdictToolInstructions(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+
+	factCheckIdx := strings.Index(got, review.FactCheckAgentName)
+	postIdx := strings.Index(got, "POST "+review.VerdictToolURLPlaceholder)
+	if factCheckIdx < 0 {
+		t.Fatalf("prompt does not mention %q at all", review.FactCheckAgentName)
+	}
+	if postIdx < 0 {
+		t.Fatalf("prompt does not contain the verdict-posting tool's own POST line")
+	}
+	if factCheckIdx >= postIdx {
+		t.Errorf("orchestration guidance does not precede the verdict-posting instructions:\n%s", got)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_RenderedOnlyWhenConfigured proves
+// §26.7's own ReviewCostBudgetUSD threading: a zero (unconfigured) ceiling
+// renders NO budget guidance at all -- never a fabricated "$0.00" ceiling,
+// which would read to the agent as "skip every optional pass" (this
+// field's own doc comment, context.go). A positive ceiling renders the
+// dollar figure, formatted to two decimals.
+func TestRenderTurnPrompt_CostBudget_RenderedOnlyWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	unconfigured := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 0})
+	if strings.Contains(unconfigured, "Cost budget:") {
+		t.Errorf("prompt with ReviewCostBudgetUSD=0 mentions a cost budget, want none at all:\n%s", unconfigured)
+	}
+
+	configured := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5})
+	if !strings.Contains(configured, "Cost budget:") {
+		t.Errorf("prompt with ReviewCostBudgetUSD=5 does not mention a cost budget at all:\n%s", configured)
+	}
+	if !strings.Contains(configured, "$5.00") {
+		t.Errorf("prompt with ReviewCostBudgetUSD=5 does not render \"$5.00\":\n%s", configured)
+	}
+
+	lightConfigured := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false, ReviewCostBudgetUSD: 0.5})
+	if !strings.Contains(lightConfigured, "$0.50") {
+		t.Errorf("light-path prompt with ReviewCostBudgetUSD=0.5 does not render \"$0.50\":\n%s", lightConfigured)
+	}
+}
+
+// TestRenderTurnPrompt_CounterReviewOmittedOnLightRequiredOnDeep is §26.4's
+// own field-level pin, one layer up from reviewpost.ValidateVerdictInput's
+// own equivalent check: the JSON-body instructions must tell a light-path
+// agent to OMIT "counterReview" entirely, and a deep-path agent that it is
+// REQUIRED.
+func TestRenderTurnPrompt_CounterReviewOmittedOnLightRequiredOnDeep(t *testing.T) {
+	t.Parallel()
+
+	light := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false})
+	if !strings.Contains(light, `"counterReview" is OMITTED entirely on this light-path review`) {
+		t.Errorf("light-path prompt does not instruct omitting counterReview:\n%s", light)
+	}
+
+	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+	if !strings.Contains(deep, `"counterReview" is REQUIRED on this deep-path review`) {
+		t.Errorf("deep-path prompt does not instruct counterReview as required:\n%s", deep)
 	}
 }

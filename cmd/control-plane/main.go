@@ -421,7 +421,11 @@ func serve() error {
 		RepoSettings:         repoSettingsStore,
 		ReviewFindings:       reviewFindingStore,
 		AutoApprovalOutcomes: autoApprovalOutcomeStore,
-		Timeouts:             cfg.Timeouts,
+		// DigestSectionFeedback (Step 69, §26.5) backs appreviewverdict.
+		// DigestContestationRate -- the SAME reviewDigestSectionFeedbackStore
+		// instance the GitHub capture command above already uses.
+		DigestSectionFeedback: reviewDigestSectionFeedbackStore,
+		Timeouts:              cfg.Timeouts,
 	}
 	// digestChannelStore (Step 62, §21.3) backs internal/app/digest's own
 	// channel-discovery step -- constructed here, alongside its own
