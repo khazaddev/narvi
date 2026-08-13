@@ -21,7 +21,11 @@ func validInput() reviewpost.VerdictInput {
 		DocsDrift:         review.DocsDriftStateNone,
 		ProposedShippable: review.ProposedShippableAuto,
 		Summary:           "Looks good, minor nit.",
-		Digest:            reviewpost.Digest{Summary: "Adds a retry helper around the flaky upstream call."},
+		Digest: reviewpost.Digest{
+			Summary:             "Adds a retry helper around the flaky upstream call.",
+			DescriptionAdequacy: review.DescriptionAdequacyOK,
+			AdequacyExplanation: "The PR body accurately describes the retry helper this diff adds.",
+		},
 	}
 }
 
@@ -130,6 +134,43 @@ func TestValidateVerdictInput(t *testing.T) {
 			},
 			wantErr: nil,
 		},
+		{
+			name:    "missing digest.descriptionAdequacy (zero value, §26.2/Step 67: required on every review)",
+			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.DescriptionAdequacy = "" },
+			wantErr: reviewpost.ErrInvalidDescriptionAdequacy,
+		},
+		{
+			name:    "garbled digest.descriptionAdequacy",
+			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.DescriptionAdequacy = "somewhat" },
+			wantErr: reviewpost.ErrInvalidDescriptionAdequacy,
+		},
+		{
+			name:    "digest.descriptionAdequacy = drift is legal",
+			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.DescriptionAdequacy = review.DescriptionAdequacyDrift },
+			wantErr: nil,
+		},
+		{
+			name: "digest.descriptionAdequacy = misleading is legal",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.DescriptionAdequacy = review.DescriptionAdequacyMisleading
+			},
+			wantErr: nil,
+		},
+		{
+			name:    "empty digest.adequacyExplanation (§26.2/Step 67: required on every review)",
+			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.AdequacyExplanation = "" },
+			wantErr: reviewpost.ErrEmptyAdequacyExplanation,
+		},
+		{
+			name:    "whitespace-only digest.adequacyExplanation",
+			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.AdequacyExplanation = "   \n\t  " },
+			wantErr: reviewpost.ErrEmptyAdequacyExplanation,
+		},
+		{
+			name:    "empty digest.proposedBody is legal (§26.2: the agent MAY propose a rewrite, not required)",
+			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.ProposedBody = "" },
+			wantErr: nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -185,6 +226,40 @@ func TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting(t *testing.T
 	}
 }
 
+// TestValidateVerdictInput_AdequacyCheckedAfterDigestSummary proves §26.2/
+// Step 67's own new Digest.DescriptionAdequacy/AdequacyExplanation checks
+// run AFTER Digest.Summary (added at the end of the fixed order, per this
+// function's own doc comment) -- a payload with BOTH an empty
+// Digest.Summary AND a garbled Digest.DescriptionAdequacy must still
+// report ErrEmptyDigestSummary, never ErrInvalidDescriptionAdequacy, so
+// this Step never changes which error an already-malformed pre-Step-67
+// payload reports.
+func TestValidateVerdictInput_AdequacyCheckedAfterDigestSummary(t *testing.T) {
+	in := validInput()
+	in.Digest.Summary = ""
+	in.Digest.DescriptionAdequacy = "bogus"
+
+	err := reviewpost.ValidateVerdictInput(in)
+	if !errors.Is(err, reviewpost.ErrEmptyDigestSummary) {
+		t.Errorf("ValidateVerdictInput() = %v, want %v (digest.summary checked before digest.descriptionAdequacy)", err, reviewpost.ErrEmptyDigestSummary)
+	}
+}
+
+// TestValidateVerdictInput_AdequacyExplanationCheckedLast proves
+// AdequacyExplanation is checked LAST of all -- a payload with BOTH a
+// garbled DescriptionAdequacy AND an empty AdequacyExplanation must still
+// report ErrInvalidDescriptionAdequacy, never ErrEmptyAdequacyExplanation.
+func TestValidateVerdictInput_AdequacyExplanationCheckedLast(t *testing.T) {
+	in := validInput()
+	in.Digest.DescriptionAdequacy = "bogus"
+	in.Digest.AdequacyExplanation = ""
+
+	err := reviewpost.ValidateVerdictInput(in)
+	if !errors.Is(err, reviewpost.ErrInvalidDescriptionAdequacy) {
+		t.Errorf("ValidateVerdictInput() = %v, want %v (digest.descriptionAdequacy checked before digest.adequacyExplanation)", err, reviewpost.ErrInvalidDescriptionAdequacy)
+	}
+}
+
 // TestBuildVerdict_ShippableAlwaysComputedNeverCopiedFromProposed proves
 // BuildVerdict's own central contract: Shippable is ALWAYS
 // review.ComputeShippable's own result, regardless of what
@@ -203,5 +278,69 @@ func TestBuildVerdict_ShippableAlwaysComputedNeverCopiedFromProposed(t *testing.
 	}
 	if got.ProposedShippable != review.ProposedShippableAuto {
 		t.Errorf("ProposedShippable = %q, want %q (still carried verbatim as audit data)", got.ProposedShippable, review.ProposedShippableAuto)
+	}
+}
+
+// TestBuildVerdict_MisleadingAdequacyRaisesShippable is §26.2/Step 67's
+// own end-to-end pin, one layer up from
+// TestComputeShippable_MisleadingRaisesShippable (internal/domain/review):
+// an otherwise-completely-clean VerdictInput (low risk, ok premise,
+// adequate coverage -- every OTHER floor clean, Shippable would otherwise
+// compute auto) whose Digest.DescriptionAdequacy is "misleading" must
+// still come out of BuildVerdict as ShippableNeedsHuman, proving the third
+// floor genuinely reaches the posting endpoint's own real construction
+// path, not merely ComputeShippable in isolation.
+func TestBuildVerdict_MisleadingAdequacyRaisesShippable(t *testing.T) {
+	in := validInput()
+	in.RiskLevel = review.RiskLevelLow
+	in.Premise = review.PremiseStateOK
+	in.TestsCoverage = review.TestsCoverageStateAdequate
+	in.Digest.DescriptionAdequacy = review.DescriptionAdequacyMisleading
+
+	got := reviewpost.BuildVerdict(in)
+	if got.Shippable != review.ShippableNeedsHuman {
+		t.Errorf("Shippable = %q, want %q (a misleading description must raise Shippable off an otherwise-clean auto baseline)", got.Shippable, review.ShippableNeedsHuman)
+	}
+}
+
+// TestBuildVerdict_AdequacyNeverAffectsRiskLevel is §26.2's own explicit
+// asymmetry, pinned at BuildVerdict's own real construction site (not just
+// ComputeShippable's pure-function level, TestComputeShippable_
+// MisleadingRaisesShippable, internal/domain/review): varying
+// Digest.DescriptionAdequacy from "ok" to "misleading", with every other
+// field held fixed, changes Shippable but leaves RiskLevel COMPLETELY
+// untouched -- "the server computes Shippable, but never fabricates risk
+// the model did not report". Mutation coverage: a bug that derived
+// RiskLevel from DescriptionAdequacy (or otherwise let the adequacy floor
+// leak into RiskLevel) makes this test fail.
+func TestBuildVerdict_AdequacyNeverAffectsRiskLevel(t *testing.T) {
+	base := validInput()
+	base.RiskLevel = review.RiskLevelMedium
+
+	okInput := base
+	okInput.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	okVerdict := reviewpost.BuildVerdict(okInput)
+
+	misleadingInput := base
+	misleadingInput.Digest.DescriptionAdequacy = review.DescriptionAdequacyMisleading
+	misleadingVerdict := reviewpost.BuildVerdict(misleadingInput)
+
+	if okVerdict.RiskLevel != review.RiskLevelMedium {
+		t.Fatalf("test setup: okVerdict.RiskLevel = %q, want %q", okVerdict.RiskLevel, review.RiskLevelMedium)
+	}
+	if misleadingVerdict.RiskLevel != review.RiskLevelMedium {
+		t.Errorf("misleadingVerdict.RiskLevel = %q, want %q (DescriptionAdequacy must never influence RiskLevel)", misleadingVerdict.RiskLevel, review.RiskLevelMedium)
+	}
+	if okVerdict.RiskLevel != misleadingVerdict.RiskLevel {
+		t.Errorf("RiskLevel differed across DescriptionAdequacy values (%q vs %q) -- must be identical, RiskLevel is upstream of and unaffected by any floor", okVerdict.RiskLevel, misleadingVerdict.RiskLevel)
+	}
+	// Sanity: Shippable itself DID change (otherwise this test would prove
+	// nothing about the floor actually running) -- both raise the SAME
+	// baseline (medium -> needs_human) here, so require Shippable to be at
+	// LEAST as strict for misleading, and confirm the floor path was
+	// genuinely exercised via the dedicated raise test above instead of
+	// re-deriving that property here.
+	if misleadingVerdict.Shippable != review.ShippableNeedsHuman {
+		t.Errorf("misleadingVerdict.Shippable = %q, want %q", misleadingVerdict.Shippable, review.ShippableNeedsHuman)
 	}
 }

@@ -1819,17 +1819,46 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 // architecture choices, and risks to the stack -- that fronts the rendered
 // verdict, ahead of the pre-existing findings/coverage/docs-drift content (now
 // collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment).
-// REQUIRED on the request as a whole (unlike findings above): summary within it is
-// the one field this Step hard-requires
-// (internal/domain/reviewpost.ValidateVerdictInput's own ErrEmptyDigestSummary);
-// archDecisions/stackRisks/unverifiedLimits are requested (the review-turn prompt
-// asks the agent to fill them, internal/domain/review.RenderTurnPrompt) but NOT
-// validation-enforced yet -- the full digest becomes schema-required only once a
-// later Step (§26.3) defines the deep path this endpoint does not implement yet.
+// Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with
+// descriptionAdequacy/adequacyExplanation/proposedBody below. REQUIRED on the
+// request as a whole (unlike findings above):
+// summary/descriptionAdequacy/adequacyExplanation within it are the fields this
+// Step hard-requires (internal/domain/reviewpost.ValidateVerdictInput);
+// archDecisions/stackRisks/unverifiedLimits/proposedBody are requested (the
+// review-turn prompt asks the agent to fill them,
+// internal/domain/review.RenderTurnPrompt) but NOT validation-enforced -- the full
+// digest becomes schema-required only once a later Step (§26.3) defines the deep
+// path this endpoint does not implement yet.
 type Digest struct {
+	// Step 67's own addition (§26.2): the tri-state's own required one-line
+	// explanation of WHY descriptionAdequacy is what it is -- REQUIRED non-blank,
+	// mirroring summary's own 'a verdict with no human-readable explanation at all
+	// defeats the point' treatment.
+	AdequacyExplanation string `json:"adequacyExplanation" yaml:"adequacyExplanation" mapstructure:"adequacyExplanation"`
+
 	// Zero or more structural decisions the diff makes -- OPTIONAL, absent/empty is
 	// legal (not yet validation-enforced, see this object's own description).
 	ArchDecisions []ArchDecision `json:"archDecisions,omitempty,omitzero" yaml:"archDecisions,omitempty" mapstructure:"archDecisions,omitempty"`
+
+	// Step 67's own addition (§26.2): the agent's own comparison of THIS SAME
+	// digest's summary (written from the diff) against the pull request's own
+	// title+body -- which stay untrusted input throughout, consumed by this
+	// comparison, never obeyed by it. Matches
+	// internal/domain/review.DescriptionAdequacy's own three values exactly. REQUIRED
+	// -- directly feeds review.ComputeShippable's own third raise-only floor
+	// (review.AdequacyFloor): 'misleading' floors Shippable at needs_human,
+	// 'ok'/'drift' impose no floor of their own.
+	DescriptionAdequacy DigestDescriptionAdequacy `json:"descriptionAdequacy" yaml:"descriptionAdequacy" mapstructure:"descriptionAdequacy"`
+
+	// Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for
+	// the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not
+	// validation-enforced: most reviews propose no rewrite at all. Rendered as a
+	// suggestion in the digest for every PR regardless of authorship; ALSO delivered
+	// as a real write only for a Narvi-authored PR with this repo's own
+	// descriptionAutofix flag on, both checks re-verified server-side at delivery
+	// time (never trusted from this payload alone). The PR's title is never rewritten
+	// automatically, in either case -- this field carries body content only.
+	ProposedBody DigestProposedBody `json:"proposedBody,omitempty,omitzero" yaml:"proposedBody,omitempty" mapstructure:"proposedBody,omitempty"`
 
 	// Free-text prose: coupling and deployment risks (migrations, multi-phase
 	// deploys, image rebuilds) and reversibility -- rendered alongside the verdict's
@@ -1847,6 +1876,48 @@ type Digest struct {
 	UnverifiedLimits DigestUnverifiedLimits `json:"unverifiedLimits,omitempty,omitzero" yaml:"unverifiedLimits,omitempty" mapstructure:"unverifiedLimits,omitempty"`
 }
 
+type DigestDescriptionAdequacy string
+
+const DigestDescriptionAdequacyDrift DigestDescriptionAdequacy = "drift"
+const DigestDescriptionAdequacyMisleading DigestDescriptionAdequacy = "misleading"
+const DigestDescriptionAdequacyOk DigestDescriptionAdequacy = "ok"
+
+var enumValues_DigestDescriptionAdequacy = []interface{}{
+	"ok",
+	"drift",
+	"misleading",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DigestDescriptionAdequacy) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_DigestDescriptionAdequacy {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_DigestDescriptionAdequacy, v)
+	}
+	*j = DigestDescriptionAdequacy(v)
+	return nil
+}
+
+// Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for
+// the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not
+// validation-enforced: most reviews propose no rewrite at all. Rendered as a
+// suggestion in the digest for every PR regardless of authorship; ALSO delivered
+// as a real write only for a Narvi-authored PR with this repo's own
+// descriptionAutofix flag on, both checks re-verified server-side at delivery time
+// (never trusted from this payload alone). The PR's title is never rewritten
+// automatically, in either case -- this field carries body content only.
+type DigestProposedBody *string
+
 // Free-text prose: coupling and deployment risks (migrations, multi-phase deploys,
 // image rebuilds) and reversibility -- rendered alongside the verdict's own
 // existing blastRadius. OPTIONAL.
@@ -1861,6 +1932,12 @@ func (j *Digest) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["adequacyExplanation"]; raw != nil && !ok {
+		return fmt.Errorf("field adequacyExplanation in Digest: required")
+	}
+	if _, ok := raw["descriptionAdequacy"]; raw != nil && !ok {
+		return fmt.Errorf("field descriptionAdequacy in Digest: required")
+	}
 	if _, ok := raw["summary"]; raw != nil && !ok {
 		return fmt.Errorf("field summary in Digest: required")
 	}
@@ -1868,6 +1945,9 @@ func (j *Digest) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if utf8.RuneCountInString(string(plain.AdequacyExplanation)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "adequacyExplanation", 1)
 	}
 	if utf8.RuneCountInString(string(plain.Summary)) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "summary", 1)
@@ -4080,10 +4160,10 @@ func (j *RebutFindingRequest) UnmarshalJSON(value []byte) error {
 
 // GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2)
 // -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql).
-// Deliberately a small, extensible shape: Step 62's auto-merge toggle and Step
-// 65's automatic-re-review opt-in (§24.5) each added a further boolean property
-// here, never a bespoke DTO of their own -- future toggles are expected to follow
-// the same pattern.
+// Deliberately a small, extensible shape: Step 62's auto-merge toggle, Step 65's
+// automatic-re-review opt-in (§24.5), and Step 67's description-autofix toggle
+// (§26.2) each added a further boolean property here, never a bespoke DTO of their
+// own -- future toggles are expected to follow the same pattern.
 type RepoSettings struct {
 	// Step 62, §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an
 	// auto-approved PR merges unattended (internal/app/automerge.Worker) instead of
@@ -4123,6 +4203,21 @@ type RepoSettings struct {
 	// How many auto-approval outcomes contradictionRatePercent was computed over -- 0
 	// whenever contradictionRateComputed is false.
 	ContradictionSampleSize int `json:"contradictionSampleSize" yaml:"contradictionSampleSize" mapstructure:"contradictionSampleSize"`
+
+	// Step 67, §26.2: admin-only, per-repo, off by default -- once armed, a
+	// Narvi-authored PR's own description-adequacy floor firing (drift/misleading)
+	// may result in this repo's own PR bodies being automatically rewritten (original
+	// preserved in a collapsed block), delivered via the outbox and re-verified
+	// server-side (Narvi-authorship AND this flag) at delivery time, never trusted
+	// from the posting agent alone. Gated by authz.ActionToggleDescriptionAutofix,
+	// the SAME admin-only row as
+	// sentinelAutofixEnabled/autoMergeEnabled/autoRetriggerReviewEnabled -- arming
+	// this changes what runs UNATTENDED on a repo's own PRs (an automatic body
+	// rewrite, no human in the loop), the same reasoning every sibling toggle in this
+	// row already carries. Human-authored PRs are never affected regardless of this
+	// flag -- they only ever get a rendered suggestion (Digest.proposedBody), never a
+	// write.
+	DescriptionAutofixEnabled bool `json:"descriptionAutofixEnabled" yaml:"descriptionAutofixEnabled" mapstructure:"descriptionAutofixEnabled"`
 
 	// Step 62, §21.2 stage 1: this repo's own configured diff-size eligibility
 	// threshold. Null means 'not configured -- the auto-approval engine's own
@@ -4233,6 +4328,9 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["contradictionSampleSize"]; raw != nil && !ok {
 		return fmt.Errorf("field contradictionSampleSize in RepoSettings: required")
+	}
+	if _, ok := raw["descriptionAutofixEnabled"]; raw != nil && !ok {
+		return fmt.Errorf("field descriptionAutofixEnabled in RepoSettings: required")
 	}
 	if _, ok := raw["maxAutoApproveFilesChanged"]; raw != nil && !ok {
 		return fmt.Errorf("field maxAutoApproveFilesChanged in RepoSettings: required")
@@ -5253,6 +5351,35 @@ func (j *UpdateAutoRetriggerReviewToggleRequest) UnmarshalJSON(value []byte) err
 		return err
 	}
 	*j = UpdateAutoRetriggerReviewToggleRequest(plain)
+	return nil
+}
+
+// Request body for PUT /api/repos/{owner}/{repo}/description-autofix (Step 67,
+// §26.2) -- arms/disarms the per-repo Narvi-authored-PR description-autofix
+// toggle. A SEPARATE endpoint, gated SOLELY by
+// authz.ActionToggleDescriptionAutofix (admin only, §13.3 row 6) -- see
+// UpdateRepoSettingsRequest's own doc comment for why this is not folded into the
+// shared PUT /settings endpoint.
+type UpdateDescriptionAutofixToggleRequest struct {
+	// Enabled corresponds to the JSON schema field "enabled".
+	Enabled bool `json:"enabled" yaml:"enabled" mapstructure:"enabled"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateDescriptionAutofixToggleRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["enabled"]; raw != nil && !ok {
+		return fmt.Errorf("field enabled in UpdateDescriptionAutofixToggleRequest: required")
+	}
+	type Plain UpdateDescriptionAutofixToggleRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpdateDescriptionAutofixToggleRequest(plain)
 	return nil
 }
 

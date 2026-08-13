@@ -1257,3 +1257,43 @@ func (a *Adapter) doPut(ctx context.Context, path, token string, reqBody []byte)
 
 	return body, nil
 }
+
+// doPatch performs one authenticated PATCH against a.apiBaseURL+path with
+// reqBody as the JSON request body -- the doPut-analog Step 67 (§26.2)
+// needs, since GitHub's own "update a pull request" endpoint (the ONE
+// real caller, prbody.go's own UpdatePRBody) is specifically a PATCH,
+// never a PUT or POST. Otherwise byte-for-byte the same bounded-read/
+// error-envelope-parsing shape as doGet/doPost/doPut.
+func (a *Adapter) doPatch(ctx context.Context, path, token string, reqBody []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, path, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: build patch request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: patch request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
+	if err != nil {
+		return nil, fmt.Errorf("githubapi: read patch response: %w", err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		message := "no error body"
+		var parsed githubErrorBody
+		if err := json.Unmarshal(body, &parsed); err == nil && parsed.Message != "" {
+			message = parsed.Message
+		} else if len(body) > 0 {
+			message = "error body did not match GitHub's expected error envelope"
+		}
+		return nil, &APIError{Status: resp.StatusCode, Message: message}
+	}
+
+	return body, nil
+}

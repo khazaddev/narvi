@@ -133,7 +133,7 @@ func TestComputeEligible(t *testing.T) {
 			name: "risk baseline alone (medium) prevents shippable=auto",
 			in: withVerdict(cleanInput(), func(v review.Verdict) review.Verdict {
 				v.RiskLevel = review.RiskLevelMedium
-				v.Shippable = review.ComputeShippable(v.RiskLevel, v.TestsCoverage, v.Premise)
+				v.Shippable = review.ComputeShippable(v.RiskLevel, v.TestsCoverage, v.Premise, review.DescriptionAdequacyOK)
 				return v
 			}),
 			cfg:          cfg,
@@ -144,7 +144,7 @@ func TestComputeEligible(t *testing.T) {
 			name: "the coverage floor alone (insufficient) prevents shippable=auto",
 			in: withVerdict(cleanInput(), func(v review.Verdict) review.Verdict {
 				v.TestsCoverage = review.TestsCoverageStateInsufficient
-				v.Shippable = review.ComputeShippable(v.RiskLevel, v.TestsCoverage, v.Premise)
+				v.Shippable = review.ComputeShippable(v.RiskLevel, v.TestsCoverage, v.Premise, review.DescriptionAdequacyOK)
 				return v
 			}),
 			cfg:          cfg,
@@ -155,7 +155,7 @@ func TestComputeEligible(t *testing.T) {
 			name: "the premise floor alone (questionable) prevents shippable=auto",
 			in: withVerdict(cleanInput(), func(v review.Verdict) review.Verdict {
 				v.Premise = review.PremiseStateQuestionable
-				v.Shippable = review.ComputeShippable(v.RiskLevel, v.TestsCoverage, v.Premise)
+				v.Shippable = review.ComputeShippable(v.RiskLevel, v.TestsCoverage, v.Premise, review.DescriptionAdequacyOK)
 				return v
 			}),
 			cfg:          cfg,
@@ -247,7 +247,7 @@ func TestComputeEligible_IgnoresModelSelfReportedFilesChangedAndBlastRadius(t *t
 		FilesChanged:      1,   // LIE: the model claims a tiny, one-file diff...
 		BlastRadius:       nil, // ...and claims it touches nothing sensitive at all.
 	}
-	lyingVerdict.Shippable = review.ComputeShippable(lyingVerdict.RiskLevel, lyingVerdict.TestsCoverage, lyingVerdict.Premise)
+	lyingVerdict.Shippable = review.ComputeShippable(lyingVerdict.RiskLevel, lyingVerdict.TestsCoverage, lyingVerdict.Premise, review.DescriptionAdequacyOK)
 	if lyingVerdict.Shippable != review.ShippableAuto {
 		t.Fatalf("test setup: lyingVerdict.Shippable = %v, want auto (the attack's own premise is that the server-computed Shippable legitimately computes to auto)", lyingVerdict.Shippable)
 	}

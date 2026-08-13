@@ -9,17 +9,22 @@
 -- transaction as that handler's existing review_findings upserts and
 -- outbox write. digest_summary/digest_arch_decisions/digest_stack_risks/
 -- digest_unverified_limits (Step 66, §26.1, migrations/
--- 000077_review_verdicts_digest.up.sql) forward internal/domain/
--- reviewpost.Digest verbatim -- see that migration's own doc comment for
--- why all four stay nullable at the schema level despite digest_summary
--- being APPLICATION-required on every new post.
+-- 000077_review_verdicts_digest.up.sql) and digest_description_adequacy/
+-- digest_adequacy_explanation/digest_proposed_body (Step 67, §26.2,
+-- migrations/000078_review_verdicts_description_adequacy.up.sql) forward
+-- internal/domain/reviewpost.Digest verbatim -- see those migrations' own
+-- doc comments for why all seven stay nullable at the schema level
+-- despite digest_summary/digest_description_adequacy/
+-- digest_adequacy_explanation being APPLICATION-required on every new
+-- post.
 INSERT INTO review_verdicts (
     repo_full_name, pr_number, head_sha,
     risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift,
     proposed_shippable, shippable, session_id,
-    digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits
+    digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits,
+    digest_description_adequacy, digest_adequacy_explanation, digest_proposed_body
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 RETURNING *;
 
 -- name: GetLatestReviewVerdict :one

@@ -82,14 +82,19 @@ func recordFromRow(row sqlcgen.ReviewVerdict) reviewverdict.Record {
 	}
 }
 
-// digestFromRow builds reviewverdict.Record.Digest from row's own four
-// digest_* columns (migrations/000077_review_verdicts_digest.up.sql) --
-// row.DigestSummary == nil means either "posted before Step 66 existed" or
-// (in principle, never in practice once ValidateVerdictInput's own
-// ErrEmptyDigestSummary check is live) "no digest recorded" -- either way
-// this returns the zero-value reviewpost.Digest{}, exactly like
-// unmarshalTags' own "malformed/absent degrades to an empty, safe value"
-// precedent immediately above.
+// digestFromRow builds reviewverdict.Record.Digest from row's own seven
+// digest_* columns (migrations/000077_review_verdicts_digest.up.sql,
+// 000078_review_verdicts_description_adequacy.up.sql) -- row.DigestSummary
+// == nil means either "posted before Step 66 existed" or (in principle,
+// never in practice once ValidateVerdictInput's own ErrEmptyDigestSummary
+// check is live) "no digest recorded" -- either way this returns the
+// zero-value reviewpost.Digest{}, exactly like unmarshalTags' own
+// "malformed/absent degrades to an empty, safe value" precedent
+// immediately above. row.DigestDescriptionAdequacy == nil (a pre-Step-67
+// row) degrades to review.DescriptionAdequacy(""), the SAME zero value
+// AdequacyFloor's own documented fail-conservative policy already treats
+// as ranking with DescriptionAdequacyMisleading -- never silently read as
+// "ok".
 func digestFromRow(row sqlcgen.ReviewVerdict) reviewpost.Digest {
 	var d reviewpost.Digest
 	if row.DigestSummary != nil {
@@ -100,6 +105,15 @@ func digestFromRow(row sqlcgen.ReviewVerdict) reviewpost.Digest {
 	}
 	if row.DigestUnverifiedLimits != nil {
 		d.UnverifiedLimits = *row.DigestUnverifiedLimits
+	}
+	if row.DigestDescriptionAdequacy != nil {
+		d.DescriptionAdequacy = review.DescriptionAdequacy(*row.DigestDescriptionAdequacy)
+	}
+	if row.DigestAdequacyExplanation != nil {
+		d.AdequacyExplanation = *row.DigestAdequacyExplanation
+	}
+	if row.DigestProposedBody != nil {
+		d.ProposedBody = *row.DigestProposedBody
 	}
 	d.ArchDecisions = unmarshalArchDecisions(row.DigestArchDecisions)
 	return d

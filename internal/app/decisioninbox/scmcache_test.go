@@ -139,6 +139,12 @@ func (f *fakeSCMCacheSourceControl) MergePR(context.Context, ports.MergePRSpec) 
 func (f *fakeSCMCacheSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
 	return ports.OpenPR{}, false, errors.New("fakeSCMCacheSourceControl: GetOpenPR not implemented")
 }
+func (f *fakeSCMCacheSourceControl) GetPRBody(context.Context, string, string, int, string) (string, bool, error) {
+	return "", false, errors.New("fakeSCMCacheSourceControl: GetPRBody not implemented")
+}
+func (f *fakeSCMCacheSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec) error {
+	return errors.New("fakeSCMCacheSourceControl: UpdatePRBody not implemented")
+}
 
 // TestSCMCache_ListOpenPRsForUser_IsolatesByExternalID proves the cache
 // key (spec.GitHubExternalID) is what actually isolates one user's own

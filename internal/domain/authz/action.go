@@ -301,6 +301,26 @@ const (
 	// admin-only placement applies identically regardless of that
 	// downstream distinction.
 	ActionToggleAutoRetriggerReview Action = "toggle_auto_retrigger_review"
+	// ActionToggleDescriptionAutofix covers Step 67's own per-repo opt-in
+	// (§26.2, "review digest: description adequacy + graduated
+	// remediation") for automatically rewriting a Narvi-authored PR's own
+	// body when the reviewing agent's description-adequacy check finds it
+	// drifted or misleading (repo_settings.description_autofix_enabled,
+	// migrations/000079_repo_settings_description_autofix.up.sql --
+	// internal/adapters/inbound/httpapi/reposettings.go's own
+	// PutDescriptionAutofixToggle). Admin only, this SAME row as
+	// ActionToggleSentinelAutoFix/ActionToggleAutoMerge/
+	// ActionToggleAutoRetriggerReview immediately above, by the identical
+	// reasoning those actions' own doc comments already state: §26.2
+	// itself names no RBAC tier for this toggle, but arming it changes
+	// what runs UNATTENDED on a repo's own PRs (an automatic body
+	// rewrite, no human in the loop, delivered via the outbox and
+	// re-verified server-side at delivery time) -- never a maintainer-
+	// level, per-PR judgment call the way row 5's actions are. A
+	// human-authored PR is never affected by this toggle at all (§26.2:
+	// human PRs only ever get a rendered suggestion, never a write) --
+	// this action governs ONLY the Narvi-authored, unattended-write path.
+	ActionToggleDescriptionAutofix Action = "toggle_description_autofix"
 )
 
 // AllActions is every recognized Action, in this file's own declaration
@@ -338,4 +358,5 @@ var AllActions = []Action{
 	ActionToggleAutoMerge,
 	ActionActivateWorkflowBinding,
 	ActionToggleAutoRetriggerReview,
+	ActionToggleDescriptionAutofix,
 }

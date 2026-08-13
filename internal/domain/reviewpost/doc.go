@@ -69,5 +69,14 @@
 //     content (§26.1): "what this PR does", architecture choices, and
 //     risks to the stack, carried on VerdictInput alongside its
 //     pre-existing fields, rendered (never re-parsed) by
-//     RenderVerdictComment above.
+//     RenderVerdictComment above. Extended by Step 67 (§26.2) with
+//     Digest.DescriptionAdequacy/AdequacyExplanation/ProposedBody --
+//     description-adequacy tri-state, its required explanation, and the
+//     agent's own optional PR-body rewrite proposal.
+//   - autofixbody.go: RenderAutofixBody -- Step 67's own (§26.2) graduated-
+//     remediation content: the ACTUAL new PR body text a Narvi-authored
+//     PR's description gets rewritten to (proposed body + the original
+//     preserved in a collapsed block), distinct from the read-only
+//     suggestion rendercomment.go renders inside the posted verdict
+//     comment for every PR.
 package reviewpost

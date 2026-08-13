@@ -229,6 +229,32 @@ const (
 	// slackapi.DigestPayload{ChannelID, Text}.
 	NotificationKindSlackDigest NotificationKind = "slack_digest"
 
+	// NotificationKindGitHubDescriptionAutofix is Step 67's own addition
+	// ("review digest: description adequacy + graduated remediation",
+	// §26.2): routes to internal/app/outboxworker's own description-
+	// autofix notifier, which re-verifies BOTH the Narvi-authorship of
+	// the target PR (an artifacts row of type 'pr' exists for its own
+	// URL, mirroring internal/app/decisioninbox's own isPlatformAuthored
+	// precedent) AND this repo's own descriptionAutofix flag, fresh, at
+	// delivery time -- never trusted from DescriptionAutofixPayload
+	// itself (§5.2: "never prompt-only, never trusting the agent to
+	// self-enforce") -- before composing (internal/domain/reviewpost.
+	// RenderAutofixBody) and writing (ports.SourceControl.UpdatePRBody) a
+	// new PR body, original preserved in a collapsed block. Either check
+	// failing is a silent, logged no-op, never an error: §26.2 draws no
+	// distinction between "not eligible" and "eligible but the write
+	// itself failed" in terms of retry policy, but a CONFIRMED-negative
+	// check (a real repo_settings row with the flag off, or a confirmed
+	// absence of a platform-authored artifact) must never be retried
+	// forever the way a genuine transient store error should be -- see
+	// that notifier's own Deliver doc comment for the exact distinction.
+	// See reviewverdict.go for the ONE place this Kind is ever enqueued
+	// (inside the same transaction as the triggering verdict's own
+	// review_verdicts insert), gated ONLY on Digest.ProposedBody being
+	// non-blank -- enqueuing is never itself a decision that a write will
+	// happen (DescriptionAutofixPayload's own doc comment).
+	NotificationKindGitHubDescriptionAutofix NotificationKind = "github_description_autofix"
+
 	// NotificationKindLinearDigest is Step 62's own Linear sibling of
 	// NotificationKindSlackDigest above. UNLIKE every other Linear
 	// notification this codebase sends, this one has no existing

@@ -543,7 +543,7 @@ func TestRevalidateForMerge_LyingVerdictAgainstReal300FileSensitivePR(t *testing
 		FilesChanged:      1,   // LIE: claims a trivial, one-file diff
 		BlastRadius:       nil, // LIE: claims nothing sensitive touched
 	}
-	lyingVerdict.Shippable = review.ComputeShippable(lyingVerdict.RiskLevel, lyingVerdict.TestsCoverage, lyingVerdict.Premise)
+	lyingVerdict.Shippable = review.ComputeShippable(lyingVerdict.RiskLevel, lyingVerdict.TestsCoverage, lyingVerdict.Premise, review.DescriptionAdequacyOK)
 	if lyingVerdict.Shippable != review.ShippableAuto {
 		t.Fatalf("test setup: lyingVerdict.Shippable = %v, want auto", lyingVerdict.Shippable)
 	}

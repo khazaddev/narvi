@@ -120,12 +120,13 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 		// this repo's own settings -- not just the admin-only row 6
 		// actions this endpoint originally gated on alone (see
 		// authorizeAny's own doc comment above). Step 65 (§24.5) adds
-		// ActionToggleAutoRetriggerReview to this SAME "any one of these
-		// suffices to read" list -- the same admin-only row as
+		// ActionToggleAutoRetriggerReview, and Step 67 (§26.2) adds
+		// ActionToggleDescriptionAutofix, to this SAME "any one of these
+		// suffices to read" list -- both the SAME admin-only row as
 		// ActionToggleAutoMerge, so this changes nothing about who could
-		// already read this endpoint, only documents the new toggle's own
-		// read gate explicitly.
-		if !authorizeAny(w, r, authz.Resource{}, authz.ActionConfigureBlockOnHighRisk, authz.ActionConfigureAutoApprove, authz.ActionToggleAutoMerge, authz.ActionToggleAutoRetriggerReview) {
+		// already read this endpoint, only documents each new toggle's
+		// own read gate explicitly.
+		if !authorizeAny(w, r, authz.Resource{}, authz.ActionConfigureBlockOnHighRisk, authz.ActionConfigureAutoApprove, authz.ActionToggleAutoMerge, authz.ActionToggleAutoRetriggerReview, authz.ActionToggleDescriptionAutofix) {
 			return
 		}
 
@@ -152,6 +153,7 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 			resp.SentinelAutofixEnabled = settings.SentinelAutofixEnabled
 			resp.AutoMergeEnabled = settings.AutoMergeEnabled
 			resp.AutoRetriggerReviewEnabled = settings.AutoRetriggerReviewEnabled
+			resp.DescriptionAutofixEnabled = settings.DescriptionAutofixEnabled
 			if settings.MaxAutoApproveFilesChanged != nil {
 				v := int(*settings.MaxAutoApproveFilesChanged)
 				resp.MaxAutoApproveFilesChanged = &v
@@ -426,6 +428,73 @@ func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore) http
 			SentinelAutofixEnabled:     settings.SentinelAutofixEnabled,
 			AutoMergeEnabled:           settings.AutoMergeEnabled,
 			AutoRetriggerReviewEnabled: settings.AutoRetriggerReviewEnabled,
+			DescriptionAutofixEnabled:  settings.DescriptionAutofixEnabled,
+		}
+		if settings.MaxAutoApproveFilesChanged != nil {
+			v := int(*settings.MaxAutoApproveFilesChanged)
+			resp.MaxAutoApproveFilesChanged = &v
+		}
+		if tags := autoApprovalTagsFromJSON(settings.SensitiveBlastRadiusTags); tags != nil {
+			resp.SensitiveBlastRadiusTags = &tags
+		}
+
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// PutDescriptionAutofixToggle backs PUT
+// /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2) --
+// arms/disarms the per-repo Narvi-authored-PR description-autofix
+// toggle. Gated SOLELY by authz.ActionToggleDescriptionAutofix (admin
+// only, §13.3 row 6) -- see UpdateDescriptionAutofixToggleRequest's own
+// doc comment for why this is a separate endpoint from PutRepoSettings
+// above, mirroring PutAutoRetriggerReviewToggle's own identical
+// reasoning.
+//
+// COLUMN-SCOPED write, via postgres.RepoSettingsStore.
+// UpsertDescriptionAutofixToggle -- touches ONLY
+// description_autofix_enabled, never any other repo_settings column (§62
+// review finding C5's own column-scoped-write discipline, applied here
+// from the start). This store method returns the FULL, just-written
+// repo_settings row, so no follow-up Get call is needed to render every
+// OTHER field on the response, exactly like PutAutoRetriggerReviewToggle
+// above.
+func PutDescriptionAutofixToggle(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionToggleDescriptionAutofix, authz.Resource{}) {
+			return
+		}
+
+		repoFullName, ok := repoFullNameFromRoute(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		var req restdtos.UpdateDescriptionAutofixToggleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "malformed request body")
+			return
+		}
+
+		settings, err := repoSettings.UpsertDescriptionAutofixToggle(ctx, repoFullName, req.Enabled)
+		if err != nil {
+			logger.Error("httpapi: upsert description-autofix toggle failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		resp := restdtos.RepoSettings{
+			RepoFullName:               repoFullName,
+			BlockOnHighRisk:            settings.BlockOnHighRisk,
+			SentinelAutofixEnabled:     settings.SentinelAutofixEnabled,
+			AutoMergeEnabled:           settings.AutoMergeEnabled,
+			AutoRetriggerReviewEnabled: settings.AutoRetriggerReviewEnabled,
+			DescriptionAutofixEnabled:  settings.DescriptionAutofixEnabled,
 		}
 		if settings.MaxAutoApproveFilesChanged != nil {
 			v := int(*settings.MaxAutoApproveFilesChanged)

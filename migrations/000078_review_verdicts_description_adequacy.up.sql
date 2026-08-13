@@ -1,0 +1,36 @@
+-- review_verdicts description-adequacy columns (Step 67, §26.2: "review
+-- digest: description adequacy + graduated remediation") -- the tri-state
+-- assessment (internal/domain/review.DescriptionAdequacy) plus its own
+-- required one-line explanation and the agent's optional PR-body rewrite
+-- proposal, persisted onto the SAME append-only history migrations/
+-- 000067_review_verdicts.up.sql established and migrations/
+-- 000077_review_verdicts_digest.up.sql already extended once for Step
+-- 66's own digest_summary/digest_arch_decisions/digest_stack_risks/
+-- digest_unverified_limits columns -- one further column group on that
+-- SAME table, mirroring its own established "one column per
+-- internal/domain/reviewpost.Digest field, verbatim" convention.
+--
+-- All three are NULLABLE, exactly like every other digest_* column on
+-- this table -- migrations/000077's own doc comment already states the
+-- full "why" (this table carries real history rows that predate any
+-- digest content at all, and no honest default exists for "this row
+-- predates the feature"), which applies identically here: every row
+-- INSERTed from this Step forward DOES carry non-empty
+-- digest_description_adequacy/digest_adequacy_explanation
+-- (internal/domain/reviewpost.ValidateVerdictInput's own
+-- ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation, enforced at
+-- the posting endpoint before any INSERT here ever runs) -- the NOT NULL
+-- constraint is intentionally left off anyway, matching
+-- turns.review_head_sha's own identical "nullable column, non-null in
+-- practice, enforced at the app layer, not the schema layer" precedent
+-- (migrations/000072_turns_review_head_sha.up.sql).
+--
+-- digest_proposed_body is REQUESTED, not required (internal/domain/
+-- reviewpost.Digest's own doc comment: "the agent MAY rewrite the PR
+-- body") -- most reviews propose no rewrite at all, so NULL here means
+-- exactly that ("no rewrite was proposed for this review"), never a
+-- degraded/missing-data case the way a NULL digest_summary on a
+-- pre-Step-66 row means.
+ALTER TABLE review_verdicts ADD COLUMN digest_description_adequacy TEXT;
+ALTER TABLE review_verdicts ADD COLUMN digest_adequacy_explanation TEXT;
+ALTER TABLE review_verdicts ADD COLUMN digest_proposed_body TEXT;

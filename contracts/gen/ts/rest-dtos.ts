@@ -481,7 +481,7 @@ export interface PostedFinding {
   suggestedFix?: string | null;
 }
 /**
- * Step 66's own additive extension (§26.1, 'review digest: verdict as merge readout'): the merge-readout's typed content -- 'what this PR does', architecture choices, and risks to the stack -- that fronts the rendered verdict, ahead of the pre-existing findings/coverage/docs-drift content (now collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment). REQUIRED on the request as a whole (unlike findings above): summary within it is the one field this Step hard-requires (internal/domain/reviewpost.ValidateVerdictInput's own ErrEmptyDigestSummary); archDecisions/stackRisks/unverifiedLimits are requested (the review-turn prompt asks the agent to fill them, internal/domain/review.RenderTurnPrompt) but NOT validation-enforced yet -- the full digest becomes schema-required only once a later Step (§26.3) defines the deep path this endpoint does not implement yet.
+ * Step 66's own additive extension (§26.1, 'review digest: verdict as merge readout'): the merge-readout's typed content -- 'what this PR does', architecture choices, and risks to the stack -- that fronts the rendered verdict, ahead of the pre-existing findings/coverage/docs-drift content (now collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment). Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with descriptionAdequacy/adequacyExplanation/proposedBody below. REQUIRED on the request as a whole (unlike findings above): summary/descriptionAdequacy/adequacyExplanation within it are the fields this Step hard-requires (internal/domain/reviewpost.ValidateVerdictInput); archDecisions/stackRisks/unverifiedLimits/proposedBody are requested (the review-turn prompt asks the agent to fill them, internal/domain/review.RenderTurnPrompt) but NOT validation-enforced -- the full digest becomes schema-required only once a later Step (§26.3) defines the deep path this endpoint does not implement yet.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "Digest".
@@ -503,6 +503,18 @@ export interface Digest {
    * Free-text prose: what was explicitly NOT verified (honest limits). OPTIONAL.
    */
   unverifiedLimits?: string | null;
+  /**
+   * Step 67's own addition (§26.2): the agent's own comparison of THIS SAME digest's summary (written from the diff) against the pull request's own title+body -- which stay untrusted input throughout, consumed by this comparison, never obeyed by it. Matches internal/domain/review.DescriptionAdequacy's own three values exactly. REQUIRED -- directly feeds review.ComputeShippable's own third raise-only floor (review.AdequacyFloor): 'misleading' floors Shippable at needs_human, 'ok'/'drift' impose no floor of their own.
+   */
+  descriptionAdequacy: 'ok' | 'drift' | 'misleading';
+  /**
+   * Step 67's own addition (§26.2): the tri-state's own required one-line explanation of WHY descriptionAdequacy is what it is -- REQUIRED non-blank, mirroring summary's own 'a verdict with no human-readable explanation at all defeats the point' treatment.
+   */
+  adequacyExplanation: string;
+  /**
+   * Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not validation-enforced: most reviews propose no rewrite at all. Rendered as a suggestion in the digest for every PR regardless of authorship; ALSO delivered as a real write only for a Narvi-authored PR with this repo's own descriptionAutofix flag on, both checks re-verified server-side at delivery time (never trusted from this payload alone). The PR's title is never rewritten automatically, in either case -- this field carries body content only.
+   */
+  proposedBody?: string | null;
 }
 /**
  * One structural decision the diff makes (Digest.archDecisions, §26.1's own 'Architecture choices' section): what was decided, the alternative implicitly rejected, and conformance to the repo's own conventions (its agent instructions file -- CLAUDE.md/AGENTS.md -- and its established patterns, already visible to the reviewing agent via its own sandbox checkout, never fetched or injected by this endpoint). No field here is REQUIRED (no minLength, no 'required' array): this Step requests the full digest but validation-enforces only Digest.summary above -- internal/domain/reviewpost's own doc comment (digest.go) is explicit that a submitted-but-incomplete ArchDecision is rendered honestly (its blank field(s) render as empty, never silently dropped) rather than rejected, since a stricter per-field requirement here is explicitly deferred to a later Step (§26.3/Step 68, once the deep path this endpoint does not implement yet is defined).
@@ -647,7 +659,7 @@ export interface PostEpistemicOutcomeResponse {
   turnId: string;
 }
 /**
- * GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: Step 62's auto-merge toggle and Step 65's automatic-re-review opt-in (§24.5) each added a further boolean property here, never a bespoke DTO of their own -- future toggles are expected to follow the same pattern.
+ * GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: Step 62's auto-merge toggle, Step 65's automatic-re-review opt-in (§24.5), and Step 67's description-autofix toggle (§26.2) each added a further boolean property here, never a bespoke DTO of their own -- future toggles are expected to follow the same pattern.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "RepoSettings".
@@ -694,6 +706,10 @@ export interface RepoSettings {
    * Step 65, §24.5: admin-only, per-repo, off by default -- once armed, a new commit pushed to a PR with an existing review session automatically enqueues a fresh review turn (after a trailing-edge debounce quiet period, §24.2) instead of waiting for a human's manual re-trigger. Gated by authz.ActionToggleAutoRetriggerReview, the SAME admin-only row as sentinelAutofixEnabled/autoMergeEnabled -- this automation never auto-approves anything on its own, it only ever enqueues an ordinary review turn.
    */
   autoRetriggerReviewEnabled: boolean;
+  /**
+   * Step 67, §26.2: admin-only, per-repo, off by default -- once armed, a Narvi-authored PR's own description-adequacy floor firing (drift/misleading) may result in this repo's own PR bodies being automatically rewritten (original preserved in a collapsed block), delivered via the outbox and re-verified server-side (Narvi-authorship AND this flag) at delivery time, never trusted from the posting agent alone. Gated by authz.ActionToggleDescriptionAutofix, the SAME admin-only row as sentinelAutofixEnabled/autoMergeEnabled/autoRetriggerReviewEnabled -- arming this changes what runs UNATTENDED on a repo's own PRs (an automatic body rewrite, no human in the loop), the same reasoning every sibling toggle in this row already carries. Human-authored PRs are never affected regardless of this flag -- they only ever get a rendered suggestion (Digest.proposedBody), never a write.
+   */
+  descriptionAutofixEnabled: boolean;
 }
 /**
  * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise. Step 62's own §21.2 fields (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are DELIBERATELY NOT on this shared request: this endpoint's own handler requires EVERY permission its fields collectively need (PutRepoSettings' own doc comment, httpapi/reposettings.go), which would force a maintainer authorized only for the auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates (row 6) too -- see UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its own endpoint with its own single, correctly-scoped gate.
@@ -738,6 +754,15 @@ export interface UpdateAutoMergeToggleRequest {
  * via the `definition` "UpdateAutoRetriggerReviewToggleRequest".
  */
 export interface UpdateAutoRetriggerReviewToggleRequest {
+  enabled: boolean;
+}
+/**
+ * Request body for PUT /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2) -- arms/disarms the per-repo Narvi-authored-PR description-autofix toggle. A SEPARATE endpoint, gated SOLELY by authz.ActionToggleDescriptionAutofix (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint.
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateDescriptionAutofixToggleRequest".
+ */
+export interface UpdateDescriptionAutofixToggleRequest {
   enabled: boolean;
 }
 /**

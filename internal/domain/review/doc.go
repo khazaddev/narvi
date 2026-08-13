@@ -40,13 +40,16 @@
 //     with a converted ProposedShippable — see verdict.go's own doc
 //     comment.
 //
-// # Exactly three exported functions
-// This package exports exactly three functions that compute anything:
-// CoverageFloor (the coverage floor), PremiseFloor (the premise floor), and
-// ComputeShippable (the one composition seam a later Step calls). Every
-// other identifier besides these three functions and the types/constants a
-// caller needs to construct a Verdict is unexported — there is no second
-// path to any of these three results, and no method set duplicating them.
+// # Exactly four exported functions
+// This package exports exactly four functions that compute anything:
+// CoverageFloor (the coverage floor), PremiseFloor (the premise floor),
+// AdequacyFloor (the description-adequacy floor, §26.2/Step 67 — the
+// THIRD raise-only floor, added to the original two Step 45 established),
+// and ComputeShippable (the one composition seam a later Step calls).
+// Every other identifier besides these four functions and the types/
+// constants a caller needs to construct a Verdict is unexported — there is
+// no second path to any of these four results, and no method set
+// duplicating them.
 //
 // # Ranking is an explicit table, never iota order
 // Shippable's total order (auto < needs_human < block, most to least
@@ -82,6 +85,9 @@
 //     TestsCoverageStateInsufficient (CoverageFloor, coverage.go).
 //   - PremiseState: unrecognized ranks with PremiseStateNotAPR
 //     (PremiseFloor, premise.go).
+//   - DescriptionAdequacy: unrecognized ranks with
+//     DescriptionAdequacyMisleading (AdequacyFloor, adequacy.go, §26.2/
+//     Step 67).
 //   - DocsDriftState: unrecognized ranks with DocsDriftStateFound
 //     (documented on the type itself, docsdrift.go) — inert in THIS
 //     package today; see the design call below.
@@ -161,4 +167,24 @@
 //     future doc-drift floor, should one ever be added, has a policy to
 //     match (unrecognized ranks with DocsDriftStateFound) already on
 //     record rather than invented ad hoc when that Step arrives.
+//
+//  6. (§26.2, Step 67) AdequacyFloor is the THIRD raise-only floor,
+//     composing into ComputeShippable the SAME way as the original two —
+//     max(rank), never a special case. §26.2 names only "misleading" as
+//     a floor trigger ("misleading floors Shippable at needs_human");
+//     "drift" is a real, distinct DescriptionAdequacy value but is
+//     deliberately NOT wired to raise anything on its own (AdequacyFloor's
+//     own doc comment, adequacy.go) — a stale-but-not-actively-wrong
+//     description does not, by §26.2's own words, warrant the same human
+//     gate an actively misleading one does. §26.2 also states an explicit
+//     asymmetry this package's OTHER two floors never had occasion to
+//     state (nothing about coverage or premise ever plausibly touches
+//     RiskLevel): AdequacyFloor "deliberately never inflate[s] RiskLevel"
+//     — the server computes Shippable, but never fabricates risk the
+//     model did not itself report. This is not a new rule invented for
+//     this Step; it is the same "model's own guess is structurally
+//     incapable of influencing anything but the one field this package
+//     exists to author" posture ComputeShippable's own doc comment
+//     already states for ProposedShippable, restated here because §26.2's
+//     own text calls it out by name for this specific floor.
 package review

@@ -255,6 +255,16 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		// ErrEmptyDigestSummary.
 		`"digest"`, `"archDecisions"`, `"decision"`, `"rejectedAlternative"`, `"conventionConformance"`,
 		`"stackRisks"`, `"unverifiedLimits"`,
+		// Step 67 (§26.2): "descriptionAdequacy"/"adequacyExplanation"
+		// (REQUIRED)/"proposedBody" (REQUESTED) were completely absent from
+		// this template before this Step -- an agent following only the
+		// pre-Step-67 template could never emit them, and
+		// PostReviewVerdictRequest.digest.descriptionAdequacy/
+		// adequacyExplanation are now REQUIRED, so every such call would be
+		// rejected 400 by reviewpost.ValidateVerdictInput's own
+		// ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation.
+		`"descriptionAdequacy"`, string(restdtos.DigestDescriptionAdequacyOk), string(restdtos.DigestDescriptionAdequacyDrift), string(restdtos.DigestDescriptionAdequacyMisleading),
+		`"adequacyExplanation"`, `"proposedBody"`,
 	}
 	for _, want := range fieldsAndEnums {
 		if !strings.Contains(got, want) {
@@ -282,6 +292,8 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 	*stackRisks = "example stack risks"
 	unverifiedLimits := restdtos.DigestUnverifiedLimits(new(string))
 	*unverifiedLimits = "example unverified limits"
+	proposedBody := restdtos.DigestProposedBody(new(string))
+	*proposedBody = "example proposed body"
 	example := restdtos.PostReviewVerdictRequest{
 		BlastRadius:  []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
 		DocsDrift:    restdtos.PostReviewVerdictRequestDocsDriftNone,
@@ -305,8 +317,11 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 			ArchDecisions: []restdtos.ArchDecision{
 				{Decision: archDecision, RejectedAlternative: archRejected, ConventionConformance: archConformance},
 			},
-			StackRisks:       stackRisks,
-			UnverifiedLimits: unverifiedLimits,
+			StackRisks:          stackRisks,
+			UnverifiedLimits:    unverifiedLimits,
+			DescriptionAdequacy: restdtos.DigestDescriptionAdequacyOk,
+			AdequacyExplanation: "example adequacy explanation",
+			ProposedBody:        proposedBody,
 		},
 	}
 	raw, err := json.Marshal(example)
@@ -316,6 +331,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 	for _, wantKey := range []string{
 		`"riskLevel"`, `"premise"`, `"filesChanged"`, `"testsCoverage"`, `"docsDrift"`, `"proposedShippable"`, `"blastRadius"`, `"summary"`, `"findings"`,
 		`"digest"`, `"archDecisions"`, `"decision"`, `"rejectedAlternative"`, `"conventionConformance"`, `"stackRisks"`, `"unverifiedLimits"`,
+		`"descriptionAdequacy"`, `"adequacyExplanation"`, `"proposedBody"`,
 	} {
 		if !strings.Contains(string(raw), wantKey) {
 			t.Errorf("marshaled restdtos.PostReviewVerdictRequest = %s, want it to contain key %q", raw, wantKey)

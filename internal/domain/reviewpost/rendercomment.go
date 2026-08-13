@@ -39,16 +39,24 @@ import (
 // below follows §26.1's own five-part shape (that section's own numbered
 // list) exactly:
 //
-//  1. Header, UNCHANGED (§26.1 item 1's own words: "do not change this
-//     part") -- risk badge (Risk/Premise), why-line (summary, the SAME
+//  1. Header -- risk badge (Risk/Premise), why-line (summary, the SAME
 //     pre-existing free-text parameter this function has always taken,
 //     rendered in the SAME position immediately under the header
 //     bullets), and shippable class (Shippable). §26.1 item 1 names
 //     exactly these three; TestsCoverage/DocsDrift/FilesChanged/
 //     BlastRadius, previously also rendered as flat bullets here, MOVE
-//     out of the header in this Step -- items 4 and 5 below name new,
-//     more specific homes for each of them.
-//  2. "What this PR does" -- digest.Summary, verbatim.
+//     out of the header in Step 66 -- items 4 and 5 below name new, more
+//     specific homes for each of them. §26.2/Step 67 adds ONE further
+//     header bullet -- "Description adequacy" (digest.DescriptionAdequacy
+//     + digest.AdequacyExplanation) -- immediately after Premise: the
+//     SAME structural role Premise already plays (a closed-vocabulary
+//     assessment that floors Shippable, §26.2's own third raise-only
+//     floor), so it belongs beside it, not buried in a later section.
+//  2. "What this PR does" -- digest.Summary, verbatim. §26.2/Step 67
+//     additionally renders a "Suggested PR description" block here, when
+//     digest.ProposedBody is non-blank -- see renderProposedBody's own
+//     doc comment below for why this renders for EVERY PR regardless of
+//     authorship, unconditionally on ProposedBody alone.
 //  3. "Architecture choices" -- one block per digest.ArchDecisions
 //     element (renderArchDecision below); an honest "none reported"
 //     sentence when empty, so the readout's own section skeleton stays
@@ -79,12 +87,14 @@ import (
 func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, summary, botHandle, syncedLabel string) string {
 	var b strings.Builder
 
-	// --- 1. Header (§26.1 item 1) -- risk badge, why-line, shippable
-	// class. UNCHANGED in shape from this function's own pre-Step-66
-	// rendering, minus the four fields that move to items 4/5 below.
+	// --- 1. Header (§26.1 item 1, §26.2 item 1) -- risk badge, why-line,
+	// shippable class, PLUS §26.2/Step 67's own "Description adequacy"
+	// bullet (immediately after Premise -- the same structural role: a
+	// closed-vocabulary assessment that floors Shippable).
 	b.WriteString("### Code review verdict\n\n")
 	fmt.Fprintf(&b, "- **Risk**: %s\n", v.RiskLevel)
 	fmt.Fprintf(&b, "- **Premise**: %s\n", v.Premise)
+	fmt.Fprintf(&b, "- **Description adequacy**: %s -- %s\n", digest.DescriptionAdequacy, strings.TrimSpace(digest.AdequacyExplanation))
 	fmt.Fprintf(&b, "- **Shippable**: %s (server-computed)\n\n", v.Shippable)
 
 	b.WriteString(strings.TrimSpace(summary))
@@ -94,6 +104,14 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 	b.WriteString("### What this PR does\n\n")
 	b.WriteString(strings.TrimSpace(digest.Summary))
 	b.WriteString("\n\n")
+
+	// --- §26.2/Step 67: "Suggested PR description", when the agent
+	// proposed one -- see renderProposedBody's own doc comment for why
+	// this renders unconditionally on ProposedBody alone, for every PR
+	// regardless of authorship (graduated remediation, §26.2, decides
+	// only whether a REAL WRITE also happens, never whether this
+	// rendered suggestion is visible).
+	b.WriteString(renderProposedBody(digest.ProposedBody))
 
 	// --- 3. "Architecture choices" (§26.1 item 3).
 	b.WriteString("### Architecture choices\n\n")
@@ -173,6 +191,40 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 	fmt.Fprintf(&b, "_Posted via Narvi's server-side verdict tool_ · labels synced: `%s`\n\n", syncedLabel)
 	b.WriteString(RerunGuidance(botHandle))
 
+	return b.String()
+}
+
+// renderProposedBody renders proposedBody (digest.ProposedBody, the
+// agent's own optional PR-body rewrite proposal, §26.2/Step 67) as a
+// collapsed "Suggested PR description" block -- an empty/blank
+// proposedBody renders NOTHING at all (not even a "none reported"
+// sentence, unlike Architecture choices/Risks to the stack above): most
+// reviews propose no rewrite at all (only a review that itself found the
+// description drifting or misleading has any reason to), so an empty
+// section header on every ordinary review would be pure noise, unlike
+// those other two sections, which are meant to appear on every review
+// with SOMETHING to say about them.
+//
+// Rendered UNCONDITIONALLY on authorship or the repo's own
+// descriptionAutofix flag -- §26.2's own graduated remediation is about
+// which PRs additionally get a REAL WRITE (internal/app/outboxworker's
+// own description-autofix notifier, re-verifying Narvi-authorship and the
+// flag SERVER-SIDE at delivery time, never here): this function has no
+// access to either fact (a pure function, §11, no I/O of its own) and
+// would have no principled way to gate on them even if it did -- a human
+// reading this comment benefits from seeing the suggestion either way,
+// exactly like §26.2's own "human-authored PRs: a proposed body rendered
+// in the digest" wording already states explicitly for that case, applied
+// here uniformly to every case rather than conditionally.
+func renderProposedBody(proposedBody string) string {
+	trimmed := strings.TrimSpace(proposedBody)
+	if trimmed == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("<details>\n<summary>Suggested PR description</summary>\n\n")
+	b.WriteString(trimmed)
+	b.WriteString("\n\n</details>\n\n")
 	return b.String()
 }
 

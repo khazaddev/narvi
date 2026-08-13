@@ -26,8 +26,10 @@ func TestRenderVerdictComment(t *testing.T) {
 		ArchDecisions: []reviewpost.ArchDecision{
 			{Decision: "Centralize comparisons in one helper.", RejectedAlternative: "Fix each call site independently.", ConventionConformance: "Matches CLAUDE.md's shared-helper convention."},
 		},
-		StackRisks:       "Touches every auth check path; a regression here is broad.",
-		UnverifiedLimits: "Did not verify constant-time behavior on the CI runner's own hardware.",
+		StackRisks:          "Touches every auth check path; a regression here is broad.",
+		UnverifiedLimits:    "Did not verify constant-time behavior on the CI runner's own hardware.",
+		DescriptionAdequacy: review.DescriptionAdequacyOK,
+		AdequacyExplanation: "The PR body accurately describes the constant-time comparison helper this diff adds.",
 	}
 
 	got := reviewpost.RenderVerdictComment(v, nil, digest, "Timing-unsafe comparison in verify.go.", "narvi-bot", reviewpost.LabelMediumRisk)
@@ -53,6 +55,9 @@ func TestRenderVerdictComment(t *testing.T) {
 		"### Risks to the stack",
 		digest.StackRisks,
 		digest.UnverifiedLimits,
+		"Description adequacy",
+		string(review.DescriptionAdequacyOK),
+		digest.AdequacyExplanation,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("RenderVerdictComment() missing %q in:\n%s", want, got)
@@ -443,5 +448,80 @@ func TestRenderVerdictComment_DigestSectionsBeforeAppendix(t *testing.T) {
 	}
 	if whatIdx >= archIdx || archIdx >= riskIdx || riskIdx >= detailsIdx {
 		t.Errorf("expected order [What this PR does, Architecture choices, Risks to the stack, <details>], got indices %d, %d, %d, %d in:\n%s", whatIdx, archIdx, riskIdx, detailsIdx, got)
+	}
+}
+
+// TestRenderVerdictComment_DescriptionAdequacyHeaderBullet proves §26.2/
+// Step 67's own new header bullet renders BOTH digest.DescriptionAdequacy
+// and digest.AdequacyExplanation, immediately after the Premise bullet
+// (the same structural position a closed-vocabulary, Shippable-flooring
+// assessment already occupies) and before the Shippable bullet.
+func TestRenderVerdictComment_DescriptionAdequacyHeaderBullet(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{
+		Summary:             "No changes of note.",
+		DescriptionAdequacy: review.DescriptionAdequacyMisleading,
+		AdequacyExplanation: "The PR body claims a docs-only change, but the diff also rewrites the auth token refresh path.",
+	}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	premiseIdx := strings.Index(got, "**Premise**")
+	adequacyIdx := strings.Index(got, "**Description adequacy**")
+	shippableIdx := strings.Index(got, "**Shippable**")
+	if premiseIdx == -1 || adequacyIdx == -1 || shippableIdx == -1 {
+		t.Fatalf("expected all three header bullets present, got:\n%s", got)
+	}
+	if premiseIdx >= adequacyIdx || adequacyIdx >= shippableIdx {
+		t.Errorf("expected order [Premise, Description adequacy, Shippable], got indices %d, %d, %d in:\n%s", premiseIdx, adequacyIdx, shippableIdx, got)
+	}
+	if !strings.Contains(got, string(review.DescriptionAdequacyMisleading)) {
+		t.Errorf("RenderVerdictComment() missing the tri-state value %q in:\n%s", review.DescriptionAdequacyMisleading, got)
+	}
+	if !strings.Contains(got, digest.AdequacyExplanation) {
+		t.Errorf("RenderVerdictComment() missing the adequacy explanation in:\n%s", got)
+	}
+}
+
+// TestRenderVerdictComment_ProposedBodyRendersSuggestionSection proves
+// §26.2/Step 67's own "Suggested PR description" block renders when
+// digest.ProposedBody is non-blank, inside a collapsed <details> block, so
+// a long proposed rewrite does not dominate the rendered comment.
+func TestRenderVerdictComment_ProposedBodyRendersSuggestionSection(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{
+		Summary:      "No changes of note.",
+		ProposedBody: "This PR rewrites the auth token refresh path to retry on transient network failures.",
+	}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if !strings.Contains(got, "Suggested PR description") {
+		t.Errorf("RenderVerdictComment() missing the \"Suggested PR description\" heading in:\n%s", got)
+	}
+	if !strings.Contains(got, digest.ProposedBody) {
+		t.Errorf("RenderVerdictComment() missing the proposed body text in:\n%s", got)
+	}
+
+	openIdx := strings.Index(got, "<summary>Suggested PR description</summary>")
+	proposedIdx := strings.Index(got, digest.ProposedBody)
+	closeIdx := strings.LastIndex(got, "</details>")
+	if openIdx == -1 || proposedIdx == -1 || closeIdx == -1 || openIdx >= proposedIdx || proposedIdx >= closeIdx {
+		t.Errorf("expected the proposed body to render INSIDE a collapsed <details> block, got:\n%s", got)
+	}
+}
+
+// TestRenderVerdictComment_EmptyProposedBodyOmitsSuggestionSection proves
+// the common case (no rewrite proposed, ProposedBody empty -- most
+// reviews) never renders a dangling "Suggested PR description" heading
+// with nothing under it.
+func TestRenderVerdictComment_EmptyProposedBodyOmitsSuggestionSection(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{Summary: "No changes of note."}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if strings.Contains(got, "Suggested PR description") {
+		t.Errorf("RenderVerdictComment() rendered a \"Suggested PR description\" section for an empty ProposedBody:\n%s", got)
 	}
 }

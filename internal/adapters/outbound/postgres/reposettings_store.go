@@ -117,6 +117,19 @@ func (s *RepoSettingsStore) UpsertAutoRetriggerReviewToggle(ctx context.Context,
 	})
 }
 
+// UpsertDescriptionAutofixToggle idempotently creates-or-updates
+// repoFullName's §26.2 per-repo opt-in -- COLUMN-SCOPED (mirrors
+// UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle's own identical
+// shape, §62 review finding C5's pattern generalized to this further,
+// independently-gated toggle): touches ONLY description_autofix_enabled,
+// leaving every other repo_settings column completely untouched.
+func (s *RepoSettingsStore) UpsertDescriptionAutofixToggle(ctx context.Context, repoFullName string, enabled bool) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertDescriptionAutofixToggle(ctx, sqlcgen.UpsertDescriptionAutofixToggleParams{
+		RepoFullName:              repoFullName,
+		DescriptionAutofixEnabled: enabled,
+	})
+}
+
 // ListAutoMergeEnabled returns every repo_settings row with
 // auto_merge_enabled = true -- internal/app/automerge's own per-tick
 // repo enumeration (see ListAutoMergeEnabledRepos' own generated doc

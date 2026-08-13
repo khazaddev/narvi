@@ -102,6 +102,12 @@ func (f *fakeSentinelAutoFixSourceControl) CreateBranch(_ context.Context, spec 
 func (f *fakeSentinelAutoFixSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
 	return ports.OpenPR{}, false, errors.New("fakeSentinelAutoFixSourceControl: GetOpenPR not implemented")
 }
+func (f *fakeSentinelAutoFixSourceControl) GetPRBody(context.Context, string, string, int, string) (string, bool, error) {
+	return "", false, errors.New("fakeSentinelAutoFixSourceControl: GetPRBody not implemented")
+}
+func (f *fakeSentinelAutoFixSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec) error {
+	return errors.New("fakeSentinelAutoFixSourceControl: UpdatePRBody not implemented")
+}
 
 func (f *fakeSentinelAutoFixSourceControl) createBranchCallCount() int {
 	f.mu.Lock()

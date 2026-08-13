@@ -213,6 +213,34 @@ type UpdateFileContentSpec struct {
 	Token string
 }
 
+// UpdatePRBodySpec is what SourceControl.UpdatePRBody (Step 67, §26.2's
+// own "graduated remediation") needs to overwrite one pull request's own
+// body field directly, via the source-control host's own pull-request
+// update endpoint. Body is the caller's own ALREADY-COMPOSED new body
+// text (internal/domain/reviewpost.RenderAutofixBody's result) -- this
+// port's implementation never composes content itself, mirroring
+// UpdateFileContentSpec.Content's own identical "the caller has already
+// computed the resulting content" discipline immediately above. Never
+// touches the PR's title (§26.2: "the title is never rewritten
+// automatically") -- this spec carries no title field at all, so there is
+// structurally nothing for a caller to even pass one through.
+type UpdatePRBodySpec struct {
+	Owner  string
+	Repo   string
+	Number int
+	Body   string
+	// Token authenticates this write -- Step 67's own one real caller
+	// (internal/app/outboxworker's own description-autofix notifier) is a
+	// SYSTEM-INITIATED action with no per-PR human creator to attribute it
+	// to (the target PR may have been opened by a different session
+	// entirely than the one whose verdict triggered this rewrite), so this
+	// is always the deployment's own static bot credential
+	// (platform.Config.GitHubBotToken) -- never a per-user OAuth token,
+	// mirroring pushpr.go's own createSentinelFixPRBestEffort precedent
+	// for the identical "no human creator to attribute to" situation.
+	Token string
+}
+
 // RegisterPRStackSpec is what SourceControl.RegisterPRStack (Step 48,
 // §17.2/§17.6) needs to register an already-open origin+fix PR pair as a
 // real GitHub stack, once both exist.
@@ -770,6 +798,34 @@ type SourceControl interface {
 	// (reviewfindings.go's own ApplySuggestion handler) surfaces that as a
 	// 409, never retries or auto-resolves.
 	UpdateFileContent(ctx context.Context, spec UpdateFileContentSpec) (commitSHA string, err error)
+
+	// GetPRBody fetches owner/repo#number's CURRENT body text directly
+	// (Step 67, §26.2) -- the description-autofix notifier's own "read
+	// the live body before overwriting it" step, so the original text it
+	// preserves (internal/domain/reviewpost.RenderAutofixBody) is always
+	// this PR's REAL current body, never the reviewing agent's own
+	// possibly-stale copy of it (title+body are untrusted input, §5.2,
+	// and may have changed since the agent last saw them). found=false,
+	// err=nil means the PR does not exist, or is no longer open/reachable
+	// -- a legitimate, expected outcome (mirrors GetOpenPR's own identical
+	// "exists=false, err=nil for a confirmed-absent resource" discipline),
+	// never conflated with a genuine API failure (err != nil). Errors are
+	// plain, exactly like GetFileContent/GetOpenPR above.
+	GetPRBody(ctx context.Context, owner, repo string, number int, token string) (body string, found bool, err error)
+
+	// UpdatePRBody overwrites owner/repo#number's own body field with
+	// spec.Body (Step 67, §26.2) -- the description-autofix notifier's
+	// own real write, called ONLY after this port's caller has already
+	// (a) re-verified server-side that the target PR is Narvi-authored
+	// AND this repo's own descriptionAutofix flag is on (§5.2: never
+	// trusted from the caller alone), and (b) composed spec.Body itself
+	// (this method never composes content, mirroring UpdateFileContent's
+	// own identical "caller already computed the resulting content"
+	// discipline). NEVER touches the PR's title -- see UpdatePRBodySpec's
+	// own doc comment for why that is structurally impossible here, not
+	// merely a convention this method happens to follow. Errors are
+	// plain, exactly like UpdateFileContent above.
+	UpdatePRBody(ctx context.Context, spec UpdatePRBodySpec) error
 
 	// RegisterPRStack groups spec.PRNumbers into a real GitHub stack (Step
 	// 48, §17.2/§17.6) -- a SECOND call, made only after every named PR

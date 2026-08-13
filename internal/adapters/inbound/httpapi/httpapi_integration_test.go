@@ -523,6 +523,14 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(rig.repoSettings))
 	})
+	// /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2) --
+	// mounted behind auth.Middleware, exactly like cmd/control-plane/
+	// main.go's own wiring (see reposettings.go's own
+	// PutDescriptionAutofixToggle doc comment).
+	router.Route("/api/repos/{owner}/{repo}/description-autofix", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Put("/", httpapi.PutDescriptionAutofixToggle(rig.repoSettings))
+	})
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1) --
 	// mounted behind auth.Middleware exactly like cmd/control-plane/
 	// main.go's own wiring (see reviewanalytics.go's own doc comment).

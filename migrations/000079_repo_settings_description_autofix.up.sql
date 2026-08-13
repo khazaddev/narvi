@@ -1,0 +1,35 @@
+-- description_autofix_enabled: Step 67's own admin-only, per-repo toggle
+-- (§26.2: "the agent may rewrite the PR body behind a per-repo
+-- descriptionAutofix flag -- default off"). Added as a further column on
+-- the SAME repo_settings table Step 47 already shaped for exactly this
+-- (migrations/000044_repo_settings.up.sql's own doc comment: "future
+-- Steps... are each expected to add a further boolean property here,
+-- never a bespoke DTO of their own") -- NOT a new table, NOT a new
+-- endpoint family (internal/adapters/inbound/httpapi/reposettings.go gets
+-- one further column-scoped PUT handler, mirroring
+-- PutAutoRetriggerReviewToggle exactly, not a parallel mechanism).
+--
+-- RBAC tier (§26.2 does not itself name one -- reasoned here, matching
+-- CLAUDE.md's own "state your reasoning" instruction for an
+-- underspecified call): admin-only, the SAME row as
+-- sentinel_autofix_enabled/auto_merge_enabled/
+-- auto_retrigger_review_enabled (authz.ActionToggleDescriptionAutofix,
+-- internal/domain/authz/action.go) -- every ONE of those three sibling
+-- toggles is admin-only for the identical, explicitly-stated reason
+-- (each one's own doc comment): "arming this toggle changes what runs
+-- UNATTENDED on a repo's own PRs... never a maintainer-level, per-PR
+-- judgment call the way row 5's actions are". Arming descriptionAutofix
+-- is a textbook match for that exact reasoning -- it results in a PR
+-- BODY being automatically rewritten with no human in the loop, the same
+-- class of unattended action as an automatic merge, an automatic
+-- sentinel-fix PR, or an automatic re-review dispatch, never a per-PR
+-- judgment call a maintainer makes about ONE specific PR (row 5's own
+-- shape, e.g. ActionEditReviewVerdict/ActionRetriggerReview).
+--
+-- DEFAULT false: a repo's own settings row (or its total absence, this
+-- table's own established fail-closed-on-missing-row precedent) always
+-- means this automation is OFF unless an admin has explicitly armed it
+-- -- matching every sibling toggle's own identical default-false
+-- precedent. §26.2 is explicit this is itself the default ("default
+-- off"), not merely this table's own general convention.
+ALTER TABLE repo_settings ADD COLUMN description_autofix_enabled BOOLEAN NOT NULL DEFAULT false;

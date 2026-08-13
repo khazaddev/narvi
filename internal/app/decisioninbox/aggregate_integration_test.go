@@ -216,6 +216,12 @@ func (f *fakeDecisionInboxSourceControl) GetOpenPR(_ context.Context, owner, rep
 	pr, ok := f.getOpenPRByKey[key]
 	return pr, ok, nil
 }
+func (f *fakeDecisionInboxSourceControl) GetPRBody(context.Context, string, string, int, string) (string, bool, error) {
+	return "", false, errors.New("fakeDecisionInboxSourceControl: GetPRBody not implemented")
+}
+func (f *fakeDecisionInboxSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec) error {
+	return errors.New("fakeDecisionInboxSourceControl: UpdatePRBody not implemented")
+}
 
 func strPtr(s string) *string { return &s }
 
@@ -241,7 +247,7 @@ func seedAutoApprovedVerdict(ctx context.Context, t *testing.T, pool *pgxpool.Po
 		ProposedShippable: review.ProposedShippableAuto,
 		FilesChanged:      3,
 	}
-	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
 	if _, err := appreviewverdict.Insert(ctx, store, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}); err != nil {
 		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
 	}

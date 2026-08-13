@@ -128,6 +128,12 @@ func (f *fakeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec
 func (f *fakeSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
 	return ports.OpenPR{}, false, errors.New("fakeSourceControl: GetOpenPR not implemented")
 }
+func (f *fakeSourceControl) GetPRBody(context.Context, string, string, int, string) (string, bool, error) {
+	return "", false, errors.New("fakeSourceControl: GetPRBody not implemented")
+}
+func (f *fakeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec) error {
+	return errors.New("fakeSourceControl: UpdatePRBody not implemented")
+}
 
 // ListMergedBetween (Step 50, "release PR review", §15.2) is never
 // reached from this package either -- same "not implemented" precedent

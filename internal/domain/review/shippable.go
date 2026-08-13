@@ -76,13 +76,13 @@ var shippableRank = map[Shippable]int{
 }
 
 // rank returns s's position in shippableRank's explicit total order. Every
-// producer in this package (baselineFromRisk, CoverageFloor, PremiseFloor)
-// only ever returns one of the three legal Shippable consts, so this
-// branch is never exercised by a legitimate call within this package
-// today — it exists purely as defense in depth, so that IF a future change
-// ever pipes an unvalidated Shippable value through rank() (rather than
-// through one of the three producer functions above), the result fails
-// conservative: ranked one above the strictest legal value (ShippableBlock
+// producer in this package (baselineFromRisk, CoverageFloor, PremiseFloor,
+// AdequacyFloor) only ever returns one of the three legal Shippable
+// consts, so this branch is never exercised by a legitimate call within
+// this package today — it exists purely as defense in depth, so that IF a
+// future change ever pipes an unvalidated Shippable value through rank()
+// (rather than through one of the producer functions above), the result
+// fails conservative: ranked one above the strictest legal value (ShippableBlock
 // itself), never silently read as rank 0 ("auto") via a bare map-lookup
 // miss. maxShippable below never reconstructs a NEW Shippable value from a
 // rank number — it always returns one of its two INPUT values verbatim —
@@ -139,14 +139,22 @@ func baselineFromRisk(r RiskLevel) Shippable {
 }
 
 // ComputeShippable is domain/review's single exported pure function for
-// deriving Shippable (§8.2/Step 45) — the ONLY sanctioned way any caller
-// computes an authoritative Shippable value. It is a pure function of the
-// reviewer's own RiskLevel plus the two independent raise-only floors
-// (coverage, premise), composed via max(rank):
+// deriving Shippable (§8.2/Step 45, extended by §26.2/Step 67) — the ONLY
+// sanctioned way any caller computes an authoritative Shippable value. It
+// is a pure function of the reviewer's own RiskLevel plus the THREE
+// independent raise-only floors (coverage, premise, description
+// adequacy), composed via max(rank):
 //
 //	result = max(rank(baselineFromRisk(risk)),
 //	             rank(CoverageFloor(coverage)),
-//	             rank(PremiseFloor(premise)))
+//	             rank(PremiseFloor(premise)),
+//	             rank(AdequacyFloor(adequacy)))
+//
+// adequacy (§26.2, Step 67) is this function's own THIRD floor input,
+// added alongside the original two (coverage, premise) Step 45 already
+// established — see AdequacyFloor's own doc comment (adequacy.go) for its
+// full policy, and this function's own closing paragraph below for why
+// RiskLevel (untouched by any floor) is unaffected by this addition.
 //
 // Deliberately NOT a parameter here: any model-proposed value
 // (ProposedShippable). This is not an oversight — it is the whole point of
@@ -159,18 +167,28 @@ func baselineFromRisk(r RiskLevel) Shippable {
 // with Verdict's own ProposedShippable field, converted or otherwise — see
 // Verdict's own doc comment (verdict.go).
 //
-// RAISE-ONLY property: for any (risk, coverage, premise) input, this
-// function never returns a Shippable ranked BELOW baselineFromRisk(risk)
+// RAISE-ONLY property: for any (risk, coverage, premise, adequacy) input,
+// this function never returns a Shippable ranked BELOW baselineFromRisk(risk)
 // alone, nor below CoverageFloor(coverage) alone, nor below
-// PremiseFloor(premise) alone — max() is monotonic in each argument by
-// construction, and every producer above returns one of exactly three
-// legal Shippable values, so this composition can never observe (let
-// alone propagate) an out-of-band rank. See
-// TestComputeShippable_RaiseOnly (shippable_test.go) for this property
-// proved exhaustively across the full input matrix.
-func ComputeShippable(risk RiskLevel, coverage TestsCoverageState, premise PremiseState) Shippable {
+// PremiseFloor(premise) alone, nor below AdequacyFloor(adequacy) alone —
+// max() is monotonic in each argument by construction, and every producer
+// above returns one of exactly three legal Shippable values, so this
+// composition can never observe (let alone propagate) an out-of-band
+// rank. See TestComputeShippable_RaiseOnly (shippable_test.go) for this
+// property proved exhaustively across the full input matrix.
+//
+// RiskLevel is NEVER touched by this function, or by AdequacyFloor, or by
+// any other floor — §26.2 states this asymmetry explicitly ("deliberately
+// never inflating RiskLevel... the server computes Shippable, but never
+// fabricates risk the model did not report"): RiskLevel is carried on
+// Verdict verbatim from the reviewer's own self-reported assessment,
+// upstream of and structurally unrelated to this function's own Shippable
+// computation — see TestComputeShippable_AdequacyFloorNeverTouchesRiskLevel
+// (shippable_test.go) for the pin.
+func ComputeShippable(risk RiskLevel, coverage TestsCoverageState, premise PremiseState, adequacy DescriptionAdequacy) Shippable {
 	result := baselineFromRisk(risk)
 	result = maxShippable(result, CoverageFloor(coverage))
 	result = maxShippable(result, PremiseFloor(premise))
+	result = maxShippable(result, AdequacyFloor(adequacy))
 	return result
 }

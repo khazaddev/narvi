@@ -54,6 +54,12 @@ func (f *fakeAutoMergeSourceControl) GetOpenPR(_ context.Context, owner, repo st
 	pr, ok := f.prsByKey[key]
 	return pr, ok, nil
 }
+func (f *fakeAutoMergeSourceControl) GetPRBody(context.Context, string, string, int, string) (string, bool, error) {
+	return "", false, errors.New("fakeAutoMergeSourceControl: GetPRBody not implemented")
+}
+func (f *fakeAutoMergeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec) error {
+	return errors.New("fakeAutoMergeSourceControl: UpdatePRBody not implemented")
+}
 
 func (f *fakeAutoMergeSourceControl) MergePR(_ context.Context, spec ports.MergePRSpec) (string, error) {
 	f.mu.Lock()
@@ -198,7 +204,7 @@ func (rs *automergeTestRig) seedEligiblePR(ctx context.Context, t *testing.T, re
 		ProposedShippable: review.ProposedShippableAuto,
 		FilesChanged:      3,
 	}
-	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
 	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdict.ReviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}); err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}
