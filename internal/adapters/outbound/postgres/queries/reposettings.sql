@@ -90,6 +90,21 @@ ON CONFLICT (repo_full_name)
 DO UPDATE SET auto_retrigger_review_enabled = EXCLUDED.auto_retrigger_review_enabled, updated_at = now()
 RETURNING *;
 
+-- name: UpsertDescriptionAutofixToggle :one
+-- Step 67's own admin-only, per-repo opt-in (§26.2, migrations/
+-- 000079_repo_settings_description_autofix.up.sql) -- idempotent
+-- create-or-update of ONLY description_autofix_enabled, mirroring
+-- UpsertAutoMergeToggle/UpsertAutoRetriggerReviewToggle's own identical
+-- column-scoped shape above (§62 review finding C5's fix, generalized to
+-- this further, independently-gated toggle): every other repo_settings
+-- column is left COMPLETELY untouched, so a concurrent write to any of
+-- them can never race with this one at the database level.
+INSERT INTO repo_settings (repo_full_name, description_autofix_enabled, updated_at)
+VALUES ($1, $2, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET description_autofix_enabled = EXCLUDED.description_autofix_enabled, updated_at = now()
+RETURNING *;
+
 -- name: ListAutoMergeEnabledRepos :many
 -- internal/app/automerge's own per-tick repo enumeration (§21.2 stage
 -- 2): every repo an admin has armed -- mirrors this table's own

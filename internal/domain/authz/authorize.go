@@ -183,6 +183,12 @@ var matrix = map[Action]actionRule{
 	// ActionToggleAutoMerge immediately above (action.go's own doc
 	// comment).
 	ActionToggleAutoRetriggerReview: {allow: roles(RoleAdmin)},
+	// Step 67 (§26.2): arming the per-repo description-autofix opt-in --
+	// same row, same reasoning as ActionToggleSentinelAutoFix/
+	// ActionToggleAutoMerge/ActionToggleAutoRetriggerReview immediately
+	// above (action.go's own doc comment: §26.2 names no tier itself,
+	// reasoned here to match every sibling unattended-write toggle).
+	ActionToggleDescriptionAutofix: {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against

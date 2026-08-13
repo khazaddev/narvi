@@ -1659,6 +1659,7 @@ type RepoSetting struct {
 	MaxAutoApproveFilesChanged *int32             `json:"max_auto_approve_files_changed"`
 	SensitiveBlastRadiusTags   []byte             `json:"sensitive_blast_radius_tags"`
 	AutoRetriggerReviewEnabled bool               `json:"auto_retrigger_review_enabled"`
+	DescriptionAutofixEnabled  bool               `json:"description_autofix_enabled"`
 }
 
 type ReviewFalsePositivePattern struct {
@@ -1697,24 +1698,27 @@ type ReviewFinding struct {
 }
 
 type ReviewVerdict struct {
-	ID                     pgtype.UUID        `json:"id"`
-	RepoFullName           string             `json:"repo_full_name"`
-	PrNumber               int32              `json:"pr_number"`
-	HeadSha                string             `json:"head_sha"`
-	RiskLevel              string             `json:"risk_level"`
-	Premise                string             `json:"premise"`
-	BlastRadius            []byte             `json:"blast_radius"`
-	FilesChanged           int32              `json:"files_changed"`
-	TestsCoverage          string             `json:"tests_coverage"`
-	DocsDrift              string             `json:"docs_drift"`
-	ProposedShippable      string             `json:"proposed_shippable"`
-	Shippable              string             `json:"shippable"`
-	SessionID              pgtype.UUID        `json:"session_id"`
-	CreatedAt              pgtype.Timestamptz `json:"created_at"`
-	DigestSummary          *string            `json:"digest_summary"`
-	DigestArchDecisions    []byte             `json:"digest_arch_decisions"`
-	DigestStackRisks       *string            `json:"digest_stack_risks"`
-	DigestUnverifiedLimits *string            `json:"digest_unverified_limits"`
+	ID                        pgtype.UUID        `json:"id"`
+	RepoFullName              string             `json:"repo_full_name"`
+	PrNumber                  int32              `json:"pr_number"`
+	HeadSha                   string             `json:"head_sha"`
+	RiskLevel                 string             `json:"risk_level"`
+	Premise                   string             `json:"premise"`
+	BlastRadius               []byte             `json:"blast_radius"`
+	FilesChanged              int32              `json:"files_changed"`
+	TestsCoverage             string             `json:"tests_coverage"`
+	DocsDrift                 string             `json:"docs_drift"`
+	ProposedShippable         string             `json:"proposed_shippable"`
+	Shippable                 string             `json:"shippable"`
+	SessionID                 pgtype.UUID        `json:"session_id"`
+	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+	DigestSummary             *string            `json:"digest_summary"`
+	DigestArchDecisions       []byte             `json:"digest_arch_decisions"`
+	DigestStackRisks          *string            `json:"digest_stack_risks"`
+	DigestUnverifiedLimits    *string            `json:"digest_unverified_limits"`
+	DigestDescriptionAdequacy *string            `json:"digest_description_adequacy"`
+	DigestAdequacyExplanation *string            `json:"digest_adequacy_explanation"`
+	DigestProposedBody        *string            `json:"digest_proposed_body"`
 }
 
 type Sandbox struct {

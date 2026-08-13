@@ -98,7 +98,7 @@ func TestFetch_Success_DiffPinnedToExactlyWhatGetPullRequestReported(t *testing.
 	t.Parallel()
 
 	fetcher := &fakeFetcher{
-		pr:   githubapi.PullRequest{HeadRef: "feature-x", HeadSHA: "resolved-head-sha", BaseRef: "main"},
+		pr:   githubapi.PullRequest{HeadRef: "feature-x", HeadSHA: "resolved-head-sha", BaseRef: "main", Title: "Fix the retry loop", Body: "Retries now back off exponentially."},
 		diff: "diff --git a/x b/x\n",
 	}
 
@@ -115,6 +115,12 @@ func TestFetch_Success_DiffPinnedToExactlyWhatGetPullRequestReported(t *testing.
 	}
 	if got.HeadSHA != "resolved-head-sha" {
 		t.Errorf("HeadSHA = %q, want %q", got.HeadSHA, "resolved-head-sha")
+	}
+	if got.Title != "Fix the retry loop" {
+		t.Errorf("Title = %q, want %q", got.Title, "Fix the retry loop")
+	}
+	if got.Body != "Retries now back off exponentially." {
+		t.Errorf("Body = %q, want %q", got.Body, "Retries now back off exponentially.")
 	}
 	if fetcher.prCalls != 1 {
 		t.Errorf("prCalls = %d, want 1", fetcher.prCalls)
@@ -289,6 +295,52 @@ func TestFetch_DiffFetchFails_HeadSHAStillReported(t *testing.T) {
 	}
 	if got.HeadSHA != "resolved-head-sha" {
 		t.Errorf("HeadSHA = %q, want %q -- a diff-fetch failure must not erase an already-confirmed head sha", got.HeadSHA, "resolved-head-sha")
+	}
+}
+
+// TestFetch_TitleBodyThreadedThrough_EvenWhenDiffFetchFails is the
+// adversarial-review fix's own regression test (§26.2/Step 67's own
+// follow-up, review.PreFetchedContext.Title's own doc comment): Title/Body
+// come from the SAME already-succeeded GetPullRequest call HeadSHA itself
+// is resolved from, so a LATER diff-fetch failure must not erase them --
+// mirrors TestFetch_DiffFetchFails_HeadSHAStillReported's own identical
+// "HeadSHA/Title/Body are independent of the diff fetch's own outcome"
+// property.
+func TestFetch_TitleBodyThreadedThrough_EvenWhenDiffFetchFails(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &fakeFetcher{
+		pr:      githubapi.PullRequest{HeadSHA: "resolved-head-sha", BaseRef: "main", Title: "Fix the retry loop", Body: "Retries now back off exponentially."},
+		diffErr: errors.New("network exploded"),
+	}
+
+	got := reviewcontext.Fetch(context.Background(), discardLogger(), fetcher, platform.DefaultTimeouts(), "acme", "widgets", 42, "gho_bottoken", nil)
+
+	if got.Title != "Fix the retry loop" {
+		t.Errorf("Title = %q, want %q -- a diff-fetch failure must not erase an already-fetched title", got.Title, "Fix the retry loop")
+	}
+	if got.Body != "Retries now back off exponentially." {
+		t.Errorf("Body = %q, want %q -- a diff-fetch failure must not erase an already-fetched body", got.Body, "Retries now back off exponentially.")
+	}
+}
+
+// TestFetch_GetPullRequestFails_TitleBodyStayEmpty proves the SAME
+// graceful-degradation precedent Diff/HeadSHA already establish
+// (TestFetch_GetPullRequestFails_DiffNeverAttempted_OnlyKnownStackSurvives)
+// extends to Title/Body: a GetPullRequest failure leaves them at their own
+// honest empty zero value, never a stale or fabricated value.
+func TestFetch_GetPullRequestFails_TitleBodyStayEmpty(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &fakeFetcher{prErr: errors.New("network exploded")}
+
+	got := reviewcontext.Fetch(context.Background(), discardLogger(), fetcher, platform.DefaultTimeouts(), "acme", "widgets", 42, "gho_bottoken", nil)
+
+	if got.Title != "" {
+		t.Errorf("Title = %q, want empty on a GetPullRequest failure", got.Title)
+	}
+	if got.Body != "" {
+		t.Errorf("Body = %q, want empty on a GetPullRequest failure", got.Body)
 	}
 }
 

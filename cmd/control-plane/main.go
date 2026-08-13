@@ -1167,6 +1167,15 @@ func serve() error {
 		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(repoSettingsStore))
 	})
 
+	// /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2): a
+	// further, separately-gated route mirroring auto-retrigger-review
+	// above -- see httpapi/reposettings.go's own
+	// PutDescriptionAutofixToggle doc comment.
+	router.Route("/api/repos/{owner}/{repo}/description-autofix", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutDescriptionAutofixToggle(repoSettingsStore))
+	})
+
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):
 	// read-only GET over the three analytics rollups (timeseries,
 	// top-risk-driver breakdown, "Review finding outcomes" KPI) -- see
@@ -1364,6 +1373,13 @@ func serve() error {
 	// sourceControl/cfg.GitHubBotToken every other GitHub-flavored
 	// notifier above already uses.
 	releaseManifestNotifier := githubapi.NewReleaseManifestNotifier(sourceControl, cfg.GitHubBotToken)
+	// descriptionAutofixNotifier (Step 67, "review digest: description
+	// adequacy + graduated remediation", §26.2) re-verifies Narvi-
+	// authorship and this repo's own descriptionAutofix flag, fresh, at
+	// delivery time, then rewrites a Narvi-authored PR's own body -- the
+	// SAME repoSettingsStore/artifactStore/sourceControl/cfg.GitHubBotToken
+	// every other caller above already uses.
+	descriptionAutofixNotifier := outboxworker.NewDescriptionAutofixNotifier(repoSettingsStore, artifactStore, sourceControl, cfg.GitHubBotToken, cfg.Timeouts)
 
 	// outboxStore is constructed earlier, alongside linearAgentSessionStore
 	// -- see that construction site's own doc comment for why.
@@ -1378,6 +1394,11 @@ func serve() error {
 		ports.NotificationKindSentinelAutoFix:   sentinelAutoFixNotifier,
 		ports.NotificationKindHandoffSentinel:   handoffNotifier,
 		ports.NotificationKindReleaseManifest:   releaseManifestNotifier,
+		// Step 67 ("review digest: description adequacy + graduated
+		// remediation", §26.2): re-verifies Narvi-authorship and this
+		// repo's own descriptionAutofix flag, fresh, at delivery time,
+		// then rewrites a Narvi-authored PR's own body.
+		ports.NotificationKindGitHubDescriptionAutofix: descriptionAutofixNotifier,
 		// Step 56 ("workflow HITL gate + circuit breaker", §25.9): a
 		// workflow step awaiting decision, or a run escalating to
 		// needs_review, notifies a human via whichever of these three the

@@ -57,6 +57,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -480,6 +481,65 @@ func PostReviewVerdict(
 			return
 		}
 
+		// §26.2/Step 67: enqueue exactly one further outbox row whenever
+		// the agent proposed a PR-body rewrite (Digest.ProposedBody
+		// non-blank) AND the floor that rewrite is meant to remediate
+		// actually fired (Digest.DescriptionAdequacy is "drift" or
+		// "misleading", never "ok") -- adversarial-review fix: BEFORE this
+		// fix, only the non-blank check ran here, so a verdict reporting
+		// an ACCURATE description (adequacy "ok") plus an unsolicited,
+		// unrelated stylistic proposedBody would still silently enqueue a
+		// write that collapses an already-accurate, human-visible
+		// description behind a rewrite -- on a verdict that had just
+		// certified it adequate. DescriptionAdequacy is already validated
+		// to one of review's own three closed enum values by
+		// reviewpost.ValidateVerdictInput (above, before this transaction
+		// even opens), so "!= review.DescriptionAdequacyOK" here is
+		// exactly "== drift || == misleading", never a garbled/missing
+		// value slipping through.
+		//
+		// Both preconditions checked HERE are themselves NEVER a decision
+		// that a write will actually happen: the Narvi-authorship check
+		// and this repo's own descriptionAutofix flag are BOTH
+		// re-verified server-side, fresh, at DELIVERY time by the notifier
+		// (internal/app/outboxworker's own description-autofix notifier,
+		// §5.2: "never prompt-only, never trusting the agent to
+		// self-enforce") -- neither of THOSE checks is performed here, so
+		// this handler needs no repoSettings/artifacts read of its own for
+		// this candidate path (DescriptionAutofixPayload's own doc
+		// comment). DescriptionAdequacy, unlike authorship/the flag, is
+		// ALSO carried onto the payload verbatim (never re-derived) and
+		// re-asserted at delivery time as a THIRD, defense-in-depth check
+		// -- see DescriptionAutofixPayload.DescriptionAdequacy's own doc
+		// comment for why this ONE fact travels rather than being
+		// re-looked-up. Enqueued in the SAME transaction as every other
+		// write above, so a crash between them can never leave this
+		// candidate silently dropped.
+		if input.Digest.DescriptionAdequacy != review.DescriptionAdequacyOK && strings.TrimSpace(input.Digest.ProposedBody) != "" {
+			autofixPayload, marshalErr := json.Marshal(ports.DescriptionAutofixPayload{
+				Owner:               owner,
+				Repo:                repo,
+				PRNumber:            int(prSession.PrNumber),
+				ProposedBody:        input.Digest.ProposedBody,
+				DescriptionAdequacy: input.Digest.DescriptionAdequacy,
+			})
+			if marshalErr != nil {
+				logger.Error("httpapi: review-verdict: marshal description-autofix outbox payload failed", "error", marshalErr)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			if _, err := outbox.WithTx(tx).Create(ctx, sqlcgen.CreateOutboxEntryParams{
+				SessionID:     sessionID,
+				Kind:          string(ports.NotificationKindGitHubDescriptionAutofix),
+				Payload:       autofixPayload,
+				CorrelationID: correlationID,
+			}); err != nil {
+				logger.Error("httpapi: review-verdict: enqueue description-autofix outbox entry failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+		}
+
 		if autoFixCandidate {
 			claim, claimErr := sentinelFixes.WithTx(tx).Claim(ctx, prSession.RepoFullName, prSession.PrNumber, sessionID, originHeadBranch)
 			if claimErr != nil {
@@ -567,30 +627,42 @@ func findingInputFromWire(f restdtos.PostedFinding) reviewpost.FindingInput {
 }
 
 // digestInputFromWire converts one restdtos.Digest (the wire shape,
-// Step 66, §26.1) into reviewpost.Digest -- the one place this conversion
-// happens, mirroring findingInputFromWire's own identical "one conversion
-// site" convention immediately above. d.Summary is decode-time-guaranteed
-// non-empty (restdtos.Digest's own generated UnmarshalJSON, minLength 1)
-// -- ValidateVerdictInput's own ErrEmptyDigestSummary check is still real
-// defense in depth for a whitespace-only value, exactly mirroring how
-// ValidateVerdictInput already treats the top-level Summary field.
+// Step 66, §26.1, extended by Step 67, §26.2) into reviewpost.Digest --
+// the one place this conversion happens, mirroring findingInputFromWire's
+// own identical "one conversion site" convention immediately above.
+// d.Summary/d.DescriptionAdequacy/d.AdequacyExplanation are decode-time-
+// guaranteed non-empty/in-enum (restdtos.Digest's own generated
+// UnmarshalJSON, minLength 1 / enum) -- ValidateVerdictInput's own
+// ErrEmptyDigestSummary/ErrInvalidDescriptionAdequacy/
+// ErrEmptyAdequacyExplanation checks are still real defense in depth for
+// a whitespace-only or (in principle) otherwise-malformed value, exactly
+// mirroring how ValidateVerdictInput already treats the top-level Summary
+// field.
 //
-// Every ArchDecision sub-field, and StackRisks/UnverifiedLimits, are
-// nullable *string on the wire (contracts/rest/v1/dtos.schema.json's own
-// ArchDecision/Digest defs carry no "required"/minLength on any of them,
-// deliberately -- this Step validation-enforces ONLY Digest.summary, see
+// Every ArchDecision sub-field, and StackRisks/UnverifiedLimits/
+// ProposedBody, are nullable *string on the wire (contracts/rest/v1/
+// dtos.schema.json's own ArchDecision/Digest defs carry no "required"/
+// minLength on any of them, deliberately -- this Step validation-enforces
+// ONLY Digest.summary/descriptionAdequacy/adequacyExplanation, see
 // reviewpost.Digest's own doc comment) -- archDecisionStringField below
 // nil-safely converts each to reviewpost.ArchDecision's own plain string
 // fields, a nil pointer (the field was omitted or explicitly null)
-// converting to "" exactly like StackRisks/UnverifiedLimits already do,
-// never a nil-pointer panic.
+// converting to "" exactly like StackRisks/UnverifiedLimits/ProposedBody
+// already do, never a nil-pointer panic.
 func digestInputFromWire(d restdtos.Digest) reviewpost.Digest {
-	out := reviewpost.Digest{Summary: d.Summary}
+	out := reviewpost.Digest{
+		Summary:             d.Summary,
+		DescriptionAdequacy: review.DescriptionAdequacy(d.DescriptionAdequacy),
+		AdequacyExplanation: d.AdequacyExplanation,
+	}
 	if d.StackRisks != nil {
 		out.StackRisks = *d.StackRisks
 	}
 	if d.UnverifiedLimits != nil {
 		out.UnverifiedLimits = *d.UnverifiedLimits
+	}
+	if d.ProposedBody != nil {
+		out.ProposedBody = *d.ProposedBody
 	}
 	for _, ad := range d.ArchDecisions {
 		out.ArchDecisions = append(out.ArchDecisions, reviewpost.ArchDecision{

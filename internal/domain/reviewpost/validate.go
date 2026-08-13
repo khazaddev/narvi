@@ -79,6 +79,21 @@ var (
 	// garbled are the identical failure" posture), for the digest's own
 	// "what this PR does" field rather than the verdict's overall narrative.
 	ErrEmptyDigestSummary = errors.New("reviewpost: digest.summary must not be empty")
+	// ErrInvalidDescriptionAdequacy is §26.2/Step 67's own addition:
+	// digest.descriptionAdequacy must be one of review's own three closed
+	// DescriptionAdequacy values -- mirrors ErrInvalidPremise/
+	// ErrInvalidRiskLevel's own identical closed-enum check shape, applied
+	// here rather than treated like Digest.Summary's weaker "just
+	// non-blank" check, since DescriptionAdequacy is a validated enum that
+	// directly feeds review.ComputeShippable's own third floor, not free
+	// text.
+	ErrInvalidDescriptionAdequacy = errors.New("reviewpost: digest.descriptionAdequacy must be one of ok/drift/misleading")
+	// ErrEmptyAdequacyExplanation is §26.2/Step 67's own addition:
+	// digest.adequacyExplanation must not be empty/whitespace-only --
+	// mirrors ErrEmptySummary/ErrEmptyDigestSummary's own identical
+	// "missing and garbled are the identical failure" posture, for the
+	// tri-state's own required one-line explanation.
+	ErrEmptyAdequacyExplanation = errors.New("reviewpost: digest.adequacyExplanation must not be empty")
 )
 
 // ValidateVerdictInput rejects a malformed or partial verdict-posting-tool
@@ -87,14 +102,17 @@ var (
 // addition to any of those enums only ever needs a switch case added
 // here, never a parallel vocabulary invented independently). Checked in a
 // fixed order (RiskLevel, Premise, TestsCoverage, DocsDrift,
-// ProposedShippable, BlastRadius, FilesChanged, Summary, Digest.Summary) so
-// a caller presenting more than one bad field always gets the SAME,
-// deterministic first error rather than one that depends on map iteration
-// order or similar. Digest.Summary is checked LAST among these (Step 66,
-// §26.1's own new required field) -- added at the end of the existing fixed
-// order rather than interleaved earlier, so this Step never changes which
+// ProposedShippable, BlastRadius, FilesChanged, Summary, Digest.Summary,
+// Digest.DescriptionAdequacy, Digest.AdequacyExplanation) so a caller
+// presenting more than one bad field always gets the SAME, deterministic
+// first error rather than one that depends on map iteration order or
+// similar. Digest.Summary is checked next-to-last (Step 66, §26.1's own
+// new required field), and Digest.DescriptionAdequacy/
+// Digest.AdequacyExplanation are checked LAST (§26.2/Step 67's own new
+// required fields) -- each added at the end of the existing fixed order
+// rather than interleaved earlier, so neither Step ever changes which
 // error an EXISTING malformed payload (one that already fails an
-// earlier-checked field) was already reporting before this Step shipped.
+// earlier-checked field) was already reporting before it shipped.
 //
 // Every one of review's four "closed enum" types has a Go zero value
 // ("") that is deliberately not a legal member (review/doc.go's own
@@ -164,6 +182,30 @@ func ValidateVerdictInput(in VerdictInput) error {
 		return ErrEmptyDigestSummary
 	}
 
+	// Digest.DescriptionAdequacy (§26.2/Step 67): a closed-enum check,
+	// mirroring RiskLevel/Premise/TestsCoverage/DocsDrift/ProposedShippable
+	// above rather than Digest.Summary's own weaker "just non-blank"
+	// check -- this field directly feeds review.ComputeShippable's own
+	// third raise-only floor (review.AdequacyFloor), so an unvalidated
+	// value here would let a garbled/missing assessment silently reach
+	// that computation instead of being rejected up front. REQUIRED on
+	// every review from this Step on -- see digest.go's own doc comment
+	// for why this is NOT deferred behind a future light/deep distinction
+	// the way ArchDecisions/StackRisks/UnverifiedLimits still are.
+	switch in.Digest.DescriptionAdequacy {
+	case review.DescriptionAdequacyOK, review.DescriptionAdequacyDrift, review.DescriptionAdequacyMisleading:
+	default:
+		return ErrInvalidDescriptionAdequacy
+	}
+
+	// Digest.AdequacyExplanation (§26.2/Step 67): "plus a one-line
+	// explanation" -- REQUIRED non-blank, mirroring Summary/Digest.
+	// Summary's own identical "missing and garbled are the identical
+	// failure" treatment for a free-text narrative field.
+	if strings.TrimSpace(in.Digest.AdequacyExplanation) == "" {
+		return ErrEmptyAdequacyExplanation
+	}
+
 	// Findings (Step 48, additive): each one validated by
 	// ValidateFindingInput, in order -- first bad finding wins, mirroring
 	// this function's own fixed-order, first-error-wins discipline above.
@@ -188,6 +230,17 @@ func ValidateVerdictInput(in VerdictInput) error {
 // as pure audit/transparency data -- it simply never influences
 // Shippable's own computation, since ComputeShippable's signature does not
 // accept it at all).
+//
+// in.Digest.DescriptionAdequacy (§26.2/Step 67) is threaded through as
+// ComputeShippable's own fourth argument, the THIRD raise-only floor --
+// composed via the SAME max(rank) as coverage/premise, never a special
+// case. RiskLevel below is set from in.RiskLevel VERBATIM, completely
+// independent of this call: §26.2's own explicit "deliberately never
+// inflating RiskLevel" asymmetry is structurally guaranteed here by
+// construction, not by any runtime check -- RiskLevel is assigned once,
+// above, from the caller's own self-reported field, and nothing about
+// in.Digest.DescriptionAdequacy (or any other floor input) can reach that
+// assignment.
 func BuildVerdict(in VerdictInput) review.Verdict {
 	return review.Verdict{
 		RiskLevel:         in.RiskLevel,
@@ -197,7 +250,7 @@ func BuildVerdict(in VerdictInput) review.Verdict {
 		TestsCoverage:     in.TestsCoverage,
 		DocsDrift:         in.DocsDrift,
 		ProposedShippable: in.ProposedShippable,
-		Shippable:         review.ComputeShippable(in.RiskLevel, in.TestsCoverage, in.Premise),
+		Shippable:         review.ComputeShippable(in.RiskLevel, in.TestsCoverage, in.Premise, in.Digest.DescriptionAdequacy),
 	}
 }
 

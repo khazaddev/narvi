@@ -76,7 +76,7 @@ func (rig *decisionInboxTestRig) seedAutoApprovedVerdict(ctx context.Context, t 
 		ProposedShippable: review.ProposedShippableAuto,
 		FilesChanged:      3,
 	}
-	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
 	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}); err != nil {
 		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
 	}
@@ -143,6 +143,12 @@ func (f *fakeMergeSourceControl) ListMergedBetween(context.Context, ports.ListMe
 	return nil, false, errors.New("not implemented")
 }
 func (f *fakeMergeSourceControl) CreateBranch(context.Context, ports.CreateBranchSpec) error {
+	return errors.New("not implemented")
+}
+func (f *fakeMergeSourceControl) GetPRBody(context.Context, string, string, int, string) (string, bool, error) {
+	return "", false, errors.New("not implemented")
+}
+func (f *fakeMergeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec) error {
 	return errors.New("not implemented")
 }
 func (f *fakeMergeSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {

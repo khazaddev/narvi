@@ -51,7 +51,9 @@ func findingsVerdictRequestJSON(sentinelKind, description string) string {
 			}
 		],
 		"digest": {
-			"summary": "Adds a helper function; one coverage gap found."
+			"summary": "Adds a helper function; one coverage gap found.",
+			"descriptionAdequacy": "ok",
+			"adequacyExplanation": "The PR body accurately describes this change."
 		}
 	}`, kindJSON, description)
 }
@@ -106,7 +108,7 @@ func TestPostReviewVerdict_FindingReReportedAtShiftedLine_SameIdentity(t *testin
 	repoFullName := "acme/findings-line-shift-repo"
 	session := setupReviewSessionWithSandbox(ctx, t, rig, repoFullName, 22)
 
-	body1 := `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"insufficient","docsDrift":"none","proposedShippable":"auto","summary":"s","findings":[{"sentinelKind":"coverage","severity":"medium","filePath":"a.go","line":10,"description":"Missing coverage for X."}],"digest":{"summary":"Adds a helper; one coverage gap found."}}`
+	body1 := `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"insufficient","docsDrift":"none","proposedShippable":"auto","summary":"s","findings":[{"sentinelKind":"coverage","severity":"medium","filePath":"a.go","line":10,"description":"Missing coverage for X."}],"digest":{"summary":"Adds a helper; one coverage gap found.","descriptionAdequacy":"ok","adequacyExplanation":"Accurate."}}`
 	status, resp1 := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body1)
 	if status != http.StatusCreated {
 		t.Fatalf("first post status = %d, want %d", status, http.StatusCreated)
@@ -122,7 +124,7 @@ func TestPostReviewVerdict_FindingReReportedAtShiftedLine_SameIdentity(t *testin
 	}
 
 	// Re-report the SAME finding at a SHIFTED line (10 -> 25).
-	body2 := `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"insufficient","docsDrift":"none","proposedShippable":"auto","summary":"s","findings":[{"sentinelKind":"coverage","severity":"medium","filePath":"a.go","line":25,"description":"Missing coverage for X."}],"digest":{"summary":"Adds a helper; one coverage gap found."}}`
+	body2 := `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"insufficient","docsDrift":"none","proposedShippable":"auto","summary":"s","findings":[{"sentinelKind":"coverage","severity":"medium","filePath":"a.go","line":25,"description":"Missing coverage for X."}],"digest":{"summary":"Adds a helper; one coverage gap found.","descriptionAdequacy":"ok","adequacyExplanation":"Accurate."}}`
 	status2, resp2 := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body2)
 	if status2 != http.StatusCreated {
 		t.Fatalf("second post status = %d, want %d", status2, http.StatusCreated)
@@ -358,6 +360,12 @@ func (f *applySuggestionFakeSourceControl) CreateBranch(context.Context, ports.C
 func (f *applySuggestionFakeSourceControl) GetOpenPR(context.Context, string, string, int, string) (ports.OpenPR, bool, error) {
 	return ports.OpenPR{}, false, errors.New("not implemented")
 }
+func (f *applySuggestionFakeSourceControl) GetPRBody(context.Context, string, string, int, string) (string, bool, error) {
+	return "", false, errors.New("not implemented")
+}
+func (f *applySuggestionFakeSourceControl) UpdatePRBody(context.Context, ports.UpdatePRBodySpec) error {
+	return errors.New("not implemented")
+}
 func (f *applySuggestionFakeSourceControl) ListMergedBetween(context.Context, ports.ListMergedBetweenSpec) ([]ports.MergedPR, bool, error) {
 	return nil, false, errors.New("not implemented")
 }
@@ -386,7 +394,7 @@ func setupFindingWithSuggestedFix(ctx context.Context, t *testing.T, rig testRig
 	session := createOwnedGitHubReviewSessionWithBranch(ctx, t, rig, owner.ID, repoFullName, prNumber, "widgets", "https://github.com/acme/widgets.git", "pr-head-branch")
 	createSandboxWithToken(ctx, t, rig, session.ID, "sandbox-bearer-token")
 
-	body := `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"insufficient","docsDrift":"none","proposedShippable":"auto","summary":"s","findings":[{"severity":"low","filePath":"internal/foo/bar.go","description":"Stale comment.","suggestedFix":"--- a/internal/foo/bar.go\n+++ b/internal/foo/bar.go\n@@ -1,2 +1,2 @@\n package foo\n-// old comment\n+// new comment\n"}],"digest":{"summary":"Fixes a stale comment."}}`
+	body := `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"insufficient","docsDrift":"none","proposedShippable":"auto","summary":"s","findings":[{"severity":"low","filePath":"internal/foo/bar.go","description":"Stale comment.","suggestedFix":"--- a/internal/foo/bar.go\n+++ b/internal/foo/bar.go\n@@ -1,2 +1,2 @@\n package foo\n-// old comment\n+// new comment\n"}],"digest":{"summary":"Fixes a stale comment.","descriptionAdequacy":"ok","adequacyExplanation":"Accurate."}}`
 	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
 	if status != http.StatusCreated {
 		t.Fatalf("post verdict status = %d, want %d", status, http.StatusCreated)

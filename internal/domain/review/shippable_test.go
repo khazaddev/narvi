@@ -82,9 +82,16 @@ func TestShippableRank_TotalOrder(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := review.ComputeShippable(tc.risk, tc.coverage, tc.premise)
+			// review.DescriptionAdequacyOK imposes no floor of its own
+			// (AdequacyFloor's own doc comment) -- held fixed here so this
+			// table's own pre-existing risk/coverage/premise interplay
+			// assertions are unaffected by the §26.2/Step 67 addition; see
+			// TestComputeShippable_AdequacyRaiseOnly and
+			// TestComputeShippable_ThreeFloorCompositionMatrix below for the
+			// adequacy floor's own dedicated coverage.
+			got := review.ComputeShippable(tc.risk, tc.coverage, tc.premise, review.DescriptionAdequacyOK)
 			if got != tc.want {
-				t.Errorf("ComputeShippable(%s, %s, %s) = %s, want %s", tc.risk, tc.coverage, tc.premise, got, tc.want)
+				t.Errorf("ComputeShippable(%s, %s, %s, ok) = %s, want %s", tc.risk, tc.coverage, tc.premise, got, tc.want)
 			}
 		})
 	}
@@ -116,23 +123,26 @@ func TestComputeShippable_RiskBaseline(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := review.ComputeShippable(tc.risk, review.TestsCoverageStateAdequate, review.PremiseStateOK)
+			got := review.ComputeShippable(tc.risk, review.TestsCoverageStateAdequate, review.PremiseStateOK, review.DescriptionAdequacyOK)
 			if got != tc.want {
-				t.Errorf("ComputeShippable(%s, adequate, ok) = %s, want %s", tc.risk, got, tc.want)
+				t.Errorf("ComputeShippable(%s, adequate, ok, ok) = %s, want %s", tc.risk, got, tc.want)
 			}
 		})
 	}
 }
 
-// TestComputeShippable_FloorCompositionMatrix is the exhaustive
-// coverage-floor-state × premise-floor-state matrix the Step brief asks
-// for: every one of the five TestsCoverageState values under test
-// (adequate/insufficient/skipped/zero/unrecognized) crossed with every one
-// of the five PremiseState values under test
-// (ok/questionable/not_a_pr/zero/unrecognized) = 25 rows, RiskLevel fixed
-// at RiskLevelLow (baseline ShippableAuto, the most permissive) so each
-// cell isolates exactly what the two floors alone compose to.
-func TestComputeShippable_FloorCompositionMatrix(t *testing.T) {
+// TestComputeShippable_ThreeFloorCompositionMatrix is the exhaustive
+// coverage-floor-state × premise-floor-state × description-adequacy-
+// floor-state matrix (extended by §26.2/Step 67 from its own original
+// two-floor version): every one of the five TestsCoverageState values
+// under test (adequate/insufficient/skipped/zero/unrecognized) crossed
+// with every one of the five PremiseState values under test
+// (ok/questionable/not_a_pr/zero/unrecognized) crossed with every one of
+// the five DescriptionAdequacy values under test
+// (ok/drift/misleading/zero/unrecognized) = 125 rows, RiskLevel fixed at
+// RiskLevelLow (baseline ShippableAuto, the most permissive) so each cell
+// isolates exactly what the three floors alone compose to.
+func TestComputeShippable_ThreeFloorCompositionMatrix(t *testing.T) {
 	t.Parallel()
 
 	coverageCases := []struct {
@@ -157,23 +167,38 @@ func TestComputeShippable_FloorCompositionMatrix(t *testing.T) {
 		{"unrecognized", review.PremiseState("bogus")},
 	}
 
+	adequacyCases := []struct {
+		name  string
+		state review.DescriptionAdequacy
+	}{
+		{"ok", review.DescriptionAdequacyOK},
+		{"drift", review.DescriptionAdequacyDrift},
+		{"misleading", review.DescriptionAdequacyMisleading},
+		{"zero", review.DescriptionAdequacy("")},
+		{"unrecognized", review.DescriptionAdequacy("bogus")},
+	}
+
 	for _, cov := range coverageCases {
 		cov := cov
 		for _, prem := range premiseCases {
 			prem := prem
-			t.Run(cov.name+"_x_"+prem.name, func(t *testing.T) {
-				t.Parallel()
+			for _, adeq := range adequacyCases {
+				adeq := adeq
+				t.Run(cov.name+"_x_"+prem.name+"_x_"+adeq.name, func(t *testing.T) {
+					t.Parallel()
 
-				covFloor := review.CoverageFloor(cov.state)
-				premFloor := review.PremiseFloor(prem.state)
-				want := composeExpected(review.ShippableAuto, covFloor, premFloor)
+					covFloor := review.CoverageFloor(cov.state)
+					premFloor := review.PremiseFloor(prem.state)
+					adeqFloor := review.AdequacyFloor(adeq.state)
+					want := composeExpected(review.ShippableAuto, covFloor, premFloor, adeqFloor)
 
-				got := review.ComputeShippable(review.RiskLevelLow, cov.state, prem.state)
-				if got != want {
-					t.Errorf("ComputeShippable(low, %s, %s) = %s, want %s (coverageFloor=%s, premiseFloor=%s)",
-						cov.name, prem.name, got, want, covFloor, premFloor)
-				}
-			})
+					got := review.ComputeShippable(review.RiskLevelLow, cov.state, prem.state, adeq.state)
+					if got != want {
+						t.Errorf("ComputeShippable(low, %s, %s, %s) = %s, want %s (coverageFloor=%s, premiseFloor=%s, adequacyFloor=%s)",
+							cov.name, prem.name, adeq.name, got, want, covFloor, premFloor, adeqFloor)
+					}
+				})
+			}
 		}
 	}
 }
@@ -230,27 +255,90 @@ func TestComputeShippable_RaiseOnly(t *testing.T) {
 
 					covFloor := review.CoverageFloor(cov)
 					premFloor := review.PremiseFloor(prem)
-					got := review.ComputeShippable(r.level, cov, prem)
+					got := review.ComputeShippable(r.level, cov, prem, review.DescriptionAdequacyOK)
 
 					if rank(got) < rank(r.wantBaseline) {
-						t.Errorf("ComputeShippable(%s, %s, %s) = %s ranks BELOW the risk baseline %s alone -- raise-only violated",
+						t.Errorf("ComputeShippable(%s, %s, %s, ok) = %s ranks BELOW the risk baseline %s alone -- raise-only violated",
 							r.name, cov, prem, got, r.wantBaseline)
 					}
 					if rank(got) < rank(covFloor) {
-						t.Errorf("ComputeShippable(%s, %s, %s) = %s ranks BELOW CoverageFloor(%s)=%s alone -- raise-only violated",
+						t.Errorf("ComputeShippable(%s, %s, %s, ok) = %s ranks BELOW CoverageFloor(%s)=%s alone -- raise-only violated",
 							r.name, cov, prem, got, cov, covFloor)
 					}
 					if rank(got) < rank(premFloor) {
-						t.Errorf("ComputeShippable(%s, %s, %s) = %s ranks BELOW PremiseFloor(%s)=%s alone -- raise-only violated",
+						t.Errorf("ComputeShippable(%s, %s, %s, ok) = %s ranks BELOW PremiseFloor(%s)=%s alone -- raise-only violated",
 							r.name, cov, prem, got, prem, premFloor)
 					}
 
 					want := composeExpected(r.wantBaseline, covFloor, premFloor)
 					if got != want {
-						t.Errorf("ComputeShippable(%s, %s, %s) = %s, want %s", r.name, cov, prem, got, want)
+						t.Errorf("ComputeShippable(%s, %s, %s, ok) = %s, want %s", r.name, cov, prem, got, want)
 					}
 				})
 			}
 		}
+	}
+}
+
+// TestComputeShippable_AdequacyRaiseOnly is AdequacyFloor's own dedicated
+// raise-only proof (§26.2/Step 67), isolated from every other input:
+// risk/coverage/premise are held at their cleanest legal values (low/
+// adequate/ok, baseline ShippableAuto) so each row isolates exactly what
+// the description-adequacy floor alone contributes, exhaustively over
+// every DescriptionAdequacy value under test
+// (ok/drift/misleading/zero/unrecognized) -- mirrors
+// TestComputeShippable_RiskBaseline's own identical "isolate one input,
+// hold the others clean" shape.
+func TestComputeShippable_AdequacyRaiseOnly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		adequacy review.DescriptionAdequacy
+		want     review.Shippable
+	}{
+		{"ok", review.DescriptionAdequacyOK, review.ShippableAuto},
+		{"drift", review.DescriptionAdequacyDrift, review.ShippableAuto},
+		{"misleading raises to needs_human", review.DescriptionAdequacyMisleading, review.ShippableNeedsHuman},
+		{"zero value fails conservative (needs_human, matching misleading)", review.DescriptionAdequacy(""), review.ShippableNeedsHuman},
+		{"unrecognized value fails conservative (needs_human, matching misleading)", review.DescriptionAdequacy("bogus"), review.ShippableNeedsHuman},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			adeqFloor := review.AdequacyFloor(tc.adequacy)
+			got := review.ComputeShippable(review.RiskLevelLow, review.TestsCoverageStateAdequate, review.PremiseStateOK, tc.adequacy)
+
+			if rank(got) < rank(adeqFloor) {
+				t.Errorf("ComputeShippable(low, adequate, ok, %s) = %s ranks BELOW AdequacyFloor(%s)=%s alone -- raise-only violated",
+					tc.adequacy, got, tc.adequacy, adeqFloor)
+			}
+			if got != tc.want {
+				t.Errorf("ComputeShippable(low, adequate, ok, %s) = %s, want %s", tc.adequacy, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestComputeShippable_MisleadingRaisesShippable is the single, explicit
+// pin this Step's own process requirements name by phrase: "the floor
+// actually raising Shippable on misleading". A misleading description
+// alone (everything else at its cleanest: low risk, adequate coverage, ok
+// premise -- which alone would compute ShippableAuto) raises the RESULT
+// to ShippableNeedsHuman, never leaving it at the clean baseline.
+func TestComputeShippable_MisleadingRaisesShippable(t *testing.T) {
+	t.Parallel()
+
+	clean := review.ComputeShippable(review.RiskLevelLow, review.TestsCoverageStateAdequate, review.PremiseStateOK, review.DescriptionAdequacyOK)
+	if clean != review.ShippableAuto {
+		t.Fatalf("sanity check failed: an all-clean verdict computed %s, want %s (test setup is broken, not the property under test)", clean, review.ShippableAuto)
+	}
+
+	misleading := review.ComputeShippable(review.RiskLevelLow, review.TestsCoverageStateAdequate, review.PremiseStateOK, review.DescriptionAdequacyMisleading)
+	if misleading != review.ShippableNeedsHuman {
+		t.Errorf("ComputeShippable(low, adequate, ok, misleading) = %s, want %s (misleading must raise Shippable off an otherwise-clean auto baseline)", misleading, review.ShippableNeedsHuman)
 	}
 }

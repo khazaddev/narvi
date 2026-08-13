@@ -29,14 +29,18 @@ import (
 // all, rather than existing with a value the auto-approval eligibility
 // engine's own stale-verdict guard could never honestly evaluate.
 //
-// digest (Step 66, §26.1) is forwarded verbatim onto the SAME row's own
-// four digest_* columns (migrations/000077_review_verdicts_digest.up.sql)
-// -- digest.Summary is expected non-empty by the time this function is
-// called in production (reviewpost.ValidateVerdictInput's own
-// ErrEmptyDigestSummary already rejected an empty one before BuildVerdict
-// ever ran), but this function does not itself re-validate that -- exactly
-// like it does not re-validate verdict's own fields, trusting its one
-// caller (httpapi.PostReviewVerdict) to have already done so.
+// digest (Step 66, §26.1, extended by Step 67, §26.2) is forwarded
+// verbatim onto the SAME row's own seven digest_* columns (migrations/
+// 000077_review_verdicts_digest.up.sql,
+// 000078_review_verdicts_description_adequacy.up.sql) -- digest.Summary/
+// DescriptionAdequacy/AdequacyExplanation are expected non-empty/in-enum
+// by the time this function is called in production
+// (reviewpost.ValidateVerdictInput's own ErrEmptyDigestSummary/
+// ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation already
+// rejected a malformed one before BuildVerdict ever ran), but this
+// function does not itself re-validate that -- exactly like it does not
+// re-validate verdict's own fields, trusting its one caller
+// (httpapi.PostReviewVerdict) to have already done so.
 func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullName string, prNumber int32, headSHA string, sessionID pgtype.UUID, verdict review.Verdict, digest reviewpost.Digest) (reviewverdict.Record, error) {
 	if headSHA == "" {
 		return reviewverdict.Record{}, fmt.Errorf("reviewverdict: insert: refusing to persist a verdict with no known head sha for %s#%d", repoFullName, prNumber)
@@ -53,22 +57,25 @@ func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullNam
 	}
 
 	row, err := store.Insert(ctx, sqlcgen.InsertReviewVerdictParams{
-		RepoFullName:           repoFullName,
-		PrNumber:               prNumber,
-		HeadSha:                headSHA,
-		RiskLevel:              string(verdict.RiskLevel),
-		Premise:                string(verdict.Premise),
-		BlastRadius:            blastRadiusJSON,
-		FilesChanged:           int32(verdict.FilesChanged),
-		TestsCoverage:          string(verdict.TestsCoverage),
-		DocsDrift:              string(verdict.DocsDrift),
-		ProposedShippable:      string(verdict.ProposedShippable),
-		Shippable:              string(verdict.Shippable),
-		SessionID:              sessionID,
-		DigestSummary:          nonEmptyStringPtr(digest.Summary),
-		DigestArchDecisions:    archDecisionsJSON,
-		DigestStackRisks:       nonEmptyStringPtr(digest.StackRisks),
-		DigestUnverifiedLimits: nonEmptyStringPtr(digest.UnverifiedLimits),
+		RepoFullName:              repoFullName,
+		PrNumber:                  prNumber,
+		HeadSha:                   headSHA,
+		RiskLevel:                 string(verdict.RiskLevel),
+		Premise:                   string(verdict.Premise),
+		BlastRadius:               blastRadiusJSON,
+		FilesChanged:              int32(verdict.FilesChanged),
+		TestsCoverage:             string(verdict.TestsCoverage),
+		DocsDrift:                 string(verdict.DocsDrift),
+		ProposedShippable:         string(verdict.ProposedShippable),
+		Shippable:                 string(verdict.Shippable),
+		SessionID:                 sessionID,
+		DigestSummary:             nonEmptyStringPtr(digest.Summary),
+		DigestArchDecisions:       archDecisionsJSON,
+		DigestStackRisks:          nonEmptyStringPtr(digest.StackRisks),
+		DigestUnverifiedLimits:    nonEmptyStringPtr(digest.UnverifiedLimits),
+		DigestDescriptionAdequacy: nonEmptyStringPtr(string(digest.DescriptionAdequacy)),
+		DigestAdequacyExplanation: nonEmptyStringPtr(digest.AdequacyExplanation),
+		DigestProposedBody:        nonEmptyStringPtr(digest.ProposedBody),
 	})
 	if err != nil {
 		return reviewverdict.Record{}, err

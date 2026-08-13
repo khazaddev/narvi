@@ -81,7 +81,7 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 		ProposedShippable: review.ProposedShippableAuto,
 		FilesChanged:      2,
 	}
-	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
 	seededDigest := reviewpost.Digest{
 		Summary: "Test-seeded verdict.",
 		ArchDecisions: []reviewpost.ArchDecision{

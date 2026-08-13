@@ -129,5 +129,12 @@ func Fetch(ctx context.Context, logger *slog.Logger, fetcher Fetcher, timeouts p
 	// never coupled into a single all-or-nothing outcome) -- only now,
 	// whenever Diff IS non-empty, it is provably anchored to this exact
 	// value (this function's own top doc comment).
-	return review.PreFetchedContext{Diff: diff, DiffTruncated: truncated, Stack: stack, HeadSHA: pr.HeadSHA}
+	//
+	// Title/Body (adversarial-review fix, §26.2/Step 67's own follow-up,
+	// review.PreFetchedContext.Title's own doc comment): forwarded verbatim
+	// from the SAME GetPullRequest call HeadSHA itself came from, above --
+	// no separate fetch. Reported even when the diff fetch below failed,
+	// exactly like HeadSHA, since pr itself was already successfully
+	// resolved by this point regardless of what happens to the diff.
+	return review.PreFetchedContext{Diff: diff, DiffTruncated: truncated, Stack: stack, HeadSHA: pr.HeadSHA, Title: pr.Title, Body: pr.Body}
 }

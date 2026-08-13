@@ -58,7 +58,9 @@ func verdictRequestWithFinding(filePath, description string) string {
 			},
 		},
 		"digest": map[string]any{
-			"summary": "Reworks the loop bounds check.",
+			"summary":             "Reworks the loop bounds check.",
+			"descriptionAdequacy": "ok",
+			"adequacyExplanation": "The PR body accurately describes this change.",
 		},
 	})
 	if err != nil {

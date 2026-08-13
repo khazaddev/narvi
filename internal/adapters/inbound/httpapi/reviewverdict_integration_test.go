@@ -26,7 +26,8 @@ import (
 // this file starts from, mutating only the ONE field a given test cares
 // about -- RiskLevel low, Premise ok, empty BlastRadius (legal), adequate
 // coverage, no docs drift, the model proposing "auto" (irrelevant to what
-// the server actually computes), and a real, non-blank Summary.
+// the server actually computes), a real, non-blank Summary, and (§26.2,
+// Step 67) an "ok" descriptionAdequacy with its own required explanation.
 func validVerdictRequestJSON() string {
 	return `{
 		"riskLevel": "low",
@@ -38,7 +39,9 @@ func validVerdictRequestJSON() string {
 		"proposedShippable": "auto",
 		"summary": "Looks good overall, one minor nit below.",
 		"digest": {
-			"summary": "Adds a retry helper around the flaky upstream call and swaps every existing call site onto it."
+			"summary": "Adds a retry helper around the flaky upstream call and swaps every existing call site onto it.",
+			"descriptionAdequacy": "ok",
+			"adequacyExplanation": "The PR body accurately describes the retry helper this diff adds."
 		}
 	}`
 }
@@ -203,7 +206,14 @@ func TestPostReviewVerdict_MalformedPartialPayload(t *testing.T) {
 		// the one field within it this Step actually validates.
 		{name: "missing digest entirely (Step 66, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x"}`},
 		{name: "digest present but missing digest.summary entirely (Step 66, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{}}`},
-		{name: "whitespace-only digest.summary (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"   "}}`},
+		{name: "whitespace-only digest.summary (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"   ","descriptionAdequacy":"ok","adequacyExplanation":"x"}}`},
+		// §26.2/Step 67: "descriptionAdequacy"/"adequacyExplanation" are
+		// REQUIRED on every review from this Step on, the SAME treatment
+		// as digest.summary above.
+		{name: "digest present but missing digest.descriptionAdequacy entirely (Step 67, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","adequacyExplanation":"x"}}`},
+		{name: "garbled digest.descriptionAdequacy enum value", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"somewhat","adequacyExplanation":"x"}}`},
+		{name: "digest present but missing digest.adequacyExplanation entirely (Step 67, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"ok"}}`},
+		{name: "whitespace-only digest.adequacyExplanation (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"x","descriptionAdequacy":"ok","adequacyExplanation":"   "}}`},
 	}
 
 	for i, tc := range tests {
@@ -387,7 +397,9 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 				{"decision": "Centralize retries in one helper.", "rejectedAlternative": "Inline retry logic per call site.", "conventionConformance": "Matches CLAUDE.md's shared-helper convention."}
 			],
 			"stackRisks": "Touches every call site of the upstream client; a regression here is broad.",
-			"unverifiedLimits": "Did not verify behavior under a real network partition."
+			"unverifiedLimits": "Did not verify behavior under a real network partition.",
+			"descriptionAdequacy": "drift",
+			"adequacyExplanation": "The PR body doesn't mention the new retry helper at all."
 		}
 	}`
 
@@ -396,10 +408,10 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
 	}
 
-	var digestSummary, digestStackRisks, digestUnverifiedLimits *string
+	var digestSummary, digestStackRisks, digestUnverifiedLimits, digestDescriptionAdequacy, digestAdequacyExplanation *string
 	var digestArchDecisions []byte
-	if err := rig.pool.QueryRow(ctx, `SELECT digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits FROM review_verdicts WHERE repo_full_name = $1 AND pr_number = $2`, "acme/verdict-digest-persist", 66).
-		Scan(&digestSummary, &digestArchDecisions, &digestStackRisks, &digestUnverifiedLimits); err != nil {
+	if err := rig.pool.QueryRow(ctx, `SELECT digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits, digest_description_adequacy, digest_adequacy_explanation FROM review_verdicts WHERE repo_full_name = $1 AND pr_number = $2`, "acme/verdict-digest-persist", 66).
+		Scan(&digestSummary, &digestArchDecisions, &digestStackRisks, &digestUnverifiedLimits, &digestDescriptionAdequacy, &digestAdequacyExplanation); err != nil {
 		t.Fatalf("query review_verdicts digest columns: %v", err)
 	}
 
@@ -412,6 +424,12 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 	if digestUnverifiedLimits == nil || *digestUnverifiedLimits != "Did not verify behavior under a real network partition." {
 		t.Errorf("digest_unverified_limits = %v, want the posted unverifiedLimits text", digestUnverifiedLimits)
 	}
+	if digestDescriptionAdequacy == nil || *digestDescriptionAdequacy != "drift" {
+		t.Errorf("digest_description_adequacy = %v, want %q", digestDescriptionAdequacy, "drift")
+	}
+	if digestAdequacyExplanation == nil || *digestAdequacyExplanation != "The PR body doesn't mention the new retry helper at all." {
+		t.Errorf("digest_adequacy_explanation = %v, want the posted adequacyExplanation text", digestAdequacyExplanation)
+	}
 	if !strings.Contains(string(digestArchDecisions), "Centralize retries in one helper.") {
 		t.Errorf("digest_arch_decisions = %s, want it to contain the posted decision text", digestArchDecisions)
 	}
@@ -423,9 +441,13 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 	// review_verdicts above must ALSO be present in the outbox row's own
 	// rendered comment body -- the text that actually gets posted to the
 	// PR. Queried the same way TestPostReviewVerdict_
-	// Success_EnqueuesGitHubVerdictOutboxRow already does.
+	// Success_EnqueuesGitHubVerdictOutboxRow already does -- scoped to
+	// kind = github_verdict specifically (Step 67 own no
+	// descriptionAutofix candidate this request has no proposedBody, so
+	// only this ONE outbox row is ever enqueued for this session; the
+	// explicit kind filter keeps this query correct regardless).
 	var row sqlcgen.Outbox
-	if err := rig.pool.QueryRow(ctx, `SELECT id, session_id, kind, payload, status FROM outbox WHERE session_id = $1`, session.ID).
+	if err := rig.pool.QueryRow(ctx, `SELECT id, session_id, kind, payload, status FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubVerdict)).
 		Scan(&row.ID, &row.SessionID, &row.Kind, &row.Payload, &row.Status); err != nil {
 		t.Fatalf("query outbox row: %v", err)
 	}
@@ -445,6 +467,9 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 		"### Risks to the stack",
 		"Touches every call site of the upstream client; a regression here is broad.",
 		"Did not verify behavior under a real network partition.",
+		"Description adequacy",
+		"drift",
+		"The PR body doesn't mention the new retry helper at all.",
 	} {
 		if !strings.Contains(payload.Body, want) {
 			t.Errorf("outbox payload Body missing %q -- the digest persisted to review_verdicts did not reach the rendered comment. Body:\n%s", want, payload.Body)
@@ -534,7 +559,9 @@ func TestPostReviewVerdict_ShippableNeverTrustsProposedShippable(t *testing.T) {
 		"proposedShippable": "auto",
 		"summary": "This diff is empty; nothing to review.",
 		"digest": {
-			"summary": "This PR's diff is empty; there is nothing to describe."
+			"summary": "This PR's diff is empty; there is nothing to describe.",
+			"descriptionAdequacy": "ok",
+			"adequacyExplanation": "Nothing to compare against; the diff itself is empty."
 		}
 	}`
 
@@ -572,7 +599,9 @@ func TestPostReviewVerdict_BlockOnHighRisk(t *testing.T) {
 		"proposedShippable": "auto",
 		"summary": "High risk per my own assessment, but every floor is clean.",
 		"digest": {
-			"summary": "Rewrites the token-refresh path to retry on transient failures."
+			"summary": "Rewrites the token-refresh path to retry on transient failures.",
+			"descriptionAdequacy": "ok",
+			"adequacyExplanation": "The PR body accurately describes the token-refresh rewrite."
 		}
 	}`
 
@@ -657,5 +686,268 @@ func TestPostReviewVerdict_ConcurrentCalls_AllSucceedNoDeadlock(t *testing.T) {
 	}
 	if count != n {
 		t.Errorf("outbox row count = %d, want %d", count, n)
+	}
+}
+
+// TestPostReviewVerdict_MisleadingAdequacyRaisesShippable is this Step's
+// own end-to-end pin, through the real HTTP surface: an otherwise-clean
+// verdict (low risk, ok premise, adequate coverage -- Shippable would
+// otherwise compute auto) whose digest.descriptionAdequacy is
+// "misleading" must come back as needs_human, and the rendered outbox
+// comment must carry the tri-state and its explanation.
+func TestPostReviewVerdict_MisleadingAdequacyRaisesShippable(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-misleading-adequacy", 12)
+
+	body := `{
+		"riskLevel": "low",
+		"premise": "ok",
+		"blastRadius": [],
+		"filesChanged": 1,
+		"testsCoverage": "adequate",
+		"docsDrift": "none",
+		"proposedShippable": "auto",
+		"summary": "Small change, but the description doesn't match the diff.",
+		"digest": {
+			"summary": "Rewrites the auth token refresh path to retry on transient network failures.",
+			"descriptionAdequacy": "misleading",
+			"adequacyExplanation": "The PR title/body claim this is a docs-only change; the diff rewrites the auth token refresh path."
+		}
+	}`
+
+	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+	if resp.Shippable != restdtos.PostReviewVerdictResponseShippableNeedsHuman {
+		t.Errorf("Shippable = %q, want %q (a misleading description must raise Shippable off an otherwise-clean auto baseline)", resp.Shippable, restdtos.PostReviewVerdictResponseShippableNeedsHuman)
+	}
+
+	var row sqlcgen.Outbox
+	if err := rig.pool.QueryRow(ctx, `SELECT id, session_id, kind, payload, status FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubVerdict)).
+		Scan(&row.ID, &row.SessionID, &row.Kind, &row.Payload, &row.Status); err != nil {
+		t.Fatalf("query outbox row: %v", err)
+	}
+	var payload githubapi.VerdictPayload
+	if err := json.Unmarshal(row.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal outbox payload: %v", err)
+	}
+	if !strings.Contains(payload.Body, "misleading") {
+		t.Errorf("outbox payload Body missing the %q tri-state value, Body:\n%s", "misleading", payload.Body)
+	}
+	if !strings.Contains(payload.Body, "The PR title/body claim this is a docs-only change") {
+		t.Errorf("outbox payload Body missing the posted adequacyExplanation, Body:\n%s", payload.Body)
+	}
+}
+
+// TestPostReviewVerdict_AdequacyNeverAffectsRiskLevel is this Step's own
+// end-to-end pin of §26.2's explicit asymmetry: RiskLevel is what the
+// caller posted, completely untouched by descriptionAdequacy -- through
+// the real HTTP surface, via the SAME risk_level column
+// TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown
+// already asserts, this time with an adequacy value that DOES raise
+// Shippable (misleading) alongside a risk the model self-reported as
+// medium.
+func TestPostReviewVerdict_AdequacyNeverAffectsRiskLevel(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-adequacy-risklevel", 13)
+
+	reviewHeadSHA := "sha-adequacy-risklevel-abc123"
+	if _, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusProcessing, ReviewHeadSha: &reviewHeadSHA}); err != nil {
+		t.Fatalf("seed processing turn with review head sha: %v", err)
+	}
+
+	body := `{
+		"riskLevel": "medium",
+		"premise": "ok",
+		"blastRadius": [],
+		"filesChanged": 1,
+		"testsCoverage": "adequate",
+		"docsDrift": "none",
+		"proposedShippable": "auto",
+		"summary": "Medium risk per my own assessment.",
+		"digest": {
+			"summary": "Rewrites the auth token refresh path.",
+			"descriptionAdequacy": "misleading",
+			"adequacyExplanation": "The PR body claims a docs-only change."
+		}
+	}`
+
+	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+	// Shippable is raised by the misleading floor (medium risk baseline ->
+	// needs_human already, so this alone doesn't distinguish the floor
+	// firing -- the persisted risk_level column below is the real proof).
+	if resp.Shippable != restdtos.PostReviewVerdictResponseShippableNeedsHuman {
+		t.Errorf("Shippable = %q, want %q", resp.Shippable, restdtos.PostReviewVerdictResponseShippableNeedsHuman)
+	}
+
+	var riskLevel string
+	if err := rig.pool.QueryRow(ctx, `SELECT risk_level FROM review_verdicts WHERE repo_full_name = $1 AND pr_number = $2`, "acme/verdict-adequacy-risklevel", 13).Scan(&riskLevel); err != nil {
+		t.Fatalf("query review_verdicts risk_level: %v", err)
+	}
+	if riskLevel != string(review.RiskLevelMedium) {
+		t.Errorf("risk_level = %q, want %q (a misleading descriptionAdequacy must never influence the persisted RiskLevel)", riskLevel, review.RiskLevelMedium)
+	}
+}
+
+// TestPostReviewVerdict_ProposedBodyPresent_EnqueuesDescriptionAutofixOutboxRow
+// proves §26.2's own enqueue-time contract: a posted digest.proposedBody
+// enqueues exactly one ports.NotificationKindGitHubDescriptionAutofix
+// outbox row, alongside (never instead of) the ordinary
+// NotificationKindGitHubVerdict row -- carrying owner/repo/prNumber/
+// proposedBody, verbatim. This handler performs NO authorship/flag check
+// of its own (DescriptionAutofixPayload's own doc comment) -- that is
+// entirely the delivering notifier's own job, at delivery time.
+func TestPostReviewVerdict_ProposedBodyPresent_EnqueuesDescriptionAutofixOutboxRow(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-autofix-candidate", 14)
+
+	proposedBody := "This PR rewrites the auth token refresh path to retry on transient network failures."
+	body := `{
+		"riskLevel": "low",
+		"premise": "ok",
+		"blastRadius": [],
+		"filesChanged": 1,
+		"testsCoverage": "adequate",
+		"docsDrift": "none",
+		"proposedShippable": "auto",
+		"summary": "Small change, description was stale.",
+		"digest": {
+			"summary": "Rewrites the auth token refresh path.",
+			"descriptionAdequacy": "drift",
+			"adequacyExplanation": "The PR body is stale.",
+			"proposedBody": "` + proposedBody + `"
+		}
+	}`
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var count int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubDescriptionAutofix)).Scan(&count); err != nil {
+		t.Fatalf("count description-autofix outbox rows: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("description-autofix outbox row count = %d, want 1", count)
+	}
+
+	var payloadBytes []byte
+	if err := rig.pool.QueryRow(ctx, `SELECT payload FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubDescriptionAutofix)).Scan(&payloadBytes); err != nil {
+		t.Fatalf("query description-autofix outbox payload: %v", err)
+	}
+	var payload ports.DescriptionAutofixPayload
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		t.Fatalf("unmarshal description-autofix outbox payload: %v", err)
+	}
+	if payload.Owner != "acme" || payload.Repo != "verdict-autofix-candidate" {
+		t.Errorf("Owner/Repo = %q/%q, want %q/%q", payload.Owner, payload.Repo, "acme", "verdict-autofix-candidate")
+	}
+	if payload.PRNumber != 14 {
+		t.Errorf("PRNumber = %d, want 14", payload.PRNumber)
+	}
+	if payload.ProposedBody != proposedBody {
+		t.Errorf("ProposedBody = %q, want %q", payload.ProposedBody, proposedBody)
+	}
+	if payload.DescriptionAdequacy != review.DescriptionAdequacyDrift {
+		t.Errorf("DescriptionAdequacy = %q, want %q (adversarial-review fix: carried onto the payload verbatim, never re-derived)", payload.DescriptionAdequacy, review.DescriptionAdequacyDrift)
+	}
+
+	// The ordinary verdict outbox row must ALSO still be present -- this
+	// is an ADDITIVE second row, never a replacement.
+	var verdictCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubVerdict)).Scan(&verdictCount); err != nil {
+		t.Fatalf("count verdict outbox rows: %v", err)
+	}
+	if verdictCount != 1 {
+		t.Errorf("verdict outbox row count = %d, want 1", verdictCount)
+	}
+}
+
+// TestPostReviewVerdict_AdequacyOKWithProposedBody_NeverEnqueuesDescriptionAutofixOutboxRow
+// is the adversarial-review fix's own central regression test (item 2,
+// HIGH: "nothing gates the description rewrite on adequacy"): a verdict
+// reporting descriptionAdequacy "ok" -- an ACCURATE description -- plus a
+// non-blank, unsolicited proposedBody (routine over-filling of an
+// optional free-text field, never itself a sign the floor fired) must
+// enqueue ZERO description-autofix outbox rows. Before this fix, the
+// enqueue's ONLY precondition was "proposedBody non-blank", so this exact
+// input would have silently queued a write that collapses an already-
+// accurate, human-visible description -- on a verdict that had just
+// certified it adequate.
+func TestPostReviewVerdict_AdequacyOKWithProposedBody_NeverEnqueuesDescriptionAutofixOutboxRow(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-adequacy-ok-candidate", 16)
+
+	body := `{
+		"riskLevel": "low",
+		"premise": "ok",
+		"blastRadius": [],
+		"filesChanged": 1,
+		"testsCoverage": "adequate",
+		"docsDrift": "none",
+		"proposedShippable": "auto",
+		"summary": "Small change, description is accurate.",
+		"digest": {
+			"summary": "Rewrites the auth token refresh path.",
+			"descriptionAdequacy": "ok",
+			"adequacyExplanation": "The PR body already honestly describes the diff.",
+			"proposedBody": "An unsolicited stylistic rewrite the agent proposed anyway."
+		}
+	}`
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var count int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubDescriptionAutofix)).Scan(&count); err != nil {
+		t.Fatalf("count description-autofix outbox rows: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("description-autofix outbox row count = %d, want 0 (descriptionAdequacy was \"ok\" -- the floor never fired, so a proposedBody must never be enqueued for a real write)", count)
+	}
+
+	// The ordinary verdict outbox row must still be present -- this gate is
+	// specific to the description-autofix candidate row, never the verdict
+	// posting itself.
+	var verdictCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubVerdict)).Scan(&verdictCount); err != nil {
+		t.Fatalf("count verdict outbox rows: %v", err)
+	}
+	if verdictCount != 1 {
+		t.Errorf("verdict outbox row count = %d, want 1", verdictCount)
+	}
+}
+
+// TestPostReviewVerdict_ProposedBodyAbsent_NeverEnqueuesDescriptionAutofixOutboxRow
+// proves the common case (no rewrite proposed -- validVerdictRequestJSON's
+// own digest carries no proposedBody at all) never enqueues the
+// description-autofix outbox kind.
+func TestPostReviewVerdict_ProposedBodyAbsent_NeverEnqueuesDescriptionAutofixOutboxRow(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-no-autofix-candidate", 15)
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", validVerdictRequestJSON())
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var count int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubDescriptionAutofix)).Scan(&count); err != nil {
+		t.Fatalf("count description-autofix outbox rows: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("description-autofix outbox row count = %d, want 0 (no proposedBody was posted)", count)
 	}
 }
