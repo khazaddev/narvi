@@ -350,7 +350,18 @@ func TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown(t *te
 // digest_stack_risks/digest_unverified_limits (migrations/
 // 000077_review_verdicts_digest.up.sql) are all populated from the
 // posted digest, verbatim, on the SAME review_verdicts row Step 62
-// already writes -- "digest quality measurable from day one".
+// already writes -- "digest quality measurable from day one". It ALSO
+// closes the one end-to-end gap on this Step's actual deliverable -- the
+// rendered merge readout -- by asserting the SAME posted digest reaches
+// the enqueued outbox row's own Body (reviewpost.RenderVerdictComment's
+// output, githubapi.VerdictNotifier's own delivery payload): persistence
+// and rendering were previously only ever proven in isolation from each
+// other (this test proving persistence, TestRenderVerdictComment* proving
+// rendering from a hand-built Digest), so a regression that silently
+// stopped the digest from ever reaching the POSTED COMMENT -- e.g.
+// PostReviewVerdict building the outbox payload from the wrong Digest, or
+// dropping it before RenderVerdictComment ever saw it -- would have been
+// caught by NEITHER.
 func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
@@ -406,6 +417,38 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 	}
 	if !strings.Contains(string(digestArchDecisions), "Matches CLAUDE.md's shared-helper convention.") {
 		t.Errorf("digest_arch_decisions = %s, want it to contain the posted conventionConformance text", digestArchDecisions)
+	}
+
+	// The end-to-end proof: the SAME digest that just landed in
+	// review_verdicts above must ALSO be present in the outbox row's own
+	// rendered comment body -- the text that actually gets posted to the
+	// PR. Queried the same way TestPostReviewVerdict_
+	// Success_EnqueuesGitHubVerdictOutboxRow already does.
+	var row sqlcgen.Outbox
+	if err := rig.pool.QueryRow(ctx, `SELECT id, session_id, kind, payload, status FROM outbox WHERE session_id = $1`, session.ID).
+		Scan(&row.ID, &row.SessionID, &row.Kind, &row.Payload, &row.Status); err != nil {
+		t.Fatalf("query outbox row: %v", err)
+	}
+
+	var payload githubapi.VerdictPayload
+	if err := json.Unmarshal(row.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal outbox payload: %v", err)
+	}
+
+	for _, want := range []string{
+		"### What this PR does",
+		"Adds a retry helper around the flaky upstream call.",
+		"### Architecture choices",
+		"Centralize retries in one helper.",
+		"Inline retry logic per call site.",
+		"Matches CLAUDE.md's shared-helper convention.",
+		"### Risks to the stack",
+		"Touches every call site of the upstream client; a regression here is broad.",
+		"Did not verify behavior under a real network partition.",
+	} {
+		if !strings.Contains(payload.Body, want) {
+			t.Errorf("outbox payload Body missing %q -- the digest persisted to review_verdicts did not reach the rendered comment. Body:\n%s", want, payload.Body)
+		}
 	}
 }
 
