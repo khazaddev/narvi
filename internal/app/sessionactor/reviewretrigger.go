@@ -238,7 +238,9 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// PR's own CURRENT diff, reviewCtx above), THEN floored at
 			// the PR's own previous depth ("once deep, a PR stays deep,
 			// even if the delta itself would independently route
-			// light") -- decision.latestVerdictReviewPath is the SAME
+			// light") -- UNLESS this fresh decision is itself an explicit
+			// always_light admin override (D9, below) -- decision.
+			// latestVerdictReviewPath is the SAME
 			// GetLatest read readReviewRetriggerState already performed
 			// (phase 1), never a second, redundant review_verdicts
 			// query. ComputeDecision itself performs its OWN further
@@ -247,13 +249,45 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// query outside any transaction, accepted for reusing the
 			// SAME shared entry point every other trigger path calls
 			// rather than a bespoke variant just for this one caller.
+			// D1 (adversarial-review fix): ComputeDecision's own third
+			// return value (priorReviewDepth, compute.go) is deliberately
+			// IGNORED here -- this lane already has its OWN, independently
+			// obtained prior depth (decision.latestVerdictReviewPath,
+			// read by readReviewRetriggerState's own phase-1 GetLatest,
+			// above) to floor against, so using ComputeDecision's copy of
+			// the identical fact here would be redundant, never a
+			// correctness difference (both reads name the SAME latest
+			// review_verdicts row for this repoFullName/prNumber).
 			triageDeps := appreviewtriage.Deps{RepoSettings: a.stores.repoSettings, ReviewVerdicts: a.stores.reviewVerdict, Artifacts: a.stores.artifact, Sessions: a.stores.session}
-			triageDecision, triageConfig := appreviewtriage.ComputeDecision(ctx, triageDeps, decision.repoFullName, decision.prNumber, reviewCtx)
+			triageDecision, triageConfig, _ := appreviewtriage.ComputeDecision(ctx, triageDeps, decision.repoFullName, decision.prNumber, reviewCtx)
 			triageProvenance := appreviewtriage.ResolveProvenance(ctx, triageDeps, decision.repoFullName, decision.prNumber)
-			flooredDepth := domainreviewtriage.Floor(triageDecision.Depth, domainreviewtriage.ReviewDepth(decision.latestVerdictReviewPath))
+			// D9 (adversarial-review fix): skip the floor entirely when
+			// the FRESH decision's own Reason is ReasonAlwaysLightConfig
+			// -- an explicit admin cost-control override (reviewDepth.
+			// mode=always_light) outranks this history-based "always add
+			// rigor" floor -- see domainreviewtriage.Floor's own doc
+			// comment (depth.go) for the full "why" this precedence exists
+			// and why it was never explicitly decided before this fix.
+			// Without this guard, a PR that had EVER gone deep once would
+			// stay deep on every subsequent auto-triggered push forever,
+			// even after an admin flipped this repo to always_light --
+			// and the persisted decision record would self-contradict
+			// (mode "always_light" alongside depth "deep").
+			flooredDepth := triageDecision.Depth
+			if triageDecision.Reason != domainreviewtriage.ReasonAlwaysLightConfig {
+				flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, domainreviewtriage.ReviewDepth(decision.latestVerdictReviewPath))
+			}
 			decision.finalReviewDepth = string(flooredDepth)
 			decision.triageModelID, decision.triageEffort = domainreviewtriage.ModelAndEffort(flooredDepth, a.reviewModelDeep)
-			if recordJSON, marshalErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance)); marshalErr != nil {
+			// D4 (nice-to-have adversarial-review fix): see internal/
+			// adapters/inbound/httpapi/reviewretrigger.go's own identical
+			// log line for the full "why" -- an operator otherwise has no
+			// signal that a deep-routed turn's model-tier override is
+			// silently inert.
+			if flooredDepth == domainreviewtriage.DepthDeep && a.reviewModelDeep == "" {
+				a.logger.Info("sessionactor: automatic re-review routed deep but no deep-tier model configured (NARVI_REVIEW_MODEL_DEEP unset), dispatching with the default model at forced high effort", "repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
+			}
+			if recordJSON, marshalErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, decision.triageModelID, decision.triageEffort)); marshalErr != nil {
 				a.logger.Warn("sessionactor: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", marshalErr, "repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
 			} else {
 				decision.reviewDepthDecisionJSON = recordJSON

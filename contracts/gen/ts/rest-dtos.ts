@@ -481,7 +481,7 @@ export interface PostedFinding {
   suggestedFix?: string | null;
 }
 /**
- * Step 66's own additive extension (§26.1, 'review digest: verdict as merge readout'): the merge-readout's typed content -- 'what this PR does', architecture choices, and risks to the stack -- that fronts the rendered verdict, ahead of the pre-existing findings/coverage/docs-drift content (now collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment). Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with descriptionAdequacy/adequacyExplanation/proposedBody below. REQUIRED on the request as a whole (unlike findings above): summary/descriptionAdequacy/adequacyExplanation within it are the fields this Step hard-requires (internal/domain/reviewpost.ValidateVerdictInput); archDecisions/stackRisks/unverifiedLimits/proposedBody are requested (the review-turn prompt asks the agent to fill them, internal/domain/review.RenderTurnPrompt) but NOT validation-enforced -- the full digest becomes schema-required only once a later Step (§26.3) defines the deep path this endpoint does not implement yet.
+ * Step 66's own additive extension (§26.1, 'review digest: verdict as merge readout'): the merge-readout's typed content -- 'what this PR does', architecture choices, and risks to the stack -- that fronts the rendered verdict, ahead of the pre-existing findings/coverage/docs-drift content (now collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment). Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with descriptionAdequacy/adequacyExplanation/proposedBody below, and by Step 68 (§26.3, light/deep review-depth triage) with a CONDITIONAL requirement on three more fields. REQUIRED on the request as a whole (unlike findings above): summary/descriptionAdequacy/adequacyExplanation within it are ALWAYS hard-required (internal/domain/reviewpost.ValidateVerdictInput); archDecisions/stackRisks/unverifiedLimits are requested on every review (the review-turn prompt asks the agent to fill them, internal/domain/review.RenderTurnPrompt) and are ADDITIONALLY hard-required -- rejected when empty/blank -- whenever this session's own review-depth routing decision (turns.review_depth, resolved server-side, never a field on this request body) is 'deep'. This JSON Schema cannot express that condition itself (review-depth lives on the turn, not on this payload) -- see ValidateVerdictInput's own doc comment (validate.go) for the exact, application-level enforced rule. proposedBody remains requested but never required, on every path.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "Digest".
@@ -492,15 +492,15 @@ export interface Digest {
    */
   summary: string;
   /**
-   * Zero or more structural decisions the diff makes -- OPTIONAL, absent/empty is legal (not yet validation-enforced, see this object's own description).
+   * Zero or more structural decisions the diff makes -- schema-optional at this JSON Schema level (absent/empty always decodes fine), but application-level REQUIRED (at least one entry with real, non-blank content) whenever this session's own server-resolved review-depth is 'deep' (Step 68, §26.3) -- see this object's own description, and internal/domain/reviewpost.ValidateVerdictInput's own doc comment, for the exact conditional rule this schema alone cannot express.
    */
   archDecisions?: ArchDecision[];
   /**
-   * Free-text prose: coupling and deployment risks (migrations, multi-phase deploys, image rebuilds) and reversibility -- rendered alongside the verdict's own existing blastRadius. OPTIONAL.
+   * Free-text prose: coupling and deployment risks (migrations, multi-phase deploys, image rebuilds) and reversibility -- rendered alongside the verdict's own existing blastRadius. Schema-optional; application-level REQUIRED non-blank on a 'deep' review-depth turn, mirroring archDecisions above (Step 68, §26.3).
    */
   stackRisks?: string | null;
   /**
-   * Free-text prose: what was explicitly NOT verified (honest limits). OPTIONAL.
+   * Free-text prose: what was explicitly NOT verified (honest limits). Schema-optional; application-level REQUIRED non-blank on a 'deep' review-depth turn, mirroring archDecisions above (Step 68, §26.3).
    */
   unverifiedLimits?: string | null;
   /**
@@ -517,7 +517,7 @@ export interface Digest {
   proposedBody?: string | null;
 }
 /**
- * One structural decision the diff makes (Digest.archDecisions, §26.1's own 'Architecture choices' section): what was decided, the alternative implicitly rejected, and conformance to the repo's own conventions (its agent instructions file -- CLAUDE.md/AGENTS.md -- and its established patterns, already visible to the reviewing agent via its own sandbox checkout, never fetched or injected by this endpoint). No field here is REQUIRED (no minLength, no 'required' array): this Step requests the full digest but validation-enforces only Digest.summary above -- internal/domain/reviewpost's own doc comment (digest.go) is explicit that a submitted-but-incomplete ArchDecision is rendered honestly (its blank field(s) render as empty, never silently dropped) rather than rejected, since a stricter per-field requirement here is explicitly deferred to a later Step (§26.3/Step 68, once the deep path this endpoint does not implement yet is defined).
+ * One structural decision the diff makes (Digest.archDecisions, §26.1's own 'Architecture choices' section): what was decided, the alternative implicitly rejected, and conformance to the repo's own conventions (its agent instructions file -- CLAUDE.md/AGENTS.md -- and its established patterns, already visible to the reviewing agent via its own sandbox checkout, never fetched or injected by this endpoint). No individual field here is REQUIRED at the schema level (no minLength, no 'required' array on THIS object) -- internal/domain/reviewpost's own doc comment (digest.go) is explicit that a submitted-but-incomplete ArchDecision is rendered honestly (its blank field(s) render as empty, never silently dropped) rather than rejected. Digest.archDecisions as a WHOLE, however, is application-level required to contain at least one entry with real, non-blank content in ANY of these three fields whenever this session's own review-depth is 'deep' (Step 68, §26.3, now implemented) -- see Digest.archDecisions' own description, and internal/domain/reviewpost.ValidateVerdictInput's own hasNonBlankArchDecision check, for the exact rule this per-object schema cannot itself express.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "ArchDecision".

@@ -377,12 +377,21 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		// comment. rig.diffFetcher/rig.botToken default nil/"" -- see this
 		// rig's own diffFetcher field doc comment for why, and for how a
 		// test overrides them.
-		// reviewTriageDeps/reviewModelDeep (Step 68, §26.3) default to the
-		// zero value -- appreviewtriage.ComputeDecision/LoadConfig are both
-		// nil-store-safe (degrade to the built-in default, never panic),
-		// so this rig needs no further fixture wiring for tests that don't
-		// care about review-depth triage specifically.
-		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.reviewFindings, rig.falsePositivePatterns, rig.botToken, platform.DefaultTimeouts(), appreviewtriage.Deps{}, ""))
+		// reviewTriageDeps (Step 68, §26.3; wired to REAL stores as of D6's
+		// own adversarial-review fix -- this used to pass the bare zero
+		// value appreviewtriage.Deps{}, which meant NO test anywhere in
+		// this package's own integration suite could exercise
+		// ComputeDecision's real repo_settings/review_verdicts reads (or,
+		// critically for D1, the re-review floor those reads feed) through
+		// this endpoint at all -- appreviewtriage.ComputeDecision/LoadConfig
+		// are both nil-store-safe by construction, but "degrades safely"
+		// and "is ever actually tested" are different properties, and the
+		// second one had zero coverage). rig.repoSettings/rig.reviewVerdicts
+		// are the SAME stores every other route in this rig already shares
+		// -- no new store, no new pool connection. reviewModelDeep stays ""
+		// (unconfigured) -- no test in this package needs a specific
+		// deep-tier model id, only the depth decision itself.
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.reviewFindings, rig.falsePositivePatterns, rig.botToken, platform.DefaultTimeouts(), appreviewtriage.Deps{RepoSettings: rig.repoSettings, ReviewVerdicts: rig.reviewVerdicts}, ""))
 		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48)
 		// -- see reviewfindings.go's own doc comment.
 		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(rig.sessions, rig.prSessions, rig.reviewFindings, rig.auditLog))
@@ -536,6 +545,19 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	router.Route("/api/repos/{owner}/{repo}/description-autofix", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutDescriptionAutofixToggle(rig.repoSettings))
+	})
+	// /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3) -- mounted
+	// behind auth.Middleware, exactly like cmd/control-plane/main.go's own
+	// wiring (see reposettings.go's own PutReviewDepthConfig doc comment).
+	// Adversarial-review fix, D8: this route was NOT mounted in this test
+	// rig at all before this fix -- PutReviewDepthConfig/
+	// ActionConfigureReviewDepth had zero test coverage anywhere in this
+	// codebase (reproduced: widening the RBAC action's allowed roles from
+	// admin-only to include maintainer/member/viewer left the entire test
+	// suite green).
+	router.Route("/api/repos/{owner}/{repo}/review-depth", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Put("/", httpapi.PutReviewDepthConfig(rig.repoSettings))
 	})
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1) --
 	// mounted behind auth.Middleware exactly like cmd/control-plane/

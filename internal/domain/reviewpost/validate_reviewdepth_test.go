@@ -39,6 +39,37 @@ func TestValidateVerdictInput_DeepPath(t *testing.T) {
 			wantErr: reviewpost.ErrEmptyDigestArchDecisions,
 		},
 		{
+			// Adversarial-review fix, D2's own "hollow check" aggravator:
+			// a non-empty slice containing only an all-blank ArchDecision
+			// must be rejected exactly like an empty slice -- a bare
+			// len() > 0 check would have let this through.
+			name: "deep path with a single all-blank ArchDecision entry is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = []reviewpost.ArchDecision{{}}
+			},
+			wantErr: reviewpost.ErrEmptyDigestArchDecisions,
+		},
+		{
+			// A non-blank field in ANY position (not just Decision) still
+			// counts -- this is a "does at least one field carry real
+			// content" check, not "is Decision specifically non-blank".
+			name: "deep path with only ConventionConformance filled in is accepted",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = []reviewpost.ArchDecision{{ConventionConformance: "matches CLAUDE.md's no-I/O-in-domain rule"}}
+			},
+			wantErr: nil,
+		},
+		{
+			// A mix of one all-blank entry and one real entry still
+			// passes -- the check only requires AT LEAST ONE real entry,
+			// never that every entry be non-blank.
+			name: "deep path with one blank entry alongside one real entry is accepted",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = []reviewpost.ArchDecision{{}, {Decision: "Introduced a new triage package"}}
+			},
+			wantErr: nil,
+		},
+		{
 			name:    "deep path with empty StackRisks is rejected",
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.StackRisks = "" },
 			wantErr: reviewpost.ErrEmptyDigestStackRisks,

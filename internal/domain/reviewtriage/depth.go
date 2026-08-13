@@ -61,6 +61,28 @@ func rank(d ReviewDepth) int {
 // ReviewDepth instead. prior == "" (no prior verdict/depth on record --
 // e.g. this PR's first-ever review) is the common, legitimate case: fresh
 // alone decides, unaffected by an absent floor.
+//
+// # Precedence: an explicit always_light admin override outranks this floor (D9, adversarial-review fix)
+//
+// Floor itself has no awareness of WHY fresh is what it is -- it composes
+// two ReviewDepth values, nothing more. But every caller applying it MUST
+// skip this call entirely (using the fresh, unfloored Decision.Depth
+// as-is) whenever that Decision's own Reason is ReasonAlwaysLightConfig
+// (decide.go): a repo admin setting reviewDepth.mode=always_light is an
+// explicit, deliberate cost-control choice ("always subtract to light"),
+// and this floor is a history-based "always add rigor" mechanism -- the
+// two are in direct, irreconcilable tension for exactly this one case,
+// and the explicit admin choice must win. Before this fix, every one of
+// this package's real callers applied Floor unconditionally, so a PR that
+// had EVER gone deep once stayed deep on every subsequent auto-triggered
+// push FOREVER, even after an admin flipped the repo to always_light --
+// silently defeating the override, and (worse) persisting a self-
+// contradictory decision record (mode: "always_light" alongside
+// depth: "deep"). See internal/app/sessionactor/reviewretrigger.go's own
+// handleReviewRetriggerDebounceTimer for where this precedence is now
+// actually enforced, and internal/app/reviewtriage.ComputeDecision's own
+// doc comment for how a caller obtains the prior depth this floor needs
+// without a second, redundant Postgres read.
 func Floor(fresh, prior ReviewDepth) ReviewDepth {
 	if rank(prior) > rank(fresh) {
 		return prior

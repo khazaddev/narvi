@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -12,8 +13,10 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/releasereview"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	domainreviewtriage "github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -554,26 +557,94 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// logic regardless, simply unread on this one path now.
 		// prCtx (Step 68, §26.3) is hoisted to this outer scope -- unlike
 		// fetchedHeadSHA (its own pre-existing identical hoist, one line
-		// below), the WHOLE struct is needed further down, at
-		// coalescer.CreateOrJoin's own call site, to compute this
-		// mention's own light/deep triage decision. review.
-		// PreFetchedContext{} (every field its own honest zero value) is
-		// exactly what a nil cfg.DiffFetcher, or a repo_full_name that
-		// fails to split, degrades to -- internal/app/reviewtriage.
+		// below), the WHOLE struct is needed further down, to compute this
+		// mention's own light/deep triage decision BEFORE rendering the
+		// prompt (see this block's own doc comment immediately below).
+		// review.PreFetchedContext{} (every field its own honest zero
+		// value) is exactly what a nil cfg.DiffFetcher, or a repo_full_name
+		// that fails to split, degrades to -- internal/app/reviewtriage.
 		// ComputeDecision's own fail-open posture already treats an
 		// all-zero Signals as "route light", so no special-casing is
 		// needed here for either branch below.
 		var fetchedHeadSHA string
 		var prCtx review.PreFetchedContext
+		havePrCtx := false
 		if cfg.DiffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(m.RepoFullName); ok {
 				prCtx = reviewcontext.Fetch(ctx, logger, cfg.DiffFetcher, cfg.Timeouts, owner, repo, m.PRNumber, cfg.BotToken, m.Stack)
-				m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
+				havePrCtx = true
 				fetchedHeadSHA = prCtx.HeadSHA
 			} else {
 				logger.Warn("github: could not split repo_full_name into owner/repo, skipping pre-fetched review context",
 					"repo_full_name", m.RepoFullName, "pr_number", m.PRNumber)
 			}
+		}
+
+		// Step 68 (§26.3): the depth decision, computed from prCtx above.
+		// Adversarial-review fix D2 ("deep-path digest requirement
+		// contradicts the prompt the agent actually receives"): this MUST
+		// run, and be floored (D1, immediately below), BEFORE
+		// review.RenderTurnPrompt renders m.CommentBody -- prCtx.DeepPath
+		// (set right below) is the ONE fact that makes RenderTurnPrompt's
+		// own verdictToolInstructions tell the agent the truth about
+		// whether digest.archDecisions/stackRisks/unverifiedLimits are
+		// REQUIRED for THIS turn. This used to run INSIDE coalescer.
+		// CreateOrJoin, called by this handler AFTER the prompt was
+		// already rendered -- moved here, into this handler, so the
+		// SAME depth value both informs the prompt text and gets
+		// persisted onto the resulting turn, never two independently-
+		// computed values that could disagree. ComputeDecision never
+		// errors (its own doc comment) -- there is no failure path here
+		// to propagate.
+		//
+		// D1 (adversarial-review fix, "re-review depth floor applied at
+		// only 1 of 3 lanes"): this handler's own REUSE-branch turns
+		// (coalescer.CreateOrJoin's own second-mention/label-retrigger
+		// path) used to feed the FRESH, unfloored decision straight
+		// through, never applying §24's re-review floor at all --
+		// applied here, uniformly, for BOTH the WINNER and REUSE branches
+		// CreateOrJoin may end up taking (which one is only decided
+		// further inside CreateOrJoin's own claim-row transaction, not
+		// knowable yet at this point in the handler) -- this is safe
+		// because a WINNER (brand-new github_pr_sessions claim row) can
+		// never have a real prior review_verdicts row to floor against in
+		// practice (posting a verdict always requires a turn created via
+		// an EXISTING claim row first), so priorReviewDepth is always ""
+		// on that branch and Floor(fresh, "") is a no-op by construction
+		// -- see CreateOrJoin's own doc comment (coalesce.go) for the
+		// full "why" this uniform application is equivalent to a
+		// REUSE-only floor in every reachable state.
+		//
+		// D9 (adversarial-review fix): skip the floor entirely when the
+		// fresh decision's own Reason is ReasonAlwaysLightConfig -- an
+		// explicit admin reviewDepth.mode=always_light override outranks
+		// this history-based floor, mirroring internal/app/sessionactor/
+		// reviewretrigger.go's own identical guard (see
+		// domainreviewtriage.Floor's own doc comment, depth.go, for the
+		// full "why").
+		triageDecision, triageConfig, priorReviewDepth := appreviewtriage.ComputeDecision(ctx, coalescer.ReviewTriage, m.RepoFullName, m.PRNumber, prCtx)
+		triageProvenance := appreviewtriage.ResolveProvenance(ctx, coalescer.ReviewTriage, m.RepoFullName, m.PRNumber)
+		flooredDepth := triageDecision.Depth
+		if triageDecision.Reason != domainreviewtriage.ReasonAlwaysLightConfig {
+			flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, priorReviewDepth)
+		}
+		prCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
+		if havePrCtx {
+			m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
+		}
+		reviewDepthStr := string(flooredDepth)
+		triageModelID, triageEffort := domainreviewtriage.ModelAndEffort(flooredDepth, coalescer.ReviewModelDeep)
+		// D4 (nice-to-have adversarial-review fix): see internal/adapters/
+		// inbound/httpapi/reviewretrigger.go's own identical log line for
+		// the full "why" -- an operator otherwise has no signal that a
+		// deep-routed turn's model-tier override is silently inert.
+		if flooredDepth == domainreviewtriage.DepthDeep && coalescer.ReviewModelDeep == "" {
+			logger.Info("github: review routed deep but no deep-tier model configured (NARVI_REVIEW_MODEL_DEEP unset), dispatching with the default model at forced high effort", "repo", m.RepoFullName, "pr_number", m.PRNumber)
+		}
+		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort))
+		if triageRecordErr != nil {
+			logger.Warn("github: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo", m.RepoFullName, "pr_number", m.PRNumber)
+			triageRecordJSON = nil
 		}
 
 		req := restdtos.CreateSessionRequest{
@@ -624,7 +695,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor, m.IsLabelRetrigger, mentionText, fetchedHeadSHA, prCtx)
+		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor, m.IsLabelRetrigger, mentionText, fetchedHeadSHA, &reviewDepthStr, triageModelID, triageEffort, triageRecordJSON)
 		if err != nil {
 			if errors.Is(err, ErrActorNotAuthorized) {
 				// ErrActorNotAuthorized fires for TWO distinct reasons

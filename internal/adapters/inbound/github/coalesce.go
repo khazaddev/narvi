@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -20,8 +19,6 @@ import (
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	intentdomain "github.com/khazaddev/narvi/internal/domain/intent"
-	"github.com/khazaddev/narvi/internal/domain/review"
-	domainreviewtriage "github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -303,31 +300,39 @@ type SessionCoalescer struct {
 // path's CreateTurnForBot call), so it lands on THAT turn's own row
 // (turns.review_head_sha) at creation time -- see that column's own
 // migration doc comment for the full "why".
-func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID, isLabelRetrigger bool, classifyText string, reviewHeadSHA string, prCtx review.PreFetchedContext) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
+//
+// reviewDepth/triageModelID/triageEffort/triageRecordJSON (Step 68,
+// §26.3) are the ALREADY-RESOLVED light/deep routing outcome -- computed
+// by THIS function's own caller, handler.go, via appreviewtriage.
+// ComputeDecision (plus domainreviewtriage.Floor/ModelAndEffort/
+// NewDecisionRecord), BEFORE handler.go calls review.RenderTurnPrompt on
+// req.Prompt and BEFORE this function is ever invoked (adversarial-review
+// fix D2: "deep-path digest requirement contradicts the prompt the agent
+// actually receives"). This function used to compute this itself, inline,
+// AFTER handler.go had already rendered the prompt -- which meant the
+// text an agent actually read could never honestly reflect the depth this
+// function was about to persist. CreateOrJoin no longer computes triage
+// at all: it just persists what its caller already decided, applied
+// identically to BOTH the WINNER and REUSE branches below, mirroring
+// reviewHeadSHA's own identical "resolved upstream, just threaded through
+// and persisted here" shape. See handler.go's own call site for the full
+// "why here, once, before rendering" reasoning, and for why applying the
+// SAME (unfloored-for-WINNER, floored-for-REUSE) value to both branches
+// uniformly is safe: review_verdicts can only ever carry a row for a PR
+// that already has a github_pr_sessions claim row (every verdict-posting
+// turn is created via one of this package's own two branches, or the
+// manual/auto-retrigger lanes, all of which require an EXISTING claim
+// row), so the WINNER branch (no existing claim row) can never actually
+// have a prior verdict/depth to floor against in practice -- Floor(fresh,
+// "") is a no-op by construction (domainreviewtriage.Floor's own doc
+// comment) regardless.
+func (c *SessionCoalescer) CreateOrJoin(ctx context.Context, repoFullName string, prNumber int32, req restdtos.CreateSessionRequest, actor pgtype.UUID, isLabelRetrigger bool, classifyText string, reviewHeadSHA string, reviewDepth *string, triageModelID *string, triageEffort *string, triageRecordJSON []byte) (session sqlcgen.Session, turn sqlcgen.Turn, isNewSession bool, err error) {
 	var reviewHeadSHAPtr *string
 	if reviewHeadSHA != "" {
 		reviewHeadSHAPtr = &reviewHeadSHA
 	}
 	logger := platform.Logger(ctx)
-
-	// Step 68 (§26.3): the depth decision runs ONCE here, before ANY
-	// transaction opens (a real Postgres read of its own, mirroring
-	// createAuthorized's own identical "resolve outside any ambient
-	// transaction" discipline immediately below) -- consulted by BOTH the
-	// WINNER and REUSE branches, since every review turn (not just a
-	// session's first one) gets its own fresh routing decision.
-	// ComputeDecision never errors (its own doc comment) -- there is no
-	// failure path here for CreateOrJoin to propagate.
-	triageDecision, triageConfig := appreviewtriage.ComputeDecision(ctx, c.ReviewTriage, repoFullName, prNumber, prCtx)
-	triageProvenance := appreviewtriage.ResolveProvenance(ctx, c.ReviewTriage, repoFullName, prNumber)
-	reviewDepthStr := string(triageDecision.Depth)
-	reviewDepthPtr := &reviewDepthStr
-	triageModelID, triageEffort := domainreviewtriage.ModelAndEffort(triageDecision.Depth, c.ReviewModelDeep)
-	triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, triageDecision.Depth, triageProvenance))
-	if triageRecordErr != nil {
-		logger.Warn("github: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo", repoFullName, "pr_number", prNumber)
-		triageRecordJSON = nil
-	}
+	reviewDepthPtr := reviewDepth
 
 	// Resolved BEFORE any transaction opens -- see this function's own
 	// doc comment above for why. Only actually consulted by the WINNER

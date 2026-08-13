@@ -32,16 +32,32 @@ import (
 // signal) plus LoadConfig's own repo_settings read; no new network call,
 // no diff re-fetch.
 //
-// Returns the FRESH decision alone -- §24's re-review floor (Floor,
-// internal/domain/reviewtriage/depth.go) is a SEPARATE, caller-applied
-// step (see internal/app/sessionactor/reviewretrigger.go's own call
-// site): a caller with no prior depth to floor against (a brand-new
-// review session) simply uses decision.Depth as-is; a caller re-
-// reviewing an existing PR calls reviewtriage.Floor(decision.Depth,
-// priorDepth) and rebuilds its own DecisionRecord via reviewtriage.
-// NewDecisionRecord(decision, cfg, flooredDepth) to capture that the
-// floor is what actually decided.
-func ComputeDecision(ctx context.Context, deps Deps, repoFullName string, prNumber int32, prCtx review.PreFetchedContext) (reviewtriage.Decision, reviewtriage.Config) {
+// Returns the FRESH decision, cfg, and priorReviewDepth -- priorReviewDepth
+// (adversarial-review fix, D1: "re-review depth floor applied at only 1 of
+// 3 lanes") is the SAME latest-review_verdicts row's own review_path this
+// function already reads (below) for the "prior high verdict" signal
+// (rule 4), now ALSO surfaced to the caller instead of discarded, so
+// every caller -- not just internal/app/sessionactor/reviewretrigger.go's
+// own auto-retrigger lane, which already performed a SEPARATE GetLatest
+// read of its own for exactly this purpose -- can apply §24's re-review
+// floor (reviewtriage.Floor(decision.Depth, priorReviewDepth)) without a
+// second, redundant Postgres query. Empty ("") when no verdict has ever
+// been posted for this PR, or when the latest one predates Step 68 (its
+// own turn never resolved a depth) -- both degrade identically to
+// "nothing to floor against" (reviewtriage.Floor's own doc comment: an
+// empty/unrecognized prior ranks with DepthLight, the least conservative
+// reading), exactly like a brand-new review session with no prior turn at
+// all.
+//
+// A caller with no prior depth to floor against (a brand-new review
+// session, priorReviewDepth == "") simply uses decision.Depth as-is --
+// reviewtriage.Floor(fresh, "") is a no-op by construction (Floor's own
+// rank table), so a caller MAY also apply Floor unconditionally without
+// special-casing this case itself. A caller re-reviewing an existing PR
+// calls reviewtriage.Floor(decision.Depth, priorReviewDepth) and rebuilds
+// its own DecisionRecord via reviewtriage.NewDecisionRecord(decision, cfg,
+// flooredDepth) to capture that the floor is what actually decided.
+func ComputeDecision(ctx context.Context, deps Deps, repoFullName string, prNumber int32, prCtx review.PreFetchedContext) (decision reviewtriage.Decision, cfg reviewtriage.Config, priorReviewDepth reviewtriage.ReviewDepth) {
 	logger := platform.Logger(ctx)
 
 	cfg, err := LoadConfig(ctx, deps, repoFullName)
@@ -57,19 +73,25 @@ func ComputeDecision(ctx context.Context, deps Deps, repoFullName string, prNumb
 	// LoadConfig's own identical nil-store convention (config.go).
 	priorVerdictRiskHigh := false
 	if deps.ReviewVerdicts == nil {
-		return decideWithSignals(prCtx, cfg, priorVerdictRiskHigh)
+		decision, cfg = decideWithSignals(prCtx, cfg, priorVerdictRiskHigh)
+		return decision, cfg, ""
 	}
 	if latest, verdictErr := deps.ReviewVerdicts.GetLatest(ctx, repoFullName, prNumber); verdictErr != nil {
 		if !errors.Is(verdictErr, pgx.ErrNoRows) {
 			logger.Warn("reviewtriage: compute decision: read latest review verdict failed, treating prior-high-verdict signal as absent", "error", verdictErr, "repo_full_name", repoFullName, "pr_number", prNumber)
 		}
 		// pgx.ErrNoRows: no verdict has ever been posted for this PR --
-		// priorVerdictRiskHigh correctly stays false, not an error at all.
+		// priorVerdictRiskHigh correctly stays false, priorReviewDepth
+		// correctly stays "", neither is an error at all.
 	} else {
 		priorVerdictRiskHigh = latest.RiskLevel == string(review.RiskLevelHigh)
+		if latest.ReviewPath != nil {
+			priorReviewDepth = reviewtriage.ReviewDepth(*latest.ReviewPath)
+		}
 	}
 
-	return decideWithSignals(prCtx, cfg, priorVerdictRiskHigh)
+	decision, cfg = decideWithSignals(prCtx, cfg, priorVerdictRiskHigh)
+	return decision, cfg, priorReviewDepth
 }
 
 // decideWithSignals assembles the final reviewtriage.Signals from prCtx

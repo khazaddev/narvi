@@ -38,11 +38,30 @@ type DecisionRecord struct {
 	// Narvi-authored session never had an explicit build model set.
 	NarviAuthored  bool   `json:"narviAuthored"`
 	AuthoringModel string `json:"authoringModel,omitempty"`
+
+	// ResolvedModelID/ResolvedEffort (D4, nice-to-have adversarial-review
+	// fix) are ModelAndEffort's own (modelID, effort) return values
+	// (modeleffort.go), the ACTUAL override this turn's own creation call
+	// requested -- recorded here so a maintainer inspecting turns.
+	// review_depth_decision can see, for THIS specific turn, whether the
+	// deep-tier model override actually fired (ResolvedModelID non-empty)
+	// or silently stayed inert (ResolvedModelID empty on a deep-routed
+	// turn -- platform.Config.ReviewModelDeep was never configured for
+	// this deployment, ModelAndEffort's own doc comment). Both empty on
+	// the light path (ModelAndEffort returns nil, nil for anything other
+	// than DepthDeep). ResolvedEffort is "high" whenever Depth is deep,
+	// regardless of ResolvedModelID.
+	ResolvedModelID string `json:"resolvedModelId,omitempty"`
+	ResolvedEffort  string `json:"resolvedEffort,omitempty"`
 }
 
-// Provenance is ComputeDecision's own third return value (internal/app/
-// reviewtriage) -- see DecisionRecord.NarviAuthored/AuthoringModel's own
-// doc comment for why this is captured but not routed on.
+// Provenance is internal/app/reviewtriage.ResolveProvenance's own return
+// value (a SEPARATE call from ComputeDecision -- ComputeDecision's own
+// three return values are Decision, Config, and, as of D1's adversarial-
+// review fix, the prior review_path ReviewDepth; provenance is resolved
+// independently, by its own dedicated function, not bundled into that
+// tuple) -- see DecisionRecord.NarviAuthored/AuthoringModel's own doc
+// comment for why this is captured but not routed on.
 type Provenance struct {
 	NarviAuthored  bool
 	AuthoringModel string
@@ -52,12 +71,23 @@ type Provenance struct {
 // output), cfg (the resolved per-repo config Decide was called with),
 // finalDepth (decision.Depth after Floor has been applied, if this is a
 // re-review path -- callers with no floor to apply pass decision.Depth
-// itself unchanged), and provenance (internal/app/reviewtriage's own
-// best-effort authorship lookup).
-func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, provenance Provenance) DecisionRecord {
+// itself unchanged), provenance (internal/app/reviewtriage's own
+// best-effort authorship lookup), and resolvedModelID/resolvedEffort (D4,
+// nice-to-have adversarial-review fix -- ModelAndEffort's own two return
+// values, computed by the caller from the SAME finalDepth passed here;
+// nil for both on the light path, mirroring ModelAndEffort's own "both
+// nil except on DepthDeep" contract).
+func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, provenance Provenance, resolvedModelID, resolvedEffort *string) DecisionRecord {
 	tags := make([]string, len(decision.MatchedSensitiveTags))
 	for i, t := range decision.MatchedSensitiveTags {
 		tags[i] = string(t)
+	}
+	var modelID, effort string
+	if resolvedModelID != nil {
+		modelID = *resolvedModelID
+	}
+	if resolvedEffort != nil {
+		effort = *resolvedEffort
 	}
 	return DecisionRecord{
 		Depth:                string(finalDepth),
@@ -65,6 +95,8 @@ func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, pr
 		MatchedSensitiveTags: tags,
 		ChangedLines:         decision.ChangedLines,
 		DistinctRoots:        decision.DistinctRoots,
+		ResolvedModelID:      modelID,
+		ResolvedEffort:       effort,
 		Mode:                 string(resolveMode(cfg.Mode)),
 		Floored:              finalDepth != decision.Depth,
 		NarviAuthored:        provenance.NarviAuthored,

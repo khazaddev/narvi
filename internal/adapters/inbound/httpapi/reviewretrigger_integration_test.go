@@ -8,6 +8,7 @@ package httpapi_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -477,5 +478,92 @@ func TestRetriggerReview_AwaitingPlanAlwaysDeclines_NeverClassifies(t *testing.T
 	}
 	if turnCount != 1 {
 		t.Errorf("turn count = %d, want 1 (only the seeded producing turn -- the decline must never enqueue a new turn)", turnCount)
+	}
+}
+
+// TestRetriggerReview_DeepToLight_StaysFloorAtDeep is D1's own regression
+// test for this lane (adversarial-review fix, "re-review depth floor
+// applied at only 1 of 3 lanes"): before this fix, this endpoint fed the
+// FRESH, unfloored triage decision straight through with no awareness of
+// this PR's own prior depth at all -- a light-looking re-review (no
+// diffFetcher wired here, so the fresh signal is the honest, maximally
+// light "nothing to see" input) through this button would have produced
+// review_depth = "light" even though this PR had already gone deep once,
+// silently defeating §24's own "once deep, a PR stays deep" floor for
+// every OTHER lane reading review_verdicts.review_path back afterward
+// (readReviewRetriggerState, internal/app/sessionactor/reviewretrigger.go).
+// With the fix, ComputeDecision's own third return value (the SAME
+// review_verdicts.GetLatest read already performed for the "prior high
+// verdict" signal) feeds domainreviewtriage.Floor, and the floored --
+// never the fresh -- depth is what actually gets persisted.
+func TestRetriggerReview_DeepToLight_StaysFloorAtDeep(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	repoFullName := "acme/deep-to-light-retrigger-repo"
+	const prNumber = 271
+	session := rig.createOwnedGitHubReviewSession(ctx, t, owner.ID, repoFullName, prNumber)
+
+	// A PRIOR verdict already on record for this exact PR, review_path
+	// "deep" -- the fact D1's own floor must consult.
+	deepPath := "deep"
+	if _, err := rig.reviewVerdicts.Insert(ctx, sqlcgen.InsertReviewVerdictParams{
+		RepoFullName:      repoFullName,
+		PrNumber:          prNumber,
+		HeadSha:           "sha-prior-deep-review",
+		RiskLevel:         "low",
+		Premise:           "ok",
+		BlastRadius:       []byte(`[]`),
+		FilesChanged:      1,
+		TestsCoverage:     "adequate",
+		DocsDrift:         "none",
+		ProposedShippable: "auto",
+		Shippable:         "auto",
+		SessionID:         session.ID,
+		ReviewPath:        &deepPath,
+	}); err != nil {
+		t.Fatalf("seed prior deep review verdict: %v", err)
+	}
+
+	// No diffFetcher wired -- prCtx stays the honest all-zero value, so
+	// the FRESH decision this firing computes is deterministically light
+	// (ReasonLightDefault, internal/domain/reviewtriage.Decide's own rule
+	// 6) -- the floor, not the fresh signal, is what this test isolates.
+	var resp restdtos.CreateTurnResponse
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/review/retrigger", nil, &resp, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var reviewDepth *string
+	var reviewDepthDecisionJSON []byte
+	if err := rig.pool.QueryRow(ctx, `SELECT review_depth, review_depth_decision FROM turns WHERE id = $1`, resp.Id).Scan(&reviewDepth, &reviewDepthDecisionJSON); err != nil {
+		t.Fatalf("query turn review_depth: %v", err)
+	}
+	if reviewDepth == nil || *reviewDepth != "deep" {
+		got := "<nil>"
+		if reviewDepth != nil {
+			got = *reviewDepth
+		}
+		t.Errorf("turns.review_depth = %s, want %q (a light-looking re-review must still floor at this PR's own prior deep depth)", got, "deep")
+	}
+
+	if reviewDepthDecisionJSON == nil {
+		t.Fatal("turns.review_depth_decision is nil, want a recorded decision")
+	}
+	var record struct {
+		Depth   string `json:"depth"`
+		Floored bool   `json:"floored"`
+	}
+	if err := json.Unmarshal(reviewDepthDecisionJSON, &record); err != nil {
+		t.Fatalf("unmarshal review_depth_decision: %v", err)
+	}
+	if record.Depth != "deep" {
+		t.Errorf("review_depth_decision.depth = %q, want %q", record.Depth, "deep")
+	}
+	if !record.Floored {
+		t.Error("review_depth_decision.floored = false, want true (the fresh decision was light; the floor is what actually decided)")
 	}
 }

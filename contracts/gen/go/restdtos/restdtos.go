@@ -47,14 +47,17 @@ func (j *ApplySuggestionResponse) UnmarshalJSON(value []byte) error {
 // rejected, and conformance to the repo's own conventions (its agent instructions
 // file -- CLAUDE.md/AGENTS.md -- and its established patterns, already visible to
 // the reviewing agent via its own sandbox checkout, never fetched or injected by
-// this endpoint). No field here is REQUIRED (no minLength, no 'required' array):
-// this Step requests the full digest but validation-enforces only Digest.summary
-// above -- internal/domain/reviewpost's own doc comment (digest.go) is explicit
-// that a submitted-but-incomplete ArchDecision is rendered honestly (its blank
-// field(s) render as empty, never silently dropped) rather than rejected, since a
-// stricter per-field requirement here is explicitly deferred to a later Step
-// (§26.3/Step 68, once the deep path this endpoint does not implement yet is
-// defined).
+// this endpoint). No individual field here is REQUIRED at the schema level (no
+// minLength, no 'required' array on THIS object) -- internal/domain/reviewpost's
+// own doc comment (digest.go) is explicit that a submitted-but-incomplete
+// ArchDecision is rendered honestly (its blank field(s) render as empty, never
+// silently dropped) rather than rejected. Digest.archDecisions as a WHOLE,
+// however, is application-level required to contain at least one entry with real,
+// non-blank content in ANY of these three fields whenever this session's own
+// review-depth is 'deep' (Step 68, §26.3, now implemented) -- see
+// Digest.archDecisions' own description, and
+// internal/domain/reviewpost.ValidateVerdictInput's own hasNonBlankArchDecision
+// check, for the exact rule this per-object schema cannot itself express.
 type ArchDecision struct {
 	// How this decision conforms to (or diverges from) the repo's own established
 	// conventions.
@@ -1820,15 +1823,21 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 // verdict, ahead of the pre-existing findings/coverage/docs-drift content (now
 // collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment).
 // Extended by Step 67 (§26.2, 'description adequacy + graduated remediation') with
-// descriptionAdequacy/adequacyExplanation/proposedBody below. REQUIRED on the
-// request as a whole (unlike findings above):
-// summary/descriptionAdequacy/adequacyExplanation within it are the fields this
-// Step hard-requires (internal/domain/reviewpost.ValidateVerdictInput);
-// archDecisions/stackRisks/unverifiedLimits/proposedBody are requested (the
+// descriptionAdequacy/adequacyExplanation/proposedBody below, and by Step 68
+// (§26.3, light/deep review-depth triage) with a CONDITIONAL requirement on three
+// more fields. REQUIRED on the request as a whole (unlike findings above):
+// summary/descriptionAdequacy/adequacyExplanation within it are ALWAYS
+// hard-required (internal/domain/reviewpost.ValidateVerdictInput);
+// archDecisions/stackRisks/unverifiedLimits are requested on every review (the
 // review-turn prompt asks the agent to fill them,
-// internal/domain/review.RenderTurnPrompt) but NOT validation-enforced -- the full
-// digest becomes schema-required only once a later Step (§26.3) defines the deep
-// path this endpoint does not implement yet.
+// internal/domain/review.RenderTurnPrompt) and are ADDITIONALLY hard-required --
+// rejected when empty/blank -- whenever this session's own review-depth routing
+// decision (turns.review_depth, resolved server-side, never a field on this
+// request body) is 'deep'. This JSON Schema cannot express that condition itself
+// (review-depth lives on the turn, not on this payload) -- see
+// ValidateVerdictInput's own doc comment (validate.go) for the exact,
+// application-level enforced rule. proposedBody remains requested but never
+// required, on every path.
 type Digest struct {
 	// Step 67's own addition (§26.2): the tri-state's own required one-line
 	// explanation of WHY descriptionAdequacy is what it is -- REQUIRED non-blank,
@@ -1836,8 +1845,13 @@ type Digest struct {
 	// defeats the point' treatment.
 	AdequacyExplanation string `json:"adequacyExplanation" yaml:"adequacyExplanation" mapstructure:"adequacyExplanation"`
 
-	// Zero or more structural decisions the diff makes -- OPTIONAL, absent/empty is
-	// legal (not yet validation-enforced, see this object's own description).
+	// Zero or more structural decisions the diff makes -- schema-optional at this
+	// JSON Schema level (absent/empty always decodes fine), but application-level
+	// REQUIRED (at least one entry with real, non-blank content) whenever this
+	// session's own server-resolved review-depth is 'deep' (Step 68, §26.3) -- see
+	// this object's own description, and
+	// internal/domain/reviewpost.ValidateVerdictInput's own doc comment, for the
+	// exact conditional rule this schema alone cannot express.
 	ArchDecisions []ArchDecision `json:"archDecisions,omitempty,omitzero" yaml:"archDecisions,omitempty" mapstructure:"archDecisions,omitempty"`
 
 	// Step 67's own addition (§26.2): the agent's own comparison of THIS SAME
@@ -1862,7 +1876,8 @@ type Digest struct {
 
 	// Free-text prose: coupling and deployment risks (migrations, multi-phase
 	// deploys, image rebuilds) and reversibility -- rendered alongside the verdict's
-	// own existing blastRadius. OPTIONAL.
+	// own existing blastRadius. Schema-optional; application-level REQUIRED non-blank
+	// on a 'deep' review-depth turn, mirroring archDecisions above (Step 68, §26.3).
 	StackRisks DigestStackRisks `json:"stackRisks,omitempty,omitzero" yaml:"stackRisks,omitempty" mapstructure:"stackRisks,omitempty"`
 
 	// 'What this PR does' -- 2-4 sentences written FROM THE DIFF, never copied from
@@ -1872,7 +1887,9 @@ type Digest struct {
 	// full 'why two summaries' explanation.
 	Summary string `json:"summary" yaml:"summary" mapstructure:"summary"`
 
-	// Free-text prose: what was explicitly NOT verified (honest limits). OPTIONAL.
+	// Free-text prose: what was explicitly NOT verified (honest limits).
+	// Schema-optional; application-level REQUIRED non-blank on a 'deep' review-depth
+	// turn, mirroring archDecisions above (Step 68, §26.3).
 	UnverifiedLimits DigestUnverifiedLimits `json:"unverifiedLimits,omitempty,omitzero" yaml:"unverifiedLimits,omitempty" mapstructure:"unverifiedLimits,omitempty"`
 }
 
@@ -1920,10 +1937,13 @@ type DigestProposedBody *string
 
 // Free-text prose: coupling and deployment risks (migrations, multi-phase deploys,
 // image rebuilds) and reversibility -- rendered alongside the verdict's own
-// existing blastRadius. OPTIONAL.
+// existing blastRadius. Schema-optional; application-level REQUIRED non-blank on a
+// 'deep' review-depth turn, mirroring archDecisions above (Step 68, §26.3).
 type DigestStackRisks *string
 
-// Free-text prose: what was explicitly NOT verified (honest limits). OPTIONAL.
+// Free-text prose: what was explicitly NOT verified (honest limits).
+// Schema-optional; application-level REQUIRED non-blank on a 'deep' review-depth
+// turn, mirroring archDecisions above (Step 68, §26.3).
 type DigestUnverifiedLimits *string
 
 // UnmarshalJSON implements json.Unmarshaler.

@@ -163,7 +163,7 @@ func TestComputeDecision_BasicRouting(t *testing.T) {
 	}
 
 	prCtx := review.PreFetchedContext{ChangedPaths: []string{"migrations/000099_x.up.sql"}}
-	decision, cfg := reviewtriage.ComputeDecision(ctx, deps, repoFullName, 1, prCtx)
+	decision, cfg, _ := reviewtriage.ComputeDecision(ctx, deps, repoFullName, 1, prCtx)
 
 	if decision.Depth != domainreviewtriage.DepthDeep {
 		t.Errorf("Depth = %q, want deep", decision.Depth)
@@ -193,7 +193,7 @@ func TestComputeDecision_FailsOpenOnBrokenRepoSettings(t *testing.T) {
 	}
 
 	prCtx := review.PreFetchedContext{Additions: 5, Deletions: 5, ChangedPaths: []string{"internal/app/foo/a.go"}}
-	decision, cfg := reviewtriage.ComputeDecision(ctx, deps, repoFullName, 1, prCtx)
+	decision, cfg, _ := reviewtriage.ComputeDecision(ctx, deps, repoFullName, 1, prCtx)
 
 	if decision.Depth != domainreviewtriage.DepthLight {
 		t.Errorf("Depth = %q, want light (a broken repo_settings read must fall open to the built-in default, never force deep)", decision.Depth)
@@ -219,10 +219,100 @@ func TestComputeDecision_FailsOpenOnBrokenReviewVerdicts(t *testing.T) {
 	}
 
 	prCtx := review.PreFetchedContext{Additions: 5, Deletions: 5, ChangedPaths: []string{"internal/app/foo/a.go"}}
-	decision, _ := reviewtriage.ComputeDecision(ctx, deps, repoFullName, 1, prCtx)
+	decision, _, _ := reviewtriage.ComputeDecision(ctx, deps, repoFullName, 1, prCtx)
 
 	if decision.Depth != domainreviewtriage.DepthLight {
 		t.Errorf("Depth = %q, want light (a broken review_verdicts read must degrade the prior-high-verdict signal to false, never force deep)", decision.Depth)
+	}
+}
+
+// TestComputeDecision_PriorHighVerdict_RoutesDeep is D7's own regression
+// test for rule 4 (§26.3's own "the PR's own verdict history -- a prior
+// high verdict routes deep", doc.go's own "v1 rules -- five, not three"
+// section): before this test, the exact line computing
+// priorVerdictRiskHigh (compute.go) had ZERO coverage across this whole
+// repo -- a mutation there (== "zzz-never", permanently disabling the
+// rule) passed the full integration suite. This seeds a REAL high-risk
+// review_verdicts row (via the real store, not a fake) on an otherwise
+// light-looking PR (a small diff touching one ordinary, non-sensitive
+// path) and asserts the resulting Depth/Reason.
+func TestComputeDecision_PriorHighVerdict_RoutesDeep(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	repoFullName := repoFullNameForTest(t)
+
+	reviewVerdicts := narvipg.NewReviewVerdictStore(pool)
+	if _, err := reviewVerdicts.Insert(ctx, sqlcgen.InsertReviewVerdictParams{
+		RepoFullName:      repoFullName,
+		PrNumber:          1,
+		HeadSha:           "sha-prior-high-risk",
+		RiskLevel:         "high",
+		Premise:           "ok",
+		BlastRadius:       []byte(`[]`),
+		FilesChanged:      1,
+		TestsCoverage:     "adequate",
+		DocsDrift:         "none",
+		ProposedShippable: "auto",
+		Shippable:         "auto",
+	}); err != nil {
+		t.Fatalf("seed prior high-risk review verdict: %v", err)
+	}
+
+	deps := reviewtriage.Deps{
+		RepoSettings:   narvipg.NewRepoSettingsStore(pool),
+		ReviewVerdicts: reviewVerdicts,
+	}
+
+	// Deliberately light-looking on every OTHER signal: small diff,
+	// ordinary non-sensitive path, no repo config, no needs-human label --
+	// isolating rule 4 as the ONE thing that could route this deep.
+	prCtx := review.PreFetchedContext{Additions: 3, Deletions: 2, ChangedPaths: []string{"internal/app/foo/a.go"}}
+	decision, _, _ := reviewtriage.ComputeDecision(ctx, deps, repoFullName, 1, prCtx)
+
+	if decision.Depth != domainreviewtriage.DepthDeep {
+		t.Errorf("Depth = %q, want deep (a prior high-risk verdict must route this PR deep, §26.3 rule 4)", decision.Depth)
+	}
+	if decision.Reason != domainreviewtriage.ReasonPriorHighVerdict {
+		t.Errorf("Reason = %q, want %q", decision.Reason, domainreviewtriage.ReasonPriorHighVerdict)
+	}
+}
+
+// TestComputeDecision_NeedsHumanLabel_RoutesDeep is D7's own regression
+// test for rule 5 (doc.go's own fifth trigger: "the PR's existing
+// review:needs-human label ... routing an already-flagged-needs-human PR
+// through the MORE rigorous deep path is strictly the safer direction").
+// Before this test, hasNeedsHumanLabel's own mapping (compute.go) had
+// ZERO coverage for the identical underlying reason as rule 4 above: no
+// test in this package ever seeds a real review:needs-human label on a
+// triage-reachable PR. No prior verdict this time -- isolating rule 5
+// specifically (rule 4 never fires: ReviewVerdicts.GetLatest returns
+// pgx.ErrNoRows for a PR with no verdict on record at all).
+func TestComputeDecision_NeedsHumanLabel_RoutesDeep(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+	repoFullName := repoFullNameForTest(t)
+
+	deps := reviewtriage.Deps{
+		RepoSettings:   narvipg.NewRepoSettingsStore(pool),
+		ReviewVerdicts: narvipg.NewReviewVerdictStore(pool),
+	}
+
+	// Deliberately light-looking on every OTHER signal (small diff,
+	// ordinary non-sensitive path, no repo config, no prior verdict at
+	// all) except Labels, which carries the real reviewpost.LabelNeedsHuman
+	// string verbatim (hand-copied here rather than imported -- this
+	// package's own test file has no existing dependency on
+	// internal/domain/reviewpost, and doc.go's own "review:needs-human"
+	// citation is this package's authoritative source for the exact
+	// string).
+	prCtx := review.PreFetchedContext{Additions: 3, Deletions: 2, ChangedPaths: []string{"internal/app/foo/a.go"}, Labels: []string{"review:needs-human"}}
+	decision, _, _ := reviewtriage.ComputeDecision(ctx, deps, repoFullName, 2, prCtx)
+
+	if decision.Depth != domainreviewtriage.DepthDeep {
+		t.Errorf("Depth = %q, want deep (an existing review:needs-human label must route this PR deep, §26.3 rule 5)", decision.Depth)
+	}
+	if decision.Reason != domainreviewtriage.ReasonNeedsHumanLabel {
+		t.Errorf("Reason = %q, want %q", decision.Reason, domainreviewtriage.ReasonNeedsHumanLabel)
 	}
 }
 
