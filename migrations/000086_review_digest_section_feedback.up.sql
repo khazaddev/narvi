@@ -21,10 +21,27 @@
 -- vocabulary (summary/arch_recap/stack_risks/unverified_limits) -- v1
 -- ships exactly ONE capture command, targeting 'arch_recap' only
 -- (§26.5's own scope), but this column is not itself narrowed to that one
--- value: the read model (contest/confirm counts per section) is written
--- to generalize from day one, per IMPLEMENTATION_PLAN.md's Step 69 row
--- ("per-section digest feedback ... contest/confirm per digest section"),
--- even though only one section has a dedicated capture command today.
+-- value: the read model (a per-section contest COUNT -- see below) is
+-- written to generalize from day one, per TECHNICAL_PLAN.md §26.5 itself
+-- ("Per-section digest feedback extends the finding-outcome read model
+-- (§21.1): contest/confirm per digest section..." -- corrected citation;
+-- this quote is §26.5's own words, not IMPLEMENTATION_PLAN.md's own Step
+-- 69 row, which paraphrases it more loosely as "per-section digest
+-- feedback kinds"), even though only one section has a dedicated capture
+-- command today.
+--
+-- B12 fix, honesty correction: despite §26.5's own "contest/confirm"
+-- phrasing, this table admits ONLY a contest -- there is no `kind`
+-- column, and the one capture command that ever writes a row here
+-- (`arch recap wrong: <reason>`, internal/domain/archrecap) can only ever
+-- assert disagreement, never confirmation. Every row in this table IS a
+-- contest, by construction, not one of two kinds a reader might
+-- distinguish -- DigestContestationRate's own numerator (internal/app/
+-- reviewverdict/digestcontestation.go) reads this table on exactly that
+-- assumption. A genuine "confirm" signal (a maintainer affirmatively
+-- endorsing a digest section, not merely the absence of a contest) is not
+-- built here at all -- a real gap against §26.5's own wording, left for a
+-- future Step rather than rushed into this migration's own schema.
 --
 -- content_hash is internal/domain/reviewpost.ComputeDigestSectionIdentity's
 -- own sha256 hex digest of the CONTESTED digest section's own persisted
