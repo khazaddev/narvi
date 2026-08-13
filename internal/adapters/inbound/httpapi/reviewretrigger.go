@@ -25,6 +25,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -34,10 +35,12 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	domainreviewtriage "github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -100,7 +103,10 @@ const manualRetriggerPromptText = "Manual re-review requested via the web review
 // outbound LLM call spent classifying text that was never a reply to
 // begin with (the fail-safe direction Step 64's own review batch requires:
 // "when in doubt, skip classification rather than guess").
-func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts) http.HandlerFunc {
+// reviewTriageDeps/reviewModelDeep (Step 68, §26.3) mirror internal/
+// adapters/inbound/github's own identical SessionCoalescer.ReviewTriage/
+// ReviewModelDeep fields -- see that struct's own doc comment.
+func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, prSessions *postgres.GitHubPRSessionStore, diffFetcher reviewcontext.Fetcher, reviewFindings reviewcontext.FindingsFetcher, falsePositivePatterns reviewcontext.FalsePositivePatternsFetcher, botToken string, timeouts platform.Timeouts, reviewTriageDeps appreviewtriage.Deps, reviewModelDeep string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sessionID, ok := parseSessionID(w, r)
 		if !ok {
@@ -183,10 +189,20 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// previous github_pr_sessions.pending_head_sha design this fix
 		// replaces -- see migrations/000072_turns_review_head_sha.up.sql's
 		// own doc comment for the full "why").
+		// prCtx (Step 68, §26.3) is hoisted to this outer scope -- the
+		// WHOLE struct is needed further down to compute this manual
+		// re-trigger's own light/deep triage decision, mirroring
+		// internal/adapters/inbound/github's own identical hoist
+		// (handler.go). review.PreFetchedContext{} (every field its own
+		// honest zero value) is exactly what a nil diffFetcher, or a
+		// repo_full_name that fails to split, degrades to --
+		// internal/app/reviewtriage.ComputeDecision's own fail-open
+		// posture already treats an all-zero Signals as "route light".
 		var reviewHeadSHA *string
+		var prCtx review.PreFetchedContext
 		if diffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(prSession.RepoFullName); ok {
-				prCtx := reviewcontext.Fetch(ctx, logger, diffFetcher, timeouts, owner, repo, prSession.PrNumber, botToken, nil)
+				prCtx = reviewcontext.Fetch(ctx, logger, diffFetcher, timeouts, owner, repo, prSession.PrNumber, botToken, nil)
 				prompt = review.RenderTurnPrompt(prompt, prCtx)
 				if prCtx.HeadSHA != "" {
 					reviewHeadSHA = &prCtx.HeadSHA
@@ -195,6 +211,22 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 				logger.Warn("httpapi: could not split repo_full_name into owner/repo, skipping pre-fetched review context",
 					"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 			}
+		}
+
+		// Step 68 (§26.3): the depth decision, computed from prCtx above
+		// -- see internal/adapters/inbound/github/coalesce.go's own
+		// identical call site (CreateOrJoin) for the full "why here,
+		// once, before dispatch" reasoning. Light leaves modelID/effort
+		// both nil (today's unchanged behavior); deep forces high effort
+		// (and, when reviewModelDeep is configured, a specific frontier
+		// model).
+		triageDecision, triageConfig := appreviewtriage.ComputeDecision(ctx, reviewTriageDeps, prSession.RepoFullName, prSession.PrNumber, prCtx)
+		reviewDepthStr := string(triageDecision.Depth)
+		triageModelID, triageEffort := domainreviewtriage.ModelAndEffort(triageDecision.Depth, reviewModelDeep)
+		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, triageDecision.Depth))
+		if triageRecordErr != nil {
+			logger.Warn("httpapi: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			triageRecordJSON = nil
 		}
 
 		// AlwaysQueue, NOT CreateTurn's own RejectIfOpen -- see this file's
@@ -225,7 +257,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// to the safe, deterministic pre-Step-64 "decline while a plan is
 		// awaiting approval" behavior instead of guessing from
 		// manualRetriggerPromptText/the pre-fetched diff.
-		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, nil, auditLog, registry, sessionID, prompt, nil, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA})
+		created, _, cerr := CreateTurnCore(ctx, pool, sessions, turns, plans, nil, auditLog, registry, sessionID, prompt, triageModelID, false, false, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, Effort: triageEffort, ReviewDepth: &reviewDepthStr, ReviewDepthDecision: triageRecordJSON})
 		if cerr != nil {
 			logger.Error("httpapi: retrigger review (create turn) failed", "status", cerr.Status, "message", cerr.Message)
 			writeError(w, cerr.Status, cerr.Message)
