@@ -51,7 +51,14 @@ func ComputeDecision(ctx context.Context, deps Deps, repoFullName string, prNumb
 		cfg = reviewtriage.DefaultConfig()
 	}
 
+	// A nil deps.ReviewVerdicts (this package's own tests, or any other
+	// minimal wiring that doesn't care about this Step) degrades
+	// identically to "no verdict on record" -- never a panic, mirroring
+	// LoadConfig's own identical nil-store convention (config.go).
 	priorVerdictRiskHigh := false
+	if deps.ReviewVerdicts == nil {
+		return decideWithSignals(prCtx, cfg, priorVerdictRiskHigh)
+	}
 	if latest, verdictErr := deps.ReviewVerdicts.GetLatest(ctx, repoFullName, prNumber); verdictErr != nil {
 		if !errors.Is(verdictErr, pgx.ErrNoRows) {
 			logger.Warn("reviewtriage: compute decision: read latest review verdict failed, treating prior-high-verdict signal as absent", "error", verdictErr, "repo_full_name", repoFullName, "pr_number", prNumber)
@@ -62,6 +69,14 @@ func ComputeDecision(ctx context.Context, deps Deps, repoFullName string, prNumb
 		priorVerdictRiskHigh = latest.RiskLevel == string(review.RiskLevelHigh)
 	}
 
+	return decideWithSignals(prCtx, cfg, priorVerdictRiskHigh)
+}
+
+// decideWithSignals assembles the final reviewtriage.Signals from prCtx
+// and the already-resolved priorVerdictRiskHigh, and calls the pure
+// domain Decide -- the one tail both of ComputeDecision's own paths
+// (real deps.ReviewVerdicts read, or a nil-store short-circuit) share.
+func decideWithSignals(prCtx review.PreFetchedContext, cfg reviewtriage.Config, priorVerdictRiskHigh bool) (reviewtriage.Decision, reviewtriage.Config) {
 	sig := reviewtriage.Signals{
 		Additions:              prCtx.Additions,
 		Deletions:              prCtx.Deletions,
@@ -69,7 +84,6 @@ func ComputeDecision(ctx context.Context, deps Deps, repoFullName string, prNumb
 		NeedsHumanLabelPresent: hasNeedsHumanLabel(prCtx.Labels),
 		PriorVerdictRiskHigh:   priorVerdictRiskHigh,
 	}
-
 	return reviewtriage.Decide(sig, cfg), cfg
 }
 

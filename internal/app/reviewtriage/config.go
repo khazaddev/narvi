@@ -28,7 +28,15 @@ import (
 //     degraded config read must never block a review, so failing open
 //     to the built-in default is the correct direction here, the
 //     opposite of LoadEligibilityConfig's own unattended-merge context.
+//
+// A nil deps.RepoSettings (this package's own tests, or any other
+// minimal wiring that doesn't care about this Step) degrades identically
+// to a missing row -- DefaultConfig(), nil -- never a panic, mirroring
+// ResolveProvenance's own identical nil-store convention (provenance.go).
 func LoadConfig(ctx context.Context, deps Deps, repoFullName string) (reviewtriage.Config, error) {
+	if deps.RepoSettings == nil {
+		return reviewtriage.DefaultConfig(), nil
+	}
 	settings, err := deps.RepoSettings.Get(ctx, repoFullName)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -57,15 +65,4 @@ func LoadConfig(ctx context.Context, deps Deps, repoFullName string) (reviewtria
 		// and the line/root thresholds still apply regardless.
 	}
 	return cfg, nil
-}
-
-// marshalDeepPaths converts paths into repo_settings.review_depth_deep_paths'
-// own JSONB shape -- a nil/empty paths marshals to "[]", never a JSON
-// null, mirroring internal/app/reviewverdict.marshalTags' own identical
-// "always a present, empty array" guarantee.
-func marshalDeepPaths(paths []string) ([]byte, error) {
-	if paths == nil {
-		paths = []string{}
-	}
-	return json.Marshal(paths)
 }

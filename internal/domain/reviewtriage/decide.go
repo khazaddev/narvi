@@ -23,6 +23,8 @@ const (
 // column.
 type Reason string
 
+// The Reason values Decide can return -- one per v1 rule, checked in the
+// fixed order Decide's own doc comment documents.
 const (
 	ReasonAlwaysLightConfig Reason = "repo config: mode=always_light"
 	ReasonAlwaysDeepConfig  Reason = "repo config: mode=always_deep"

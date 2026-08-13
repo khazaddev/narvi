@@ -51,6 +51,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/findingposition"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -376,7 +377,12 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		// comment. rig.diffFetcher/rig.botToken default nil/"" -- see this
 		// rig's own diffFetcher field doc comment for why, and for how a
 		// test overrides them.
-		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.reviewFindings, rig.falsePositivePatterns, rig.botToken, platform.DefaultTimeouts()))
+		// reviewTriageDeps/reviewModelDeep (Step 68, §26.3) default to the
+		// zero value -- appreviewtriage.ComputeDecision/LoadConfig are both
+		// nil-store-safe (degrade to the built-in default, never panic),
+		// so this rig needs no further fixture wiring for tests that don't
+		// care about review-depth triage specifically.
+		r.Post("/{sessionID}/review/retrigger", httpapi.RetriggerReview(rig.pool, rig.sessions, rig.turns, rig.plans, rig.auditLog, rig.registry, rig.prSessions, rig.diffFetcher, rig.reviewFindings, rig.falsePositivePatterns, rig.botToken, platform.DefaultTimeouts(), appreviewtriage.Deps{}, ""))
 		// review/findings/{identityHash}/rebut + apply-suggestion (Step 48)
 		// -- see reviewfindings.go's own doc comment.
 		r.Post("/{sessionID}/review/findings/{identityHash}/rebut", httpapi.RebutReviewFinding(rig.sessions, rig.prSessions, rig.reviewFindings, rig.auditLog))
