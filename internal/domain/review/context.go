@@ -194,7 +194,40 @@ type PreFetchedContext struct {
 	// renders no budget guidance at all in that case, never a fabricated
 	// "$0.00" ceiling that would read as "skip every optional pass".
 	ReviewCostBudgetUSD float64
+
+	// CostBudgetSafetyMarginPercent (B5 fix) is reviewtriage.
+	// CostBudgetSafetyMargin (costbudget.go), as a whole percentage (80
+	// for the Step's own proposed 0.8), threaded in by a caller that
+	// already imports internal/domain/reviewtriage -- THIS package
+	// cannot import that one at all (doc.go's own "zero external imports"
+	// convention), so this is the one way the prompt text below can ever
+	// state the SAME figure ShouldSkipOptionalPass itself would compare
+	// against, rather than a second, hand-typed English literal that
+	// could silently drift from the real constant if it ever changes.
+	// Every real caller (internal/adapters/inbound/github/handler.go,
+	// internal/adapters/inbound/httpapi/reviewretrigger.go, internal/app/
+	// sessionactor/reviewretrigger.go) sets this from
+	// int(reviewtriage.CostBudgetSafetyMargin*100) at the SAME call site
+	// that already sets ReviewCostBudgetUSD above. Zero (a caller that
+	// predates this fix, or a genuine 0% margin, which this package has
+	// no way to distinguish) falls back to this Step's own literal
+	// proposed figure ("80") in the rendered text -- never a blank/
+	// garbled percentage in the prompt an agent actually reads, matching
+	// ReviewCostBudgetUSD's own "never render a fabricated ceiling"
+	// discipline immediately above by rendering something plausible
+	// instead of nothing.
+	CostBudgetSafetyMarginPercent int
 }
+
+// defaultCostBudgetSafetyMarginPercent is the fallback subAgentOrchestrationInstructions
+// renders when a caller leaves PreFetchedContext.CostBudgetSafetyMarginPercent
+// at its own zero value -- matches reviewtriage.CostBudgetSafetyMargin's
+// OWN proposed figure (0.8 = 80%) as of this Step, kept here only as a
+// literal of last resort for a caller that has not yet threaded the real
+// constant through (CostBudgetSafetyMarginPercent's own doc comment) --
+// this package cannot import reviewtriage to derive it instead (doc.go's
+// own "zero external imports" convention).
+const defaultCostBudgetSafetyMarginPercent = 80
 
 // diffContentDelimiter, stackContentDelimiter, and
 // descriptionContentDelimiter are the fixed tags RenderTurnPrompt wraps
@@ -417,7 +450,7 @@ const (
 // guidance this function prepends before these JSON-body instructions --
 // an agent must know HOW to arrive at "factCheck"/"counterReview" values
 // before it is told the shape to report them in.
-func verdictToolInstructions(deep bool, costBudgetUSD float64) string {
+func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyMarginPercent int) string {
 	digestRequiredFieldsClause := "\"archDecisions\"/\"stackRisks\"/\"unverifiedLimits\"/\"proposedBody\"/\"contestedPoints\" are requested but optional"
 	archDecisionsRequirement := "REQUESTED, not required"
 	stackRisksRequirement := "REQUESTED, not required"
@@ -443,7 +476,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64) string {
 		counterReviewWhenPresentClause = "one of \"done\" | \"skipped\" (\"done\" means you actually spawned and adjudicated the " + CounterReviewerAgentName + " sub-task; \"skipped\" means a genuine sub-task error/timeout, or the cost budget already having been reached before it would have been dispatched -- \"skipped\" raises this verdict's own shippable classification to needs_human no matter how low-risk everything else looks, so do not report \"done\" unless the sub-task genuinely ran)"
 	}
 
-	return subAgentOrchestrationInstructions(deep, costBudgetUSD) +
+	return subAgentOrchestrationInstructions(deep, costBudgetUSD, costBudgetSafetyMarginPercent) +
 		"\n\n" +
 		"When you have finished reviewing (including the sub-task orchestration above), post your verdict by calling this system's own verdict-posting tool below -- a single authenticated HTTP request. Do NOT post an ordinary PR/issue comment yourself, do NOT submit a GitHub pull request review yourself (via `gh`, a direct GitHub API call, or any other means), and do NOT call any GitHub API directly to report your findings: the request below is the ONLY sanctioned way for this review to reach the pull request, and its typed fields -- never free text parsed back out of anything you post -- are the actual verdict of record.\n\n" +
 		"POST " + VerdictToolURLPlaceholder + "\n" +
@@ -543,7 +576,7 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64) string {
 // (reviewpost.FactCheckStatus's own doc comment) -- so the worst a
 // dishonest or merely-mistaken self-report can do is the SAME safe
 // direction a genuine provider failure already produces.
-func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64) string {
+func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyMarginPercent int) string {
 	out := "\n\n" +
 		"Before posting your verdict, orchestrate the following sub-tasks using this system's own \"task\" tool (a genuinely separate, context-isolated agent -- not a note to yourself), naming the exact \"subagent_type\" below for each:\n\n" +
 		"1. Diff-only fact-check (subagent_type \"" + FactCheckAgentName + "\", ALWAYS -- light and deep path alike): after you have your own first-draft findings, spawn this sub-task with your findings list and the diff. It has NO tool access -- it reasons over text you give it alone. Its ONLY job is to try to DISPROVE each finding using the diff text alone: it may kill a finding ONLY when it is PROVABLY wrong from the diff alone (a fact, not a judgment call), and must leave anything merely uncertain untouched -- it is not asked to (and must not attempt to) confirm findings, only to disprove the provably-wrong ones. Remove from your own findings list exactly the ones it disproved; report \"factCheck\": \"done\" and \"factCheckKilled\" as the count removed (0 is a completely normal, common outcome -- most findings are not provably wrong from the diff alone). If this sub-task errors, times out, or returns something you cannot parse, do NOT block on it -- publish your findings exactly as if you had never run it, and report \"factCheck\": \"skipped\", \"factCheckKilled\": 0.\n"
@@ -552,7 +585,20 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64) string 
 			"3. Counter-review (subagent_type \"" + CounterReviewerAgentName + "\", deep path only, AFTER fact-check has already pruned your findings): spawn this sub-task with your own SURVIVING findings (post-fact-check) and your digest, and ask it to try to REFUTE each one and to surface anything you missed. It has read/tool access to the repo (it may need to verify a claim against real files) but must not edit anything. It may itself surface genuinely NEW findings -- these are NOT re-run through fact-check (a tool-equipped, full-context adversarial pass is by construction at least as rigorous as a diff-only check). Publish only the findings that SURVIVE this adjudication -- drop anything it convincingly refutes. Where it disagreed with you and you did not simply defer to it, name that disagreement in \"digest.contestedPoints\" -- agent disagreement is precisely the signal a human should weigh in on. Report \"counterReview\": \"done\". If this sub-task errors, times out, or returns something you cannot parse, publish your findings exactly as they stood after fact-check, and report \"counterReview\": \"skipped\" -- this alone raises your verdict's own shippable classification to needs_human, so do not treat a skip as routine.\n"
 	}
 	if costBudgetUSD > 0 {
-		out += "\nCost budget: this review has an approximate ceiling of $" + formatUSD(costBudgetUSD) + " for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\""
+		// B5 fix: costBudgetSafetyMarginPercent (PreFetchedContext's own
+		// doc comment) is reviewtriage.CostBudgetSafetyMargin threaded in
+		// as a whole percentage by this function's own caller -- rendered
+		// here rather than a hand-typed "80%" literal, so this prompt text
+		// can never silently desynchronize from the real constant
+		// ShouldSkipOptionalPass itself would compare against. Falls back
+		// to defaultCostBudgetSafetyMarginPercent (this Step's own
+		// proposed 80) for a caller that left the field unset, rather than
+		// rendering a nonsensical "0%".
+		marginPercent := costBudgetSafetyMarginPercent
+		if marginPercent <= 0 {
+			marginPercent = defaultCostBudgetSafetyMarginPercent
+		}
+		out += "\nCost budget: this review has an approximate ceiling of $" + formatUSD(costBudgetUSD) + " for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough " + itoa(marginPercent) + "% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\""
 		if deep {
 			out += "/\"counterReview\""
 		}
@@ -648,7 +694,7 @@ func twoDigits(n int) string {
 // them in itself, and where they actually get resolved. This fifth piece
 // is now (Step 68, §26.3, extended by Step 69, §26.4/§26.6/§26.7) the ONE
 // piece that is not textually identical across every call --
-// verdictToolInstructions(ctx.DeepPath, ctx.ReviewCostBudgetUSD) renders
+// verdictToolInstructions(ctx.DeepPath, ctx.ReviewCostBudgetUSD, ctx.CostBudgetSafetyMarginPercent) renders
 // the deep-path digest fields as REQUIRED rather than merely requested,
 // includes counter-review/architecture-scribe orchestration guidance, and
 // states a cost-budget ceiling, exactly when ctx.DeepPath/
@@ -699,7 +745,7 @@ func RenderTurnPrompt(basePrompt string, ctx PreFetchedContext) string {
 		out += "</" + stackContentDelimiter + ">"
 	}
 
-	out += verdictToolInstructions(ctx.DeepPath, ctx.ReviewCostBudgetUSD)
+	out += verdictToolInstructions(ctx.DeepPath, ctx.ReviewCostBudgetUSD, ctx.CostBudgetSafetyMarginPercent)
 
 	return out
 }

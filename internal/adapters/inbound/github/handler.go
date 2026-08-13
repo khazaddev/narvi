@@ -689,6 +689,13 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// repo_settings read, mirroring internal/adapters/inbound/httpapi/
 		// reviewretrigger.go's own identical addition.
 		prCtx.ReviewCostBudgetUSD = triageConfig.CostBudget.ForDepth(flooredDepth)
+		// B5 fix: threads reviewtriage.CostBudgetSafetyMargin through as a
+		// whole percentage -- review.PreFetchedContext.
+		// CostBudgetSafetyMarginPercent's own doc comment for why this
+		// package (which already imports reviewtriage) is the one that
+		// must set it, never review itself (doc.go's own "zero external
+		// imports" convention).
+		prCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
 		if havePrCtx {
 			m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
 		}

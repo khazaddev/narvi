@@ -52,15 +52,26 @@ func DefaultCostBudget() CostBudget {
 	return CostBudget{Light: 0.50, Deep: 5.00}
 }
 
-// costBudgetSafetyMargin is §26.7's own proposed look-ahead safety margin
+// CostBudgetSafetyMargin is §26.7's own proposed look-ahead safety margin
 // -- "propose 80%, mirroring OpenCodeReview's own 4/5 figure" -- expressed
 // as the FRACTION of the ceiling that must remain UNSPENT for another
 // optional pass to still be worth dispatching (i.e. dispatch is allowed
-// while spent <= ceiling * 0.8). A named constant, never a magic literal
-// inlined into ShouldSkipOptionalPass below, so a future per-repo override
+// while spent <= ceiling * 0.8). A named, EXPORTED constant (B5 fix --
+// previously unexported and duplicated as a hardcoded "a rough 80%
+// margin" English literal in internal/domain/review/context.go's own
+// subAgentOrchestrationInstructions, the prompt text a reviewing agent
+// actually reads: changing this constant would have silently
+// desynchronized that prose from the real figure, since review's own
+// "zero external imports" convention (doc.go) forbids that package from
+// importing this one to read the constant directly -- see
+// review.PreFetchedContext.CostBudgetSafetyMarginPercent's own doc
+// comment for how the value reaches that prompt text instead, threaded in
+// by a caller that already imports both packages, exactly like
+// ReviewCostBudgetUSD itself already is) -- so a future per-repo override
 // of the margin itself (not asked for by this Step) would have exactly
-// one call site to change.
-const costBudgetSafetyMargin = 0.8
+// one call site to change, and the prompt text an agent reads can never
+// drift from it.
+const CostBudgetSafetyMargin = 0.8
 
 // ShouldSkipOptionalPass is §26.7's own "Mechanism" -- the ONE exported
 // pure function checking accumulated spend against a per-path ceiling
@@ -95,6 +106,21 @@ const costBudgetSafetyMargin = 0.8
 // RAISE-ONLY in the sense THIS package's other decision functions are:
 // this function only ever recommends skipping MORE conservatively as
 // spend rises toward the ceiling, never the reverse.
+//
+// NOT YET CALLED BY ANY PRODUCTION PATH (B5 disclosure): §26.7's own
+// enforcement mechanism is the reviewing agent's OWN self-governed
+// judgment against the dollar ceiling stated in its prompt (review/
+// context.go's own subAgentOrchestrationInstructions -- see that
+// function's own "a self-governed, best-effort check, not a server-
+// enforced gate" doc comment for the full "why": this control plane has
+// no channel to intervene inside an already-dispatched turn at all).
+// This function is that same policy's REFERENCE implementation --
+// grepped for callers before writing this disclosure, and there are
+// none outside this package's own tests -- kept as a real, tested,
+// exported pure function against exactly the day a server-side
+// verification/audit path is built on top of it, but nothing calls it
+// today. A doc comment silent on this would read as though this ceiling
+// were actively, mechanically enforced somewhere; it is not, yet.
 func ShouldSkipOptionalPass(spentUSD, ceilingUSD float64) bool {
 	if ceilingUSD <= 0 {
 		return false
@@ -102,5 +128,5 @@ func ShouldSkipOptionalPass(spentUSD, ceilingUSD float64) bool {
 	if spentUSD < 0 {
 		spentUSD = 0
 	}
-	return spentUSD >= ceilingUSD*costBudgetSafetyMargin
+	return spentUSD >= ceilingUSD*CostBudgetSafetyMargin
 }

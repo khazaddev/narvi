@@ -24,11 +24,18 @@
 -- mirror), so the choice is reasoned here rather than following an
 -- established local precedent: NUMERIC, not FLOAT/DOUBLE PRECISION,
 -- because a repeating-binary-fraction rounding error on a cost CEILING
--- (compared against via ShouldSkipOptionalPass's own strict >=) is a real
--- risk FLOAT genuinely carries and NUMERIC does not -- unlike
+-- (the figure internal/domain/reviewtriage.ShouldSkipOptionalPass's own
+-- strict >= compares against -- a real, tested pure function, though NOT
+-- YET called by any production path: §26.7's own actual enforcement
+-- today is the reviewing agent's own self-governed judgment against the
+-- dollar figure stated in its prompt, internal/domain/review's own
+-- subAgentOrchestrationInstructions, since this control plane has no
+-- channel to intervene inside an already-dispatched turn) is a real risk
+-- FLOAT genuinely carries and NUMERIC does not -- unlike
 -- modelcatalog.Cost's own float64 fields (application-layer, sourced from
 -- a hand-refreshed embedded snapshot, never compared for a >= gate the
--- way this ceiling is). 10 total digits / 2 fractional digits is
+-- way this ceiling is intended to be, once a real enforcement path calls
+-- ShouldSkipOptionalPass). 10 total digits / 2 fractional digits is
 -- generous for a per-review USD figure in the tens-to-hundreds range;
 -- pgx's own NUMERIC mapping (pgtype.Numeric) is converted to/from a plain
 -- float64 at the internal/app/reviewtriage.LoadConfig read site (this
@@ -39,11 +46,11 @@
 -- (internal/domain/reviewtriage.DefaultCostBudget, $0.50 light / $5
 -- deep) -- mirrors review_depth_mode's own identical "NULL = use the
 -- built-in default, never a magic sentinel value" precedent (migrations/
--- 000082). Validated application-side as non-negative -- a negative
--- configured ceiling has no principled meaning
--- (internal/domain/reviewtriage.ShouldSkipOptionalPass's own doc comment
--- already treats a negative ceiling as "no ceiling configured", the
--- identical fail-open direction a garbled value gets everywhere else in
--- this package).
+-- 000082). Validated application-side as STRICTLY POSITIVE (B9 fix,
+-- httpapi.PutReviewCostBudget) -- an explicit 0 is rejected 400, never
+-- silently stored: it would collide with ShouldSkipOptionalPass's own
+-- "a zero/negative ceiling means no ceiling configured, never skip"
+-- sentinel and resolve to unlimited spend, the opposite of an explicit-
+-- zero operator's likely intent.
 ALTER TABLE repo_settings ADD COLUMN review_cost_budget_light_usd NUMERIC(10, 2);
 ALTER TABLE repo_settings ADD COLUMN review_cost_budget_deep_usd NUMERIC(10, 2);

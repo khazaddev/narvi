@@ -7,6 +7,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // TestRenderTurnPrompt is a table-driven test over every branch
@@ -650,6 +651,75 @@ func TestRenderTurnPrompt_CostBudget_CounterReviewClausesOnlyOnDeep(t *testing.T
 	}
 	if strings.Contains(budgetParagraph, "counterReview") {
 		t.Errorf("light-path cost-budget paragraph mentions \"counterReview\" at all, want it omitted entirely (light never runs that sub-task, §26.9):\n%s", budgetParagraph)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_SafetyMarginDerivedFromConstant is B5's
+// own regression test: the rendered "a rough X% margin" figure must be
+// genuinely DERIVED from PreFetchedContext.CostBudgetSafetyMarginPercent
+// (which every real caller sets from the exported reviewtriage.
+// CostBudgetSafetyMargin constant, costbudget.go), not a second,
+// independently hand-typed English literal that could silently
+// desynchronize if that constant ever changes. Sets an off-the-default
+// percentage (55, never reviewtriage.CostBudgetSafetyMargin's own actual
+// 80%) and asserts THAT figure -- not 80 -- appears in the rendered text,
+// which a test that merely checked for "80%" (true both before and after
+// a broken/no-op threading change) could never distinguish.
+func TestRenderTurnPrompt_CostBudget_SafetyMarginDerivedFromConstant(t *testing.T) {
+	t.Parallel()
+
+	const offDefaultPercent = 55
+	if offDefaultPercent == int(reviewtriage.CostBudgetSafetyMargin*100) {
+		t.Fatalf("test setup: offDefaultPercent (%d) must differ from reviewtriage.CostBudgetSafetyMargin's own real value (%d), or this test cannot distinguish genuine threading from a hardcoded fallback", offDefaultPercent, int(reviewtriage.CostBudgetSafetyMargin*100))
+	}
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5, CostBudgetSafetyMarginPercent: offDefaultPercent})
+	if !strings.Contains(got, "a rough 55% margin") {
+		t.Errorf("prompt with CostBudgetSafetyMarginPercent=55 does not render %q:\n%s", "a rough 55% margin", got)
+	}
+	if strings.Contains(got, "a rough 80% margin") {
+		t.Errorf("prompt with CostBudgetSafetyMarginPercent=55 still renders the OLD hardcoded %q text -- the threading is a no-op:\n%s", "a rough 80% margin", got)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_SafetyMarginFallsBackWhenUnset proves a
+// caller that predates the B5 fix (CostBudgetSafetyMarginPercent left at
+// its own zero value) still renders a plausible figure -- this Step's own
+// proposed 80%, matching reviewtriage.CostBudgetSafetyMargin's own real
+// value today -- never a nonsensical "a rough 0% margin", which would
+// read to the agent as "skip literally everything immediately".
+func TestRenderTurnPrompt_CostBudget_SafetyMarginFallsBackWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5})
+	if !strings.Contains(got, "a rough 80% margin") {
+		t.Errorf("prompt with CostBudgetSafetyMarginPercent unset does not fall back to %q:\n%s", "a rough 80% margin", got)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_GoldenParagraph is B8's own golden-pin
+// test: the FULL, exact cost-budget paragraph text, both light and deep,
+// asserted verbatim rather than via scattered substring checks -- so ANY
+// future edit to this prompt (a rewording, a reordering, a dropped
+// clause) shows up as an explicit, reviewable diff in this test's own
+// failure output, never a silent behavior change an agent's own prompt
+// quietly drifts through. Deliberately narrow (a single scenario per
+// path, not a table) -- a golden test's own value is in pinning the EXACT
+// current text, not in covering every input combination (the other tests
+// in this file already do that).
+func TestRenderTurnPrompt_CostBudget_GoldenParagraph(t *testing.T) {
+	t.Parallel()
+
+	deepGot := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5, CostBudgetSafetyMarginPercent: 80})
+	deepWant := "\nCost budget: this review has an approximate ceiling of $5.00 for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\"/\"counterReview\") as \"skipped\" with the reason noted in your own free-text summary.\nThis is a judgment call on your part, not something this system measures for you mid-review -- err toward running fact-check (cheap, and it only ever prunes noise) before skipping counter-review (the more expensive pass) if you must choose.\n"
+	if !strings.Contains(deepGot, deepWant) {
+		t.Errorf("deep-path cost-budget paragraph =\n%s\nwant it to contain, verbatim:\n%s", deepGot, deepWant)
+	}
+
+	lightGot := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false, ReviewCostBudgetUSD: 0.5, CostBudgetSafetyMarginPercent: 80})
+	lightWant := "\nCost budget: this review has an approximate ceiling of $0.50 for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\") as \"skipped\" with the reason noted in your own free-text summary.\n"
+	if !strings.Contains(lightGot, lightWant) {
+		t.Errorf("light-path cost-budget paragraph =\n%s\nwant it to contain, verbatim:\n%s", lightGot, lightWant)
 	}
 }
 

@@ -735,11 +735,11 @@ export interface RepoSettings {
    */
   reviewDepthDeepPaths: string[] | null;
   /**
-   * Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6, same row as reviewDepthMode) -- arming a non-default ceiling changes how much spend every future automated review is allowed before its own optional passes start skipping, the same reasoning every sibling toggle in this row already carries.
+   * Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6, same row as reviewDepthMode) -- arming a non-default ceiling changes the dollar figure STATED to the reviewing agent's own prompt (internal/domain/review's own subAgentOrchestrationInstructions), which self-governs against it: §26.7 is a self-reported, best-effort check, not a server-enforced gate (this control plane has no channel to intervene inside an already-dispatched turn) -- reviewtriage.ShouldSkipOptionalPass, the pure function this ceiling would feed a real enforcement path, is not yet called by any production path. The same 'changes what an unattended review is TOLD, admin-gated' reasoning every sibling toggle in this row already carries, worded here to avoid overstating this as an active runtime gate.
    */
   reviewCostBudgetLightUsd: number | null;
   /**
-   * Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd.
+   * Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd -- see that field's own description for why this is a self-governed figure the agent reads, not a server-enforced spend cap.
    */
   reviewCostBudgetDeepUsd: number | null;
 }

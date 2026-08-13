@@ -306,6 +306,13 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// the one and only place this lane calls review.RenderTurnPrompt.
 			reviewCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
 			reviewCtx.ReviewCostBudgetUSD = triageConfig.CostBudget.ForDepth(flooredDepth)
+			// B5 fix: threads reviewtriage.CostBudgetSafetyMargin through as
+			// a whole percentage -- review.PreFetchedContext.
+			// CostBudgetSafetyMarginPercent's own doc comment for why this
+			// package (which already imports reviewtriage) is the one that
+			// must set it, never review itself (doc.go's own "zero external
+			// imports" convention).
+			reviewCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
 
 			// Rereview fix (finding 1): compose §22.3's own false-positive
 			// advisory block and §22.1's own already-answered-facts block
