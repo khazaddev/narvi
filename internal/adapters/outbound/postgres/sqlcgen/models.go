@@ -1504,10 +1504,13 @@ type GithubActorLinkNotice struct {
 }
 
 type GithubPrSession struct {
-	RepoFullName string             `json:"repo_full_name"`
-	PrNumber     int32              `json:"pr_number"`
-	SessionID    pgtype.UUID        `json:"session_id"`
-	ClaimedAt    pgtype.Timestamptz `json:"claimed_at"`
+	RepoFullName                    string             `json:"repo_full_name"`
+	PrNumber                        int32              `json:"pr_number"`
+	SessionID                       pgtype.UUID        `json:"session_id"`
+	ClaimedAt                       pgtype.Timestamptz `json:"claimed_at"`
+	PendingRetriggerHeadSha         *string            `json:"pending_retrigger_head_sha"`
+	AutoRetriggerCount              int32              `json:"auto_retrigger_count"`
+	AutoRetriggerBudgetNoticeSentAt pgtype.Timestamptz `json:"auto_retrigger_budget_notice_sent_at"`
 }
 
 type HandoffSentinelRun struct {
@@ -1655,6 +1658,7 @@ type RepoSetting struct {
 	AutoMergeEnabled           bool               `json:"auto_merge_enabled"`
 	MaxAutoApproveFilesChanged *int32             `json:"max_auto_approve_files_changed"`
 	SensitiveBlastRadiusTags   []byte             `json:"sensitive_blast_radius_tags"`
+	AutoRetriggerReviewEnabled bool               `json:"auto_retrigger_review_enabled"`
 }
 
 type ReviewFalsePositivePattern struct {

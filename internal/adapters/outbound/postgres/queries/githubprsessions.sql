@@ -58,3 +58,93 @@ WHERE session_id = $1;
 -- TurnStore.GetProcessingTurnForSession, never a shared per-(repo,PR)
 -- column any later, unrelated turn's own context-fetch could overwrite.
 -- See that migration's own doc comment for the full "why".
+
+-- Queries backing Step 65's ("review: automatic re-review on new
+-- commits", §24) trailing-edge debounce + per-PR budget -- see
+-- migrations/000075_github_pr_sessions_retrigger.up.sql's own doc comment
+-- for the three columns below, including why pending_retrigger_head_sha
+-- is a deliberately DIFFERENT name from the retired pending_head_sha.
+
+-- name: UpsertPendingRetriggerHeadSHA :one
+-- The synchronize webhook handler's own direct, actor-bypassing write
+-- (§24.1's 4th cost item, internal/adapters/inbound/github/
+-- pullrequestsynchronize.go) -- called in the SAME transaction as
+-- UpsertSessionTimer's own re-arm (session_timers.sql), never
+-- independently committed. Guarded on session_id IS NOT NULL (CLAUDE.md/
+-- §11's own "guarded UPDATE ... WHERE for cross-writer transitions" idiom)
+-- so this is a genuine no-op -- pgx.ErrNoRows, never a fabricated row --
+-- for exactly the two cases §24.1 says must be acknowledged and ignored:
+-- no github_pr_sessions row at all for this PR, or a row whose session_id
+-- is still NULL (nobody has ever mentioned the bot on this PR) -- "no
+-- session to re-trigger", identical in kind to today's "no mention"
+-- no-op for comment events. Overwrites (never appends) on every event,
+-- per §24.2's own "upserted, not appended" rule.
+UPDATE github_pr_sessions
+SET pending_retrigger_head_sha = $3
+WHERE repo_full_name = $1 AND pr_number = $2 AND session_id IS NOT NULL
+RETURNING *;
+
+-- name: ClearPendingRetriggerHeadSHA :one
+-- The review_retrigger_debounce timer's own fire handler
+-- (sessionactor.handleReviewRetriggerDebounceTimer) calls this after
+-- EVERY firing that reaches a decision (§24.3 steps 3 and 4 alike: heads
+-- already match, a turn was just enqueued, or the budget is exhausted) --
+-- guarded on pending_retrigger_head_sha STILL equalling the exact value
+-- ($3) this firing just read and acted on (a compare-and-swap, CLAUDE.md/
+-- §11's own guarded-UPDATE idiom): a NEW synchronize event landing
+-- between this firing's own read and this clear (a genuine, expected
+-- race between the webhook handler and this timer's own claimed-but-
+-- still-processing window) will already have overwritten this column
+-- with a NEWER head sha and re-armed the timer fresh -- this guard
+-- ensures THAT newer, still-unprocessed push is never silently clobbered
+-- back to NULL by a decision made against a now-stale value. pgx.ErrNoRows
+-- on a guard miss is the expected, harmless outcome in that race (nothing
+-- to clear -- a fresher event already owns this row). Rereview fix
+-- (finding 2, correcting this comment's own earlier false claim): the
+-- caller must NOT then proceed to delete "its own claimed timer row" --
+-- session_timers has UNIQUE(session_id, name), so there is exactly ONE
+-- review_retrigger_debounce row for this session, and on a guard miss it
+-- is already the SAME row the newer synchronize event's own re-arm just
+-- updated. Deleting it here would strand that newer push with no timer
+-- left to ever act on it -- the caller must skip its own delete on a
+-- guard miss instead, trusting the newer event's own already-committed
+-- re-arm to stand in for it (the same re-arm-or-delete contract every
+-- named timer already follows, timerfired.go, satisfied by the newer
+-- event's re-arm rather than by this firing's own delete).
+UPDATE github_pr_sessions
+SET pending_retrigger_head_sha = NULL
+WHERE repo_full_name = $1 AND pr_number = $2 AND pending_retrigger_head_sha = $3
+RETURNING *;
+
+-- name: IncrementAutoRetriggerCount :one
+-- §24.6's own budget counter -- incremented exactly once per PR each
+-- time handleReviewRetriggerDebounceTimer actually enqueues an automatic
+-- re-review turn (never for a manual label/button re-trigger, which is
+-- never subject to this budget at all). A plain increment, not a guarded
+-- one: only this PR's own session actor ever writes this column, so
+-- there is no cross-writer race here to guard against (unlike
+-- pending_retrigger_head_sha, which the webhook handler ALSO writes).
+UPDATE github_pr_sessions
+SET auto_retrigger_count = auto_retrigger_count + 1
+WHERE repo_full_name = $1 AND pr_number = $2
+RETURNING *;
+
+-- name: MarkAutoRetriggerBudgetNoticeSent :one
+-- §24.6's own "a one-time event, not repeated on every subsequent
+-- firing" rule -- guarded on auto_retrigger_budget_notice_sent_at IS
+-- NULL so a caller can tell (via pgx.ErrNoRows on a guard miss) "this PR
+-- was already notified", the same guarded-UPDATE-as-claim idiom
+-- RetireFalsePositivePattern already establishes
+-- (reviewfalsepositivepatterns.sql) for a comparable single-writer,
+-- once-only transition.
+UPDATE github_pr_sessions
+SET auto_retrigger_budget_notice_sent_at = now()
+WHERE repo_full_name = $1 AND pr_number = $2 AND auto_retrigger_budget_notice_sent_at IS NULL
+RETURNING *;
+
+-- handleReviewRetriggerDebounceTimer's own read of pending_retrigger_head_
+-- sha/auto_retrigger_count/auto_retrigger_budget_notice_sent_at reuses the
+-- EXISTING GetGitHubPRSessionBySessionID above (a.sessionID is exactly
+-- what a TimerFired command carries -- there is no separate (repo,
+-- pr_number) identity to look this row up by at that point) -- no new
+-- query needed for it.

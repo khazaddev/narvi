@@ -282,6 +282,25 @@ const (
 	// like row 4's ActionManageWorkflowDefinitions. No caller exists
 	// yet (Step 54 is dark; Steps 55-56 own the first handlers).
 	ActionActivateWorkflowBinding Action = "activate_workflow_binding"
+	// ActionToggleAutoRetriggerReview covers §24.5's own per-repo opt-in
+	// for automatic re-review on new commits (repo_settings.
+	// auto_retrigger_review_enabled, migrations/
+	// 000076_repo_settings_auto_retrigger_review.up.sql --
+	// internal/adapters/inbound/httpapi/reposettings.go's own
+	// PutAutoRetriggerReviewToggle). Admin only, this SAME row as
+	// ActionToggleSentinelAutoFix/ActionToggleAutoMerge, by the identical
+	// reasoning those actions' own doc comments already state: arming
+	// this toggle changes what runs UNATTENDED on a repo's own PRs (an
+	// automatic review turn dispatched with no human in the loop at all)
+	// -- never a maintainer-level, per-PR judgment call the way row 5's
+	// actions are. Unlike ActionToggleAutoMerge, arming this toggle alone
+	// never merges or approves anything by itself (§24.5: "this
+	// automation never auto-approves anything on its own") -- it only
+	// ever enqueues an ordinary review turn through Step 46's existing
+	// dispatch, but the "changes what runs unattended" reasoning for
+	// admin-only placement applies identically regardless of that
+	// downstream distinction.
+	ActionToggleAutoRetriggerReview Action = "toggle_auto_retrigger_review"
 )
 
 // AllActions is every recognized Action, in this file's own declaration
@@ -318,4 +337,5 @@ var AllActions = []Action{
 	ActionConfigureBlockOnHighRisk,
 	ActionToggleAutoMerge,
 	ActionActivateWorkflowBinding,
+	ActionToggleAutoRetriggerReview,
 }

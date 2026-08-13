@@ -212,9 +212,21 @@ func serve() error {
 	// passed a second time, satisfying sessionactor.PRDiffFetcher exactly
 	// like it already satisfies the github inbound handler's own
 	// reviewcontext.Fetcher below (DiffFetcher: sourceControl) -- never a
-	// second, independently-constructed client.
+	// second, independently-constructed client. Step 65 ("review:
+	// automatic re-review on new commits") adds ReviewDiffFetcher --
+	// the SAME sourceControl instance a THIRD time, satisfying
+	// reviewcontext.Fetcher directly (GetPullRequest/GetCompareDiff are
+	// both real *githubapi.Adapter methods) -- plus GitHubBotHandle/
+	// GitHubBotToken, bundled into sessionactor.RegistryOptions (see that
+	// type's own doc comment for why this is a trailing options struct,
+	// not more positional parameters).
 	registry, err := sessionactor.NewRegistry(ctx, pool, cfg.Timeouts, hub, commander, sandboxProvider, cfg.PublicBaseURL,
-		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, sourceControl, cfg.EpistemicCheckDefault, cfg.GitHubBotToken)
+		sourceControl, cfg.TokenEncryptionKey, cfg.OpenCodeRuntimeVersion, sourceControl, cfg.EpistemicCheckDefault,
+		sessionactor.RegistryOptions{
+			GitHubBotToken:    cfg.GitHubBotToken,
+			GitHubBotHandle:   cfg.GitHubBotHandle,
+			ReviewDiffFetcher: sourceControl,
+		})
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)
 	}
@@ -336,6 +348,14 @@ func serve() error {
 	// tool's own blockOnHighRisk read (reviewverdict.go) -- one store,
 	// shared, never a second independently-constructed copy.
 	repoSettingsStore := postgres.NewRepoSettingsStore(pool)
+	// timerStore (Step 65, "review: automatic re-review on new commits",
+	// §24.1) backs the synchronize webhook lane's own DIRECT, actor-
+	// bypassing session_timers write below (githubingress.Config.Timers)
+	// -- a standalone instance over the SAME pool every other store here
+	// already shares (sessionactor.Registry constructs its own, separate
+	// *postgres.TimerStore internally, never exported, so this webhook
+	// handler needs its own).
+	timerStore := postgres.NewTimerStore(pool)
 	// providerCredentialStore (Step 53, "provider credential injection",
 	// §25.1/§25.3) backs the 3 scoped management CRUD route groups below
 	// AND the sandbox-facing delivery endpoint (providercredentialsdelivery.go)
@@ -845,6 +865,10 @@ func serve() error {
 			PendingChecks:        releaseManifestPendingStore,
 			ReleaseLabel:         cfg.GitHubReleaseLabel,
 			ReleaseBranchPattern: cfg.GitHubReleaseBranchPattern,
+			// Timers (Step 65, §24.1): the standalone timerStore instance
+			// constructed above, backing this lane's own direct,
+			// actor-bypassing review_retrigger_debounce timer arm.
+			Timers: timerStore,
 		},
 	))
 
@@ -1132,6 +1156,15 @@ func serve() error {
 	router.Route("/api/repos/{owner}/{repo}/auto-merge", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Put("/", httpapi.PutAutoMergeToggle(repoSettingsStore, reviewVerdictDeps))
+	})
+
+	// /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5): a
+	// further, separately-gated route mirroring auto-merge above -- see
+	// httpapi/reposettings.go's own PutAutoRetriggerReviewToggle doc
+	// comment.
+	router.Route("/api/repos/{owner}/{repo}/auto-retrigger-review", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(repoSettingsStore))
 	})
 
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):

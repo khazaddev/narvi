@@ -14,6 +14,19 @@ const (
 	TimerInactivity         = "inactivity"
 	TimerTurnDeadline       = "turn_deadline"
 	TimerTerminalGrace      = "terminal_grace"
+
+	// TimerReviewRetriggerDebounce is Step 65's own addition ("review:
+	// automatic re-review on new commits", §24.2) -- the ONE named timer
+	// this whole feature is built on. Unlike the 5 timers above, this one
+	// is armed/re-armed from OUTSIDE the actor entirely: internal/
+	// adapters/inbound/github/pullrequestsynchronize.go writes directly
+	// via postgres.TimerStore.Upsert (bypassing the actor's mailbox,
+	// §24.1's 4th cost item, mirroring how coalesce.go already writes
+	// github_pr_sessions directly today) on every `pull_request`/
+	// `synchronize` webhook event -- only the FIRING travels through the
+	// ordinary timer pump into TimerFired, exactly like every other named
+	// timer.
+	TimerReviewRetriggerDebounce = "review_retrigger_debounce"
 )
 
 // Command is the sum type an Actor's mailbox carries (§2: "one goroutine

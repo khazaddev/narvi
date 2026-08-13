@@ -171,6 +171,66 @@ func TestVerdictNotifier_Deliver_ReviewFailure_NeverSyncsLabels(t *testing.T) {
 	}
 }
 
+// TestVerdictNotifier_Deliver_EmptyRiskLevel_SkipsLabelSync is rereview
+// fix (Step 65 finding 6)'s own regression test: an empty payload.
+// RiskLevel means no real verdict was ever posted for this PR at all
+// (e.g. sessionactor's own §24.6 budget-exhausted notice, when every
+// automatic re-review for a PR declined before ever posting one) --
+// before this fix, Deliver ran label sync unconditionally, and
+// reviewpost.RiskLabel's own fail-conservative default rendered an
+// empty/unrecognized RiskLevel as review:high-risk, stamping a "high
+// risk" label on a PR this notification never actually assessed. Proves
+// the formal review is still submitted (this notification's own real
+// content), but ListLabels/AddLabels/RemoveLabel are never called at all.
+func TestVerdictNotifier_Deliver_EmptyRiskLevel_SkipsLabelSync(t *testing.T) {
+	t.Parallel()
+
+	var reviewSubmitted bool
+	var labelCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/repos/acme/widgets/pulls/42/reviews" {
+			reviewSubmitted = true
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1})
+			return
+		}
+		labelCalls++
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]map[string]any{})
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+	notifier := githubapi.NewVerdictNotifier(adapter, "baked-in-bot-token")
+
+	payload, err := json.Marshal(githubapi.VerdictPayload{
+		Owner:    "acme",
+		Repo:     "widgets",
+		PRNumber: 42,
+		Event:    string(reviewpost.FormalReviewEventComment),
+		Body:     "Automatic re-review has reached its budget for this pull request.",
+		// RiskLevel deliberately omitted -- "" (no verdict was ever
+		// posted for this PR).
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	if err := notifier.Deliver(context.Background(), ports.Notification{
+		Kind:    ports.NotificationKindGitHubVerdict,
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("Deliver() error = %v, want nil", err)
+	}
+
+	if !reviewSubmitted {
+		t.Error("formal review was never submitted -- want it submitted regardless of label sync being skipped")
+	}
+	if labelCalls != 0 {
+		t.Errorf("labelCalls = %d, want 0 (an empty RiskLevel must skip label sync entirely, never stamp a fail-conservative review:high-risk label)", labelCalls)
+	}
+}
+
 // TestVerdictNotifier_Deliver_InvalidPayload proves a malformed outbox
 // payload is a decode error, never a panic.
 func TestVerdictNotifier_Deliver_InvalidPayload(t *testing.T) {

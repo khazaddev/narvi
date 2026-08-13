@@ -515,6 +515,14 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
 		r.Put("/", httpapi.PutAutoMergeToggle(rig.repoSettings, reviewVerdictDeps))
 	})
+	// /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5) --
+	// mounted behind auth.Middleware, exactly like cmd/control-plane/
+	// main.go's own wiring (see reposettings.go's own
+	// PutAutoRetriggerReviewToggle doc comment).
+	router.Route("/api/repos/{owner}/{repo}/auto-retrigger-review", func(r chi.Router) {
+		r.Use(auth.Middleware(rig.userSessions, rig.users))
+		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(rig.repoSettings))
+	})
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1) --
 	// mounted behind auth.Middleware exactly like cmd/control-plane/
 	// main.go's own wiring (see reviewanalytics.go's own doc comment).

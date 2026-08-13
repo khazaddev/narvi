@@ -241,6 +241,20 @@ type Config struct {
 	PendingChecks        releasereview.PendingEnqueuer
 	ReleaseLabel         string
 	ReleaseBranchPattern string
+
+	// Timers (Step 65, "review: automatic re-review on new commits",
+	// §24.1) backs the NEW `pull_request`/action=="synchronize" lane
+	// (pullrequestsynchronize.go): the exported postgres.TimerStore.Upsert
+	// this handler calls DIRECTLY, bypassing the actor's mailbox entirely
+	// (§24.1's 4th cost item -- command.go's own Command sum type has no
+	// member for an inbound "new commits pushed" signal), to re-arm the
+	// review_retrigger_debounce named timer (session_timers, §2) in the
+	// SAME transaction as this lane's own github_pr_sessions.
+	// pending_retrigger_head_sha upsert. Nil-safe: a nil Timers means
+	// this lane never fires (every `synchronize` event is acknowledged as
+	// a plain no-op) -- this package's own handler_test.go, or any other
+	// minimal wiring that doesn't care about this Step, leaves it nil.
+	Timers *postgres.TimerStore
 }
 
 // NewHandler builds the POST /webhooks/github handler (cmd/control-plane/
@@ -321,6 +335,24 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		if eventType == eventTypePullRequest && cfg.SentinelFixes != nil && readPullRequestEventAction(body) == "closed" {
 			dataSource := &githubMergeGateDataSource{diffFetcher: cfg.DiffFetcher, pullRequests: cfg.PullRequests, botToken: cfg.BotToken, timeouts: cfg.Timeouts}
 			handlePullRequestClosed(ctx, w, body, cfg.SentinelFixes, cfg.RepoSettings, cfg.AuditLog, dataSource, notImplementedFixMerger{})
+			return
+		}
+
+		// Step 65 (§24.1): a `pull_request` event whose own action is
+		// "synchronize" (GitHub's own name for "new commits landed on
+		// this PR's head") is this feature's own second, automatic
+		// re-review trigger -- a STRUCTURALLY DIFFERENT thing from the
+		// "labeled" manual re-trigger lane parseMention already handles
+		// for this SAME event type, and from the "closed" merge-gating
+		// lane immediately above -- never a mention, never reaching
+		// CreateOrJoin. Checked BEFORE parseMention for the identical
+		// reason the "closed" check above already is. cfg.Timers == nil
+		// (this package's own handler_test.go, or any other minimal
+		// wiring that doesn't care about this Step) falls through to the
+		// ordinary pipeline unchanged, which acknowledges it as a no-op
+		// exactly like today.
+		if eventType == eventTypePullRequest && cfg.Timers != nil && readPullRequestEventAction(body) == "synchronize" {
+			handlePullRequestSynchronize(ctx, w, body, coalescer.Pool, coalescer.PRSessions, cfg.Timers, cfg.Timeouts, deliveries, deliveryID)
 			return
 		}
 

@@ -2135,6 +2135,31 @@ type Timeouts struct {
 	// own 10s ceiling, while keeping the worst-case added latency on this
 	// synchronous request path well short of a full minute.
 	FindingPositionResolveAllTimeout time.Duration
+
+	// -- Step 65 ("review: automatic re-review on new commits", §24) --
+	// no ordering relationship with either invariant chain above (or with
+	// any prior Step's standalone additions), so -- per those additions'
+	// own precedent -- a plain field with a sensible default, not wired
+	// into a fake invariant link.
+
+	// ReviewRetriggerDebounce is the trailing-edge debounce window §24.2
+	// names explicitly: internal/adapters/inbound/github/
+	// pullrequestsynchronize.go re-arms the review_retrigger_debounce
+	// named timer (session_timers, §2) to now() + ReviewRetriggerDebounce
+	// on EVERY `pull_request`/`synchronize` webhook event for a PR with a
+	// review session, so a burst of pushes (a rebase, a sequence of
+	// fixup commits) reviews once, at the burst's own final head, only
+	// after this long a quiet period -- never once per push, and never
+	// the first push in a burst (§24.2's own emphatic "leading-edge
+	// throttling... recreates exactly the problem this feature exists to
+	// solve"). Not specified in the plan; chosen as 2 minutes -- long
+	// enough that a human pushing a short sequence of fixup commits a few
+	// seconds apart (the common "oops, one more tweak" pattern this
+	// debounce exists to collapse) reliably lands inside one quiet
+	// window, while still short enough that a genuinely single push gets
+	// reviewed promptly rather than sitting for many minutes with no
+	// visible cause.
+	ReviewRetriggerDebounce time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2317,6 +2342,8 @@ func DefaultTimeouts() Timeouts {
 		DigestContentWindow:            24 * time.Hour,      // Step 62, §21.3, explicit ("a daily digest") -- one calendar day of rollup content, distinct from the channel-discovery lookback above
 
 		FindingPositionResolveAllTimeout: 45 * time.Second, // Step 63 fix; not specified, chosen -- generous for several per-finding relocation calls (10s each) while bounding the worst case on a synchronous verdict-POST handler path
+
+		ReviewRetriggerDebounce: 2 * time.Minute, // Step 65, §24.2; not specified, chosen -- long enough to collapse a short burst of fixup-commit pushes into one quiet window, short enough that a single push still reviews promptly
 	}
 }
 

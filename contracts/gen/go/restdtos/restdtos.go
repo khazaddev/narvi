@@ -3977,9 +3977,10 @@ func (j *RebutFindingRequest) UnmarshalJSON(value []byte) error {
 
 // GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2)
 // -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql).
-// Deliberately a small, extensible shape: future Steps (58's auto-merge toggle,
-// 61's automatic-re-review opt-in) are each expected to add a further boolean
-// property here, never a bespoke DTO of their own.
+// Deliberately a small, extensible shape: Step 62's auto-merge toggle and Step
+// 65's automatic-re-review opt-in (§24.5) each added a further boolean property
+// here, never a bespoke DTO of their own -- future toggles are expected to follow
+// the same pattern.
 type RepoSettings struct {
 	// Step 62, §21.2 stage 2: admin-only, per-repo, off by default -- once armed, an
 	// auto-approved PR merges unattended (internal/app/automerge.Worker) instead of
@@ -3987,6 +3988,15 @@ type RepoSettings struct {
 	// authz.ActionToggleAutoMerge, the SAME admin-only row as sentinelAutofixEnabled,
 	// never maintainer-level ActionConfigureAutoApprove.
 	AutoMergeEnabled bool `json:"autoMergeEnabled" yaml:"autoMergeEnabled" mapstructure:"autoMergeEnabled"`
+
+	// Step 65, §24.5: admin-only, per-repo, off by default -- once armed, a new
+	// commit pushed to a PR with an existing review session automatically enqueues a
+	// fresh review turn (after a trailing-edge debounce quiet period, §24.2) instead
+	// of waiting for a human's manual re-trigger. Gated by
+	// authz.ActionToggleAutoRetriggerReview, the SAME admin-only row as
+	// sentinelAutofixEnabled/autoMergeEnabled -- this automation never auto-approves
+	// anything on its own, it only ever enqueues an ordinary review turn.
+	AutoRetriggerReviewEnabled bool `json:"autoRetriggerReviewEnabled" yaml:"autoRetriggerReviewEnabled" mapstructure:"autoRetriggerReviewEnabled"`
 
 	// §21.2: an admin, per-repo, strict-boolean setting that reuses the
 	// verdict-posting tool's SAME formal-review submission path and carries no
@@ -4105,6 +4115,9 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["autoMergeEnabled"]; raw != nil && !ok {
 		return fmt.Errorf("field autoMergeEnabled in RepoSettings: required")
+	}
+	if _, ok := raw["autoRetriggerReviewEnabled"]; raw != nil && !ok {
+		return fmt.Errorf("field autoRetriggerReviewEnabled in RepoSettings: required")
 	}
 	if _, ok := raw["blockOnHighRisk"]; raw != nil && !ok {
 		return fmt.Errorf("field blockOnHighRisk in RepoSettings: required")
@@ -5109,6 +5122,34 @@ func (j *UpdateAutoMergeToggleRequest) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = UpdateAutoMergeToggleRequest(plain)
+	return nil
+}
+
+// Request body for PUT /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65,
+// §24.5) -- arms/disarms the per-repo automatic-re-review-on-new-commits opt-in. A
+// SEPARATE endpoint, gated SOLELY by authz.ActionToggleAutoRetriggerReview (admin
+// only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why
+// this is not folded into the shared PUT /settings endpoint.
+type UpdateAutoRetriggerReviewToggleRequest struct {
+	// Enabled corresponds to the JSON schema field "enabled".
+	Enabled bool `json:"enabled" yaml:"enabled" mapstructure:"enabled"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateAutoRetriggerReviewToggleRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["enabled"]; raw != nil && !ok {
+		return fmt.Errorf("field enabled in UpdateAutoRetriggerReviewToggleRequest: required")
+	}
+	type Plain UpdateAutoRetriggerReviewToggleRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpdateAutoRetriggerReviewToggleRequest(plain)
 	return nil
 }
 

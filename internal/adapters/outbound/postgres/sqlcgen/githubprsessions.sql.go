@@ -11,6 +11,60 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearPendingRetriggerHeadSHA = `-- name: ClearPendingRetriggerHeadSHA :one
+UPDATE github_pr_sessions
+SET pending_retrigger_head_sha = NULL
+WHERE repo_full_name = $1 AND pr_number = $2 AND pending_retrigger_head_sha = $3
+RETURNING repo_full_name, pr_number, session_id, claimed_at, pending_retrigger_head_sha, auto_retrigger_count, auto_retrigger_budget_notice_sent_at
+`
+
+type ClearPendingRetriggerHeadSHAParams struct {
+	RepoFullName            string  `json:"repo_full_name"`
+	PrNumber                int32   `json:"pr_number"`
+	PendingRetriggerHeadSha *string `json:"pending_retrigger_head_sha"`
+}
+
+// The review_retrigger_debounce timer's own fire handler
+// (sessionactor.handleReviewRetriggerDebounceTimer) calls this after
+// EVERY firing that reaches a decision (§24.3 steps 3 and 4 alike: heads
+// already match, a turn was just enqueued, or the budget is exhausted) --
+// guarded on pending_retrigger_head_sha STILL equalling the exact value
+// ($3) this firing just read and acted on (a compare-and-swap, CLAUDE.md/
+// §11's own guarded-UPDATE idiom): a NEW synchronize event landing
+// between this firing's own read and this clear (a genuine, expected
+// race between the webhook handler and this timer's own claimed-but-
+// still-processing window) will already have overwritten this column
+// with a NEWER head sha and re-armed the timer fresh -- this guard
+// ensures THAT newer, still-unprocessed push is never silently clobbered
+// back to NULL by a decision made against a now-stale value. pgx.ErrNoRows
+// on a guard miss is the expected, harmless outcome in that race (nothing
+// to clear -- a fresher event already owns this row). Rereview fix
+// (finding 2, correcting this comment's own earlier false claim): the
+// caller must NOT then proceed to delete "its own claimed timer row" --
+// session_timers has UNIQUE(session_id, name), so there is exactly ONE
+// review_retrigger_debounce row for this session, and on a guard miss it
+// is already the SAME row the newer synchronize event's own re-arm just
+// updated. Deleting it here would strand that newer push with no timer
+// left to ever act on it -- the caller must skip its own delete on a
+// guard miss instead, trusting the newer event's own already-committed
+// re-arm to stand in for it (the same re-arm-or-delete contract every
+// named timer already follows, timerfired.go, satisfied by the newer
+// event's re-arm rather than by this firing's own delete).
+func (q *Queries) ClearPendingRetriggerHeadSHA(ctx context.Context, arg ClearPendingRetriggerHeadSHAParams) (GithubPrSession, error) {
+	row := q.db.QueryRow(ctx, clearPendingRetriggerHeadSHA, arg.RepoFullName, arg.PrNumber, arg.PendingRetriggerHeadSha)
+	var i GithubPrSession
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.PrNumber,
+		&i.SessionID,
+		&i.ClaimedAt,
+		&i.PendingRetriggerHeadSha,
+		&i.AutoRetriggerCount,
+		&i.AutoRetriggerBudgetNoticeSentAt,
+	)
+	return i, err
+}
+
 const ensureGitHubPRSessionRow = `-- name: EnsureGitHubPRSessionRow :exec
 
 INSERT INTO github_pr_sessions (repo_full_name, pr_number)
@@ -41,7 +95,7 @@ func (q *Queries) EnsureGitHubPRSessionRow(ctx context.Context, arg EnsureGitHub
 }
 
 const getGitHubPRSessionBySessionID = `-- name: GetGitHubPRSessionBySessionID :one
-SELECT repo_full_name, pr_number, session_id, claimed_at FROM github_pr_sessions
+SELECT repo_full_name, pr_number, session_id, claimed_at, pending_retrigger_head_sha, auto_retrigger_count, auto_retrigger_budget_notice_sent_at FROM github_pr_sessions
 WHERE session_id = $1
 `
 
@@ -61,6 +115,43 @@ func (q *Queries) GetGitHubPRSessionBySessionID(ctx context.Context, sessionID p
 		&i.PrNumber,
 		&i.SessionID,
 		&i.ClaimedAt,
+		&i.PendingRetriggerHeadSha,
+		&i.AutoRetriggerCount,
+		&i.AutoRetriggerBudgetNoticeSentAt,
+	)
+	return i, err
+}
+
+const incrementAutoRetriggerCount = `-- name: IncrementAutoRetriggerCount :one
+UPDATE github_pr_sessions
+SET auto_retrigger_count = auto_retrigger_count + 1
+WHERE repo_full_name = $1 AND pr_number = $2
+RETURNING repo_full_name, pr_number, session_id, claimed_at, pending_retrigger_head_sha, auto_retrigger_count, auto_retrigger_budget_notice_sent_at
+`
+
+type IncrementAutoRetriggerCountParams struct {
+	RepoFullName string `json:"repo_full_name"`
+	PrNumber     int32  `json:"pr_number"`
+}
+
+// §24.6's own budget counter -- incremented exactly once per PR each
+// time handleReviewRetriggerDebounceTimer actually enqueues an automatic
+// re-review turn (never for a manual label/button re-trigger, which is
+// never subject to this budget at all). A plain increment, not a guarded
+// one: only this PR's own session actor ever writes this column, so
+// there is no cross-writer race here to guard against (unlike
+// pending_retrigger_head_sha, which the webhook handler ALSO writes).
+func (q *Queries) IncrementAutoRetriggerCount(ctx context.Context, arg IncrementAutoRetriggerCountParams) (GithubPrSession, error) {
+	row := q.db.QueryRow(ctx, incrementAutoRetriggerCount, arg.RepoFullName, arg.PrNumber)
+	var i GithubPrSession
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.PrNumber,
+		&i.SessionID,
+		&i.ClaimedAt,
+		&i.PendingRetriggerHeadSha,
+		&i.AutoRetriggerCount,
+		&i.AutoRetriggerBudgetNoticeSentAt,
 	)
 	return i, err
 }
@@ -90,6 +181,40 @@ func (q *Queries) LockGitHubPRSessionForUpdate(ctx context.Context, arg LockGitH
 	return session_id, err
 }
 
+const markAutoRetriggerBudgetNoticeSent = `-- name: MarkAutoRetriggerBudgetNoticeSent :one
+UPDATE github_pr_sessions
+SET auto_retrigger_budget_notice_sent_at = now()
+WHERE repo_full_name = $1 AND pr_number = $2 AND auto_retrigger_budget_notice_sent_at IS NULL
+RETURNING repo_full_name, pr_number, session_id, claimed_at, pending_retrigger_head_sha, auto_retrigger_count, auto_retrigger_budget_notice_sent_at
+`
+
+type MarkAutoRetriggerBudgetNoticeSentParams struct {
+	RepoFullName string `json:"repo_full_name"`
+	PrNumber     int32  `json:"pr_number"`
+}
+
+// §24.6's own "a one-time event, not repeated on every subsequent
+// firing" rule -- guarded on auto_retrigger_budget_notice_sent_at IS
+// NULL so a caller can tell (via pgx.ErrNoRows on a guard miss) "this PR
+// was already notified", the same guarded-UPDATE-as-claim idiom
+// RetireFalsePositivePattern already establishes
+// (reviewfalsepositivepatterns.sql) for a comparable single-writer,
+// once-only transition.
+func (q *Queries) MarkAutoRetriggerBudgetNoticeSent(ctx context.Context, arg MarkAutoRetriggerBudgetNoticeSentParams) (GithubPrSession, error) {
+	row := q.db.QueryRow(ctx, markAutoRetriggerBudgetNoticeSent, arg.RepoFullName, arg.PrNumber)
+	var i GithubPrSession
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.PrNumber,
+		&i.SessionID,
+		&i.ClaimedAt,
+		&i.PendingRetriggerHeadSha,
+		&i.AutoRetriggerCount,
+		&i.AutoRetriggerBudgetNoticeSentAt,
+	)
+	return i, err
+}
+
 const setGitHubPRSessionID = `-- name: SetGitHubPRSessionID :exec
 UPDATE github_pr_sessions
 SET session_id = $3
@@ -111,4 +236,59 @@ type SetGitHubPRSessionIDParams struct {
 func (q *Queries) SetGitHubPRSessionID(ctx context.Context, arg SetGitHubPRSessionIDParams) error {
 	_, err := q.db.Exec(ctx, setGitHubPRSessionID, arg.RepoFullName, arg.PrNumber, arg.SessionID)
 	return err
+}
+
+const upsertPendingRetriggerHeadSHA = `-- name: UpsertPendingRetriggerHeadSHA :one
+
+
+UPDATE github_pr_sessions
+SET pending_retrigger_head_sha = $3
+WHERE repo_full_name = $1 AND pr_number = $2 AND session_id IS NOT NULL
+RETURNING repo_full_name, pr_number, session_id, claimed_at, pending_retrigger_head_sha, auto_retrigger_count, auto_retrigger_budget_notice_sent_at
+`
+
+type UpsertPendingRetriggerHeadSHAParams struct {
+	RepoFullName            string  `json:"repo_full_name"`
+	PrNumber                int32   `json:"pr_number"`
+	PendingRetriggerHeadSha *string `json:"pending_retrigger_head_sha"`
+}
+
+// SetGitHubPRSessionHeadSHA (and pending_head_sha, migrations/000068) is
+// REMOVED as of migrations/000072_turns_review_head_sha.up.sql (§62
+// review finding C2, CRITICAL, fixed) -- superseded by turns.
+// review_head_sha, set once at turn-creation time and read back via
+// TurnStore.GetProcessingTurnForSession, never a shared per-(repo,PR)
+// column any later, unrelated turn's own context-fetch could overwrite.
+// See that migration's own doc comment for the full "why".
+// Queries backing Step 65's ("review: automatic re-review on new
+// commits", §24) trailing-edge debounce + per-PR budget -- see
+// migrations/000075_github_pr_sessions_retrigger.up.sql's own doc comment
+// for the three columns below, including why pending_retrigger_head_sha
+// is a deliberately DIFFERENT name from the retired pending_head_sha.
+// The synchronize webhook handler's own direct, actor-bypassing write
+// (§24.1's 4th cost item, internal/adapters/inbound/github/
+// pullrequestsynchronize.go) -- called in the SAME transaction as
+// UpsertSessionTimer's own re-arm (session_timers.sql), never
+// independently committed. Guarded on session_id IS NOT NULL (CLAUDE.md/
+// §11's own "guarded UPDATE ... WHERE for cross-writer transitions" idiom)
+// so this is a genuine no-op -- pgx.ErrNoRows, never a fabricated row --
+// for exactly the two cases §24.1 says must be acknowledged and ignored:
+// no github_pr_sessions row at all for this PR, or a row whose session_id
+// is still NULL (nobody has ever mentioned the bot on this PR) -- "no
+// session to re-trigger", identical in kind to today's "no mention"
+// no-op for comment events. Overwrites (never appends) on every event,
+// per §24.2's own "upserted, not appended" rule.
+func (q *Queries) UpsertPendingRetriggerHeadSHA(ctx context.Context, arg UpsertPendingRetriggerHeadSHAParams) (GithubPrSession, error) {
+	row := q.db.QueryRow(ctx, upsertPendingRetriggerHeadSHA, arg.RepoFullName, arg.PrNumber, arg.PendingRetriggerHeadSha)
+	var i GithubPrSession
+	err := row.Scan(
+		&i.RepoFullName,
+		&i.PrNumber,
+		&i.SessionID,
+		&i.ClaimedAt,
+		&i.PendingRetriggerHeadSha,
+		&i.AutoRetriggerCount,
+		&i.AutoRetriggerBudgetNoticeSentAt,
+	)
+	return i, err
 }

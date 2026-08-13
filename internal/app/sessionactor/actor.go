@@ -15,6 +15,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -100,6 +101,15 @@ type Actor struct {
 	// runHandoffSentinelBestEffort is this Actor's own one use of it. May
 	// be nil (tests that never exercise the handoff-sentinel path).
 	diffFetcher PRDiffFetcher
+
+	// reviewDiffFetcher/githubBotHandle are Step 65's ("review: automatic
+	// re-review on new commits", §24) own additions -- see Registry's own
+	// identical field doc comments (registry.go) for the full rationale;
+	// reviewretrigger.go's own handleReviewRetriggerDebounceTimer is this
+	// Actor's own one use of either. May be nil/empty (tests that never
+	// exercise the automatic-re-review path).
+	reviewDiffFetcher reviewcontext.Fetcher
+	githubBotHandle   string
 
 	// tokenEncryptionKey decrypts identities.access_token_encrypted (§13.1)
 	// to obtain the session creator's own plaintext GitHub OAuth access

@@ -71,7 +71,9 @@ func NewVerdictNotifier(adapter *Adapter, botToken string) *VerdictNotifier {
 
 // Deliver implements ports.Notifier: decodes n.Payload as VerdictPayload,
 // submits the formal review, then syncs labels (fetch current -> compute
-// plan -> apply). n.Kind is not checked -- mirrors BotNotifier.Deliver's
+// plan -> apply) -- SKIPPED entirely when payload.RiskLevel == "" (an
+// intentional no-sync, not an oversight; see that guard's own comment
+// below for why). n.Kind is not checked -- mirrors BotNotifier.Deliver's
 // own identical "only ever asked to Deliver its own matching Kind in
 // practice" precedent (the delivery worker's own kind->Notifier routing
 // map is what guarantees that).
@@ -96,6 +98,23 @@ func (n *VerdictNotifier) Deliver(ctx context.Context, notification ports.Notifi
 	if err := n.adapter.CreateReview(ctx, payload.Owner, payload.Repo, payload.PRNumber, n.botToken,
 		reviewpost.FormalReviewEvent(payload.Event), payload.Body); err != nil {
 		return fmt.Errorf("githubapi: deliver verdict (create review): %w", err)
+	}
+
+	// Rereview fix (Step 65 finding 6): payload.RiskLevel == "" means no
+	// real verdict was ever posted for this PR at all -- a real, reachable
+	// state for a ports.NotificationKindGitHubVerdict notification that
+	// isn't a real review.Verdict (e.g. sessionactor's own §24.6
+	// budget-exhausted notice, enqueueAutoRetriggerBudgetExhaustedNotice,
+	// reviewretrigger.go, when EVERY automatic re-review for this PR
+	// declined before ever posting one). reviewpost.RiskLabel's own
+	// fail-conservative default renders an empty/unrecognized RiskLevel as
+	// review:high-risk -- running the label sync below against that empty
+	// value would stamp a "high risk" label on a PR this notification
+	// never actually assessed. Skip label sync entirely in that case; the
+	// formal review/comment above (already posted) is this notification's
+	// only content.
+	if payload.RiskLevel == "" {
+		return nil
 	}
 
 	currentLabels, err := n.adapter.ListLabels(ctx, payload.Owner, payload.Repo, payload.PRNumber, n.botToken)
