@@ -16,15 +16,20 @@ type DigestSection string
 // The digest sections a maintainer can currently give feedback on. Only
 // DigestSectionArchRecap has a dedicated capture COMMAND today (§26.5's
 // own "arch recap wrong: <reason>", mirroring Step 63's "false positive:
-// <reason>" exactly) -- the other three are named here so the read model
+// <reason>" exactly) -- the other four are named here so the read model
 // (per-section contest/confirm counts) and ComputeDigestSectionIdentity
 // below are never hard-coded to just one section, even though v1 ships
-// only one capture path onto them.
+// only one capture path onto them. DigestSectionContestedPoints (Step 69,
+// §26.4/§26.5) names the "Contested points" section (rendercomment.go's
+// own renderContestedPoints) so §26.5's per-section contest mechanism can
+// address it too, the same "named for the read model even without its own
+// capture command yet" treatment the pre-existing three already get.
 const (
 	DigestSectionSummary          DigestSection = "summary"
 	DigestSectionArchRecap        DigestSection = "arch_recap"
 	DigestSectionStackRisks       DigestSection = "stack_risks"
 	DigestSectionUnverifiedLimits DigestSection = "unverified_limits"
+	DigestSectionContestedPoints  DigestSection = "contested_points"
 )
 
 // digestSectionIdentitySeparator mirrors findingIdentitySeparator's own

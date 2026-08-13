@@ -79,6 +79,20 @@ import (
 //     always produced, §26.1's own words: "demoted to supporting
 //     evidence", never restructured or dropped.
 //
+// # Step 69 (§26.4): "Contested points"
+//
+// digest.ContestedPoints (digest.go, the deep path's own inter-agent
+// disagreement narrative -- populated by counter-review synthesis, empty
+// on every light-path review since there is no counter-reviewer there to
+// disagree with anything) renders as its own "### Contested points"
+// section, immediately after "Risks to the stack" and before the
+// collapsed appendix -- visible without expanding anything, matching
+// §26.4's own "agent disagreement is precisely the signal that a human
+// must decide" framing. Rendered ONLY when non-blank, with no "none
+// reported" fallback (unlike Architecture choices/Risks to the stack
+// above) -- see renderContestedPoints' own doc comment for why, the SAME
+// reasoning renderProposedBody already established for ProposedBody.
+//
 // TestsCoverage/DocsDrift/FilesChanged/BlastRadius are v's own PRE-
 // EXISTING fields (review.Verdict, unchanged by this Step -- Step 66 adds
 // no new field to that closed, seven-field type, digest.go's own doc
@@ -145,6 +159,12 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 		b.WriteString("_No stack risks reported for this review._\n")
 	}
 	b.WriteString("\n")
+
+	// --- Step 69 (§26.4): "Contested points" -- rendered only when the
+	// deep path's counter-review synthesis actually produced one; see
+	// renderContestedPoints' own doc comment for why an empty value
+	// renders no section at all.
+	b.WriteString(renderContestedPoints(digest.ContestedPoints))
 
 	// --- 5. Collapsed appendix (§26.1 item 5) -- findings, coverage,
 	// docs-drift, files changed: retained intact, demoted to supporting
@@ -225,6 +245,35 @@ func renderProposedBody(proposedBody string) string {
 	b.WriteString("<details>\n<summary>Suggested PR description</summary>\n\n")
 	b.WriteString(trimmed)
 	b.WriteString("\n\n</details>\n\n")
+	return b.String()
+}
+
+// renderContestedPoints renders contestedPoints (digest.ContestedPoints, the
+// deep path's own inter-agent disagreement narrative, §26.4/Step 69) as a
+// "### Contested points" section -- an empty/blank contestedPoints renders
+// NOTHING at all (not even a "none reported" sentence, the SAME choice
+// renderProposedBody already makes for ProposedBody immediately below, for
+// the identical reason): the ordinary, common case -- every light-path
+// review, and most deep-path reviews too -- has no disagreement to report
+// at all, so a "none reported" heading on every ordinary review would be
+// pure noise, unlike Architecture choices/Risks to the stack above, which
+// are meant to appear on every review with something to say (even if that
+// something is an honest "none reported").
+//
+// Unlike renderProposedBody's own collapsed `<details>` treatment,
+// Contested points renders as a plain, always-visible section: §26.4's own
+// "agent disagreement is precisely the signal that a human must decide"
+// framing is exactly the kind of content a maintainer should not have to
+// expand a fold to see.
+func renderContestedPoints(contestedPoints string) string {
+	trimmed := strings.TrimSpace(contestedPoints)
+	if trimmed == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("### Contested points\n\n")
+	b.WriteString(trimmed)
+	b.WriteString("\n\n")
 	return b.String()
 }
 

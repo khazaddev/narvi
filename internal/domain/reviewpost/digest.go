@@ -196,6 +196,11 @@ type Digest struct {
 	// something contested, never padded to satisfy a requiredness check.
 	// Empty string is legal on every path (light path most of all, since
 	// there is no counter-reviewer there to disagree with anything at
-	// all, §26.9) -- rendered only when non-blank (rendercomment.go).
+	// all, §26.9) -- rendered only when non-blank, as its own "Contested
+	// points" section (rendercomment.go), mirroring renderProposedBody's
+	// own "no section header at all when blank" treatment of ProposedBody
+	// immediately above, for the identical reason: most reviews (every
+	// light-path review, and most deep-path ones too) have nothing
+	// contested to report.
 	ContestedPoints string
 }
