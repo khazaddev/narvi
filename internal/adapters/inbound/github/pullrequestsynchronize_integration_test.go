@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	githubingress "github.com/khazaddev/narvi/internal/adapters/inbound/github"
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
@@ -85,6 +86,35 @@ func getReviewRetriggerDebounceTimer(ctx context.Context, t *testing.T, pool *na
 	return sqlcgen.SessionTimer{}, false
 }
 
+// rawPendingRetriggerHeadSHA reads pending_retrigger_head_sha directly by
+// (repoFullName, prNumber) -- unlike GitHubPRSessionStore.GetBySessionID,
+// this works even when a row exists with session_id still NULL (no
+// session id to look it back up BY in that case) or doesn't exist at all
+// (the query then returns pgx.ErrNoRows, reported back as ok == false) --
+// exactly the two cases TestGitHubIntegration_PullRequestSynchronize_
+// NoReviewSession_Acknowledges200NoWrite below needs to positively prove
+// "no write happened" for, rather than merely inferring it from an
+// unrelated GetBySessionID(zero uuid) call that would return
+// pgx.ErrNoRows regardless of whether this handler wrote anything at all.
+func rawPendingRetriggerHeadSHA(ctx context.Context, t *testing.T, pool *pgxpool.Pool, repoFullName string, prNumber int) (sha string, ok bool) {
+	t.Helper()
+	row := pool.QueryRow(ctx,
+		`SELECT pending_retrigger_head_sha FROM github_pr_sessions WHERE repo_full_name = $1 AND pr_number = $2`,
+		repoFullName, prNumber,
+	)
+	var pending *string
+	if err := row.Scan(&pending); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false
+		}
+		t.Fatalf("raw select pending_retrigger_head_sha: %v", err)
+	}
+	if pending == nil {
+		return "", true
+	}
+	return *pending, true
+}
+
 // TestGitHubIntegration_PullRequestSynchronize_NoReviewSession_Acknowledges200NoWrite
 // covers §24.1's own "no row, or a row with session_id still NULL" no-op:
 // both cases must acknowledge (200) without arming anything, exactly like
@@ -107,6 +137,12 @@ func TestGitHubIntegration_PullRequestSynchronize_NoReviewSession_Acknowledges20
 		if _, err := prSessions.GetBySessionID(ctx, pgtype.UUID{}); !errors.Is(err, pgx.ErrNoRows) {
 			t.Fatalf("sanity: GetBySessionID(zero uuid) = %v, want pgx.ErrNoRows", err)
 		}
+		// Rereview fix (finding 8): positively prove the write never
+		// happened -- no github_pr_sessions row means the raw SELECT
+		// itself returns no row at all.
+		if _, ok := rawPendingRetriggerHeadSHA(ctx, t, pool, repoFullName, 1); ok {
+			t.Error("a github_pr_sessions row exists for this (repo, pr) pair, want none (no row must ever be created for a PR with no review session)")
+		}
 	})
 
 	t.Run("row exists but session_id still NULL", func(t *testing.T) {
@@ -122,8 +158,16 @@ func TestGitHubIntegration_PullRequestSynchronize_NoReviewSession_Acknowledges20
 		}
 		// UpsertPendingRetriggerHeadSHA's own guard (session_id IS NOT
 		// NULL) must have made this a no-op -- there is no session_id to
-		// look this row back up by, so the only thing left to assert is
-		// that the handler didn't panic/500 and returned 200 above.
+		// look this row back up by, so GetBySessionID cannot prove
+		// anything here. Rereview fix (finding 8): read the column back
+		// directly instead.
+		sha, ok := rawPendingRetriggerHeadSHA(ctx, t, pool, repoFullName, 2)
+		if !ok {
+			t.Fatal("github_pr_sessions row disappeared -- EnsureRow above should have left it in place")
+		}
+		if sha != "" {
+			t.Errorf("pending_retrigger_head_sha = %q, want empty/NULL (session_id IS NOT NULL guard must have made the upsert a no-op)", sha)
+		}
 	})
 }
 
@@ -181,7 +225,15 @@ func TestGitHubIntegration_PullRequestSynchronize_ExistingSession_UpsertsPending
 // covers §24.2's own "upserted (overwritten, not appended) on every
 // event" rule directly: two synchronize events for the same PR leave
 // pending_retrigger_head_sha holding only the SECOND (latest) sha, never
-// both/an array/the first.
+// both/an array/the first. It also covers §24.2's own headline TRAILING-
+// EDGE debounce semantic (rereview fix, finding 3): the timer's own
+// fires_at must strictly ADVANCE on the second push, never stay pinned to
+// the first push's own deadline (leading-edge -- the exact anti-goal
+// §24.2 names explicitly) and never merely stay unchanged. Before this
+// fix, only pending_retrigger_head_sha's own value was asserted here --
+// reverting the handler's own timer-arm to leave fires_at unchanged on
+// conflict (a literal leading-edge implementation) left this file's whole
+// suite green.
 func TestGitHubIntegration_PullRequestSynchronize_SecondPush_OverwritesPendingHeadSHA(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -207,6 +259,17 @@ func TestGitHubIntegration_PullRequestSynchronize_SecondPush_OverwritesPendingHe
 	if status := postWebhookEventType(t, rig, pullRequestSynchronizeBody(repoFullName, prNumber, "sha-first-push"), "delivery-burst-1", "pull_request"); status != 200 {
 		t.Fatalf("first push status = %d, want 200", status)
 	}
+	timerAfterFirst, ok := getReviewRetriggerDebounceTimer(ctx, t, timers, sessionRow.ID)
+	if !ok {
+		t.Fatal("review_retrigger_debounce timer was not armed after the first push")
+	}
+
+	// A real wall-clock gap between the two pushes' own now()+debounce
+	// arms, so a leading-edge (fires_at left unchanged) regression cannot
+	// coincidentally pass this assertion via two now() reads landing on
+	// the exact same instant.
+	time.Sleep(2 * time.Millisecond)
+
 	if status := postWebhookEventType(t, rig, pullRequestSynchronizeBody(repoFullName, prNumber, "sha-second-push"), "delivery-burst-2", "pull_request"); status != 200 {
 		t.Fatalf("second push status = %d, want 200", status)
 	}
@@ -217,6 +280,15 @@ func TestGitHubIntegration_PullRequestSynchronize_SecondPush_OverwritesPendingHe
 	}
 	if got.PendingRetriggerHeadSha == nil || *got.PendingRetriggerHeadSha != "sha-second-push" {
 		t.Errorf("pending_retrigger_head_sha = %v, want the LATEST push %q, never the first", got.PendingRetriggerHeadSha, "sha-second-push")
+	}
+
+	timerAfterSecond, ok := getReviewRetriggerDebounceTimer(ctx, t, timers, sessionRow.ID)
+	if !ok {
+		t.Fatal("review_retrigger_debounce timer was not armed after the second push")
+	}
+	if !timerAfterSecond.FiresAt.Time.After(timerAfterFirst.FiresAt.Time) {
+		t.Errorf("fires_at after second push = %v, want strictly after the first push's own fires_at %v (trailing-edge debounce: each new push must push the deadline further out, never stay pinned to the first push)",
+			timerAfterSecond.FiresAt.Time, timerAfterFirst.FiresAt.Time)
 	}
 }
 
