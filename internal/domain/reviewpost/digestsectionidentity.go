@@ -71,3 +71,26 @@ func normalizeDigestSectionText(text string) string {
 	lower := strings.ToLower(strings.TrimSpace(text))
 	return strings.Join(strings.Fields(lower), " ")
 }
+
+// ArchRecapText renders decisions (a verdict's own Digest.ArchDecisions)
+// into the single canonical string ComputeDigestSectionIdentity hashes
+// for DigestSectionArchRecap (§26.5's own "arch recap wrong: <reason>"
+// contest command, internal/domain/archrecap) -- the RAW structured
+// content (Decision/RejectedAlternative/ConventionConformance), never the
+// rendered markdown comment (rendercomment.go): a purely decorative
+// rendering change (bullet style, heading text) must never make an
+// already-contested recap read as a new one, which hashing the rendered
+// markdown instead of this canonical join would risk. One line per
+// decision, each decision's own three fields pipe-joined, in the SAME
+// order Decision/RejectedAlternative/ConventionConformance already
+// appear on the ArchDecision struct itself -- ComputeDigestSectionIdentity's
+// own normalization (whitespace-collapse + casefold) is what actually
+// makes the result stable across insignificant whitespace, so this
+// function itself does no normalization of its own.
+func ArchRecapText(decisions []ArchDecision) string {
+	lines := make([]string, len(decisions))
+	for i, d := range decisions {
+		lines[i] = d.Decision + "|" + d.RejectedAlternative + "|" + d.ConventionConformance
+	}
+	return strings.Join(lines, "\n")
+}

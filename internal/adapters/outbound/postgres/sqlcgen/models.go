@@ -1666,6 +1666,19 @@ type RepoSetting struct {
 	ReviewCostBudgetDeepUsd    pgtype.Numeric     `json:"review_cost_budget_deep_usd"`
 }
 
+type ReviewDigestSectionFeedback struct {
+	ID           pgtype.UUID        `json:"id"`
+	RepoFullName string             `json:"repo_full_name"`
+	PrNumber     int32              `json:"pr_number"`
+	Section      string             `json:"section"`
+	ContentHash  string             `json:"content_hash"`
+	CommentType  string             `json:"comment_type"`
+	CommentID    int64              `json:"comment_id"`
+	Reason       string             `json:"reason"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type ReviewFalsePositivePattern struct {
 	ID           pgtype.UUID        `json:"id"`
 	RepoFullName string             `json:"repo_full_name"`

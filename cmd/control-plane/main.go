@@ -398,6 +398,13 @@ func serve() error {
 	// audit-view/retire REST endpoints -- one store, shared, never a
 	// second independently-constructed copy.
 	falsePositivePatternStore := postgres.NewFalsePositivePatternStore(pool)
+	// reviewDigestSectionFeedbackStore (Step 69, "review deep path:
+	// adversarial counter-review + readout measurement", §26.5) backs the
+	// GitHub `arch recap wrong: <reason>` capture command -- one store,
+	// shared, never a second independently-constructed copy, mirroring
+	// falsePositivePatternStore's own identical precedent immediately
+	// above.
+	reviewDigestSectionFeedbackStore := postgres.NewReviewDigestSectionFeedbackStore(pool)
 	// reviewVerdictStore/autoApprovalOutcomeStore/digestSendStateStore
 	// (Step 62, "review verdict persistence, analytics, digest &
 	// automated approval", §21) back the verdict-posting tool's own
@@ -832,6 +839,13 @@ func serve() error {
 			// falsePositivePatternStore instance, satisfying this
 			// structurally different (write) interface.
 			FalsePositivePatternCapture: falsePositivePatternStore,
+			// ArchRecapContestCapture/ArchRecapVerdicts (Step 69, §26.5):
+			// reviewDigestSectionFeedbackStore is the SAME instance this
+			// deployment has exactly one of; reviewVerdictDeps is the SAME
+			// bundle every other review-verdict reader in this file already
+			// shares (constructed once, above, alongside reviewVerdictStore).
+			ArchRecapContestCapture: reviewDigestSectionFeedbackStore,
+			ArchRecapVerdicts:       reviewVerdictDeps,
 			// BotToken/PullRequests (batch fix/audit-github-pr-payload-
 			// correctness, H5 audit fix): resolve an issue_comment
 			// mention's TRUE head branch/repo via one authenticated
