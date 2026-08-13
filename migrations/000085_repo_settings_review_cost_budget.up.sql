@@ -1,0 +1,49 @@
+-- reviewCostBudget per-repo config (Step 69, §26.7: "reviewCostBudget:
+-- {light: <usd>, deep: <usd>} joins §26.3's reviewDepth config on the
+-- SAME per-repo settings row"). Two further columns on the SAME
+-- repo_settings table migrations/000082_repo_settings_review_depth.up.sql
+-- just added review_depth_mode/review_depth_deep_paths to -- NOT a new
+-- table, NOT a new endpoint family (internal/adapters/inbound/httpapi/
+-- reposettings.go gets one further column-scoped PUT handler, mirroring
+-- PutReviewDepthConfig/PutDescriptionAutofixToggle exactly, not a
+-- parallel mechanism).
+--
+-- RBAC tier: admin-only (authz.ActionConfigureReviewCostBudget,
+-- internal/domain/authz/action.go), the SAME row as
+-- review_depth_mode/review_depth_deep_paths immediately above and every
+-- other sibling unattended-behavior config on this table -- §26.7 does
+-- not itself name a tier, reasoned here to match
+-- migrations/000082's own identical reasoning for review_depth_mode:
+-- configuring the cost ceiling changes what runs (or does not run)
+-- unattended on a repo's own PRs, never a per-PR maintainer judgment
+-- call.
+--
+-- review_cost_budget_light_usd / review_cost_budget_deep_usd: NULLABLE
+-- NUMERIC(10,2). This is the FIRST currency-shaped column anywhere in
+-- this schema (grepped directly -- no existing NUMERIC/money column to
+-- mirror), so the choice is reasoned here rather than following an
+-- established local precedent: NUMERIC, not FLOAT/DOUBLE PRECISION,
+-- because a repeating-binary-fraction rounding error on a cost CEILING
+-- (compared against via ShouldSkipOptionalPass's own strict >=) is a real
+-- risk FLOAT genuinely carries and NUMERIC does not -- unlike
+-- modelcatalog.Cost's own float64 fields (application-layer, sourced from
+-- a hand-refreshed embedded snapshot, never compared for a >= gate the
+-- way this ceiling is). 10 total digits / 2 fractional digits is
+-- generous for a per-review USD figure in the tens-to-hundreds range;
+-- pgx's own NUMERIC mapping (pgtype.Numeric) is converted to/from a plain
+-- float64 at the internal/app/reviewtriage.LoadConfig read site (this
+-- Step's own conversion, mirroring how review_depth_deep_paths' own JSONB
+-- column is unmarshaled at that SAME read site) -- callers of
+-- reviewtriage.Config.CostBudget never see pgtype.Numeric directly.
+-- NULL means "use the engine's own built-in default"
+-- (internal/domain/reviewtriage.DefaultCostBudget, $0.50 light / $5
+-- deep) -- mirrors review_depth_mode's own identical "NULL = use the
+-- built-in default, never a magic sentinel value" precedent (migrations/
+-- 000082). Validated application-side as non-negative -- a negative
+-- configured ceiling has no principled meaning
+-- (internal/domain/reviewtriage.ShouldSkipOptionalPass's own doc comment
+-- already treats a negative ceiling as "no ceiling configured", the
+-- identical fail-open direction a garbled value gets everywhere else in
+-- this package).
+ALTER TABLE repo_settings ADD COLUMN review_cost_budget_light_usd NUMERIC(10, 2);
+ALTER TABLE repo_settings ADD COLUMN review_cost_budget_deep_usd NUMERIC(10, 2);

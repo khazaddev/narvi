@@ -734,6 +734,14 @@ export interface RepoSettings {
    * Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered on top of (never replacing) the engine's own fixed sensitive-glob set (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same row as reviewDepthMode).
    */
   reviewDepthDeepPaths: string[] | null;
+  /**
+   * Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6, same row as reviewDepthMode) -- arming a non-default ceiling changes how much spend every future automated review is allowed before its own optional passes start skipping, the same reasoning every sibling toggle in this row already carries.
+   */
+  reviewCostBudgetLightUsd: number | null;
+  /**
+   * Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd.
+   */
+  reviewCostBudgetDeepUsd: number | null;
 }
 /**
  * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise. Step 62's own §21.2 fields (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are DELIBERATELY NOT on this shared request: this endpoint's own handler requires EVERY permission its fields collectively need (PutRepoSettings' own doc comment, httpapi/reposettings.go), which would force a maintainer authorized only for the auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates (row 6) too -- see UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its own endpoint with its own single, correctly-scoped gate.
@@ -804,6 +812,22 @@ export interface UpdateReviewDepthConfigRequest {
    * Null means 'no repo-specific deep paths'.
    */
   deepPaths: string[] | null;
+}
+/**
+ * Request body for PUT /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7) -- (re)configures this repo's own per-path cost ceilings. A SEPARATE endpoint, gated SOLELY by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint. Always the full, current desired state for these two fields specifically (never a partial patch).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateReviewCostBudgetRequest".
+ */
+export interface UpdateReviewCostBudgetRequest {
+  /**
+   * Null means 'use the engine's own built-in default ($0.50)'. Validated application-side as non-negative.
+   */
+  lightUsd: number | null;
+  /**
+   * Null means 'use the engine's own built-in default ($5.00)'. Validated application-side as non-negative.
+   */
+  deepUsd: number | null;
 }
 /**
  * GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.

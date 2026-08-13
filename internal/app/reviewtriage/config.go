@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -64,5 +65,40 @@ func LoadConfig(ctx context.Context, deps Deps, repoFullName string) (reviewtria
 		// is the safe direction here too: the fixed sensitive-glob set
 		// and the line/root thresholds still apply regardless.
 	}
+
+	// CostBudget (§26.7, Step 69): each of the two columns independently
+	// overrides ONLY its own DefaultCostBudget field when Valid -- an
+	// admin who configured only review_cost_budget_deep_usd (leaving
+	// review_cost_budget_light_usd NULL) still gets the built-in $0.50
+	// light default, never a zeroed-out light ceiling as a side effect of
+	// configuring the other one, mirroring Mode/DeepPaths' own identical
+	// "each field its own independent override" treatment immediately
+	// above.
+	if v, ok := NumericToFloat64(settings.ReviewCostBudgetLightUsd); ok {
+		cfg.CostBudget.Light = v
+	}
+	if v, ok := NumericToFloat64(settings.ReviewCostBudgetDeepUsd); ok {
+		cfg.CostBudget.Deep = v
+	}
 	return cfg, nil
+}
+
+// NumericToFloat64 converts one pgtype.Numeric column into a plain
+// float64 -- ok=false for a SQL NULL (n.Valid == false, "use the built-in
+// default", LoadConfig's own caller) or a value pgtype itself cannot
+// represent as a float64 (should never happen for a column only ever
+// written by UpsertReviewCostBudget's own bounded NUMERIC(10,2) writes,
+// defended against anyway) -- both degrade identically to "no override",
+// mirroring this file's own established "malformed/absent degrades to a
+// safe default, never a propagated error" convention for
+// ReviewDepthDeepPaths immediately above.
+func NumericToFloat64(n pgtype.Numeric) (float64, bool) {
+	if !n.Valid {
+		return 0, false
+	}
+	f, err := n.Float64Value()
+	if err != nil || !f.Valid {
+		return 0, false
+	}
+	return f.Float64, true
 }

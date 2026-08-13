@@ -641,7 +641,7 @@
       "type": "object",
       "additionalProperties": false,
       "description": "GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: Step 62's auto-merge toggle, Step 65's automatic-re-review opt-in (§24.5), and Step 67's description-autofix toggle (§26.2) each added a further boolean property here, never a bespoke DTO of their own -- future toggles are expected to follow the same pattern.",
-      "required": ["repoFullName", "blockOnHighRisk", "sentinelAutofixEnabled", "autoMergeEnabled", "maxAutoApproveFilesChanged", "sensitiveBlastRadiusTags", "contradictionRateComputed", "contradictionRatePercent", "contradictionSampleSize", "autoRetriggerReviewEnabled", "descriptionAutofixEnabled", "reviewDepthMode", "reviewDepthDeepPaths"],
+      "required": ["repoFullName", "blockOnHighRisk", "sentinelAutofixEnabled", "autoMergeEnabled", "maxAutoApproveFilesChanged", "sensitiveBlastRadiusTags", "contradictionRateComputed", "contradictionRatePercent", "contradictionSampleSize", "autoRetriggerReviewEnabled", "descriptionAutofixEnabled", "reviewDepthMode", "reviewDepthDeepPaths", "reviewCostBudgetLightUsd", "reviewCostBudgetDeepUsd"],
       "properties": {
         "repoFullName": { "type": "string", "description": "The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own shape." },
         "blockOnHighRisk": {
@@ -696,6 +696,14 @@
           "type": ["array", "null"],
           "description": "Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered on top of (never replacing) the engine's own fixed sensitive-glob set (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same row as reviewDepthMode).",
           "items": { "type": "string" }
+        },
+        "reviewCostBudgetLightUsd": {
+          "type": ["number", "null"],
+          "description": "Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6, same row as reviewDepthMode) -- arming a non-default ceiling changes how much spend every future automated review is allowed before its own optional passes start skipping, the same reasoning every sibling toggle in this row already carries."
+        },
+        "reviewCostBudgetDeepUsd": {
+          "type": ["number", "null"],
+          "description": "Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd."
         }
       }
     },
@@ -767,6 +775,22 @@
           "type": ["array", "null"],
           "description": "Null means 'no repo-specific deep paths'.",
           "items": { "type": "string" }
+        }
+      }
+    },
+    "UpdateReviewCostBudgetRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request body for PUT /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7) -- (re)configures this repo's own per-path cost ceilings. A SEPARATE endpoint, gated SOLELY by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint. Always the full, current desired state for these two fields specifically (never a partial patch).",
+      "required": ["lightUsd", "deepUsd"],
+      "properties": {
+        "lightUsd": {
+          "type": ["number", "null"],
+          "description": "Null means 'use the engine's own built-in default ($0.50)'. Validated application-side as non-negative."
+        },
+        "deepUsd": {
+          "type": ["number", "null"],
+          "description": "Null means 'use the engine's own built-in default ($5.00)'. Validated application-side as non-negative."
         }
       }
     },

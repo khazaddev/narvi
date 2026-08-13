@@ -1662,6 +1662,8 @@ type RepoSetting struct {
 	DescriptionAutofixEnabled  bool               `json:"description_autofix_enabled"`
 	ReviewDepthMode            *string            `json:"review_depth_mode"`
 	ReviewDepthDeepPaths       []byte             `json:"review_depth_deep_paths"`
+	ReviewCostBudgetLightUsd   pgtype.Numeric     `json:"review_cost_budget_light_usd"`
+	ReviewCostBudgetDeepUsd    pgtype.Numeric     `json:"review_cost_budget_deep_usd"`
 }
 
 type ReviewFalsePositivePattern struct {

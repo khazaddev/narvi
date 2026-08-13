@@ -1197,6 +1197,14 @@ func serve() error {
 		r.Put("/", httpapi.PutReviewDepthConfig(repoSettingsStore))
 	})
 
+	// /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7): a
+	// further, separately-gated route mirroring review-depth above -- see
+	// httpapi/reposettings.go's own PutReviewCostBudget doc comment.
+	router.Route("/api/repos/{owner}/{repo}/review-cost-budget", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Put("/", httpapi.PutReviewCostBudget(repoSettingsStore))
+	})
+
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):
 	// read-only GET over the three analytics rollups (timeseries,
 	// top-risk-driver breakdown, "Review finding outcomes" KPI) -- see

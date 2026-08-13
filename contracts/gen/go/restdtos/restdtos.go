@@ -4376,6 +4376,22 @@ type RepoSettings struct {
 	// shape.
 	RepoFullName string `json:"repoFullName" yaml:"repoFullName" mapstructure:"repoFullName"`
 
+	// Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
+	// means 'not configured -- the engine's own built-in default applies'
+	// (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by
+	// authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd.
+	ReviewCostBudgetDeepUsd RepoSettingsReviewCostBudgetDeepUsd `json:"reviewCostBudgetDeepUsd" yaml:"reviewCostBudgetDeepUsd" mapstructure:"reviewCostBudgetDeepUsd"`
+
+	// Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD.
+	// Null means 'not configured -- the engine's own built-in default applies'
+	// (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel
+	// number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row
+	// 6, same row as reviewDepthMode) -- arming a non-default ceiling changes how
+	// much spend every future automated review is allowed before its own optional
+	// passes start skipping, the same reasoning every sibling toggle in this row
+	// already carries.
+	ReviewCostBudgetLightUsd RepoSettingsReviewCostBudgetLightUsd `json:"reviewCostBudgetLightUsd" yaml:"reviewCostBudgetLightUsd" mapstructure:"reviewCostBudgetLightUsd"`
+
 	// Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered
 	// on top of (never replacing) the engine's own fixed sensitive-glob set
 	// (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep
@@ -4421,6 +4437,22 @@ type RepoSettingsContradictionRatePercent *float64
 // a magic sentinel number. Gated by authz.ActionConfigureAutoApprove
 // (maintainer+).
 type RepoSettingsMaxAutoApproveFilesChanged *int
+
+// Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null
+// means 'not configured -- the engine's own built-in default applies'
+// (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by
+// authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd.
+type RepoSettingsReviewCostBudgetDeepUsd *float64
+
+// Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null
+// means 'not configured -- the engine's own built-in default applies'
+// (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel
+// number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6,
+// same row as reviewDepthMode) -- arming a non-default ceiling changes how much
+// spend every future automated review is allowed before its own optional passes
+// start skipping, the same reasoning every sibling toggle in this row already
+// carries.
+type RepoSettingsReviewCostBudgetLightUsd *float64
 
 // Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered
 // on top of (never replacing) the engine's own fixed sensitive-glob set
@@ -4523,6 +4555,12 @@ func (j *RepoSettings) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["repoFullName"]; raw != nil && !ok {
 		return fmt.Errorf("field repoFullName in RepoSettings: required")
+	}
+	if _, ok := raw["reviewCostBudgetDeepUsd"]; raw != nil && !ok {
+		return fmt.Errorf("field reviewCostBudgetDeepUsd in RepoSettings: required")
+	}
+	if _, ok := raw["reviewCostBudgetLightUsd"]; raw != nil && !ok {
+		return fmt.Errorf("field reviewCostBudgetLightUsd in RepoSettings: required")
 	}
 	if _, ok := raw["reviewDepthDeepPaths"]; raw != nil && !ok {
 		return fmt.Errorf("field reviewDepthDeepPaths in RepoSettings: required")
@@ -5684,6 +5722,51 @@ func (j *UpdateRepoSettingsRequest) UnmarshalJSON(value []byte) error {
 		plain.SentinelAutofixEnabled = false
 	}
 	*j = UpdateRepoSettingsRequest(plain)
+	return nil
+}
+
+// Request body for PUT /api/repos/{owner}/{repo}/review-cost-budget (Step 69,
+// §26.7) -- (re)configures this repo's own per-path cost ceilings. A SEPARATE
+// endpoint, gated SOLELY by authz.ActionConfigureReviewCostBudget (admin only,
+// §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is
+// not folded into the shared PUT /settings endpoint. Always the full, current
+// desired state for these two fields specifically (never a partial patch).
+type UpdateReviewCostBudgetRequest struct {
+	// Null means 'use the engine's own built-in default ($5.00)'. Validated
+	// application-side as non-negative.
+	DeepUsd UpdateReviewCostBudgetRequestDeepUsd `json:"deepUsd" yaml:"deepUsd" mapstructure:"deepUsd"`
+
+	// Null means 'use the engine's own built-in default ($0.50)'. Validated
+	// application-side as non-negative.
+	LightUsd UpdateReviewCostBudgetRequestLightUsd `json:"lightUsd" yaml:"lightUsd" mapstructure:"lightUsd"`
+}
+
+// Null means 'use the engine's own built-in default ($5.00)'. Validated
+// application-side as non-negative.
+type UpdateReviewCostBudgetRequestDeepUsd *float64
+
+// Null means 'use the engine's own built-in default ($0.50)'. Validated
+// application-side as non-negative.
+type UpdateReviewCostBudgetRequestLightUsd *float64
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *UpdateReviewCostBudgetRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["deepUsd"]; raw != nil && !ok {
+		return fmt.Errorf("field deepUsd in UpdateReviewCostBudgetRequest: required")
+	}
+	if _, ok := raw["lightUsd"]; raw != nil && !ok {
+		return fmt.Errorf("field lightUsd in UpdateReviewCostBudgetRequest: required")
+	}
+	type Plain UpdateReviewCostBudgetRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = UpdateReviewCostBudgetRequest(plain)
 	return nil
 }
 

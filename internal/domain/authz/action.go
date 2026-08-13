@@ -209,6 +209,21 @@ const (
 	// this same row 2 shape, still two names) rather than merging into
 	// one action whose meaning would depend on which caller invoked it.
 	ActionManageFalsePositivePatterns Action = "manage_false_positive_patterns"
+	// ActionContestArchRecap covers §26.5/Step 69's own "arch recap
+	// wrong: <reason>" PR-thread command -- a maintainer+ contests the
+	// deep path's own architecture-recap digest section, mirroring
+	// ActionTeachFalsePositivePattern's own capture-command shape EXACTLY
+	// (Step 63, §22.2, this SAME row): dispatched BEFORE the ordinary
+	// mention/session router (internal/adapters/inbound/github's own
+	// archrecapcontest.go), reusing THIS SAME §13.3 gate directly, never
+	// a parallel permission model invented for this one command. Placed
+	// in THIS row (maintainer+, no member own/joined carve-out -- a
+	// contest is PR-scoped but the judgment "was this recap wrong" is the
+	// same maintainer-level review-adjacent write ActionEditReviewVerdict/
+	// ActionRetriggerReview/ActionTeachFalsePositivePattern already are,
+	// never a session a member merely created or joined), the same
+	// reasoning those three already establish.
+	ActionContestArchRecap Action = "contest_arch_recap"
 
 	// -- Row 6: "Integrations, global secrets, prompt-template
 	// activation, members & roles, sentinel auto-fix toggle, per-repo
@@ -352,6 +367,20 @@ const (
 	// comment on that action) -- "changes unattended behavior" is the
 	// admin-only trigger here, not "necessarily makes things riskier".
 	ActionConfigureReviewDepth Action = "configure_review_depth"
+	// ActionConfigureReviewCostBudget covers Step 69's own per-repo
+	// reviewCostBudget config (§26.7: "reviewCostBudget: {light: <usd>,
+	// deep: <usd>} joins §26.3's reviewDepth config on the SAME per-repo
+	// settings row", repo_settings.review_cost_budget_light_usd/
+	// review_cost_budget_deep_usd, migrations/
+	// 000085_repo_settings_review_cost_budget.up.sql -- internal/adapters/
+	// inbound/httpapi/reposettings.go's own PutReviewCostBudget). Admin
+	// only, this SAME row as ActionConfigureReviewDepth immediately above,
+	// by the identical reasoning: §26.7 names no RBAC tier for this config
+	// either, but the cost ceiling changes what an automated review is
+	// allowed to spend -- and therefore which optional passes it runs --
+	// unattended, on every future PR, never a per-PR maintainer judgment
+	// call the way row 5's actions are.
+	ActionConfigureReviewCostBudget Action = "configure_review_cost_budget"
 )
 
 // AllActions is every recognized Action, in this file's own declaration
@@ -380,6 +409,7 @@ var AllActions = []Action{
 	ActionConfigureAutoApprove,
 	ActionTeachFalsePositivePattern,
 	ActionManageFalsePositivePatterns,
+	ActionContestArchRecap,
 	ActionManageIntegrations,
 	ActionManageGlobalSecrets,
 	ActionActivatePromptTemplate,
@@ -391,4 +421,5 @@ var AllActions = []Action{
 	ActionToggleAutoRetriggerReview,
 	ActionToggleDescriptionAutofix,
 	ActionConfigureReviewDepth,
+	ActionConfigureReviewCostBudget,
 }
