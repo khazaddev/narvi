@@ -552,10 +552,22 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// value is no longer trustworthy for that purpose) -- m.HeadSHA
 		// itself is left fully populated by its own existing parsing
 		// logic regardless, simply unread on this one path now.
+		// prCtx (Step 68, §26.3) is hoisted to this outer scope -- unlike
+		// fetchedHeadSHA (its own pre-existing identical hoist, one line
+		// below), the WHOLE struct is needed further down, at
+		// coalescer.CreateOrJoin's own call site, to compute this
+		// mention's own light/deep triage decision. review.
+		// PreFetchedContext{} (every field its own honest zero value) is
+		// exactly what a nil cfg.DiffFetcher, or a repo_full_name that
+		// fails to split, degrades to -- internal/app/reviewtriage.
+		// ComputeDecision's own fail-open posture already treats an
+		// all-zero Signals as "route light", so no special-casing is
+		// needed here for either branch below.
 		var fetchedHeadSHA string
+		var prCtx review.PreFetchedContext
 		if cfg.DiffFetcher != nil {
 			if owner, repo, ok := reposource.SplitFullName(m.RepoFullName); ok {
-				prCtx := reviewcontext.Fetch(ctx, logger, cfg.DiffFetcher, cfg.Timeouts, owner, repo, m.PRNumber, cfg.BotToken, m.Stack)
+				prCtx = reviewcontext.Fetch(ctx, logger, cfg.DiffFetcher, cfg.Timeouts, owner, repo, m.PRNumber, cfg.BotToken, m.Stack)
 				m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
 				fetchedHeadSHA = prCtx.HeadSHA
 			} else {
@@ -612,7 +624,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			return
 		}
 
-		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor, m.IsLabelRetrigger, mentionText, fetchedHeadSHA)
+		session, turn, isNew, err := coalescer.CreateOrJoin(ctx, m.RepoFullName, m.PRNumber, req, actor, m.IsLabelRetrigger, mentionText, fetchedHeadSHA, prCtx)
 		if err != nil {
 			if errors.Is(err, ErrActorNotAuthorized) {
 				// ErrActorNotAuthorized fires for TWO distinct reasons

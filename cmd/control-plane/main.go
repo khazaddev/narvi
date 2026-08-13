@@ -58,6 +58,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reconciler"
 	"github.com/khazaddev/narvi/internal/app/releasereview"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/app/uploadsweep"
@@ -786,6 +787,15 @@ func serve() error {
 			// instance every other caller above already uses -- threaded
 			// through to CreateTurnForBot's own awaiting-plan gate.
 			Plans: planStore,
+			// ReviewTriage/ReviewModelDeep (Step 68, §26.3): the SAME
+			// repoSettingsStore/reviewVerdictStore instances every other
+			// caller above already uses, never a second, independently-
+			// constructed copy.
+			ReviewTriage: appreviewtriage.Deps{
+				RepoSettings:   repoSettingsStore,
+				ReviewVerdicts: reviewVerdictStore,
+			},
+			ReviewModelDeep: cfg.ReviewModelDeep,
 			// F7 correction (adversarial review, Step 61): SessionCoalescer
 			// no longer has an EpistemicCheckDefault field -- both of its
 			// own CreateSessionOnTx/CreateTurnForBot call sites now

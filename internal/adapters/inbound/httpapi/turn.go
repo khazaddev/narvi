@@ -360,6 +360,19 @@ type CreateTurnOptions struct {
 	// leaves this nil, exactly like Effort/StorageConfigured above.
 	ReviewHeadSHA *string
 
+	// ReviewDepth/ReviewDepthDecision (Step 68, §26.3) mirror
+	// ReviewHeadSHA's own identical shape one field further -- non-nil
+	// ONLY for a review-session turn, the SAME callers that set
+	// ReviewHeadSHA. Stored verbatim onto turns.review_depth/
+	// review_depth_decision (migrations/000080_turns_review_depth.up.sql,
+	// 000083_turns_review_depth_decision.up.sql) at INSERT time below.
+	// ReviewDepthDecision is pre-marshaled JSON (internal/domain/
+	// reviewtriage.DecisionRecord) -- this core does no encoding of its
+	// own, mirroring this codebase's own "caller owns the encoding"
+	// convention (e.g. internal/app/reviewverdict.marshalTags).
+	ReviewDepth         *string
+	ReviewDepthDecision []byte
+
 	// ClassifyText (Step 64 follow-up fix, review Finding 1) is the raw,
 	// unprefixed human reply text the plan_followup block below (just
 	// before tx.Begin) should classify -- mirrors github/coalesce.go's own
@@ -551,12 +564,16 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	var effort *string
 	var reviewHeadSHA *string
 	var classifyText *string
+	var reviewDepth *string
+	var reviewDepthDecision []byte
 	if len(opts) > 0 {
 		attachmentIDs = opts[0].AttachmentIDs
 		storageConfigured = opts[0].StorageConfigured
 		effort = opts[0].Effort
 		reviewHeadSHA = opts[0].ReviewHeadSHA
 		classifyText = opts[0].ClassifyText
+		reviewDepth = opts[0].ReviewDepth
+		reviewDepthDecision = opts[0].ReviewDepthDecision
 	}
 
 	// Step 64 ("plan mode: follow-up intent classification", §23.1/§23.2):
@@ -907,13 +924,15 @@ func createTurnLocked(ctx context.Context, pool *pgxpool.Pool, sessions *postgre
 	}
 
 	created, err := turns.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-		SessionID:     sessionID,
-		Status:        sqlcgen.TurnStatusPending,
-		Prompt:        &effectivePrompt,
-		ModelID:       effectiveModelID,
-		Effort:        effectiveEffort,
-		PlanMode:      planMode,
-		ReviewHeadSha: reviewHeadSHA,
+		SessionID:           sessionID,
+		Status:              sqlcgen.TurnStatusPending,
+		Prompt:              &effectivePrompt,
+		ModelID:             effectiveModelID,
+		Effort:              effectiveEffort,
+		PlanMode:            planMode,
+		ReviewHeadSha:       reviewHeadSHA,
+		ReviewDepth:         reviewDepth,
+		ReviewDepthDecision: reviewDepthDecision,
 		// answerOnly (Step 64, §23.2) is nil ("classification did not
 		// apply") for every turn that predates this Step, or that never hit
 		// the plan_followup block above -- see that block's own doc

@@ -136,8 +136,13 @@ func CreateSessionForBot(ctx context.Context, pool *pgxpool.Pool, sessions *post
 // itself, by the time it reaches this function, already carries
 // review.RenderTurnPrompt's own folded-in diff/stack/verdict-tool text,
 // which must never reach the plan_followup classifier.
-func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, reviewHeadSHA *string, classifyText *string) (sqlcgen.Turn, error) {
-	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, ClassifyText: classifyText})
+// effort/reviewDepth/reviewDepthDecision (Step 68, §26.3) mirror
+// reviewHeadSHA's own identical "non-nil ONLY for github/coalesce.go's
+// own REUSE-path caller" shape, one field further -- see
+// CreateTurnOptions.Effort/ReviewDepth/ReviewDepthDecision's own doc
+// comments (turn.go).
+func CreateTurnForBot(ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, turns *postgres.TurnStore, plans *postgres.PlanStore, intentSvc *intentclassifier.Service, auditLog *postgres.AuditLogStore, registry *sessionactor.Registry, sessionID pgtype.UUID, prompt string, modelID *string, planMode bool, epistemicCheckDefault bool, actorUserID pgtype.UUID, reviewHeadSHA *string, classifyText *string, effort *string, reviewDepth *string, reviewDepthDecision []byte) (sqlcgen.Turn, error) {
+	created, _, cerr := createTurnLocked(ctx, pool, sessions, turns, plans, intentSvc, auditLog, registry, sessionID, prompt, modelID, planMode, epistemicCheckDefault, actorUserID, AlwaysQueue, CreateTurnOptions{ReviewHeadSHA: reviewHeadSHA, ClassifyText: classifyText, Effort: effort, ReviewDepth: reviewDepth, ReviewDepthDecision: reviewDepthDecision})
 	if cerr != nil {
 		// %w, NOT %s (Step 37/38 follow-up fix, Finding 1): cerr's own
 		// Error() method returns exactly cerr.Message, so this produces the
