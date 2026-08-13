@@ -593,6 +593,19 @@ func TestRenderTurnPrompt_CostBudget_RenderedOnlyWhenConfigured(t *testing.T) {
 	}
 }
 
+// TestRenderTurnPrompt_CostBudget_NeverGatesThePrimaryPass is §26.7's own
+// explicit pin: "the budget gates optional passes only, NEVER the primary
+// findings-producing pass". The rendered cost-budget guidance must say so
+// in terms an agent reading it cannot miss.
+func TestRenderTurnPrompt_CostBudget_NeverGatesThePrimaryPass(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5})
+	if !strings.Contains(got, "never before your own primary findings pass, which always runs regardless of cost") {
+		t.Errorf("cost-budget guidance does not state the primary pass is exempt from the budget gate:\n%s", got)
+	}
+}
+
 // TestRenderTurnPrompt_CounterReviewOmittedOnLightRequiredOnDeep is §26.4's
 // own field-level pin, one layer up from reviewpost.ValidateVerdictInput's
 // own equivalent check: the JSON-body instructions must tell a light-path
