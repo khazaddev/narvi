@@ -284,6 +284,21 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"maintainer cannot activate workflow binding even if ownedOrJoined", authz.RoleMaintainer, authz.ActionActivateWorkflowBinding, true, false},
 		{"member cannot activate workflow binding", authz.RoleMember, authz.ActionActivateWorkflowBinding, false, false},
 		{"viewer cannot activate workflow binding", authz.RoleViewer, authz.ActionActivateWorkflowBinding, false, false},
+
+		// Step 68 (§26.3): configuring a repo's own reviewDepth mode/
+		// deepPaths is admin ONLY, the SAME row as ActionToggleAutoMerge/
+		// ActionToggleAutoRetriggerReview/ActionToggleDescriptionAutofix
+		// -- adversarial-review fix D8: this action had ZERO rows in this
+		// exhaustive matrix before this fix (reproduced: widening its own
+		// allowed roles to include maintainer/member/viewer left this
+		// whole test suite green). Asserted with ownedOrJoined=true too,
+		// to prove the ownership escape hatch does not exist for this row
+		// at all.
+		{"admin configures review depth", authz.RoleAdmin, authz.ActionConfigureReviewDepth, false, true},
+		{"maintainer cannot configure review depth", authz.RoleMaintainer, authz.ActionConfigureReviewDepth, false, false},
+		{"maintainer cannot configure review depth even if ownedOrJoined", authz.RoleMaintainer, authz.ActionConfigureReviewDepth, true, false},
+		{"member cannot configure review depth", authz.RoleMember, authz.ActionConfigureReviewDepth, false, false},
+		{"viewer cannot configure review depth", authz.RoleViewer, authz.ActionConfigureReviewDepth, false, false},
 	}
 
 	for _, tc := range tests {
