@@ -17,6 +17,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
 )
 
@@ -104,6 +105,42 @@ func (a *Actor) environmentPathScope(ctx context.Context, tx pgx.Tx, environment
 		return nil, fmt.Errorf("sessionactor: unmarshal environment path_scope: %w", err)
 	}
 	return pathScope, nil
+}
+
+// reviewCounterReviewerModel resolves Step 69's own §26.4 opposing-model-
+// family override for THIS session, when one applies -- nil (no override
+// at all, sessionconfig.SessionConfig.ReviewCounterReviewerModel's own
+// documented "no override" zero value) for every session that is not a
+// GitHub PR review session at all (pgx.ErrNoRows from GetBySessionID, the
+// overwhelming common case: most sessions are ordinary build sessions with
+// no github_pr_sessions row), OR that IS a review session but has no
+// resolvable authoring-model provenance (a human-authored PR -- see
+// reviewtriage.ResolveCounterReviewerModel's own doc comment for why this
+// is the common case even among review sessions, not a degraded one).
+// Best-effort, NEVER errors (mirrors reviewtriage.ResolveProvenance's own
+// "the review depth decision this signal rides alongside must never be
+// delayed or blocked by a degraded authorship lookup" contract, applied
+// here to session boot instead) -- a failed lookup degrades to no
+// override, never a blocked spawn (§10-P2: "never block a spawn").
+func (a *Actor) reviewCounterReviewerModel(ctx context.Context, tx pgx.Tx, sessionID pgtype.UUID) *string {
+	if a.stores.githubPRSession == nil {
+		return nil
+	}
+	prSession, err := a.stores.githubPRSession.WithTx(tx).GetBySessionID(ctx, sessionID)
+	if err != nil {
+		// pgx.ErrNoRows: not a review session at all -- every OTHER error
+		// (a genuine, unexpected read failure) degrades identically, never
+		// blocking this spawn over a best-effort, purely additive signal.
+		return nil
+	}
+
+	triageDeps := appreviewtriage.Deps{Artifacts: a.stores.artifact, Sessions: a.stores.session}
+	prov := appreviewtriage.ResolveProvenance(ctx, triageDeps, prSession.RepoFullName, prSession.PrNumber)
+	model := appreviewtriage.ResolveCounterReviewerModel(prov.AuthoringModel)
+	if model == "" {
+		return nil
+	}
+	return &model
 }
 
 // assembleSessionConfig builds the real SESSION_CONFIG document (§6.4) a
@@ -199,5 +236,12 @@ func (a *Actor) assembleSessionConfig(
 		// config into the workspace before ever spawning `opencode serve`
 		// for this ONE kind of session.
 		CapabilityRestricted: provenance.IsSentinelAutoFix(sessionRow.ProvenanceTag),
+		// ReviewCounterReviewerModel (Step 69, §26.4): nil for every
+		// session that either is not a GitHub PR review session at all, or
+		// is one but has no resolvable authoring-model provenance to
+		// oppose -- see reviewCounterReviewerModel's own doc comment,
+		// above, for the full "why nil is the common case, not a
+		// degradation".
+		ReviewCounterReviewerModel: sessionconfig.SessionConfigReviewCounterReviewerModel(a.reviewCounterReviewerModel(ctx, tx, sessionRow.ID)),
 	}, nil
 }
