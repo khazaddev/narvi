@@ -106,8 +106,8 @@ import (
 //     reviewpost.ValidateVerdictInput (today: only a whitespace-only
 //     summary reaches this far -- every other check above already caught
 //     it at JSON-decode time; kept as real defense in depth, not dead
-//     code, and the one remaining gap the schema alone cannot close) ->
-//     400.
+//     code -- one of several application-layer checks the schema alone
+//     cannot close) -> 400.
 //  9. Otherwise -> 201 with restdtos.PostReviewVerdictResponse, having
 //     enqueued exactly one ports.NotificationKindGitHubVerdict outbox row
 //     (internal/adapters/outbound/githubapi.VerdictNotifier delivers it:
@@ -246,6 +246,7 @@ func PostReviewVerdict(
 			DocsDrift:         review.DocsDriftState(req.DocsDrift),
 			ProposedShippable: review.ProposedShippable(req.ProposedShippable),
 			Summary:           req.Summary,
+			Digest:            digestInputFromWire(req.Digest),
 		}
 		for _, tag := range req.BlastRadius {
 			input.BlastRadius = append(input.BlastRadius, review.Tag(tag))
@@ -351,7 +352,7 @@ func PostReviewVerdict(
 
 		event := reviewpost.ComputeFormalReviewEvent(verdict.Shippable, verdict.RiskLevel, blockOnHighRisk)
 		syncedLabel := reviewpost.RiskLabel(verdict.RiskLevel)
-		body := reviewpost.RenderVerdictComment(verdict, findings, req.Summary, botHandle, syncedLabel)
+		body := reviewpost.RenderVerdictComment(verdict, findings, input.Digest, req.Summary, botHandle, syncedLabel)
 
 		payload, err := json.Marshal(githubapi.VerdictPayload{
 			Owner:     owner,
@@ -462,7 +463,7 @@ func PostReviewVerdict(
 		// an unpersisted verdict.
 		if verdictHeadSHA == "" {
 			logger.Warn("httpapi: review-verdict: no review head sha on record, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict); insertErr != nil {
+		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict, input.Digest); insertErr != nil {
 			logger.Error("httpapi: review-verdict: insert review_verdicts row failed", "error", insertErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
@@ -563,6 +564,55 @@ func findingInputFromWire(f restdtos.PostedFinding) reviewpost.FindingInput {
 		in.SuggestedFix = f.SuggestedFix
 	}
 	return in
+}
+
+// digestInputFromWire converts one restdtos.Digest (the wire shape,
+// Step 66, §26.1) into reviewpost.Digest -- the one place this conversion
+// happens, mirroring findingInputFromWire's own identical "one conversion
+// site" convention immediately above. d.Summary is decode-time-guaranteed
+// non-empty (restdtos.Digest's own generated UnmarshalJSON, minLength 1)
+// -- ValidateVerdictInput's own ErrEmptyDigestSummary check is still real
+// defense in depth for a whitespace-only value, exactly mirroring how
+// ValidateVerdictInput already treats the top-level Summary field.
+//
+// Every ArchDecision sub-field, and StackRisks/UnverifiedLimits, are
+// nullable *string on the wire (contracts/rest/v1/dtos.schema.json's own
+// ArchDecision/Digest defs carry no "required"/minLength on any of them,
+// deliberately -- this Step validation-enforces ONLY Digest.summary, see
+// reviewpost.Digest's own doc comment) -- archDecisionStringField below
+// nil-safely converts each to reviewpost.ArchDecision's own plain string
+// fields, a nil pointer (the field was omitted or explicitly null)
+// converting to "" exactly like StackRisks/UnverifiedLimits already do,
+// never a nil-pointer panic.
+func digestInputFromWire(d restdtos.Digest) reviewpost.Digest {
+	out := reviewpost.Digest{Summary: d.Summary}
+	if d.StackRisks != nil {
+		out.StackRisks = *d.StackRisks
+	}
+	if d.UnverifiedLimits != nil {
+		out.UnverifiedLimits = *d.UnverifiedLimits
+	}
+	for _, ad := range d.ArchDecisions {
+		out.ArchDecisions = append(out.ArchDecisions, reviewpost.ArchDecision{
+			Decision:              archDecisionStringField(ad.Decision),
+			RejectedAlternative:   archDecisionStringField(ad.RejectedAlternative),
+			ConventionConformance: archDecisionStringField(ad.ConventionConformance),
+		})
+	}
+	return out
+}
+
+// archDecisionStringField nil-safely dereferences one of restdtos.
+// ArchDecision's own three named *string field types (ArchDecisionDecision,
+// ArchDecisionRejectedAlternative, ArchDecisionConventionConformance --
+// each a distinct Go type sharing the identical *string underlying shape,
+// go-jsonschema's own codegen convention for a nullable, non-enum string
+// property) into a plain string, "" for a nil pointer.
+func archDecisionStringField[T ~*string](p T) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // hasSentinelFinding reports whether any of findings names a sentinel

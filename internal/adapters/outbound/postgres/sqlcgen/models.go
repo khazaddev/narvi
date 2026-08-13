@@ -1697,20 +1697,24 @@ type ReviewFinding struct {
 }
 
 type ReviewVerdict struct {
-	ID                pgtype.UUID        `json:"id"`
-	RepoFullName      string             `json:"repo_full_name"`
-	PrNumber          int32              `json:"pr_number"`
-	HeadSha           string             `json:"head_sha"`
-	RiskLevel         string             `json:"risk_level"`
-	Premise           string             `json:"premise"`
-	BlastRadius       []byte             `json:"blast_radius"`
-	FilesChanged      int32              `json:"files_changed"`
-	TestsCoverage     string             `json:"tests_coverage"`
-	DocsDrift         string             `json:"docs_drift"`
-	ProposedShippable string             `json:"proposed_shippable"`
-	Shippable         string             `json:"shippable"`
-	SessionID         pgtype.UUID        `json:"session_id"`
-	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	ID                     pgtype.UUID        `json:"id"`
+	RepoFullName           string             `json:"repo_full_name"`
+	PrNumber               int32              `json:"pr_number"`
+	HeadSha                string             `json:"head_sha"`
+	RiskLevel              string             `json:"risk_level"`
+	Premise                string             `json:"premise"`
+	BlastRadius            []byte             `json:"blast_radius"`
+	FilesChanged           int32              `json:"files_changed"`
+	TestsCoverage          string             `json:"tests_coverage"`
+	DocsDrift              string             `json:"docs_drift"`
+	ProposedShippable      string             `json:"proposed_shippable"`
+	Shippable              string             `json:"shippable"`
+	SessionID              pgtype.UUID        `json:"session_id"`
+	CreatedAt              pgtype.Timestamptz `json:"created_at"`
+	DigestSummary          *string            `json:"digest_summary"`
+	DigestArchDecisions    []byte             `json:"digest_arch_decisions"`
+	DigestStackRisks       *string            `json:"digest_stack_risks"`
+	DigestUnverifiedLimits *string            `json:"digest_unverified_limits"`
 }
 
 type Sandbox struct {

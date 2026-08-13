@@ -35,6 +35,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -76,7 +77,7 @@ func (rig *decisionInboxTestRig) seedAutoApprovedVerdict(ctx context.Context, t 
 		FilesChanged:      3,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
-	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict); err != nil {
+	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}); err != nil {
 		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
 	}
 }

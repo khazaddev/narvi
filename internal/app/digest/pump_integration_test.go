@@ -22,6 +22,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -96,7 +97,7 @@ func (rs *digestTestRig) seedRepoWithSlackChannel(ctx context.Context, t *testin
 		FilesChanged:      3,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
-	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdicts, repoFullName, prNumber, "sha-digest", session.ID, verdict); err != nil {
+	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdicts, repoFullName, prNumber, "sha-digest", session.ID, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}); err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 )
 
 // TestGetReviewAnalytics_ViewerAllowed_NothingComputedYet proves TWO
@@ -81,8 +82,27 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 		FilesChanged:      2,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
-	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict); err != nil {
+	seededDigest := reviewpost.Digest{
+		Summary: "Test-seeded verdict.",
+		ArchDecisions: []reviewpost.ArchDecision{
+			{Decision: "Use a shared retry helper.", RejectedAlternative: "Inline retry logic per call site.", ConventionConformance: "Matches internal/platform's existing retry helper pattern."},
+		},
+	}
+	insertedRecord, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict, seededDigest)
+	if err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
+	}
+	// Insert's own returned Record is the digest's read-back path
+	// (recordFromRow's own ArchDecisions JSON unmarshal, convert.go) --
+	// every other call site in this codebase discards it (`if _, err :=
+	// ...`), so this is the one place that path is actually exercised
+	// end to end: it must round-trip verbatim, not just the write side
+	// TestPostReviewVerdict_PersistsDigestColumns already covers.
+	if insertedRecord.Digest.Summary != seededDigest.Summary {
+		t.Errorf("Insert() returned Digest.Summary = %q, want %q", insertedRecord.Digest.Summary, seededDigest.Summary)
+	}
+	if len(insertedRecord.Digest.ArchDecisions) != 1 || insertedRecord.Digest.ArchDecisions[0] != seededDigest.ArchDecisions[0] {
+		t.Errorf("Insert() returned Digest.ArchDecisions = %+v, want %+v", insertedRecord.Digest.ArchDecisions, seededDigest.ArchDecisions)
 	}
 
 	if _, err := rig.reviewFindings.Upsert(ctx, sqlcgen.UpsertReviewFindingParams{

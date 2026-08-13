@@ -57,6 +57,9 @@ func verdictRequestWithFinding(filePath, description string) string {
 				"description": description,
 			},
 		},
+		"digest": map[string]any{
+			"summary": "Reworks the loop bounds check.",
+		},
 	})
 	if err != nil {
 		panic(err)

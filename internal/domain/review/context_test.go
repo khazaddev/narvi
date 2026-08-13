@@ -246,6 +246,15 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		`"findings"`, `"sentinelKind"`, `"filePath"`, `"line"`, `"description"`, `"suggestedFix"`,
 		`"severity"`,
 		string(restdtos.PostedFindingSeverityLow), string(restdtos.PostedFindingSeverityMedium), string(restdtos.PostedFindingSeverityHigh),
+		// Step 66 (§26.1): "digest" (and its own per-field object) was
+		// completely absent from this template before this Step -- an agent
+		// following only the pre-Step-66 template could never emit a
+		// digest at all, and PostReviewVerdictRequest.digest is now
+		// REQUIRED (unlike findings above), so every such call would be
+		// rejected 400 by reviewpost.ValidateVerdictInput's own
+		// ErrEmptyDigestSummary.
+		`"digest"`, `"archDecisions"`, `"decision"`, `"rejectedAlternative"`, `"conventionConformance"`,
+		`"stackRisks"`, `"unverifiedLimits"`,
 	}
 	for _, want := range fieldsAndEnums {
 		if !strings.Contains(got, want) {
@@ -263,6 +272,16 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 	*findingLine = 42
 	findingSuggestedFix := restdtos.PostedFindingSuggestedFix(new(string))
 	*findingSuggestedFix = "--- a/x\n+++ b/x\n"
+	archDecision := restdtos.ArchDecisionDecision(new(string))
+	*archDecision = "example decision"
+	archRejected := restdtos.ArchDecisionRejectedAlternative(new(string))
+	*archRejected = "example rejected alternative"
+	archConformance := restdtos.ArchDecisionConventionConformance(new(string))
+	*archConformance = "example convention conformance"
+	stackRisks := restdtos.DigestStackRisks(new(string))
+	*stackRisks = "example stack risks"
+	unverifiedLimits := restdtos.DigestUnverifiedLimits(new(string))
+	*unverifiedLimits = "example unverified limits"
 	example := restdtos.PostReviewVerdictRequest{
 		BlastRadius:  []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
 		DocsDrift:    restdtos.PostReviewVerdictRequestDocsDriftNone,
@@ -281,12 +300,23 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		RiskLevel:         restdtos.PostReviewVerdictRequestRiskLevelLow,
 		Summary:           "example",
 		TestsCoverage:     restdtos.PostReviewVerdictRequestTestsCoverageAdequate,
+		Digest: restdtos.Digest{
+			Summary: "example digest summary",
+			ArchDecisions: []restdtos.ArchDecision{
+				{Decision: archDecision, RejectedAlternative: archRejected, ConventionConformance: archConformance},
+			},
+			StackRisks:       stackRisks,
+			UnverifiedLimits: unverifiedLimits,
+		},
 	}
 	raw, err := json.Marshal(example)
 	if err != nil {
 		t.Fatalf("marshal example restdtos.PostReviewVerdictRequest: %v", err)
 	}
-	for _, wantKey := range []string{`"riskLevel"`, `"premise"`, `"filesChanged"`, `"testsCoverage"`, `"docsDrift"`, `"proposedShippable"`, `"blastRadius"`, `"summary"`, `"findings"`} {
+	for _, wantKey := range []string{
+		`"riskLevel"`, `"premise"`, `"filesChanged"`, `"testsCoverage"`, `"docsDrift"`, `"proposedShippable"`, `"blastRadius"`, `"summary"`, `"findings"`,
+		`"digest"`, `"archDecisions"`, `"decision"`, `"rejectedAlternative"`, `"conventionConformance"`, `"stackRisks"`, `"unverifiedLimits"`,
+	} {
 		if !strings.Contains(string(raw), wantKey) {
 			t.Errorf("marshaled restdtos.PostReviewVerdictRequest = %s, want it to contain key %q", raw, wantKey)
 		}

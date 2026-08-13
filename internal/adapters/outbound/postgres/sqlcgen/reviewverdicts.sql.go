@@ -12,7 +12,7 @@ import (
 )
 
 const getLatestReviewVerdict = `-- name: GetLatestReviewVerdict :one
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at FROM review_verdicts
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits FROM review_verdicts
 WHERE repo_full_name = $1 AND pr_number = $2
 ORDER BY created_at DESC
 LIMIT 1
@@ -50,6 +50,10 @@ func (q *Queries) GetLatestReviewVerdict(ctx context.Context, arg GetLatestRevie
 		&i.Shippable,
 		&i.SessionID,
 		&i.CreatedAt,
+		&i.DigestSummary,
+		&i.DigestArchDecisions,
+		&i.DigestStackRisks,
+		&i.DigestUnverifiedLimits,
 	)
 	return i, err
 }
@@ -59,25 +63,30 @@ const insertReviewVerdict = `-- name: InsertReviewVerdict :one
 INSERT INTO review_verdicts (
     repo_full_name, pr_number, head_sha,
     risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift,
-    proposed_shippable, shippable, session_id
+    proposed_shippable, shippable, session_id,
+    digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-RETURNING id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+RETURNING id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits
 `
 
 type InsertReviewVerdictParams struct {
-	RepoFullName      string      `json:"repo_full_name"`
-	PrNumber          int32       `json:"pr_number"`
-	HeadSha           string      `json:"head_sha"`
-	RiskLevel         string      `json:"risk_level"`
-	Premise           string      `json:"premise"`
-	BlastRadius       []byte      `json:"blast_radius"`
-	FilesChanged      int32       `json:"files_changed"`
-	TestsCoverage     string      `json:"tests_coverage"`
-	DocsDrift         string      `json:"docs_drift"`
-	ProposedShippable string      `json:"proposed_shippable"`
-	Shippable         string      `json:"shippable"`
-	SessionID         pgtype.UUID `json:"session_id"`
+	RepoFullName           string      `json:"repo_full_name"`
+	PrNumber               int32       `json:"pr_number"`
+	HeadSha                string      `json:"head_sha"`
+	RiskLevel              string      `json:"risk_level"`
+	Premise                string      `json:"premise"`
+	BlastRadius            []byte      `json:"blast_radius"`
+	FilesChanged           int32       `json:"files_changed"`
+	TestsCoverage          string      `json:"tests_coverage"`
+	DocsDrift              string      `json:"docs_drift"`
+	ProposedShippable      string      `json:"proposed_shippable"`
+	Shippable              string      `json:"shippable"`
+	SessionID              pgtype.UUID `json:"session_id"`
+	DigestSummary          *string     `json:"digest_summary"`
+	DigestArchDecisions    []byte      `json:"digest_arch_decisions"`
+	DigestStackRisks       *string     `json:"digest_stack_risks"`
+	DigestUnverifiedLimits *string     `json:"digest_unverified_limits"`
 }
 
 // Queries backing ReviewVerdictStore (Step 62, §21.1) -- see
@@ -87,7 +96,12 @@ type InsertReviewVerdictParams struct {
 // UPDATE (see the table's own doc comment for why). Called from
 // httpapi.PostReviewVerdict (reviewverdict.go), inside the SAME
 // transaction as that handler's existing review_findings upserts and
-// outbox write.
+// outbox write. digest_summary/digest_arch_decisions/digest_stack_risks/
+// digest_unverified_limits (Step 66, §26.1, migrations/
+// 000077_review_verdicts_digest.up.sql) forward internal/domain/
+// reviewpost.Digest verbatim -- see that migration's own doc comment for
+// why all four stay nullable at the schema level despite digest_summary
+// being APPLICATION-required on every new post.
 func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdictParams) (ReviewVerdict, error) {
 	row := q.db.QueryRow(ctx, insertReviewVerdict,
 		arg.RepoFullName,
@@ -102,6 +116,10 @@ func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdi
 		arg.ProposedShippable,
 		arg.Shippable,
 		arg.SessionID,
+		arg.DigestSummary,
+		arg.DigestArchDecisions,
+		arg.DigestStackRisks,
+		arg.DigestUnverifiedLimits,
 	)
 	var i ReviewVerdict
 	err := row.Scan(
@@ -119,13 +137,17 @@ func (q *Queries) InsertReviewVerdict(ctx context.Context, arg InsertReviewVerdi
 		&i.Shippable,
 		&i.SessionID,
 		&i.CreatedAt,
+		&i.DigestSummary,
+		&i.DigestArchDecisions,
+		&i.DigestStackRisks,
+		&i.DigestUnverifiedLimits,
 	)
 	return i, err
 }
 
 const listLatestAutoApprovedInRepo = `-- name: ListLatestAutoApprovedInRepo :many
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at FROM (
-    SELECT DISTINCT ON (repo_full_name, pr_number) id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits FROM (
+    SELECT DISTINCT ON (repo_full_name, pr_number) id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits
     FROM review_verdicts
     WHERE repo_full_name = $1 AND created_at > $2
     ORDER BY repo_full_name, pr_number, created_at DESC
@@ -180,6 +202,10 @@ func (q *Queries) ListLatestAutoApprovedInRepo(ctx context.Context, arg ListLate
 			&i.Shippable,
 			&i.SessionID,
 			&i.CreatedAt,
+			&i.DigestSummary,
+			&i.DigestArchDecisions,
+			&i.DigestStackRisks,
+			&i.DigestUnverifiedLimits,
 		); err != nil {
 			return nil, err
 		}
@@ -192,7 +218,7 @@ func (q *Queries) ListLatestAutoApprovedInRepo(ctx context.Context, arg ListLate
 }
 
 const listReviewVerdictsInWindow = `-- name: ListReviewVerdictsInWindow :many
-SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at FROM review_verdicts
+SELECT id, repo_full_name, pr_number, head_sha, risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift, proposed_shippable, shippable, session_id, created_at, digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits FROM review_verdicts
 WHERE repo_full_name = $1 AND created_at > $2
 ORDER BY created_at ASC
 LIMIT $3
@@ -236,6 +262,10 @@ func (q *Queries) ListReviewVerdictsInWindow(ctx context.Context, arg ListReview
 			&i.Shippable,
 			&i.SessionID,
 			&i.CreatedAt,
+			&i.DigestSummary,
+			&i.DigestArchDecisions,
+			&i.DigestStackRisks,
+			&i.DigestUnverifiedLimits,
 		); err != nil {
 			return nil, err
 		}
