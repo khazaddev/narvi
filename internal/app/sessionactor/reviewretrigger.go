@@ -222,18 +222,6 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 				"repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
 			decision.action = reviewRetriggerActionFetchFailed
 		} else {
-			// Rereview fix (finding 1): compose §22.3's own false-positive
-			// advisory block and §22.1's own already-answered-facts block
-			// HERE, in this phase-2 window with no transaction open --
-			// see composeAutoRetriggerPrompt's own doc comment for why
-			// FetchFalsePositivePatterns' own IncrementHitCount side
-			// effect must never run inside a transaction that might still
-			// roll back -- before calling review.RenderTurnPrompt, mirroring
-			// httpapi.RetriggerReview's own manual-button lane and
-			// internal/adapters/inbound/github/handler.go's own mention/
-			// label lane byte-for-byte in ordering.
-			prompt = a.composeAutoRetriggerPrompt(ctx, decision.repoFullName, decision.prNumber, reviewCtx)
-
 			// Step 68 (§26.3): depth re-evaluated on the delta (this
 			// PR's own CURRENT diff, reviewCtx above), THEN floored at
 			// the PR's own previous depth ("once deep, a PR stays deep,
@@ -258,6 +246,26 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// the identical fact here would be redundant, never a
 			// correctness difference (both reads name the SAME latest
 			// review_verdicts row for this repoFullName/prNumber).
+			//
+			// Adversarial-review fix (Step 69, §26.4/§26.7): computed
+			// BEFORE composeAutoRetriggerPrompt now, not after -- this
+			// lane previously rendered the prompt FIRST and only computed
+			// the floored depth afterward, so reviewCtx.DeepPath (never
+			// assigned at all) stayed permanently false regardless of what
+			// turns.review_depth eventually recorded: an auto-re-review
+			// turn floored to deep by §24's own history rule persisted
+			// review_depth="deep" while its OWN prompt kept telling the
+			// agent every deep-path-only field was merely "REQUESTED, not
+			// required" and never mentioned counterReview at all -- exactly
+			// the D2-class contradiction the OTHER two trigger lanes
+			// (internal/adapters/inbound/httpapi/reviewretrigger.go,
+			// internal/adapters/inbound/github/handler.go) were already
+			// fixed against, that this lane alone had never received. Before
+			// Step 69 this only mis-set the prompt's own wording; Step 69
+			// makes it a guaranteed 400 (reviewpost.ValidateVerdictInput's
+			// own ErrInvalidCounterReview/ErrEmptyDigestArchDecisions) on
+			// every such verdict, since the agent was never told
+			// counterReview/the three digest fields were required at all.
 			triageDeps := appreviewtriage.Deps{RepoSettings: a.stores.repoSettings, ReviewVerdicts: a.stores.reviewVerdict, Artifacts: a.stores.artifact, Sessions: a.stores.session}
 			triageDecision, triageConfig, _ := appreviewtriage.ComputeDecision(ctx, triageDeps, decision.repoFullName, decision.prNumber, reviewCtx)
 			triageProvenance := appreviewtriage.ResolveProvenance(ctx, triageDeps, decision.repoFullName, decision.prNumber)
@@ -292,6 +300,28 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			} else {
 				decision.reviewDepthDecisionJSON = recordJSON
 			}
+
+			// reviewCtx is a plain value here (never a pointer) -- both of
+			// these MUST be set before composeAutoRetriggerPrompt below,
+			// the one and only place this lane calls review.RenderTurnPrompt.
+			reviewCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
+			reviewCtx.ReviewCostBudgetUSD = triageConfig.CostBudget.ForDepth(flooredDepth)
+
+			// Rereview fix (finding 1): compose §22.3's own false-positive
+			// advisory block and §22.1's own already-answered-facts block
+			// HERE, in this phase-2 window with no transaction open --
+			// see composeAutoRetriggerPrompt's own doc comment for why
+			// FetchFalsePositivePatterns' own IncrementHitCount side
+			// effect must never run inside a transaction that might still
+			// roll back -- before calling review.RenderTurnPrompt, mirroring
+			// httpapi.RetriggerReview's own manual-button lane and
+			// internal/adapters/inbound/github/handler.go's own mention/
+			// label lane byte-for-byte in ordering. Moved to AFTER the
+			// depth/cost-budget computation above (Step 69 fix, this
+			// block's own doc comment) -- reviewCtx.DeepPath/
+			// ReviewCostBudgetUSD must already reflect the FLOORED depth
+			// this turn is about to persist before its own prompt renders.
+			prompt = a.composeAutoRetriggerPrompt(ctx, decision.repoFullName, decision.prNumber, reviewCtx)
 		}
 	}
 

@@ -629,6 +629,11 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, priorReviewDepth)
 		}
 		prCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
+		// ReviewCostBudgetUSD (Step 69, §26.7): the SAME triageConfig
+		// ComputeDecision already resolved, above -- no second
+		// repo_settings read, mirroring internal/adapters/inbound/httpapi/
+		// reviewretrigger.go's own identical addition.
+		prCtx.ReviewCostBudgetUSD = triageConfig.CostBudget.ForDepth(flooredDepth)
 		if havePrCtx {
 			m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
 		}

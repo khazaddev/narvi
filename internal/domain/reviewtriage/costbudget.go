@@ -20,6 +20,23 @@ type CostBudget struct {
 	Deep float64
 }
 
+// ForDepth returns b's own ceiling for depth -- DepthDeep selects Deep,
+// everything else (DepthLight, the zero value, or any unrecognized
+// ReviewDepth) selects Light. This is deliberately NOT the SAME fail-
+// conservative-toward-the-worst-case policy every closed enum elsewhere in
+// this package's sibling review package follows for an unrecognized
+// value: an unrecognized/unresolved depth here means "we don't know this
+// was routed deep", which is honestly indistinguishable from "it wasn't"
+// -- the identical reasoning rank (depth.go) already states for Floor's
+// own prior-depth handling, applied here to which BUDGET a caller reads
+// rather than which depth composition wins.
+func (b CostBudget) ForDepth(depth ReviewDepth) float64 {
+	if depth == DepthDeep {
+		return b.Deep
+	}
+	return b.Light
+}
+
 // DefaultCostBudget is this Step's own proposed starting figures (§26.7:
 // "propose $0.50 light / $5 deep per review, matching this plan's own
 // convention of proposing a concrete, explicitly-tunable starting figure
