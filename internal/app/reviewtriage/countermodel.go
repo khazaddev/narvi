@@ -59,9 +59,16 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // no dedicated review-model-selection/tiering mechanism predates Step 68,
 // which itself is "an optional operator override rather than a catalog-
 // driven tiering system" -- there is no richer tier signal to consult),
-// falling back to the alphabetically-first model in that provider's own
-// list when none is marked Reasoning, so the choice is always
-// deterministic and never depends on map/slice iteration order.
+// falling back to every model in that provider's own list when none is
+// marked Reasoning. See pickReasoningOrFirst's own doc comment for how a
+// single winner is then chosen from that pool -- ContextWindow then Cost,
+// never alphabetically: an alphabetically-first model name has no
+// relationship to capability at all (e.g. this catalog's own
+// "gpt-5.3-codex-spark", a narrow 128k-context coding variant, sorts
+// before "gpt-5.4"'s own 1.05M-context general model purely because '3'
+// precedes '4' -- picking it as this catalog's own best available
+// "opposing frontier" proxy would be an accident of string sort order,
+// not a considered choice).
 func ResolveCounterReviewerModel(authoringModel string) string {
 	authoringProvider, _, ok := strings.Cut(authoringModel, "/")
 	authoringProvider = strings.ToLower(strings.TrimSpace(authoringProvider))
@@ -89,31 +96,62 @@ func ResolveCounterReviewerModel(authoringModel string) string {
 	return ""
 }
 
-// pickReasoningOrFirst returns the alphabetically-first Reasoning-capable
-// model's own ID, or (if none is Reasoning-capable) the alphabetically-
-// first model's own ID overall -- always deterministic, never dependent
-// on models' own input order (modelcatalog.Catalog's own doc comment: a
-// deep defensive copy, but the underlying snapshot's own array order is
-// still whatever the embedded JSON file happens to list, not itself a
-// stable contract this function should rely on).
+// pickReasoningOrFirst returns the counter-reviewer's own single best
+// candidate model ID from models (a Reasoning-capable model preferred,
+// falling back to every model in the list when none is Reasoning-capable
+// -- ResolveCounterReviewerModel's own doc comment on why Reasoning is
+// this catalog's closest "frontier tier" proxy), then, within that pool,
+// ranks by rankCounterReviewerCandidates below: ContextWindow descending,
+// then Cost.Output descending, then model ID ascending as the final,
+// always-available tie-break -- never a bare alphabetically-first pick, which
+// has no relationship to model capability at all (ResolveCounterReviewerModel's
+// own doc comment: an accident of string sort order, not a considered
+// choice). Always deterministic, never dependent on models' own input
+// order (modelcatalog.Catalog's own doc comment: a deep defensive copy,
+// but the underlying snapshot's own array order is still whatever the
+// embedded JSON file happens to list, not itself a stable contract this
+// function should rely on) -- safe to sort models' own returned slice
+// in place: Catalog() hands every caller a fresh deep copy, never a
+// shared reference, so reordering it here can never be observed by
+// another caller or a later call.
 func pickReasoningOrFirst(models []modelcatalog.Model) (string, bool) {
 	if len(models) == 0 {
 		return "", false
 	}
 
-	ids := make([]string, len(models))
-	reasoningIDs := make([]string, 0, len(models))
-	for i, m := range models {
-		ids[i] = m.ID
+	pool := models
+	reasoning := make([]modelcatalog.Model, 0, len(models))
+	for _, m := range models {
 		if m.Reasoning {
-			reasoningIDs = append(reasoningIDs, m.ID)
+			reasoning = append(reasoning, m)
 		}
 	}
-
-	if len(reasoningIDs) > 0 {
-		sort.Strings(reasoningIDs)
-		return reasoningIDs[0], true
+	if len(reasoning) > 0 {
+		pool = reasoning
 	}
-	sort.Strings(ids)
-	return ids[0], true
+
+	sort.Slice(pool, func(i, j int) bool {
+		return rankCounterReviewerCandidates(pool[i], pool[j])
+	})
+	return pool[0].ID, true
+}
+
+// rankCounterReviewerCandidates reports whether a ranks strictly ahead of
+// b as a counter-reviewer candidate (pickReasoningOrFirst's own doc
+// comment): a larger ContextWindow first -- this catalog's own next-
+// closest proxy to "frontier tier" after Reasoning capability itself --
+// then a higher Cost.Output as the tie-break (a frontier/flagship model
+// is priced at the top of this catalog's own tiers, unlike a cheap mini/
+// lite/flash budget variant that happens to share the same context
+// window), and finally model ID ascending as the LAST-resort tie-break,
+// so two candidates that share both a ContextWindow and a Cost.Output
+// still resolve to one deterministic winner.
+func rankCounterReviewerCandidates(a, b modelcatalog.Model) bool {
+	if a.ContextWindow != b.ContextWindow {
+		return a.ContextWindow > b.ContextWindow
+	}
+	if a.Cost.Output != b.Cost.Output {
+		return a.Cost.Output > b.Cost.Output
+	}
+	return a.ID < b.ID
 }
