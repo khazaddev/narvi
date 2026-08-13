@@ -106,8 +106,8 @@ import (
 //     reviewpost.ValidateVerdictInput (today: only a whitespace-only
 //     summary reaches this far -- every other check above already caught
 //     it at JSON-decode time; kept as real defense in depth, not dead
-//     code, and the one remaining gap the schema alone cannot close) ->
-//     400.
+//     code -- one of several application-layer checks the schema alone
+//     cannot close) -> 400.
 //  9. Otherwise -> 201 with restdtos.PostReviewVerdictResponse, having
 //     enqueued exactly one ports.NotificationKindGitHubVerdict outbox row
 //     (internal/adapters/outbound/githubapi.VerdictNotifier delivers it:
