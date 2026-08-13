@@ -108,7 +108,14 @@ func (s *GitHubPRSessionStore) UpsertPendingRetriggerHeadSHA(ctx context.Context
 // (unwrapped) means a newer synchronize event already overwrote it (see
 // ClearPendingRetriggerHeadSHA's own generated doc comment for the full
 // race this guards against), which the caller treats as harmless -- the
-// newer event's own timer re-arm already covers the newer push.
+// newer event's own timer re-arm already covers the newer push. Rereview
+// fix (finding 2): the caller (sessionactor.clearPendingRetriggerHeadSHAGuarded)
+// reports this outcome back to ITS OWN caller as guardMissed == true,
+// which skips that caller's subsequent deleteTimer call -- session_timers
+// has UNIQUE(session_id, name), so there is exactly ONE
+// review_retrigger_debounce row per session, the SAME row the newer
+// event's own re-arm just updated, never a separate row of this firing's
+// own to delete safely.
 func (s *GitHubPRSessionStore) ClearPendingRetriggerHeadSHA(ctx context.Context, repoFullName string, prNumber int32, expectedHeadSHA string) (sqlcgen.GithubPrSession, error) {
 	return s.q.ClearPendingRetriggerHeadSHA(ctx, sqlcgen.ClearPendingRetriggerHeadSHAParams{
 		RepoFullName:            repoFullName,

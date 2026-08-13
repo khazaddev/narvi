@@ -46,12 +46,21 @@
 // a compare-and-swap (postgres.GitHubPRSessionStore.
 // ClearPendingRetriggerHeadSHA, CLAUDE.md/§11's own "guarded UPDATE ...
 // WHERE for cross-writer transitions" idiom): pgx.ErrNoRows means a
-// newer synchronize event already won the race, and this handler simply
-// leaves that newer event's own value (and its own freshly re-armed
-// timer) alone, deleting only the ONE timer row it itself claimed --
-// timerfired.go's own re-arm-or-delete contract is satisfied either way,
-// since the newer event's own re-arm already covers what this handler
-// chose not to touch.
+// newer synchronize event already won the race.
+//
+// Rereview fix (finding 2): session_timers has UNIQUE(session_id, name),
+// so there is exactly ONE review_retrigger_debounce row for this session
+// -- never a second, separate row this handler "owns" apart from
+// whatever the newer synchronize event re-armed. On a guard miss,
+// finishReviewRetrigger's every guarded-clear call site therefore SKIPS
+// its own subsequent deleteTimer call entirely, rather than deleting
+// (unconditionally, as an earlier version of this file incorrectly did)
+// what is, in fact, the SAME row the newer event just re-armed --
+// timerfired.go's own re-arm-or-delete contract is satisfied either way:
+// on a guard miss, the newer event's own already-committed re-arm IS
+// this firing's own "re-arm" half of that contract, so this handler
+// simply leaves it alone instead of performing its own now-stale
+// "delete" half on top of it.
 
 package sessionactor
 
@@ -171,6 +180,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 	}
 
 	var reviewCtx review.PreFetchedContext
+	var prompt string
 	if decision.action == reviewRetriggerActionEnqueue {
 		reviewCtx = a.fetchAutoRetriggerReviewContext(ctx, decision.repoFullName, decision.prNumber)
 		if reviewCtx.HeadSHA == "" {
@@ -181,16 +191,27 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// never honestly be recorded in review_verdicts (Step 62's
 			// NOT NULL head_sha column) -- downgrade to a plain no-op
 			// this cycle: clear pending_retrigger_head_sha (a fresh
-			// synchronize event, or the next debounce firing once the
-			// fetch succeeds, will try again), delete the timer, spend
+			// synchronize event will try again), delete the timer, spend
 			// no budget.
 			a.logger.Warn("sessionactor: review_retrigger_debounce: could not resolve a live head sha for this PR, declining to enqueue an automatic re-review turn this cycle",
 				"repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
 			decision.action = reviewRetriggerActionFetchFailed
+		} else {
+			// Rereview fix (finding 1): compose §22.3's own false-positive
+			// advisory block and §22.1's own already-answered-facts block
+			// HERE, in this phase-2 window with no transaction open --
+			// see composeAutoRetriggerPrompt's own doc comment for why
+			// FetchFalsePositivePatterns' own IncrementHitCount side
+			// effect must never run inside a transaction that might still
+			// roll back -- before calling review.RenderTurnPrompt, mirroring
+			// httpapi.RetriggerReview's own manual-button lane and
+			// internal/adapters/inbound/github/handler.go's own mention/
+			// label lane byte-for-byte in ordering.
+			prompt = a.composeAutoRetriggerPrompt(ctx, decision.repoFullName, decision.prNumber, reviewCtx)
 		}
 	}
 
-	enqueued, err := a.finishReviewRetrigger(ctx, decision, reviewCtx)
+	enqueued, err := a.finishReviewRetrigger(ctx, decision, reviewCtx, prompt)
 	if err != nil {
 		return err
 	}
@@ -332,13 +353,15 @@ func (a *Actor) fetchAutoRetriggerReviewContext(ctx context.Context, repoFullNam
 
 // finishReviewRetrigger is handleReviewRetriggerDebounceTimer's own act
 // phase -- a single, fresh a.transact call applying decision (enriched
-// with reviewCtx when decision.action ==
-// reviewRetriggerActionEnqueue) -- see this file's own top comment for
-// why every write here is a guarded UPDATE, and why this is a SEPARATE
-// transaction from readReviewRetriggerState's. Returns whether a turn was
-// actually enqueued (the caller's own signal to call
-// handleEnsureDispatched afterward).
-func (a *Actor) finishReviewRetrigger(ctx context.Context, decision *reviewRetriggerDecision, reviewCtx review.PreFetchedContext) (bool, error) {
+// with reviewCtx/prompt when decision.action ==
+// reviewRetriggerActionEnqueue, both already fully resolved by phase 2,
+// with no transaction open -- see composeAutoRetriggerPrompt's own doc
+// comment) -- see this file's own top comment for why every write here is
+// a guarded UPDATE, and why this is a SEPARATE transaction from
+// readReviewRetriggerState's. Returns whether a turn was actually
+// enqueued (the caller's own signal to call handleEnsureDispatched
+// afterward).
+func (a *Actor) finishReviewRetrigger(ctx context.Context, decision *reviewRetriggerDecision, reviewCtx review.PreFetchedContext, prompt string) (bool, error) {
 	enqueued := false
 
 	err := a.transact(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -347,8 +370,20 @@ func (a *Actor) finishReviewRetrigger(ctx context.Context, decision *reviewRetri
 			return a.deleteTimer(ctx, tx, TimerReviewRetriggerDebounce)
 
 		case reviewRetriggerActionHeadsMatch, reviewRetriggerActionFetchFailed:
-			if err := a.clearPendingRetriggerHeadSHAGuarded(ctx, tx, decision); err != nil {
+			guardMissed, err := a.clearPendingRetriggerHeadSHAGuarded(ctx, tx, decision)
+			if err != nil {
 				return err
+			}
+			if guardMissed {
+				// Rereview fix (finding 2): the newer event that won this
+				// race already re-armed the SAME session_timers row (see
+				// this file's own top comment) -- deleting it here would
+				// strand that newer event's own pending head sha with no
+				// timer left to ever act on it again. Skip the delete;
+				// the newer event's own re-arm already satisfies
+				// timerfired.go's re-arm-or-delete contract for this
+				// firing too.
+				return nil
 			}
 			return a.deleteTimer(ctx, tx, TimerReviewRetriggerDebounce)
 
@@ -367,22 +402,56 @@ func (a *Actor) finishReviewRetrigger(ctx context.Context, decision *reviewRetri
 					return err
 				}
 			}
-			if err := a.clearPendingRetriggerHeadSHAGuarded(ctx, tx, decision); err != nil {
+			guardMissed, err := a.clearPendingRetriggerHeadSHAGuarded(ctx, tx, decision)
+			if err != nil {
 				return err
+			}
+			if guardMissed {
+				// See the identical comment on the HeadsMatch/FetchFailed
+				// branch above -- same race, same fix, same reasoning.
+				return nil
 			}
 			return a.deleteTimer(ctx, tx, TimerReviewRetriggerDebounce)
 
 		case reviewRetriggerActionEnqueue:
-			if err := a.insertAutoRetriggerTurn(ctx, tx, decision, reviewCtx); err != nil {
+			// Rereview fix (finding 4): mirror createTurnLocked's own
+			// awaiting-plan gate (internal/adapters/inbound/httpapi/
+			// turn.go) -- an ordinary (planMode == false) turn, which
+			// every automatic re-review turn always is, must never
+			// dispatch while this session has a plan sitting in
+			// plan.StatusAwaitingApproval. See
+			// reviewSessionHasAwaitingApprovalPlan's own doc comment for
+			// why this is a real, reachable precondition here, not dead
+			// code.
+			awaitingPlan, err := a.reviewSessionHasAwaitingApprovalPlan(ctx, tx)
+			if err != nil {
 				return err
 			}
-			if _, err := a.stores.githubPRSession.WithTx(tx).IncrementAutoRetriggerCount(ctx, decision.repoFullName, decision.prNumber); err != nil {
-				return fmt.Errorf("sessionactor: increment auto retrigger count: %w", err)
+			if awaitingPlan {
+				a.logger.Info("sessionactor: review_retrigger_debounce: declining to enqueue an automatic re-review turn -- a plan is awaiting approval on this session",
+					"repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
+			} else {
+				if err := a.insertAutoRetriggerTurn(ctx, tx, decision, prompt, reviewCtx.HeadSHA); err != nil {
+					return err
+				}
+				if _, err := a.stores.githubPRSession.WithTx(tx).IncrementAutoRetriggerCount(ctx, decision.repoFullName, decision.prNumber); err != nil {
+					return fmt.Errorf("sessionactor: increment auto retrigger count: %w", err)
+				}
+				enqueued = true
 			}
-			if err := a.clearPendingRetriggerHeadSHAGuarded(ctx, tx, decision); err != nil {
+			guardMissed, err := a.clearPendingRetriggerHeadSHAGuarded(ctx, tx, decision)
+			if err != nil {
 				return err
 			}
-			enqueued = true
+			if guardMissed {
+				// See the identical comment on the HeadsMatch/FetchFailed
+				// branch above -- same race, same fix, same reasoning.
+				// enqueued (if true) is unaffected: a turn genuinely was
+				// (or wasn't) just inserted above, independent of which
+				// push's own pending_retrigger_head_sha/timer this
+				// firing's own clear/delete happens to end up touching.
+				return nil
+			}
 			return a.deleteTimer(ctx, tx, TimerReviewRetriggerDebounce)
 
 		default:
@@ -396,18 +465,90 @@ func (a *Actor) finishReviewRetrigger(ctx context.Context, decision *reviewRetri
 }
 
 // clearPendingRetriggerHeadSHAGuarded is the one shared "clear, tolerating
-// a race" call every reviewRetriggerAction branch above ends with -- see
-// this file's own top comment for the compare-and-swap this performs and
-// why pgx.ErrNoRows is an expected, harmless outcome, never an error.
-func (a *Actor) clearPendingRetriggerHeadSHAGuarded(ctx context.Context, tx pgx.Tx, decision *reviewRetriggerDecision) error {
+// a race" call every reviewRetriggerAction branch above starts its own
+// tail with -- see this file's own top comment for the compare-and-swap
+// this performs. Returns guardMissed == true when pgx.ErrNoRows means a
+// newer synchronize event already won the race (an expected, harmless
+// outcome, never an error) -- see every call site above for why a true
+// result means the caller must skip its own subsequent deleteTimer call
+// (rereview fix, finding 2).
+func (a *Actor) clearPendingRetriggerHeadSHAGuarded(ctx context.Context, tx pgx.Tx, decision *reviewRetriggerDecision) (guardMissed bool, err error) {
 	if _, err := a.stores.githubPRSession.WithTx(tx).ClearPendingRetriggerHeadSHA(ctx, decision.repoFullName, decision.prNumber, decision.pendingHeadSHA); err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("sessionactor: clear pending retrigger head sha: %w", err)
+			return false, fmt.Errorf("sessionactor: clear pending retrigger head sha: %w", err)
 		}
-		a.logger.Info("sessionactor: review_retrigger_debounce: pending_retrigger_head_sha already moved on (a newer push raced in), leaving it for that push's own timer",
+		a.logger.Info("sessionactor: review_retrigger_debounce: pending_retrigger_head_sha already moved on (a newer push raced in) -- leaving it, and the SAME session_timers row that push's own re-arm just updated, alone for that push's own firing to handle",
 			"repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
+		return true, nil
 	}
-	return nil
+	return false, nil
+}
+
+// reviewSessionHasAwaitingApprovalPlan reports whether this actor's own
+// session currently has a plan row sitting in plan.StatusAwaitingApproval
+// -- createTurnLocked's own identical gate (internal/adapters/inbound/
+// httpapi/turn.go), reused here (via the SAME PlanStore.
+// ListSummariesForSession query that gate itself uses) because an
+// automatic re-review turn is exactly the kind of "ordinary (planMode ==
+// false) turn" that gate exists to hold back.
+//
+// This precondition IS reachable for a review session (rereview fix,
+// finding 4, correcting this file's own earlier false claim to the
+// contrary): internal/adapters/inbound/httpapi/turn.go's CreateTurn
+// forwards client-supplied req.PlanMode into CreateTurnCore with no
+// session-kind restriction, so a maintainer/admin CAN submit a
+// planMode=true turn on a GitHub review session via the ordinary REST
+// API, and planrecord.go's own recordPlanIfNeeded WILL then write an
+// awaiting_approval plans row for that session -- httpapi's own manual
+// re-trigger path (reviewretrigger.go) deliberately keeps this exact
+// gate for review sessions today, and this automatic path now matches it.
+func (a *Actor) reviewSessionHasAwaitingApprovalPlan(ctx context.Context, tx pgx.Tx) (bool, error) {
+	summaries, err := a.stores.plan.WithTx(tx).ListSummariesForSession(ctx, a.sessionID)
+	if err != nil {
+		return false, fmt.Errorf("sessionactor: list plan summaries for review-retrigger awaiting-plan gate: %w", err)
+	}
+	for _, s := range summaries {
+		if s.Status == sqlcgen.PlanStatusAwaitingApproval {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// composeAutoRetriggerPrompt builds the Enqueue branch's own final review-
+// turn prompt text -- called by handleReviewRetriggerDebounceTimer's own
+// phase 2, with NO transaction open (rereview fix, finding 1). Prepends
+// §22.3's own learned false-positive advisory block, then §22.1's own
+// already-answered-facts block, to autoRetriggerPromptText, exactly like
+// httpapi.RetriggerReview's own manual-button lane and internal/adapters/
+// inbound/github/handler.go's own mention/label lane already do -- before
+// this fix, the automatic lane was the ONLY review-turn producer in this
+// codebase that skipped both, self-defeating against §24.6's own per-PR
+// budget (the budget exists to break an automated-fix-to-automated-review
+// loop; telling the agent what was already rebutted/taught-as-false-
+// positive is the strongest suppressant of that exact loop). Only THEN
+// calls review.RenderTurnPrompt with reviewCtx, mirroring both of those
+// callers' own identical ordering (prepend context blocks, then render
+// diff/stack/verdict-tool-instructions last).
+//
+// Deliberately called here, not inside insertAutoRetriggerTurn: this
+// function calls reviewcontext.FetchFalsePositivePatterns, whose own
+// IncrementHitCount is a real, best-effort Postgres WRITE side effect
+// (§22.4's usage-signal bookkeeping) that must never run inside a
+// transaction that might still roll back -- insertAutoRetriggerTurn runs
+// inside finishReviewRetrigger's own transact call, but this function
+// runs before that transaction ever opens, exactly like
+// fetchAutoRetriggerReviewContext's own live network fetch already does
+// for the same reason (this file's own top comment).
+func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName string, prNumber int32, reviewCtx review.PreFetchedContext) string {
+	prompt := autoRetriggerPromptText
+	if advisory := reviewcontext.FetchFalsePositivePatterns(ctx, a.logger, a.stores.falsePositivePattern, repoFullName); advisory != "" {
+		prompt = advisory + prompt
+	}
+	if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, a.logger, a.stores.reviewFinding, repoFullName, prNumber); alreadyAnswered != "" {
+		prompt = alreadyAnswered + prompt
+	}
+	return review.RenderTurnPrompt(prompt, reviewCtx)
 }
 
 // insertAutoRetriggerTurn is §24.3 step 4's own turn creation -- CANNOT
@@ -421,6 +562,13 @@ func (a *Actor) clearPendingRetriggerHeadSHAGuarded(ctx context.Context, tx pgx.
 // (internal/adapters/inbound/httpapi/turn.go) -- mirroring Step 46's
 // manual path at the storage layer rather than calling through it.
 //
+// prompt is ALREADY the fully-composed, fully-rendered turn text
+// (composeAutoRetriggerPrompt, called by this handler's own phase 2,
+// BEFORE this transaction ever opened) -- this function itself never
+// calls review.RenderTurnPrompt or either reviewcontext Fetch* function,
+// it only persists what phase 2 already built. headSHA is reviewCtx.
+// HeadSHA, threaded through as its own parameter for the same reason.
+//
 // # Which of createTurnLocked's own extra logic is duplicated here, and why
 //
 // The audit-log write IS duplicated (below): recordPlanIfNeeded's own
@@ -430,23 +578,41 @@ func (a *Actor) clearPendingRetriggerHeadSHAGuarded(ctx context.Context, tx pgx.
 // (pgtype.UUID{}) -- an UNATTENDED action is, if anything, MORE valuable
 // to have an audit trail for than a human-clicked one, not less.
 //
-// The awaiting-plan gate is DELIBERATELY NOT duplicated: it exists to
-// stop an ordinary build/request turn from dispatching while a plan on
-// the SAME session sits awaiting_approval. A review session's turns are
-// ALWAYS created with planMode=false (this one, the manual retrigger,
-// every @mention, every label retrigger) and recordPlanIfNeeded's own
-// documented contract is that a plan_mode=false turn completing NEVER
-// records a plans row at all (planrecord.go: "trig != turn.TriggerComplete
-// || !processing.PlanMode" -- returns (nil, nil), nothing recorded) -- so
-// no review session can EVER have an awaiting_approval plan row to gate
-// against in the first place. Duplicating a check against a
-// structurally-unreachable precondition would be dead code asserting a
-// property that is already true by construction elsewhere, not a real
-// safety net.
-func (a *Actor) insertAutoRetriggerTurn(ctx context.Context, tx pgx.Tx, decision *reviewRetriggerDecision, reviewCtx review.PreFetchedContext) error {
-	prompt := review.RenderTurnPrompt(autoRetriggerPromptText, reviewCtx)
-	headSHA := reviewCtx.HeadSHA
-
+// The awaiting-plan gate IS now also duplicated (rereview fix, finding
+// 4) -- one level up, in this function's own caller
+// (finishReviewRetrigger's reviewRetriggerActionEnqueue branch, via
+// reviewSessionHasAwaitingApprovalPlan), not here. This file used to
+// claim the gate was "DELIBERATELY NOT duplicated" because "no review
+// session can EVER have an awaiting_approval plan row to gate against in
+// the first place" -- that claim was FALSE: internal/adapters/inbound/
+// httpapi/turn.go's CreateTurn forwards client-supplied req.PlanMode into
+// CreateTurnCore with no session-kind restriction, so a maintainer/admin
+// CAN submit a planMode=true turn on a GitHub review session via the
+// ordinary REST API, and planrecord.go's own recordPlanIfNeeded WILL then
+// write an awaiting_approval plans row for that session -- exactly the
+// precondition reviewSessionHasAwaitingApprovalPlan's own doc comment
+// names. httpapi's own manual re-trigger path (reviewretrigger.go)
+// already kept this exact gate for review sessions; this automatic path
+// now matches it, closing what was a real, if narrow, divergence between
+// the two.
+//
+// workflowengine (Step 55, §25.6) wiring is DELIBERATELY NOT duplicated:
+// createTurnLocked calls workflowengine.ResolveStepForNewTurn/AttachTurn
+// for every turn it creates, so that turn picks up its lane's configured
+// workflow prompt/model/effort and is tracked by a workflow run --
+// insertAutoRetriggerTurn does neither. An automatic re-review turn
+// degrades safely without this (an untracked turn is already the
+// expected, safely-handled common case everywhere else workflowengine
+// reads turns from), and wiring it in is not a low-risk addition:
+// ResolveStepForNewTurn resolves a LANE from sessionRow.IntentDecision
+// (a signal with no meaning for a review-only session) and can rewrite
+// prompt/model/effort via a step's own PromptTemplate, which risks
+// silently reshaping the carefully delimited §22.1/§22.3/verdict-tool-
+// instructions text composeAutoRetriggerPrompt just built, in ways no
+// test in this codebase exercises today. Left as a documented, deliberate
+// omission (rereview finding 9) rather than a speculative rewrite of this
+// file's own prompt-composition contract.
+func (a *Actor) insertAutoRetriggerTurn(ctx context.Context, tx pgx.Tx, decision *reviewRetriggerDecision, prompt string, headSHA string) error {
 	created, err := a.stores.turn.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
 		SessionID:     a.sessionID,
 		Status:        sqlcgen.TurnStatusPending,
@@ -482,12 +648,20 @@ func (a *Actor) insertAutoRetriggerTurn(ctx context.Context, tx pgx.Tx, decision
 // -- there is no honestly-computed RiskLevel/Shippable to forward here).
 //
 // RiskLevel in the payload is decision.latestVerdictRiskLevel -- this
-// PR's own last REAL verdict's risk, not a fabricated new assessment --
-// so VerdictNotifier's own label sync (ComputeLabelSync) resolves to a
-// no-op (the PR's current label already reflects that same risk from the
-// real verdict that posted it), rather than reviewpost.RiskLabel's own
-// fail-conservative default (an empty/unrecognized RiskLevel renders as
-// review:high-risk) mislabeling a PR this notice never actually assessed.
+// PR's own last REAL verdict's risk, not a fabricated new assessment.
+// When a real verdict WAS previously posted for this PR, this makes
+// VerdictNotifier's own label sync (ComputeLabelSync) resolve to a no-op
+// (the PR's current label already reflects that same risk from the real
+// verdict that posted it). When NO verdict has ever been posted for this
+// PR (a real, reachable state: the budget can exhaust from automatic
+// re-reviews alone, with every one of them declining before ever posting
+// a verdict -- e.g. every firing hit reviewRetriggerActionFetchFailed),
+// latestVerdictRiskLevel is "" -- rereview fix (finding 6): VerdictNotifier.
+// Deliver now treats an empty RiskLevel as an explicit, intentional
+// "skip label sync entirely" signal, rather than letting
+// reviewpost.RiskLabel's own fail-conservative default (an empty/
+// unrecognized RiskLevel renders as review:high-risk) stamp a "high risk"
+// label on a PR this notice never actually assessed.
 func (a *Actor) enqueueAutoRetriggerBudgetExhaustedNotice(ctx context.Context, tx pgx.Tx, decision *reviewRetriggerDecision) error {
 	owner, repo, ok := reposource.SplitFullName(decision.repoFullName)
 	if !ok {

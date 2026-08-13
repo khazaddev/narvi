@@ -5,6 +5,7 @@ package sessionactor
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -356,15 +358,165 @@ func TestReviewRetriggerDebounceTimer_Enqueue_CreatesReviewTurn(t *testing.T) {
 	}
 }
 
+// TestReviewRetriggerDebounceTimer_Enqueue_PromptIncludesFalsePositiveAdvisoryAndAlreadyAnsweredFacts
+// is rereview fix (finding 1)'s own regression test: before this fix,
+// insertAutoRetriggerTurn built its own turn prompt by calling
+// review.RenderTurnPrompt directly on autoRetriggerPromptText, with NO
+// §22.3 false-positive advisory block and NO §22.1 already-answered-facts
+// block ever prepended -- the automatic re-review lane was the ONLY
+// review-turn producer in this codebase that skipped both (every other
+// lane -- httpapi.RetriggerReview's own manual-button path, internal/
+// adapters/inbound/github/handler.go's own mention/label path -- already
+// prepends them, see each of THEIR OWN "AlreadyAnsweredFacts_Prepended..."
+// -style regression tests). Proves the composed prompt this handler
+// actually persists CONTAINS both blocks' own distinguishing content, not
+// merely that SOME prompt was rendered.
+func TestReviewRetriggerDebounceTimer_Enqueue_PromptIncludesFalsePositiveAdvisoryAndAlreadyAnsweredFacts(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	f := newAutoRetriggerFixture(ctx, t, pool)
+	if _, err := f.repoSettings.UpsertAutoRetriggerReviewToggle(ctx, f.repoFullName, true); err != nil {
+		t.Fatalf("enable auto-retrigger-review: %v", err)
+	}
+	f.setPendingHeadSHA(ctx, t, "sha-pending-composed-prompt")
+	f.armDebounceTimer(ctx, t)
+
+	const wantAdvisoryReason = "Logging a variable name that merely CONTAINS 'password' is not a real secret leak."
+	falsePositivePatterns := narvipg.NewFalsePositivePatternStore(pool)
+	if _, _, err := falsePositivePatterns.Upsert(ctx, f.repoFullName, 1001, "issue_comment", wantAdvisoryReason, pgtype.UUID{}); err != nil {
+		t.Fatalf("seed false-positive pattern: %v", err)
+	}
+
+	const wantFindingDescription = "Missing test coverage for the timeout path."
+	reviewFindings := narvipg.NewReviewFindingStore(pool)
+	if _, err := reviewFindings.Upsert(ctx, sqlcgen.UpsertReviewFindingParams{
+		RepoFullName: f.repoFullName,
+		PrNumber:     f.prNumber,
+		IdentityHash: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		Severity:     "medium",
+		FilePath:     "internal/foo/bar.go",
+		Description:  wantFindingDescription,
+	}); err != nil {
+		t.Fatalf("seed review finding: %v", err)
+	}
+
+	diffFetcher := &fakeReviewDiffFetcher{nextHeadSHA: "sha-live-composed", nextBaseRef: "main", nextDiff: "+ line changed"}
+	r := newAutoRetriggerRegistry(ctx, t, pool, diffFetcher)
+	fireDebounceTimer(ctx, t, r, f)
+
+	turns, err := f.turns.ListForSession(ctx, f.sessionID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turns created = %d, want 1", len(turns))
+	}
+	prompt := turns[0].Prompt
+	if prompt == nil {
+		t.Fatal("turn prompt is nil")
+	}
+
+	if !strings.Contains(*prompt, wantAdvisoryReason) {
+		t.Errorf("prompt = %q, want it to contain the false-positive advisory's own reason %q (§22.3)", *prompt, wantAdvisoryReason)
+	}
+	if !strings.Contains(*prompt, wantFindingDescription) {
+		t.Errorf("prompt = %q, want it to contain the already-answered finding's own description %q (§22.1)", *prompt, wantFindingDescription)
+	}
+	if !strings.Contains(*prompt, autoRetriggerPromptText) {
+		t.Errorf("prompt = %q, want it to STILL contain the automatic re-trigger's own prose fallback %q (prepended TO, never REPLACING it)", *prompt, autoRetriggerPromptText)
+	}
+
+	// composeAutoRetriggerPrompt prepends the advisory block to the base
+	// prompt FIRST, then prepends the already-answered-facts block to
+	// THAT -- exactly mirroring httpapi.RetriggerReview's and github/
+	// handler.go's own identical two-step prepend order -- so the final
+	// byte order is already-answered-facts, THEN the advisory, THEN the
+	// prose fallback.
+	advisoryIdx := strings.Index(*prompt, wantAdvisoryReason)
+	factsIdx := strings.Index(*prompt, wantFindingDescription)
+	proseIdx := strings.Index(*prompt, autoRetriggerPromptText)
+	if advisoryIdx == -1 || factsIdx == -1 || proseIdx == -1 {
+		t.Fatal("one or more expected substrings missing -- see the individual assertions above")
+	}
+	if !(factsIdx < advisoryIdx && advisoryIdx < proseIdx) {
+		t.Errorf("want ordering already-answered-facts(%d) < advisory(%d) < prose fallback(%d), got a different order",
+			factsIdx, advisoryIdx, proseIdx)
+	}
+}
+
+// TestReviewRetriggerDebounceTimer_AwaitingPlan_DeclinesToEnqueue is
+// rereview fix (finding 4)'s own regression test: mirrors httpapi's own
+// TestRetriggerReview_AwaitingPlanAlwaysDeclines_NeverClassifies
+// (internal/adapters/inbound/httpapi/reviewretrigger_integration_test.go)
+// for the AUTOMATIC lane -- before this fix, insertAutoRetriggerTurn's
+// own doc comment claimed "no review session can EVER have an
+// awaiting_approval plan row to gate against", a claim this test
+// disproves directly: a maintainer/admin CAN submit planMode=true on a
+// GitHub review session via the ordinary REST API (httpapi.CreateTurn
+// forwards client-supplied req.PlanMode into CreateTurnCore with no
+// session-kind restriction), producing exactly the awaiting_approval row
+// seeded below.
+func TestReviewRetriggerDebounceTimer_AwaitingPlan_DeclinesToEnqueue(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	f := newAutoRetriggerFixture(ctx, t, pool)
+	if _, err := f.repoSettings.UpsertAutoRetriggerReviewToggle(ctx, f.repoFullName, true); err != nil {
+		t.Fatalf("enable auto-retrigger-review: %v", err)
+	}
+	f.setPendingHeadSHA(ctx, t, "sha-pending-awaiting-plan")
+	f.armDebounceTimer(ctx, t)
+
+	// Seed a producing turn (Completed, plan_mode true) and an
+	// awaiting_approval plans row atop the session -- mirrors httpapi's
+	// own TestRetriggerReview_AwaitingPlanAlwaysDeclines_NeverClassifies
+	// precedent exactly (that file lives in package httpapi_test,
+	// unreachable from here; this is this file's own equivalent).
+	plans := narvipg.NewPlanStore(pool)
+	producingTurn, err := f.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: f.sessionID, Status: sqlcgen.TurnStatusCompleted, PlanMode: true})
+	if err != nil {
+		t.Fatalf("seed producing turn: %v", err)
+	}
+	if _, err := plans.Create(ctx, sqlcgen.CreatePlanParams{SessionID: f.sessionID, TurnID: producingTurn.ID, Version: 1, Status: sqlcgen.PlanStatusAwaitingApproval}); err != nil {
+		t.Fatalf("seed awaiting_approval plan: %v", err)
+	}
+
+	diffFetcher := &fakeReviewDiffFetcher{nextHeadSHA: "sha-live-awaiting-plan", nextBaseRef: "main", nextDiff: "diff"}
+	r := newAutoRetriggerRegistry(ctx, t, pool, diffFetcher)
+	fireDebounceTimer(ctx, t, r, f)
+
+	turns, err := f.turns.ListForSession(ctx, f.sessionID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	// producingTurn is the only turn that should exist -- no automatic
+	// re-review turn was inserted atop it while its own plan sits
+	// awaiting_approval.
+	if len(turns) != 1 {
+		t.Fatalf("turns after firing = %d, want 1 (only the seeded producing turn -- no automatic re-review turn while a plan is awaiting approval)", len(turns))
+	}
+
+	row := f.getPRSession(ctx, t)
+	if row.PendingRetriggerHeadSha != nil {
+		t.Errorf("pending_retrigger_head_sha = %v, want nil (cleared even though nothing was enqueued)", row.PendingRetriggerHeadSha)
+	}
+	if row.AutoRetriggerCount != 0 {
+		t.Errorf("auto_retrigger_count = %d, want 0 (no budget spent while declining for an awaiting-approval plan)", row.AutoRetriggerCount)
+	}
+	if diffFetcher.getPRCalls != 1 {
+		t.Errorf("GetPullRequest call count = %d, want 1 (phase 2 still live-fetches BEFORE the awaiting-plan gate runs inside the transaction -- see handleReviewRetriggerDebounceTimer's own two-phase shape)", diffFetcher.getPRCalls)
+	}
+}
+
 // TestReviewRetriggerDebounceTimer_NoLiveHeadSHA_DeclinesToEnqueue covers
 // §24's own fail-closed direction: when the live reviewcontext.Fetch call
 // cannot resolve a head sha (here: the fake's GetPullRequest call fails),
 // this handler must NOT guess-and-dispatch a turn with no honest head sha
 // to anchor to -- it declines or, this cycle, treats it identically to
 // "nothing to do": pending_retrigger_head_sha still clears and the timer
-// still deletes (a fresh synchronize event, or simply the next debounce
-// firing once the transient failure clears, tries again), but the
-// per-PR budget is never spent on a turn that was never created.
+// still deletes (only a fresh synchronize event tries again -- the timer
+// this firing just deleted means there is no "next debounce firing" left
+// to retry on its own), but the per-PR budget is never spent on a turn
+// that was never created.
 func TestReviewRetriggerDebounceTimer_NoLiveHeadSHA_DeclinesToEnqueue(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -389,7 +541,7 @@ func TestReviewRetriggerDebounceTimer_NoLiveHeadSHA_DeclinesToEnqueue(t *testing
 
 	row := f.getPRSession(ctx, t)
 	if row.PendingRetriggerHeadSha != nil {
-		t.Errorf("pending_retrigger_head_sha = %v, want nil (cleared -- the next synchronize event or debounce cycle retries)", row.PendingRetriggerHeadSha)
+		t.Errorf("pending_retrigger_head_sha = %v, want nil (cleared -- only a fresh synchronize event retries)", row.PendingRetriggerHeadSha)
 	}
 	if row.AutoRetriggerCount != 0 {
 		t.Errorf("auto_retrigger_count = %d, want 0 (no budget spent on a turn that was never created)", row.AutoRetriggerCount)
@@ -466,6 +618,23 @@ func TestReviewRetriggerDebounceTimer_BudgetExhausted_PostsNoticeOnce(t *testing
 // handler's own correctness rests on, and is fully exercised by every
 // other scenario test above using it as documented (a real firing that
 // finds no race always succeeds).
+//
+// Rereview fix (finding 2) extends this test past the store-level CAS: a
+// guard miss like the one just proved above must ALSO make
+// finishReviewRetrigger skip its own subsequent deleteTimer call, since
+// session_timers has UNIQUE(session_id, name) -- there is no SECOND,
+// separate timer row this firing "owns" apart from the one the newer
+// push's own re-arm (armDebounceTimer below, simulating
+// pullrequestsynchronize.go's real upsert-pending-sha+re-arm-timer pair)
+// just updated. Before this fix, every branch unconditionally deleted the
+// timer regardless of a guard miss, silently stranding the newer push's
+// own pending head sha with no timer left to ever act on it again --
+// exactly the trailing-edge-debounce failure §24.2 exists to prevent.
+// Exercised by calling the real finishReviewRetrigger method directly
+// (this file's own package, not the full two-phase handler -- same
+// reasoning as the store-level call above) with a deliberately STALE
+// decision (pendingHeadSHA "sha-old", exactly what a firing would have
+// read from readReviewRetriggerState BEFORE the race).
 func TestReviewRetriggerDebounceTimer_RaceWithNewerPush_NeverClobbersFresherValue(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -473,8 +642,12 @@ func TestReviewRetriggerDebounceTimer_RaceWithNewerPush_NeverClobbersFresherValu
 
 	f.setPendingHeadSHA(ctx, t, "sha-old")
 	// Simulates a NEW synchronize webhook event racing in after a
-	// firing's own read but before its own clear.
+	// firing's own read but before its own clear -- ALSO re-arming the
+	// SAME session_timers row, exactly like pullrequestsynchronize.go's
+	// real handler does (pending_retrigger_head_sha and the debounce
+	// timer are always upserted together, in one transaction).
 	f.setPendingHeadSHA(ctx, t, "sha-new")
+	f.armDebounceTimer(ctx, t)
 
 	_, err := f.prSessions.ClearPendingRetriggerHeadSHA(ctx, f.repoFullName, f.prNumber, "sha-old")
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -484,5 +657,67 @@ func TestReviewRetriggerDebounceTimer_RaceWithNewerPush_NeverClobbersFresherValu
 	row := f.getPRSession(ctx, t)
 	if row.PendingRetriggerHeadSha == nil || *row.PendingRetriggerHeadSha != "sha-new" {
 		t.Errorf("pending_retrigger_head_sha = %v, want unchanged %q (a stale clear must never clobber a fresher push)", row.PendingRetriggerHeadSha, "sha-new")
+	}
+
+	registry := newAutoRetriggerRegistry(ctx, t, pool, &fakeReviewDiffFetcher{})
+	a, err := registry.GetOrSpawn(ctx, f.sessionID)
+	if err != nil {
+		t.Fatalf("GetOrSpawn: %v", err)
+	}
+	staleDecision := &reviewRetriggerDecision{
+		action:         reviewRetriggerActionHeadsMatch,
+		repoFullName:   f.repoFullName,
+		prNumber:       f.prNumber,
+		pendingHeadSHA: "sha-old",
+	}
+	enqueued, err := a.finishReviewRetrigger(ctx, staleDecision, review.PreFetchedContext{}, "")
+	if err != nil {
+		t.Fatalf("finishReviewRetrigger: %v", err)
+	}
+	if enqueued {
+		t.Error("enqueued = true, want false (reviewRetriggerActionHeadsMatch never enqueues a turn)")
+	}
+
+	if !f.timerExists(ctx, t) {
+		t.Error("review_retrigger_debounce timer was deleted on a guard miss -- it is the SAME row the newer push's own re-arm just set (session_timers has UNIQUE(session_id, name)), so deleting it strands that newer push with no timer left to ever act on it again")
+	}
+	row = f.getPRSession(ctx, t)
+	if row.PendingRetriggerHeadSha == nil || *row.PendingRetriggerHeadSha != "sha-new" {
+		t.Errorf("pending_retrigger_head_sha after finishReviewRetrigger = %v, want still unchanged %q", row.PendingRetriggerHeadSha, "sha-new")
+	}
+}
+
+// TestReviewRetriggerDebounceTimer_MarkAutoRetriggerBudgetNoticeSent_GuardsAgainstDoubleMark
+// is rereview fix (finding 7)'s own store-level isolation test: §24.6's
+// own "post the notice exactly once" property is enforced by BOTH an
+// in-memory check (decision.budgetNoticeAlreadySent, read once per firing
+// -- this actor processes one command at a time for a given session, §2)
+// AND a SQL guard clause (AND auto_retrigger_budget_notice_sent_at IS
+// NULL, MarkAutoRetriggerBudgetNoticeSent's own generated query) --
+// TestReviewRetriggerDebounceTimer_BudgetExhausted_PostsNoticeOnce above
+// only kills the COMBINED mutation of both (removing the SQL guard alone
+// still passes that test, since its own single-actor execution path is
+// already covered by the in-memory check). This isolates and proves the
+// SQL guard specifically, calling the store method directly twice --
+// mirroring TestReviewRetriggerDebounceTimer_RaceWithNewerPush_
+// NeverClobbersFresherValue's own identical store-level-CAS-proof pattern
+// for ClearPendingRetriggerHeadSHA, above.
+func TestReviewRetriggerDebounceTimer_MarkAutoRetriggerBudgetNoticeSent_GuardsAgainstDoubleMark(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	f := newAutoRetriggerFixture(ctx, t, pool)
+
+	if _, err := f.prSessions.MarkAutoRetriggerBudgetNoticeSent(ctx, f.repoFullName, f.prNumber); err != nil {
+		t.Fatalf("first MarkAutoRetriggerBudgetNoticeSent = %v, want success", err)
+	}
+
+	_, err := f.prSessions.MarkAutoRetriggerBudgetNoticeSent(ctx, f.repoFullName, f.prNumber)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("second MarkAutoRetriggerBudgetNoticeSent = %v, want pgx.ErrNoRows (the SQL guard -- auto_retrigger_budget_notice_sent_at IS NULL -- must refuse a second mark)", err)
+	}
+
+	row := f.getPRSession(ctx, t)
+	if !row.AutoRetriggerBudgetNoticeSentAt.Valid {
+		t.Error("auto_retrigger_budget_notice_sent_at is NULL, want set by the first (successful) mark")
 	}
 }

@@ -237,15 +237,16 @@ const verdictToolInstructions = "\n\n" +
 //
 // A FOURTH piece, unconditional and always last: verdictToolInstructions
 // (above), instructing the agent how to post its verdict via Step 47's
-// own verdict-posting tool -- unconditional because both of this
+// own verdict-posting tool -- unconditional because all THREE of this
 // function's own real callers (internal/adapters/inbound/github's own
-// handler.go and internal/adapters/inbound/httpapi's own
-// reviewretrigger.go) build a review turn's prompt ONLY by calling this
-// function; there is no OTHER kind of turn this function is ever asked to
-// render text for. The URL/bearer/gen this block names are placeholder
-// tokens (VerdictToolURLPlaceholder et al.), never live secrets -- see
-// their own doc comment for why this package cannot fill them in itself,
-// and where they actually get resolved.
+// handler.go, internal/adapters/inbound/httpapi's own reviewretrigger.go,
+// and internal/app/sessionactor's own reviewretrigger.go, added by Step
+// 65's automatic re-review lane) build a review turn's prompt ONLY by
+// calling this function; there is no OTHER kind of turn this function is
+// ever asked to render text for. The URL/bearer/gen this block names are
+// placeholder tokens (VerdictToolURLPlaceholder et al.), never live
+// secrets -- see their own doc comment for why this package cannot fill
+// them in itself, and where they actually get resolved.
 func RenderTurnPrompt(basePrompt string, ctx PreFetchedContext) string {
 	out := basePrompt
 

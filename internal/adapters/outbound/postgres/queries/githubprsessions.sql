@@ -99,11 +99,18 @@ RETURNING *;
 -- ensures THAT newer, still-unprocessed push is never silently clobbered
 -- back to NULL by a decision made against a now-stale value. pgx.ErrNoRows
 -- on a guard miss is the expected, harmless outcome in that race (nothing
--- to clear -- a fresher event already owns this row); the caller simply
--- proceeds to delete ITS OWN claimed timer row regardless (the SAME
--- re-arm-or-delete contract every named timer already follows,
--- timerfired.go), trusting the newer synchronize event's own timer
--- re-arm to cover the newer push.
+-- to clear -- a fresher event already owns this row). Rereview fix
+-- (finding 2, correcting this comment's own earlier false claim): the
+-- caller must NOT then proceed to delete "its own claimed timer row" --
+-- session_timers has UNIQUE(session_id, name), so there is exactly ONE
+-- review_retrigger_debounce row for this session, and on a guard miss it
+-- is already the SAME row the newer synchronize event's own re-arm just
+-- updated. Deleting it here would strand that newer push with no timer
+-- left to ever act on it -- the caller must skip its own delete on a
+-- guard miss instead, trusting the newer event's own already-committed
+-- re-arm to stand in for it (the same re-arm-or-delete contract every
+-- named timer already follows, timerfired.go, satisfied by the newer
+-- event's re-arm rather than by this firing's own delete).
 UPDATE github_pr_sessions
 SET pending_retrigger_head_sha = NULL
 WHERE repo_full_name = $1 AND pr_number = $2 AND pending_retrigger_head_sha = $3

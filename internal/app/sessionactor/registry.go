@@ -150,33 +150,45 @@ type storeBundle struct {
 	// this PR" (the auto-approval eligibility engine, the decision inbox)
 	// already reuses -- never a second, independently-derived reduction.
 	reviewVerdict *postgres.ReviewVerdictStore
+
+	// falsePositivePattern is a rereview fix (Step 65 finding 1) own
+	// addition: handleReviewRetriggerDebounceTimer's own phase 2
+	// (composeAutoRetriggerPrompt, reviewretrigger.go) calls
+	// reviewcontext.FetchFalsePositivePatterns with this store, exactly
+	// like httpapi.RetriggerReview's own manual-button lane and
+	// internal/adapters/inbound/github/handler.go's own mention/label
+	// lane already do -- before this fix, the automatic lane was the
+	// ONLY review-turn producer in this codebase that never prepended
+	// §22.3's own learned false-positive advisory block.
+	falsePositivePattern *postgres.FalsePositivePatternStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 	return storeBundle{
-		session:             postgres.NewSessionStore(pool),
-		turn:                postgres.NewTurnStore(pool),
-		sandbox:             postgres.NewSandboxStore(pool),
-		timer:               postgres.NewTimerStore(pool),
-		event:               postgres.NewEventStore(pool),
-		identity:            postgres.NewIdentityStore(pool),
-		artifact:            postgres.NewArtifactStore(pool),
-		user:                postgres.NewUserStore(pool),
-		imageBuild:          postgres.NewImageBuildStore(pool),
-		environment:         postgres.NewEnvironmentStore(pool),
-		contractDrift:       postgres.NewContractDriftStore(pool),
-		outbox:              postgres.NewOutboxStore(pool),
-		slackThreadSession:  postgres.NewSlackThreadSessionStore(pool),
-		githubPRSession:     postgres.NewGitHubPRSessionStore(pool),
-		linearAgentSession:  postgres.NewLinearAgentSessionStore(pool),
-		plan:                postgres.NewPlanStore(pool),
-		auditLog:            postgres.NewAuditLogStore(pool),
-		sentinelFix:         postgres.NewSentinelFixStore(pool),
-		reviewFinding:       postgres.NewReviewFindingStore(pool),
-		handoffSentinelRuns: postgres.NewHandoffSentinelStore(pool),
-		workflow:            postgres.NewWorkflowStore(pool),
-		repoSettings:        postgres.NewRepoSettingsStore(pool),
-		reviewVerdict:       postgres.NewReviewVerdictStore(pool),
+		session:              postgres.NewSessionStore(pool),
+		turn:                 postgres.NewTurnStore(pool),
+		sandbox:              postgres.NewSandboxStore(pool),
+		timer:                postgres.NewTimerStore(pool),
+		event:                postgres.NewEventStore(pool),
+		identity:             postgres.NewIdentityStore(pool),
+		artifact:             postgres.NewArtifactStore(pool),
+		user:                 postgres.NewUserStore(pool),
+		imageBuild:           postgres.NewImageBuildStore(pool),
+		environment:          postgres.NewEnvironmentStore(pool),
+		contractDrift:        postgres.NewContractDriftStore(pool),
+		outbox:               postgres.NewOutboxStore(pool),
+		slackThreadSession:   postgres.NewSlackThreadSessionStore(pool),
+		githubPRSession:      postgres.NewGitHubPRSessionStore(pool),
+		linearAgentSession:   postgres.NewLinearAgentSessionStore(pool),
+		plan:                 postgres.NewPlanStore(pool),
+		auditLog:             postgres.NewAuditLogStore(pool),
+		sentinelFix:          postgres.NewSentinelFixStore(pool),
+		reviewFinding:        postgres.NewReviewFindingStore(pool),
+		handoffSentinelRuns:  postgres.NewHandoffSentinelStore(pool),
+		workflow:             postgres.NewWorkflowStore(pool),
+		repoSettings:         postgres.NewRepoSettingsStore(pool),
+		reviewVerdict:        postgres.NewReviewVerdictStore(pool),
+		falsePositivePattern: postgres.NewFalsePositivePatternStore(pool),
 	}
 }
 
