@@ -95,6 +95,10 @@ type Actor struct {
 	// that never exercise the sentinel-fix PR path).
 	githubBotToken string
 
+	// reviewModelDeep is Step 68's own addition (§26.3) -- see
+	// RegistryOptions.ReviewModelDeep's own doc comment.
+	reviewModelDeep string
+
 	// diffFetcher is Step 49's ("handoff-readiness sentinel", §14.4) own
 	// addition -- see Registry's own identical field doc comment
 	// (registry.go) for the full rationale; handoffsentinel.go's own

@@ -227,6 +227,7 @@ func serve() error {
 			GitHubBotToken:    cfg.GitHubBotToken,
 			GitHubBotHandle:   cfg.GitHubBotHandle,
 			ReviewDiffFetcher: sourceControl,
+			ReviewModelDeep:   cfg.ReviewModelDeep,
 		})
 	if err != nil {
 		return fmt.Errorf("construct session actor registry: %w", err)

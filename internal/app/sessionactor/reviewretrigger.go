@@ -78,9 +78,11 @@ import (
 	"github.com/khazaddev/narvi/internal/app/auditlog"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	domainreviewtriage "github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // reviewAutoRetriggerBudget is §24.6's own per-PR budget on the AUTOMATIC
@@ -127,6 +129,29 @@ type reviewRetriggerDecision struct {
 	autoRetriggerCount      int32
 	budgetNoticeAlreadySent bool
 	latestVerdictRiskLevel  string
+
+	// latestVerdictReviewPath (Step 68, §26.3) is the latest posted
+	// verdict's own review_path column -- §24's own re-review floor
+	// input ("once deep, a PR stays deep, even if the delta itself
+	// would independently route light"). Empty when no verdict has ever
+	// been posted for this PR, or when the latest one predates Step 68 /
+	// never resolved a depth -- both degrade identically to "nothing to
+	// floor against", mirroring latestVerdictRiskLevel's own identical
+	// "no prior verdict" zero-value convention immediately above.
+	latestVerdictReviewPath string
+
+	// The four fields below are Step 68's own computed OUTPUT (§26.3),
+	// set by handleReviewRetriggerDebounceTimer between phase 2 (fetch)
+	// and phase 3 (finish/insert) -- never set by readReviewRetriggerState
+	// itself, which only ever reads latestVerdictReviewPath above as an
+	// INPUT. finalReviewDepth is decision.Depth AFTER §24's Floor has
+	// been applied against latestVerdictReviewPath -- see
+	// insertAutoRetriggerTurn's own doc comment for how these four ride
+	// onto the inserted turn's own row.
+	finalReviewDepth        string
+	reviewDepthDecisionJSON []byte
+	triageModelID           *string
+	triageEffort            *string
 }
 
 type reviewRetriggerAction int
@@ -208,6 +233,30 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			// internal/adapters/inbound/github/handler.go's own mention/
 			// label lane byte-for-byte in ordering.
 			prompt = a.composeAutoRetriggerPrompt(ctx, decision.repoFullName, decision.prNumber, reviewCtx)
+
+			// Step 68 (§26.3): depth re-evaluated on the delta (this
+			// PR's own CURRENT diff, reviewCtx above), THEN floored at
+			// the PR's own previous depth ("once deep, a PR stays deep,
+			// even if the delta itself would independently route
+			// light") -- decision.latestVerdictReviewPath is the SAME
+			// GetLatest read readReviewRetriggerState already performed
+			// (phase 1), never a second, redundant review_verdicts
+			// query. ComputeDecision itself performs its OWN further
+			// GetLatest read (for the "prior high verdict" signal,
+			// distinct from the floor) -- a second, small, harmless
+			// query outside any transaction, accepted for reusing the
+			// SAME shared entry point every other trigger path calls
+			// rather than a bespoke variant just for this one caller.
+			triageDeps := appreviewtriage.Deps{RepoSettings: a.stores.repoSettings, ReviewVerdicts: a.stores.reviewVerdict}
+			triageDecision, triageConfig := appreviewtriage.ComputeDecision(ctx, triageDeps, decision.repoFullName, decision.prNumber, reviewCtx)
+			flooredDepth := domainreviewtriage.Floor(triageDecision.Depth, domainreviewtriage.ReviewDepth(decision.latestVerdictReviewPath))
+			decision.finalReviewDepth = string(flooredDepth)
+			decision.triageModelID, decision.triageEffort = domainreviewtriage.ModelAndEffort(flooredDepth, a.reviewModelDeep)
+			if recordJSON, marshalErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth)); marshalErr != nil {
+				a.logger.Warn("sessionactor: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", marshalErr, "repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
+			} else {
+				decision.reviewDepthDecisionJSON = recordJSON
+			}
 		}
 	}
 
@@ -287,7 +336,7 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 		// SAME per-PR GetLatestReviewVerdict reduction §21.1 defines and
 		// every other caller of "the latest verdict for this PR" already
 		// reuses (queries/reviewverdicts.sql).
-		var verdictHeadSHA, verdictRiskLevel string
+		var verdictHeadSHA, verdictRiskLevel, verdictReviewPath string
 		if latest, verdictErr := a.stores.reviewVerdict.WithTx(tx).GetLatest(ctx, prSession.RepoFullName, prSession.PrNumber); verdictErr != nil {
 			if !errors.Is(verdictErr, pgx.ErrNoRows) {
 				return fmt.Errorf("sessionactor: get latest review verdict: %w", verdictErr)
@@ -298,6 +347,13 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 		} else {
 			verdictHeadSHA = latest.HeadSha
 			verdictRiskLevel = latest.RiskLevel
+			// Step 68 (§26.3): review_path is nullable (a pre-Step-68
+			// row, or a verdict whose own turn never resolved a depth)
+			// -- degrades to "", the SAME "nothing to floor against"
+			// reading as no prior verdict at all.
+			if latest.ReviewPath != nil {
+				verdictReviewPath = *latest.ReviewPath
+			}
 		}
 
 		base := reviewRetriggerDecision{
@@ -307,6 +363,7 @@ func (a *Actor) readReviewRetriggerState(ctx context.Context) (*reviewRetriggerD
 			autoRetriggerCount:      prSession.AutoRetriggerCount,
 			budgetNoticeAlreadySent: prSession.AutoRetriggerBudgetNoticeSentAt.Valid,
 			latestVerdictRiskLevel:  verdictRiskLevel,
+			latestVerdictReviewPath: verdictReviewPath,
 		}
 
 		switch {
@@ -612,13 +669,29 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 // test in this codebase exercises today. Left as a documented, deliberate
 // omission (rereview finding 9) rather than a speculative rewrite of this
 // file's own prompt-composition contract.
+// reviewDepth/reviewDepthDecision/modelID/effort (Step 68, §26.3) are
+// decision's own finalReviewDepth/reviewDepthDecisionJSON/triageModelID/
+// triageEffort fields, already computed and FLOORED (§24) by
+// handleReviewRetriggerDebounceTimer before this function's own caller
+// (finishReviewRetrigger) ever runs -- this function does no further
+// triage computation of its own, it only persists what was already
+// decided, mirroring headSHA's own identical "already resolved
+// upstream, just persisted here" shape.
 func (a *Actor) insertAutoRetriggerTurn(ctx context.Context, tx pgx.Tx, decision *reviewRetriggerDecision, prompt string, headSHA string) error {
+	var reviewDepth *string
+	if decision.finalReviewDepth != "" {
+		reviewDepth = &decision.finalReviewDepth
+	}
 	created, err := a.stores.turn.WithTx(tx).Create(ctx, sqlcgen.CreateTurnParams{
-		SessionID:     a.sessionID,
-		Status:        sqlcgen.TurnStatusPending,
-		Prompt:        &prompt,
-		PlanMode:      false,
-		ReviewHeadSha: &headSHA,
+		SessionID:           a.sessionID,
+		Status:              sqlcgen.TurnStatusPending,
+		Prompt:              &prompt,
+		ModelID:             decision.triageModelID,
+		Effort:              decision.triageEffort,
+		PlanMode:            false,
+		ReviewHeadSha:       &headSHA,
+		ReviewDepth:         reviewDepth,
+		ReviewDepthDecision: decision.reviewDepthDecisionJSON,
 	})
 	if err != nil {
 		return fmt.Errorf("sessionactor: insert automatic re-review turn: %w", err)

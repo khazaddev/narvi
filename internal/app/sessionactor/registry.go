@@ -264,6 +264,10 @@ type Registry struct {
 	// empty (tests that never exercise the sentinel-fix PR path).
 	githubBotToken string
 
+	// reviewModelDeep is Step 68's own addition (§26.3) -- see
+	// RegistryOptions.ReviewModelDeep's own doc comment.
+	reviewModelDeep string
+
 	// diffFetcher is Step 49's ("handoff-readiness sentinel", §14.4) own
 	// addition, threaded through to every Actor this Registry hydrates
 	// exactly like the fields above: handoffsentinel.go's own
@@ -464,6 +468,7 @@ func NewRegistry(
 		reviewDiffFetcher:      opt.ReviewDiffFetcher,
 		githubBotHandle:        opt.GitHubBotHandle,
 		githubBotToken:         opt.GitHubBotToken,
+		reviewModelDeep:        opt.ReviewModelDeep,
 		contractDriftDetected:  contractDriftDetected,
 		repoAccessCache:        newRepoAccessCache(),
 		epistemicCheckDefault:  epistemicCheckDefault,
@@ -489,6 +494,13 @@ type RegistryOptions struct {
 	// ReviewDiffFetcher is Step 65's own addition -- see Registry.
 	// reviewDiffFetcher's own doc comment.
 	ReviewDiffFetcher reviewcontext.Fetcher
+	// ReviewModelDeep is Step 68's own addition (§26.3): platform.Config.
+	// ReviewModelDeep, threaded through to reviewretrigger.go's own
+	// automatic re-review turn insert exactly like internal/adapters/
+	// inbound/github's own SessionCoalescer.ReviewModelDeep field. Empty
+	// means "not configured" -- see internal/domain/reviewtriage.
+	// ModelAndEffort's own doc comment.
+	ReviewModelDeep string
 }
 
 // GetOrSpawn returns the live local Actor for sessionID if this process
