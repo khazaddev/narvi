@@ -183,8 +183,9 @@ func baselineFromRisk(r RiskLevel) Shippable {
 // fabricates risk the model did not report"): RiskLevel is carried on
 // Verdict verbatim from the reviewer's own self-reported assessment,
 // upstream of and structurally unrelated to this function's own Shippable
-// computation — see TestComputeShippable_AdequacyFloorNeverTouchesRiskLevel
-// (shippable_test.go) for the pin.
+// computation — see TestBuildVerdict_AdequacyNeverAffectsRiskLevel
+// (internal/domain/reviewpost/validate_test.go) for the pin, at
+// BuildVerdict's own real construction site.
 func ComputeShippable(risk RiskLevel, coverage TestsCoverageState, premise PremiseState, adequacy DescriptionAdequacy) Shippable {
 	result := baselineFromRisk(risk)
 	result = maxShippable(result, CoverageFloor(coverage))

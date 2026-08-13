@@ -483,24 +483,45 @@ func PostReviewVerdict(
 
 		// §26.2/Step 67: enqueue exactly one further outbox row whenever
 		// the agent proposed a PR-body rewrite (Digest.ProposedBody
-		// non-blank) -- the ONLY precondition checked HERE. This is NEVER
-		// itself a decision that a write will actually happen: the
-		// Narvi-authorship check and this repo's own descriptionAutofix
-		// flag are BOTH re-verified server-side, fresh, at DELIVERY time
-		// by the notifier (internal/app/outboxworker's own description-
-		// autofix notifier, §5.2: "never prompt-only, never trusting the
-		// agent to self-enforce") -- neither check is performed here, so
+		// non-blank) AND the floor that rewrite is meant to remediate
+		// actually fired (Digest.DescriptionAdequacy is "drift" or
+		// "misleading", never "ok") -- adversarial-review fix: BEFORE this
+		// fix, only the non-blank check ran here, so a verdict reporting
+		// an ACCURATE description (adequacy "ok") plus an unsolicited,
+		// unrelated stylistic proposedBody would still silently enqueue a
+		// write that collapses an already-accurate, human-visible
+		// description behind a rewrite -- on a verdict that had just
+		// certified it adequate. DescriptionAdequacy is already validated
+		// to one of review's own three closed enum values by
+		// reviewpost.ValidateVerdictInput (above, before this transaction
+		// even opens), so "!= review.DescriptionAdequacyOK" here is
+		// exactly "== drift || == misleading", never a garbled/missing
+		// value slipping through.
+		//
+		// Both preconditions checked HERE are themselves NEVER a decision
+		// that a write will actually happen: the Narvi-authorship check
+		// and this repo's own descriptionAutofix flag are BOTH
+		// re-verified server-side, fresh, at DELIVERY time by the notifier
+		// (internal/app/outboxworker's own description-autofix notifier,
+		// §5.2: "never prompt-only, never trusting the agent to
+		// self-enforce") -- neither of THOSE checks is performed here, so
 		// this handler needs no repoSettings/artifacts read of its own for
 		// this candidate path (DescriptionAutofixPayload's own doc
-		// comment). Enqueued in the SAME transaction as every other write
-		// above, so a crash between them can never leave this candidate
-		// silently dropped.
-		if strings.TrimSpace(input.Digest.ProposedBody) != "" {
+		// comment). DescriptionAdequacy, unlike authorship/the flag, is
+		// ALSO carried onto the payload verbatim (never re-derived) and
+		// re-asserted at delivery time as a THIRD, defense-in-depth check
+		// -- see DescriptionAutofixPayload.DescriptionAdequacy's own doc
+		// comment for why this ONE fact travels rather than being
+		// re-looked-up. Enqueued in the SAME transaction as every other
+		// write above, so a crash between them can never leave this
+		// candidate silently dropped.
+		if input.Digest.DescriptionAdequacy != review.DescriptionAdequacyOK && strings.TrimSpace(input.Digest.ProposedBody) != "" {
 			autofixPayload, marshalErr := json.Marshal(ports.DescriptionAutofixPayload{
-				Owner:        owner,
-				Repo:         repo,
-				PRNumber:     int(prSession.PrNumber),
-				ProposedBody: input.Digest.ProposedBody,
+				Owner:               owner,
+				Repo:                repo,
+				PRNumber:            int(prSession.PrNumber),
+				ProposedBody:        input.Digest.ProposedBody,
+				DescriptionAdequacy: input.Digest.DescriptionAdequacy,
 			})
 			if marshalErr != nil {
 				logger.Error("httpapi: review-verdict: marshal description-autofix outbox payload failed", "error", marshalErr)

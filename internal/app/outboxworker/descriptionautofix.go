@@ -10,6 +10,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -132,12 +133,16 @@ func isPlatformAuthored(ctx context.Context, artifacts *postgres.ArtifactStore, 
 
 // Deliver implements ports.Notifier: decodes n.Payload, re-verifies BOTH
 // the Narvi-authorship of the target PR and this repo's own
-// descriptionAutofix flag FRESH (never trusted from the payload, which
-// carries neither -- DescriptionAutofixPayload's own doc comment), then
-// -- only if both pass -- re-fetches the PR's own CURRENT body, composes
-// the new body (internal/domain/reviewpost.RenderAutofixBody), and writes
-// it. See this file's own top doc comment for the full fail-safe
-// direction every branch below follows.
+// descriptionAutofix flag FRESH (never trusted from the payload for
+// EITHER of those two -- DescriptionAutofixPayload's own doc comment),
+// PLUS re-asserts the payload's own carried DescriptionAdequacy (a fact
+// fixed at verdict time, never re-derivable from live state, so this
+// third check re-checks the CARRIED value rather than looking anything up
+// -- adversarial-review fix, §26.2/Step 67's own follow-up) -- then, only
+// if all three pass, re-fetches the PR's own CURRENT body, composes the
+// new body (internal/domain/reviewpost.RenderAutofixBody), and writes it.
+// See this file's own top doc comment for the full fail-safe direction
+// every branch below follows.
 func (n *descriptionAutofixNotifier) Deliver(ctx context.Context, notification ports.Notification) error {
 	if notification.Kind != ports.NotificationKindGitHubDescriptionAutofix {
 		return fmt.Errorf("outboxworker: descriptionAutofixNotifier: unrecognized notification kind %q", notification.Kind)
@@ -146,6 +151,22 @@ func (n *descriptionAutofixNotifier) Deliver(ctx context.Context, notification p
 	var payload ports.DescriptionAutofixPayload
 	if err := json.Unmarshal(notification.Payload, &payload); err != nil {
 		return fmt.Errorf("outboxworker: descriptionAutofixNotifier: decode payload: %w", err)
+	}
+
+	// Check 0: DescriptionAdequacy, re-asserted from the payload's own
+	// CARRIED value (never a live re-derivation -- DescriptionAutofixPayload.
+	// DescriptionAdequacy's own doc comment explains why none is possible
+	// or needed for this particular fact). An ALLOW-list, not a deny-list:
+	// only "drift"/"misleading" proceed -- "ok", the zero value (an older
+	// outbox row enqueued before this field existed), and any other
+	// unrecognized value all fail toward the SAME confirmed, silent,
+	// never-retried no-op every other confirmed-negative check in this
+	// file already returns. This is pure payload inspection, no I/O, so it
+	// runs first, before either real check below.
+	switch payload.DescriptionAdequacy {
+	case review.DescriptionAdequacyDrift, review.DescriptionAdequacyMisleading:
+	default:
+		return nil
 	}
 
 	repoFullName := payload.Owner + "/" + payload.Repo

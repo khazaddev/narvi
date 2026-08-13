@@ -856,9 +856,70 @@ func TestPostReviewVerdict_ProposedBodyPresent_EnqueuesDescriptionAutofixOutboxR
 	if payload.ProposedBody != proposedBody {
 		t.Errorf("ProposedBody = %q, want %q", payload.ProposedBody, proposedBody)
 	}
+	if payload.DescriptionAdequacy != review.DescriptionAdequacyDrift {
+		t.Errorf("DescriptionAdequacy = %q, want %q (adversarial-review fix: carried onto the payload verbatim, never re-derived)", payload.DescriptionAdequacy, review.DescriptionAdequacyDrift)
+	}
 
 	// The ordinary verdict outbox row must ALSO still be present -- this
 	// is an ADDITIVE second row, never a replacement.
+	var verdictCount int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubVerdict)).Scan(&verdictCount); err != nil {
+		t.Fatalf("count verdict outbox rows: %v", err)
+	}
+	if verdictCount != 1 {
+		t.Errorf("verdict outbox row count = %d, want 1", verdictCount)
+	}
+}
+
+// TestPostReviewVerdict_AdequacyOKWithProposedBody_NeverEnqueuesDescriptionAutofixOutboxRow
+// is the adversarial-review fix's own central regression test (item 2,
+// HIGH: "nothing gates the description rewrite on adequacy"): a verdict
+// reporting descriptionAdequacy "ok" -- an ACCURATE description -- plus a
+// non-blank, unsolicited proposedBody (routine over-filling of an
+// optional free-text field, never itself a sign the floor fired) must
+// enqueue ZERO description-autofix outbox rows. Before this fix, the
+// enqueue's ONLY precondition was "proposedBody non-blank", so this exact
+// input would have silently queued a write that collapses an already-
+// accurate, human-visible description -- on a verdict that had just
+// certified it adequate.
+func TestPostReviewVerdict_AdequacyOKWithProposedBody_NeverEnqueuesDescriptionAutofixOutboxRow(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-adequacy-ok-candidate", 16)
+
+	body := `{
+		"riskLevel": "low",
+		"premise": "ok",
+		"blastRadius": [],
+		"filesChanged": 1,
+		"testsCoverage": "adequate",
+		"docsDrift": "none",
+		"proposedShippable": "auto",
+		"summary": "Small change, description is accurate.",
+		"digest": {
+			"summary": "Rewrites the auth token refresh path.",
+			"descriptionAdequacy": "ok",
+			"adequacyExplanation": "The PR body already honestly describes the diff.",
+			"proposedBody": "An unsolicited stylistic rewrite the agent proposed anyway."
+		}
+	}`
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var count int
+	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubDescriptionAutofix)).Scan(&count); err != nil {
+		t.Fatalf("count description-autofix outbox rows: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("description-autofix outbox row count = %d, want 0 (descriptionAdequacy was \"ok\" -- the floor never fired, so a proposedBody must never be enqueued for a real write)", count)
+	}
+
+	// The ordinary verdict outbox row must still be present -- this gate is
+	// specific to the description-autofix candidate row, never the verdict
+	// posting itself.
 	var verdictCount int
 	if err := rig.pool.QueryRow(ctx, `SELECT count(*) FROM outbox WHERE session_id = $1 AND kind = $2`, session.ID, string(ports.NotificationKindGitHubVerdict)).Scan(&verdictCount); err != nil {
 		t.Fatalf("count verdict outbox rows: %v", err)

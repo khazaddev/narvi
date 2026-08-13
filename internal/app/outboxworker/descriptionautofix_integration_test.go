@@ -22,6 +22,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/outboxworker"
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -31,6 +32,19 @@ import (
 // -- every other method returns a clear "not implemented" error,
 // mirroring fakeSentinelAutoFixSourceControl's own identical precedent
 // (sentinelautofix_integration_test.go).
+//
+// STATEFUL (adversarial-review fix, item 3's own explicit ask): UpdatePRBody
+// now updates nextBody in place, so a SUBSEQUENT GetPRBody call -- exactly
+// what a second Deliver call for the SAME PR does, whether a genuine retry
+// or a later re-review's own delivery -- observes the body the FIRST
+// UpdatePRBody call actually wrote, mirroring what a real GitHub PR does
+// (a body PATCH is immediately visible to the next GET). Before this fix,
+// nextBody/nextFound were fixed constants GetPRBody always returned
+// regardless of any prior UpdatePRBody call, which made item 3's own bug
+// (RenderAutofixBody not idempotent across repeated deliveries) impossible
+// to even EXPRESS against this fake -- see
+// TestDescriptionAutofixNotifier_RepeatedDelivery_IsIdempotent below, the
+// test this statefulness exists to make possible.
 type fakeDescriptionAutofixSourceControl struct {
 	mu sync.Mutex
 
@@ -65,6 +79,14 @@ func (f *fakeDescriptionAutofixSourceControl) UpdatePRBody(_ context.Context, sp
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.updateCalls = append(f.updateCalls, spec)
+	if f.nextUpdateErr == nil {
+		// Stateful: a successful write is immediately visible to the NEXT
+		// GetPRBody call, exactly like a real GitHub PATCH -- this file's
+		// own top doc comment on this type explains why this is load-bearing
+		// for item 3's own idempotency regression test.
+		f.nextBody = spec.Body
+		f.nextFound = true
+	}
 	return f.nextUpdateErr
 }
 
@@ -145,13 +167,26 @@ func seedPlatformAuthoredPR(ctx context.Context, t *testing.T, pool *pgxpool.Poo
 	}
 }
 
+// descriptionAutofixPayload builds a marshaled ports.DescriptionAutofixPayload
+// with DescriptionAdequacy defaulted to review.DescriptionAdequacyDrift (a
+// qualifying value, so every EXISTING call site -- all of them exercising
+// the flag/authorship checks, never the adequacy gate itself -- keeps
+// clearing Deliver's own Check 0 exactly as before this field existed).
+// descriptionAutofixPayloadWithAdequacy below is the adequacy-gate tests'
+// own explicit-value sibling.
 func descriptionAutofixPayload(t *testing.T, owner, repo string, number int, proposedBody string) []byte {
 	t.Helper()
+	return descriptionAutofixPayloadWithAdequacy(t, owner, repo, number, proposedBody, review.DescriptionAdequacyDrift)
+}
+
+func descriptionAutofixPayloadWithAdequacy(t *testing.T, owner, repo string, number int, proposedBody string, adequacy review.DescriptionAdequacy) []byte {
+	t.Helper()
 	payload, err := json.Marshal(ports.DescriptionAutofixPayload{
-		Owner:        owner,
-		Repo:         repo,
-		PRNumber:     number,
-		ProposedBody: proposedBody,
+		Owner:               owner,
+		Repo:                repo,
+		PRNumber:            number,
+		DescriptionAdequacy: adequacy,
+		ProposedBody:        proposedBody,
 	})
 	if err != nil {
 		t.Fatalf("marshal payload: %v", err)
@@ -253,6 +288,77 @@ func TestDescriptionAutofixNotifier_NotPlatformAuthored_NeverWrites(t *testing.T
 
 	if sourceControl.getPRBodyCallCount() != 0 {
 		t.Errorf("GetPRBody called %d times, want 0 (a human-authored PR must never reach the GitHub fetch step)", sourceControl.getPRBodyCallCount())
+	}
+	if sourceControl.updateCallCount() != 0 {
+		t.Errorf("UpdatePRBody called %d times, want 0", sourceControl.updateCallCount())
+	}
+}
+
+// TestDescriptionAutofixNotifier_AdequacyOK_NeverWrites is the
+// adversarial-review fix's own delivery-time regression test for item 2
+// (HIGH: "nothing gates the description rewrite on adequacy") -- Deliver's
+// own THIRD check, defense-in-depth against httpapi's enqueue-time gate
+// ever regressing: a payload carrying DescriptionAdequacy "ok" must be a
+// silent, confirmed, never-retried no-op, even though BOTH the flag and
+// authorship checks would otherwise pass.
+func TestDescriptionAutofixNotifier_AdequacyOK_NeverWrites(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	artifacts := narvipg.NewArtifactStore(pool)
+
+	owner, repo, number := "acme", "adequacyok-repo", 108
+	repoFullName := owner + "/" + repo
+	seedPlatformAuthoredPR(ctx, t, pool, owner, repo, number)
+	if _, err := repoSettings.UpsertDescriptionAutofixToggle(ctx, repoFullName, true); err != nil {
+		t.Fatalf("upsert repo settings (flag on): %v", err)
+	}
+
+	sourceControl := &fakeDescriptionAutofixSourceControl{nextFound: true, nextBody: "Original body."}
+	notifier := outboxworker.NewDescriptionAutofixNotifier(repoSettings, artifacts, sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts())
+
+	payload := descriptionAutofixPayloadWithAdequacy(t, owner, repo, number, "An unsolicited proposed rewrite.", review.DescriptionAdequacyOK)
+	if err := notifier.Deliver(ctx, ports.Notification{Kind: ports.NotificationKindGitHubDescriptionAutofix, Payload: payload}); err != nil {
+		t.Fatalf("Deliver() error = %v, want nil (a confirmed adequacy=ok is a silent no-op, never an error)", err)
+	}
+
+	if sourceControl.getPRBodyCallCount() != 0 {
+		t.Errorf("GetPRBody called %d times, want 0 (adequacy=ok must short-circuit before any GitHub call, even with the flag on and the PR platform-authored)", sourceControl.getPRBodyCallCount())
+	}
+	if sourceControl.updateCallCount() != 0 {
+		t.Errorf("UpdatePRBody called %d times, want 0", sourceControl.updateCallCount())
+	}
+}
+
+// TestDescriptionAutofixNotifier_AdequacyZeroValue_NeverWrites proves the
+// SAME gate fails safe on an older, pre-this-fix outbox row (or any other
+// unrecognized DescriptionAdequacy value) -- the zero value is REJECTED,
+// never treated as an implicit "proceed": Check 0 is an ALLOW-list
+// ("drift"/"misleading" only), not a deny-list keyed off "ok" alone.
+func TestDescriptionAutofixNotifier_AdequacyZeroValue_NeverWrites(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	artifacts := narvipg.NewArtifactStore(pool)
+
+	owner, repo, number := "acme", "adequacyzero-repo", 109
+	repoFullName := owner + "/" + repo
+	seedPlatformAuthoredPR(ctx, t, pool, owner, repo, number)
+	if _, err := repoSettings.UpsertDescriptionAutofixToggle(ctx, repoFullName, true); err != nil {
+		t.Fatalf("upsert repo settings (flag on): %v", err)
+	}
+
+	sourceControl := &fakeDescriptionAutofixSourceControl{nextFound: true, nextBody: "Original body."}
+	notifier := outboxworker.NewDescriptionAutofixNotifier(repoSettings, artifacts, sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts())
+
+	// Marshal a payload with NO descriptionAdequacy key at all -- exactly
+	// what an outbox row enqueued before this field existed would decode
+	// to (Go's own JSON zero value for a missing string-typed field).
+	payload := []byte(`{"owner":"acme","repo":"adequacyzero-repo","prNumber":109,"proposedBody":"Proposed."}`)
+	if err := notifier.Deliver(ctx, ports.Notification{Kind: ports.NotificationKindGitHubDescriptionAutofix, Payload: payload}); err != nil {
+		t.Fatalf("Deliver() error = %v, want nil (a confirmed unrecognized adequacy value is a silent no-op, never an error)", err)
 	}
 	if sourceControl.updateCallCount() != 0 {
 		t.Errorf("UpdatePRBody called %d times, want 0", sourceControl.updateCallCount())
@@ -402,5 +508,68 @@ func TestDescriptionAutofixNotifier_RepoSettingsReadError_ReturnsErrorForRetry(t
 	}
 	if sourceControl.updateCallCount() != 0 {
 		t.Errorf("UpdatePRBody called %d times, want 0", sourceControl.updateCallCount())
+	}
+}
+
+// TestDescriptionAutofixNotifier_RepeatedDelivery_IsIdempotent is item 3's
+// own central regression test, at the notifier level (the unit-level
+// counterpart, reviewpost.TestRenderAutofixBody_DoubleRenderEqualsSingleRender,
+// pins the SAME property one layer down, in the pure rendering function
+// alone): deliver the SAME outbox notification TWICE against the SAME
+// (now-stateful, adversarial-review fix) fake source control -- exactly
+// what a plain outbox retry after a PATCH whose response was lost looks
+// like from Deliver's own point of view, GetPRBody's second call
+// observing the body the first Deliver call's own UpdatePRBody already
+// wrote. The SECOND delivery's own body must be BYTE-FOR-BYTE IDENTICAL
+// to the first -- never a second, nested wrapper around the first
+// delivery's own output, and never a body containing Narvi's own prior
+// rewrite mislabeled as the "original".
+func TestDescriptionAutofixNotifier_RepeatedDelivery_IsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+
+	repoSettings := narvipg.NewRepoSettingsStore(pool)
+	artifacts := narvipg.NewArtifactStore(pool)
+
+	owner, repo, number := "acme", "repeat-delivery-repo", 110
+	repoFullName := owner + "/" + repo
+	seedPlatformAuthoredPR(ctx, t, pool, owner, repo, number)
+	if _, err := repoSettings.UpsertDescriptionAutofixToggle(ctx, repoFullName, true); err != nil {
+		t.Fatalf("upsert repo settings (flag on): %v", err)
+	}
+
+	realOriginal := "The real, human-authored original description."
+	sourceControl := &fakeDescriptionAutofixSourceControl{nextFound: true, nextBody: realOriginal}
+	notifier := outboxworker.NewDescriptionAutofixNotifier(repoSettings, artifacts, sourceControl, "gh-fake-bot-token", platform.DefaultTimeouts())
+
+	proposedBody := "This PR rewrites the auth token refresh path to retry on transient failures."
+	payload := descriptionAutofixPayload(t, owner, repo, number, proposedBody)
+
+	if err := notifier.Deliver(ctx, ports.Notification{Kind: ports.NotificationKindGitHubDescriptionAutofix, Payload: payload}); err != nil {
+		t.Fatalf("first Deliver() error = %v, want nil", err)
+	}
+	if sourceControl.updateCallCount() != 1 {
+		t.Fatalf("UpdatePRBody called %d times after first delivery, want 1", sourceControl.updateCallCount())
+	}
+	firstBody := sourceControl.lastUpdateSpec().Body
+
+	// Redeliver the IDENTICAL notification -- a plain outbox retry, never
+	// a new verdict/payload.
+	if err := notifier.Deliver(ctx, ports.Notification{Kind: ports.NotificationKindGitHubDescriptionAutofix, Payload: payload}); err != nil {
+		t.Fatalf("second Deliver() error = %v, want nil", err)
+	}
+	if sourceControl.updateCallCount() != 2 {
+		t.Fatalf("UpdatePRBody called %d times after second delivery, want 2", sourceControl.updateCallCount())
+	}
+	secondBody := sourceControl.lastUpdateSpec().Body
+
+	if firstBody != secondBody {
+		t.Errorf("second delivery's own body != first delivery's own body -- not idempotent:\nfirst:\n%s\n\nsecond:\n%s", firstBody, secondBody)
+	}
+	if !strings.Contains(secondBody, realOriginal) {
+		t.Errorf("second delivery's own body lost the REAL original description, got:\n%s", secondBody)
+	}
+	if strings.Count(secondBody, proposedBody) != 1 {
+		t.Errorf("second delivery's own body contains the proposed text %d times, want exactly 1 (no nested/duplicated content), got:\n%s", strings.Count(secondBody, proposedBody), secondBody)
 	}
 }

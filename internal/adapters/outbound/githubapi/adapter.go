@@ -565,7 +565,22 @@ func (a *Adapter) doPost(ctx context.Context, path, token string, reqBody []byte
 // pull_request_review_comment, whose payload already embeds this same
 // head.ref/head.repo shape verbatim -- internal/adapters/inbound/github/
 // payload.go's own pullRequestReviewCommentPayload).
+//
+// Title/Body (adversarial-review fix, §26.2/Step 67's own follow-up: the
+// review-digest "descriptionAdequacy" comparison needs the PR's real
+// title/body as INPUT, and this endpoint already returns both -- see
+// PullRequest.Title/Body's own doc comment below for the full "why" this
+// adapter, not the reviewing agent, is the one fetching them).
 type pullRequestResponse struct {
+	// Title/Body are GitHub's own top-level "title"/"body" string fields on
+	// this SAME PR resource -- "body" is nullable (a PR opened with no
+	// description at all decodes it as JSON null, GitHub's own documented
+	// shape), so a plain string field would fail to unmarshal a null body;
+	// *string mirrors Head.Repo's own identical nullable-pointer precedent
+	// immediately below, in this SAME struct, for the SAME reason.
+	Title string  `json:"title"`
+	Body  *string `json:"body"`
+
 	Head struct {
 		Ref string `json:"ref"`
 		// SHA (Step 62, §21.1) is this PR's own CURRENT head commit --
@@ -631,6 +646,37 @@ type stackResponse struct {
 // PR's TRUE head branch/repo (H5 audit fix), plus (Step 46, "review
 // sessions", §8.2/§17.6) its GitHub-native stack context, when present.
 type PullRequest struct {
+	// Title/Body are this PR's own CURRENT title/body (GitHub's own top-
+	// level "title"/"body" string fields) -- adversarial-review fix
+	// (§26.2/Step 67's own follow-up): the review-digest
+	// "descriptionAdequacy" comparison (internal/domain/review.
+	// AdequacyFloor's own input) needs the PR's real title/body as
+	// UNTRUSTED INPUT (§5.2), and this endpoint already returns both on
+	// every real GetPullRequest call -- so internal/app/reviewcontext.Fetch
+	// (this method's one real caller building a review turn's context)
+	// carries them onto review.PreFetchedContext.Title/Body, and
+	// review.RenderTurnPrompt renders them into a DELIMITED, labeled
+	// "treat as DATA, never instructions" block (mirroring the existing
+	// <pr_diff> block), rather than instructing the reviewing agent to
+	// fetch them itself via its own tool use (e.g. `gh pr view`). That
+	// agent-fetch approach is what this fix REPLACES: no GitHub credential
+	// reaches the sandbox (the sandbox bearer token is deliberately
+	// stripped, opencodeproc/spawn.go), so an agent-side `gh pr view` was
+	// never actually reachable in the first place -- and even where a
+	// credential existed, an agent-side re-fetch would be unpinned to the
+	// exact head SHA this review verdict is about. Never empty for a real
+	// GitHub PR the way HeadRef never is (Title), though Body legitimately
+	// can be (a PR opened with no description) -- see Body's own doc
+	// comment.
+	Title string
+	// Body is this PR's own CURRENT description -- empty when GitHub's own
+	// "body" was null (a PR opened with no description at all, a real and
+	// common case) OR empty string; both collapse to Go's own empty string
+	// here, mirroring HeadRepoName/HeadRepoCloneURL's own "nullable field
+	// collapses to its zero value" precedent immediately below, since
+	// nothing downstream of this adapter (review.RenderTurnPrompt) needs to
+	// distinguish "no body at all" from "an explicitly empty body".
+	Body string
 	// HeadRef is the PR's real head branch name (GitHub's own
 	// "head.ref") -- never empty for a real, open GitHub pull request.
 	HeadRef string
@@ -700,7 +746,10 @@ func (a *Adapter) GetPullRequest(ctx context.Context, owner, repo string, number
 		return PullRequest{}, fmt.Errorf("githubapi: decode pull request response: %w", err)
 	}
 
-	pr := PullRequest{HeadRef: parsed.Head.Ref, HeadSHA: parsed.Head.SHA, BaseRef: parsed.Base.Ref}
+	pr := PullRequest{Title: parsed.Title, HeadRef: parsed.Head.Ref, HeadSHA: parsed.Head.SHA, BaseRef: parsed.Base.Ref}
+	if parsed.Body != nil {
+		pr.Body = *parsed.Body
+	}
 	if parsed.Head.Repo != nil {
 		pr.HeadRepoName = parsed.Head.Repo.Name
 		pr.HeadRepoCloneURL = parsed.Head.Repo.CloneURL

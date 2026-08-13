@@ -431,6 +431,8 @@ func TestGetPullRequest_Success(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"number": 42,
+			"title":  "Fix the retry loop",
+			"body":   "Retries now back off exponentially.",
 			"head": map[string]any{
 				"ref": "feature-x",
 				"repo": map[string]any{
@@ -467,6 +469,41 @@ func TestGetPullRequest_Success(t *testing.T) {
 	}
 	if pr.HeadRepoCloneURL != "https://github.com/contributor/widgets.git" {
 		t.Errorf("PullRequest.HeadRepoCloneURL = %q, want %q", pr.HeadRepoCloneURL, "https://github.com/contributor/widgets.git")
+	}
+	if pr.Title != "Fix the retry loop" {
+		t.Errorf("PullRequest.Title = %q, want %q", pr.Title, "Fix the retry loop")
+	}
+	if pr.Body != "Retries now back off exponentially." {
+		t.Errorf("PullRequest.Body = %q, want %q", pr.Body, "Retries now back off exponentially.")
+	}
+}
+
+// TestGetPullRequest_NullBody proves a real "body: null" response (GitHub's
+// own documented shape for a PR opened with no description at all) resolves
+// to an empty PullRequest.Body rather than an error or a panic -- mirrors
+// TestGetPullRequest_NullHeadRepo's own identical nullable-field precedent,
+// for the SAME underlying reason (pullRequestResponse.Body is *string).
+func TestGetPullRequest_NullBody(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"number": 42, "title": "Fix the retry loop", "body": null, "head": {"ref": "feature-x", "repo": null}}`))
+	}))
+	defer server.Close()
+
+	adapter := githubapi.New(server.Client(), server.URL)
+
+	pr, err := adapter.GetPullRequest(context.Background(), "acme", "widgets", 42, "gho_bottoken")
+	if err != nil {
+		t.Fatalf("GetPullRequest() error = %v, want nil", err)
+	}
+	if pr.Title != "Fix the retry loop" {
+		t.Errorf("PullRequest.Title = %q, want %q", pr.Title, "Fix the retry loop")
+	}
+	if pr.Body != "" {
+		t.Errorf("PullRequest.Body = %q, want empty (body was null)", pr.Body)
 	}
 }
 

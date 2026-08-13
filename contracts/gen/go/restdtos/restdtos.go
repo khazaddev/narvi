@@ -4207,10 +4207,14 @@ type RepoSettings struct {
 	// Step 67, §26.2: admin-only, per-repo, off by default -- once armed, a
 	// Narvi-authored PR's own description-adequacy floor firing (drift/misleading)
 	// may result in this repo's own PR bodies being automatically rewritten (original
-	// preserved in a collapsed block), delivered via the outbox and re-verified
-	// server-side (Narvi-authorship AND this flag) at delivery time, never trusted
-	// from the posting agent alone. Gated by authz.ActionToggleDescriptionAutofix,
-	// the SAME admin-only row as
+	// preserved in a collapsed block), delivered via the outbox. The drift/misleading
+	// precondition is enforced at ENQUEUE time (a verdict reporting
+	// descriptionAdequacy "ok" never enqueues a rewrite candidate at all, regardless
+	// of proposedBody); Narvi-authorship and this flag are independently re-verified
+	// FRESH server-side at DELIVERY time, with descriptionAdequacy itself re-asserted
+	// a third time from the same verdict (a fact fixed at verdict time, carried
+	// rather than re-derived) -- never trusted from the posting agent alone. Gated by
+	// authz.ActionToggleDescriptionAutofix, the SAME admin-only row as
 	// sentinelAutofixEnabled/autoMergeEnabled/autoRetriggerReviewEnabled -- arming
 	// this changes what runs UNATTENDED on a repo's own PRs (an automatic body
 	// rewrite, no human in the loop), the same reasoning every sibling toggle in this

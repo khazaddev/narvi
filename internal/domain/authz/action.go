@@ -305,7 +305,14 @@ const (
 	// (§26.2, "review digest: description adequacy + graduated
 	// remediation") for automatically rewriting a Narvi-authored PR's own
 	// body when the reviewing agent's description-adequacy check finds it
-	// drifted or misleading (repo_settings.description_autofix_enabled,
+	// drifted or misleading -- a precondition enforced structurally, not
+	// just by prompt: httpapi/reviewverdict.go enqueues a rewrite
+	// candidate ONLY when the posted verdict's own DescriptionAdequacy is
+	// "drift"/"misleading" (never "ok"), and the delivering notifier
+	// (internal/app/outboxworker's own description-autofix notifier)
+	// re-asserts that SAME fact again at delivery time, alongside the
+	// fresh Narvi-authorship/flag re-verification below
+	// (repo_settings.description_autofix_enabled,
 	// migrations/000079_repo_settings_description_autofix.up.sql --
 	// internal/adapters/inbound/httpapi/reposettings.go's own
 	// PutDescriptionAutofixToggle). Admin only, this SAME row as
