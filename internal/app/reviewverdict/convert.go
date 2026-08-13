@@ -5,6 +5,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
 )
 
@@ -77,5 +78,85 @@ func recordFromRow(row sqlcgen.ReviewVerdict) reviewverdict.Record {
 			ProposedShippable: review.ProposedShippable(row.ProposedShippable),
 			Shippable:         review.Shippable(row.Shippable),
 		},
+		Digest: digestFromRow(row),
 	}
+}
+
+// digestFromRow builds reviewverdict.Record.Digest from row's own four
+// digest_* columns (migrations/000077_review_verdicts_digest.up.sql) --
+// row.DigestSummary == nil means either "posted before Step 66 existed" or
+// (in principle, never in practice once ValidateVerdictInput's own
+// ErrEmptyDigestSummary check is live) "no digest recorded" -- either way
+// this returns the zero-value reviewpost.Digest{}, exactly like
+// unmarshalTags' own "malformed/absent degrades to an empty, safe value"
+// precedent immediately above.
+func digestFromRow(row sqlcgen.ReviewVerdict) reviewpost.Digest {
+	var d reviewpost.Digest
+	if row.DigestSummary != nil {
+		d.Summary = *row.DigestSummary
+	}
+	if row.DigestStackRisks != nil {
+		d.StackRisks = *row.DigestStackRisks
+	}
+	if row.DigestUnverifiedLimits != nil {
+		d.UnverifiedLimits = *row.DigestUnverifiedLimits
+	}
+	d.ArchDecisions = unmarshalArchDecisions(row.DigestArchDecisions)
+	return d
+}
+
+// archDecisionJSON is digest_arch_decisions' own JSON-array element shape
+// -- mirrors marshalTags/unmarshalTags' own "a plain JSON array, not a
+// native Postgres array or composite type" precedent (this file, above),
+// applied here to a per-element OBJECT rather than a bare string.
+type archDecisionJSON struct {
+	Decision              string `json:"decision"`
+	RejectedAlternative   string `json:"rejectedAlternative"`
+	ConventionConformance string `json:"conventionConformance"`
+}
+
+// marshalArchDecisions converts decisions into digest_arch_decisions'
+// own JSONB bytes -- a nil/empty decisions marshals to "[]", never a JSON
+// null, mirroring marshalTags' own identical "always a present, empty
+// array" guarantee immediately above (make's own "non-nil even at length
+// zero" property is what makes this true with no extra nil-check).
+func marshalArchDecisions(decisions []reviewpost.ArchDecision) ([]byte, error) {
+	out := make([]archDecisionJSON, len(decisions))
+	for i, ad := range decisions {
+		out[i] = archDecisionJSON{
+			Decision:              ad.Decision,
+			RejectedAlternative:   ad.RejectedAlternative,
+			ConventionConformance: ad.ConventionConformance,
+		}
+	}
+	return json.Marshal(out)
+}
+
+// unmarshalArchDecisions is marshalArchDecisions' own inverse -- a NULL
+// column (raw == nil) or genuinely invalid JSON (should never happen for a
+// column only ever written by marshalArchDecisions above, defended against
+// anyway) both degrade to nil, never a decode error propagated up through
+// recordFromRow, mirroring unmarshalTags' own identical fail-conservative
+// posture for the SAME reason: there is no principled "worse than nil"
+// value to invent for architecture-decision prose.
+func unmarshalArchDecisions(raw []byte) []reviewpost.ArchDecision {
+	if len(raw) == 0 {
+		return nil
+	}
+	var decoded []archDecisionJSON
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil
+	}
+	if len(decoded) == 0 {
+		return nil
+	}
+	decisions := make([]reviewpost.ArchDecision, len(decoded))
+	for i, d := range decoded {
+		decisions[i] = reviewpost.ArchDecision{
+			Decision:              d.Decision,
+			RejectedAlternative:   d.RejectedAlternative,
+			ConventionConformance: d.ConventionConformance,
+		}
+	}
+	return decisions
 }

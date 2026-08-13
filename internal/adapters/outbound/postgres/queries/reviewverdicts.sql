@@ -7,13 +7,19 @@
 -- UPDATE (see the table's own doc comment for why). Called from
 -- httpapi.PostReviewVerdict (reviewverdict.go), inside the SAME
 -- transaction as that handler's existing review_findings upserts and
--- outbox write.
+-- outbox write. digest_summary/digest_arch_decisions/digest_stack_risks/
+-- digest_unverified_limits (Step 66, §26.1, migrations/
+-- 000077_review_verdicts_digest.up.sql) forward internal/domain/
+-- reviewpost.Digest verbatim -- see that migration's own doc comment for
+-- why all four stay nullable at the schema level despite digest_summary
+-- being APPLICATION-required on every new post.
 INSERT INTO review_verdicts (
     repo_full_name, pr_number, head_sha,
     risk_level, premise, blast_radius, files_changed, tests_coverage, docs_drift,
-    proposed_shippable, shippable, session_id
+    proposed_shippable, shippable, session_id,
+    digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING *;
 
 -- name: GetLatestReviewVerdict :one

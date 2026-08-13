@@ -36,7 +36,10 @@ func validVerdictRequestJSON() string {
 		"testsCoverage": "adequate",
 		"docsDrift": "none",
 		"proposedShippable": "auto",
-		"summary": "Looks good overall, one minor nit below."
+		"summary": "Looks good overall, one minor nit below.",
+		"digest": {
+			"summary": "Adds a retry helper around the flaky upstream call and swaps every existing call site onto it."
+		}
 	}`
 }
 
@@ -196,6 +199,11 @@ func TestPostReviewVerdict_MalformedPartialPayload(t *testing.T) {
 		{name: "negative filesChanged", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":-1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x"}`},
 		{name: "whitespace-only summary (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"   "}`},
 		{name: "malformed JSON", body: `{not json`},
+		// Step 66 (§26.1): "digest" is REQUIRED, and "digest.summary" is
+		// the one field within it this Step actually validates.
+		{name: "missing digest entirely (Step 66, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x"}`},
+		{name: "digest present but missing digest.summary entirely (Step 66, partial payload)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{}}`},
+		{name: "whitespace-only digest.summary (caught by ValidateVerdictInput, not schema decode)", body: `{"riskLevel":"low","premise":"ok","blastRadius":[],"filesChanged":1,"testsCoverage":"adequate","docsDrift":"none","proposedShippable":"auto","summary":"x","digest":{"summary":"   "}}`},
 	}
 
 	for i, tc := range tests {
@@ -337,6 +345,70 @@ func TestPostReviewVerdict_PersistsReviewVerdictRow_WhenReviewHeadSHAKnown(t *te
 	}
 }
 
+// TestPostReviewVerdict_PersistsDigestColumns is Step 66's own (§26.1)
+// persistence proof: digest_summary/digest_arch_decisions/
+// digest_stack_risks/digest_unverified_limits (migrations/
+// 000077_review_verdicts_digest.up.sql) are all populated from the
+// posted digest, verbatim, on the SAME review_verdicts row Step 62
+// already writes -- "digest quality measurable from day one".
+func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-digest-persist", 66)
+
+	reviewHeadSHA := "sha-digest-persist-abc123"
+	if _, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusProcessing, ReviewHeadSha: &reviewHeadSHA}); err != nil {
+		t.Fatalf("seed processing turn with review head sha: %v", err)
+	}
+
+	body := `{
+		"riskLevel": "low",
+		"premise": "ok",
+		"blastRadius": [],
+		"filesChanged": 2,
+		"testsCoverage": "adequate",
+		"docsDrift": "none",
+		"proposedShippable": "auto",
+		"summary": "Looks good.",
+		"digest": {
+			"summary": "Adds a retry helper around the flaky upstream call.",
+			"archDecisions": [
+				{"decision": "Centralize retries in one helper.", "rejectedAlternative": "Inline retry logic per call site.", "conventionConformance": "Matches CLAUDE.md's shared-helper convention."}
+			],
+			"stackRisks": "Touches every call site of the upstream client; a regression here is broad.",
+			"unverifiedLimits": "Did not verify behavior under a real network partition."
+		}
+	}`
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var digestSummary, digestStackRisks, digestUnverifiedLimits *string
+	var digestArchDecisions []byte
+	if err := rig.pool.QueryRow(ctx, `SELECT digest_summary, digest_arch_decisions, digest_stack_risks, digest_unverified_limits FROM review_verdicts WHERE repo_full_name = $1 AND pr_number = $2`, "acme/verdict-digest-persist", 66).
+		Scan(&digestSummary, &digestArchDecisions, &digestStackRisks, &digestUnverifiedLimits); err != nil {
+		t.Fatalf("query review_verdicts digest columns: %v", err)
+	}
+
+	if digestSummary == nil || *digestSummary != "Adds a retry helper around the flaky upstream call." {
+		t.Errorf("digest_summary = %v, want %q", digestSummary, "Adds a retry helper around the flaky upstream call.")
+	}
+	if digestStackRisks == nil || *digestStackRisks != "Touches every call site of the upstream client; a regression here is broad." {
+		t.Errorf("digest_stack_risks = %v, want the posted stackRisks text", digestStackRisks)
+	}
+	if digestUnverifiedLimits == nil || *digestUnverifiedLimits != "Did not verify behavior under a real network partition." {
+		t.Errorf("digest_unverified_limits = %v, want the posted unverifiedLimits text", digestUnverifiedLimits)
+	}
+	if !strings.Contains(string(digestArchDecisions), "Centralize retries in one helper.") {
+		t.Errorf("digest_arch_decisions = %s, want it to contain the posted decision text", digestArchDecisions)
+	}
+	if !strings.Contains(string(digestArchDecisions), "Matches CLAUDE.md's shared-helper convention.") {
+		t.Errorf("digest_arch_decisions = %s, want it to contain the posted conventionConformance text", digestArchDecisions)
+	}
+}
+
 // TestPostReviewVerdict_SkipsReviewVerdictInsert_WhenNoReviewHeadSHA
 // proves a PR whose own processing turn carries NO review_head_sha (e.g.
 // a review turn whose own context fetch degraded to no head sha at all,
@@ -417,7 +489,10 @@ func TestPostReviewVerdict_ShippableNeverTrustsProposedShippable(t *testing.T) {
 		"testsCoverage": "skipped",
 		"docsDrift": "skipped",
 		"proposedShippable": "auto",
-		"summary": "This diff is empty; nothing to review."
+		"summary": "This diff is empty; nothing to review.",
+		"digest": {
+			"summary": "This PR's diff is empty; there is nothing to describe."
+		}
 	}`
 
 	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
@@ -452,7 +527,10 @@ func TestPostReviewVerdict_BlockOnHighRisk(t *testing.T) {
 		"testsCoverage": "adequate",
 		"docsDrift": "none",
 		"proposedShippable": "auto",
-		"summary": "High risk per my own assessment, but every floor is clean."
+		"summary": "High risk per my own assessment, but every floor is clean.",
+		"digest": {
+			"summary": "Rewrites the token-refresh path to retry on transient failures."
+		}
 	}`
 
 	t.Run("off (default, no repo_settings row)", func(t *testing.T) {

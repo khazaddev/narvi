@@ -21,7 +21,16 @@ func TestRenderVerdictComment(t *testing.T) {
 		Shippable:         review.ShippableNeedsHuman,
 	}
 
-	got := reviewpost.RenderVerdictComment(v, nil, "Timing-unsafe comparison in verify.go.", "narvi-bot", reviewpost.LabelMediumRisk)
+	digest := reviewpost.Digest{
+		Summary: "Adds a constant-time comparison helper and swaps every password/token check onto it.",
+		ArchDecisions: []reviewpost.ArchDecision{
+			{Decision: "Centralize comparisons in one helper.", RejectedAlternative: "Fix each call site independently.", ConventionConformance: "Matches CLAUDE.md's shared-helper convention."},
+		},
+		StackRisks:       "Touches every auth check path; a regression here is broad.",
+		UnverifiedLimits: "Did not verify constant-time behavior on the CI runner's own hardware.",
+	}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Timing-unsafe comparison in verify.go.", "narvi-bot", reviewpost.LabelMediumRisk)
 
 	for _, want := range []string{
 		string(review.RiskLevelMedium),
@@ -35,6 +44,15 @@ func TestRenderVerdictComment(t *testing.T) {
 		"Timing-unsafe comparison in verify.go.",
 		reviewpost.LabelMediumRisk,
 		"server-side verdict tool",
+		"### What this PR does",
+		digest.Summary,
+		"### Architecture choices",
+		"Centralize comparisons in one helper.",
+		"Fix each call site independently.",
+		"Matches CLAUDE.md's shared-helper convention.",
+		"### Risks to the stack",
+		digest.StackRisks,
+		digest.UnverifiedLimits,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("RenderVerdictComment() missing %q in:\n%s", want, got)
@@ -60,7 +78,7 @@ func TestRenderVerdictComment_EmptyBlastRadiusOmitsLine(t *testing.T) {
 		Shippable:     review.ShippableAuto,
 	}
 
-	got := reviewpost.RenderVerdictComment(v, nil, "Nothing to flag.", "narvi-bot", reviewpost.LabelLowRisk)
+	got := reviewpost.RenderVerdictComment(v, nil, reviewpost.Digest{Summary: "No changes of note."}, "Nothing to flag.", "narvi-bot", reviewpost.LabelLowRisk)
 	if strings.Contains(got, "Blast radius") {
 		t.Errorf("RenderVerdictComment() rendered a Blast radius line for an empty BlastRadius:\n%s", got)
 	}
@@ -82,7 +100,7 @@ func TestRenderVerdictComment_AnchoredFindingRendersStartEndLine(t *testing.T) {
 		StartLine: 10, EndLine: 12,
 	}
 
-	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, reviewpost.Digest{Summary: "No changes of note."}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
 
 	if !strings.Contains(got, "main.go:10-12") {
 		t.Errorf("RenderVerdictComment() missing anchored range %q in:\n%s", "main.go:10-12", got)
@@ -106,7 +124,7 @@ func TestRenderVerdictComment_AnchoredSingleLineFindingOmitsRange(t *testing.T) 
 		StartLine: 10, EndLine: 10,
 	}
 
-	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, reviewpost.Digest{Summary: "No changes of note."}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
 
 	if !strings.Contains(got, "main.go:10`") {
 		t.Errorf("RenderVerdictComment() missing single-line anchor %q in:\n%s", "main.go:10`", got)
@@ -135,12 +153,204 @@ func TestRenderVerdictComment_UnanchoredFindingNeverRendersAGuessedLine(t *testi
 		StartLine: 0, EndLine: 0,
 	}
 
-	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, reviewpost.Digest{Summary: "No changes of note."}, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
 
 	if strings.Contains(got, "main.go:42") {
 		t.Errorf("RenderVerdictComment() rendered the model's own unverified Line (42) for an UNANCHORED finding -- must render no line at all:\n%s", got)
 	}
 	if !strings.Contains(got, "`main.go`") {
 		t.Errorf("RenderVerdictComment() should still render the bare file path for an unanchored finding:\n%s", got)
+	}
+}
+
+// baseVerdict is the minimal valid review.Verdict the digest-section tests
+// below share, mutating only what each test cares about.
+func baseVerdict() review.Verdict {
+	return review.Verdict{
+		RiskLevel: review.RiskLevelLow, Premise: review.PremiseStateOK,
+		TestsCoverage: review.TestsCoverageStateAdequate, DocsDrift: review.DocsDriftStateNone,
+		Shippable: review.ShippableAuto,
+	}
+}
+
+// TestRenderVerdictComment_DigestSummaryDistinctFromNarrativeSummary
+// proves Step 66's own central rendering property: Digest.Summary ("what
+// this PR does") and the pre-existing free-text `summary` parameter (the
+// verdict's own narrative "why") are two INDEPENDENT pieces of rendered
+// text, never the same value rendered twice or one substituted for the
+// other.
+func TestRenderVerdictComment_DigestSummaryDistinctFromNarrativeSummary(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{Summary: "Adds a retry helper around the flaky upstream call."}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Looks safe overall, one minor nit.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if !strings.Contains(got, "Adds a retry helper around the flaky upstream call.") {
+		t.Errorf("RenderVerdictComment() missing Digest.Summary in:\n%s", got)
+	}
+	if !strings.Contains(got, "Looks safe overall, one minor nit.") {
+		t.Errorf("RenderVerdictComment() missing the narrative summary in:\n%s", got)
+	}
+
+	whatIdx := strings.Index(got, "### What this PR does")
+	summaryIdx := strings.Index(got, "Looks safe overall, one minor nit.")
+	digestIdx := strings.Index(got, "Adds a retry helper around the flaky upstream call.")
+	if whatIdx == -1 || summaryIdx == -1 || digestIdx == -1 {
+		t.Fatalf("expected all three markers present, got %q", got)
+	}
+	// The narrative summary (header, unchanged) renders BEFORE "What this
+	// PR does" (Step 66's own new section), which in turn contains the
+	// digest summary -- proving the two are ordered, distinct pieces of
+	// content, not a duplicate rendering of the same value.
+	if summaryIdx >= whatIdx || whatIdx >= digestIdx {
+		t.Errorf("expected order [narrative summary, \"What this PR does\" heading, digest summary], got indices %d, %d, %d in:\n%s", summaryIdx, whatIdx, digestIdx, got)
+	}
+}
+
+// TestRenderVerdictComment_ArchDecisionsRendered proves each
+// ArchDecision's own three fields (Decision, RejectedAlternative,
+// ConventionConformance) all render under "Architecture choices".
+func TestRenderVerdictComment_ArchDecisionsRendered(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{
+		Summary: "No changes of note.",
+		ArchDecisions: []reviewpost.ArchDecision{
+			{Decision: "Use a shared retry helper.", RejectedAlternative: "Inline retry logic per call site.", ConventionConformance: "Matches internal/platform's existing retry helper pattern."},
+		},
+	}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	for _, want := range []string{"Use a shared retry helper.", "Inline retry logic per call site.", "Matches internal/platform's existing retry helper pattern."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("RenderVerdictComment() missing ArchDecision field %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestRenderVerdictComment_EmptyArchDecisionsRendersHonestFallback proves
+// an empty ArchDecisions (legal -- not hard-required this Step, digest.go's
+// own doc comment) renders an honest "none reported" line under
+// "Architecture choices", never a blank/dangling heading.
+func TestRenderVerdictComment_EmptyArchDecisionsRendersHonestFallback(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{Summary: "No changes of note."}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if !strings.Contains(got, "### Architecture choices\n\n_No architecture decisions reported for this review._") {
+		t.Errorf("RenderVerdictComment() missing the empty-ArchDecisions fallback in:\n%s", got)
+	}
+}
+
+// TestRenderVerdictComment_StackRisksSectionRendersBlastRadiusAndProse
+// proves "Risks to the stack" carries BOTH the verdict's own existing
+// BlastRadius tags AND the digest's own StackRisks/UnverifiedLimits prose.
+func TestRenderVerdictComment_StackRisksSectionRendersBlastRadiusAndProse(t *testing.T) {
+	v := baseVerdict()
+	v.BlastRadius = []review.Tag{review.TagMigrations}
+	digest := reviewpost.Digest{
+		Summary:          "No changes of note.",
+		StackRisks:       "Requires a two-phase deploy: migration lands first, code follows.",
+		UnverifiedLimits: "Did not test against a production-sized table.",
+	}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	riskHeadingIdx := strings.Index(got, "### Risks to the stack")
+	if riskHeadingIdx == -1 {
+		t.Fatalf("missing \"### Risks to the stack\" heading in:\n%s", got)
+	}
+	section := got[riskHeadingIdx:]
+	for _, want := range []string{string(review.TagMigrations), "two-phase deploy", "Not verified", "production-sized table"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("RenderVerdictComment() \"Risks to the stack\" section missing %q in:\n%s", want, section)
+		}
+	}
+}
+
+// TestRenderVerdictComment_EmptyStackRisksRendersHonestFallback proves an
+// empty BlastRadius + empty StackRisks + empty UnverifiedLimits renders an
+// honest fallback under "Risks to the stack", never a blank heading.
+func TestRenderVerdictComment_EmptyStackRisksRendersHonestFallback(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{Summary: "No changes of note."}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if !strings.Contains(got, "### Risks to the stack\n\n_No stack risks reported for this review._") {
+		t.Errorf("RenderVerdictComment() missing the empty-stack-risks fallback in:\n%s", got)
+	}
+}
+
+// TestRenderVerdictComment_FindingsCollapsedInDetailsBlock proves §26.1's
+// own "collapsed appendix" instruction: when findings are present, the
+// ENTIRE findings block renders inside a <details> element (collapsed by
+// default in GitHub's own markdown rendering), with the finding's own
+// content still present, byte-identical, inside it.
+func TestRenderVerdictComment_FindingsCollapsedInDetailsBlock(t *testing.T) {
+	v := baseVerdict()
+	finding := reviewpost.Finding{Severity: review.RiskLevelMedium, FilePath: "main.go", Description: "off-by-one", StartLine: 10, EndLine: 10}
+	digest := reviewpost.Digest{Summary: "No changes of note."}
+
+	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	openIdx := strings.Index(got, "<details>")
+	closeIdx := strings.Index(got, "</details>")
+	findingIdx := strings.Index(got, "off-by-one")
+	if openIdx == -1 || closeIdx == -1 || findingIdx == -1 {
+		t.Fatalf("expected a <details>...</details> block wrapping the finding, got:\n%s", got)
+	}
+	if openIdx >= findingIdx || findingIdx >= closeIdx {
+		t.Errorf("expected the finding to render BETWEEN <details> and </details>, got indices open=%d finding=%d close=%d in:\n%s", openIdx, findingIdx, closeIdx, got)
+	}
+}
+
+// TestRenderVerdictComment_NoFindingsStillRendersAppendixWithoutFindingsHeading
+// proves the appendix's own two independent parts: the <details> block
+// itself renders UNCONDITIONALLY (TestsCoverage/DocsDrift/FilesChanged are
+// "retained intact" per §26.1 item 5 -- they rendered unconditionally
+// before this Step, as flat header bullets, and must keep doing so now,
+// just relocated into the fold, never disappearing outright for the
+// common case of a clean verdict with zero findings), while the
+// "**Findings:**" sub-heading is gated on len(findings) > 0, exactly as
+// before this Step.
+func TestRenderVerdictComment_NoFindingsStillRendersAppendixWithoutFindingsHeading(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{Summary: "No changes of note."}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if !strings.Contains(got, "<details>") {
+		t.Errorf("RenderVerdictComment() rendered no <details> block at all with zero findings -- coverage/docs-drift/files-changed must still be retained intact:\n%s", got)
+	}
+	if !strings.Contains(got, "Test coverage") || !strings.Contains(got, "Docs drift") || !strings.Contains(got, "Files changed") {
+		t.Errorf("RenderVerdictComment() dropped coverage/docs-drift/files-changed from the appendix with zero findings:\n%s", got)
+	}
+	if strings.Contains(got, "**Findings:**") {
+		t.Errorf("RenderVerdictComment() rendered a \"Findings:\" heading with zero findings:\n%s", got)
+	}
+}
+
+// TestRenderVerdictComment_DigestSectionsBeforeAppendix proves §26.1's own
+// front-loading instruction end to end: every digest section ("What this
+// PR does", "Architecture choices", "Risks to the stack") renders BEFORE
+// the collapsed findings appendix, never after.
+func TestRenderVerdictComment_DigestSectionsBeforeAppendix(t *testing.T) {
+	v := baseVerdict()
+	finding := reviewpost.Finding{Severity: review.RiskLevelMedium, FilePath: "main.go", Description: "off-by-one", StartLine: 10, EndLine: 10}
+	digest := reviewpost.Digest{Summary: "No changes of note."}
+
+	got := reviewpost.RenderVerdictComment(v, []reviewpost.Finding{finding}, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	whatIdx := strings.Index(got, "### What this PR does")
+	archIdx := strings.Index(got, "### Architecture choices")
+	riskIdx := strings.Index(got, "### Risks to the stack")
+	detailsIdx := strings.Index(got, "<details>")
+	if whatIdx == -1 || archIdx == -1 || riskIdx == -1 || detailsIdx == -1 {
+		t.Fatalf("expected all four markers present, got:\n%s", got)
+	}
+	if whatIdx >= archIdx || archIdx >= riskIdx || riskIdx >= detailsIdx {
+		t.Errorf("expected order [What this PR does, Architecture choices, Risks to the stack, <details>], got indices %d, %d, %d, %d in:\n%s", whatIdx, archIdx, riskIdx, detailsIdx, got)
 	}
 }

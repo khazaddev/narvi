@@ -22,6 +22,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/ports"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
@@ -198,7 +199,7 @@ func (rs *automergeTestRig) seedEligiblePR(ctx context.Context, t *testing.T, re
 		FilesChanged:      3,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
-	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdict.ReviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict); err != nil {
+	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdict.ReviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}); err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}
 	return htmlURL

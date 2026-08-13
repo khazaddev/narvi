@@ -16,6 +16,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 )
 
 // TestGetReviewAnalytics_ViewerAllowed_NothingComputedYet proves TWO
@@ -81,7 +82,7 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 		FilesChanged:      2,
 	}
 	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise)
-	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict); err != nil {
+	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}); err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}
 

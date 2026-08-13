@@ -42,6 +42,41 @@ func (j *ApplySuggestionResponse) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One structural decision the diff makes (Digest.archDecisions, §26.1's own
+// 'Architecture choices' section): what was decided, the alternative implicitly
+// rejected, and conformance to the repo's own conventions (its agent instructions
+// file -- CLAUDE.md/AGENTS.md -- and its established patterns, already visible to
+// the reviewing agent via its own sandbox checkout, never fetched or injected by
+// this endpoint). No field here is REQUIRED (no minLength, no 'required' array):
+// this Step requests the full digest but validation-enforces only Digest.summary
+// above -- internal/domain/reviewpost's own doc comment (digest.go) is explicit
+// that a submitted-but-incomplete ArchDecision is rendered honestly (its blank
+// field(s) render as empty, never silently dropped) rather than rejected, since a
+// stricter per-field requirement here is explicitly deferred to a later Step
+// (§26.3/Step 68, once the deep path this endpoint does not implement yet is
+// defined).
+type ArchDecision struct {
+	// How this decision conforms to (or diverges from) the repo's own established
+	// conventions.
+	ConventionConformance ArchDecisionConventionConformance `json:"conventionConformance,omitempty,omitzero" yaml:"conventionConformance,omitempty" mapstructure:"conventionConformance,omitempty"`
+
+	// What the diff actually decided.
+	Decision ArchDecisionDecision `json:"decision,omitempty,omitzero" yaml:"decision,omitempty" mapstructure:"decision,omitempty"`
+
+	// The alternative this decision implicitly passed over.
+	RejectedAlternative ArchDecisionRejectedAlternative `json:"rejectedAlternative,omitempty,omitzero" yaml:"rejectedAlternative,omitempty" mapstructure:"rejectedAlternative,omitempty"`
+}
+
+// How this decision conforms to (or diverges from) the repo's own established
+// conventions.
+type ArchDecisionConventionConformance *string
+
+// What the diff actually decided.
+type ArchDecisionDecision *string
+
+// The alternative this decision implicitly passed over.
+type ArchDecisionRejectedAlternative *string
+
 // GET /api/sessions/:id/artifacts (§6.3). Unbounded (no pagination) -- this list
 // is expected to stay small. Each element's own status/failureReason fields (Step
 // 58, §28.6) are additive here too, loosely typed like every element in this array
@@ -1779,6 +1814,68 @@ func (j *DecisionInboxItem) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Step 66's own additive extension (§26.1, 'review digest: verdict as merge
+// readout'): the merge-readout's typed content -- 'what this PR does',
+// architecture choices, and risks to the stack -- that fronts the rendered
+// verdict, ahead of the pre-existing findings/coverage/docs-drift content (now
+// collapsed into an appendix, internal/domain/reviewpost.RenderVerdictComment).
+// REQUIRED on the request as a whole (unlike findings above): summary within it is
+// the one field this Step hard-requires
+// (internal/domain/reviewpost.ValidateVerdictInput's own ErrEmptyDigestSummary);
+// archDecisions/stackRisks/unverifiedLimits are requested (the review-turn prompt
+// asks the agent to fill them, internal/domain/review.RenderTurnPrompt) but NOT
+// validation-enforced yet -- the full digest becomes schema-required only once a
+// later Step (§26.3) defines the deep path this endpoint does not implement yet.
+type Digest struct {
+	// Zero or more structural decisions the diff makes -- OPTIONAL, absent/empty is
+	// legal (not yet validation-enforced, see this object's own description).
+	ArchDecisions []ArchDecision `json:"archDecisions,omitempty,omitzero" yaml:"archDecisions,omitempty" mapstructure:"archDecisions,omitempty"`
+
+	// Free-text prose: coupling and deployment risks (migrations, multi-phase
+	// deploys, image rebuilds) and reversibility -- rendered alongside the verdict's
+	// own existing blastRadius. OPTIONAL.
+	StackRisks DigestStackRisks `json:"stackRisks,omitempty,omitzero" yaml:"stackRisks,omitempty" mapstructure:"stackRisks,omitempty"`
+
+	// 'What this PR does' -- 2-4 sentences written FROM THE DIFF, never copied from
+	// the PR's own title/body (untrusted input, §5.2). Distinct from the top-level
+	// summary above (this request's own pre-existing free-text narrative explaining
+	// the VERDICT) -- see internal/domain/reviewpost.Digest's own doc comment for the
+	// full 'why two summaries' explanation.
+	Summary string `json:"summary" yaml:"summary" mapstructure:"summary"`
+
+	// Free-text prose: what was explicitly NOT verified (honest limits). OPTIONAL.
+	UnverifiedLimits DigestUnverifiedLimits `json:"unverifiedLimits,omitempty,omitzero" yaml:"unverifiedLimits,omitempty" mapstructure:"unverifiedLimits,omitempty"`
+}
+
+// Free-text prose: coupling and deployment risks (migrations, multi-phase deploys,
+// image rebuilds) and reversibility -- rendered alongside the verdict's own
+// existing blastRadius. OPTIONAL.
+type DigestStackRisks *string
+
+// Free-text prose: what was explicitly NOT verified (honest limits). OPTIONAL.
+type DigestUnverifiedLimits *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *Digest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["summary"]; raw != nil && !ok {
+		return fmt.Errorf("field summary in Digest: required")
+	}
+	type Plain Digest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Summary)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "summary", 1)
+	}
+	*j = Digest(plain)
+	return nil
+}
+
 // GET /api/sessions/:id/events (§6.3). Mirrors client-ws/v1's own
 // FetchHistoryResponse shape exactly, for the same reason that schema gives: the
 // full event-payload shape is assembled by later PRs, and REST/WS should not
@@ -3176,6 +3273,9 @@ type PostReviewVerdictRequest struct {
 	// empty array is legal (the reviewer found no tagged area touched).
 	BlastRadius []PostReviewVerdictRequestBlastRadiusElem `json:"blastRadius" yaml:"blastRadius" mapstructure:"blastRadius"`
 
+	// Digest corresponds to the JSON schema field "digest".
+	Digest Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
 	// Matches internal/domain/review.DocsDriftState's own three values exactly.
 	DocsDrift PostReviewVerdictRequestDocsDrift `json:"docsDrift" yaml:"docsDrift" mapstructure:"docsDrift"`
 
@@ -3422,6 +3522,9 @@ func (j *PostReviewVerdictRequest) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["blastRadius"]; raw != nil && !ok {
 		return fmt.Errorf("field blastRadius in PostReviewVerdictRequest: required")
+	}
+	if _, ok := raw["digest"]; raw != nil && !ok {
+		return fmt.Errorf("field digest in PostReviewVerdictRequest: required")
 	}
 	if _, ok := raw["docsDrift"]; raw != nil && !ok {
 		return fmt.Errorf("field docsDrift in PostReviewVerdictRequest: required")

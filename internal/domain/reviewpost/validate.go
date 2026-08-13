@@ -45,6 +45,17 @@ type VerdictInput struct {
 	// below. See finding.go's own doc comment for why this type lives
 	// here, in reviewpost, rather than as a new review.Verdict field.
 	Findings []FindingInput
+
+	// Digest is Step 66's own additive extension (§26.1): the merge-
+	// readout's typed content -- restdtos.PostReviewVerdictRequest.digest
+	// is REQUIRED (unlike Findings above), and Digest.Summary within it is
+	// the one field ValidateVerdictInput below actually enforces this
+	// Step; ArchDecisions/StackRisks/UnverifiedLimits are requested (the
+	// review-turn prompt, review/context.go, asks the agent to fill them)
+	// but not yet validation-enforced -- see digest.go's own doc comment
+	// for the full "why", and this field's own struct type for why it
+	// lives here rather than as a new review.Verdict field.
+	Digest Digest
 }
 
 // The errors ValidateVerdictInput returns -- one per rejected field, named
@@ -62,6 +73,12 @@ var (
 	ErrInvalidBlastRadiusTag    = errors.New("reviewpost: blastRadius contains an unrecognized tag")
 	ErrNegativeFilesChanged     = errors.New("reviewpost: filesChanged must not be negative")
 	ErrEmptySummary             = errors.New("reviewpost: summary must not be empty")
+	// ErrEmptyDigestSummary is Step 66's own addition (§26.1): "Digest.Summary
+	// is required on every review from Step 66 on" -- mirrors ErrEmptySummary
+	// above exactly (same empty/whitespace-only check, same "missing and
+	// garbled are the identical failure" posture), for the digest's own
+	// "what this PR does" field rather than the verdict's overall narrative.
+	ErrEmptyDigestSummary = errors.New("reviewpost: digest.summary must not be empty")
 )
 
 // ValidateVerdictInput rejects a malformed or partial verdict-posting-tool
@@ -70,10 +87,14 @@ var (
 // addition to any of those enums only ever needs a switch case added
 // here, never a parallel vocabulary invented independently). Checked in a
 // fixed order (RiskLevel, Premise, TestsCoverage, DocsDrift,
-// ProposedShippable, BlastRadius, FilesChanged, Summary) so a caller
-// presenting more than one bad field always gets the SAME, deterministic
-// first error rather than one that depends on map iteration order or
-// similar.
+// ProposedShippable, BlastRadius, FilesChanged, Summary, Digest.Summary) so
+// a caller presenting more than one bad field always gets the SAME,
+// deterministic first error rather than one that depends on map iteration
+// order or similar. Digest.Summary is checked LAST among these (Step 66,
+// §26.1's own new required field) -- added at the end of the existing fixed
+// order rather than interleaved earlier, so this Step never changes which
+// error an EXISTING malformed payload (one that already fails an
+// earlier-checked field) was already reporting before this Step shipped.
 //
 // Every one of review's four "closed enum" types has a Go zero value
 // ("") that is deliberately not a legal member (review/doc.go's own
@@ -130,6 +151,17 @@ func ValidateVerdictInput(in VerdictInput) error {
 
 	if strings.TrimSpace(in.Summary) == "" {
 		return ErrEmptySummary
+	}
+
+	// Digest.Summary (Step 66, §26.1): "required on every review from
+	// Step 66 on" -- the ONE digest field this Step hard-requires.
+	// ArchDecisions/StackRisks/UnverifiedLimits are deliberately NOT
+	// checked here at all -- requested via the prompt (review/context.go),
+	// not validation-enforced, until §26.3 (a later Step) defines the deep
+	// path this package does not implement yet (digest.go's own doc
+	// comment).
+	if strings.TrimSpace(in.Digest.Summary) == "" {
+		return ErrEmptyDigestSummary
 	}
 
 	// Findings (Step 48, additive): each one validated by

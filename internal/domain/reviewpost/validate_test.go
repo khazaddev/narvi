@@ -21,6 +21,7 @@ func validInput() reviewpost.VerdictInput {
 		DocsDrift:         review.DocsDriftStateNone,
 		ProposedShippable: review.ProposedShippableAuto,
 		Summary:           "Looks good, minor nit.",
+		Digest:            reviewpost.Digest{Summary: "Adds a retry helper around the flaky upstream call."},
 	}
 }
 
@@ -110,6 +111,25 @@ func TestValidateVerdictInput(t *testing.T) {
 			mutate:  func(in *reviewpost.VerdictInput) { in.Summary = "   \n\t  " },
 			wantErr: reviewpost.ErrEmptySummary,
 		},
+		{
+			name:    "empty digest summary (Step 66, §26.1: required on every review)",
+			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.Summary = "" },
+			wantErr: reviewpost.ErrEmptyDigestSummary,
+		},
+		{
+			name:    "whitespace-only digest summary",
+			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.Summary = "   \n\t  " },
+			wantErr: reviewpost.ErrEmptyDigestSummary,
+		},
+		{
+			name: "empty ArchDecisions/StackRisks/UnverifiedLimits is legal (Step 66: requested, not required, until §26.3/Step 68 defines the deep path)",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = nil
+				in.Digest.StackRisks = ""
+				in.Digest.UnverifiedLimits = ""
+			},
+			wantErr: nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -144,6 +164,24 @@ func TestValidateVerdictInput_FieldOrder(t *testing.T) {
 	err := reviewpost.ValidateVerdictInput(in)
 	if !errors.Is(err, reviewpost.ErrInvalidRiskLevel) {
 		t.Errorf("ValidateVerdictInput() = %v, want %v (riskLevel checked first)", err, reviewpost.ErrInvalidRiskLevel)
+	}
+}
+
+// TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting proves
+// Step 66's own new Digest.Summary check runs AFTER every pre-existing
+// check (added at the end of the fixed order, never interleaved earlier,
+// per this function's own doc comment) -- a payload with BOTH an empty
+// top-level Summary AND an empty Digest.Summary must still report
+// ErrEmptySummary, never ErrEmptyDigestSummary, so this Step never changes
+// which error an already-malformed pre-Step-66 payload reports.
+func TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting(t *testing.T) {
+	in := validInput()
+	in.Summary = ""
+	in.Digest.Summary = ""
+
+	err := reviewpost.ValidateVerdictInput(in)
+	if !errors.Is(err, reviewpost.ErrEmptySummary) {
+		t.Errorf("ValidateVerdictInput() = %v, want %v (top-level summary checked before digest.summary)", err, reviewpost.ErrEmptySummary)
 	}
 }
 

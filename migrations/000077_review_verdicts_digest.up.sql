@@ -1,0 +1,54 @@
+-- review_verdicts digest columns (Step 66, §26.1: "review digest: verdict
+-- as merge readout") -- the merge readout's own typed content
+-- (internal/domain/reviewpost.Digest/ArchDecision), persisted onto the
+-- SAME append-only history migrations/000067_review_verdicts.up.sql
+-- already established, one column group per Digest field, mirroring that
+-- table's own existing "one column per internal/domain/review.Verdict
+-- field, verbatim" convention -- §26.1's own words: "digest columns ride
+-- the append-only review_verdicts history... so digest quality is
+-- measurable from day one like everything else already persisted there".
+--
+-- All four columns are NULLABLE, unlike review_verdicts' own pre-existing
+-- risk_level/premise/etc columns (NOT NULL): this table already carries
+-- real history rows from every verdict posted since Step 62 shipped, none
+-- of which ever reported a digest at all (the feature did not exist yet)
+-- -- an ALTER TABLE ... ADD COLUMN ... NOT NULL against an
+-- already-populated table needs either a default or a rewrite, and no
+-- honest default exists for "this row predates the digest feature"
+-- (§21.1's own "not yet computed sentinel, distinct from a real zero"
+-- discipline, applied here: NULL means exactly that, never an empty
+-- string standing in for "the agent reported nothing"). Every row
+-- INSERTed from this Step forward DOES carry a non-empty digest_summary
+-- (internal/domain/reviewpost.ValidateVerdictInput's own
+-- ErrEmptyDigestSummary, enforced at the posting endpoint before any
+-- INSERT here ever runs) -- the NOT NULL constraint is intentionally left
+-- off the column anyway, matching turns.review_head_sha's own identical
+-- "nullable column, non-null in practice, enforced at the app layer, not
+-- the schema layer" precedent (migrations/000072_turns_review_head_sha.
+-- up.sql).
+--
+-- digest_arch_decisions is JSONB, mirroring blast_radius's own established
+-- "a plain JSON array of objects" precedent one column over -- a JSON
+-- array of {decision, rejectedAlternative, conventionConformance} objects
+-- (internal/domain/reviewpost.ArchDecision, marshaled/unmarshaled by
+-- internal/app/reviewverdict's own marshalArchDecisions/
+-- unmarshalArchDecisions, convert.go). NULL means "no digest recorded at
+-- all" (a pre-Step-66 row, or -- in principle -- a row whose own INSERT
+-- somehow carried no ArchDecisions marshal at all); an EMPTY JSON array
+-- ('[]') means "a digest was recorded, and it reported zero architecture
+-- decisions" -- ArchDecisions is requested, not required, this Step
+-- (digest.go's own doc comment), so this is the ordinary, common case for
+-- a review with nothing structural worth naming.
+--
+-- digest_stack_risks/digest_unverified_limits are free-text TEXT, exactly
+-- like every other free-text field already forwarded onto this table
+-- (risk_level et al. are enum-shaped TEXT; these two are prose-shaped
+-- TEXT, same column type, different content). Neither is validation-
+-- enforced this Step (digest.go's own doc comment: "requested... but not
+-- yet validation-enforced"), so an empty string and a NULL both mean "no
+-- content reported" from any reader's perspective -- internal/app/
+-- reviewverdict's own conversion never distinguishes the two on read.
+ALTER TABLE review_verdicts ADD COLUMN digest_summary TEXT;
+ALTER TABLE review_verdicts ADD COLUMN digest_arch_decisions JSONB;
+ALTER TABLE review_verdicts ADD COLUMN digest_stack_risks TEXT;
+ALTER TABLE review_verdicts ADD COLUMN digest_unverified_limits TEXT;
