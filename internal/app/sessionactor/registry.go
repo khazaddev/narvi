@@ -161,6 +161,19 @@ type storeBundle struct {
 	// ONLY review-turn producer in this codebase that never prepended
 	// §22.3's own learned false-positive advisory block.
 	falsePositivePattern *postgres.FalsePositivePatternStore
+
+	// providerCredential is a B2 fix (adversarial review of Step 69, §26.4)
+	// own addition: sessionconfig.go's own reviewCredentialedProviders
+	// (called from reviewCounterReviewerModel) reads it to learn which of
+	// counterReviewerProviderPreference's fixed 3 providers this SESSION
+	// actually has a resolvable credential for, before ever pinning the
+	// counter-reviewer sub-task to one -- "prefer no pin over guessing when
+	// the opposing provider is not known-credentialed" (existence only,
+	// via ListForResolution + providercredential.Resolve; this package
+	// never decrypts anything, mirroring httpapi.ProviderCredentialsDelivery's
+	// own identical grouping one step earlier than that handler's own
+	// decrypt call).
+	providerCredential *postgres.ProviderCredentialStore
 }
 
 func newStoreBundle(pool *pgxpool.Pool) storeBundle {
@@ -189,6 +202,7 @@ func newStoreBundle(pool *pgxpool.Pool) storeBundle {
 		repoSettings:         postgres.NewRepoSettingsStore(pool),
 		reviewVerdict:        postgres.NewReviewVerdictStore(pool),
 		falsePositivePattern: postgres.NewFalsePositivePatternStore(pool),
+		providerCredential:   postgres.NewProviderCredentialStore(pool),
 	}
 }
 

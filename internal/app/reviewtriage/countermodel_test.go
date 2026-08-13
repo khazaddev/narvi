@@ -7,6 +7,16 @@ import (
 	"github.com/khazaddev/narvi/internal/app/reviewtriage"
 )
 
+// allProvidersCredentialed is every test in this file's own default input
+// for ResolveCounterReviewerModel's credentialedProviders parameter (B2
+// fix) unless a test case is SPECIFICALLY about that parameter's own
+// gating behavior (TestResolveCounterReviewerModel_CredentialGating below)
+// -- every other case in this file exists to exercise the RANKING/
+// exclusion logic in isolation, so it opts every catalog provider in,
+// exactly mirroring this codebase's own "credentials fully available"
+// happy path.
+var allProvidersCredentialed = map[string]bool{"anthropic": true, "openai": true, "google": true}
+
 func TestResolveCounterReviewerModel(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -24,7 +34,7 @@ func TestResolveCounterReviewerModel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviewtriage.ResolveCounterReviewerModel(tt.authoringModel)
+			got := reviewtriage.ResolveCounterReviewerModel(tt.authoringModel, allProvidersCredentialed)
 			if tt.wantEmpty {
 				if got != "" {
 					t.Errorf("ResolveCounterReviewerModel(%q) = %q, want empty (no override)", tt.authoringModel, got)
@@ -40,6 +50,62 @@ func TestResolveCounterReviewerModel(t *testing.T) {
 			}
 			if tt.wantNotProvider != "" && provider == tt.wantNotProvider {
 				t.Errorf("ResolveCounterReviewerModel(%q) = %q, provider must NEVER match the authoring family %q", tt.authoringModel, got, tt.wantNotProvider)
+			}
+		})
+	}
+}
+
+// TestResolveCounterReviewerModel_CredentialGating is B2's own regression
+// test: "prefer no pin over guessing when the opposing provider is not
+// known-credentialed". Step 53's own credential injection is best-effort
+// and per-session configured -- counterReviewerProviderPreference's fixed
+// 3-provider list only names which providers the MECHANISM supports,
+// never which ones are actually usable for a given session -- so a
+// candidate provider absent from credentialedProviders must be skipped
+// exactly like an excluded authoring-family match, never guessed at.
+func TestResolveCounterReviewerModel_CredentialGating(t *testing.T) {
+	tests := []struct {
+		name                  string
+		authoringModel        string
+		credentialedProviders map[string]bool
+		want                  string
+	}{
+		{
+			name:                  "opposing provider not credentialed falls through to the next credentialed preference provider",
+			authoringModel:        "anthropic/claude-opus-4-5",
+			credentialedProviders: map[string]bool{"google": true}, // openai (preference order's first non-anthropic entry) deliberately absent
+			want:                  "google/gemini-3-pro-preview",
+		},
+		{
+			name:                  "no preference provider credentialed at all returns no override, never a guess",
+			authoringModel:        "anthropic/claude-opus-4-5",
+			credentialedProviders: map[string]bool{},
+			want:                  "",
+		},
+		{
+			name:                  "nil credentialedProviders degrades identically to an empty set (Go nil-map read is always false)",
+			authoringModel:        "anthropic/claude-opus-4-5",
+			credentialedProviders: nil,
+			want:                  "",
+		},
+		{
+			name:                  "a credentialedProviders entry for the EXCLUDED authoring family alone still yields no override",
+			authoringModel:        "anthropic/claude-opus-4-5",
+			credentialedProviders: map[string]bool{"anthropic": true},
+			want:                  "",
+		},
+		{
+			name:                  "every preference provider credentialed resolves the normal, highest-priority pick",
+			authoringModel:        "anthropic/claude-opus-4-5",
+			credentialedProviders: allProvidersCredentialed,
+			want:                  "openai/gpt-5.6-fast",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := reviewtriage.ResolveCounterReviewerModel(tt.authoringModel, tt.credentialedProviders)
+			if got != tt.want {
+				t.Errorf("ResolveCounterReviewerModel(%q, %v) = %q, want %q", tt.authoringModel, tt.credentialedProviders, got, tt.want)
 			}
 		})
 	}
@@ -63,7 +129,7 @@ func TestResolveCounterReviewerModel(t *testing.T) {
 // also have picked (its name happens to sort first too), so a second case
 // below pins a provider where the two rankings genuinely diverge.
 func TestResolveCounterReviewerModel_RanksByContextWindowThenCost_NotAlphabetical(t *testing.T) {
-	got := reviewtriage.ResolveCounterReviewerModel("openai/gpt-5.4")
+	got := reviewtriage.ResolveCounterReviewerModel("openai/gpt-5.4", allProvidersCredentialed)
 	want := "anthropic/claude-fable-5"
 	if got != want {
 		t.Errorf("ResolveCounterReviewerModel(%q) = %q, want %q", "openai/gpt-5.4", got, want)
@@ -83,7 +149,7 @@ func TestResolveCounterReviewerModel_RanksByContextWindowThenCost_NotAlphabetica
 // tie-break. If this ever regresses back to a bare alphabetically-first
 // pick, this test fails with "gpt-5.3-codex-spark" instead.
 func TestResolveCounterReviewerModel_RanksByContextWindowThenCost_DivergesFromAlphabetical(t *testing.T) {
-	got := reviewtriage.ResolveCounterReviewerModel("anthropic/claude-opus-4-5")
+	got := reviewtriage.ResolveCounterReviewerModel("anthropic/claude-opus-4-5", allProvidersCredentialed)
 	want := "openai/gpt-5.6-fast"
 	if got != want {
 		t.Errorf("ResolveCounterReviewerModel(%q) = %q, want %q (alphabetical would have wrongly picked openai/gpt-5.3-codex-spark, a 128k-context variant, over this catalog's own 1.05M-context/highest-cost tier)", "anthropic/claude-opus-4-5", got, want)
@@ -95,9 +161,9 @@ func TestResolveCounterReviewerModel_RanksByContextWindowThenCost_DivergesFromAl
 // function must never depend on map/slice iteration order (pickReasoningOrFirst's
 // own doc comment).
 func TestResolveCounterReviewerModel_Deterministic(t *testing.T) {
-	first := reviewtriage.ResolveCounterReviewerModel("anthropic/claude-opus-4-5")
+	first := reviewtriage.ResolveCounterReviewerModel("anthropic/claude-opus-4-5", allProvidersCredentialed)
 	for i := 0; i < 20; i++ {
-		if got := reviewtriage.ResolveCounterReviewerModel("anthropic/claude-opus-4-5"); got != first {
+		if got := reviewtriage.ResolveCounterReviewerModel("anthropic/claude-opus-4-5", allProvidersCredentialed); got != first {
 			t.Fatalf("ResolveCounterReviewerModel is non-deterministic: call %d = %q, first call = %q", i, got, first)
 		}
 	}

@@ -48,6 +48,28 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // unrecognized one. "Opposition" only needs a provider ID to compare
 // against, never catalog membership of the authoring side itself.
 //
+// credentialedProviders (B2 fix) is the set of lowercase provider IDs this
+// SESSION actually has a resolvable credential for (internal/app/
+// reviewtriage.CredentialedProviders' own reduction of ProviderCredentialStore.
+// ListForResolution -- "would Step 53's own delivery endpoint produce
+// anything for this provider at all", never a decrypted value). A
+// candidate provider absent from this set (including every provider when
+// credentialedProviders is nil -- a Go nil-map read is always false, no
+// special-casing needed) is skipped exactly like an excluded authoring-
+// family match above, falling through to the next preference-order
+// candidate, or to "" if none remain. This function never GUESSES: Step
+// 53's own credential injection is best-effort and per-(repo/environment/
+// global) configured, so counterReviewerProviderPreference's fixed 3-
+// provider list is only a statement of which providers the MECHANISM
+// supports, never a promise that all 3 (or even one) are actually usable
+// for a given session -- pinning the counter-reviewer sub-task to a
+// provider with no usable credential would not fail loudly here; it would
+// surface later as an opaque auth failure deep inside the sandboxed
+// OpenCode process, far from this decision. "" (no override, the
+// sub-task then simply inherits the deep-path turn's own already-
+// dispatched model, which IS known to have a usable credential -- it is
+// already running) is always the safe fallback over a blind pin.
+//
 // "tier from depth (§26.3, already shipped)": this function is only ever
 // called for a deep-path review (counter-review never runs on light,
 // §26.9), so there is exactly one tier to pick from -- no depth parameter
@@ -69,7 +91,7 @@ var counterReviewerProviderPreference = []string{"anthropic", "openai", "google"
 // precedes '4' -- picking it as this catalog's own best available
 // "opposing frontier" proxy would be an accident of string sort order,
 // not a considered choice).
-func ResolveCounterReviewerModel(authoringModel string) string {
+func ResolveCounterReviewerModel(authoringModel string, credentialedProviders map[string]bool) string {
 	authoringProvider, _, ok := strings.Cut(authoringModel, "/")
 	authoringProvider = strings.ToLower(strings.TrimSpace(authoringProvider))
 	if !ok || authoringProvider == "" {
@@ -83,6 +105,9 @@ func ResolveCounterReviewerModel(authoringModel string) string {
 
 	for _, providerID := range counterReviewerProviderPreference {
 		if providerID == authoringProvider {
+			continue
+		}
+		if !credentialedProviders[providerID] {
 			continue
 		}
 		models := byProvider[providerID]

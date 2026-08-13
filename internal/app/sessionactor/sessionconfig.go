@@ -19,6 +19,8 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	"github.com/khazaddev/narvi/internal/domain/provenance"
+	"github.com/khazaddev/narvi/internal/domain/reposource"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // publicWsBaseURL derives a ws(s):// base URL from httpBaseURL (platform.
@@ -116,17 +118,24 @@ func (a *Actor) environmentPathScope(ctx context.Context, tx pgx.Tx, environment
 // no github_pr_sessions row), OR that IS a review session but has no
 // resolvable authoring-model provenance (a human-authored PR -- see
 // reviewtriage.ResolveCounterReviewerModel's own doc comment for why this
-// is the common case even among review sessions, not a degraded one).
-// Best-effort, NEVER errors (mirrors reviewtriage.ResolveProvenance's own
-// "the review depth decision this signal rides alongside must never be
-// delayed or blocked by a degraded authorship lookup" contract, applied
-// here to session boot instead) -- a failed lookup degrades to no
-// override, never a blocked spawn (§10-P2: "never block a spawn").
-func (a *Actor) reviewCounterReviewerModel(ctx context.Context, tx pgx.Tx, sessionID pgtype.UUID) *string {
+// is the common case even among review sessions, not a degraded one), OR
+// (B2 fix) has a resolvable authoring model but no OTHER catalog provider
+// this session actually has a usable credential for -- see
+// reviewCredentialedProviders' own doc comment. Best-effort, NEVER errors
+// (mirrors reviewtriage.ResolveProvenance's own "the review depth decision
+// this signal rides alongside must never be delayed or blocked by a
+// degraded authorship lookup" contract, applied here to session boot
+// instead) -- a failed lookup degrades to no override, never a blocked
+// spawn (§10-P2: "never block a spawn"). Logs the resolved decision either
+// way (B2 fix: "no observability on the counter-reviewer pin") -- the ONE
+// place this decision is made, so an operator investigating "why did the
+// counter-reviewer run under model X" (or "why didn't it get an opposing
+// pin at all") has a single log line to search for, keyed by repo/PR.
+func (a *Actor) reviewCounterReviewerModel(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session) *string {
 	if a.stores.githubPRSession == nil {
 		return nil
 	}
-	prSession, err := a.stores.githubPRSession.WithTx(tx).GetBySessionID(ctx, sessionID)
+	prSession, err := a.stores.githubPRSession.WithTx(tx).GetBySessionID(ctx, sessionRow.ID)
 	if err != nil {
 		// pgx.ErrNoRows: not a review session at all -- every OTHER error
 		// (a genuine, unexpected read failure) degrades identically, never
@@ -136,11 +145,105 @@ func (a *Actor) reviewCounterReviewerModel(ctx context.Context, tx pgx.Tx, sessi
 
 	triageDeps := appreviewtriage.Deps{Artifacts: a.stores.artifact, Sessions: a.stores.session}
 	prov := appreviewtriage.ResolveProvenance(ctx, triageDeps, prSession.RepoFullName, prSession.PrNumber)
-	model := appreviewtriage.ResolveCounterReviewerModel(prov.AuthoringModel)
-	if model == "" {
+	if prov.AuthoringModel == "" {
+		// The overwhelming common case (human-authored PR, or a Narvi-
+		// authored one with no recorded build_model_id) -- nothing to
+		// oppose, so skip the credential lookup below entirely rather than
+		// paying for a query whose answer could never change this outcome.
 		return nil
 	}
+
+	credentialedProviders := a.reviewCredentialedProviders(ctx, tx, sessionRow)
+	model := appreviewtriage.ResolveCounterReviewerModel(prov.AuthoringModel, credentialedProviders)
+	logger := platform.Logger(ctx)
+	if model == "" {
+		logger.Info("sessionactor: review counter-reviewer: no opposing-model override resolved",
+			"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber,
+			"authoring_model", prov.AuthoringModel, "credentialed_providers", credentialedProviders)
+		return nil
+	}
+	logger.Info("sessionactor: review counter-reviewer: pinned opposing model",
+		"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber,
+		"authoring_model", prov.AuthoringModel, "counter_reviewer_model", model)
 	return &model
+}
+
+// reviewCredentialedProviders resolves the set of counterReviewerProviderPreference
+// providers (internal/app/reviewtriage) that sessionRow's own repo(s)/
+// environment/creator actually has a usable credential for -- B2 fix
+// (adversarial review of Step 69, §26.4): "prefer no pin over guessing
+// when the opposing provider is not known-credentialed". Mirrors
+// httpapi.ProviderCredentialsDelivery's own resolution inputs exactly
+// (repoFullNames from sessionRow.Repos via reposource.ParseOwnerRepo,
+// environmentID from sessionRow.EnvironmentID, userID from sessionRow.
+// CreatedBy) but stops at EXISTENCE (reviewtriage.CredentialedProviders'
+// own byProvider-then-Resolve reduction) -- this function never decrypts
+// anything, and a.stores.providerCredential's own ValueEncrypted column is
+// never even read here.
+//
+// nil (a.stores.providerCredential == nil, or any read/parse failure) is
+// the SAME safe degradation this file's own reviewCounterReviewerModel
+// already established for every other best-effort lookup: a nil map read
+// is always false in Go, so ResolveCounterReviewerModel's own credential
+// gate treats "we could not determine this" identically to "nothing is
+// credentialed" -- never a guess, and never a blocked spawn either (§10-P2).
+func (a *Actor) reviewCredentialedProviders(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session) map[string]bool {
+	logger := platform.Logger(ctx)
+	if a.stores.providerCredential == nil {
+		return nil
+	}
+
+	repoFullNames, err := reviewCredentialRepoFullNames(sessionRow.Repos)
+	if err != nil {
+		logger.Warn("sessionactor: review counter-reviewer: parse session repos for credential lookup failed", "error", err)
+		return nil
+	}
+
+	var environmentID *string
+	if sessionRow.EnvironmentID.Valid {
+		id := sessionRow.EnvironmentID.String()
+		environmentID = &id
+	}
+	var userID *string
+	if sessionRow.CreatedBy.Valid {
+		id := sessionRow.CreatedBy.String()
+		userID = &id
+	}
+
+	rows, err := a.stores.providerCredential.WithTx(tx).ListForResolution(ctx, repoFullNames, environmentID, userID)
+	if err != nil {
+		logger.Warn("sessionactor: review counter-reviewer: list provider credentials for opposing-model gating failed", "error", err)
+		return nil
+	}
+	return appreviewtriage.CredentialedProviders(rows)
+}
+
+// reviewCredentialRepoFullNames mirrors httpapi.sessionRepoFullNames
+// exactly (providercredentialsdelivery.go) -- duplicated here rather than
+// exported cross-package: both unmarshal sessions.repos' own raw JSONB
+// bytes and keep only the repos whose clone URL parses via reposource.
+// ParseOwnerRepo, skipping (never erroring on) a malformed entry, for the
+// SAME ProviderCredentialStore.ListForResolution call each package makes
+// on its own session's own repos.
+func reviewCredentialRepoFullNames(rawRepos []byte) ([]string, error) {
+	if len(rawRepos) == 0 {
+		return nil, nil
+	}
+	var repos []struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(rawRepos, &repos); err != nil {
+		return nil, err
+	}
+	fullNames := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		owner, name, err := reposource.ParseOwnerRepo(repo.URL)
+		if err != nil {
+			continue
+		}
+		fullNames = append(fullNames, owner+"/"+name)
+	}
+	return fullNames, nil
 }
 
 // assembleSessionConfig builds the real SESSION_CONFIG document (§6.4) a
@@ -242,6 +345,6 @@ func (a *Actor) assembleSessionConfig(
 		// oppose -- see reviewCounterReviewerModel's own doc comment,
 		// above, for the full "why nil is the common case, not a
 		// degradation".
-		ReviewCounterReviewerModel: sessionconfig.SessionConfigReviewCounterReviewerModel(a.reviewCounterReviewerModel(ctx, tx, sessionRow.ID)),
+		ReviewCounterReviewerModel: sessionconfig.SessionConfigReviewCounterReviewerModel(a.reviewCounterReviewerModel(ctx, tx, sessionRow)),
 	}, nil
 }
