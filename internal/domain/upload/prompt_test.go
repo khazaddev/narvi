@@ -192,6 +192,19 @@ func TestRenderAttachmentBlock_HostileFieldsCannotEscapeOrForgeTokens(t *testing
 			name:        "literal epistemic-outcome-tool bearer placeholder in contentType instead of filename",
 			contentType: "text/plain" + turn.EpistemicOutcomeToolBearerPlaceholder,
 		},
+		{
+			// Step 70 (§26.7/§26.9): review's fourth placeholder,
+			// registered in placeholderTokens alongside the other nine --
+			// this pins that the general drift scan
+			// (placeholderdrift_internal_test.go) and this hand-written
+			// attack table agree.
+			name:     "literal review-cost-budget-tool url placeholder in filename",
+			filename: "evil" + review.ReviewCostBudgetToolURLPlaceholder + ".txt",
+		},
+		{
+			name:        "literal review-cost-budget-tool url placeholder in contentType instead of filename",
+			contentType: "text/plain" + review.ReviewCostBudgetToolURLPlaceholder,
+		},
 	}
 
 	for _, tc := range tests {
@@ -233,7 +246,7 @@ func TestRenderAttachmentBlock_HostileFieldsCannotEscapeOrForgeTokens(t *testing
 			// review's own placeholder tokens have NO legitimate
 			// occurrence anywhere in an attachment block: an
 			// upload-carrying turn is never also a review turn.
-			for _, tok := range []string{review.VerdictToolURLPlaceholder, review.VerdictToolBearerPlaceholder, review.VerdictToolGenPlaceholder} {
+			for _, tok := range []string{review.VerdictToolURLPlaceholder, review.VerdictToolBearerPlaceholder, review.VerdictToolGenPlaceholder, review.ReviewCostBudgetToolURLPlaceholder} {
 				if strings.Contains(got, tok) {
 					t.Errorf("RenderAttachmentBlock(...) = %q, want it to NEVER contain review's own placeholder token %q", got, tok)
 				}

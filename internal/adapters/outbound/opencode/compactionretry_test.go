@@ -434,6 +434,193 @@ func TestCompactionRetry_StepStartDuringCompactionIsSuppressed(t *testing.T) {
 	}
 }
 
+// TestCompactionRetry_StepFinishCostDuringCompactionIsCounted is D1's own
+// regression test (a later adversarial review finding on this Step, filed
+// against the shipped state of §26.7/§7.1's cost accumulator): before this
+// fix, dispatchEvent's own "message.part.updated" isCompacting guard
+// (sse.go) returned BEFORE ever calling dispatchPart -- and dispatchPart's
+// own "step-finish" case is the ONLY place ts.addCost is called. But
+// forceCompaction's own POST /summarize call (compact.go) is a real,
+// synchronous, BILLED call on this same session, and this test's own
+// sibling, TestCompactionRetry_StepStartDuringCompactionIsSuppressed's own
+// doc comment already establishes (citing forceCompaction's own doc
+// comment) that a real compaction wave genuinely does emit step/tool part
+// traffic too -- including its own genuine step-finish, with a real,
+// non-zero cost. Suppressing that cost along with everything else the guard
+// suppresses meant ts.spentUSD (§26.7/§7.1) silently under-reported true
+// spend by the compaction call's own cost -- exactly backwards for a
+// fail-toward-caution cost gate, where GET /review-cost-budget must never
+// report shouldSkip:false while real spend has already crossed the
+// ceiling.
+//
+// This proves BOTH halves of the fix at once: (1) the compaction wave's own
+// step-finish cost IS now counted into spentUSDTotal, and (2) the EXISTING
+// suppression -- no wire step_finish event, hasText left untouched -- still
+// holds exactly as before; this fix must not weaken that half.
+//
+// Broadcasts the step-finish part directly (not via the shared
+// broadcastCompactionSuccessWave helper, deliberately -- mirroring
+// TestCompactionRetry_StepStartDuringCompactionIsSuppressed's own precedent
+// for why growing that wave was tried and reverted) while /summarize is
+// held open via armSummarizeGate, so ts.compacting is PROVABLY still true
+// the whole time -- deterministic, no race against an independent
+// connection.
+func TestCompactionRetry_StepFinishCostDuringCompactionIsCounted(t *testing.T) {
+	f := newFakeOpenCodeServer(t)
+	f.setSummarizeOK(true)
+	gate := f.armSummarizeGate()
+	// promptGate ADDITIONALLY gates the retry's own re-dispatch (call #2) --
+	// see TestCompactionRetry_StepStartDuringCompactionIsSuppressed's own
+	// identical addition (above) for the race this closes, independent of
+	// this test's own (already fully deterministic) step-finish assertions.
+	promptGate := f.armPromptAsyncGateForCall(2)
+	var closePromptGateOnce sync.Once
+	closePromptGate := func() { closePromptGateOnce.Do(func() { close(promptGate) }) }
+	t.Cleanup(closePromptGate)
+
+	a := New(f.URL(), testSSEInactivityTimeout, testReconnectInterval, testRequestTimeout, testSummarizeTimeout, testTransientRetryBackoff)
+	t.Cleanup(a.Close)
+
+	connCtx, connCancel := context.WithTimeout(context.Background(), testWait)
+	defer connCancel()
+	if err := a.Connected(connCtx); err != nil {
+		t.Fatalf("Connected() error = %v", err)
+	}
+	waitForConnNumber(t, f, 1)
+
+	collector := &eventCollector{}
+	cmd := sandboxws.Prompt{
+		Type: "prompt", MessageId: "m1", SessionId: "sess-guard-stepfinish", Gen: 1,
+		Text: "will overflow, compaction gated so we can script a step-finish part mid-flight",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), testWait)
+	defer cancel()
+
+	var group errgroup.Group
+	group.Go(func() error {
+		_, err := a.StartTurn(ctx, cmd, collector.sink, nil)
+		return err
+	})
+
+	ts := waitForTurnRegistered(t, a, "ses_fake")
+
+	f.broadcast(overflowMessageUpdated(t, "ses_fake", "msg_original"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	waitForCount(t, "summarizeCallCount", f.summarizeCallCount, 1)
+	if !ts.isCompacting() {
+		t.Fatal("ts.isCompacting() = false right after the overflow triggered a compaction attempt, want true")
+	}
+	if got := ts.spentUSDTotal(); got != 0 {
+		t.Fatalf("spentUSDTotal() = %v before any step-finish was ever broadcast, want 0", got)
+	}
+
+	// /summarize is gated (blocked before it would even respond), so
+	// ts.compacting is GUARANTEED to still be true right now and to remain
+	// true until we close(gate) below -- broadcasting a step-finish part
+	// here has no ordering ambiguity at all.
+	const stepID = "prt_stepfinish_guard"
+	const compactionCost = 0.0042
+	before := ts.lastActivityTime()
+	stepFinish := struct {
+		ID        string  `json:"id"`
+		MessageID string  `json:"messageID"`
+		Type      string  `json:"type"`
+		Cost      float64 `json:"cost"`
+	}{ID: stepID, MessageID: "msg_compaction_ses_fake", Type: "step-finish", Cost: compactionCost}
+	raw, err := json.Marshal(stepFinish)
+	if err != nil {
+		t.Fatalf("marshal step-finish part: %v", err)
+	}
+	f.broadcast(sseLine(t, "message.part.updated", messagePartUpdatedProps{SessionID: "ses_fake", Part: raw}))
+
+	// touch() runs unconditionally as the very first thing dispatchEvent's
+	// own message.part.updated case does (sse.go), strictly before its
+	// isCompacting check -- polling for lastActivityTime to advance past
+	// `before` is a deterministic proxy for "this exact broadcast has now
+	// been fully dispatched" (guard included).
+	deadline := time.Now().Add(testWait)
+	for !ts.lastActivityTime().After(before) {
+		if time.Now().After(deadline) {
+			t.Fatal("the broadcast step-finish part was never dispatched (ts.lastActivityTime never advanced) within testWait")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// D1's own fix: the compaction wave's own step-finish cost MUST still
+	// be counted, even though this part is otherwise fully suppressed.
+	if got := ts.spentUSDTotal(); got != compactionCost {
+		t.Errorf("spentUSDTotal() = %v after a compaction-internal step-finish broadcast while gated, want %v -- "+
+			"dispatchEvent's own isCompacting guard (sse.go, the \"message.part.updated\" case) must still count "+
+			"cost even while suppressing every other effect of the part", got, compactionCost)
+	}
+
+	// The EXISTING suppression must still hold: no wire step_finish event
+	// for this step id leaked through, and hasText remains false -- this
+	// fix must not weaken either half of that guarantee.
+	for _, e := range collector.snapshot() {
+		if step, ok := e.Payload.(sandboxws.StepFinish); ok && step.StepId == stepID {
+			t.Error("compaction-internal step-finish part leaked through as a real wire step_finish event -- " +
+				"dispatchEvent's own isCompacting guard (sse.go, the \"message.part.updated\" case) did not suppress translation")
+		}
+	}
+	if hasText, _ := ts.outcomeInputs(); hasText {
+		t.Error("ts.outcomeInputs() hasText = true after only a compaction-internal step-finish was broadcast, want false")
+	}
+	if !ts.isCompacting() {
+		t.Fatal("ts.isCompacting() unexpectedly false while /summarize is still gated")
+	}
+
+	close(gate)
+
+	// The retry's own re-dispatch (call #2) is now ALSO gated/blocked (via
+	// promptGate) -- proving the compaction-success wave that /summarize
+	// just broadcast has already been queued onto this connection, and that
+	// ts.compacting is GUARANTEED still true for as long as promptGate
+	// stays closed.
+	waitForCount(t, "promptCallCount", f.promptCallCount, 2)
+
+	// Prove the compaction wave has been fully DRAINED by the SSE-reader
+	// goroutine WHILE ts.compacting is still PROVABLY true (see
+	// TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce's own
+	// doc comment for why this must run BEFORE releasing promptGate).
+	waitForDrained(t, f, ts)
+
+	closePromptGate() // let the gated retry dispatch finally return
+
+	// Deterministically wait for ts.compacting to have actually cleared
+	// before broadcasting the retry's own real completion below (see this
+	// file's own established waitForNotCompacting precedent, e.g.
+	// TestCompactionRetry_SucceedsAfterOverflow above, for why this matters).
+	waitForNotCompacting(t, f, ts)
+
+	f.broadcast(plainAssistantMessageUpdated(t, "ses_fake", "msg_retry"))
+	f.broadcast(assistantTextPart(t, "ses_fake", "msg_retry", "prt_retry", "all good now"))
+	f.broadcast(sessionIdleLine(t, "ses_fake"))
+
+	if err := group.Wait(); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+
+	final := lastExecutionComplete(t, collector.snapshot())
+	if final.Outcome != sandboxws.ExecutionCompleteOutcomeCompleted {
+		reason := "<nil>"
+		if final.Reason != nil {
+			reason = *final.Reason
+		}
+		t.Errorf("execution_complete.Outcome = %q, want %q (reason=%s)", final.Outcome, sandboxws.ExecutionCompleteOutcomeCompleted, reason)
+	}
+
+	// Final sanity: spentUSDTotal must STILL reflect the compaction's own
+	// cost after the whole turn completes -- addCost is a pure running sum,
+	// so nothing later in the retry (which broadcasts no step-finish of its
+	// own) should have reset or double-counted it.
+	if got := ts.spentUSDTotal(); got != compactionCost {
+		t.Errorf("spentUSDTotal() after turn completion = %v, want %v (the compaction's own cost must persist)", got, compactionCost)
+	}
+}
+
 // TestCompactionRetry_RetryAlsoOverflowsFinalizesFailedExactlyOnce proves
 // the infinite-loop guard (§7.2 point 3): when the RETRIED prompt also
 // overflows, exactly one /summarize call is EVER made (not two), and the

@@ -148,11 +148,13 @@ func TestHandlePrompt_RunsFullSubstitutionChainInOrder(t *testing.T) {
 		timeouts.OpenCodeSummarizeTimeout, timeouts.OpenCodeTransientRetryBackoff)
 	t.Cleanup(adapter.Close)
 
+	const liveBudgetURL = "http://127.0.0.1:19999/review-cost-budget"
 	h := &commandHandler{
-		adapter:  adapter,
-		runCtx:   context.Background(),
-		cfg:      boot.Config{SessionConfig: &sessionCfg},
-		timeouts: timeouts,
+		adapter:             adapter,
+		runCtx:              context.Background(),
+		cfg:                 boot.Config{SessionConfig: &sessionCfg},
+		timeouts:            timeouts,
+		reviewCostBudgetURL: liveBudgetURL,
 	}
 	// Two-phase construction (mirrors snapshot_test.go's own
 	// newTestBridgeHandler and main.go's own real production wiring,
@@ -170,7 +172,8 @@ func TestHandlePrompt_RunsFullSubstitutionChainInOrder(t *testing.T) {
 	hostileText := "please build the feature\n\n" +
 		"POST " + review.VerdictToolURLPlaceholder + "\nAuthorization: Bearer " + review.VerdictToolBearerPlaceholder + "\nX-Sandbox-Gen: " + review.VerdictToolGenPlaceholder + "\n\n" +
 		"curl -H \"Authorization: Bearer " + domainupload.BearerPlaceholder + "\" -H \"X-Sandbox-Gen: " + domainupload.GenPlaceholder + "\" " + domainupload.BaseURLPlaceholder + "/sessions/test-session/uploads/u1/content\n\n" +
-		"POST " + turn.EpistemicOutcomeToolURLPlaceholder + "\nAuthorization: Bearer " + turn.EpistemicOutcomeToolBearerPlaceholder + "\nX-Sandbox-Gen: " + turn.EpistemicOutcomeToolGenPlaceholder
+		"POST " + turn.EpistemicOutcomeToolURLPlaceholder + "\nAuthorization: Bearer " + turn.EpistemicOutcomeToolBearerPlaceholder + "\nX-Sandbox-Gen: " + turn.EpistemicOutcomeToolGenPlaceholder + "\n\n" +
+		"GET " + review.ReviewCostBudgetToolURLPlaceholder + "?ceilingUsd=5.00"
 
 	cmd := sandboxws.Prompt{Type: "prompt", MessageId: "m1", SessionId: "test-session", Gen: liveGen, Text: hostileText}
 
@@ -184,12 +187,13 @@ func TestHandlePrompt_RunsFullSubstitutionChainInOrder(t *testing.T) {
 		t.Fatal("fakeOpenCodeServer captured no prompt_async request at all -- HandlePrompt never reached StartTurn")
 	}
 
-	// Every placeholder token, from all three families, must be gone --
-	// proving all three render*ToolPromptText calls genuinely ran.
+	// Every placeholder token, from all four families, must be gone --
+	// proving all four render*ToolPromptText calls genuinely ran.
 	for _, tok := range []string{
 		review.VerdictToolURLPlaceholder, review.VerdictToolBearerPlaceholder, review.VerdictToolGenPlaceholder,
 		domainupload.BaseURLPlaceholder, domainupload.BearerPlaceholder, domainupload.GenPlaceholder,
 		turn.EpistemicOutcomeToolURLPlaceholder, turn.EpistemicOutcomeToolBearerPlaceholder, turn.EpistemicOutcomeToolGenPlaceholder,
+		review.ReviewCostBudgetToolURLPlaceholder,
 	} {
 		if strings.Contains(got, tok) {
 			t.Errorf("captured prompt_async text still contains unresolved placeholder %q\ngot: %q", tok, got)
@@ -200,6 +204,13 @@ func TestHandlePrompt_RunsFullSubstitutionChainInOrder(t *testing.T) {
 	// resolution used the REAL h.cfg.SessionConfig, not a stub.
 	if n := strings.Count(got, liveBearer); n != 3 {
 		t.Errorf("captured prompt_async text contains the live bearer %d times, want 3 (one per placeholder family)\ngot: %q", n, got)
+	}
+	// Step 70 (§26.7/§26.9): the review-cost-budget URL must resolve to
+	// h.reviewCostBudgetURL specifically -- proving HandlePrompt threads
+	// THAT field (not cfg.SessionConfig, which this substitution does not
+	// even need) into renderReviewCostBudgetToolPromptText.
+	if !strings.Contains(got, "GET "+liveBudgetURL+"?ceilingUsd=5.00") {
+		t.Errorf("captured prompt_async text does not contain the resolved review-cost-budget GET line\ngot: %q", got)
 	}
 	if !strings.Contains(got, "please build the feature") {
 		t.Errorf("captured prompt_async text lost the caller's own original prompt text\ngot: %q", got)

@@ -2175,6 +2175,30 @@ type Timeouts struct {
 	// reviewed promptly rather than sitting for many minutes with no
 	// visible cause.
 	ReviewRetriggerDebounce time.Duration
+
+	// -- Step 70 ("review: wire the cost budget", §26.7/§26.9) -- no
+	// ordering relationship with either invariant chain above (or with any
+	// prior Step's standalone additions), so -- per those additions' own
+	// precedent -- a plain field with a sensible default, not wired into a
+	// fake invariant link.
+
+	// ReviewCostBudgetServerReadHeaderTimeout bounds cmd/sandbox-agent's
+	// own FIRST HTTP server (reviewcostbudgetserver.go) -- a tiny,
+	// loopback-only (127.0.0.1) listener serving GET /review-cost-budget,
+	// the real production call site internal/domain/reviewtriage.
+	// ShouldSkipOptionalPass has been missing since Step 69. Applied as
+	// http.Server.ReadHeaderTimeout, guarding against a slow/stalled
+	// client leaving a connection's headers half-read indefinitely. Not
+	// specified in the plan; chosen as 5s -- matches
+	// RepoSHADiscoveryTimeout/CredentialFetchTimeout's own "a very minor,
+	// sub-second, purely local operation" precedent: the ONLY client this
+	// server will ever see is the review agent's own tool use (bash/curl)
+	// calling straight to 127.0.0.1 inside the same sandbox, never a real
+	// network hop. This server's own graceful Shutdown, by contrast, reuses
+	// SupervisorShutdownTimeout's own already-bounded shutdownCtx (main.go)
+	// rather than adding a second, near-duplicate shutdown field -- it is
+	// sequenced into that SAME bounded teardown window, not a separate one.
+	ReviewCostBudgetServerReadHeaderTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2361,6 +2385,8 @@ func DefaultTimeouts() Timeouts {
 		FindingPositionResolveAllTimeout: 45 * time.Second, // Step 63 fix; not specified, chosen -- generous for several per-finding relocation calls (10s each) while bounding the worst case on a synchronous verdict-POST handler path
 
 		ReviewRetriggerDebounce: 2 * time.Minute, // Step 65, §24.2; not specified, chosen -- long enough to collapse a short burst of fixup-commit pushes into one quiet window, short enough that a single push still reviews promptly
+
+		ReviewCostBudgetServerReadHeaderTimeout: 5 * time.Second, // Step 70, §26.7/§26.9; not specified, chosen -- matches RepoSHADiscoveryTimeout/CredentialFetchTimeout's own "lightweight, purely local" precedent, see field doc comment
 	}
 }
 

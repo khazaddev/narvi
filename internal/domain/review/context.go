@@ -287,6 +287,34 @@ const (
 	VerdictToolGenPlaceholder    = "{{REVIEW_VERDICT_TOOL_GEN}}"
 )
 
+// ReviewCostBudgetToolURLPlaceholder (§26.7/§26.9, Step 70) is the fixed
+// token subAgentOrchestrationInstructions (below) carries in place of this
+// turn's real, live GET review-cost-budget URL -- mirrors
+// VerdictToolURLPlaceholder's own doc comment exactly, for the identical
+// reason: this package runs at TURN-CREATION time, in the control plane,
+// before any sandbox even exists, so it cannot know a loopback port a
+// sandbox-agent process has not booted yet, let alone chosen (the server
+// binds an EPHEMERAL port at its own startup, cmd/sandbox-agent's own
+// reviewcostbudgetserver.go, specifically so it can never collide with a
+// session's own arbitrary services.yml service ports, §14.2).
+//
+// Unlike VerdictToolURLPlaceholder, this is the ONLY placeholder this
+// mechanism needs: no bearer, no gen. The server it points at is
+// loopback-only (127.0.0.1, unreachable from outside this sandbox's own
+// network namespace) and serves nothing but numeric budget state
+// (spent/ceiling/skip-or-not) -- never a secret -- so it needs no
+// authentication at all (reviewcostbudgetserver.go's own doc comment).
+// Resolved exactly once in the whole system, inside sandbox-agent itself,
+// immediately before a "prompt" command's own Text is handed to OpenCode
+// (cmd/sandbox-agent's renderReviewCostBudgetToolPromptText) -- the ONE
+// place this specific sandbox's own, already-bound loopback port is in
+// scope. A prompt with no occurrence of this token (every non-review
+// turn, and a review turn whose ctx.ReviewCostBudgetUSD is 0 -- see
+// subAgentOrchestrationInstructions' own gating below) is left untouched
+// by that substitution, exactly like the verdict-tool placeholders'
+// own identical "absence is itself the signal" contract.
+const ReviewCostBudgetToolURLPlaceholder = "{{REVIEW_COST_BUDGET_TOOL_URL}}"
+
 // ArchitectureScribeAgentName, CounterReviewerAgentName, and
 // FactCheckAgentName (§26.4/§26.6, Step 69) are the literal OpenCode
 // custom-agent names (opencode.json's own "agent" object, mirroring Step
@@ -561,8 +589,8 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // findings list this funnel prunes) -- dispatched whenever convenient,
 // before/after/interleaved with the funnel above.
 //
-// # The cost budget (§26.7): a self-governed, best-effort check, not a
-// server-enforced gate
+// # The cost budget (§26.7, Step 70): a real, checkable fact, not
+// self-estimation -- but still not a server-ENFORCED gate
 //
 // §26.7 specifies a look-ahead check performed by "the primary reviewer's
 // own orchestration" before each optional sub-task dispatch. This control
@@ -570,9 +598,29 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // (§7's own anti-corruption-layer boundary: once a turn starts, the
 // server only ever consumes/tags the resulting event stream, never
 // injects further instructions mid-turn) -- so the actual mechanism
-// putting §26.7's policy into effect is the review agent's OWN judgment,
-// guided by the dollar ceiling this text states plainly. This is a
-// considered, explicitly-named design call (not an oversight): unlike
+// putting §26.7's policy into effect is still, necessarily, the review
+// agent's OWN cooperation: nothing outside the turn can force it to check
+// or to obey what it learns. What Step 70 changes is WHAT that cooperation
+// consists of. Before this Step, the text below asked the agent to "use
+// your own best judgment of how much of that ceiling this review has
+// likely already consumed" -- a self-ESTIMATION, with no real spend figure
+// behind it at all (internal/domain/reviewtriage.ShouldSkipOptionalPass,
+// costbudget.go, existed as a tested pure function with ZERO production
+// callers, its own doc comment said so explicitly). Now the text below
+// instructs a single GET to a loopback HTTP server cmd/sandbox-agent
+// itself runs (reviewcostbudgetserver.go) -- backed by a real, running
+// total of this turn's own step_finish.cost, summed across the main lane
+// and every sub-task alike (turnState.spentUSD, internal/adapters/
+// outbound/opencode/turn.go) -- which calls THIS package's sibling,
+// reviewtriage.ShouldSkipOptionalPass, for real, and returns its real
+// answer. The agent is still the one that has to make the GET call and
+// obey the answer (§7's boundary above is unchanged), but "obey a
+// server-computed fact" is a materially different, more honest
+// cooperation than "self-estimate a number you were never given" --
+// exactly this Step's own reason for existing.
+//
+// This is still a considered, explicitly-named design call, not an
+// oversight, in the SAME sense the pre-Step-70 text already was: unlike
 // Shippable, which the server always recomputes because a model's
 // self-report could be gamed toward an UNSAFE outcome, a self-reported
 // budget-driven skip can NEVER be gamed unsafely here -- CounterReview:
@@ -580,8 +628,20 @@ func verdictToolInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyM
 // was skipped (review.CounterReviewFloor treats every cause identically),
 // and FactCheck:skipped never raises or lowers anything at all
 // (reviewpost.FactCheckStatus's own doc comment) -- so the worst a
-// dishonest or merely-mistaken self-report can do is the SAME safe
-// direction a genuine provider failure already produces.
+// dishonest or merely-mistaken agent can do (ignore "shouldSkip": true,
+// or claim the GET failed when it didn't) is the SAME safe direction a
+// genuine provider failure already produces. This is also why the
+// endpoint itself needs no authentication (reviewcostbudgetserver.go's
+// own doc comment): it serves only numeric budget state, never a secret,
+// and there is no adversarial incentive for the agent calling it to lie
+// about what it received.
+//
+// §26.9's own decided exclusion carries over unchanged: the ceiling
+// governs fact-check and counter-review only, NEVER
+// ArchitectureScribeAgentName -- see this function's own deep-only
+// gating below, which never even names the scribe on the light path at
+// all (TestRenderTurnPrompt_ArchitectureScribeAndCounterReviewerOnlyOnDeepPath
+// already pins that light never mentions it, for any reason).
 func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBudgetSafetyMarginPercent int) string {
 	out := "\n\n" +
 		"Before posting your verdict, orchestrate the following sub-tasks using this system's own \"task\" tool (a genuinely separate, context-isolated agent -- not a note to yourself), naming the exact \"subagent_type\" below for each:\n\n" +
@@ -591,33 +651,51 @@ func subAgentOrchestrationInstructions(deep bool, costBudgetUSD float64, costBud
 			"3. Counter-review (subagent_type \"" + CounterReviewerAgentName + "\", deep path only, AFTER fact-check has already pruned your findings): spawn this sub-task with your own SURVIVING findings (post-fact-check) and your digest, and ask it to try to REFUTE each one and to surface anything you missed. It has read/tool access to the repo (it may need to verify a claim against real files) but must not edit anything. It may itself surface genuinely NEW findings -- these are NOT re-run through fact-check (a tool-equipped, full-context adversarial pass is by construction at least as rigorous as a diff-only check). Publish only the findings that SURVIVE this adjudication -- drop anything it convincingly refutes. Where it disagreed with you and you did not simply defer to it, name that disagreement in \"digest.contestedPoints\" -- agent disagreement is precisely the signal a human should weigh in on. Report \"counterReview\": \"done\". If this sub-task errors, times out, or returns something you cannot parse, publish your findings exactly as they stood after fact-check, and report \"counterReview\": \"skipped\" -- this alone raises your verdict's own shippable classification to needs_human, so do not treat a skip as routine.\n"
 	}
 	if costBudgetUSD > 0 {
-		// B5 fix: costBudgetSafetyMarginPercent (PreFetchedContext's own
-		// doc comment) is reviewtriage.CostBudgetSafetyMargin threaded in
-		// as a whole percentage by this function's own caller -- rendered
-		// here rather than a hand-typed "80%" literal, so this prompt text
-		// can never silently desynchronize from the real constant
-		// ShouldSkipOptionalPass itself would compare against. Falls back
-		// to defaultCostBudgetSafetyMarginPercent (this Step's own
-		// proposed 80) for a caller that left the field unset, rather than
-		// rendering a nonsensical "0%".
+		// B5 fix (kept by Step 70): costBudgetSafetyMarginPercent
+		// (PreFetchedContext's own doc comment) is reviewtriage.
+		// CostBudgetSafetyMargin threaded in as a whole percentage by this
+		// function's own caller -- rendered here rather than a hand-typed
+		// "80%" literal, so this prompt text can never silently
+		// desynchronize from the real constant ShouldSkipOptionalPass
+		// itself compares against, server-side, inside the loopback
+		// endpoint below. Falls back to defaultCostBudgetSafetyMarginPercent
+		// (this Step's own proposed 80) for a caller that left the field
+		// unset, rather than rendering a nonsensical "0%". Purely
+		// explanatory now (Step 70): the agent no longer has to APPLY this
+		// figure itself, only understand roughly what the endpoint's own
+		// "shouldSkip" answer already accounts for.
 		marginPercent := costBudgetSafetyMarginPercent
 		if marginPercent <= 0 {
 			marginPercent = defaultCostBudgetSafetyMarginPercent
 		}
-		out += "\nCost budget: this review has an approximate ceiling of $" + formatUSD(costBudgetUSD) + " for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough " + itoa(marginPercent) + "% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\""
+		out += "\nCost budget: this review has an approximate ceiling of $" + formatUSD(costBudgetUSD) + " for the optional sub-tasks below, combined with your own main line of work -- never before your own primary findings pass, which always runs regardless of cost."
+		if deep {
+			// §26.9's decided exclusion, stated to the agent explicitly and
+			// ONLY on deep (never even naming ArchitectureScribeAgentName on
+			// light -- see this function's own top doc comment and
+			// TestRenderTurnPrompt_ArchitectureScribeAndCounterReviewerOnlyOnDeepPath).
+			out += " This ceiling NEVER applies to " + ArchitectureScribeAgentName + " either (§26.9) -- it always runs regardless of cost; the ceiling below governs fact-check and counter-review only."
+		}
+		out += " Before spawning fact-check"
+		if deep {
+			out += " or counter-review"
+		}
+		out += ", first make a single GET request via your own tool use (e.g. bash/curl -- never the verdict-posting tool above) to:\n"
+		out += "GET " + ReviewCostBudgetToolURLPlaceholder + "?ceilingUsd=" + formatUSD(costBudgetUSD) + "\n"
+		out += "This is a purely local endpoint inside your own sandbox -- no credential is required. A successful response is a small JSON body: {\"spentUSD\": <number>, \"ceilingUSD\": <number>, \"shouldSkip\": true|false} -- \"shouldSkip\" is already computed for you there, checked at a rough " + itoa(marginPercent) + "% margin against the ceiling, so you never need to estimate spend yourself. If \"shouldSkip\" is true, SKIP that sub-task rather than spawning it, and report the affected field(s) (\"factCheck\""
 		if deep {
 			out += "/\"counterReview\""
 		}
-		out += ") as \"skipped\" with the reason noted in your own free-text summary.\n"
-		// B6 fix: the fact-check-vs-counter-review tradeoff sentence below
-		// only makes sense when BOTH exist to choose between -- light has
-		// no counter-review sub-task at all (§26.9), so "err toward running
-		// fact-check before skipping counter-review" would be nonsense
-		// there (there is nothing to weigh fact-check against; it is
-		// already the ONLY optional pass light ever runs, CostBudget.Light's
-		// own "a degenerate, one-checkpoint case" doc comment, costbudget.go).
+		out += ") as \"skipped\" with the reason noted in your own free-text summary. If the request itself fails for ANY reason -- your own tool use erroring, a timeout, a non-2xx response, a malformed or unparseable body -- treat that IDENTICALLY to \"shouldSkip\": true: skip the sub-task rather than proceeding as though under budget, matching this system's own consistent fail-safe-toward-caution posture on cost.\n"
+		// B6 fix (kept by Step 70): the fact-check-vs-counter-review
+		// tradeoff sentence below only makes sense when BOTH exist to
+		// choose between -- light has no counter-review sub-task at all
+		// (§26.9), so it would be nonsense there (there is nothing to
+		// weigh fact-check against; it is already the ONLY optional pass
+		// light ever runs, CostBudget.Light's own "a degenerate,
+		// one-checkpoint case" doc comment, costbudget.go).
 		if deep {
-			out += "This is a judgment call on your part, not something this system measures for you mid-review -- err toward running fact-check (cheap, and it only ever prunes noise) before skipping counter-review (the more expensive pass) if you must choose.\n"
+			out += "Check independently before EACH of fact-check and counter-review -- spend only grows during a review, so an earlier answer does not still hold later; err toward running fact-check (cheap, and it only ever prunes noise) before skipping counter-review (the more expensive pass) if the two compete for the same remaining budget.\n"
 		}
 	}
 	return out
