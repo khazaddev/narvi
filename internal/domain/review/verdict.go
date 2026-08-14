@@ -11,9 +11,10 @@ package review
 //
 // CONTRACT for the caller that constructs a Verdict (a later Step, never
 // this package): Shippable must be populated with EXACTLY
-// ComputeShippable(RiskLevel, TestsCoverage, Premise)'s return value —
-// never a hand-set value, and never ProposedShippable converted to
-// Shippable. This package cannot enforce that at the type-system level
+// ComputeShippable(RiskLevel, TestsCoverage, Premise, DescriptionAdequacy,
+// CounterReviewStatus)'s return value — never a hand-set value, and never
+// ProposedShippable converted to Shippable. This package cannot enforce
+// that at the type-system level
 // (Go has no way to make a struct field "write-once, only via this
 // function") — the enforcement is ProposedShippable's own distinct type
 // (verdict.go's sibling doc comment on shippable.go), which makes the one

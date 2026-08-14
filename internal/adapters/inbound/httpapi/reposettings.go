@@ -35,6 +35,7 @@ import (
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
+	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/review"
@@ -122,13 +123,14 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 		// this repo's own settings -- not just the admin-only row 6
 		// actions this endpoint originally gated on alone (see
 		// authorizeAny's own doc comment above). Step 65 (§24.5) adds
-		// ActionToggleAutoRetriggerReview, and Step 67 (§26.2) adds
-		// ActionToggleDescriptionAutofix, to this SAME "any one of these
-		// suffices to read" list -- both the SAME admin-only row as
+		// ActionToggleAutoRetriggerReview, Step 67 (§26.2) adds
+		// ActionToggleDescriptionAutofix, and Step 69 (§26.7) adds
+		// ActionConfigureReviewCostBudget, to this SAME "any one of these
+		// suffices to read" list -- all the SAME admin-only row as
 		// ActionToggleAutoMerge, so this changes nothing about who could
 		// already read this endpoint, only documents each new toggle's
 		// own read gate explicitly.
-		if !authorizeAny(w, r, authz.Resource{}, authz.ActionConfigureBlockOnHighRisk, authz.ActionConfigureAutoApprove, authz.ActionToggleAutoMerge, authz.ActionToggleAutoRetriggerReview, authz.ActionToggleDescriptionAutofix, authz.ActionConfigureReviewDepth) {
+		if !authorizeAny(w, r, authz.Resource{}, authz.ActionConfigureBlockOnHighRisk, authz.ActionConfigureAutoApprove, authz.ActionToggleAutoMerge, authz.ActionToggleAutoRetriggerReview, authz.ActionToggleDescriptionAutofix, authz.ActionConfigureReviewDepth, authz.ActionConfigureReviewCostBudget) {
 			return
 		}
 
@@ -164,6 +166,7 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 				resp.SensitiveBlastRadiusTags = &tags
 			}
 			resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
+			resp.ReviewCostBudgetLightUsd, resp.ReviewCostBudgetDeepUsd = reviewCostBudgetFieldsFromRow(settings)
 		}
 
 		rate, _, sampleSize, computed, err := appreviewverdict.ContradictionRate(ctx, reviewVerdictDeps, repoFullName, time.Now())
@@ -217,6 +220,23 @@ func reviewDepthFieldsFromRow(settings sqlcgen.RepoSetting) (mode restdtos.RepoS
 		}
 	}
 	return mode, deepPaths
+}
+
+// reviewCostBudgetFieldsFromRow renders settings' own
+// review_cost_budget_light_usd/review_cost_budget_deep_usd columns (Step
+// 69, §26.7) into RepoSettings' own two wire fields -- mirrors
+// reviewDepthFieldsFromRow's own identical "one shared conversion, many
+// call sites" precedent immediately above, sharing internal/app/
+// reviewtriage's own numericToFloat64 conversion rather than
+// re-implementing pgtype.Numeric handling a second time.
+func reviewCostBudgetFieldsFromRow(settings sqlcgen.RepoSetting) (light, deep *float64) {
+	if v, ok := appreviewtriage.NumericToFloat64(settings.ReviewCostBudgetLightUsd); ok {
+		light = &v
+	}
+	if v, ok := appreviewtriage.NumericToFloat64(settings.ReviewCostBudgetDeepUsd); ok {
+		deep = &v
+	}
+	return light, deep
 }
 
 // reviewTagsFromJSON decodes a JSON array of tag strings (the SAME wire
@@ -284,12 +304,15 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc 
 		}
 
 		mode, deepPaths := reviewDepthFieldsFromRow(settings)
+		costBudgetLight, costBudgetDeep := reviewCostBudgetFieldsFromRow(settings)
 		writeJSON(w, http.StatusOK, restdtos.RepoSettings{
-			RepoFullName:           repoFullName,
-			BlockOnHighRisk:        settings.BlockOnHighRisk,
-			SentinelAutofixEnabled: settings.SentinelAutofixEnabled,
-			ReviewDepthMode:        mode,
-			ReviewDepthDeepPaths:   deepPaths,
+			RepoFullName:             repoFullName,
+			BlockOnHighRisk:          settings.BlockOnHighRisk,
+			SentinelAutofixEnabled:   settings.SentinelAutofixEnabled,
+			ReviewDepthMode:          mode,
+			ReviewDepthDeepPaths:     deepPaths,
+			ReviewCostBudgetLightUsd: costBudgetLight,
+			ReviewCostBudgetDeepUsd:  costBudgetDeep,
 		})
 	}
 }
@@ -463,6 +486,7 @@ func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore) http
 			resp.SensitiveBlastRadiusTags = &tags
 		}
 		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
+		resp.ReviewCostBudgetLightUsd, resp.ReviewCostBudgetDeepUsd = reviewCostBudgetFieldsFromRow(settings)
 
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -530,6 +554,7 @@ func PutDescriptionAutofixToggle(repoSettings *postgres.RepoSettingsStore) http.
 			resp.SensitiveBlastRadiusTags = &tags
 		}
 		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
+		resp.ReviewCostBudgetLightUsd, resp.ReviewCostBudgetDeepUsd = reviewCostBudgetFieldsFromRow(settings)
 
 		writeJSON(w, http.StatusOK, resp)
 	}
@@ -560,6 +585,7 @@ func autoApprovalSettingsToRepoSettingsDTO(ctx context.Context, repoSettings *po
 		resp.BlockOnHighRisk = settings.BlockOnHighRisk
 		resp.SentinelAutofixEnabled = settings.SentinelAutofixEnabled
 		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
+		resp.ReviewCostBudgetLightUsd, resp.ReviewCostBudgetDeepUsd = reviewCostBudgetFieldsFromRow(settings)
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		platform.Logger(ctx).Error("httpapi: read back block-on-high-risk/sentinel-autofix fields failed", "error", err)
 	}
@@ -673,6 +699,92 @@ func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore) http.Handler
 			resp.SensitiveBlastRadiusTags = &tags
 		}
 		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
+		resp.ReviewCostBudgetLightUsd, resp.ReviewCostBudgetDeepUsd = reviewCostBudgetFieldsFromRow(settings)
+
+		writeJSON(w, http.StatusOK, resp)
+	}
+}
+
+// PutReviewCostBudget backs PUT /api/repos/{owner}/{repo}/review-cost-budget
+// (Step 69, §26.7) -- (re)configures this repo's own per-path cost
+// ceilings. Gated SOLELY by authz.ActionConfigureReviewCostBudget (admin
+// only, §13.3 row 6) -- see UpdateReviewCostBudgetRequest's own doc
+// comment (contracts/rest/v1/dtos.schema.json) for why this is a separate
+// endpoint from PutRepoSettings above, mirroring PutReviewDepthConfig's
+// own identical reasoning.
+//
+// COLUMN-SCOPED write, via postgres.RepoSettingsStore.
+// UpsertReviewCostBudget -- touches ONLY review_cost_budget_light_usd/
+// review_cost_budget_deep_usd, never any other repo_settings column (§62
+// review finding C5's own column-scoped-write discipline, applied here
+// from the start, exactly like PutReviewDepthConfig above). This store
+// method already returns the FULL, just-written repo_settings row, so no
+// follow-up Get call is needed to render every OTHER field on the
+// response.
+func PutReviewCostBudget(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		logger := platform.Logger(ctx)
+
+		if !authorize(w, r, authz.ActionConfigureReviewCostBudget, authz.Resource{}) {
+			return
+		}
+
+		repoFullName, ok := repoFullNameFromRoute(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, "repo not found")
+			return
+		}
+
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		var req restdtos.UpdateReviewCostBudgetRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "malformed request body")
+			return
+		}
+
+		lightUSD := (*float64)(req.LightUsd)
+		deepUSD := (*float64)(req.DeepUsd)
+		// <= 0, not < 0: reviewtriage.CostBudget's own zero value means "no
+		// ceiling configured" (ShouldSkipOptionalPass, internal/domain/
+		// reviewtriage/costbudget.go's own doc comment: "a zero ceilingUSD
+		// ... NEVER skips"), so an explicit lightUsd/deepUsd of 0 stored
+		// here would silently collide with that "unconfigured" sentinel and
+		// resolve to UNLIMITED spend -- the opposite of what an operator
+		// setting an explicit 0 almost certainly intends. Rejecting it with
+		// a 400 (rather than silently accepting and reinterpreting it) is
+		// the SAME "never silently reinterpret a value the caller
+		// explicitly set" discipline reviewDepthModeString already applies
+		// to an unrecognized mode string, immediately below.
+		if (lightUSD != nil && *lightUSD <= 0) || (deepUSD != nil && *deepUSD <= 0) {
+			writeError(w, http.StatusBadRequest, "lightUsd and deepUsd must be positive (zero would collide with the built-in 'no ceiling configured' sentinel and silently mean unlimited), or null to use the built-in default")
+			return
+		}
+
+		settings, err := repoSettings.UpsertReviewCostBudget(ctx, repoFullName, lightUSD, deepUSD)
+		if err != nil {
+			logger.Error("httpapi: upsert review cost budget failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+
+		resp := restdtos.RepoSettings{
+			RepoFullName:               repoFullName,
+			BlockOnHighRisk:            settings.BlockOnHighRisk,
+			SentinelAutofixEnabled:     settings.SentinelAutofixEnabled,
+			AutoMergeEnabled:           settings.AutoMergeEnabled,
+			AutoRetriggerReviewEnabled: settings.AutoRetriggerReviewEnabled,
+			DescriptionAutofixEnabled:  settings.DescriptionAutofixEnabled,
+		}
+		if settings.MaxAutoApproveFilesChanged != nil {
+			v := int(*settings.MaxAutoApproveFilesChanged)
+			resp.MaxAutoApproveFilesChanged = &v
+		}
+		if tags := autoApprovalTagsFromJSON(settings.SensitiveBlastRadiusTags); tags != nil {
+			resp.SensitiveBlastRadiusTags = &tags
+		}
+		resp.ReviewDepthMode, resp.ReviewDepthDeepPaths = reviewDepthFieldsFromRow(settings)
+		resp.ReviewCostBudgetLightUsd, resp.ReviewCostBudgetDeepUsd = reviewCostBudgetFieldsFromRow(settings)
 
 		writeJSON(w, http.StatusOK, resp)
 	}

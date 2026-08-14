@@ -49,6 +49,27 @@ type SessionConfig struct {
 	// mirror.
 	Repos []SessionConfigReposElem `json:"repos" yaml:"repos" mapstructure:"repos"`
 
+	// Step 69 (§26.4): the counter-review sub-task's own opposing-model-family
+	// override, a "provider/model" string
+	// (internal/app/reviewtriage.ResolveCounterReviewerModel), resolved server-side
+	// ONCE per spawn/restore/resume from this session's own GitHub PR association's
+	// authoring-model provenance, when one exists. Null/absent means no override at
+	// all -- the OVERWHELMING common case (a human-authored PR, or any non-review
+	// session, has no authoring model to oppose in the first place) -- sandbox-agent
+	// then registers the 'counter-reviewer' custom OpenCode agent
+	// (internal/adapters/outbound/opencode/reviewsubagents.go) with no 'model' field
+	// of its own, so it simply inherits whatever model the deep-path turn's own
+	// dispatch already resolved. Genuinely OPTIONAL, like
+	// pathScope/capabilityRestricted above: absent is today's exact unchanged
+	// behavior for every session created before this field existed. The three review
+	// sub-agent definitions themselves
+	// (architecture-scribe/counter-reviewer/fact-check) are registered
+	// UNCONDITIONALLY for every session, never gated by a session-level flag the way
+	// capabilityRestricted gates 'sentinel-fix' -- see reviewsubagents.go's own doc
+	// comment for why (a review turn's own prompt, never agent-config presence, is
+	// what actually decides whether any of them is ever invoked).
+	ReviewCounterReviewerModel SessionConfigReviewCounterReviewerModel `json:"reviewCounterReviewerModel,omitempty,omitzero" yaml:"reviewCounterReviewerModel,omitempty" mapstructure:"reviewCounterReviewerModel,omitempty"`
+
 	// This sandbox instance's own stable identity (sandboxes.id), delivered to
 	// sandbox-agent so it can present itself correctly as the X-Sandbox-ID header on
 	// the sandbox WS handshake (§6.1).
@@ -148,6 +169,27 @@ func (j *SessionConfigReposElem) UnmarshalJSON(value []byte) error {
 	*j = SessionConfigReposElem(plain)
 	return nil
 }
+
+// Step 69 (§26.4): the counter-review sub-task's own opposing-model-family
+// override, a "provider/model" string
+// (internal/app/reviewtriage.ResolveCounterReviewerModel), resolved server-side
+// ONCE per spawn/restore/resume from this session's own GitHub PR association's
+// authoring-model provenance, when one exists. Null/absent means no override at
+// all -- the OVERWHELMING common case (a human-authored PR, or any non-review
+// session, has no authoring model to oppose in the first place) -- sandbox-agent
+// then registers the 'counter-reviewer' custom OpenCode agent
+// (internal/adapters/outbound/opencode/reviewsubagents.go) with no 'model' field
+// of its own, so it simply inherits whatever model the deep-path turn's own
+// dispatch already resolved. Genuinely OPTIONAL, like
+// pathScope/capabilityRestricted above: absent is today's exact unchanged behavior
+// for every session created before this field existed. The three review sub-agent
+// definitions themselves (architecture-scribe/counter-reviewer/fact-check) are
+// registered UNCONDITIONALLY for every session, never gated by a session-level
+// flag the way capabilityRestricted gates 'sentinel-fix' -- see
+// reviewsubagents.go's own doc comment for why (a review turn's own prompt, never
+// agent-config presence, is what actually decides whether any of them is ever
+// invoked).
+type SessionConfigReviewCounterReviewerModel *string
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *SessionConfig) UnmarshalJSON(value []byte) error {

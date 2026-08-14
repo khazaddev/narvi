@@ -6,6 +6,7 @@ import (
 
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // validInput returns a VerdictInput that passes every check --
@@ -26,6 +27,7 @@ func validInput() reviewpost.VerdictInput {
 			DescriptionAdequacy: review.DescriptionAdequacyOK,
 			AdequacyExplanation: "The PR body accurately describes the retry helper this diff adds.",
 		},
+		FactCheck: reviewpost.FactCheckDone,
 	}
 }
 
@@ -169,6 +171,41 @@ func TestValidateVerdictInput(t *testing.T) {
 		{
 			name:    "empty digest.proposedBody is legal (§26.2: the agent MAY propose a rewrite, not required)",
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.ProposedBody = "" },
+			wantErr: nil,
+		},
+		{
+			name:    "missing factCheck (zero value) -- §26.6: schema-required unconditionally",
+			mutate:  func(in *reviewpost.VerdictInput) { in.FactCheck = "" },
+			wantErr: reviewpost.ErrInvalidFactCheck,
+		},
+		{
+			name:    "garbled factCheck",
+			mutate:  func(in *reviewpost.VerdictInput) { in.FactCheck = "maybe" },
+			wantErr: reviewpost.ErrInvalidFactCheck,
+		},
+		{
+			name:    "factCheck=skipped with factCheckKilled=0 is legal",
+			mutate:  func(in *reviewpost.VerdictInput) { in.FactCheck = reviewpost.FactCheckSkipped; in.FactCheckKilled = 0 },
+			wantErr: nil,
+		},
+		{
+			name:    "negative factCheckKilled",
+			mutate:  func(in *reviewpost.VerdictInput) { in.FactCheckKilled = -1 },
+			wantErr: reviewpost.ErrNegativeFactCheckKilled,
+		},
+		{
+			name:    "factCheck=skipped with a non-zero factCheckKilled is rejected (a skipped pass removed nothing, by construction)",
+			mutate:  func(in *reviewpost.VerdictInput) { in.FactCheck = reviewpost.FactCheckSkipped; in.FactCheckKilled = 2 },
+			wantErr: reviewpost.ErrFactCheckKilledOnSkip,
+		},
+		{
+			name:    "factCheck=done with a positive factCheckKilled is legal",
+			mutate:  func(in *reviewpost.VerdictInput) { in.FactCheck = reviewpost.FactCheckDone; in.FactCheckKilled = 3 },
+			wantErr: nil,
+		},
+		{
+			name:    "counterReview is unchecked on the light path even when garbled (§26.9: no meaning there)",
+			mutate:  func(in *reviewpost.VerdictInput) { in.CounterReview = "bogus" },
 			wantErr: nil,
 		},
 	}
@@ -342,5 +379,153 @@ func TestBuildVerdict_AdequacyNeverAffectsRiskLevel(t *testing.T) {
 	// re-deriving that property here.
 	if misleadingVerdict.Shippable != review.ShippableNeedsHuman {
 		t.Errorf("misleadingVerdict.Shippable = %q, want %q", misleadingVerdict.Shippable, review.ShippableNeedsHuman)
+	}
+}
+
+// TestBuildVerdict_CounterReviewSkippedRaisesShippable is §26.4/Step 69's
+// own end-to-end pin, one layer up from
+// TestComputeShippable_CounterReviewSkippedRaisesShippable
+// (internal/domain/review/shippable_test.go): an otherwise-completely-clean,
+// DEEP-path VerdictInput (low risk, ok premise, adequate coverage, ok
+// adequacy -- every OTHER floor clean, Shippable would otherwise compute
+// auto) whose CounterReview is "skipped" must still come out of
+// BuildVerdict as ShippableNeedsHuman, proving the fourth floor genuinely
+// reaches the posting endpoint's own real construction path, not merely
+// ComputeShippable in isolation. This is explicitly named, in this Step's
+// own process requirements, as "the single most important property in
+// this whole Step".
+func TestBuildVerdict_CounterReviewSkippedRaisesShippable(t *testing.T) {
+	in := validInput()
+	in.ReviewDepth = reviewtriage.DepthDeep
+	in.RiskLevel = review.RiskLevelLow
+	in.Premise = review.PremiseStateOK
+	in.TestsCoverage = review.TestsCoverageStateAdequate
+	in.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	in.Digest.ArchDecisions = []reviewpost.ArchDecision{{Decision: "x"}}
+	in.Digest.StackRisks = "none of note"
+	in.Digest.UnverifiedLimits = "did not run against production data"
+	in.CounterReview = review.CounterReviewSkipped
+
+	if err := reviewpost.ValidateVerdictInput(in); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput() = %v, want nil", err)
+	}
+
+	got := reviewpost.BuildVerdict(in)
+	if got.Shippable != review.ShippableNeedsHuman {
+		t.Errorf("Shippable = %q, want %q (a skipped counter-review must raise Shippable off an otherwise-clean auto baseline on the deep path)", got.Shippable, review.ShippableNeedsHuman)
+	}
+}
+
+// TestBuildVerdict_CounterReviewFloorInertOnLightPath is the mutation-test
+// pin for BuildVerdict's own light-path substitution (this function's own
+// doc comment, validate.go): a LIGHT-path (or unresolved-depth) VerdictInput
+// carrying a garbled/unset CounterReview value must NOT have Shippable
+// floored to needs_human by it -- review.CounterReviewFloor's own
+// fail-conservative default would otherwise silently defeat light-path
+// auto-approval entirely, on every single light-path verdict, since the
+// light path never populates (or validates) this field at all (§26.9).
+// Mutation coverage: reverting BuildVerdict's own `if in.ReviewDepth !=
+// reviewtriage.DepthDeep { counterReviewForFloor = review.CounterReviewDone }`
+// substitution (e.g. always forwarding in.CounterReview verbatim) makes
+// this test fail, since ReviewDepth is left at its own zero value below
+// (never DepthDeep) with CounterReview left at ITS zero value too.
+func TestBuildVerdict_CounterReviewFloorInertOnLightPath(t *testing.T) {
+	in := validInput()
+	in.RiskLevel = review.RiskLevelLow
+	in.Premise = review.PremiseStateOK
+	in.TestsCoverage = review.TestsCoverageStateAdequate
+	in.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	// in.ReviewDepth is left at its own zero value (never DepthDeep) --
+	// the light-path/unresolved-depth case.
+	// in.CounterReview is left at its own zero value too, exactly what an
+	// agent that was never asked to populate it (§26.9: no counter-review
+	// on light) would submit.
+
+	if err := reviewpost.ValidateVerdictInput(in); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput() = %v, want nil (counterReview is never validated on the light path)", err)
+	}
+
+	got := reviewpost.BuildVerdict(in)
+	if got.Shippable != review.ShippableAuto {
+		t.Errorf("Shippable = %q, want %q (an unset CounterReview must be inert on the light path, never floored as though it were 'skipped')", got.Shippable, review.ShippableAuto)
+	}
+}
+
+// TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath
+// is B11's own regression test: unlike the BLANK/unset CounterReview the
+// test immediately above pins as correctly inert on the light path, a
+// verdict that EXPLICITLY carries CounterReview: "skipped" -- legal input
+// there, since ValidateVerdictInput never checks this field at all when
+// in.ReviewDepth != reviewtriage.DepthDeep -- must still float Shippable
+// to needs_human, the SAME floor TestBuildVerdict_CounterReviewSkippedRaisesShippable
+// above already pins for the deep path. Before the B11 fix, BuildVerdict's
+// own unconditional light-path substitution silently rewrote this
+// explicit self-report into CounterReviewDone, erasing exactly the signal
+// §26.4 says must raise the floor.
+// Mutation coverage: reverting BuildVerdict's own added
+// `&& in.CounterReview != review.CounterReviewSkipped` clause (back to the
+// bare `if in.ReviewDepth != reviewtriage.DepthDeep` this test's own
+// sibling above still covers) makes this test fail, since it would then
+// recompute Shippable as auto instead.
+func TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath(t *testing.T) {
+	in := validInput()
+	in.RiskLevel = review.RiskLevelLow
+	in.Premise = review.PremiseStateOK
+	in.TestsCoverage = review.TestsCoverageStateAdequate
+	in.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	// in.ReviewDepth is left at its own zero value (never DepthDeep) --
+	// the light-path/unresolved-depth case, exactly like the sibling test
+	// above -- but CounterReview is EXPLICITLY reported skipped this time.
+	in.CounterReview = review.CounterReviewSkipped
+
+	if err := reviewpost.ValidateVerdictInput(in); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput() = %v, want nil (CounterReview is never validated on the light path, so an explicit \"skipped\" is legal input there)", err)
+	}
+
+	got := reviewpost.BuildVerdict(in)
+	if got.Shippable != review.ShippableNeedsHuman {
+		t.Errorf("Shippable = %q, want %q (an EXPLICIT CounterReview: skipped must still raise Shippable, even on a verdict this function cannot confirm is genuinely deep-path)", got.Shippable, review.ShippableNeedsHuman)
+	}
+}
+
+// TestComputeShippable_FactCheckSkippedNeverRaisesShippable is §26.6's
+// own deliberate, load-bearing DIFFERENCE from
+// TestBuildVerdict_CounterReviewSkippedRaisesShippable above: FactCheck
+// has NO floor at all, so it can never be found anywhere in
+// review.ComputeShippable's own parameter list, and no VerdictInput
+// mutation involving FactCheck can ever change BuildVerdict's own computed
+// Shippable. This proves the asymmetry end to end, at the SAME
+// construction site the counter-review pin above exercises: two
+// VerdictInputs, identical except FactCheck (done vs. skipped, with
+// FactCheckKilled adjusted to keep each one independently valid), must
+// compute the IDENTICAL Shippable.
+func TestComputeShippable_FactCheckSkippedNeverRaisesShippable(t *testing.T) {
+	base := validInput()
+	base.RiskLevel = review.RiskLevelLow
+	base.Premise = review.PremiseStateOK
+	base.TestsCoverage = review.TestsCoverageStateAdequate
+	base.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+
+	doneInput := base
+	doneInput.FactCheck = reviewpost.FactCheckDone
+	doneInput.FactCheckKilled = 5
+	if err := reviewpost.ValidateVerdictInput(doneInput); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput(done) = %v, want nil", err)
+	}
+	doneVerdict := reviewpost.BuildVerdict(doneInput)
+
+	skippedInput := base
+	skippedInput.FactCheck = reviewpost.FactCheckSkipped
+	skippedInput.FactCheckKilled = 0
+	if err := reviewpost.ValidateVerdictInput(skippedInput); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput(skipped) = %v, want nil", err)
+	}
+	skippedVerdict := reviewpost.BuildVerdict(skippedInput)
+
+	if doneVerdict.Shippable != review.ShippableAuto {
+		t.Fatalf("test setup: doneVerdict.Shippable = %q, want %q", doneVerdict.Shippable, review.ShippableAuto)
+	}
+	if skippedVerdict.Shippable != doneVerdict.Shippable {
+		t.Errorf("skippedVerdict.Shippable = %q, doneVerdict.Shippable = %q -- FactCheck:skipped must NEVER raise Shippable (the deliberate difference from CounterReview:skipped)", skippedVerdict.Shippable, doneVerdict.Shippable)
 	}
 }

@@ -48,7 +48,21 @@ import (
 // never resolved a depth, or a caller that predates this Step), persisted
 // as a genuine SQL NULL, never the literal string "" (nonEmptyStringPtr
 // below).
-func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullName string, prNumber int32, headSHA string, sessionID pgtype.UUID, verdict review.Verdict, digest reviewpost.Digest, reviewPath reviewtriage.ReviewDepth) (reviewverdict.Record, error) {
+//
+// counterReview/factCheck/factCheckKilled (Step 69, §26.4/§26.6) are
+// forwarded verbatim from the SAME already-validated VerdictInput this
+// verdict/digest were themselves built from -- counterReview's own empty
+// value (light path, §26.9) persists as NULL via nonEmptyStringPtr
+// exactly like reviewPath's own identical degradation; factCheck is
+// UNCONDITIONALLY non-empty by the time this function is called in
+// production (reviewpost.ValidateVerdictInput's own ErrInvalidFactCheck
+// already rejected anything else before BuildVerdict ever ran), but this
+// function does not itself re-validate that, exactly like it does not
+// re-validate any other field. factCheckKilled persists as a genuine SQL
+// NULL only when this function is never reached by a real caller at all
+// (there is no "unset" VerdictInput.FactCheckKilled distinct from 0 --
+// factCheckKilledPtr below always returns a non-nil pointer).
+func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullName string, prNumber int32, headSHA string, sessionID pgtype.UUID, verdict review.Verdict, digest reviewpost.Digest, reviewPath reviewtriage.ReviewDepth, counterReview review.CounterReviewStatus, factCheck reviewpost.FactCheckStatus, factCheckKilled int) (reviewverdict.Record, error) {
 	if headSHA == "" {
 		return reviewverdict.Record{}, fmt.Errorf("reviewverdict: insert: refusing to persist a verdict with no known head sha for %s#%d", repoFullName, prNumber)
 	}
@@ -84,6 +98,10 @@ func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullNam
 		DigestAdequacyExplanation: nonEmptyStringPtr(digest.AdequacyExplanation),
 		DigestProposedBody:        nonEmptyStringPtr(digest.ProposedBody),
 		ReviewPath:                nonEmptyStringPtr(string(reviewPath)),
+		CounterReview:             nonEmptyStringPtr(string(counterReview)),
+		FactCheck:                 nonEmptyStringPtr(string(factCheck)),
+		FactCheckKilled:           factCheckKilledPtr(factCheckKilled),
+		DigestContestedPoints:     nonEmptyStringPtr(digest.ContestedPoints),
 	})
 	if err != nil {
 		return reviewverdict.Record{}, err
@@ -102,4 +120,21 @@ func nonEmptyStringPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// factCheckKilledPtr converts n into sqlcgen.InsertReviewVerdictParams.
+// FactCheckKilled's own *int32 column shape -- ALWAYS a non-nil pointer
+// (unlike nonEmptyStringPtr above): there is no "unset" FactCheckKilled
+// value distinct from 0 (reviewpost.VerdictInput.FactCheckKilled is a
+// plain int, always present on every VerdictInput, validated non-negative
+// by ValidateVerdictInput before this function is ever called in
+// production) -- a real, non-NULL 0 in review_verdicts.fact_check_killed
+// therefore always means "a real INSERT recorded zero kills" (fact_check
+// == 'skipped', or a 'done' pass that happened to remove nothing), never
+// "no value was ever recorded" -- that latter case is what a genuine SQL
+// NULL (a pre-Step-69 row, this column simply not existing yet) means
+// instead.
+func factCheckKilledPtr(n int) *int32 {
+	v := int32(n)
+	return &v
 }

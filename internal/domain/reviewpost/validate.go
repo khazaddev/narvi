@@ -71,6 +71,35 @@ type VerdictInput struct {
 	// DepthLight (never requiring the full digest), since a turn with no
 	// recorded depth was never routed deep by construction.
 	ReviewDepth reviewtriage.ReviewDepth
+
+	// CounterReview (§26.4, Step 69) is the deep path's own structural-
+	// enforcement signal: whether the primary reviewer's orchestration
+	// actually spawned and adjudicated the `counter-reviewer` sub-task
+	// (§7.1's engine-native fan-out) before posting this verdict.
+	// SCHEMA-REQUIRED (one of review.CounterReviewDone/CounterReviewSkipped,
+	// ValidateVerdictInput's own ErrInvalidCounterReview) ONLY when
+	// ReviewDepth == reviewtriage.DepthDeep -- unvalidated, and never fed
+	// to the counter-review floor as-is, on every other path (see
+	// BuildVerdict's own doc comment for the light-path substitution).
+	CounterReview review.CounterReviewStatus
+
+	// FactCheck (§26.6, Step 69) is the diff-only fact-check sub-task's
+	// own outcome -- whether the primary reviewer's orchestration spawned
+	// it at all before posting this verdict. SCHEMA-REQUIRED
+	// UNCONDITIONALLY (validate.go's own ErrInvalidFactCheck check, both
+	// paths, not merely deep) -- the fact-check pass runs on every review
+	// regardless of depth (§26.6: "runs on the light path too"). Never an
+	// input to ANY Shippable floor -- see FactCheckStatus's own doc
+	// comment (factcheck.go) for why FactCheck:skipped, unlike
+	// CounterReview:skipped above, never raises Shippable.
+	FactCheck FactCheckStatus
+	// FactCheckKilled (§26.6, Step 69) is the count of findings the
+	// fact-check pass actually removed as provably wrong from the diff
+	// alone -- 0 when FactCheck == FactCheckSkipped (a skipped pass, by
+	// construction, kills nothing), and always >= 0 otherwise
+	// (ValidateVerdictInput's own ErrNegativeFactCheckKilled /
+	// ErrFactCheckKilledOnSkip checks).
+	FactCheckKilled int
 }
 
 // The errors ValidateVerdictInput returns -- one per rejected field, named
@@ -123,6 +152,37 @@ var (
 	ErrEmptyDigestArchDecisions    = errors.New("reviewpost: digest.archDecisions must not be empty on a deep-path review")
 	ErrEmptyDigestStackRisks       = errors.New("reviewpost: digest.stackRisks must not be empty on a deep-path review")
 	ErrEmptyDigestUnverifiedLimits = errors.New("reviewpost: digest.unverifiedLimits must not be empty on a deep-path review")
+	// ErrInvalidFactCheck is §26.6/Step 69's own addition: factCheck must
+	// be one of review's own two closed FactCheckStatus values --
+	// SCHEMA-REQUIRED UNCONDITIONALLY (both paths, never gated behind
+	// ReviewDepth, unlike the deep-path-only digest checks above) since
+	// the fact-check pass itself runs on every review, light and deep
+	// alike (§26.6: "runs on the light path too").
+	ErrInvalidFactCheck = errors.New("reviewpost: factCheck must be one of done/skipped")
+	// ErrNegativeFactCheckKilled is §26.6/Step 69's own addition: mirrors
+	// ErrNegativeFilesChanged's own identical "a count field must never be
+	// negative" check.
+	ErrNegativeFactCheckKilled = errors.New("reviewpost: factCheckKilled must not be negative")
+	// ErrFactCheckKilledOnSkip is §26.6/Step 69's own addition: a SKIPPED
+	// fact-check pass, by construction, removed nothing -- "FactCheckKilled
+	// int (the count removed, 0 when skipped)" (§26.6, verbatim). A
+	// non-zero count paired with FactCheckSkipped is not a value this
+	// package can honestly persist (it would read, to any future KPI over
+	// review_verdicts.fact_check_killed, as findings the pass DID prune
+	// despite never having run at all) -- rejected outright, the SAME
+	// reject-don't-repair posture every other structurally-inconsistent
+	// combination in this function already gets, rather than silently
+	// clamped to 0 or silently trusted.
+	ErrFactCheckKilledOnSkip = errors.New("reviewpost: factCheckKilled must be 0 when factCheck is skipped")
+	// ErrInvalidCounterReview is §26.4/Step 69's own addition:
+	// counterReview must be one of review's own two closed
+	// CounterReviewStatus values -- SCHEMA-REQUIRED ONLY on the deep path
+	// (in.ReviewDepth == reviewtriage.DepthDeep), mirroring
+	// ErrEmptyDigestArchDecisions/ErrEmptyDigestStackRisks/
+	// ErrEmptyDigestUnverifiedLimits' own identical deep-path-only
+	// treatment immediately above -- never checked at all on the light
+	// path, where counter-review has no meaning (§26.9).
+	ErrInvalidCounterReview = errors.New("reviewpost: counterReview must be one of done/skipped on a deep-path review")
 )
 
 // ValidateVerdictInput rejects a malformed or partial verdict-posting-tool
@@ -132,19 +192,24 @@ var (
 // here, never a parallel vocabulary invented independently). Checked in a
 // fixed order (RiskLevel, Premise, TestsCoverage, DocsDrift,
 // ProposedShippable, BlastRadius, FilesChanged, Summary, Digest.Summary,
-// Digest.DescriptionAdequacy, Digest.AdequacyExplanation, and -- Step 68,
-// §26.3, LAST of all -- Digest.ArchDecisions/StackRisks/UnverifiedLimits,
-// but ONLY when in.ReviewDepth == reviewtriage.DepthDeep) so a caller
-// presenting more than one bad field always gets the SAME, deterministic
-// first error rather than one that depends on map iteration order or
-// similar. Digest.Summary is checked next (Step 66, §26.1's own new
-// required field), Digest.DescriptionAdequacy/Digest.AdequacyExplanation
-// follow (§26.2/Step 67's own new required fields), and the three
-// deep-path-only digest checks are checked LAST of all (Step 68) -- each
-// added at the end of the existing fixed order rather than interleaved
-// earlier, so no Step ever changes which error an EXISTING malformed
-// payload (one that already fails an earlier-checked field) was already
-// reporting before it shipped.
+// Digest.DescriptionAdequacy, Digest.AdequacyExplanation, FactCheck/
+// FactCheckKilled (§26.6/Step 69, unconditional), and -- Step 68, §26.3,
+// LAST of all -- Digest.ArchDecisions/StackRisks/UnverifiedLimits/
+// CounterReview (§26.4/Step 69), but ONLY when in.ReviewDepth ==
+// reviewtriage.DepthDeep) so a caller presenting more than one bad field
+// always gets the SAME, deterministic first error rather than one that
+// depends on map iteration order or similar. Digest.Summary is checked
+// next (Step 66, §26.1's own new required field), Digest.
+// DescriptionAdequacy/Digest.AdequacyExplanation follow (§26.2/Step 67's
+// own new required fields), FactCheck/FactCheckKilled follow those
+// (§26.6/Step 69's own new UNCONDITIONAL fields -- checked before the
+// deep-path-only block, never inside it, since they apply regardless of
+// depth), and the deep-path-only checks (three digest fields plus
+// CounterReview) are checked LAST of all -- each added at the end of the
+// existing fixed order rather than interleaved earlier, so no Step ever
+// changes which error an EXISTING malformed payload (one that already
+// fails an earlier-checked field) was already reporting before it
+// shipped.
 //
 // Every one of review's four "closed enum" types has a Go zero value
 // ("") that is deliberately not a legal member (review/doc.go's own
@@ -238,6 +303,27 @@ func ValidateVerdictInput(in VerdictInput) error {
 		return ErrEmptyAdequacyExplanation
 	}
 
+	// FactCheck/FactCheckKilled (§26.6/Step 69): a closed-enum check,
+	// mirroring Digest.DescriptionAdequacy's own treatment immediately
+	// above -- SCHEMA-REQUIRED UNCONDITIONALLY, both paths, since the
+	// fact-check pass itself runs on every review regardless of depth
+	// (§26.6: "runs on the light path too" -- the light path's own single
+	// review turn spawns exactly one fact-check sub-task"). Checked here,
+	// BEFORE the deep-path-only block below, so an unconditional check
+	// never has its own first-error-wins position made to depend on
+	// ReviewDepth.
+	switch in.FactCheck {
+	case FactCheckDone, FactCheckSkipped:
+	default:
+		return ErrInvalidFactCheck
+	}
+	if in.FactCheckKilled < 0 {
+		return ErrNegativeFactCheckKilled
+	}
+	if in.FactCheck == FactCheckSkipped && in.FactCheckKilled != 0 {
+		return ErrFactCheckKilledOnSkip
+	}
+
 	// Digest.ArchDecisions/StackRisks/UnverifiedLimits (Step 68, §26.3,
 	// via §26.1's own forward reference): schema-required ONLY on the
 	// deep path -- checked LAST, after every field the light path already
@@ -268,6 +354,24 @@ func ValidateVerdictInput(in VerdictInput) error {
 		}
 		if strings.TrimSpace(in.Digest.UnverifiedLimits) == "" {
 			return ErrEmptyDigestUnverifiedLimits
+		}
+		// CounterReview (§26.4/Step 69): schema-required ONLY on the deep
+		// path, appended LAST within this deep-path-only block (this
+		// function's own "each added at the end of the existing fixed
+		// order" discipline, top doc comment) -- rejected if absent or
+		// garbled, following the exact reject-don't-repair pattern the
+		// three checks immediately above already establish for this SAME
+		// deep-path-only block. Never checked at all on the light path
+		// (in.ReviewDepth != reviewtriage.DepthDeep skips this whole
+		// block) -- counter-review has no meaning there (§26.9), and
+		// BuildVerdict's own light-path substitution (validate.go's
+		// BuildVerdict doc comment) is what keeps an unvalidated
+		// in.CounterReview from ever reaching CounterReviewFloor on that
+		// path.
+		switch in.CounterReview {
+		case review.CounterReviewDone, review.CounterReviewSkipped:
+		default:
+			return ErrInvalidCounterReview
 		}
 	}
 
@@ -325,7 +429,57 @@ func hasNonBlankArchDecision(decisions []ArchDecision) bool {
 // above, from the caller's own self-reported field, and nothing about
 // in.Digest.DescriptionAdequacy (or any other floor input) can reach that
 // assignment.
+//
+// counterReviewForFloor (§26.4/Step 69) is this function's own resolution
+// of ComputeShippable's fifth argument, the FOURTH raise-only floor --
+// NEVER in.CounterReview forwarded verbatim. On a deep-path verdict
+// (in.ReviewDepth == reviewtriage.DepthDeep), ValidateVerdictInput has
+// already rejected anything but review.CounterReviewDone/
+// CounterReviewSkipped by the time this function runs (its own
+// ErrInvalidCounterReview check, below), so in.CounterReview is forwarded
+// as-is. On every OTHER verdict (light path, or ReviewDepth's own zero
+// value, "no resolvable depth" -- VerdictInput.ReviewDepth's own doc
+// comment) this field carries NO validated meaning at all: the light path
+// never runs a counter-reviewer sub-task (§26.9), so in.CounterReview is
+// whatever zero-value/unset field an agent that was never asked to
+// populate it happens to submit -- review.CounterReviewFloor's own
+// fail-conservative policy would otherwise read that blank value via its
+// own default branch and floor EVERY light-path verdict to needs_human,
+// silently defeating light-path auto-approval entirely.
+//
+// B11 fix: the substitution is skipped -- in.CounterReview is forwarded
+// as-is instead -- when in.CounterReview is EXPLICITLY
+// review.CounterReviewSkipped, even on a verdict this function cannot
+// confirm is genuinely deep-path. An agent reporting "skipped" is an
+// honest, explicit self-report that an adversarial counter-review did not
+// happen, for WHATEVER reason (§26.7's own "each field's already-decided
+// Shippable consequence applies unchanged and un-special-cased" wording,
+// review.CounterReviewStatus's own doc comment) -- silently laundering
+// that explicit signal into CounterReviewDone here, solely because
+// in.ReviewDepth did not read back as DepthDeep (which could be the
+// verdict's own genuine light-path status, but could just as easily be a
+// misrouted/blank ReviewDepth on what was actually meant to be an
+// adversarially-reviewed PR), would erase the SAME "did not get an
+// adversarial counter-review" signal §26.4 says must float the floor to
+// needs_human. This carve-out can only ever make a verdict's own
+// Shippable MORE conservative than the unconditional substitution did,
+// never less -- it does not touch the blank/unset case the substitution
+// exists for in the first place (blank != CounterReviewSkipped, so that
+// case still substitutes exactly as before). This function is the one
+// place VerdictInput's own depth is in scope (reviewpost already imports
+// both review and reviewtriage; review itself cannot, doc.go's own "zero
+// external imports" convention) and therefore the one place this
+// substitution belongs -- see review.CounterReviewStatus's own doc comment
+// for why CounterReviewFloor itself stays a plain, depth-unaware pure
+// function rather than growing a parameter for this. Pinned by
+// TestBuildVerdict_CounterReviewFloorInertOnLightPath and
+// TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath
+// (validate_test.go).
 func BuildVerdict(in VerdictInput) review.Verdict {
+	counterReviewForFloor := in.CounterReview
+	if in.ReviewDepth != reviewtriage.DepthDeep && in.CounterReview != review.CounterReviewSkipped {
+		counterReviewForFloor = review.CounterReviewDone
+	}
 	return review.Verdict{
 		RiskLevel:         in.RiskLevel,
 		Premise:           in.Premise,
@@ -334,7 +488,7 @@ func BuildVerdict(in VerdictInput) review.Verdict {
 		TestsCoverage:     in.TestsCoverage,
 		DocsDrift:         in.DocsDrift,
 		ProposedShippable: in.ProposedShippable,
-		Shippable:         review.ComputeShippable(in.RiskLevel, in.TestsCoverage, in.Premise, in.Digest.DescriptionAdequacy),
+		Shippable:         review.ComputeShippable(in.RiskLevel, in.TestsCoverage, in.Premise, in.Digest.DescriptionAdequacy, counterReviewForFloor),
 	}
 }
 

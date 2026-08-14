@@ -96,8 +96,8 @@ func (rs *digestTestRig) seedRepoWithSlackChannel(ctx context.Context, t *testin
 		ProposedShippable: review.ProposedShippableAuto,
 		FilesChanged:      3,
 	}
-	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
-	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdicts, repoFullName, prNumber, "sha-digest", session.ID, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, ""); err != nil {
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
+	if _, err := appreviewverdict.Insert(ctx, rs.reviewVerdicts, repoFullName, prNumber, "sha-digest", session.ID, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}
 }
@@ -176,12 +176,23 @@ func TestPumpOnce_SecondTickSameDay_NoDuplicateSend(t *testing.T) {
 	rig.seedRepoWithSlackChannel(ctx, t, repoFullName, 2, channelID)
 
 	pump := digest.New(rig.deps())
-	now := time.Now()
-	if err := pump.PumpOnce(ctx, now); err != nil {
+	// Both ticks are anchored to a fixed midday-UTC instant on today's
+	// date rather than to the raw wall clock. PumpOnce keys its send
+	// state on the UTC CALENDAR DAY (pump.go's own sendDate), so a real
+	// clock reading within ten minutes of midnight puts the second tick
+	// on the NEXT day, where a second send is correct behaviour rather
+	// than the duplicate this test exists to catch -- i.e. the test would
+	// fail on a schedule while the code under test is fine. Anchoring
+	// backwards is safe for discovery: discoverChannelRepos derives only
+	// a lower bound from now (since = now - lookback, channels.go), never
+	// an upper one, so rows seeded at the real wall clock still match.
+	today := time.Now().UTC()
+	firstTick := time.Date(today.Year(), today.Month(), today.Day(), 12, 0, 0, 0, time.UTC)
+	if err := pump.PumpOnce(ctx, firstTick); err != nil {
 		t.Fatalf("PumpOnce() (first tick) error = %v, want nil", err)
 	}
 	// A second tick, minutes later the SAME calendar day.
-	if err := pump.PumpOnce(ctx, now.Add(10*time.Minute)); err != nil {
+	if err := pump.PumpOnce(ctx, firstTick.Add(10*time.Minute)); err != nil {
 		t.Fatalf("PumpOnce() (second tick) error = %v, want nil", err)
 	}
 

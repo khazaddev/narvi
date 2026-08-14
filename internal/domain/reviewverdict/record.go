@@ -48,4 +48,18 @@ type Record struct {
 	// at all, mirroring Digest's own identical "zero value means not yet
 	// recorded" precedent immediately above.
 	ReviewPath reviewtriage.ReviewDepth
+	// CounterReview is Step 69's own structural-enforcement signal
+	// (§26.4), persisted verbatim from the posting VerdictInput's own
+	// CounterReview field (migrations/000084_review_verdicts_counter_
+	// review.up.sql) -- the zero value (review.CounterReviewStatus(""))
+	// is what a pre-Step-69 row, or any light-path row (§26.9: this field
+	// has no meaning there), reads back as.
+	CounterReview review.CounterReviewStatus
+	// FactCheck/FactCheckKilled are Step 69's own diff-only fact-check
+	// pass outcome (§26.6), persisted verbatim -- unlike CounterReview,
+	// schema-required UNCONDITIONALLY at the posting endpoint (both
+	// paths), so the zero value here means only "posted before Step 69
+	// existed", never "this path never runs fact-check".
+	FactCheck       reviewpost.FactCheckStatus
+	FactCheckKilled int
 }

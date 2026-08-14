@@ -384,6 +384,74 @@ func TestReviewRetriggerDebounceTimer_Enqueue_CreatesReviewTurn(t *testing.T) {
 	}
 }
 
+// TestReviewRetriggerDebounceTimer_FlooredDeep_PromptReflectsDeepPath is
+// Step 69's own regression test for a genuine, pre-existing defect this
+// Step's own restructuring of handleReviewRetriggerDebounceTimer fixed:
+// this handler used to call composeAutoRetriggerPrompt (the ONE place
+// this lane calls review.RenderTurnPrompt) BEFORE computing the floored
+// review depth, so reviewCtx.DeepPath -- never assigned at all, before
+// this fix -- stayed permanently false no matter what turns.review_depth
+// went on to record. A PR floored to "deep" by §24's own re-review floor
+// (a prior verdict on record with review_path "deep", mirroring
+// TestReviewRetriggerDebounceTimer_AlwaysLightConfig_SkipsFloor_StaysLight's
+// own fixture immediately below) must now get a prompt that ACTUALLY
+// tells the agent the three deep-path digest fields and counterReview are
+// REQUIRED, not merely requested -- the exact wording
+// reviewpost.ValidateVerdictInput's own deep-path checks (validate.go)
+// enforce at the posting endpoint. Before this fix, this same scenario
+// would persist review_depth="deep" alongside a prompt promising
+// "REQUESTED, not required" and never mentioning counterReview at all --
+// guaranteeing ValidateVerdictInput would 400 any honest verdict this
+// turn's own agent tried to post.
+func TestReviewRetriggerDebounceTimer_FlooredDeep_PromptReflectsDeepPath(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	f := newAutoRetriggerFixture(ctx, t, pool)
+	if _, err := f.repoSettings.UpsertAutoRetriggerReviewToggle(ctx, f.repoFullName, true); err != nil {
+		t.Fatalf("enable auto-retrigger-review: %v", err)
+	}
+	// A PRIOR verdict that already went deep -- §24's own re-review floor
+	// ("once deep, a PR stays deep") means THIS re-review floors to deep
+	// too, regardless of how light-looking its own fresh delta is.
+	f.insertVerdictWithReviewPath(ctx, t, "sha-prior-deep-2", "low", "deep")
+	f.setPendingHeadSHA(ctx, t, "sha-pending-floored-deep")
+	f.armDebounceTimer(ctx, t)
+
+	// A deliberately light-looking delta (small diff, no sensitive path) --
+	// chosen so this test proves the FLOOR alone drives the outcome, not
+	// some other deep-routing signal a bigger/sensitive diff would also
+	// trigger.
+	diffFetcher := &fakeReviewDiffFetcher{nextHeadSHA: "sha-live-floored-deep", nextBaseRef: "main", nextDiff: "+ trivial line changed"}
+	r := newAutoRetriggerRegistry(ctx, t, pool, diffFetcher)
+	fireDebounceTimer(ctx, t, r, f)
+
+	turns, err := f.turns.ListForSession(ctx, f.sessionID)
+	if err != nil {
+		t.Fatalf("list turns: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("turns created = %d, want 1", len(turns))
+	}
+	got := turns[0]
+	if got.ReviewDepth == nil || *got.ReviewDepth != "deep" {
+		t.Fatalf("turns.review_depth = %v, want %q (the re-review floor must apply -- test setup is broken, not the property under test)", got.ReviewDepth, "deep")
+	}
+	if got.Prompt == nil {
+		t.Fatal("Prompt is nil, want the rendered auto-retrigger prompt")
+	}
+	prompt := *got.Prompt
+
+	if !strings.Contains(prompt, "REQUIRED on this deep-path review") {
+		t.Errorf("prompt does not mention deep-path-REQUIRED wording even though turns.review_depth = %q -- reviewCtx.DeepPath was not set before RenderTurnPrompt ran (the bug this test pins): %s", *got.ReviewDepth, prompt)
+	}
+	if strings.Contains(prompt, `"archDecisions": [zero or more of the following object -- REQUESTED, not required`) {
+		t.Errorf("prompt still describes archDecisions as merely REQUESTED on a deep-floored turn: %s", prompt)
+	}
+	if !strings.Contains(prompt, "\"counterReview\": \"done\" | \"skipped\" (REQUIRED on this deep-path review") {
+		t.Errorf("prompt does not tell the agent counterReview is required on a deep-floored turn: %s", prompt)
+	}
+}
+
 // TestReviewRetriggerDebounceTimer_Enqueue_PromptIncludesFalsePositiveAdvisoryAndAlreadyAnsweredFacts
 // is rereview fix (finding 1)'s own regression test: before this fix,
 // insertAutoRetriggerTurn built its own turn prompt by calling

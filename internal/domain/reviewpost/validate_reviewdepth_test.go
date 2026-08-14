@@ -4,13 +4,15 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // deepValidInput mirrors validInput() but additionally fills in the three
-// Step 68 deep-path-only digest fields and marks ReviewDepth deep -- a
-// caller on the deep path must pass ALL of these to validate.
+// Step 68 deep-path-only digest fields, marks ReviewDepth deep, and
+// (§26.4/Step 69) sets CounterReview -- a caller on the deep path must
+// pass ALL of these to validate.
 func deepValidInput() reviewpost.VerdictInput {
 	in := validInput()
 	in.ReviewDepth = reviewtriage.DepthDeep
@@ -19,6 +21,7 @@ func deepValidInput() reviewpost.VerdictInput {
 	}
 	in.Digest.StackRisks = "None beyond the new migration."
 	in.Digest.UnverifiedLimits = "Did not test against a live GitHub org with real stacked PRs."
+	in.CounterReview = review.CounterReviewDone
 	return in
 }
 
@@ -84,6 +87,21 @@ func TestValidateVerdictInput_DeepPath(t *testing.T) {
 			mutate:  func(in *reviewpost.VerdictInput) { in.Digest.UnverifiedLimits = "" },
 			wantErr: reviewpost.ErrEmptyDigestUnverifiedLimits,
 		},
+		{
+			name:    "deep path with missing counterReview (zero value) is rejected -- §26.4: schema-required on the deep path",
+			mutate:  func(in *reviewpost.VerdictInput) { in.CounterReview = "" },
+			wantErr: reviewpost.ErrInvalidCounterReview,
+		},
+		{
+			name:    "deep path with garbled counterReview is rejected",
+			mutate:  func(in *reviewpost.VerdictInput) { in.CounterReview = "maybe" },
+			wantErr: reviewpost.ErrInvalidCounterReview,
+		},
+		{
+			name:    "deep path with counterReview=skipped is a VALID payload (the skip itself only floors Shippable, it does not fail validation)",
+			mutate:  func(in *reviewpost.VerdictInput) { in.CounterReview = review.CounterReviewSkipped },
+			wantErr: nil,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,5 +166,56 @@ func TestValidateVerdictInput_DeepDigestChecksRunLast(t *testing.T) {
 	err := reviewpost.ValidateVerdictInput(in)
 	if !errors.Is(err, reviewpost.ErrEmptySummary) {
 		t.Errorf("ValidateVerdictInput() = %v, want %v (pre-existing checks run first)", err, reviewpost.ErrEmptySummary)
+	}
+}
+
+// TestValidateVerdictInput_CounterReviewCheckedLastOfAll proves §26.4/Step
+// 69's own CounterReview check is appended at the very END of the
+// deep-path-only block (this function's own "each added at the end of the
+// existing fixed order" discipline) -- a deep-path payload with BOTH an
+// empty UnverifiedLimits AND a garbled CounterReview must still report
+// ErrEmptyDigestUnverifiedLimits first, never ErrInvalidCounterReview.
+func TestValidateVerdictInput_CounterReviewCheckedLastOfAll(t *testing.T) {
+	in := deepValidInput()
+	in.Digest.UnverifiedLimits = ""
+	in.CounterReview = "bogus"
+
+	err := reviewpost.ValidateVerdictInput(in)
+	if !errors.Is(err, reviewpost.ErrEmptyDigestUnverifiedLimits) {
+		t.Errorf("ValidateVerdictInput() = %v, want %v (the three pre-existing deep-path digest checks run before CounterReview)", err, reviewpost.ErrEmptyDigestUnverifiedLimits)
+	}
+}
+
+// TestValidateVerdictInput_FactCheckCheckedBeforeDeepPathBlock proves
+// §26.6/Step 69's own FactCheck check runs BEFORE the deep-path-only block
+// (it is unconditional, so it must never be positioned inside a block that
+// only ever runs on the deep path) -- a deep-path payload with BOTH a
+// garbled FactCheck AND an empty ArchDecisions must report
+// ErrInvalidFactCheck first, never ErrEmptyDigestArchDecisions.
+func TestValidateVerdictInput_FactCheckCheckedBeforeDeepPathBlock(t *testing.T) {
+	in := deepValidInput()
+	in.FactCheck = "bogus"
+	in.Digest.ArchDecisions = nil
+
+	err := reviewpost.ValidateVerdictInput(in)
+	if !errors.Is(err, reviewpost.ErrInvalidFactCheck) {
+		t.Errorf("ValidateVerdictInput() = %v, want %v (the unconditional FactCheck check runs before the deep-path-only block)", err, reviewpost.ErrInvalidFactCheck)
+	}
+}
+
+// TestValidateVerdictInput_FactCheckCheckedOnLightPathToo proves §26.6's
+// own "schema-required UNCONDITIONALLY (both paths, not just deep)" --
+// unlike CounterReview (which the light path never validates at all,
+// TestValidateVerdictInput's own "counterReview is unchecked on the light
+// path even when garbled" case), a light-path payload with a missing
+// FactCheck must still be rejected.
+func TestValidateVerdictInput_FactCheckCheckedOnLightPathToo(t *testing.T) {
+	in := validInput()
+	in.ReviewDepth = reviewtriage.DepthLight
+	in.FactCheck = ""
+
+	err := reviewpost.ValidateVerdictInput(in)
+	if !errors.Is(err, reviewpost.ErrInvalidFactCheck) {
+		t.Errorf("ValidateVerdictInput() = %v, want %v (FactCheck is required on the light path too)", err, reviewpost.ErrInvalidFactCheck)
 	}
 }

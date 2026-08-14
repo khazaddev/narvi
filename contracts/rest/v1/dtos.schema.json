@@ -372,8 +372,8 @@
     "PostReviewVerdictRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Request body for POST /sessions/:id/review/verdict (Step 47, 'server-side verdict', §8.2/§5.2) -- the verdict-posting tool's own typed-fields call, validated server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself, which this endpoint always recomputes server-side (review.ComputeShippable) and NEVER accepts from a caller -- see that package's own Verdict.Shippable doc comment (verdict.go) for why.",
-      "required": ["riskLevel", "premise", "blastRadius", "filesChanged", "testsCoverage", "docsDrift", "proposedShippable", "summary", "digest"],
+      "description": "Request body for POST /sessions/:id/review/verdict (Step 47, 'server-side verdict', §8.2/§5.2) -- the verdict-posting tool's own typed-fields call, validated server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself, which this endpoint always recomputes server-side (review.ComputeShippable) and NEVER accepts from a caller -- see that package's own Verdict.Shippable doc comment (verdict.go) for why. factCheck/factCheckKilled and counterReview are Step 69's own additions (§26.4/§26.6, 'review deep path: adversarial counter-review + readout measurement') -- see those two properties' own doc comments below.",
+      "required": ["riskLevel", "premise", "blastRadius", "filesChanged", "testsCoverage", "docsDrift", "proposedShippable", "summary", "digest", "factCheck", "factCheckKilled"],
       "properties": {
         "riskLevel": {
           "type": "string",
@@ -419,7 +419,21 @@
           "description": "Step 48's own additive extension (§8.2/§17/§22.1): zero or more per-finding typed fields, alongside the verdict's own aggregate fields above. OPTIONAL -- absent/empty means this verdict reports no individual findings, exactly like every verdict posted before this Step. See internal/domain/reviewpost/finding.go's own doc comment for why identityHash is NEVER accepted here (server-computed only, from sentinelKind+filePath+description).",
           "items": { "$ref": "#/$defs/PostedFinding" }
         },
-        "digest": { "$ref": "#/$defs/Digest" }
+        "digest": { "$ref": "#/$defs/Digest" },
+        "factCheck": {
+          "type": "string",
+          "enum": ["done", "skipped"],
+          "description": "Step 69's own addition (§26.6, 'diff-only fact-check pass, both paths'): whether the primary reviewer's orchestration spawned the diff-only fact-check sub-task (§7.1's engine-native fan-out, no tool access) before posting this verdict. Matches internal/domain/reviewpost.FactCheckStatus's own two values exactly. REQUIRED UNCONDITIONALLY -- both paths, not merely deep, since the fact-check pass itself runs on every review regardless of depth. Never an input to the server-computed Shippable -- 'skipped' can only mean published findings were not additionally pruned of provably-wrong ones, never that a real defect went unverified (the deliberate, load-bearing difference from counterReview below)."
+        },
+        "factCheckKilled": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Step 69's own addition (§26.6): the count of findings the fact-check pass actually removed as provably wrong from the diff alone. REQUIRED UNCONDITIONALLY, alongside factCheck above -- MUST be 0 when factCheck is 'skipped' (a skipped pass, by construction, removed nothing; internal/domain/reviewpost.ValidateVerdictInput's own ErrFactCheckKilledOnSkip rejects any other combination)."
+        },
+        "counterReview": {
+          "type": ["string", "null"],
+          "description": "Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'): whether the primary reviewer's orchestration spawned and adjudicated the counter-reviewer sub-task (§7.1's engine-native fan-out) before posting this verdict. One of 'done'/'skipped' when present, matching internal/domain/review.CounterReviewStatus's own two values -- deliberately modeled as an unconstrained nullable string here, not a schema-level enum (mirroring PostedFinding.sentinelKind's own identical precedent immediately above, itself mirroring UpdateMemberRoleRequest.role's precedent): null/absent is legal on every path (the light path never runs a counter-reviewer at all, §26.9), and the closed vocabulary plus the CONDITIONAL requirement (application-level REQUIRED whenever this session's own server-resolved review-depth is 'deep') are both enforced at the application layer (internal/domain/reviewpost.ValidateVerdictInput's own ErrInvalidCounterReview), which this JSON Schema cannot express (review-depth lives on the turn, not on this payload -- mirrors digest.archDecisions/stackRisks/unverifiedLimits' own identical conditional-requirement shape, Step 68). 'skipped' raises the server-computed Shippable floor to needs_human (review.CounterReviewFloor) -- the deliberate, load-bearing difference from factCheck above, which never raises anything."
+        }
       }
     },
     "Digest": {
@@ -459,6 +473,10 @@
         "proposedBody": {
           "type": ["string", "null"],
           "description": "Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not validation-enforced: most reviews propose no rewrite at all. Rendered as a suggestion in the digest for every PR regardless of authorship; ALSO delivered as a real write only for a Narvi-authored PR with this repo's own descriptionAutofix flag on, both checks re-verified server-side at delivery time (never trusted from this payload alone). The PR's title is never rewritten automatically, in either case -- this field carries body content only."
+        },
+        "contestedPoints": {
+          "type": ["string", "null"],
+          "description": "Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'): free-text prose naming where the primary reviewer's own findings/digest and the counter-reviewer sub-task's own adjudication genuinely disagreed -- 'inter-agent disagreement is precisely the signal that a human must decide'. OPTIONAL, not validation-enforced, on every path -- most deep reviews produce no disagreement at all, and there is no counter-reviewer on the light path to disagree with anything (§26.9)."
         }
       }
     },
@@ -623,7 +641,7 @@
       "type": "object",
       "additionalProperties": false,
       "description": "GET/PUT /api/repos/{owner}/{repo}/settings response body (Step 47, §8.2/§21.2) -- an admin, per-repo policy-flag row (migrations/000044_repo_settings.up.sql). Deliberately a small, extensible shape: Step 62's auto-merge toggle, Step 65's automatic-re-review opt-in (§24.5), and Step 67's description-autofix toggle (§26.2) each added a further boolean property here, never a bespoke DTO of their own -- future toggles are expected to follow the same pattern.",
-      "required": ["repoFullName", "blockOnHighRisk", "sentinelAutofixEnabled", "autoMergeEnabled", "maxAutoApproveFilesChanged", "sensitiveBlastRadiusTags", "contradictionRateComputed", "contradictionRatePercent", "contradictionSampleSize", "autoRetriggerReviewEnabled", "descriptionAutofixEnabled", "reviewDepthMode", "reviewDepthDeepPaths"],
+      "required": ["repoFullName", "blockOnHighRisk", "sentinelAutofixEnabled", "autoMergeEnabled", "maxAutoApproveFilesChanged", "sensitiveBlastRadiusTags", "contradictionRateComputed", "contradictionRatePercent", "contradictionSampleSize", "autoRetriggerReviewEnabled", "descriptionAutofixEnabled", "reviewDepthMode", "reviewDepthDeepPaths", "reviewCostBudgetLightUsd", "reviewCostBudgetDeepUsd"],
       "properties": {
         "repoFullName": { "type": "string", "description": "The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own shape." },
         "blockOnHighRisk": {
@@ -678,6 +696,14 @@
           "type": ["array", "null"],
           "description": "Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered on top of (never replacing) the engine's own fixed sensitive-glob set (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same row as reviewDepthMode).",
           "items": { "type": "string" }
+        },
+        "reviewCostBudgetLightUsd": {
+          "type": ["number", "null"],
+          "description": "Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6, same row as reviewDepthMode) -- arming a non-default ceiling changes the dollar figure STATED to the reviewing agent's own prompt (internal/domain/review's own subAgentOrchestrationInstructions), which self-governs against it: §26.7 is a self-reported, best-effort check, not a server-enforced gate (this control plane has no channel to intervene inside an already-dispatched turn) -- reviewtriage.ShouldSkipOptionalPass, the pure function this ceiling would feed a real enforcement path, is not yet called by any production path. The same 'changes what an unattended review is TOLD, admin-gated' reasoning every sibling toggle in this row already carries, worded here to avoid overstating this as an active runtime gate."
+        },
+        "reviewCostBudgetDeepUsd": {
+          "type": ["number", "null"],
+          "description": "Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd -- see that field's own description for why this is a self-governed figure the agent reads, not a server-enforced spend cap."
         }
       }
     },
@@ -752,11 +778,27 @@
         }
       }
     },
+    "UpdateReviewCostBudgetRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Request body for PUT /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7) -- (re)configures this repo's own per-path cost ceilings. A SEPARATE endpoint, gated SOLELY by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint. Always the full, current desired state for these two fields specifically (never a partial patch).",
+      "required": ["lightUsd", "deepUsd"],
+      "properties": {
+        "lightUsd": {
+          "type": ["number", "null"],
+          "description": "Null means 'use the engine's own built-in default ($0.50)'. Validated application-side as strictly POSITIVE -- an explicit 0 is rejected 400, never silently stored: internal/domain/reviewtriage.CostBudget's own zero value means 'no ceiling configured', so a stored 0 here would collide with that sentinel and resolve to unlimited spend, the opposite of an explicit-zero operator's likely intent."
+        },
+        "deepUsd": {
+          "type": ["number", "null"],
+          "description": "Null means 'use the engine's own built-in default ($5.00)'. Validated application-side as strictly positive, the SAME 'zero collides with the unconfigured sentinel' reasoning as lightUsd above."
+        }
+      }
+    },
     "ReviewAnalytics": {
       "type": "object",
       "additionalProperties": false,
-      "description": "GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.",
-      "required": ["repoFullName", "timeseriesComputed", "timeseries", "topRiskDriversComputed", "topRiskDrivers", "findingOutcomesComputed", "findingOutcomes"],
+      "description": "GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Step 69, §26.5 adds a fourth rollup, digestContestationRatePercent -- the 'digest precision (contestation rate)' KPI that section names, the SAME 'own independent not-yet-computed sentinel' discipline as the original three. Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.",
+      "required": ["repoFullName", "timeseriesComputed", "timeseries", "topRiskDriversComputed", "topRiskDrivers", "findingOutcomesComputed", "findingOutcomes", "digestContestationRateComputed", "digestContestationRatePercent"],
       "properties": {
         "repoFullName": { "type": "string", "description": "The natural 'owner/repo' key, matching github_pr_sessions.repo_full_name's own shape." },
         "timeseriesComputed": {
@@ -785,6 +827,14 @@
           "type": ["array", "null"],
           "description": "Every reviewpost.FindingStatus present in the window, sorted by count descending then status ascending. Null iff findingOutcomesComputed is false -- like timeseries above, a real, computed result can never itself be an empty array (every counted status is non-empty by construction), so null is unambiguous here too.",
           "items": { "$ref": "#/$defs/ReviewAnalyticsFindingStatusCount" }
+        },
+        "digestContestationRateComputed": {
+          "type": "boolean",
+          "description": "Step 69, §26.5: false means zero deep-path verdicts have been posted for this repo within the window (only a deep-path review ever produces an arch recap at all, §26.4/§26.9) -- distinct from a real, computed 0% rate, the SAME 'not yet computed' sentinel discipline as RepoSettings.contradictionRateComputed (reposettings.go)."
+        },
+        "digestContestationRatePercent": {
+          "type": ["number", "null"],
+          "description": "Null iff digestContestationRateComputed is false. The fraction of this window's deep-path arch-recap digest sections a maintainer contested (via the §26.5 'arch recap wrong: <reason>' command), as a 0-100 percentage -- §26.5's own 'digest precision (contestation rate)' KPI."
         }
       }
     },

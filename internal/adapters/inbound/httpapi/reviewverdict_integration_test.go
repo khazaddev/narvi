@@ -42,7 +42,9 @@ func validVerdictRequestJSON() string {
 			"summary": "Adds a retry helper around the flaky upstream call and swaps every existing call site onto it.",
 			"descriptionAdequacy": "ok",
 			"adequacyExplanation": "The PR body accurately describes the retry helper this diff adds."
-		}
+		},
+		"factCheck": "done",
+		"factCheckKilled": 0
 	}`
 }
 
@@ -400,7 +402,9 @@ func TestPostReviewVerdict_PersistsDigestColumns(t *testing.T) {
 			"unverifiedLimits": "Did not verify behavior under a real network partition.",
 			"descriptionAdequacy": "drift",
 			"adequacyExplanation": "The PR body doesn't mention the new retry helper at all."
-		}
+		},
+		"factCheck": "done",
+		"factCheckKilled": 0
 	}`
 
 	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
@@ -562,7 +566,9 @@ func TestPostReviewVerdict_ShippableNeverTrustsProposedShippable(t *testing.T) {
 			"summary": "This PR's diff is empty; there is nothing to describe.",
 			"descriptionAdequacy": "ok",
 			"adequacyExplanation": "Nothing to compare against; the diff itself is empty."
-		}
+		},
+		"factCheck": "done",
+		"factCheckKilled": 0
 	}`
 
 	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
@@ -602,7 +608,9 @@ func TestPostReviewVerdict_BlockOnHighRisk(t *testing.T) {
 			"summary": "Rewrites the token-refresh path to retry on transient failures.",
 			"descriptionAdequacy": "ok",
 			"adequacyExplanation": "The PR body accurately describes the token-refresh rewrite."
-		}
+		},
+		"factCheck": "done",
+		"factCheckKilled": 0
 	}`
 
 	t.Run("off (default, no repo_settings row)", func(t *testing.T) {
@@ -713,7 +721,9 @@ func TestPostReviewVerdict_MisleadingAdequacyRaisesShippable(t *testing.T) {
 			"summary": "Rewrites the auth token refresh path to retry on transient network failures.",
 			"descriptionAdequacy": "misleading",
 			"adequacyExplanation": "The PR title/body claim this is a docs-only change; the diff rewrites the auth token refresh path."
-		}
+		},
+		"factCheck": "done",
+		"factCheckKilled": 0
 	}`
 
 	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
@@ -772,7 +782,9 @@ func TestPostReviewVerdict_AdequacyNeverAffectsRiskLevel(t *testing.T) {
 			"summary": "Rewrites the auth token refresh path.",
 			"descriptionAdequacy": "misleading",
 			"adequacyExplanation": "The PR body claims a docs-only change."
-		}
+		},
+		"factCheck": "done",
+		"factCheckKilled": 0
 	}`
 
 	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
@@ -823,7 +835,9 @@ func TestPostReviewVerdict_ProposedBodyPresent_EnqueuesDescriptionAutofixOutboxR
 			"descriptionAdequacy": "drift",
 			"adequacyExplanation": "The PR body is stale.",
 			"proposedBody": "` + proposedBody + `"
-		}
+		},
+		"factCheck": "done",
+		"factCheckKilled": 0
 	}`
 
 	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)
@@ -901,7 +915,9 @@ func TestPostReviewVerdict_AdequacyOKWithProposedBody_NeverEnqueuesDescriptionAu
 			"descriptionAdequacy": "ok",
 			"adequacyExplanation": "The PR body already honestly describes the diff.",
 			"proposedBody": "An unsolicited stylistic rewrite the agent proposed anyway."
-		}
+		},
+		"factCheck": "done",
+		"factCheckKilled": 0
 	}`
 
 	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", body)

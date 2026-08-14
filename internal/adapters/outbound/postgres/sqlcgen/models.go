@@ -1662,6 +1662,21 @@ type RepoSetting struct {
 	DescriptionAutofixEnabled  bool               `json:"description_autofix_enabled"`
 	ReviewDepthMode            *string            `json:"review_depth_mode"`
 	ReviewDepthDeepPaths       []byte             `json:"review_depth_deep_paths"`
+	ReviewCostBudgetLightUsd   pgtype.Numeric     `json:"review_cost_budget_light_usd"`
+	ReviewCostBudgetDeepUsd    pgtype.Numeric     `json:"review_cost_budget_deep_usd"`
+}
+
+type ReviewDigestSectionFeedback struct {
+	ID           pgtype.UUID        `json:"id"`
+	RepoFullName string             `json:"repo_full_name"`
+	PrNumber     int32              `json:"pr_number"`
+	Section      string             `json:"section"`
+	ContentHash  string             `json:"content_hash"`
+	CommentType  string             `json:"comment_type"`
+	CommentID    int64              `json:"comment_id"`
+	Reason       string             `json:"reason"`
+	CreatedBy    pgtype.UUID        `json:"created_by"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type ReviewFalsePositivePattern struct {
@@ -1722,6 +1737,10 @@ type ReviewVerdict struct {
 	DigestAdequacyExplanation *string            `json:"digest_adequacy_explanation"`
 	DigestProposedBody        *string            `json:"digest_proposed_body"`
 	ReviewPath                *string            `json:"review_path"`
+	CounterReview             *string            `json:"counter_review"`
+	FactCheck                 *string            `json:"fact_check"`
+	FactCheckKilled           *int32             `json:"fact_check_killed"`
+	DigestContestedPoints     *string            `json:"digest_contested_points"`
 }
 
 type Sandbox struct {

@@ -40,12 +40,27 @@ type Config struct {
 	// matchDeepPath (decide.go) for the two supported pattern shapes
 	// (a bare directory/file prefix, or a single-`*`-wildcard glob).
 	DeepPaths []string
+	// CostBudget (§26.7, Step 69) is this repo's own per-path cost
+	// ceiling -- "reviewCostBudget: {light, deep} joins §26.3's
+	// reviewDepth config on the SAME per-repo settings row" (§26.7,
+	// verbatim). See CostBudget's own doc comment (costbudget.go) for the
+	// full shape and DefaultCostBudget for this Step's own proposed
+	// starting figures.
+	CostBudget CostBudget
 }
 
 // DefaultConfig is the engine's own built-in default -- applied whenever
 // a repo has never configured reviewDepth at all (internal/app/
 // reviewtriage.LoadConfig's own doc comment: a missing repo_settings row,
 // or a NULL reviewDepth column on an existing one, both resolve to this).
+// CostBudget defaults to DefaultCostBudget() (§26.7's own "on by default,
+// both paths" -- IMPLEMENTATION_PLAN.md's Step 69 row and §26.9's own
+// "Decided defaults" section both name the cost budget as on by default,
+// unlike Mode/DeepPaths above, which default to "no extra behavior at
+// all" -- reviewDepth's own triage rules were already the engine's
+// default BEHAVIOR before any repo config existed, but the cost budget is
+// new v1 behavior this Step introduces, decided ON by default rather than
+// off).
 func DefaultConfig() Config {
-	return Config{Mode: ModeAuto}
+	return Config{Mode: ModeAuto, CostBudget: DefaultCostBudget()}
 }

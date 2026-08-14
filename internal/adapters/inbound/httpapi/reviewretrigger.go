@@ -267,6 +267,20 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 			flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, priorReviewDepth)
 		}
 		prCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
+		// ReviewCostBudgetUSD (Step 69, §26.7): the SAME triageConfig
+		// ComputeDecision already resolved, above -- no second repo_settings
+		// read. Read AFTER flooredDepth is known so a re-review that got
+		// floored deep by §24's own "once deep, stays deep" rule correctly
+		// gets the deep-path ceiling, never the fresh (possibly light)
+		// triageDecision.Depth's own ceiling.
+		prCtx.ReviewCostBudgetUSD = triageConfig.CostBudget.ForDepth(flooredDepth)
+		// B5 fix: threads reviewtriage.CostBudgetSafetyMargin through as a
+		// whole percentage -- review.PreFetchedContext.
+		// CostBudgetSafetyMarginPercent's own doc comment for why this
+		// package (which already imports reviewtriage) is the one that
+		// must set it, never review itself (doc.go's own "zero external
+		// imports" convention).
+		prCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
 		if havePrCtx {
 			prompt = review.RenderTurnPrompt(prompt, prCtx)
 		}

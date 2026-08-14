@@ -298,6 +298,9 @@ func PostReviewVerdict(
 			ProposedShippable: review.ProposedShippable(req.ProposedShippable),
 			Summary:           req.Summary,
 			Digest:            digestInputFromWire(req.Digest),
+			CounterReview:     counterReviewFromWire(req.CounterReview),
+			FactCheck:         reviewpost.FactCheckStatus(req.FactCheck),
+			FactCheckKilled:   req.FactCheckKilled,
 		}
 		for _, tag := range req.BlastRadius {
 			input.BlastRadius = append(input.BlastRadius, review.Tag(tag))
@@ -474,7 +477,7 @@ func PostReviewVerdict(
 		// an unpersisted verdict.
 		if verdictHeadSHA == "" {
 			logger.Warn("httpapi: review-verdict: no review head sha on record, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict, input.Digest, reviewDepth); insertErr != nil {
+		} else if _, insertErr := appreviewverdict.Insert(ctx, reviewVerdicts.WithTx(tx), prSession.RepoFullName, prSession.PrNumber, verdictHeadSHA, sessionID, verdict, input.Digest, reviewDepth, input.CounterReview, input.FactCheck, input.FactCheckKilled); insertErr != nil {
 			logger.Error("httpapi: review-verdict: insert review_verdicts row failed", "error", insertErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
@@ -674,6 +677,9 @@ func digestInputFromWire(d restdtos.Digest) reviewpost.Digest {
 	if d.ProposedBody != nil {
 		out.ProposedBody = *d.ProposedBody
 	}
+	if d.ContestedPoints != nil {
+		out.ContestedPoints = *d.ContestedPoints
+	}
 	for _, ad := range d.ArchDecisions {
 		out.ArchDecisions = append(out.ArchDecisions, reviewpost.ArchDecision{
 			Decision:              archDecisionStringField(ad.Decision),
@@ -682,6 +688,26 @@ func digestInputFromWire(d restdtos.Digest) reviewpost.Digest {
 		})
 	}
 	return out
+}
+
+// counterReviewFromWire nil-safely converts restdtos.
+// PostReviewVerdictRequestCounterReview (a named *string type, go-
+// jsonschema's own codegen convention for an unconstrained-nullable-string
+// schema property, mirroring PostedFinding.SentinelKind's own identical
+// shape) into review.CounterReviewStatus -- a nil pointer (the field was
+// omitted, the ordinary case on every light-path verdict, §26.9) converts
+// to the zero value "", exactly the value reviewpost.BuildVerdict's own
+// light-path substitution expects to see and ValidateVerdictInput leaves
+// completely unvalidated outside the deep path (validate.go's own doc
+// comment). A present value is forwarded verbatim -- ValidateVerdictInput
+// is what actually rejects anything other than review.CounterReviewDone/
+// CounterReviewSkipped, and only when this session's own resolved
+// ReviewDepth is deep.
+func counterReviewFromWire(v restdtos.PostReviewVerdictRequestCounterReview) review.CounterReviewStatus {
+	if v == nil {
+		return ""
+	}
+	return review.CounterReviewStatus(*v)
 }
 
 // archDecisionStringField nil-safely dereferences one of restdtos.

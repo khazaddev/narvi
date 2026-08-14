@@ -121,6 +121,22 @@ ON CONFLICT (repo_full_name)
 DO UPDATE SET review_depth_mode = EXCLUDED.review_depth_mode, review_depth_deep_paths = EXCLUDED.review_depth_deep_paths, updated_at = now()
 RETURNING *;
 
+-- name: UpsertReviewCostBudget :one
+-- Step 69's own admin-only, per-repo reviewCostBudget config (§26.7,
+-- migrations/000085_repo_settings_review_cost_budget.up.sql) -- idempotent
+-- create-or-update of ONLY review_cost_budget_light_usd/
+-- review_cost_budget_deep_usd, mirroring UpsertReviewDepthConfig's own
+-- identical column-scoped shape immediately above (§62 review finding
+-- C5's fix, generalized to this further, independently-gated config):
+-- every other repo_settings column is left COMPLETELY untouched, so a
+-- concurrent write to any of them can never race with this one at the
+-- database level.
+INSERT INTO repo_settings (repo_full_name, review_cost_budget_light_usd, review_cost_budget_deep_usd, updated_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (repo_full_name)
+DO UPDATE SET review_cost_budget_light_usd = EXCLUDED.review_cost_budget_light_usd, review_cost_budget_deep_usd = EXCLUDED.review_cost_budget_deep_usd, updated_at = now()
+RETURNING *;
+
 -- name: ListAutoMergeEnabledRepos :many
 -- internal/app/automerge's own per-tick repo enumeration (§21.2 stage
 -- 2): every repo an admin has armed -- mirrors this table's own

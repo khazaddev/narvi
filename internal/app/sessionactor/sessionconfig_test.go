@@ -255,4 +255,28 @@ func TestAssembleSessionConfig_CapabilityRestricted(t *testing.T) {
 	}
 }
 
+// TestAssembleSessionConfig_ReviewCounterReviewerModel_NilWithoutPRSessionStore
+// pins §26.4/Step 69's own fail-safe degradation: an Actor with no
+// githubPRSession store wired at all (the zero-value *Actor this file's
+// own TestAssembleSessionConfig/TestAssembleSessionConfig_CapabilityRestricted
+// already construct, and every non-review-session production Actor in
+// practice too) must never attempt a nil-store lookup -- reviewCounterReviewerModel's
+// own doc comment: "nil ... for every session that is not a GitHub PR
+// review session at all". Never touches tx (passed nil here, exactly like
+// every other test in this file) at all in this path.
+func TestAssembleSessionConfig_ReviewCounterReviewerModel_NilWithoutPRSessionStore(t *testing.T) {
+	t.Parallel()
+
+	a := &Actor{publicBaseURL: "https://narvi.example.com"}
+	sessionRow := sessionRowWithRepos(t, `[{"name":"widgets","url":"https://github.com/acme/widgets","branch":null}]`)
+
+	cfg, err := a.assembleSessionConfig(context.Background(), nil, sessionRow, 1, "plaintext-token", uuid.NewString(), sessionconfig.SessionConfigBootModeFresh)
+	if err != nil {
+		t.Fatalf("assembleSessionConfig() error = %v, want nil", err)
+	}
+	if cfg.ReviewCounterReviewerModel != nil {
+		t.Errorf("ReviewCounterReviewerModel = %v, want nil (no githubPRSession store wired at all)", cfg.ReviewCounterReviewerModel)
+	}
+}
+
 func strPtr(s string) *string { return &s }
