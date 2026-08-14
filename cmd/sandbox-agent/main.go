@@ -300,6 +300,17 @@ type commandHandler struct {
 	timeouts platform.Timeouts
 	sup      *supervisor.Supervisor
 
+	// reviewCostBudgetURL is Step 70's own addition (§26.7/§26.9): the
+	// real, already-bound http://127.0.0.1:<port>/review-cost-budget URL
+	// this sandbox's own loopback budget server resolved at startup (run(),
+	// via budgetServer.URL()) -- empty exactly when cfg.SessionConfig was
+	// nil (no server was ever started, see run()'s own budgetServer
+	// declaration). HandlePrompt substitutes this for
+	// review.ReviewCostBudgetToolURLPlaceholder in a review turn's own
+	// prompt text, mirroring cfg's own identical role for
+	// renderVerdictToolPromptText/renderUploadToolPromptText.
+	reviewCostBudgetURL string
+
 	// group launches each HandlePrompt's own StartTurn call on its own
 	// goroutine (via errgroup.Group.Go, never a bare `go` statement, §11)
 	// so wsbridge's own readLoop -- which calls HandlePrompt synchronously
@@ -341,6 +352,13 @@ func (h *commandHandler) HandlePrompt(_ context.Context, cmd sandboxws.Prompt) {
 	// with none of those placeholders present, i.e. the overwhelming
 	// common case while the feature stays off by default.
 	cmd.Text = renderEpistemicOutcomeToolPromptText(cmd.Text, h.cfg.SessionConfig)
+	// Step 70 (§26.7/§26.9): the SAME mechanism once more, for the
+	// review-cost-budget loopback endpoint's own URL placeholder
+	// (internal/domain/review.ReviewCostBudgetToolURLPlaceholder,
+	// subAgentOrchestrationInstructions) -- a no-op for every turn without
+	// that placeholder present (every non-review turn, and a review turn
+	// whose ceiling was never configured, review/context.go's own gating).
+	cmd.Text = renderReviewCostBudgetToolPromptText(cmd.Text, h.reviewCostBudgetURL)
 
 	h.group.Go(func() error {
 		sink := func(event ports.AgentEvent) {
@@ -971,6 +989,21 @@ func run() error {
 	// exist by then -- see this file's own package doc comment for the
 	// full reasoning.
 	var agentRuntime *opencode.Adapter
+	// budgetServer/reviewCostBudgetURL are Step 70's own addition (§26.7/
+	// §26.9): budgetServer is sandbox-agent's own FIRST HTTP server (a
+	// tiny, loopback-only listener serving GET /review-cost-budget,
+	// reviewcostbudgetserver.go) -- nil exactly when cfg.SessionConfig is
+	// nil, mirroring agentRuntime's own identical "no real session, no
+	// work" precedent immediately above, since there is no turn for it to
+	// ever report spend for. reviewCostBudgetURL is that server's own
+	// real, resolved http://127.0.0.1:<port>/review-cost-budget URL, kept
+	// at this outer scope so HandlePrompt's own commandHandler (constructed
+	// further below, once bridge exists) can substitute it for
+	// review.ReviewCostBudgetToolURLPlaceholder in a review turn's own
+	// prompt text, exactly like SessionConfig/timeouts/sup are already
+	// threaded into commandHandler for the SAME reason.
+	var budgetServer *reviewCostBudgetServer
+	var reviewCostBudgetURL string
 	// resolvedCredentials is populated inside the SAME block below and
 	// consumed twice: providerCredentialSpawnEnv (api-kind, feeding
 	// opencodeproc.Spawn's own env) here, and providerCredentialOAuthSets
@@ -1110,6 +1143,29 @@ func run() error {
 		postSpawnFingerprint := boot.CollectFingerprint(cfg, timeouts.RepoSHADiscoveryTimeout, result.Version)
 		slog.Info("sandbox-agent: boot fingerprint (post-opencode-spawn)",
 			"opencode_version", postSpawnFingerprint.OpenCodeVersion)
+
+		// Step 70 (§26.7/§26.9): start the review-cost-budget loopback
+		// server NOW -- agentRuntime already exists (its own
+		// CurrentTurnSpentUSD method is this server's one data source), and
+		// this must land before ANY "prompt" command can possibly arrive
+		// (the bridge below has not started accepting commands yet), so a
+		// review turn's own prompt substitution (renderReviewCostBudgetToolPromptText,
+		// HandlePrompt below) always has a real, already-bound URL to
+		// resolve the placeholder against. A failure here is treated
+		// exactly like a failed opencode spawn just above: best-effort
+		// cleanup of whatever sup is already tracking, then a hard boot
+		// failure -- never a silently-degraded review session that renders
+		// the raw, unresolved placeholder into a prompt an agent could
+		// never usefully call.
+		var startErr error
+		budgetServer, startErr = startReviewCostBudgetServer(agentRuntime.CurrentTurnSpentUSD, timeouts.ReviewCostBudgetServerReadHeaderTimeout)
+		if startErr != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), timeouts.SupervisorShutdownTimeout)
+			_ = sup.StopAll(shutdownCtx, timeouts.ProcessStopGracePeriod)
+			cancel()
+			return fmt.Errorf("sandbox-agent: start review-cost-budget server: %w", startErr)
+		}
+		reviewCostBudgetURL = budgetServer.URL()
 	}
 
 	// bridge/handler are nil exactly when cfg.SessionConfig is nil --
@@ -1127,7 +1183,7 @@ func run() error {
 	var bridge *wsbridge.Bridge
 	var handler *commandHandler
 	if cfg.SessionConfig != nil {
-		handler = &commandHandler{adapter: agentRuntime, runCtx: ctx, cfg: cfg, timeouts: timeouts, sup: sup}
+		handler = &commandHandler{adapter: agentRuntime, runCtx: ctx, cfg: cfg, timeouts: timeouts, sup: sup, reviewCostBudgetURL: reviewCostBudgetURL}
 		bridge = wsbridge.New(*cfg.SessionConfig, cfg.SandboxID, handler,
 			timeouts.SandboxWSDialTimeout, timeouts.SandboxWSHeartbeatInterval,
 			timeouts.SandboxWSReconnectMinBackoff, timeouts.SandboxWSReconnectMaxBackoff)
@@ -1218,6 +1274,11 @@ func run() error {
 	// what a direct `<-ctx.Done()` would, just launched through the group
 	// so both cases converge identically below.
 	var group errgroup.Group
+	// budgetSrvGroup is Step 70's own SEPARATE errgroup for
+	// budgetServer.Serve() -- see the "Step 70" comment below (right where
+	// budgetSrvGroup.Go is actually called) for why this must NOT be the
+	// SAME group as the one immediately above.
+	var budgetSrvGroup errgroup.Group
 	if bridge != nil {
 		group.Go(func() error {
 			return bridge.Run(ctx)
@@ -1226,6 +1287,32 @@ func run() error {
 		group.Go(func() error {
 			<-ctx.Done()
 			return nil
+		})
+	}
+
+	// Step 70 (§26.7/§26.9): budgetServer's own Accept loop runs on its OWN
+	// errgroup (budgetSrvGroup), deliberately NOT the "group" var above --
+	// group.Wait() (below) is this function's own convergence signal for
+	// "the bridge (or, headless, the ctx-wait stand-in) is done", reached
+	// either by ctx being canceled OR by bridge.Run returning entirely on
+	// its own (a *FatalConnectError from a 401/403/404/410 handshake,
+	// wsbridge/run.go's own doc comment -- notably NOT accompanied by any
+	// cancellation of ctx, since Run only ever OBSERVES ctx, never cancels
+	// it). Folding budgetServer.Serve() into that SAME group -- an earlier
+	// version of this Step's own code did exactly that, gated on a SECOND
+	// group member that waited on ctx.Done() before calling Shutdown --
+	// would deadlock precisely on that fatal-status path: group.Wait()
+	// would then also need THAT watcher goroutine to finish, which itself
+	// waits on ctx.Done(), which never fires until run() itself reaches its
+	// own deferred stop() call at the very bottom of this function -- but
+	// run() can never reach there while still blocked on THIS group.Wait().
+	// Kept on its own group instead, Shutdown is called explicitly, always,
+	// in the unconditional teardown block below (the SAME place sup.StopAll
+	// already runs, reusing its own bounded shutdownCtx) -- reached
+	// regardless of which of the three ways group.Wait() (below) converged.
+	if budgetServer != nil {
+		budgetSrvGroup.Go(func() error {
+			return budgetServer.Serve()
 		})
 	}
 
@@ -1321,6 +1408,28 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeouts.SupervisorShutdownTimeout)
 	defer cancel()
 	stopErr := sup.StopAll(shutdownCtx, timeouts.ProcessStopGracePeriod)
+
+	// Step 70 (§26.7/§26.9): shut the review-cost-budget loopback server
+	// down here, unconditionally -- this is the ONE place reached
+	// regardless of which of the three ways `runErr := group.Wait()` above
+	// converged (normal ctx cancellation, a CP-issued shutdown, or a fatal
+	// WS status that returns on its own without ever canceling ctx, see
+	// budgetSrvGroup's own doc comment above for why Shutdown is
+	// deliberately NOT triggered by a ctx-watcher instead). Reuses the SAME
+	// bounded shutdownCtx sup.StopAll just used, rather than a second,
+	// near-duplicate timeout. budgetSrvGroup.Wait() afterward drains
+	// budgetServer's own Serve goroutine (Shutdown makes it return
+	// promptly) -- never left running past this function's own return, the
+	// same "no orphaned listener/goroutine" bar Step 171 already set for a
+	// different subsystem.
+	if budgetServer != nil {
+		if err := budgetServer.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("sandbox-agent: review-cost-budget server shutdown failed", "error", err)
+		}
+		if err := budgetSrvGroup.Wait(); err != nil {
+			slog.Warn("sandbox-agent: review-cost-budget server Serve returned an unexpected error", "error", err)
+		}
+	}
 
 	// A fatal handshake status (401/403/404/410, §6.1: "no retry") is NOT a
 	// normal shutdown trigger -- it must propagate as run()'s own error

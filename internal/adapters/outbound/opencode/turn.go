@@ -72,6 +72,26 @@ type turnState struct {
 	sawText            bool
 	sawToolCall        bool
 
+	// spentUSD is this turn's own running cost total (§7.1's own corrected
+	// text, §26.7, Step 70) -- the accumulator §26.7's cost-budget
+	// mechanism assumed already existed (it did not, see
+	// internal/domain/reviewtriage.ShouldSkipOptionalPass's own "NOT YET
+	// CALLED BY ANY PRODUCTION PATH" doc comment, costbudget.go) and this
+	// Step finally builds. Summed by addCost, called from dispatchPart's
+	// own "step-finish" case (sse.go) for EVERY step-finish this turn
+	// observes -- main lane AND every sub-task alike, since §7.1's own
+	// fan-out routes a sub-task's events back to this SAME turnState
+	// pointer (resolveEvent, adapter.go), tagged with its own subTaskId --
+	// dispatchPart itself is subTaskId-agnostic (it has no idea, and does
+	// not need to know, whether the step-finish it is looking at belongs
+	// to the main lane or a sub-task), so summing unconditionally here is
+	// exactly "main lane and every sub-task alike" by construction, not an
+	// extra case to wire in. Read back by Adapter.CurrentTurnSpentUSD
+	// (adapter.go), the one method cmd/sandbox-agent's own loopback
+	// review-cost-budget HTTP server (reviewcostbudgetserver.go) calls to
+	// answer a review agent's own GET /review-cost-budget check.
+	spentUSD float64
+
 	// compacting/compactionAttempted implement §7.2's own compaction-retry
 	// guard. compacting is true for the whole window between
 	// Adapter.finalizeOrRecoverFromOverflow deciding to attempt a recovery
@@ -528,6 +548,36 @@ func (ts *turnState) markSawToolCall() {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.sawToolCall = true
+}
+
+// addCost adds cost (a single step-finish's own p.Cost, USD) to this
+// turn's own running spentUSD total (§26.7/§7.1, Step 70) -- called from
+// dispatchPart's own "step-finish" case (sse.go) for every step-finish
+// this turn observes, main lane and every sub-task alike (see spentUSD's
+// own field doc comment above for why no separate sub-task case is
+// needed). cost is never negative in practice (OpenCode's own step-finish
+// schema, types.go), but this adds it verbatim rather than guarding
+// against a hypothetical negative value here -- ShouldSkipOptionalPass
+// (reviewtriage/costbudget.go) already clamps a negative spentUSD to 0 at
+// the one place that actually matters (its own decision), so a defensive
+// guard here would only duplicate that, never add real safety.
+func (ts *turnState) addCost(cost float64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.spentUSD += cost
+}
+
+// spentUSDTotal returns this turn's own running spentUSD total (addCost's
+// own accumulator, above) -- read by Adapter.CurrentTurnSpentUSD
+// (adapter.go). Named with a "Total" suffix, not just "spentUSD", to keep
+// it visually distinct from the field of the identical name it reads
+// (Go permits a method and a field to share a name, but this package's
+// existing style elsewhere avoids that pattern, e.g. compactionAlreadyAttempted
+// vs. compactionAttempted).
+func (ts *turnState) spentUSDTotal() float64 {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.spentUSD
 }
 
 // errorForOutcome returns whichever tagged error was observed for this

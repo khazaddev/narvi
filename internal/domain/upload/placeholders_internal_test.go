@@ -35,6 +35,11 @@ func TestPlaceholderTokensMatchReviewPackage(t *testing.T) {
 		review.VerdictToolURLPlaceholder,
 		review.VerdictToolBearerPlaceholder,
 		review.VerdictToolGenPlaceholder,
+		// Step 70 (§26.7/§26.9): review's FOURTH placeholder, a single
+		// literal with no bearer/gen counterpart (the endpoint it points at
+		// needs no authentication, reviewcostbudgetserver.go's own doc
+		// comment).
+		review.ReviewCostBudgetToolURLPlaceholder,
 	} {
 		if !containsToken(placeholderTokens, tok) {
 			t.Errorf("placeholderTokens = %v, want it to contain review's own real placeholder %q", placeholderTokens, tok)
@@ -69,13 +74,15 @@ func TestPlaceholderTokensMatchTurnPackage(t *testing.T) {
 }
 
 // TestPlaceholderTokensExactCount pins placeholderTokens' own total size --
-// this package's own three, plus review's own three, plus turn's own three,
+// this package's own three, plus review's own four, plus turn's own three,
 // no more no less (F1, adversarial review: bumped 6 -> 9 when turn's three
-// EPISTEMIC_OUTCOME_TOOL_* literals were registered). A future family that
-// grows this list without a corresponding drift-matcher test above (or
-// without the general cross-domain-package scan,
-// placeholderdrift_internal_test.go) fails here first, forcing a deliberate
-// update to this exact number rather than an unnoticed size change.
+// EPISTEMIC_OUTCOME_TOOL_* literals were registered; Step 70, §26.7/§26.9:
+// bumped 9 -> 10 when review's own fourth, ReviewCostBudgetToolURLPlaceholder,
+// was registered). A future family that grows this list without a
+// corresponding drift-matcher test above (or without the general
+// cross-domain-package scan, placeholderdrift_internal_test.go) fails here
+// first, forcing a deliberate update to this exact number rather than an
+// unnoticed size change.
 func TestPlaceholderTokensExactCount(t *testing.T) {
 	t.Parallel()
 
@@ -88,8 +95,8 @@ func TestPlaceholderTokensExactCount(t *testing.T) {
 		}
 	}
 
-	if len(placeholderTokens) != 9 {
-		t.Errorf("len(placeholderTokens) = %d, want exactly 9 (this package's own 3, plus review's own 3, plus turn's own 3, no more no less)", len(placeholderTokens))
+	if len(placeholderTokens) != 10 {
+		t.Errorf("len(placeholderTokens) = %d, want exactly 10 (this package's own 3, plus review's own 4, plus turn's own 3, no more no less)", len(placeholderTokens))
 	}
 }
 

@@ -1218,6 +1218,23 @@ func TestDefaultTimeouts_Step62StandaloneFields(t *testing.T) {
 	}
 }
 
+func TestDefaultTimeouts_Step70StandaloneField(t *testing.T) {
+	t.Parallel()
+
+	to := platform.DefaultTimeouts()
+
+	if to.ReviewCostBudgetServerReadHeaderTimeout <= 0 {
+		t.Errorf("ReviewCostBudgetServerReadHeaderTimeout = %v, want > 0", to.ReviewCostBudgetServerReadHeaderTimeout)
+	}
+	if to.ReviewCostBudgetServerReadHeaderTimeout != 5*time.Second {
+		t.Errorf("ReviewCostBudgetServerReadHeaderTimeout = %v, want %v", to.ReviewCostBudgetServerReadHeaderTimeout, 5*time.Second)
+	}
+
+	if err := to.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil (Step 70's addition must not disturb any invariant chain)", err)
+	}
+}
+
 // TestValidate_ReportsAllViolations proves Validate collects every broken
 // link (via errors.Join) rather than stopping at the first one.
 func TestValidate_ReportsAllViolations(t *testing.T) {

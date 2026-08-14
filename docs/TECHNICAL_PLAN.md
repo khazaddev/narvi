@@ -258,7 +258,7 @@ Problem this solves: some engine behaviors spawn multiple concurrent sub-agents 
 
 - The adapter assigns each spawned sub-task a stable `subTaskId` (derived from whatever correlator the engine itself exposes — OpenCode's own nested-task id today; not Narvi's own session concepts, per the note below) and tags every event that sub-task produces with it (§6.1), emitting `sub_task_start`/`sub_task_finish` to bracket its lifetime.
 - **Not a new domain entity.** A sub-task is a presentation/wire-level grouping of events belonging to one turn — not a new Postgres row, and not Narvi's own "child session" (§14.4: a full session with its own sandbox/turns, spawned by automation/sentinel features — a materially heavier mechanism; the naming here is deliberately distinct so the two are never confused). The turn state machine (§3.3) is unaffected: one turn still has exactly one `processing` state no matter how many sub-tasks ran underneath it.
-- **Cost should roll up — recorded here as intent, not as a shipped fact.** An earlier draft of this bullet claimed, in the present tense, that every `step_finish.cost` (§6.1) "is summed" into one turn/session total regardless of lane. **Verified false**: the only cost columns anywhere in the schema are `repo_settings.review_cost_budget_light_usd`/`..._deep_usd` (migration 000085) — Step 69's own configured *ceilings* — and no per-turn or per-session running total exists in Postgres or in Go. That false present tense was not harmless: §26.7's own cost-budget mechanism was written reading this bullet as an already-existing dependency, and shipped without ever building the accumulator it assumed, a gap corrected once already (§26.7's own text) but left uncorrected here, at its source, until now. This bullet now states the requirement Step 70 (§26.7, §26.9) exists to build — a real per-turn/session total, main lane and every sub-task alike — never claims it as built. (Per-model cost attribution when a sub-task runs on a different model than its turn — §12.2 item 6's cost-by-model view — is not designed here either; that needs its own `step_finish` model field before it can be claimed, left to whichever future work actually adds it.)
+- **Cost rolls up — a real, shipped accumulator as of Step 70, but scoped to the OpenCode adapter's own in-memory turn state, not Postgres.** An earlier draft of this bullet claimed, in the present tense, that every `step_finish.cost` (§6.1) "is summed" into one turn/session total regardless of lane, before any such accumulator existed — **verified false at the time**: the only cost columns anywhere in the schema were `repo_settings.review_cost_budget_light_usd`/`..._deep_usd` (migration 000085), Step 69's own configured *ceilings*, and no running total existed anywhere. That gap is what Step 70 closes, but the fix landed adapter-side, not schema-side: `internal/adapters/outbound/opencode`'s own `turnState` (turn.go) carries a `spentUSD float64` field, summed by `dispatchPart`'s `"step-finish"` case (sse.go) for every step-finish this turn observes — main lane and every sub-task alike, since §7.1's own fan-out routes every sub-task's events back to the SAME `turnState` pointer, tagged only with a `subTaskId`, so the summation needs no lane-specific case at all. This total lives and dies with one turn's own in-process `turnState` — the individual per-step `cost` figures still flow to the control plane exactly as before, unchanged, on each `step_finish` event (§6.1), but the RUNNING SUM itself is never persisted to Postgres, never itself transmitted over the sandbox WS, and never visible outside the one `sandbox-agent` process running that turn. It exists to answer exactly one question, locally: "how much has THIS review spent so far", read back via `Adapter.CurrentTurnSpentUSD` (adapter.go) by `cmd/sandbox-agent`'s own new loopback HTTP server (§26.7's own mechanism, reviewcostbudgetserver.go) — a sandbox-process-local total is sufficient for that, and a Postgres-backed one would need a real wire-contract change and a migration this Step does not make. (Per-model cost attribution when a sub-task runs on a different model than its turn — §12.2 item 6's cost-by-model view — is still not designed here; that needs its own `step_finish` model field before it can be claimed, left to whichever future work actually adds it. A control-plane-visible, cross-turn/session cost total, if ever needed, is also still unbuilt — this accumulator does not attempt it.)
 - Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 82 (session timeline, lane nesting) and Step 83 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
 
 ### 7.2 Context-overflow compaction retry (Step 44)
@@ -1357,9 +1357,14 @@ cost the routing above must now be read with, one a security improvement worth s
 - **More PRs now cross the deep-routing thresholds.** A PR whose third distinct top-level root is
   only a binary asset, or whose sensitive-glob hit was previously invisible because the changed file
   was a mode-only change, now counts. Deep means cross-family counter-review, the fact-check pass,
-  and the architecture-scribe (§26.4/§26.6) — real added cost per review — and that cost is
-  currently **unmeasured and unbounded**: §26.7's cost ceiling has no accumulator or production call
-  site until Step 70 ships (§7.1). This widening was not sized before it shipped.
+  and the architecture-scribe (§26.4/§26.6) — real added cost per review. At the time this widening
+  landed, that cost was **unmeasured and unbounded**: §26.7's cost ceiling had no accumulator and no
+  production call site yet (§7.1) — this widening was not sized before it shipped, and nothing
+  existed at the time to bound its consequence even after the fact. Step 70 has since closed that gap
+  (the accumulator and the loopback call site both now exist, §26.7's own updated text), but that
+  closes the MEASUREMENT/bound gap going forward — it does not retroactively size what this specific
+  widening cost while unbounded, which remains an open question for whoever reviews Step 70's own
+  cost-per-path analytics once they accumulate real data.
 - **Sensitive-path detection is genuinely better**, not merely different. A binary file committed
   under a sensitive path — the shape committed credential material or a compiled artifact typically
   takes — previously produced no path at all and triggered nothing. It now routes deep like any other
@@ -1434,12 +1439,19 @@ N× boot cost with no real independence gain — each sub-agent already has a cl
   section must never make an already-contested `ArchDecision` read as a new one.
 - **KPIs** (Step 62 analytics + §12.2): digest precision (contestation rate); decision latency
   (verdict → approve — already a §16 KPI, now attributable per review path); cost per path —
-  **measured today, and bounded only once §26.7's ceiling has both an accumulator and a production
-  call site**. An earlier draft claimed the bound as already delivered "as of §26.7"; it is not.
-  §26.7's decision function ships as a pure domain function, but the per-turn cost accumulator it
-  consults is unbuilt (see §26.7's own corrected paragraph) and nothing in the orchestration path
-  calls it yet, so this KPI reports observed spend, not enforced spend. Stating it the other way
-  round would claim a guarantee no operator actually has; and the paradigm's proxy
+  **measured since Step 62, and bounded (agent-self-governed, never server-enforced — see §26.7's
+  own "why not a server-enforced gate" paragraph) as of Step 70, which gave §26.7's ceiling both a
+  real accumulator and a real production call site**. Earlier drafts of this bullet went back and
+  forth: one claimed the bound already delivered "as of §26.7" before either the accumulator or the
+  call site existed (corrected once, to "measured today, bounded only once..."); that corrected
+  version is itself now stale, since Step 70 is exactly the Step that closes the remaining gap it
+  named. `internal/adapters/outbound/opencode`'s own `turnState.spentUSD` (§7.1's own corrected
+  paragraph) is the accumulator; `cmd/sandbox-agent`'s loopback `GET /review-cost-budget` endpoint,
+  which a review turn's own prompt now instructs the agent to call before each optional sub-task and
+  calls `reviewtriage.ShouldSkipOptionalPass` for real, is the production call site. The bound is
+  still exactly as strong as §26.7 always said it would be — self-reported, agent-cooperated, never a
+  server-side kill switch, since this control plane has no channel to intervene inside an
+  already-dispatched turn — never claim more than that; and the paradigm's proxy
   metric: **% of PRs approved with zero human inline comments** — the number that says whether the
   shift is actually operating.
 - The §21.3 deterministic digest and the §16 decision inbox surface the readout's `Summary` line
@@ -1534,7 +1546,7 @@ adding this pass to the light path compatible with the invariant at all. §26.9 
 invariant's own wording to say this outright, so a future reader does not have to re-derive it from
 here.
 
-### 26.7 Per-review cost budget with look-ahead (Step 69)
+### 26.7 Per-review cost budget with look-ahead (Step 69 design, Step 70 wiring)
 
 **Honest framing: this closes a cost gap, not the context-window gap — that one is already closed.**
 OpenCodeReview's own budget mechanism (full citation §22.1.1) is a **context-window** guard, not a
@@ -1548,21 +1560,67 @@ work, not a measurement taken after the fact. What Narvi actually lacks, and wha
 adds, is the other axis entirely — a **cost** ceiling, so that §26.5's "cost per path" becomes
 bounded, not merely observed.
 
-**Mechanism: check accumulated spend before each optional pass, never predict the next one's
-cost.** The running total this checks against **does not already exist and is owned by this
-mechanism** — an earlier draft of this paragraph asserted that §7.1 "already rolls up" every
-`step_finish.cost`, main lane and sub-tasks alike, into one running total per turn. It does not:
-§7.1's own phasing assigns no Step to the data-side summation, only Steps 82/83 to *rendering* a
-per-sub-task cost, and §7.1 separately records that a per-step model attribution is still missing
-from `step_finish`. The accumulator is therefore work this section owns, not an inherited given,
-and the distinction is load-bearing — a ceiling checked against a total nobody computes is not a
-bound at all. Before the primary reviewer's orchestration dispatches the *next*
-optional sub-task (`architecture-scribe`, `counter-reviewer`, or §26.6's fact-check sub-task), it
-checks that running total against a per-path ceiling at a safety margin — propose 80%, mirroring
-OpenCodeReview's own `4/5` figure — and skips the dispatch if already at or over it. This is
-deliberately not a prediction of what the next pass would cost (unknowable in advance, and no more
-reliable a number here than anywhere else this plan refuses to guess) — it is a ceiling enforced
-**before** commitment, which is what makes it a real bound rather than a retrospective statistic.
+**Mechanism, as designed (Step 69) and as actually shipped (Step 70): check accumulated spend
+before each optional pass, never predict the next one's cost.** When this section was first
+written (Step 69), the running total it checks against did not exist anywhere, and an earlier draft
+of this paragraph's own false claim that §7.1 "already rolls up" every `step_finish.cost` into one
+running total was corrected in place — see §7.1's own corrected bullet for the full history. Step 70
+is the Step that actually built it, and the shipped shape is concrete, not abstract:
+
+- **The accumulator lives inside the sandbox, not the control plane** — `internal/adapters/outbound/
+  opencode`'s own `turnState.spentUSD` (turn.go), summed by `dispatchPart`'s `"step-finish"` case
+  (sse.go) for every step-finish this turn observes, main lane and every sub-task alike (§7.1's own
+  fan-out already routes a sub-task's events back to the SAME `turnState`, tagged only with a
+  `subTaskId`, so no lane-specific summation logic is needed). This total is in-memory and
+  sandbox-process-local — it is never persisted to Postgres and never itself transmitted over the
+  sandbox WS (the individual per-step costs still flow to the control plane unchanged, on each
+  `step_finish` event; only the RUNNING SUM is new, and it stays inside the sandbox).
+- **The check itself is a loopback HTTP call, not a number stated in the prompt.** `cmd/sandbox-agent`
+  runs its own first HTTP server (`reviewcostbudgetserver.go`) — a tiny listener bound to
+  `127.0.0.1` only (never `0.0.0.0`, and needing no authentication: it serves only numeric budget
+  state, never a secret, and is reachable exclusively from inside this sandbox's own network
+  namespace) on an EPHEMERAL port chosen at boot, avoiding any collision with a session's own
+  arbitrary `services.yml` (§14.2) service ports. `internal/domain/review`'s own
+  `subAgentOrchestrationInstructions` (context.go) instructs the reviewing agent, before spawning
+  `counter-reviewer` or `fact-check` via the task tool, to `GET` this server's own
+  `/review-cost-budget?ceilingUsd=<the per-path ceiling>` endpoint (the loopback URL itself travels
+  as a placeholder token — `{{REVIEW_COST_BUDGET_TOOL_URL}}` — resolved by sandbox-agent immediately
+  before the prompt reaches the engine, mirroring the verdict-posting tool's own
+  `{{REVIEW_VERDICT_TOOL_URL}}` placeholder mechanism exactly, §8.2/Step 47). The handler reads the
+  turn's own live `spentUSD` from the accumulator above and calls `internal/domain/reviewtriage.
+  ShouldSkipOptionalPass(spentUSD, ceilingUSD)` — Step 69's own tested, exported pure function,
+  finally given the production call site its own doc comment said it lacked — returning
+  `{"spentUSD": ..., "ceilingUSD": ..., "shouldSkip": true|false}`. The safety margin itself is
+  unchanged from Step 69's own proposal — 80%, mirroring OpenCodeReview's own `4/5` figure
+  (`reviewtriage.CostBudgetSafetyMargin`, `ShouldSkipOptionalPass` returns `true` once
+  `spentUSD >= ceilingUSD * 0.8`) — computed entirely server-side (inside the loopback handler), so
+  the agent no longer needs to know or apply the percentage itself; the prompt still states it, for
+  the agent's own context, but purely as explanation, never as something the agent must calculate.
+- **This is deliberately not a prediction of what the next pass would cost** (unknowable in advance,
+  and no more reliable a number here than anywhere else this plan refuses to guess) — it is a
+  ceiling enforced **before** commitment, checked independently before each optional dispatch (spend
+  only grows during a review, so an earlier answer never still holds later), which is what makes it
+  a real bound rather than a retrospective statistic.
+- **Fail-safe toward skip, not toward proceeding.** If the agent's own call to the loopback endpoint
+  fails for any reason — its own tool-use erroring, a timeout, a non-2xx response, a malformed or
+  unparseable body — the prompt instructs it to treat that identically to `"shouldSkip": true`: skip
+  the sub-task rather than proceed as though under budget. This matches this plan's own consistent
+  fail-conservative-toward-caution posture on cost (mirroring, at a smaller scale, `ShouldSkipOptionalPass`'s
+  own "a zero or negative ceiling never skips, a negative spend clamps to zero" fail-conservative
+  handling of its own out-of-range inputs).
+- **`architecture-scribe` is excluded from this check entirely, on both paths' own wording of the
+  prompt text** — never even named in the budget-check instructions on the light path (it is never
+  orchestrated there at all), and explicitly carved out by name on the deep path ("this ceiling NEVER
+  applies to architecture-scribe... it always runs regardless of cost") — see §26.9's own "why" for
+  the exclusion; this paragraph states only that the shipped prompt text actually implements it.
+- **Still self-governed, never server-enforced**, exactly as this section always said: the control
+  plane still has no channel to intervene inside an already-dispatched turn (§7's anti-corruption
+  layer boundary is unchanged by this Step) — the loopback endpoint gives the reviewing agent a real,
+  checkable *fact* to cooperate with, in place of the self-estimate it used to be asked to produce
+  from nothing, but the agent still has to make the call and obey the answer. See
+  `internal/domain/review/context.go`'s own `subAgentOrchestrationInstructions` doc comment for the
+  full "why this is still not a security boundary" reasoning (unchanged in kind from Step 69, now
+  restated against the real mechanism rather than the abstract one).
 
 **The budget gates optional passes only, never the primary pass a verdict depends on.** The primary
 reviewer's own findings-producing pass is never itself budget-gated — there is no verdict to post
@@ -1669,8 +1727,9 @@ LLM tie-break — not designed now.
 3. Pass-routing as a validated extension of triage (§26.3) — the citation strengthening §26.3's
    existing light/deep rules is **v1 documentation**, no new behavior beyond those rules; the
    within-deep-path gating it further suggests is **explicitly deferred**, per above.
-4. Per-review cost budget with look-ahead (§26.7) — **v1, Step 69**, both paths, per-path
-   ceilings.
+4. Per-review cost budget with look-ahead (§26.7) — **v1, Step 69 design, Step 70 wiring** (the
+   `turnState.spentUSD` accumulator and the loopback `GET /review-cost-budget` production call site,
+   §26.7's own updated text), both paths, per-path ceilings.
 
 ### 26.10 Risks and open questions
 

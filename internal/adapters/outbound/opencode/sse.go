@@ -346,6 +346,12 @@ func (a *Adapter) dispatchPart(ts *turnState, subTaskID string, raw json.RawMess
 			slog.Warn("opencode: malformed step-finish part, skipping", "error", err)
 			return
 		}
+		// §26.7/§7.1 (Step 70): sum p.Cost into this turn's own running
+		// total -- unconditionally, regardless of subTaskID, since this
+		// SAME turnState is shared by the main lane and every sub-task
+		// alike (see turnState.spentUSD's own field doc comment, turn.go,
+		// for the full reasoning).
+		ts.addCost(p.Cost)
 		ts.emit(translateStepFinish(ts.cmd, p, subTaskID))
 
 	case "tool":

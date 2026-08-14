@@ -711,15 +711,67 @@ func TestRenderTurnPrompt_CostBudget_GoldenParagraph(t *testing.T) {
 	t.Parallel()
 
 	deepGot := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5, CostBudgetSafetyMarginPercent: 80})
-	deepWant := "\nCost budget: this review has an approximate ceiling of $5.00 for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\"/\"counterReview\") as \"skipped\" with the reason noted in your own free-text summary.\nThis is a judgment call on your part, not something this system measures for you mid-review -- err toward running fact-check (cheap, and it only ever prunes noise) before skipping counter-review (the more expensive pass) if you must choose.\n"
+	deepWant := "\nCost budget: this review has an approximate ceiling of $5.00 for the optional sub-tasks below, combined with your own main line of work -- never before your own primary findings pass, which always runs regardless of cost. This ceiling NEVER applies to architecture-scribe either (§26.9) -- it always runs regardless of cost; the ceiling below governs fact-check and counter-review only. Before spawning fact-check or counter-review, first make a single GET request via your own tool use (e.g. bash/curl -- never the verdict-posting tool above) to:\n" +
+		"GET {{REVIEW_COST_BUDGET_TOOL_URL}}?ceilingUsd=5.00\n" +
+		"This is a purely local endpoint inside your own sandbox -- no credential is required. A successful response is a small JSON body: {\"spentUSD\": <number>, \"ceilingUSD\": <number>, \"shouldSkip\": true|false} -- \"shouldSkip\" is already computed for you there, checked at a rough 80% margin against the ceiling, so you never need to estimate spend yourself. If \"shouldSkip\" is true, SKIP that sub-task rather than spawning it, and report the affected field(s) (\"factCheck\"/\"counterReview\") as \"skipped\" with the reason noted in your own free-text summary. If the request itself fails for ANY reason -- your own tool use erroring, a timeout, a non-2xx response, a malformed or unparseable body -- treat that IDENTICALLY to \"shouldSkip\": true: skip the sub-task rather than proceeding as though under budget, matching this system's own consistent fail-safe-toward-caution posture on cost.\n" +
+		"Check independently before EACH of fact-check and counter-review -- spend only grows during a review, so an earlier answer does not still hold later; err toward running fact-check (cheap, and it only ever prunes noise) before skipping counter-review (the more expensive pass) if the two compete for the same remaining budget.\n"
 	if !strings.Contains(deepGot, deepWant) {
 		t.Errorf("deep-path cost-budget paragraph =\n%s\nwant it to contain, verbatim:\n%s", deepGot, deepWant)
 	}
 
 	lightGot := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false, ReviewCostBudgetUSD: 0.5, CostBudgetSafetyMarginPercent: 80})
-	lightWant := "\nCost budget: this review has an approximate ceiling of $0.50 for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\") as \"skipped\" with the reason noted in your own free-text summary.\n"
+	lightWant := "\nCost budget: this review has an approximate ceiling of $0.50 for the optional sub-tasks below, combined with your own main line of work -- never before your own primary findings pass, which always runs regardless of cost. Before spawning fact-check, first make a single GET request via your own tool use (e.g. bash/curl -- never the verdict-posting tool above) to:\n" +
+		"GET {{REVIEW_COST_BUDGET_TOOL_URL}}?ceilingUsd=0.50\n" +
+		"This is a purely local endpoint inside your own sandbox -- no credential is required. A successful response is a small JSON body: {\"spentUSD\": <number>, \"ceilingUSD\": <number>, \"shouldSkip\": true|false} -- \"shouldSkip\" is already computed for you there, checked at a rough 80% margin against the ceiling, so you never need to estimate spend yourself. If \"shouldSkip\" is true, SKIP that sub-task rather than spawning it, and report the affected field(s) (\"factCheck\") as \"skipped\" with the reason noted in your own free-text summary. If the request itself fails for ANY reason -- your own tool use erroring, a timeout, a non-2xx response, a malformed or unparseable body -- treat that IDENTICALLY to \"shouldSkip\": true: skip the sub-task rather than proceeding as though under budget, matching this system's own consistent fail-safe-toward-caution posture on cost.\n"
 	if !strings.Contains(lightGot, lightWant) {
 		t.Errorf("light-path cost-budget paragraph =\n%s\nwant it to contain, verbatim:\n%s", lightGot, lightWant)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_LoopbackEndpoint is this Step's own
+// central pin (Step 70, §26.7/§26.9): the cost-budget paragraph now
+// instructs a real GET to a loopback endpoint carrying the ceiling as a
+// query parameter, rather than asking the agent to self-estimate spend --
+// and NEVER routes architecture-scribe through that check, on either
+// path.
+func TestRenderTurnPrompt_CostBudget_LoopbackEndpoint(t *testing.T) {
+	t.Parallel()
+
+	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5, CostBudgetSafetyMarginPercent: 80})
+	if !strings.Contains(deep, "GET "+review.ReviewCostBudgetToolURLPlaceholder+"?ceilingUsd=5.00") {
+		t.Errorf("deep-path prompt does not render the review-cost-budget GET line:\n%s", deep)
+	}
+	if strings.Contains(deep, "use your own best judgment of how much of that ceiling") {
+		t.Errorf("deep-path prompt still contains the OLD self-estimation instruction, want it replaced by the real GET check:\n%s", deep)
+	}
+	if !strings.Contains(deep, "\"shouldSkip\": true|false") {
+		t.Errorf("deep-path prompt does not describe the loopback endpoint's own JSON response shape:\n%s", deep)
+	}
+	if !strings.Contains(deep, "treat that IDENTICALLY to \"shouldSkip\": true") {
+		t.Errorf("deep-path prompt does not instruct fail-safe-toward-skip on a failed/malformed budget-check request:\n%s", deep)
+	}
+
+	// §26.9's own decided exclusion: architecture-scribe is named ONLY in
+	// its own "NEVER applies to" exclusion clause -- never as a sub-task
+	// the cost-budget check itself gates.
+	budgetIdx := strings.Index(deep, "\nCost budget:")
+	if budgetIdx < 0 {
+		t.Fatalf("deep-path prompt does not render the cost-budget paragraph at all:\n%s", deep)
+	}
+	budgetParagraph := deep[budgetIdx:]
+	if end := strings.Index(budgetParagraph, "\n\n\n"); end >= 0 {
+		budgetParagraph = budgetParagraph[:end]
+	}
+	if !strings.Contains(budgetParagraph, "NEVER applies to "+review.ArchitectureScribeAgentName) {
+		t.Errorf("deep-path cost-budget paragraph does not explicitly exclude architecture-scribe from the budget check:\n%s", budgetParagraph)
+	}
+
+	light := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false, ReviewCostBudgetUSD: 0.5, CostBudgetSafetyMarginPercent: 80})
+	if !strings.Contains(light, "GET "+review.ReviewCostBudgetToolURLPlaceholder+"?ceilingUsd=0.50") {
+		t.Errorf("light-path prompt does not render the review-cost-budget GET line:\n%s", light)
+	}
+	if strings.Contains(light, review.ArchitectureScribeAgentName) {
+		t.Errorf("light-path prompt mentions architecture-scribe at all, want it absent entirely (§26.9, and it is never even orchestrated on light):\n%s", light)
 	}
 }
 

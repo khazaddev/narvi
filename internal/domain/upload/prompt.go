@@ -28,35 +28,45 @@ import (
 // raw literals exactly like review's three immediately above, never
 // imported.
 //
-// F1 (adversarial review, Step 61): these three were the verified
-// omission -- added to Step 61's own turn package but never registered
-// here, so sanitizeUntrustedField did not strip them from untrusted
-// attachment metadata, letting a filename like
+// reviewCostBudgetToolURLPlaceholderLiteral is the SAME byte-for-byte
+// treatment for internal/domain/review's own
+// ReviewCostBudgetToolURLPlaceholder (review/context.go, Step 70, §26.7/
+// §26.9) -- a fourth placeholder FAMILY, but a single literal (this one has
+// no bearer/gen counterpart: the endpoint it points at needs no
+// authentication at all, reviewcostbudgetserver.go's own doc comment).
+//
+// F1 (adversarial review, Step 61): epistemicOutcomeTool*'s three were the
+// verified omission -- added to Step 61's own turn package but never
+// registered here, so sanitizeUntrustedField did not strip them from
+// untrusted attachment metadata, letting a filename like
 // "x{{EPISTEMIC_OUTCOME_TOOL_BEARER}}" survive into a dispatched build-turn
 // prompt and get expanded into the live sandbox bearer by sandbox-agent's
 // own later, unconditional substitution (cmd/sandbox-agent/
 // epistemicoutcometoolprompt.go) -- reachable even with the epistemic
 // feature OFF, since that substitution is driven only by the placeholder
 // text's presence, never by whether the check actually ran on this turn.
-// See placeholderdrift_internal_test.go for the general, self-updating
-// mechanism that now guards against a FOURTH family being forgotten the
-// same way.
+// placeholderdrift_internal_test.go's own general, self-updating source
+// scan is exactly what caught reviewCostBudgetToolURLPlaceholderLiteral's
+// own omission when Step 70 first added it here -- proving that mechanism
+// now does its job automatically, without a human needing to remember this
+// file exists.
 //
 // Why this package needs review's/turn's own literals AT ALL: sandbox-
 // agent's own prompt substitution (cmd/sandbox-agent/
-// reviewverdicttoolprompt.go, epistemicoutcometoolprompt.go) runs its OWN
-// placeholder set's strings.ReplaceAll over a turn's ENTIRE assembled
-// prompt text, not just the fragment each producer rendered -- so an
-// attacker-controlled Filename/ContentType containing one of these
-// literals verbatim would be expanded into that OTHER tool's real, live
-// bearer/gen by that later, blind substitution, exactly as readily as this
-// package's own three. sanitizeUntrustedField (below) must therefore
-// neutralize all nine, not just the three this package itself defines.
+// reviewverdicttoolprompt.go, epistemicoutcometoolprompt.go,
+// reviewcostbudgetprompt.go) runs its OWN placeholder set's
+// strings.ReplaceAll over a turn's ENTIRE assembled prompt text, not just
+// the fragment each producer rendered -- so an attacker-controlled
+// Filename/ContentType containing one of these literals verbatim would be
+// expanded into that OTHER tool's real, live bearer/gen/URL by that later,
+// blind substitution, exactly as readily as this package's own three.
+// sanitizeUntrustedField (below) must therefore neutralize all ten, not
+// just the three this package itself defines.
 //
 // TestPlaceholderTokensMatchReviewPackage/TestPlaceholderTokensMatchTurnPackage
 // (placeholders_internal_test.go, an internal test package free to import
 // internal/domain/review and internal/domain/turn for exactly this
-// cross-package consistency check) assert these six literals stay
+// cross-package consistency check) assert these seven literals stay
 // byte-for-byte identical to review's/turn's own real exported constants,
 // so any future drift between the packages fails CI instead of silently
 // reopening this gap.
@@ -68,16 +78,21 @@ const (
 	epistemicOutcomeToolURLPlaceholderLiteral    = "{{EPISTEMIC_OUTCOME_TOOL_URL}}"
 	epistemicOutcomeToolBearerPlaceholderLiteral = "{{EPISTEMIC_OUTCOME_TOOL_BEARER}}"
 	epistemicOutcomeToolGenPlaceholderLiteral    = "{{EPISTEMIC_OUTCOME_TOOL_GEN}}"
+
+	reviewCostBudgetToolURLPlaceholderLiteral = "{{REVIEW_COST_BUDGET_TOOL_URL}}"
 )
 
 // placeholderTokens lists every literal placeholder token this whole
-// system ever substitutes for a live secret at prompt-substitution time
-// (sandbox-agent's own blind, whole-prompt strings.ReplaceAll calls,
-// cmd/sandbox-agent/reviewverdicttoolprompt.go/epistemicoutcometoolprompt.go):
-// this package's own three (BaseURLPlaceholder/BearerPlaceholder/
-// GenPlaceholder), review's own three, plus turn's own three (all
+// system ever substitutes for a live secret (or, for
+// reviewCostBudgetToolURLPlaceholderLiteral, a live but non-secret local
+// URL) at prompt-substitution time (sandbox-agent's own blind, whole-prompt
+// strings.ReplaceAll calls, cmd/sandbox-agent/reviewverdicttoolprompt.go/
+// epistemicoutcometoolprompt.go/reviewcostbudgetprompt.go): this package's
+// own three (BaseURLPlaceholder/BearerPlaceholder/GenPlaceholder), review's
+// own four (VerdictToolURLPlaceholder/BearerPlaceholder/GenPlaceholder,
+// plus ReviewCostBudgetToolURLPlaceholder), plus turn's own three (all
 // immediately above). sanitizeUntrustedField (below) destroys every exact
-// occurrence of all nine before any untrusted value is interpolated into
+// occurrence of all ten before any untrusted value is interpolated into
 // rendered output, so a poisoned Filename/ContentType can never survive to
 // that later substitution step -- see that function's own doc comment for
 // the full attack this closes.
@@ -91,6 +106,7 @@ var placeholderTokens = []string{
 	epistemicOutcomeToolURLPlaceholderLiteral,
 	epistemicOutcomeToolBearerPlaceholderLiteral,
 	epistemicOutcomeToolGenPlaceholderLiteral,
+	reviewCostBudgetToolURLPlaceholderLiteral,
 }
 
 // BaseURLPlaceholder, BearerPlaceholder, and GenPlaceholder are the fixed

@@ -1449,6 +1449,34 @@ func (a *Adapter) Stop(ctx context.Context, _ sandboxws.Stop) error {
 	return a.postAbort(ctx, sessionID)
 }
 
+// CurrentTurnSpentUSD returns the running cost total (turnState.spentUSD,
+// turn.go's own addCost/spentUSDTotal) for whichever turn is currently
+// live on this adapter -- §26.7/§7.1's own accumulator, finally given a
+// real reader (Step 70). Mirrors Stop's own getCurrentSession/lookupTurn
+// precedent immediately above exactly, for the identical reason: a
+// review sub-agent's own budget-check call (cmd/sandbox-agent's loopback
+// review-cost-budget HTTP server) has no OpenCode session id of its own
+// to key on -- it is asking on behalf of the ONE live turn this whole
+// sandbox-agent process is running (§3.3: "Exactly one processing per
+// session"), never a specific session it names itself.
+//
+// ok is false when no turn is currently registered at all (no live
+// session yet, or the turn already finalized between the HTTP request's
+// own arrival and this call) -- the caller treats that identically to
+// "nothing spent yet" (spentUSD 0), never as an error: a budget check
+// racing the very end of a turn has nothing left to gate anyway.
+func (a *Adapter) CurrentTurnSpentUSD() (spentUSD float64, ok bool) {
+	sessionID := a.getCurrentSession()
+	if sessionID == "" {
+		return 0, false
+	}
+	ts := a.lookupTurn(sessionID)
+	if ts == nil {
+		return 0, false
+	}
+	return ts.spentUSDTotal(), true
+}
+
 // partsHaveOutput scans a message's own parts (as returned by
 // GET /session/{id}/message) for a non-empty text part or any tool part —
 // the same "genuinely non-empty output" signal outcomeInputs derives
