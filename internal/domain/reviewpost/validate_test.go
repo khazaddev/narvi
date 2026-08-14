@@ -488,6 +488,150 @@ func TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath(t 
 	}
 }
 
+// TestBuildVerdict_CorroboratedDeepPathKeepsCounterReviewDoneFloor pins
+// the ORDINARY, expected-common-case outcome of the second substitution
+// (§26.4, Step 71): a deep-path verdict that claims CounterReview: done
+// AND whose claim the caller has independently corroborated against the
+// persisted sub_task_finish trace (CounterReviewCorroborated: true) keeps
+// counterReviewForFloor at CounterReviewDone -- floor stays whatever
+// CounterReviewDone already gives (ShippableAuto on this otherwise-clean
+// input), completely untouched by the new substitution.
+func TestBuildVerdict_CorroboratedDeepPathKeepsCounterReviewDoneFloor(t *testing.T) {
+	in := validInput()
+	in.ReviewDepth = reviewtriage.DepthDeep
+	in.RiskLevel = review.RiskLevelLow
+	in.Premise = review.PremiseStateOK
+	in.TestsCoverage = review.TestsCoverageStateAdequate
+	in.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	in.Digest.ArchDecisions = []reviewpost.ArchDecision{{Decision: "x"}}
+	in.Digest.StackRisks = "none of note"
+	in.Digest.UnverifiedLimits = "did not run against production data"
+	in.CounterReview = review.CounterReviewDone
+	in.CounterReviewCorroborated = true
+
+	if err := reviewpost.ValidateVerdictInput(in); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput() = %v, want nil", err)
+	}
+
+	got := reviewpost.BuildVerdict(in)
+	if got.Shippable != review.ShippableAuto {
+		t.Errorf("Shippable = %q, want %q (a corroborated done claim on the deep path must keep the ordinary CounterReviewDone floor)", got.Shippable, review.ShippableAuto)
+	}
+}
+
+// TestBuildVerdict_UncorroboratedDeepPathDoneFloorsToNeedsHuman is this
+// Step's own central positive case: a deep-path verdict claiming
+// CounterReview: done, whose claim the caller could NOT corroborate
+// against the persisted trace (CounterReviewCorroborated: false), must be
+// floored to ShippableNeedsHuman -- the SAME floor an honest "skipped"
+// self-report already produces (TestBuildVerdict_CounterReviewSkippedRaisesShippable
+// above), even though the raw self-report itself claims "done".
+// Mutation coverage: removing BuildVerdict's own second substitution
+// entirely (or inverting !in.CounterReviewCorroborated to
+// in.CounterReviewCorroborated) makes this test fail, since Shippable
+// would then stay at ShippableAuto instead.
+func TestBuildVerdict_UncorroboratedDeepPathDoneFloorsToNeedsHuman(t *testing.T) {
+	in := validInput()
+	in.ReviewDepth = reviewtriage.DepthDeep
+	in.RiskLevel = review.RiskLevelLow
+	in.Premise = review.PremiseStateOK
+	in.TestsCoverage = review.TestsCoverageStateAdequate
+	in.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	in.Digest.ArchDecisions = []reviewpost.ArchDecision{{Decision: "x"}}
+	in.Digest.StackRisks = "none of note"
+	in.Digest.UnverifiedLimits = "did not run against production data"
+	in.CounterReview = review.CounterReviewDone
+	in.CounterReviewCorroborated = false
+
+	if err := reviewpost.ValidateVerdictInput(in); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput() = %v, want nil", err)
+	}
+
+	got := reviewpost.BuildVerdict(in)
+	if got.Shippable != review.ShippableNeedsHuman {
+		t.Errorf("Shippable = %q, want %q (a deep-path done claim the server could NOT corroborate must be floored to needs_human)", got.Shippable, review.ShippableNeedsHuman)
+	}
+}
+
+// TestBuildVerdict_ExplicitSkippedUnaffectedByCorroboration pins that an
+// EXPLICIT CounterReview: skipped self-report on the deep path is
+// completely unaffected by CounterReviewCorroborated either way -- the
+// second substitution's own condition requires in.CounterReview ==
+// review.CounterReviewDone, so a "skipped" self-report never enters that
+// branch at all, and Shippable is floored to needs_human by the ORIGINAL,
+// unconditional CounterReviewFloor(CounterReviewSkipped) computation
+// regardless of what CounterReviewCorroborated happens to carry.
+func TestBuildVerdict_ExplicitSkippedUnaffectedByCorroboration(t *testing.T) {
+	base := validInput()
+	base.ReviewDepth = reviewtriage.DepthDeep
+	base.RiskLevel = review.RiskLevelLow
+	base.Premise = review.PremiseStateOK
+	base.TestsCoverage = review.TestsCoverageStateAdequate
+	base.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	base.Digest.ArchDecisions = []reviewpost.ArchDecision{{Decision: "x"}}
+	base.Digest.StackRisks = "none of note"
+	base.Digest.UnverifiedLimits = "did not run against production data"
+	base.CounterReview = review.CounterReviewSkipped
+
+	for _, corroborated := range []bool{true, false} {
+		in := base
+		in.CounterReviewCorroborated = corroborated
+
+		if err := reviewpost.ValidateVerdictInput(in); err != nil {
+			t.Fatalf("test setup (corroborated=%v): ValidateVerdictInput() = %v, want nil", corroborated, err)
+		}
+
+		got := reviewpost.BuildVerdict(in)
+		if got.Shippable != review.ShippableNeedsHuman {
+			t.Errorf("corroborated=%v: Shippable = %q, want %q (an explicit skipped self-report floors regardless of CounterReviewCorroborated)", corroborated, got.Shippable, review.ShippableNeedsHuman)
+		}
+	}
+}
+
+// TestBuildVerdict_CorroborationSubstitutionInertOnLightPath is the
+// regression test for the exact bug this Step's own gate reasoning warns
+// against (BuildVerdict's own doc comment, "Second substitution: post-hoc
+// corroboration"): a LIGHT-path verdict whose payload happens to carry
+// CounterReview: "done" -- legal, if meaningless, input there, since
+// ValidateVerdictInput never checks this field outside the deep-path-only
+// block -- combined with CounterReviewCorroborated left at its own zero
+// value, false (httpapi never runs the corroboration query on the light
+// path, VerdictInput.CounterReviewCorroborated's own doc comment) MUST
+// NOT be floored by the second substitution. Gating that substitution on
+// in.CounterReview == review.CounterReviewDone alone (instead of ALSO
+// requiring in.ReviewDepth == reviewtriage.DepthDeep) would floor every
+// such light-path verdict to needs_human, silently defeating light-path
+// auto-approval -- the same failure mode the FIRST substitution's own doc
+// comment already exists to prevent, reintroduced through a different
+// door.
+// Mutation coverage: dropping the `in.ReviewDepth ==
+// reviewtriage.DepthDeep &&` clause from the second substitution's
+// condition (leaving only `in.CounterReview == review.CounterReviewDone
+// && !in.CounterReviewCorroborated`) makes this test fail, since Shippable
+// would then be floored to needs_human instead of staying auto.
+func TestBuildVerdict_CorroborationSubstitutionInertOnLightPath(t *testing.T) {
+	in := validInput()
+	in.RiskLevel = review.RiskLevelLow
+	in.Premise = review.PremiseStateOK
+	in.TestsCoverage = review.TestsCoverageStateAdequate
+	in.Digest.DescriptionAdequacy = review.DescriptionAdequacyOK
+	// in.ReviewDepth is left at its own zero value (never DepthDeep) --
+	// the light-path/unresolved-depth case.
+	in.CounterReview = review.CounterReviewDone
+	// in.CounterReviewCorroborated is left at its own zero value, false --
+	// exactly what httpapi leaves it at on every light-path verdict, since
+	// it never runs the corroboration query there at all.
+
+	if err := reviewpost.ValidateVerdictInput(in); err != nil {
+		t.Fatalf("test setup: ValidateVerdictInput() = %v, want nil (counterReview is never validated on the light path)", err)
+	}
+
+	got := reviewpost.BuildVerdict(in)
+	if got.Shippable != review.ShippableAuto {
+		t.Errorf("Shippable = %q, want %q (the corroboration substitution must be inert on the light path, never floored via a CounterReview:\"done\" echo paired with an always-false CounterReviewCorroborated)", got.Shippable, review.ShippableAuto)
+	}
+}
+
 // TestComputeShippable_FactCheckSkippedNeverRaisesShippable is §26.6's
 // own deliberate, load-bearing DIFFERENCE from
 // TestBuildVerdict_CounterReviewSkippedRaisesShippable above: FactCheck

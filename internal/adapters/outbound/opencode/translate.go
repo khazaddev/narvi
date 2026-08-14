@@ -230,7 +230,13 @@ func translateSubTaskStart(cmd sandboxws.Prompt, p subtaskPart) sandboxws.SubTas
 // this sub-task" the wire schema's own SubTaskStart.parentMessageId
 // documents. Label is best-effort from the task call's own "description"
 // input field (taskInputDescription below) -- a human-readable label, not
-// a correctness-bearing value.
+// a correctness-bearing value. SubAgentType (Step 71, §26.4/§7.1) is the
+// SAME task call's own "subagent_type" input field (taskInputSubAgentType
+// below) -- unlike Label, this IS the engine's own reliable dispatch
+// parameter, and is what post-hoc sub-task corroboration
+// (reviewverdict.CounterReviewCorroborated) keys off once this event lands
+// in Postgres (sessionactor's unconditional raw-event persistence, no
+// further wiring needed on that side).
 func translateSubTaskStartFromTask(cmd sandboxws.Prompt, p toolPart, subTaskID string) sandboxws.SubTaskStart {
 	return sandboxws.SubTaskStart{
 		Type:            "sub_task_start",
@@ -240,6 +246,7 @@ func translateSubTaskStartFromTask(cmd sandboxws.Prompt, p toolPart, subTaskID s
 		SubTaskId:       subTaskID,
 		Label:           taskInputDescription(p.State.Input),
 		ParentMessageId: p.MessageID,
+		SubAgentType:    subAgentTypePtr(taskInputSubAgentType(p.State.Input)),
 	}
 }
 
@@ -257,6 +264,48 @@ func taskInputDescription(raw json.RawMessage) string {
 		return desc
 	}
 	return "task"
+}
+
+// taskInputSubAgentType best-effort extracts the "task" tool's own
+// "subagent_type" input field — the SAME VERIFIED-LIVE input shape
+// taskInputDescription documents above ({"description","prompt",
+// "subagent_type"}), just the third key rather than the first. This is
+// OpenCode's own real dispatch parameter: the literal value the model
+// passes to invoke a specific named custom agent (e.g.
+// review.CounterReviewerAgentName's "counter-reviewer"), not freeform
+// text — which is exactly why Step 71's post-hoc corroboration
+// (reviewverdict.CounterReviewCorroborated) keys off this field rather
+// than Label. Returns "" on absent/malformed input, never an error: this
+// only feeds a display/correlation field on the wire event, the same
+// "this only feeds a display label" reasoning taskInputDescription's own
+// doc comment already gives — an empty SubAgentType simply means
+// corroboration will never find a matching starts record for this
+// sub-task, never a hard failure anywhere in this adapter.
+func taskInputSubAgentType(raw json.RawMessage) string {
+	m, err := decodeToolObject(raw)
+	if err != nil {
+		return ""
+	}
+	if agentType, ok := m["subagent_type"].(string); ok {
+		return agentType
+	}
+	return ""
+}
+
+// subAgentTypePtr converts a subAgentType string into sub_task_start's own
+// wire shape for SubAgentType (§6.1: OPTIONAL, additive, Step 71) --
+// mirrors subTaskIDPtr's own identical "empty string becomes a nil
+// pointer, non-empty becomes a pointer to it" convention immediately
+// above, so json.Marshal's own omitempty tag on that field omits it
+// entirely whenever there was nothing real to report (translateSubTaskStart's
+// legacy/unverified-live subtaskPart fallback path, which has no task-tool
+// input to extract this from at all, and any malformed/absent
+// "subagent_type" on the real task-tool path).
+func subAgentTypePtr(subAgentType string) *string {
+	if subAgentType == "" {
+		return nil
+	}
+	return &subAgentType
 }
 
 func translateSubTaskFinish(cmd sandboxws.Prompt, subTaskID string, outcome sandboxws.ExecutionCompleteOutcome) sandboxws.SubTaskFinish {

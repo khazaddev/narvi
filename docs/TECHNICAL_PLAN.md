@@ -227,7 +227,7 @@ These are the canonical contracts the web UI and the sandbox agent speak. Formal
 ### 6.1 Sandbox WS (sandbox-agent ↔ control plane)
 - Connect: `wss://…/sessions/{id}/ws?type=sandbox`, `Authorization: Bearer <sandbox_token>`, `X-Sandbox-ID` (+ NEW: `X-Sandbox-Gen`). Server: 410 when session stopped, 403 on id/gen mismatch. Agent treats 401/403/404/410 as fatal (no retry); else exponential-backoff reconnect.
 - CP→agent commands: `prompt` (with author scmName/scmEmail for git attribution), `stop`, `push` (per-repo spec; CP awaits `push_complete`, 360s), `snapshot`, `shutdown`, `ack`, `git_sync_complete`.
-- Agent→CP events: `ready`, `heartbeat` (30s, carries conversation id + `last_boot_phase`), `boot_progress`, `token` (cumulative text, upsert-by-messageId not append), `tool_call`/`tool_result`, `step_start`/`step_finish` (carries `cost`; NOTE: `tokens` is an **object**, not a number — a number-vs-object mismatch here silently zeroes cost tracking, so pin it in the contract test), `sub_task_start`/`sub_task_finish` (§7.1), `git_sync`, `artifact`, `execution_complete`, `push_complete`/`push_error`, `session_title`, `warning`, `error`, `snapshot_ready`.
+- Agent→CP events: `ready`, `heartbeat` (30s, carries conversation id + `last_boot_phase`), `boot_progress`, `token` (cumulative text, upsert-by-messageId not append), `tool_call`/`tool_result`, `step_start`/`step_finish` (carries `cost`; NOTE: `tokens` is an **object**, not a number — a number-vs-object mismatch here silently zeroes cost tracking, so pin it in the contract test), `sub_task_start`/`sub_task_finish` (§7.1; `sub_task_start` additionally carries an optional `subAgentType`, Step 71, §26.4 — the task tool's own real `subagent_type` dispatch parameter, distinct from `label`'s freeform text, used to corroborate a self-reported `counter-reviewer` dispatch against the persisted trace), `git_sync`, `artifact`, `execution_complete`, `push_complete`/`push_error`, `session_title`, `warning`, `error`, `snapshot_ready`.
 - **Ack protocol**: 6 critical types (`execution_complete`, `error`, `snapshot_ready`, `push_complete`, `push_error`, `sub_task_finish`) carry deterministic `ackId = "{type}:{messageId}"`; sender buffers (1000 events, evict oldest non-critical) and re-sends on reconnect until acked; receiver dedupes by upsert-on-messageId. `sub_task_finish` joins the critical set because it closes an "active" state the UI tracks (§12.2 item 1's live sub-lane count) exactly like `execution_complete` does at the turn level — a dropped, never-redelivered `sub_task_finish` would leave a sub-lane stuck active forever, live and in history, with no reconciliation path (the same failure class §3.2's two-phase terminalization and §9.3 #4/#7 exist to prevent at the turn level).
 - **Sub-task fan-out** (§7.1): every event type emitted during turn processing additionally accepts an optional `subTaskId` (absent/null = the turn's main lane), for envelope uniformity — session/connection-lifecycle events (`ready`, `heartbeat`, `boot_progress`, `git_sync`, `session_title`, `warning`, `snapshot_ready`) never populate it, only turn/tool/step-scoped events do — so a lane is always unambiguous even when several sub-tasks' events interleave on the wire. `sub_task_start` (`subTaskId`, `label`, `parentMessageId` — the `messageId` of the main-lane `tool_call` event whose invocation spawned this sub-task) and `sub_task_finish` (`subTaskId`, `outcome`: `completed | failed | cancelled`, reusing the turn's own taxonomy, §3.3) bracket a sub-task's lifetime. The model is flat — a sub-task cannot itself spawn a further-nested sub-task.
 
@@ -256,7 +256,7 @@ The most delicate area of the system — budget real care here.
 
 Problem this solves: some engine behaviors spawn multiple concurrent sub-agents within a single turn — OpenCode's own task-tool sub-agents today; the same class of behavior exists in other engines under other names (e.g. a coding assistant's own dynamic multi-agent workflow mode), mentioned here only as the general shape of the problem, not something Narvi special-cases per engine. Left untranslated, this reads to the control plane as one flat, interleaved event stream: unattributable, and easy to undercount on cost.
 
-- The adapter assigns each spawned sub-task a stable `subTaskId` (derived from whatever correlator the engine itself exposes — OpenCode's own nested-task id today; not Narvi's own session concepts, per the note below) and tags every event that sub-task produces with it (§6.1), emitting `sub_task_start`/`sub_task_finish` to bracket its lifetime.
+- The adapter assigns each spawned sub-task a stable `subTaskId` (derived from whatever correlator the engine itself exposes — OpenCode's own nested-task id today; not Narvi's own session concepts, per the note below) and tags every event that sub-task produces with it (§6.1), emitting `sub_task_start`/`sub_task_finish` to bracket its lifetime. `sub_task_start` additionally carries an optional `subAgentType` (Step 71, §26.4) sourced from the task tool's own real `subagent_type` dispatch parameter (VERIFIED LIVE: `{"description","prompt","subagent_type"}`) — unlike `label` (freeform, not correctness-bearing), this is the engine's own reliable dispatch parameter, which is why §26.4's post-hoc sub-task corroboration keys off it rather than `label`.
 - **Not a new domain entity.** A sub-task is a presentation/wire-level grouping of events belonging to one turn — not a new Postgres row, and not Narvi's own "child session" (§14.4: a full session with its own sandbox/turns, spawned by automation/sentinel features — a materially heavier mechanism; the naming here is deliberately distinct so the two are never confused). The turn state machine (§3.3) is unaffected: one turn still has exactly one `processing` state no matter how many sub-tasks ran underneath it.
 - **Cost rolls up — a real, shipped accumulator as of Step 70, but scoped to the OpenCode adapter's own in-memory turn state, not Postgres.** An earlier draft of this bullet claimed, in the present tense, that every `step_finish.cost` (§6.1) "is summed" into one turn/session total regardless of lane, before any such accumulator existed — **verified false at the time**: the only cost columns anywhere in the schema were `repo_settings.review_cost_budget_light_usd`/`..._deep_usd` (migration 000085), Step 69's own configured *ceilings*, and no running total existed anywhere. That gap is what Step 70 closes, but the fix landed adapter-side, not schema-side: `internal/adapters/outbound/opencode`'s own `turnState` (turn.go) carries a `spentUSD float64` field, summed by `dispatchPart`'s `"step-finish"` case (sse.go) for every step-finish this turn observes — main lane and every sub-task alike, since §7.1's own fan-out routes every sub-task's events back to the SAME `turnState` pointer, tagged only with a `subTaskId`, so the summation needs no lane-specific case at all. This total lives and dies with one turn's own in-process `turnState` — the individual per-step `cost` figures still flow to the control plane exactly as before, unchanged, on each `step_finish` event (§6.1), but the RUNNING SUM itself is never persisted to Postgres, never itself transmitted over the sandbox WS, and never visible outside the one `sandbox-agent` process running that turn. It exists to answer exactly one question, locally: "how much has THIS review spent so far", read back via `Adapter.CurrentTurnSpentUSD` (adapter.go) by `cmd/sandbox-agent`'s own new loopback HTTP server (§26.7's own mechanism, reviewcostbudgetserver.go) — a sandbox-process-local total is sufficient for that, and a Postgres-backed one would need a real wire-contract change and a migration this Step does not make. (Per-model cost attribution when a sub-task runs on a different model than its turn — §12.2 item 6's cost-by-model view — is still not designed here; that needs its own `step_finish` model field before it can be claimed, left to whichever future work actually adds it. A control-plane-visible, cross-turn/session cost total, if ever needed, is also still unbuilt — this accumulator does not attempt it.)
 - Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 82 (session timeline, lane nesting) and Step 83 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
@@ -1403,24 +1403,66 @@ N× boot cost with no real independence gain — each sub-agent already has a cl
 - **Synthesis**: only findings surviving counter-review are published. Inter-agent disagreements
   surface in the digest as a **"Contested points"** section — agent disagreement is precisely the
   signal that a human must decide.
-- **Schema-enforced self-report — presence, not truth.** The verdict payload carries a typed
-  `CounterReview: done|skipped` field, schema-required on the deep path (rejected if absent —
-  §26.1's reject-don't-repair posture); `skipped` raises the `Shippable` floor to `needs_human`.
-  A typed field, never a marker parsed from markdown (Step 45's invariant, once more).
-  **The justification is narrower than an earlier draft of this bullet claimed, and the correction
-  matters.** That draft was headed "Structural enforcement" and argued that the control plane
-  "cannot observe the sandbox's internals" — which contradicts this very section's own opening
-  (§7.1's `subTaskId` tagging, shipped in Step 17) and is false as stated: `sub_task_finish` is one
-  of the six ack-guaranteed critical event types (`ports/agentruntime.go`), and sandbox-event
-  persistence is unconditional for every recognized type (`sessionactor/sandboxevent.go`), so a
-  sub-agent that actually ran leaves a durable, queryable trace. What the control plane genuinely
-  lacks is not the *event* but its *content*: a `sub_task_finish` records that a sub-task ended,
-  never what the counter-reviewer concluded, so the verdict does still have to carry the outcome.
-  The residual is therefore real and is named here rather than argued away — a schema guarantees
-  the field is **present**, never that it is **true**, and a reviewer that never dispatched the
-  sub-agent at all can still report `done`. Corroborating the claim against the persisted
-  `sub_task_finish` trace is what would make the heading "structural"; that is a separate,
-  currently-unscheduled Step, and until it ships this field is **trusted, not verified**.
+- **Schema-enforced self-report, now corroborated against the persisted trace — structural, not
+  merely presence-checked (Step 71).** The verdict payload carries a typed `CounterReview:
+  done|skipped` field, schema-required on the deep path (rejected if absent — §26.1's
+  reject-don't-repair posture); `skipped` raises the `Shippable` floor to `needs_human`. A typed
+  field, never a marker parsed from markdown (Step 45's invariant, once more).
+  **An earlier draft of this bullet, headed "Structural enforcement," argued that the control
+  plane "cannot observe the sandbox's internals" — which contradicts this very section's own
+  opening (§7.1's `subTaskId` tagging, shipped in Step 17) and was false as stated:**
+  `sub_task_finish` is one of the six ack-guaranteed critical event types
+  (`ports/agentruntime.go`), and sandbox-event persistence is unconditional for every recognized
+  type (`sessionactor/sandboxevent.go`), so a sub-agent that actually ran leaves a durable,
+  queryable trace — the control plane's own gap was never the *event*, only its *content*
+  (`sub_task_finish` records that a sub-task ended, never what the counter-reviewer concluded, so
+  the verdict still has to carry the outcome). Step 71 closes the remaining gap by reading that
+  trace back and comparing it against the self-report, making the heading honestly "structural"
+  rather than aspirational:
+  - `sandboxws.SubTaskStart` gained an additive, optional `subAgentType` field (§6.1) — the task
+    tool's own real `subagent_type` dispatch parameter (VERIFIED LIVE:
+    `{"description","prompt","subagent_type"}`), distinct from `label`'s pre-existing freeform,
+    non-correctness-bearing text. `internal/adapters/outbound/opencode/translate.go`'s
+    `translateSubTaskStartFromTask` populates it from the task tool's own input; the legacy,
+    unverified-live `subtaskPart` fallback path (`translateSubTaskStart`) has no task-tool input to
+    source it from and leaves it absent, exactly like any producer that predates the field.
+  - `internal/domain/reviewverdict.CounterReviewCorroborated` (pure, zero I/O) reports whether a
+    `sub_task_start` record naming `review.CounterReviewerAgentName` and a `sub_task_finish` record
+    for the SAME `subTaskId` with `outcome == "completed"` both exist in the trace it is handed.
+  - `httpapi.PostReviewVerdict` reads that trace back via two queries
+    (`ListSubTaskStartEventsForTurn`/`ListSubTaskFinishEventsForTurn`, filtering the `events`
+    table's JSONB `payload->>'gen'`) scoped to BOTH `turns.dispatched_sandbox_gen` AND a
+    `created_at >= <this turn's own dispatched_at>` lower bound — never merely `session_id`, and
+    (fixed post-review, see below) never gen alone either. Gen alone was found, by an adversarial
+    review of this Step's own PR, to be insufficient: `dispatched_sandbox_gen` is bumped only on a
+    fresh spawn/restore/resume, never on an ordinary dispatch to an already-live sandbox, so a
+    session whose sandbox survives across multiple review turns (§24's automatic re-review, the
+    ORDINARY case, not a corner case) dispatches every one of those turns at the SAME gen — letting
+    an earlier turn's own real trace spuriously corroborate a later turn's self-report purely
+    because both turns shared the same gen. The `dispatched_at` lower bound closes that gap:
+    `turns_one_processing_per_session`'s own unique partial index guarantees turns execute strictly
+    sequentially per session, so an earlier turn's own sub-task events always predate a later turn's
+    own `dispatched_at`. Gen-scoping still stays, alongside it, for the orthogonal case it alone
+    catches: a stale, late-arriving event from a genuinely different, now-dead sandbox incarnation.
+    Only queried when it could matter at all: deep path and a self-reported `done`.
+    `dispatched_sandbox_gen` or `dispatched_at` being unset (a turn with no recorded dispatch) is
+    treated as NOT corroborated, fail-conservative like every other closed-enum default in this
+    codebase.
+  - `reviewpost.BuildVerdict` applies a SECOND, raise-only substitution (immediately after the
+    existing light-path substitution, and gated explicitly on `ReviewDepth == DepthDeep` — never
+    merely on the raw `CounterReview` value, which carries no validated meaning on the light path
+    and would otherwise let this substitution silently floor light-path verdicts too): a deep-path
+    `done` claim the server could NOT corroborate is downgraded to `CounterReviewSkipped` before
+    `CounterReviewFloor` runs, landing on the identical `needs_human` floor an honest `skipped`
+    self-report already produces. This can only ever make `Shippable` MORE conservative than the
+    self-report alone, never less.
+  - **A known, accepted race, not a bug:** the verdict POST and the WS event carrying
+    `sub_task_finish` are two independent network round-trips from the sandbox with no server-side
+    ordering guarantee between them, so a real, completed counter-review whose `sub_task_finish`
+    has not yet committed to Postgres by POST time reads as uncorroborated. This fails toward
+    `needs_human` — strictly more conservative, never less — the same fail-conservative bias
+    `CounterReviewSkipped`'s own "every cause floors identically" posture already commits to.
+    Deliberately left unaddressed: no retries, no polling, no new timeout constant.
 
 ### 26.5 Measuring the readout (Step 69, on Step 62's instrument)
 

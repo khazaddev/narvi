@@ -316,6 +316,10 @@ export interface SubTaskStart {
    * The messageId of the enclosing main-lane message whose invocation spawned this sub-task.
    */
   parentMessageId: string;
+  /**
+   * Step 71 (§26.4/§7.1): the task tool's own 'subagent_type' dispatch parameter -- the literal named sub-agent (e.g. 'counter-reviewer', 'architecture-scribe', 'fact-check') the engine was actually told to invoke, VERIFIED LIVE as one of the task tool's own real input fields ({"description","prompt","subagent_type"}). Unlike label above (freeform, explicitly documented there as 'not a correctness-bearing value'), this is the engine's own reliable dispatch parameter, which is why post-hoc sub-task corroboration (reviewverdict.CounterReviewCorroborated) keys off this field, never off label. Optional and additive: this event has real, already-shipped production consumers that predate this field, so adding it now is not a breaking wire-contract change. Absent/omitted on any producer that predates this field, and always absent on the legacy/unverified-live subtaskPart fallback translation path (translateSubTaskStart), which has no task-tool input to extract this from at all.
+   */
+  subAgentType?: string;
 }
 /**
  * CRITICAL (requires ackId). §7.1: closes an 'active' state the UI tracks (a live sub-lane count), the same criticality reasoning as execution_complete at the turn level.

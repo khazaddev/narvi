@@ -100,6 +100,25 @@ type VerdictInput struct {
 	// (ValidateVerdictInput's own ErrNegativeFactCheckKilled /
 	// ErrFactCheckKilledOnSkip checks).
 	FactCheckKilled int
+
+	// CounterReviewCorroborated (§26.4, Step 71) is what makes §26.4's own
+	// "structural enforcement" heading honestly so: whether the caller
+	// (internal/adapters/inbound/httpapi/reviewverdict.go) independently
+	// confirmed, against THIS turn's own already-persisted sandbox event
+	// trace (reviewverdict.CounterReviewCorroborated, gen-scoped to
+	// turns.dispatched_sandbox_gen), that a counter-reviewer sub-task
+	// (review.CounterReviewerAgentName) both actually started and actually
+	// completed -- never merely that CounterReview above claims "done".
+	// Computed server-side ONLY, never accepted from the agent's own POST
+	// body (mirrors ReviewDepth/Shippable's own "server-computed only"
+	// contract above) -- there is no restdtos wire field this is ever read
+	// from. The caller ONLY runs the corroboration query, and therefore
+	// only ever sets this true, when it could possibly matter (deep path,
+	// CounterReview == done) -- see that call site's own doc comment for
+	// why every other verdict leaves this at its zero value, false, by
+	// simply never querying at all. BuildVerdict's own second substitution
+	// (below) is the ONE place this field is read.
+	CounterReviewCorroborated bool
 }
 
 // The errors ValidateVerdictInput returns -- one per rejected field, named
@@ -475,10 +494,87 @@ func hasNonBlankArchDecision(decisions []ArchDecision) bool {
 // TestBuildVerdict_CounterReviewFloorInertOnLightPath and
 // TestBuildVerdict_ExplicitCounterReviewSkippedNeverOverwrittenOnLightPath
 // (validate_test.go).
+//
+// # Second substitution: post-hoc corroboration (§26.4, Step 71)
+//
+// Immediately after the light-path substitution above, a SECOND
+// substitution closes §26.4's own named residual: a schema-required
+// `CounterReview: done` self-report is presence-verified by
+// ValidateVerdictInput's own closed-enum check, but truth-verified by
+// nothing -- a primary reviewer that never actually dispatched the
+// counter-reviewer sub-task can still self-report "done". When the caller
+// (httpapi) has independently confirmed against this turn's own
+// persisted sandbox event trace (reviewverdict.CounterReviewCorroborated,
+// gen-scoped to the turn's own dispatched_sandbox_gen) that the claim
+// does NOT hold up, this substitution downgrades counterReviewForFloor to
+// review.CounterReviewSkipped -- the SAME value an honest "skipped"
+// self-report already produces, floored by CounterReviewFloor to
+// ShippableNeedsHuman exactly as before. This can only ever make Shippable
+// MORE conservative than the self-report alone would, mirroring the first
+// substitution's own "never less permissive" direction and the B11
+// carve-out's identical posture.
+//
+// The gate is REQUIRED to be in.ReviewDepth == reviewtriage.DepthDeep
+// EXPLICITLY -- not merely in.CounterReview == review.CounterReviewDone --
+// and this is the one place getting the gate wrong would be a real bug,
+// not a style nit. Reason: by the time this line runs, the FIRST
+// substitution has already forced counterReviewForFloor to
+// review.CounterReviewDone on every light-path verdict (the branch
+// immediately above) -- but in.CounterReview itself, the RAW field this
+// second substitution's condition reads, is untouched by that first
+// substitution, and VerdictInput.CounterReview's own doc comment already
+// warns that on the light path this raw field "carries NO validated
+// meaning at all": ValidateVerdictInput never even looks at it outside
+// the deep-path-only block, so a light-path agent's payload can echo
+// "done" (or anything else) into that field with zero consequence today.
+// A gate reading only "in.CounterReview == review.CounterReviewDone"
+// would ALSO match that light-path echo, and -- since httpapi's own
+// corroboration query only ever runs on the deep path (VerdictInput.
+// CounterReviewCorroborated's own doc comment: "ONLY when it could
+// possibly matter") -- in.CounterReviewCorroborated is ALWAYS false, its
+// own zero value, on every light-path verdict, with no exception. Gating
+// on the raw CounterReview value alone would therefore silently floor
+// EVERY light-path verdict whose payload happens to carry
+// CounterReview:"done" straight to ShippableNeedsHuman via this second
+// substitution -- reintroducing, through a different door, the EXACT
+// "silently defeating light-path auto-approval entirely" failure mode the
+// FIRST substitution's own doc comment exists to prevent. Requiring
+// in.ReviewDepth == reviewtriage.DepthDeep explicitly closes that door:
+// only a genuinely deep-path verdict, where in.CounterReview was actually
+// validated and in.CounterReviewCorroborated was actually computed from a
+// real query, can ever reach this branch.
+//
+// # The accepted race: not a bug, do not "fix" it
+//
+// httpapi's own corroboration query call site (reviewverdict.go) is a
+// sandbox-bearer-authenticated HTTP POST -- a channel entirely separate
+// from the WS event stream that carries sub_task_finish. The deep-path
+// review prompt (review/context.go's own orchestration instructions)
+// tells the agent to wait for the counter-reviewer sub-task's own result
+// before composing this verdict, so CAUSALLY the sub-task has already
+// resolved by the time this POST is made -- but there is no server-side
+// guarantee the corresponding sub_task_finish WS event has actually been
+// committed to Postgres yet: two independent network round-trips from the
+// sandbox, no ordering guarantee between them. A false negative here (the
+// counter-review genuinely completed, but its own finish event's own
+// commit has not landed by the time this POST is processed) fails toward
+// ShippableNeedsHuman -- MORE conservative, never less, the identical
+// fail-conservative bias review.CounterReviewSkipped's own doc comment
+// already commits to ("every cause floors identically... whatever the
+// reason"). This is accepted, not a defect: no retries, no polling, no
+// new timeout constant belongs here to chase it away.
 func BuildVerdict(in VerdictInput) review.Verdict {
 	counterReviewForFloor := in.CounterReview
 	if in.ReviewDepth != reviewtriage.DepthDeep && in.CounterReview != review.CounterReviewSkipped {
 		counterReviewForFloor = review.CounterReviewDone
+	}
+	// Second substitution (§26.4, Step 71) -- see this function's own doc
+	// comment above ("Second substitution: post-hoc corroboration") for
+	// the full "why", especially why this gate is in.ReviewDepth ==
+	// reviewtriage.DepthDeep EXPLICITLY and not merely in.CounterReview ==
+	// review.CounterReviewDone.
+	if in.ReviewDepth == reviewtriage.DepthDeep && in.CounterReview == review.CounterReviewDone && !in.CounterReviewCorroborated {
+		counterReviewForFloor = review.CounterReviewSkipped
 	}
 	return review.Verdict{
 		RiskLevel:         in.RiskLevel,

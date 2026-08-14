@@ -1688,6 +1688,22 @@ type SubTaskStart struct {
 	// SessionId corresponds to the JSON schema field "sessionId".
 	SessionId string `json:"sessionId" yaml:"sessionId" mapstructure:"sessionId"`
 
+	// Step 71 (§26.4/§7.1): the task tool's own 'subagent_type' dispatch parameter --
+	// the literal named sub-agent (e.g. 'counter-reviewer', 'architecture-scribe',
+	// 'fact-check') the engine was actually told to invoke, VERIFIED LIVE as one of
+	// the task tool's own real input fields
+	// ({"description","prompt","subagent_type"}). Unlike label above (freeform,
+	// explicitly documented there as 'not a correctness-bearing value'), this is the
+	// engine's own reliable dispatch parameter, which is why post-hoc sub-task
+	// corroboration (reviewverdict.CounterReviewCorroborated) keys off this field,
+	// never off label. Optional and additive: this event has real, already-shipped
+	// production consumers that predate this field, so adding it now is not a
+	// breaking wire-contract change. Absent/omitted on any producer that predates
+	// this field, and always absent on the legacy/unverified-live subtaskPart
+	// fallback translation path (translateSubTaskStart), which has no task-tool input
+	// to extract this from at all.
+	SubAgentType *string `json:"subAgentType,omitempty,omitzero" yaml:"subAgentType,omitempty" mapstructure:"subAgentType,omitempty"`
+
 	// Stable correlator for this sub-task's lifetime (§7.1), derived from whatever
 	// correlator the engine itself exposes (OpenCode's own nested-task id today).
 	SubTaskId string `json:"subTaskId" yaml:"subTaskId" mapstructure:"subTaskId"`
