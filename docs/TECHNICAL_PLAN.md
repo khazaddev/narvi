@@ -1358,16 +1358,33 @@ N× boot cost with no real independence gain — each sub-agent already has a cl
 - **Synthesis**: only findings surviving counter-review are published. Inter-agent disagreements
   surface in the digest as a **"Contested points"** section — agent disagreement is precisely the
   signal that a human must decide.
-- **Structural enforcement.** The control plane cannot observe the sandbox's internals, so the
-  verdict payload carries a typed `CounterReview: done|skipped` field, schema-required on the deep
-  path (rejected if absent — §26.1's reject-don't-repair posture); `skipped` raises the
-  `Shippable` floor to `needs_human`. A typed field, never a marker parsed from markdown (Step
-  45's invariant, once more).
+- **Schema-enforced self-report — presence, not truth.** The verdict payload carries a typed
+  `CounterReview: done|skipped` field, schema-required on the deep path (rejected if absent —
+  §26.1's reject-don't-repair posture); `skipped` raises the `Shippable` floor to `needs_human`.
+  A typed field, never a marker parsed from markdown (Step 45's invariant, once more).
+  **The justification is narrower than an earlier draft of this bullet claimed, and the correction
+  matters.** That draft was headed "Structural enforcement" and argued that the control plane
+  "cannot observe the sandbox's internals" — which contradicts this very section's own opening
+  (§7.1's `subTaskId` tagging, shipped in Step 17) and is false as stated: `sub_task_finish` is one
+  of the six ack-guaranteed critical event types (`ports/agentruntime.go`), and sandbox-event
+  persistence is unconditional for every recognized type (`sessionactor/sandboxevent.go`), so a
+  sub-agent that actually ran leaves a durable, queryable trace. What the control plane genuinely
+  lacks is not the *event* but its *content*: a `sub_task_finish` records that a sub-task ended,
+  never what the counter-reviewer concluded, so the verdict does still have to carry the outcome.
+  The residual is therefore real and is named here rather than argued away — a schema guarantees
+  the field is **present**, never that it is **true**, and a reviewer that never dispatched the
+  sub-agent at all can still report `done`. Corroborating the claim against the persisted
+  `sub_task_finish` trace is what would make the heading "structural"; that is a separate,
+  currently-unscheduled Step, and until it ships this field is **trusted, not verified**.
 
 ### 26.5 Measuring the readout (Step 69, on Step 62's instrument)
 
-- **Per-section digest feedback** extends the finding-outcome read model (§21.1): contest/confirm
-  per digest section, plus a maintainer command `arch recap wrong: <reason>` mirroring Step 63's
+- **Per-section digest feedback** extends the finding-outcome read model (§21.1): **contest only,
+  per digest section** — an earlier draft said "contest/confirm", which the shipped schema
+  (`migrations/000086`) does not admit and was never going to: it records contests, and a section
+  carrying none is un-contested by absence. An explicit confirm would add a write per section per
+  review to persist a signal already derivable from silence, and would quietly change what the
+  contestation-rate KPI below divides by. Plus a maintainer command `arch recap wrong: <reason>` mirroring Step 63's
   `false positive:` command exactly — maintainer+ via the existing `Authorize` gate,
   deterministically routable (§5.2), idempotent on the triggering comment id. The recap itself
   becomes measurable and correctable. Each contest is reconciled by a content hash of the digest
@@ -1376,8 +1393,13 @@ N× boot cost with no real independence gain — each sub-agent already has a cl
   §22.1 already solves for findings: a PR update that merely reorders or rewords an unrelated
   section must never make an already-contested `ArchDecision` read as a new one.
 - **KPIs** (Step 62 analytics + §12.2): digest precision (contestation rate); decision latency
-  (verdict → approve — already a §16 KPI, now attributable per review path); cost per path — **as
-  of §26.7, bounded per path, not merely measured after the fact**; and the paradigm's proxy
+  (verdict → approve — already a §16 KPI, now attributable per review path); cost per path —
+  **measured today, and bounded only once §26.7's ceiling has both an accumulator and a production
+  call site**. An earlier draft claimed the bound as already delivered "as of §26.7"; it is not.
+  §26.7's decision function ships as a pure domain function, but the per-turn cost accumulator it
+  consults is unbuilt (see §26.7's own corrected paragraph) and nothing in the orchestration path
+  calls it yet, so this KPI reports observed spend, not enforced spend. Stating it the other way
+  round would claim a guarantee no operator actually has; and the paradigm's proxy
   metric: **% of PRs approved with zero human inline comments** — the number that says whether the
   shift is actually operating.
 - The §21.3 deterministic digest and the §16 decision inbox surface the readout's `Summary` line
@@ -1487,8 +1509,14 @@ adds, is the other axis entirely — a **cost** ceiling, so that §26.5's "cost 
 bounded, not merely observed.
 
 **Mechanism: check accumulated spend before each optional pass, never predict the next one's
-cost.** §7.1 already rolls up every `step_finish.cost` — main lane and every sub-task alike — into
-one running total per turn. Before the primary reviewer's orchestration dispatches the *next*
+cost.** The running total this checks against **does not already exist and is owned by this
+mechanism** — an earlier draft of this paragraph asserted that §7.1 "already rolls up" every
+`step_finish.cost`, main lane and sub-tasks alike, into one running total per turn. It does not:
+§7.1's own phasing assigns no Step to the data-side summation, only Steps 80/81 to *rendering* a
+per-sub-task cost, and §7.1 separately records that a per-step model attribution is still missing
+from `step_finish`. The accumulator is therefore work this section owns, not an inherited given,
+and the distinction is load-bearing — a ceiling checked against a total nobody computes is not a
+bound at all. Before the primary reviewer's orchestration dispatches the *next*
 optional sub-task (`architecture-scribe`, `counter-reviewer`, or §26.6's fact-check sub-task), it
 checks that running total against a per-path ceiling at a safety margin — propose 80%, mirroring
 OpenCodeReview's own `4/5` figure — and skips the dispatch if already at or over it. This is
@@ -1573,8 +1601,22 @@ exists to cover — most concretely, a small sensitive-glob-triggered diff (a th
 is exactly the shape a size-based secondary gate would be tempted to downgrade, and exactly the
 shape that must not be. The invariant above is hereby extended to cover this axis explicitly: no
 v1 mechanism skips `architecture-scribe` or `counter-reviewer` on a PR already routed deep, for any
-reason short of §26.7's own cost ceiling (which floors `Shippable` when it fires, never a silent
-downgrade). §26.6's fact-check pass is exempt from this floor for the same reason it is exempt from
+reason short of §26.7's own cost ceiling. **That carve-out is narrower than an earlier draft of
+this sentence stated, and the gap it left is closed here rather than papered over.** The draft
+justified the carve-out by saying the ceiling "floors `Shippable` when it fires, never a silent
+downgrade" — true for `counter-reviewer` and for §26.6's fact-check pass, whose skips are both
+recorded in already-specified typed fields, and **false for `architecture-scribe`**, which has no
+such field: a budget-triggered scribe skip would floor nothing and appear nowhere, which is
+precisely the silent downgrade the invariant forbids. Nor does dispatch order rescue it — §26.7
+itself dispatches the three "in whatever order that orchestration dispatches them", so a scribe
+skip cannot be assumed to imply a later, recorded counter-review skip. The resolution follows from
+§26.7's own stated economy (it explicitly declines to grow a parallel outcome field per new way a
+pass can end up skipped): **`architecture-scribe` is excluded from budget gating entirely.** The
+ceiling governs `counter-reviewer` and the fact-check pass only — the two whose skips are already
+recorded. This deliberately buys a slightly weaker bound in exchange for the stronger invariant,
+the same trade §26.7 already makes when it refuses to budget-gate the primary findings pass. Adding
+a typed scribe-skip field and gating it too remains the open alternative, and would need §26.7's
+field-economy argument reopened rather than quietly overridden. §26.6's fact-check pass is exempt from this floor for the same reason it is exempt from
 the light-path invariant above — it was never a rigor-bearing pass to begin with, not because of
 which path it runs on. A future, telemetry-justified version of within-deep gating remains open,
 mirroring §26.3's own "v2 option only if per-path analytics show a real grey zone" deferral for the
