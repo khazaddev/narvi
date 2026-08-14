@@ -138,6 +138,50 @@ func TestEvaluateHook_WorkspaceMovedIgnoredEverywhereElse(t *testing.T) {
 	}
 }
 
+// TestEvaluateHook_HookDelta_TruthTable proves §19.6's own new Step-43
+// policy row (HookDelta, "sync.sh"): eligible under the EXACT SAME envelope
+// as HookSetup's own repo_image branch (mode == BootModeRepoImage &&
+// workspaceMoved), for both primary values, and FatalOnFailure always
+// false -- mirroring TestEvaluateHook_RepoImageSetup_WorkspaceMovedAmendment's
+// own structure exactly, one dedicated table per new/changed cell rather
+// than folding a third hook value into TestEvaluateHook_TruthTable's own
+// pinned 16-row count.
+func TestEvaluateHook_HookDelta_TruthTable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		mode           sandboxboot.BootMode
+		primary        bool
+		workspaceMoved bool
+		wantShouldRun  bool
+	}{
+		{sandboxboot.BootModeBuild, true, true, false},
+		{sandboxboot.BootModeBuild, false, true, false},
+		{sandboxboot.BootModeFresh, true, true, false},
+		{sandboxboot.BootModeFresh, false, true, false},
+		{sandboxboot.BootModeSnapshotRestore, true, true, false},
+		{sandboxboot.BootModeSnapshotRestore, false, true, false},
+		{sandboxboot.BootModeRepoImage, true, false, false},
+		{sandboxboot.BootModeRepoImage, false, false, false},
+		{sandboxboot.BootModeRepoImage, true, true, true},
+		{sandboxboot.BootModeRepoImage, false, true, true},
+	}
+
+	for _, tc := range tests {
+		name := string(tc.mode) + "/primary=" + boolString(tc.primary) + "/workspaceMoved=" + boolString(tc.workspaceMoved)
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := sandboxboot.EvaluateHook(tc.mode, sandboxboot.HookDelta, tc.primary, tc.workspaceMoved)
+			want := sandboxboot.HookOutcome{ShouldRun: tc.wantShouldRun, FatalOnFailure: false}
+			if got != want {
+				t.Errorf("EvaluateHook(%s, sync.sh, primary=%v, workspaceMoved=%v) = %+v, want %+v",
+					tc.mode, tc.primary, tc.workspaceMoved, got, want)
+			}
+		})
+	}
+}
+
 func TestEvaluateHook_UnrecognizedHook(t *testing.T) {
 	t.Parallel()
 

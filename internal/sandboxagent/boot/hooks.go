@@ -30,6 +30,24 @@ func workspaceMovedFor(moved map[string]bool, repoName string) bool {
 	return v
 }
 
+// ladderFor looks up repoName in ladder (§19.6's per-repo
+// SetupRerunLadder map, boot.ComputeSetupRerunLadder) -- a repo genuinely
+// absent from the map (ladder itself nil, the common case for every call
+// site that predates this Step or never bothered computing one -- every
+// existing test in this package, plus every mode other than repo_image)
+// defaults to the SAME conservative floor ComputeSetupRerunLadder itself
+// produces for a missing manifest: DependencySkipIneligible and
+// DeltaEligible: false, i.e. "fall all the way through to full setup.sh" --
+// today's exact pre-Step-43 behavior, never a spurious skip or a
+// spuriously-preferred delta script.
+func ladderFor(ladder map[string]SetupRerunLadder, repoName string) SetupRerunLadder {
+	v, ok := ladder[repoName]
+	if !ok {
+		return SetupRerunLadder{DependencySkip: DependencySkipIneligible, DeltaEligible: false}
+	}
+	return v
+}
+
 // RepoInfo is one repo's boot-hook-relevant identity: its directory name
 // under WorkspaceDir (i.e. /workspace/{Name}), and whether it's the
 // primary repo (§3.4: "position 0 = primary" in SESSION_CONFIG.repos). The
@@ -69,6 +87,16 @@ type RepoInfo struct {
 // exactly one cell (repo_image + HookSetup). nil is a correct, safe input
 // (every entry defaults to "moved", via workspaceMovedFor) -- the shape
 // every OTHER mode's own call already used before this parameter existed.
+//
+// ladder (§19.6, Step 43) is the per-repo SetupRerunLadder map
+// boot.ComputeSetupRerunLadder computes once per boot, alongside
+// workspaceMoved -- consulted ONLY for the exact same cell workspaceMoved
+// itself is (repo_image + HookSetup + workspaceMoved: true), to decide
+// whether that cell's own rerun can be skipped entirely or handled by a
+// cheaper delta script instead of a full setup.sh rerun. nil is a correct,
+// safe input (every entry defaults to the conservative "fall through to
+// full setup.sh" floor, via ladderFor) -- matching workspaceMoved's own nil
+// precedent exactly.
 func RunHooks(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -76,10 +104,11 @@ func RunHooks(
 	repos []RepoInfo,
 	mode sandboxboot.BootMode,
 	workspaceMoved map[string]bool,
+	ladder map[string]SetupRerunLadder,
 	hookTimeout, stopGrace time.Duration,
 ) error {
 	for _, repo := range repos {
-		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, hookTimeout, stopGrace); err != nil {
+		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, hookTimeout, stopGrace); err != nil {
 			return err
 		}
 	}
@@ -111,6 +140,7 @@ func runRepoHooks(
 	repo RepoInfo,
 	mode sandboxboot.BootMode,
 	workspaceMoved map[string]bool,
+	ladder map[string]SetupRerunLadder,
 	hookTimeout, stopGrace time.Duration,
 ) error {
 	moved := workspaceMovedFor(workspaceMoved, repo.Name)
@@ -134,6 +164,17 @@ func runRepoHooks(
 		}
 
 		if !outcome.ShouldRun {
+			continue
+		}
+
+		// §19.6 (Step 43): the ONE cell this graduated ladder replaces --
+		// repo_image's own HookSetup rerun, already known ShouldRun here.
+		// Every other (mode, hook) combination -- including repo_image's
+		// OWN HookStart, and HookSetup under every OTHER mode -- falls
+		// through to the plain runHook call below, completely unchanged
+		// from before this Step.
+		if hook == sandboxboot.HookSetup && mode == sandboxboot.BootModeRepoImage && moved {
+			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), hookTimeout, stopGrace)
 			continue
 		}
 
@@ -177,6 +218,125 @@ func runRepoHooks(
 		}
 	}
 	return nil
+}
+
+// runSetupRerunLadder implements §19.6's graduated setup-rerun ladder for
+// the ONE cell it applies to: BootModeRepoImage's own HookSetup, already
+// known ShouldRun (workspaceMoved: true) by the time runRepoHooks calls
+// this. Every step is non-fatal by construction (mode is always
+// BootModeRepoImage here, whose HookSetup FatalOnFailure is unconditionally
+// false -- see sandboxboot.EvaluateHook's own doc comment), so this
+// function never returns an error: a setup-rerun-ladder outcome is, by
+// definition, always a warn-and-continue outcome, exactly matching the
+// plain repo_image path's own behavior before this Step existed.
+//
+// Ladder, in order (every decision logged individually, §5.3's own
+// structured-reason requirement, ladder.RerunReason's own closed
+// vocabulary):
+//
+//  1. DEPENDENCY-DIGEST SKIP (§19.6 first bullet): ladder.DependencySkip ==
+//     DependencySkipMatch -- setup.sh is skipped ENTIRELY, logged
+//     reason=skip. Anything else falls through, logged reason=
+//     ineligible-fallback (an unreadable/absent/unrecognized baked digest,
+//     or a boot-side compute error) for BOTH the genuinely-ineligible case
+//     and a clean, proven digest MISMATCH -- both behave identically here
+//     (fall through to the delta tier), even though a mismatch is, per
+//     §19.6's own text, positive proof dependencies moved rather than an
+//     absence of information; that distinction is still preserved for an
+//     operator via the separate "digest_outcome" attribute logged
+//     alongside.
+//  2. DELTA SCRIPT (§19.6 third bullet onward): ladder.DeltaEligible --
+//     sync.sh runs INSTEAD of setup.sh, sharing hookTimeout (never a new
+//     timeout constant). A repo with no sync.sh on disk falls through
+//     silently (reason=ineligible-fallback), exactly like any other absent
+//     hook always has. A delta-script FAILURE (non-fatal) also falls
+//     through to full setup.sh -- the failure ladder's own "delta fails ->
+//     warn -> run full setup.sh" step -- logged reason=delta regardless
+//     (choosing to attempt sync.sh IS this tier's own decision; whether
+//     that attempt then succeeded is a separate, already-logged runtime
+//     outcome, not a second ladder decision).
+//  3. FULL setup.sh: today's unconditional repo_image rerun, unchanged --
+//     the ladder's own floor, reached whenever neither tier above actually
+//     resolved the decision. Logged reason=full.
+func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, hookTimeout, stopGrace time.Duration) {
+	logger := platform.Logger(ctx)
+	repoDir := filepath.Join(workspaceDir, repo.Name)
+
+	if ladder.DependencySkip == DependencySkipMatch {
+		logger.Info("boot: setup-rerun ladder decision",
+			"repo", repo.Name, "tier", "digest", "outcome", string(RerunReasonSkip),
+			"digest_outcome", string(ladder.DependencySkip))
+		return
+	}
+	logger.Info("boot: setup-rerun ladder decision",
+		"repo", repo.Name, "tier", "digest", "outcome", string(RerunReasonIneligibleFallback),
+		"digest_outcome", string(ladder.DependencySkip))
+
+	if ladder.DeltaEligible {
+		ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookDelta), sandboxboot.BootModeRepoImage, true, hookTimeout, stopGrace)
+		if ran {
+			logger.Info("boot: setup-rerun ladder decision",
+				"repo", repo.Name, "tier", "delta", "outcome", string(RerunReasonDelta), "succeeded", ok)
+			if ok {
+				return
+			}
+			// Delta script failed -- fall through to full setup.sh, the
+			// failure ladder's own explicit "delta fails -> warn -> run
+			// full setup.sh" step. runNamedHookNonFatal already logged its
+			// own Warn with the failure's output_tail.
+		}
+		// ran == false: no sync.sh present on disk (or its own stat
+		// failed) -- a routine, silent fall-through, matching
+		// hookScriptPresent's own existing "absent script is normal, not
+		// even a warning" precedent everywhere else in this package.
+	} else {
+		logger.Info("boot: setup-rerun ladder decision",
+			"repo", repo.Name, "tier", "delta", "outcome", string(RerunReasonIneligibleFallback))
+	}
+
+	logger.Info("boot: setup-rerun ladder decision",
+		"repo", repo.Name, "tier", "full", "outcome", string(RerunReasonFull))
+	runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, true, hookTimeout, stopGrace)
+}
+
+// runNamedHookNonFatal runs the script at repoDir/scriptName if present,
+// mirroring runRepoHooks' own inline stat -> spawn -> time -> record -> log
+// sequence for a NON-FATAL hook exactly -- factored out specifically for
+// runSetupRerunLadder's own two script attempts (sync.sh, then a
+// fallback-or-primary full setup.sh), both of which are always non-fatal
+// by construction (mode is always BootModeRepoImage at both call sites).
+// Never returns an error for that reason: every caller already knows this
+// attempt cannot fail the boot.
+//
+// Returns (ran, ok): ran is false when the script was absent (or its own
+// stat failed) -- nothing was attempted, ok is meaningless. ran is true
+// once the script was actually spawned; ok then reports whether it
+// succeeded. recordHookRerunDuration is only ever called when ran is true,
+// exactly mirroring runRepoHooks' own existing "absent hook records
+// nothing" behavior.
+func runNamedHookNonFatal(ctx context.Context, sup *supervisor.Supervisor, repoDir, repoName, scriptName string, mode sandboxboot.BootMode, moved bool, hookTimeout, stopGrace time.Duration) (ran, ok bool) {
+	scriptPath := filepath.Join(repoDir, scriptName)
+
+	present, statErr := hookScriptPresent(scriptPath)
+	if statErr != nil {
+		platform.Logger(ctx).Warn("boot: hook stat failed, skipping",
+			"repo", repoName, "hook", scriptName, "error", statErr)
+		return false, false
+	}
+	if !present {
+		return false, false
+	}
+
+	start := time.Now()
+	tail, runErr := runHook(ctx, sup, scriptPath, repoDir, hookTimeout, stopGrace)
+	recordHookRerunDuration(ctx, repoName, scriptName, string(mode), moved, time.Since(start).Seconds(), runErr != nil)
+
+	if runErr != nil {
+		platform.Logger(ctx).Warn("boot: hook failed, continuing",
+			"repo", repoName, "hook", scriptName, "error", runErr, "output_tail", tail.Lines())
+		return true, false
+	}
+	return true, true
 }
 
 // hookScriptPresent reports whether scriptPath exists on disk. A genuine

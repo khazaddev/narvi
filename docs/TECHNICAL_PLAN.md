@@ -346,8 +346,8 @@ GitHub/Slack/Linear/webhook ingress with shared toolkit (signature verify, atomi
 *Exit: bot ingress demo; classifier shadow report on real traffic.*
 
 **Phase 4 — Warm boot & agent-turn resilience (Steps 40-44; additive, does not gate Phase 3's exit above or block Phase 5's start)**
-Shared, tip-tracking image prebuilds (§19): re-keyed fingerprint, fetch-aware `gitclone.SyncAll`, freshness pump, the `repo_image` setup-rerun contract amendment, hook-output capture, and the telemetry-gated graduated rerun ladder; plus the OpenCode adapter's context-overflow compaction retry (§7.2), fully independent of the warm-boot work.
-*Exit: per-Environment warm-boot staleness window observed within the 10–40 min range §19.2 predicts; §9.3-class fetch-fail/stale-image/non-idempotent-setup scenarios green; compaction-retry contract test green against the pinned OpenCode binary. Step 43 specifically does not start until Step 42's rerun-duration telemetry shows a real need.*
+Shared, tip-tracking image prebuilds (§19): re-keyed fingerprint, fetch-aware `gitclone.SyncAll`, freshness pump, the `repo_image` setup-rerun contract amendment, hook-output capture, and the graduated rerun ladder (§19.6, ungated — §19.9 records why); plus the OpenCode adapter's context-overflow compaction retry (§7.2), fully independent of the warm-boot work.
+*Exit: per-Environment warm-boot staleness window observed within the 10–40 min range §19.2 predicts; §9.3-class fetch-fail/stale-image/non-idempotent-setup scenarios green; compaction-retry contract test green against the pinned OpenCode binary.*
 
 **Phase 5 — Code review & automations (2 wks)**
 Full §8.2 code review; automations engine + sweeps; RWX provider + previews; uploads; secrets scopes; model catalog + Codex OAuth.
@@ -736,7 +736,7 @@ Two small, concrete gaps this design surfaces and closes, both landing no later 
 
 **(b) Rerun-duration telemetry.** Per-hook wall-clock, emitted from the existing hook-run bracketing in `runRepoHooks`/`runHook`, joins the OTel metrics §5.3 already lists (boot phase durations). This is the concrete measurement §19.4's "expected to be fast" claim needs, and it is §19.6's own adoption trigger — shipping §19.4 without this leaves that trigger unmeasurable.
 
-### 19.6 Graduated setup-rerun ladder (Step 43, telemetry-gated)
+### 19.6 Graduated setup-rerun ladder (Step 43)
 
 This adds tiers between "skip" and "full rerun." The original posture here was to hold the whole section until §19.5(b)'s telemetry showed full `setup.sh` reruns materially eroding the warm-boot latency win. That gate is now split, because it never fit both tiers equally (§19.9 records the per-tier triggers):
 

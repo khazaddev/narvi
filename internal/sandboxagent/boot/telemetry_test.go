@@ -91,7 +91,7 @@ func TestRunHooks_RecordsHookRerunDurationMetric(t *testing.T) {
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
-	if err := boot.RunHooks(ctx, sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
+	if err := boot.RunHooks(ctx, sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil,
 		5*time.Second, time.Second); err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
@@ -160,7 +160,7 @@ func TestRunHooks_RecordsHookRerunDurationMetric_CarriesBootModeAndWorkspaceMove
 	// repo_image + workspaceMoved:true is the ONE cell EvaluateHook actually
 	// reruns setup.sh for non-fatally (§19.4) -- the exact cell this
 	// histogram exists to isolate from a cold build-mode run.
-	if err := boot.RunHooks(ctx, sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
+	if err := boot.RunHooks(ctx, sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, nil,
 		5*time.Second, time.Second); err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}
@@ -200,7 +200,7 @@ func TestRunHooks_HookRerunDurationHistogram_UsesFineGrainedSubFiveSecondBuckets
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo-buckets-test", Primary: true}}
 
-	if err := boot.RunHooks(ctx, sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
+	if err := boot.RunHooks(ctx, sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil, nil,
 		5*time.Second, time.Second); err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil", err)
 	}

@@ -39,6 +39,10 @@ import (
 // sandboxboot.EvaluateHook in the first place (§14.2's own "no new
 // supervision code path" design), so workspaceMoved has nothing to gate
 // there.
+//
+// ladder (§19.6, Step 43) is passed straight through to runRepoHooks
+// alongside workspaceMoved, for the identical reason and the identical
+// services.yml-branch exemption.
 func RunBoot(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -46,6 +50,7 @@ func RunBoot(
 	repos []RepoInfo,
 	mode sandboxboot.BootMode,
 	workspaceMoved map[string]bool,
+	ladder map[string]SetupRerunLadder,
 	reporter services.ProgressReporter,
 	hookTimeout, stopGrace, readinessTimeout, readinessPollInterval time.Duration,
 ) error {
@@ -58,7 +63,7 @@ func RunBoot(
 		}
 
 		if !found {
-			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, hookTimeout, stopGrace); err != nil {
+			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, hookTimeout, stopGrace); err != nil {
 				return err
 			}
 			continue

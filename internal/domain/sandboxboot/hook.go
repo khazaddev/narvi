@@ -1,9 +1,10 @@
 package sandboxboot
 
-// Hook names one of the two boot-sequence scripts §6.4 defines. This is a
-// closed vocabulary controlled entirely by this package and its caller
-// (internal/sandboxagent/boot's hook runner) -- no external input ever
-// supplies a raw Hook value.
+// Hook names one of the boot-sequence scripts §6.4 defines (setup.sh,
+// start.sh) plus §19.6's own Step-43 addition, the optional delta script
+// (sync.sh). This is a closed vocabulary controlled entirely by this
+// package and its caller (internal/sandboxagent/boot's hook runner) -- no
+// external input ever supplies a raw Hook value.
 type Hook string
 
 const (
@@ -11,6 +12,17 @@ const (
 	HookSetup Hook = "setup.sh"
 	// HookStart is the per-boot service-start script.
 	HookStart Hook = "start.sh"
+	// HookDelta is the OPTIONAL, repo-authored delta script (§19.6, Step
+	// 43): "sync.sh", added to the closed hook vocabulary specifically to
+	// run INSTEAD OF a full HookSetup rerun under BootModeRepoImage when
+	// workspaceMoved is true but setup.sh itself is provably unchanged
+	// since the built SHA (`git diff --quiet <built_sha> HEAD --
+	// setup.sh`, computed by the caller -- this package never touches
+	// git). A repo with no sync.sh on disk is a routine, silent no-op,
+	// exactly like an absent setup.sh/start.sh always has been -- this is
+	// purely additive and opt-in, never a new requirement on existing
+	// repos.
+	HookDelta Hook = "sync.sh"
 )
 
 // HookOutcome is EvaluateHook's decision for one (mode, hook, primary)
@@ -70,12 +82,33 @@ type HookOutcome struct {
 // whenever it runs at all (a secondary repo's start.sh failing is only
 // ever a warning).
 //
-// An unrecognized Hook value (anything other than HookSetup or HookStart)
-// is treated as a programming error, not a data error: Hook is a closed
-// vocabulary this package and its own caller control, so this returns the
-// zero HookOutcome (ShouldRun: false) rather than defining a third named
-// error type for a case that can only arise from a bug in this codebase,
-// never from external input.
+// An unrecognized Hook value (anything other than HookSetup, HookStart, or
+// -- as of Step 43 -- HookDelta) is treated as a programming error, not a
+// data error: Hook is a closed vocabulary this package and its own caller
+// control, so this returns the zero HookOutcome (ShouldRun: false) rather
+// than defining a third named error type for a case that can only arise
+// from a bug in this codebase, never from external input.
+//
+// # Step 43 addition: HookDelta (§19.6)
+//
+// HookDelta's own policy row is deliberately the SAME eligibility envelope
+// as HookSetup's own repo_image branch (mode == BootModeRepoImage &&
+// workspaceMoved) -- this function only ever describes WHEN the delta
+// script is conceptually in-scope, never whether it should be PREFERRED
+// over a full setup.sh rerun: that preference (§19.6's own "prefer the
+// delta script over full setup.sh when eligible") depends on a second,
+// orthogonal predicate this package cannot evaluate (setup.sh itself
+// provably unchanged since the built SHA, a live git check) and on
+// sync.sh's own on-disk presence -- both resolved by the caller
+// (internal/sandboxagent/boot's own graduated-ladder orchestration, which
+// ALSO owns the "delta fails -> fall back to full setup.sh" sequencing;
+// EvaluateHook is a stateless, per-cell function and has no way to express
+// a multi-step fallback sequence). FatalOnFailure is unconditionally false,
+// exactly mirroring HookSetup's own repo_image rerun: a delta-script
+// failure can never fail the boot any more than a full setup.sh rerun's
+// own failure can (§19.4's "a moved workspace proves nothing about
+// dependencies" reasoning applies identically here -- see this function's
+// own HookSetup case).
 func EvaluateHook(mode BootMode, hook Hook, primary, workspaceMoved bool) HookOutcome {
 	switch hook {
 	case HookSetup:
@@ -90,6 +123,11 @@ func EvaluateHook(mode BootMode, hook Hook, primary, workspaceMoved bool) HookOu
 		return HookOutcome{
 			ShouldRun:      runs,
 			FatalOnFailure: runs && primary,
+		}
+	case HookDelta:
+		return HookOutcome{
+			ShouldRun:      mode == BootModeRepoImage && workspaceMoved,
+			FatalOnFailure: false,
 		}
 	default:
 		return HookOutcome{}

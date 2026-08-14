@@ -1474,6 +1474,12 @@ func runBootSequence(
 	// workspaceMoved: true" (workspaceMovedFor's own safe default), which is
 	// moot anyway since repos is empty in that case too.
 	var workspaceMoved map[string]bool
+	// setupRerunLadder (§19.6, Step 43) stays nil for a nil-SessionConfig
+	// boot too -- boot.RunBoot's own ladderFor call treats a nil map as
+	// "fall through to full setup.sh", the correct floor, and is moot
+	// anyway since repos itself is empty in that case (mirroring
+	// workspaceMoved's own identical comment just above).
+	var setupRerunLadder map[string]boot.SetupRerunLadder
 	if cfg.SessionConfig != nil {
 		var manifestInput []gitclone.CloneResult
 
@@ -1579,9 +1585,21 @@ func runBootSequence(
 		manifest, manifestFound, manifestErr := boot.LoadImageManifest(boot.ImageManifestPath)
 		logImageManifest(cfg.BootMode, manifest, manifestFound, manifestErr, postCloneFingerprint.RepoSHAs)
 		workspaceMoved = boot.ComputeWorkspaceMoved(manifest, manifestFound, postCloneFingerprint.RepoSHAs)
+
+		// §19.6 (Step 43)'s own graduated setup-rerun ladder: computed
+		// uniformly right alongside workspaceMoved (same manifest, same
+		// postCloneFingerprint.RepoSHAs, same "costs nothing to compute for
+		// every mode even though only repo_image ever consults it"
+		// reasoning as workspaceMoved's own comment just above).
+		// RepoSHADiscoveryTimeout is reused for the ladder's own small
+		// local git-plumbing check (`git diff --quiet <built_sha> HEAD --
+		// setup.sh`) rather than a new timeout constant -- the identical
+		// class of operation DiscoverRepoSHAs' own repoHeadSHA already
+		// bounds with this exact field.
+		setupRerunLadder = boot.ComputeSetupRerunLadder(manifest, manifestFound, cfg.WorkspaceDir, postCloneFingerprint.RepoSHAs, timeouts.RepoSHADiscoveryTimeout)
 	}
 
-	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, reportBootProgress,
+	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, reportBootProgress,
 		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
 		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval); err != nil {
 		return fmt.Errorf("boot: %w", err)
