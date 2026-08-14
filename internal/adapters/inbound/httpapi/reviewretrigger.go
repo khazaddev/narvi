@@ -170,16 +170,24 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 				prompt = advisory + prompt
 			}
 		}
-		// Step 48 (§22.1): prepend this PR's own already-answered facts
-		// (open+rebutted review_findings) BEFORE calling RenderTurnPrompt
-		// -- prepended to, never replacing, the prose fallback above.
-		// Independent of diffFetcher (a review turn can still get
-		// reconciliation facts even with no diff fetcher wired).
-		if reviewFindings != nil {
-			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, reviewFindings, prSession.RepoFullName, prSession.PrNumber); alreadyAnswered != "" {
-				prompt = alreadyAnswered + prompt
-			}
-		}
+		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement, this Step): prepend
+		// this PR's own already-answered facts (open+rebutted
+		// review_findings) BEFORE calling RenderTurnPrompt -- prepended
+		// to, never replacing, the prose fallback above. This call is
+		// DELIBERATELY placed AFTER prCtx is resolved below (moved by
+		// this Step; it used to sit here, immediately after the
+		// false-positive-patterns block above) so it can pass
+		// prCtx.ChangedPaths through to FetchAlreadyAnswered for §22.1.2's
+		// own out-of-diff retirement check -- see that function's own doc
+		// comment for why reordering it after the diff fetch changes
+		// nothing about correctness (neither read depends on the other)
+		// while still producing byte-for-byte the SAME final prompt text
+		// order as before this Step: the "prompt = X + prompt" prepend
+		// idiom used throughout this handler means the LAST block
+		// prepended ends up FIRST in the rendered prompt, so moving this
+		// call later in EXECUTION order, while keeping it the LAST
+		// prepend before RenderTurnPrompt, preserves its own existing
+		// FIRST position in the text exactly.
 		// reviewHeadSHA (§62 review finding C2, CRITICAL, fixed) is
 		// captured here and threaded into CreateTurnCore below via
 		// CreateTurnOptions.ReviewHeadSHA -- persisted onto THIS turn's
@@ -281,6 +289,19 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// must set it, never review itself (doc.go's own "zero external
 		// imports" convention).
 		prCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
+		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement): see this
+		// function's own earlier comment (where this block used to sit,
+		// right after the false-positive-patterns block) for why it moved
+		// here -- prCtx.ChangedPaths is only known now, after the diff
+		// fetch above, and §22.1.2's retirement check needs it. This is
+		// still the LAST block prepended before RenderTurnPrompt below,
+		// so the final prompt text order is unchanged from before this
+		// Step.
+		if reviewFindings != nil {
+			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, reviewFindings, prSession.RepoFullName, prSession.PrNumber, prCtx.ChangedPaths); alreadyAnswered != "" {
+				prompt = alreadyAnswered + prompt
+			}
+		}
 		if havePrCtx {
 			prompt = review.RenderTurnPrompt(prompt, prCtx)
 		}
@@ -298,7 +319,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		if flooredDepth == domainreviewtriage.DepthDeep && reviewModelDeep == "" {
 			logger.Info("httpapi: review routed deep but no deep-tier model configured (NARVI_REVIEW_MODEL_DEEP unset), dispatching with the default model at forced high effort", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 		}
-		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort))
+		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort, prCtx.ChangedFilesCount))
 		if triageRecordErr != nil {
 			logger.Warn("httpapi: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 			triageRecordJSON = nil

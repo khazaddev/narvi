@@ -295,7 +295,7 @@ func (a *Actor) handleReviewRetriggerDebounceTimer(ctx context.Context) error {
 			if flooredDepth == domainreviewtriage.DepthDeep && a.reviewModelDeep == "" {
 				a.logger.Info("sessionactor: automatic re-review routed deep but no deep-tier model configured (NARVI_REVIEW_MODEL_DEEP unset), dispatching with the default model at forced high effort", "repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
 			}
-			if recordJSON, marshalErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, decision.triageModelID, decision.triageEffort)); marshalErr != nil {
+			if recordJSON, marshalErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, decision.triageModelID, decision.triageEffort, reviewCtx.ChangedFilesCount)); marshalErr != nil {
 				a.logger.Warn("sessionactor: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", marshalErr, "repo_full_name", decision.repoFullName, "pr_number", decision.prNumber)
 			} else {
 				decision.reviewDepthDecisionJSON = recordJSON
@@ -674,7 +674,7 @@ func (a *Actor) composeAutoRetriggerPrompt(ctx context.Context, repoFullName str
 	if advisory := reviewcontext.FetchFalsePositivePatterns(ctx, a.logger, a.stores.falsePositivePattern, repoFullName); advisory != "" {
 		prompt = advisory + prompt
 	}
-	if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, a.logger, a.stores.reviewFinding, repoFullName, prNumber); alreadyAnswered != "" {
+	if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, a.logger, a.stores.reviewFinding, repoFullName, prNumber, reviewCtx.ChangedPaths); alreadyAnswered != "" {
 		prompt = alreadyAnswered + prompt
 	}
 	return review.RenderTurnPrompt(prompt, reviewCtx)

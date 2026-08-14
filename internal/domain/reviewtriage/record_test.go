@@ -13,7 +13,7 @@ func TestNewDecisionRecord(t *testing.T) {
 	decision := reviewtriage.Decide(sig, cfg)
 
 	t.Run("not floored", func(t *testing.T) {
-		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{}, nil, nil)
+		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{}, nil, nil, 0)
 		want := reviewtriage.DecisionRecord{
 			Depth:                "deep",
 			Reason:               string(reviewtriage.ReasonSensitiveGlob),
@@ -33,7 +33,7 @@ func TestNewDecisionRecord(t *testing.T) {
 		lightDecision := reviewtriage.Decide(lightSig, cfg)
 		floored := reviewtriage.Floor(lightDecision.Depth, reviewtriage.DepthDeep)
 
-		got := reviewtriage.NewDecisionRecord(lightDecision, cfg, floored, reviewtriage.Provenance{}, nil, nil)
+		got := reviewtriage.NewDecisionRecord(lightDecision, cfg, floored, reviewtriage.Provenance{}, nil, nil, 0)
 		if got.Depth != "deep" {
 			t.Errorf("Depth = %q, want deep", got.Depth)
 		}
@@ -50,7 +50,7 @@ func TestNewDecisionRecord(t *testing.T) {
 	t.Run("resolved model/effort recorded verbatim", func(t *testing.T) {
 		modelID := "anthropic/claude-frontier"
 		effort := reviewtriage.EffortHigh
-		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{}, &modelID, &effort)
+		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{}, &modelID, &effort, 0)
 		if got.ResolvedModelID != modelID {
 			t.Errorf("ResolvedModelID = %q, want %q", got.ResolvedModelID, modelID)
 		}
@@ -60,9 +60,27 @@ func TestNewDecisionRecord(t *testing.T) {
 	})
 
 	t.Run("nil resolved model/effort records as empty, never a nil-pointer panic", func(t *testing.T) {
-		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{}, nil, nil)
+		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{}, nil, nil, 0)
 		if got.ResolvedModelID != "" || got.ResolvedEffort != "" {
 			t.Errorf("ResolvedModelID/ResolvedEffort = %q/%q, want both empty", got.ResolvedModelID, got.ResolvedEffort)
+		}
+	})
+
+	// changedFilesCount (§21.1's own filesChanged drift canary) is
+	// recorded verbatim -- this record's own sole job for that field is
+	// to carry it, unmodified, from turn-creation time to verdict-post
+	// time (DecisionRecord.ChangedFilesCount's own doc comment).
+	t.Run("changed files count recorded verbatim", func(t *testing.T) {
+		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{}, nil, nil, 42)
+		if got.ChangedFilesCount != 42 {
+			t.Errorf("ChangedFilesCount = %d, want 42", got.ChangedFilesCount)
+		}
+	})
+
+	t.Run("zero changed files count records as zero, indistinguishable from unset", func(t *testing.T) {
+		got := reviewtriage.NewDecisionRecord(decision, cfg, decision.Depth, reviewtriage.Provenance{}, nil, nil, 0)
+		if got.ChangedFilesCount != 0 {
+			t.Errorf("ChangedFilesCount = %d, want 0", got.ChangedFilesCount)
 		}
 	})
 }

@@ -40,7 +40,31 @@ type FindingsFetcher interface {
 // this function itself never touches basePrompt or calls RenderTurnPrompt,
 // matching Fetch's own identical "assembles context, the CALLER decides
 // how to fold it into the turn's own prompt" division of responsibility.
-func FetchAlreadyAnswered(ctx context.Context, logger *slog.Logger, fetcher FindingsFetcher, repoFullName string, prNumber int32) string {
+//
+// changedPaths (§22.1.2's own "determinable fact" refinement) is the
+// CURRENT diff's own changed-path list -- review.PreFetchedContext.
+// ChangedPaths, Step 68's reviewtriage.ExtractChangedPaths -- forwarded
+// verbatim to reviewpost.RenderAlreadyAnsweredFacts, this function's own
+// pure render half, which uses it to mark (never drop, see that
+// function's own doc comment for the full "why") a finding whose
+// anchoring file has left the diff entirely. Every real caller of THIS
+// function already has that value in hand from its own review.
+// PreFetchedContext by the point it calls this function -- see each
+// caller's own comment for why (internal/app/sessionactor/
+// reviewretrigger.go's reviewCtx is fetched before composeAutoRetriggerPrompt
+// calls this function; internal/adapters/inbound/httpapi/reviewretrigger.go
+// and internal/adapters/inbound/github/handler.go both now call this
+// function AFTER their own prCtx fetch, not before, exactly so
+// prCtx.ChangedPaths is already resolved here -- a deliberate reordering
+// of this Step, since neither the Postgres read this function performs
+// nor the GitHub fetch that produces prCtx depends on the other, so
+// reordering them changes nothing about correctness, only about when the
+// retirement fact becomes available). A caller with no pre-fetched
+// context at all (a nil diffFetcher, or a repo_full_name that fails to
+// split) simply passes nil -- this function's own zero value -- and
+// retirement is skipped exactly like a failed diff fetch would skip it
+// (RenderAlreadyAnsweredFacts' own "nil means no reliable data" contract).
+func FetchAlreadyAnswered(ctx context.Context, logger *slog.Logger, fetcher FindingsFetcher, repoFullName string, prNumber int32, changedPaths []string) string {
 	if fetcher == nil {
 		return ""
 	}
@@ -69,5 +93,5 @@ func FetchAlreadyAnswered(ctx context.Context, logger *slog.Logger, fetcher Find
 		}
 	}
 
-	return reviewpost.RenderAlreadyAnsweredFacts(findings)
+	return reviewpost.RenderAlreadyAnsweredFacts(findings, changedPaths)
 }

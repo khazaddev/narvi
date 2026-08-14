@@ -7,6 +7,7 @@
 package httpapi_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -14,12 +15,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/githubapi"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // validVerdictRequestJSON is the happy-path request body every test in
@@ -46,6 +50,24 @@ func validVerdictRequestJSON() string {
 		"factCheck": "done",
 		"factCheckKilled": 0
 	}`
+}
+
+// driftFiringVerdictRequestJSON is validVerdictRequestJSON with filesChanged
+// overridden to 25 -- deliberately chosen, paired with a seeded
+// server-computed count of 15 (TestPostReviewVerdict_
+// FilesChangedDriftCanary_FiresOnDivergence_NeverAffectsVerdict), so the
+// fired/not-fired OUTCOME actually depends on which of the two values
+// FilesChangedDrifted's own two parameters receive: delta is 10 either
+// way (|25-15| == |15-25|), but the RATIO does not, since it divides by
+// whichever value lands in the "serverComputed" position -- 10/15 ≈ 0.67
+// (>= FilesChangedDriftRatioThreshold, fires) using the CORRECT
+// (self-reported, server-computed) order, versus 10/25 = 0.4 (does NOT
+// fire) were the two ever accidentally swapped at the call site. A
+// same-magnitude pair like 3-vs-50 would fire under EITHER order (both
+// ratios land far past the threshold), silently passing a swapped-
+// argument regression -- this pair is chosen specifically so it would not.
+func driftFiringVerdictRequestJSON() string {
+	return strings.Replace(validVerdictRequestJSON(), `"filesChanged": 3`, `"filesChanged": 25`, 1)
 }
 
 // postReviewVerdict posts body to sessionID's own review/verdict endpoint,
@@ -965,5 +987,167 @@ func TestPostReviewVerdict_ProposedBodyAbsent_NeverEnqueuesDescriptionAutofixOut
 	}
 	if count != 0 {
 		t.Errorf("description-autofix outbox row count = %d, want 0 (no proposedBody was posted)", count)
+	}
+}
+
+// seedProcessingTurnWithChangedFilesCount creates a processing turn for
+// session carrying reviewHeadSHA (turns.review_head_sha, exactly as
+// production turn-creation sets it) and a review_depth_decision JSON blob
+// whose own changedFilesCount field is serverComputedChangedFiles --
+// mirrors reviewtriage.DecisionRecord's own real wire shape (record.go)
+// rather than a hand-typed JSON literal, so a future field rename there
+// is caught here at compile time instead of silently producing a JSON
+// blob PostReviewVerdict can no longer unmarshal the field it wants out
+// of.
+func seedProcessingTurnWithChangedFilesCount(ctx context.Context, t *testing.T, r testRig, sessionID pgtype.UUID, reviewHeadSHA string, serverComputedChangedFiles int) {
+	t.Helper()
+	recordJSON, err := json.Marshal(reviewtriage.DecisionRecord{ChangedFilesCount: serverComputedChangedFiles})
+	if err != nil {
+		t.Fatalf("marshal review depth decision record: %v", err)
+	}
+	if _, err := r.turns.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID:           sessionID,
+		Status:              sqlcgen.TurnStatusProcessing,
+		ReviewHeadSha:       &reviewHeadSHA,
+		ReviewDepthDecision: recordJSON,
+	}); err != nil {
+		t.Fatalf("seed processing turn with review_depth_decision: %v", err)
+	}
+}
+
+// filesChangedDriftCanaryLogMsg is reviewverdict.go's own exact log
+// message for a fired canary -- named here as a literal (this is package
+// httpapi_test, a black-box test package) rather than re-deriving it,
+// mirroring wantProseFallback's own identical "named literal for an
+// unexported production string" precedent elsewhere in this package's
+// tests.
+const filesChangedDriftCanaryLogMsg = "httpapi: review-verdict: filesChanged drift canary fired -- self-reported and server-computed changed-file counts diverge beyond both thresholds; diagnostic only, verdict unaffected"
+
+// hasLogEntry is findLogEntry's own non-fatal sibling (planapprove_
+// integration_test.go) -- reports whether buf contains a line whose "msg"
+// equals wantMsg, without failing the test when it does not (the ABSENCE
+// of a log line is itself the fact several of this file's own new tests
+// below assert).
+func hasLogEntry(t *testing.T, buf *bytes.Buffer, wantMsg string) bool {
+	t.Helper()
+	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			t.Fatalf("unmarshal log line %q: %v", line, err)
+		}
+		if entry["msg"] == wantMsg {
+			return true
+		}
+	}
+	return false
+}
+
+// TestPostReviewVerdict_FilesChangedDriftCanary_FiresOnDivergence_NeverAffectsVerdict
+// is §21.1's own filesChanged drift canary, wired end to end: a processing
+// turn's own review_depth_decision records a server-computed
+// changedFilesCount (15) against a self-reported filesChanged (25, this
+// test's own request body override -- see driftFiringVerdictRequestJSON's
+// own doc comment for why 25/15, not e.g. validVerdictRequestJSON's plain
+// default, is deliberately chosen) clearing BOTH reviewverdict.
+// FilesChangedDriftRatioThreshold and FilesChangedDriftAbsoluteThreshold
+// -- the canary must fire a diagnostic log line, and (§21.1's own first
+// load-bearing constraint) the posted verdict, the review_verdicts row it
+// persists, and this request's own 201 response must all be COMPLETELY
+// unaffected: nothing here is a filter or a gate.
+func TestPostReviewVerdict_FilesChangedDriftCanary_FiresOnDivergence_NeverAffectsVerdict(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-drift-fires", 70)
+	seedProcessingTurnWithChangedFilesCount(ctx, t, rig, session.ID, "sha-drift-fires", 15)
+
+	buf := captureDefaultLoggerJSON(t)
+
+	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", driftFiringVerdictRequestJSON())
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d (a fired canary must never fail the request)", status, http.StatusCreated)
+	}
+	if resp.Shippable != restdtos.PostReviewVerdictResponseShippable(review.ShippableAuto) {
+		t.Errorf("Shippable = %q, want %q (a fired canary must never move the shippable classification)", resp.Shippable, review.ShippableAuto)
+	}
+
+	entry := findLogEntry(t, buf, filesChangedDriftCanaryLogMsg)
+	if got, want := fmt.Sprintf("%v", entry["self_reported_files_changed"]), "25"; got != want {
+		t.Errorf("self_reported_files_changed = %v, want %v", got, want)
+	}
+	if got, want := fmt.Sprintf("%v", entry["server_computed_files_changed"]), "15"; got != want {
+		t.Errorf("server_computed_files_changed = %v, want %v", got, want)
+	}
+
+	var filesChanged int
+	if err := rig.pool.QueryRow(ctx, `SELECT files_changed FROM review_verdicts WHERE repo_full_name = $1 AND pr_number = $2`, "acme/verdict-drift-fires", 70).Scan(&filesChanged); err != nil {
+		t.Fatalf("query review_verdicts row: %v", err)
+	}
+	if filesChanged != 25 {
+		t.Errorf("review_verdicts.files_changed = %d, want 25 (the self-reported value, verbatim -- a fired canary must never rewrite it)", filesChanged)
+	}
+}
+
+// TestPostReviewVerdict_FilesChangedDriftCanary_NoDivergence_NeverFires is
+// the fired test's own negative-space sibling: a server-computed count
+// EQUAL to the self-reported one never logs the canary line at all.
+func TestPostReviewVerdict_FilesChangedDriftCanary_NoDivergence_NeverFires(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-drift-quiet", 71)
+	// validVerdictRequestJSON's own filesChanged is 3 -- matching it here
+	// exactly so there is nothing to diverge on.
+	seedProcessingTurnWithChangedFilesCount(ctx, t, rig, session.ID, "sha-drift-quiet", 3)
+
+	buf := captureDefaultLoggerJSON(t)
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", validVerdictRequestJSON())
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	if hasLogEntry(t, buf, filesChangedDriftCanaryLogMsg) {
+		t.Errorf("filesChanged drift canary fired with no real divergence (self-reported and server-computed both 3); full log:\n%s", buf.String())
+	}
+}
+
+// TestPostReviewVerdict_FilesChangedDriftCanary_ServerComputedZero_NeverFires
+// is §21.1's own second load-bearing constraint, proven end to end: a
+// processing turn whose own review_depth_decision was never set at all
+// (no ReviewDepthDecision passed to turns.Create, mirroring a turn that
+// predates this field, or one whose own marshal step failed at creation
+// time) leaves serverComputedChangedFiles at its honest zero value --
+// indistinguishable from a genuinely failed GetPullRequest fetch
+// (review.PreFetchedContext.ChangedFilesCount's own doc comment) -- and
+// the canary must NEVER read that as "confidently zero, so any self-
+// report is 100% drift." Deliberately posts a self-reported filesChanged
+// of 3 (validVerdictRequestJSON's own default) against a real, wildly
+// different server-computed value that would otherwise obviously fire,
+// were it not for the zero-guard: this test does not control
+// serverComputedChangedFiles at all (no seedProcessingTurnWithChangedFilesCount
+// call), which is the point -- it is 0 precisely because it was never
+// recorded.
+func TestPostReviewVerdict_FilesChangedDriftCanary_ServerComputedZero_NeverFires(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-drift-zero-guard", 72)
+	reviewHeadSHA := "sha-drift-zero-guard"
+	// Deliberately no ReviewDepthDecision -- review_depth_decision stays
+	// SQL NULL, exactly like a turn that predates this field.
+	if _, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{SessionID: session.ID, Status: sqlcgen.TurnStatusProcessing, ReviewHeadSha: &reviewHeadSHA}); err != nil {
+		t.Fatalf("seed processing turn with no review_depth_decision: %v", err)
+	}
+
+	buf := captureDefaultLoggerJSON(t)
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", validVerdictRequestJSON())
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	if hasLogEntry(t, buf, filesChangedDriftCanaryLogMsg) {
+		t.Errorf("filesChanged drift canary fired against an unset (zero) server-computed count -- must be treated as no reliable signal, never as a real zero; full log:\n%s", buf.String())
 	}
 }

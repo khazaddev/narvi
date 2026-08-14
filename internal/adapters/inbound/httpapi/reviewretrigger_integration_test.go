@@ -416,6 +416,94 @@ func TestRetriggerReview_AlreadyAnsweredFacts_PrependedNeverReplacingProse(t *te
 	}
 }
 
+// TestRetriggerReview_AlreadyAnsweredFacts_RetiresFindingWhoseFileLeftTheDiff
+// is this Step's own end-to-end proof of §22.1.2's "determinable fact"
+// retirement refinement, exercised through this handler's real HTTP path
+// rather than reviewpost's own unit-test layer: a real diffFetcher is
+// wired (so prCtx.ChangedPaths is genuinely populated from a fetched
+// diff, not left nil), and a pre-existing review_findings row names a
+// file that diff never touches. The persisted turn prompt must still
+// carry that finding (never a silent drop, §22.3's advisory-never-a-
+// filter posture) but annotated RETIRED -- and a second, still-live
+// finding on a file the diff DOES touch must render with no such
+// annotation, proving this endpoint's own reordering of the
+// already-answered-facts call (moved, by this Step, to AFTER the diff
+// fetch so prCtx.ChangedPaths is available) actually threads real diff
+// data through, not just an empty/nil placeholder.
+func TestRetriggerReview_AlreadyAnsweredFacts_RetiresFindingWhoseFileLeftTheDiff(t *testing.T) {
+	fetcher := &fakeReviewContextFetcher{
+		diff: "diff --git a/internal/live.go b/internal/live.go\n--- a/internal/live.go\n+++ b/internal/live.go\n+hello\n",
+		pr:   githubapi.PullRequest{HeadSHA: "resolved-head-sha", BaseRef: "main"},
+	}
+	rig := newTestRig(t, func(r *testRig) {
+		r.diffFetcher = fetcher
+		r.botToken = "test-bot-token"
+	})
+	ctx := context.Background()
+	owner, _ := rig.createAuthenticatedUser(ctx, t)
+	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+
+	repoFullName := "acme/retirement-repo"
+	const prNumber = int32(56)
+	session := rig.createOwnedGitHubReviewSession(ctx, t, owner.ID, repoFullName, prNumber)
+
+	const staleDescription = "Old finding on a file this diff no longer touches."
+	const liveDescription = "Finding on a file still in this diff."
+	if _, err := rig.reviewFindings.Upsert(ctx, sqlcgen.UpsertReviewFindingParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+		IdentityHash: "1111111111111111111111111111111111111111111111111111111111111111",
+		Severity:     "medium",
+		FilePath:     "internal/stale.go",
+		Description:  staleDescription,
+	}); err != nil {
+		t.Fatalf("upsert stale review finding: %v", err)
+	}
+	if _, err := rig.reviewFindings.Upsert(ctx, sqlcgen.UpsertReviewFindingParams{
+		RepoFullName: repoFullName,
+		PrNumber:     prNumber,
+		IdentityHash: "2222222222222222222222222222222222222222222222222222222222222222",
+		Severity:     "medium",
+		FilePath:     "internal/live.go",
+		Description:  liveDescription,
+	}); err != nil {
+		t.Fatalf("upsert live review finding: %v", err)
+	}
+
+	status := rig.doJSON(t, http.MethodPost, "/api/sessions/"+session.ID.String()+"/review/retrigger", nil, nil, token)
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	var prompt string
+	if err := rig.pool.QueryRow(ctx, `SELECT prompt FROM turns WHERE session_id = $1`, session.ID).Scan(&prompt); err != nil {
+		t.Fatalf("query turn prompt: %v", err)
+	}
+
+	if !strings.Contains(prompt, staleDescription) || !strings.Contains(prompt, liveDescription) {
+		t.Fatalf("prompt = %q, want it to contain BOTH findings -- retirement notes, never silently drops (§22.3)", prompt)
+	}
+
+	var staleLine, liveLine string
+	for _, line := range strings.Split(prompt, "\n") {
+		switch {
+		case strings.Contains(line, staleDescription):
+			staleLine = line
+		case strings.Contains(line, liveDescription):
+			liveLine = line
+		}
+	}
+	if staleLine == "" || liveLine == "" {
+		t.Fatalf("prompt = %q, could not locate both findings' own lines", prompt)
+	}
+	if !strings.Contains(staleLine, "RETIRED:") {
+		t.Errorf("stale finding's own line = %q, want a RETIRED annotation (its file left the diff)", staleLine)
+	}
+	if strings.Contains(liveLine, "RETIRED:") {
+		t.Errorf("live finding's own line = %q, want NO RETIRED annotation (its file is still in the diff)", liveLine)
+	}
+}
+
 // TestRetriggerReview_AwaitingPlanAlwaysDeclines_NeverClassifies is F1's
 // own regression test (Step 64 follow-up fix, review Finding 1) for this
 // endpoint: a manual re-review click carries no human reply for the

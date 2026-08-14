@@ -53,6 +53,40 @@ type DecisionRecord struct {
 	// regardless of ResolvedModelID.
 	ResolvedModelID string `json:"resolvedModelId,omitempty"`
 	ResolvedEffort  string `json:"resolvedEffort,omitempty"`
+
+	// ChangedFilesCount (§21.1's own filesChanged drift canary, extended
+	// here rather than given a new section, per this Step's own plan-text
+	// instruction) is review.PreFetchedContext.ChangedFilesCount -- the
+	// SAME server-computed, GitHub-"changed_files"-derived count Decide's
+	// own caller already resolved for THIS turn's triage routing, carried
+	// here purely so it survives from turn-CREATION time (where it is
+	// computed) to verdict-POST time (where reviewverdict.
+	// FilesChangedDrifted, internal/domain/reviewverdict, compares it
+	// against the reviewing agent's own self-reported review.Verdict.
+	// FilesChanged) -- mirroring this SAME struct's own pre-existing
+	// ChangedLines/DistinctRoots fields, which already ride along on this
+	// record for an unrelated (triage-routing) reason. This field serves
+	// NO triage purpose of its own -- Decide never reads it -- it exists
+	// solely as this record's own already-established "turn-scoped
+	// carrier" mechanism (turns.review_depth_decision, read back via
+	// httpapi.PostReviewVerdict's own turns.GetProcessingTurnForSession
+	// call) for a value that would otherwise have no way to reach
+	// verdict-post time at all, short of a new turns column mirroring
+	// review_head_sha/review_depth's own dedicated-column treatment --
+	// deliberately not done here (this Step's own scope: a diagnostic-only
+	// signal, never gated on, does not warrant a new migration when an
+	// existing, already-threaded carrier already reaches the one place
+	// that needs it).
+	//
+	// Zero for every turn that predates this field, or whose own context
+	// fetch degraded (review.PreFetchedContext's own "0 for a failed
+	// GetPullRequest fetch, indistinguishable from a genuinely empty
+	// diff" contract, context.go) -- FilesChangedDrifted's own doc comment
+	// (reviewverdict package) covers why treating either case as "no
+	// reliable signal, never fire" is the required, fail-safe reading,
+	// never "zero files changed, so any non-zero self-report is massive
+	// drift".
+	ChangedFilesCount int `json:"changedFilesCount,omitempty"`
 }
 
 // Provenance is internal/app/reviewtriage.ResolveProvenance's own return
@@ -72,12 +106,18 @@ type Provenance struct {
 // finalDepth (decision.Depth after Floor has been applied, if this is a
 // re-review path -- callers with no floor to apply pass decision.Depth
 // itself unchanged), provenance (internal/app/reviewtriage's own
-// best-effort authorship lookup), and resolvedModelID/resolvedEffort (D4,
+// best-effort authorship lookup), resolvedModelID/resolvedEffort (D4,
 // nice-to-have adversarial-review fix -- ModelAndEffort's own two return
 // values, computed by the caller from the SAME finalDepth passed here;
 // nil for both on the light path, mirroring ModelAndEffort's own "both
-// nil except on DepthDeep" contract).
-func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, provenance Provenance, resolvedModelID, resolvedEffort *string) DecisionRecord {
+// nil except on DepthDeep" contract), and changedFilesCount (§21.1's own
+// filesChanged drift canary -- DecisionRecord.ChangedFilesCount's own doc
+// comment for the full "why" this rides here). Every one of this
+// function's three real callers already has review.PreFetchedContext.
+// ChangedFilesCount in scope at the SAME point it calls this function
+// (it is what Decide's own Signals were themselves built from, one call
+// earlier) -- passed straight through, never re-derived.
+func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, provenance Provenance, resolvedModelID, resolvedEffort *string, changedFilesCount int) DecisionRecord {
 	tags := make([]string, len(decision.MatchedSensitiveTags))
 	for i, t := range decision.MatchedSensitiveTags {
 		tags[i] = string(t)
@@ -101,5 +141,6 @@ func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, pr
 		Floored:              finalDepth != decision.Depth,
 		NarviAuthored:        provenance.NarviAuthored,
 		AuthoringModel:       provenance.AuthoringModel,
+		ChangedFilesCount:    changedFilesCount,
 	}
 }
