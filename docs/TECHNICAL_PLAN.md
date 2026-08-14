@@ -258,8 +258,8 @@ Problem this solves: some engine behaviors spawn multiple concurrent sub-agents 
 
 - The adapter assigns each spawned sub-task a stable `subTaskId` (derived from whatever correlator the engine itself exposes — OpenCode's own nested-task id today; not Narvi's own session concepts, per the note below) and tags every event that sub-task produces with it (§6.1), emitting `sub_task_start`/`sub_task_finish` to bracket its lifetime.
 - **Not a new domain entity.** A sub-task is a presentation/wire-level grouping of events belonging to one turn — not a new Postgres row, and not Narvi's own "child session" (§14.4: a full session with its own sandbox/turns, spawned by automation/sentinel features — a materially heavier mechanism; the naming here is deliberately distinct so the two are never confused). The turn state machine (§3.3) is unaffected: one turn still has exactly one `processing` state no matter how many sub-tasks ran underneath it.
-- **Cost rolls up.** Every `step_finish.cost` (§6.1) is summed into the same turn/session total regardless of which lane — main or any sub-task — produced it; a sub-task's spend is never invisible in the cost breakdown (§12.2 item 1). (Per-model cost attribution when a sub-task runs on a different model than its turn — §12.2 item 6's cost-by-model view — is not designed here; that needs its own `step_finish` model field before it can be claimed, left to whichever future work actually adds it.)
-- Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 80 (session timeline, lane nesting) and Step 81 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
+- **Cost should roll up — recorded here as intent, not as a shipped fact.** An earlier draft of this bullet claimed, in the present tense, that every `step_finish.cost` (§6.1) "is summed" into one turn/session total regardless of lane. **Verified false**: the only cost columns anywhere in the schema are `repo_settings.review_cost_budget_light_usd`/`..._deep_usd` (migration 000085) — Step 69's own configured *ceilings* — and no per-turn or per-session running total exists in Postgres or in Go. That false present tense was not harmless: §26.7's own cost-budget mechanism was written reading this bullet as an already-existing dependency, and shipped without ever building the accumulator it assumed, a gap corrected once already (§26.7's own text) but left uncorrected here, at its source, until now. This bullet now states the requirement Step 70 (§26.7, §26.9) exists to build — a real per-turn/session total, main lane and every sub-task alike — never claims it as built. (Per-model cost attribution when a sub-task runs on a different model than its turn — §12.2 item 6's cost-by-model view — is not designed here either; that needs its own `step_finish` model field before it can be claimed, left to whichever future work actually adds it.)
+- Phasing: adapter-side tagging is Step 17 (OpenCode adapter, alongside the other quirks on this line); UI rendering of sub-task lanes is Step 82 (session timeline, lane nesting) and Step 83 (session rail, cost-breakdown roll-up) — see §12.2 item 1.
 
 ### 7.2 Context-overflow compaction retry (Step 44)
 
@@ -394,7 +394,7 @@ Design mockups of the nine views exist (decision inbox/home, session workspace, 
 ### 12.3 UX items to land with the UI
 Boot progress phases instead of spinner; failure reason + resume everywhere (matching the Slack/Linear retry affordance); distinct cancelled/failed/timeout chips; sandbox "what happened" panel (transitions + fingerprint + correlation id).
 
-**Composer send semantics (item 1's composer, Step 81, decision 5) — acceptance criteria, day one:** Enter sends and Shift+Enter inserts a newline, from the very first ship of this composer, never added later — inverting this after users have built muscle memory around one behavior is a change users route around, not adopt, so it is not a follow-up. An IME composition guard is required: confirming an in-progress IME composition (e.g. selecting a candidate while typing Japanese/Chinese/Korean, which itself uses Enter) must never itself send — the guard checks the browser's own composition state, not a heuristic over the text. Exactly ONE shared can-submit predicate drives both the Send button's disabled state and the keydown handler's own send-or-not decision — never two independently-maintained checks, since a button and a key handler silently drifting apart on when submission is allowed is the classic defect this class of UI produces. Touch/mobile gets an explicit decision rather than an unstated gap: out of scope for this ship — the mockups' existing breakpoints (`docs/design/mockups.html`, three `@media (max-width:980px)` rules collapsing `.app`/`.sidebar`/`.rail`, `.settings`/`.setnav`, and `.charts2` to single-column layouts) reflow for narrower viewports but define no touch-specific interaction anywhere, and the composer itself carries no rule inside any of them; a touch-appropriate composer affordance (mobile virtual keyboards make Shift+Enter awkward to reach) is deferred, named here rather than silently left unspecified.
+**Composer send semantics (item 1's composer, Step 83, decision 5) — acceptance criteria, day one:** Enter sends and Shift+Enter inserts a newline, from the very first ship of this composer, never added later — inverting this after users have built muscle memory around one behavior is a change users route around, not adopt, so it is not a follow-up. An IME composition guard is required: confirming an in-progress IME composition (e.g. selecting a candidate while typing Japanese/Chinese/Korean, which itself uses Enter) must never itself send — the guard checks the browser's own composition state, not a heuristic over the text. Exactly ONE shared can-submit predicate drives both the Send button's disabled state and the keydown handler's own send-or-not decision — never two independently-maintained checks, since a button and a key handler silently drifting apart on when submission is allowed is the classic defect this class of UI produces. Touch/mobile gets an explicit decision rather than an unstated gap: out of scope for this ship — the mockups' existing breakpoints (`docs/design/mockups.html`, three `@media (max-width:980px)` rules collapsing `.app`/`.sidebar`/`.rail`, `.settings`/`.setnav`, and `.charts2` to single-column layouts) reflow for narrower viewports but define no touch-specific interaction anywhere, and the composer itself carries no rule inside any of them; a touch-appropriate composer affordance (mobile virtual keyboards make Shift+Enter awkward to reach) is deferred, named here rather than silently left unspecified.
 
 ### 12.4 Sequencing & exit
 Built in phase 7. Definition of done: all nine views built to the mockups + §12.3 items; screenshot-level review against the mockups; `make dist` produces the single self-contained binary.
@@ -809,7 +809,7 @@ Unlike a prompt-only self-check (which produces nothing a query can ever answer 
 A turn running under `plan_mode=true` never gets the devil's-advocate preamble — plan mode's own HITL approval step (§8.1) already is the human review of the proposed action before anything executes; injecting a second, independent caution mechanism into a turn a human is about to approve anyway would just be noise duplicating a gate that already exists. The preamble applies only to non-planning build turns.
 
 ### 20.4 Threading and defaults
-The enable/disable flag follows exactly the same threading `plan_mode` already uses: a global `platform.Config` default plus an optional override field on `SessionConfig`/`TurnSpec`, resolved with the same precedence (session override wins when set, global default otherwise) — no new config-resolution mechanism. **Off by default.** The signal is collected purely for analytics while the feature is calibrated (§21's analytics rollups are the natural home for an eventual false-alarm-rate view); there is no UI prominence beyond a subtle indicator surfaced in the review view (§12.2 item 2, Step 82) once shipped.
+The enable/disable flag follows exactly the same threading `plan_mode` already uses: a global `platform.Config` default plus an optional override field on `SessionConfig`/`TurnSpec`, resolved with the same precedence (session override wins when set, global default otherwise) — no new config-resolution mechanism. **Off by default.** The signal is collected purely for analytics while the feature is calibrated (§21's analytics rollups are the natural home for an eventual false-alarm-rate view); there is no UI prominence beyond a subtle indicator surfaced in the review view (§12.2 item 2, Step 84) once shipped.
 
 ### 20.5 Hard-gate is explicitly out of scope
 A hard gate — blocking the turn outright on a STRONG outcome rather than just surfacing it — is not designed here and not scheduled. It becomes a candidate only if and when the structured signal's own telemetry (§20.2) shows STRONG firing on genuine misses at a rate that justifies the cost of interrupting a session outright; until that evidence exists, gating on an unvalidated signal would risk blocking correct work on a false alarm, which is a worse failure than the one this feature exists to catch.
@@ -852,7 +852,7 @@ This section **supersedes** the label-driven auto-approval mechanism §8.2 and �
 
 No per-PR human label is required or consulted for this decision — the LLM's verdict only ever *proposes* `Shippable`; the server recomputes it and checks every criterion above independently, the same "never trust the model's own verdict" discipline §18.1's `FallbackReason` and `domain/sandbox`'s decision functions already apply elsewhere. The existing `review: low risk` label **inverts into an escape hatch**: replaced by `review: needs-human`, which forces a specific PR out of auto-approval regardless of what the criteria say — a maintainer who knows something the criteria can't see still has a lever, just an opt-out one instead of an opt-in gate. (`visual-qa: pass/skip` is unrelated to this change and continues exactly as before.)
 
-**Stage 2 — auto-merge (per-repo toggle, off by default).** Auto-approval alone does not merge anything. While a repo's auto-merge toggle is off (the default, and the state every repo starts in during a calibration period), an auto-approved PR surfaces in the decision inbox (§16.1's `ready_to_merge` row) as "ready to merge (auto)" with a 1-click human confirm — the human step moves from "decide if this is low-risk" to "confirm the machine's decision," a materially cheaper ask, but not a removed one. Every auto-approval outcome — confirmed as-is, or contested (a human overrides/requests changes on a PR the engine approved) — accumulates into a **contradiction-rate read model**: the fraction of auto-approved PRs a human later disagreed with, per repo. An admin arms the auto-merge toggle for a repo only once this data justifies it; the toggle's own settings row displays the reliability stats (§12.2 item 5, Step 84) next to the control, so arming it is an informed decision, not a leap of faith.
+**Stage 2 — auto-merge (per-repo toggle, off by default).** Auto-approval alone does not merge anything. While a repo's auto-merge toggle is off (the default, and the state every repo starts in during a calibration period), an auto-approved PR surfaces in the decision inbox (§16.1's `ready_to_merge` row) as "ready to merge (auto)" with a 1-click human confirm — the human step moves from "decide if this is low-risk" to "confirm the machine's decision," a materially cheaper ask, but not a removed one. Every auto-approval outcome — confirmed as-is, or contested (a human overrides/requests changes on a PR the engine approved) — accumulates into a **contradiction-rate read model**: the fraction of auto-approved PRs a human later disagreed with, per repo. An admin arms the auto-merge toggle for a repo only once this data justifies it; the toggle's own settings row displays the reliability stats (§12.2 item 5, Step 86) next to the control, so arming it is an informed decision, not a leap of faith.
 
 Once armed, auto-merge reuses the decision inbox's **existing** server-side re-validation-at-click contract unchanged (§16.2, Step 60: re-check CI, approval state, `Authorize` before calling the SCM) — merging is simply machine-initiated instead of human-clicked, the same checks either way. This is a deliberate reuse, not a parallel merge path: the inbox's Merge endpoint was already built to never trust its own rendered queue as authority, exactly the property an unattended merge needs.
 
@@ -860,7 +860,7 @@ Once armed, auto-merge reuses the decision inbox's **existing** server-side re-v
 A daily digest is **entirely deterministic, never LLM-narrated** — it renders from the same `review_verdicts`/analytics read model above via a template, not a model call; a digest is a compliance/status artifact, and a fixed rendering is easier to trust and to test than a fresh narration every day. Scope is **per-repo/per-channel from day one**, reusing the decision inbox's own assignment logic (§16.2's identity-graph-backed provenance) rather than inventing a second, separate repo↔channel association mechanism — a person's digest shows what their own inbox would show, not a global fan-out. Sending is **claim-before-act per (date, channel)**: a `digest_send_state(date, channel)` row plus `SELECT ... FOR UPDATE SKIP LOCKED` (the same idiom §5.1 already uses for PR-mention coalescing) guarantees at-most-one send per channel per day even with concurrent ticks — no separate storage-layer serialization mechanism needed, Postgres already does this.
 
 ### 21.4 Phasing
-Step 62, Phase 5, after Step 45 (verdict shape) and Step 47 (posting path) — designing the verdict schema once, before any of persistence/analytics/digest/auto-approval builds on it, avoids the parallel-reinvention trap a shared schema exists to prevent. UI: Settings → Analytics gains the review-risk section and the per-repo auto-merge toggle with calibration stats (§12.2 items 5-6, Step 84); the decision inbox's `ready_to_merge` row (§16.1, Step 85) gains the "(auto)" 1-click-confirm variant.
+Step 62, Phase 5, after Step 45 (verdict shape) and Step 47 (posting path) — designing the verdict schema once, before any of persistence/analytics/digest/auto-approval builds on it, avoids the parallel-reinvention trap a shared schema exists to prevent. UI: Settings → Analytics gains the review-risk section and the per-repo auto-merge toggle with calibration stats (§12.2 items 5-6, Step 86); the decision inbox's `ready_to_merge` row (§16.1, Step 87) gains the "(auto)" 1-click-confirm variant.
 
 ## 22. Learned false-positive patterns & rebuttal identity (new capability)
 
@@ -907,7 +907,7 @@ Learned patterns are injected into every review pass (first pass and re-review a
 Retire, hit-count, and an audit view for this table **ship in the same Step** as the capture mechanism — never a deferred follow-up. A learned-pattern table with no retirement path only ever grows, accumulating stale or wrong patterns with no mechanism to review or remove them; shipping capture without a lifecycle would create exactly that unreviewable, ever-growing state from day one.
 
 ### 22.5 Phasing
-Step 63, Phase 5, after Step 47 (needs the verdict-posting path new patterns get weighed against) and Step 39 (`Authorize`, RBAC). §22.1.1's relocation fallback additionally depends on the `LLM` port (§4.3), already required and shipped for the intent classifier (Step 36) — no new port, one new call site on an existing one. UI: Settings → Environments gains false-positive pattern view/retire per repo (maintainer+, §12.2 item 5, Step 84); finding cards gain rebuttal history with the content-based finding-identity linkage; since §22.1.1's anchoring fields are deliberately ephemeral (never persisted — position is a pure function of the snippet and diff, and a stored position would go stale the moment the diff moves), Step 82 re-resolves each finding's position at read time by refetching the diff at the verdict's own persisted `review_verdicts.head_sha` (§21.2, Step 62) and re-running §22.1.1's match, rendering at the resolved position or explicitly flagged unanchored if the re-resolution also fails — never a stored, potentially-stale line number (§12.2 item 2, Step 82).
+Step 63, Phase 5, after Step 47 (needs the verdict-posting path new patterns get weighed against) and Step 39 (`Authorize`, RBAC). §22.1.1's relocation fallback additionally depends on the `LLM` port (§4.3), already required and shipped for the intent classifier (Step 36) — no new port, one new call site on an existing one. UI: Settings → Environments gains false-positive pattern view/retire per repo (maintainer+, §12.2 item 5, Step 86); finding cards gain rebuttal history with the content-based finding-identity linkage; since §22.1.1's anchoring fields are deliberately ephemeral (never persisted — position is a pure function of the snippet and diff, and a stored position would go stale the moment the diff moves), Step 84 re-resolves each finding's position at read time by refetching the diff at the verdict's own persisted `review_verdicts.head_sha` (§21.2, Step 62) and re-running §22.1.1's match, rendering at the resolved position or explicitly flagged unanchored if the re-resolution also fails — never a stored, potentially-stale line number (§12.2 item 2, Step 84).
 
 ## 23. Plan follow-up classification (amend vs answer) (new capability)
 
@@ -969,7 +969,7 @@ An automated fix session (§17, sentinel auto-fix, or any future automation that
 Once the counter reaches the budget, §24.3 step 4's "otherwise" branch stops enqueueing a turn: it still clears `pending_head_sha` (so a later manual re-trigger starts clean) and deletes the `review_retrigger_debounce` timer (the same re-arm-or-delete contract every named-timer handler follows, `timerfired.go`) but does not dispatch. The FIRST time this happens for a given PR, the review session additionally posts one server-side verdict-tool notice (§5.2 — never a raw comment) that automatic re-review has reached its budget and further pushes need the existing manual re-trigger — a one-time event, not repeated on every subsequent debounce firing, so hitting the ceiling is observable without becoming noise. Later `synchronize` events on that same PR keep re-arming the debounce timer exactly as before (a cheap upsert either way); each firing simply finds the budget still exhausted and no-ops without posting a second notice.
 
 ### 24.7 Phasing
-Step 65, Phase 5, after Step 46 (the claim/coalescing primitives this extends with a second, automatic ingress lane) and Step 62 (`review_verdicts.head_sha`, this feature's own trigger-state source) — designing this after both means it reuses primitives that already exist rather than growing them in parallel. Gates nothing else in Phase 6/7. UI: the per-repo opt-in toggle ships in Settings → Analytics alongside the other per-repo automation toggles (§12.2 items 5-6, Step 84).
+Step 65, Phase 5, after Step 46 (the claim/coalescing primitives this extends with a second, automatic ingress lane) and Step 62 (`review_verdicts.head_sha`, this feature's own trigger-state source) — designing this after both means it reuses primitives that already exist rather than growing them in parallel. Gates nothing else in Phase 6/7. UI: the per-repo opt-in toggle ships in Settings → Analytics alongside the other per-repo automation toggles (§12.2 items 5-6, Step 86).
 
 ## 25. Configurable workflow engine per lane + visual canvas editor (new capability)
 
@@ -987,7 +987,7 @@ plan become three system workflows an admin may duplicate and customize — glob
 never in place — never delete;
 Gemini ships alongside Anthropic/OpenAI in v1 (§8.8/Step 59, amended); the backend engine lands in
 Phase 5 right after the automations work (Steps 51-52), the canvas editor in Phase 7 right after
-Settings (Step 84); a HITL "revise" verdict is always a re-execution of the same step with the
+Settings (Step 86); a HITL "revise" verdict is always a re-execution of the same step with the
 human's text folded in as an additional instruction — exactly plan mode's own `revise:` handling
 today (§8.1) — never a direct substitution of a structured artifact; and the OpenCode
 credential-injection gap (§25.3) is a blocking prerequisite for this entire chantier, built first,
@@ -1195,13 +1195,13 @@ Three new actions, each mirroring an existing row in `internal/domain/authz/auth
 
 `is_built_in` immutability is a structural invariant, not an RBAC row (§25.4).
 
-### 25.12 Visual canvas editor (Step 86, Phase 7)
+### 25.12 Visual canvas editor (Step 88, Phase 7)
 
 A React Flow-style node/edge canvas for authoring a lane/repo workflow's steps and edges. It must
 validate/constrain what a user can draw against the engine's closed model — ordered steps plus
 3-status edges, no expression language (§25.4) — rejecting an undrawable-by-the-engine graph at
 save time, not silently accepting it. Inline progress display of a running workflow in the session
-view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 80/81) — not
+view is a SMALL extension of the already-planned sub-task-lane rendering (§7.1, Steps 82/83) — not
 a separate Step.
 
 ### 25.13 Risks and open questions
@@ -1222,10 +1222,9 @@ a separate Step.
 
 ### 25.14 Phasing
 
-Steps 53-56, Phase 5, immediately after Step 52 (automations: triggers & extras) — see the Phase 5
-renumbering note (IMPLEMENTATION_PLAN.md). 53 is a blocking prerequisite for 54-56; 55 is exercised
-by 100% of production traffic from day one. Step 86, Phase 7, immediately before ui finalize (Step
-87) — see the Phase 7 renumbering note.
+Steps 53-56, Phase 5, immediately after Step 52 (automations: triggers & extras). 53 is a blocking
+prerequisite for 54-56; 55 is exercised by 100% of production traffic from day one. Step 88, Phase 7,
+immediately before ui finalize (Step 89).
 
 ## 26. Review as a merge readout (new capability)
 
@@ -1343,6 +1342,29 @@ trust agent judgment for routing; deterministic fallbacks throughout, §18):
   review must never be blocked by its own router.
 - **Re-review on push** (§24): depth re-evaluated on the delta, but floored at the PR's previous
   depth — once deep, a PR stays deep.
+
+**The changed-path discovery this depends on was widened after shipping, as a side effect of a
+different fix — recorded here because it changes this section's own routing volume.**
+`reviewtriage.ExtractChangedPaths`, the function computing the changed **paths** signal above and
+the sensitive-glob classification and root-count triggers that key off it, originally harvested
+paths only from unified-diff `---`/`+++` header lines. The finding-retirement work (§22.1.2) needed
+it to also recognize binary files, mode-only changes, and git-quoted non-ASCII paths — shapes that
+previously contributed no path at all — so it could tell "genuinely absent from the diff" apart from
+"present but in a shape the old parser didn't recognize." That fix landed in a PR about finding
+retirement, not about triage, and this section was not updated at the time. Two consequences, one a
+cost the routing above must now be read with, one a security improvement worth stating plainly:
+
+- **More PRs now cross the deep-routing thresholds.** A PR whose third distinct top-level root is
+  only a binary asset, or whose sensitive-glob hit was previously invisible because the changed file
+  was a mode-only change, now counts. Deep means cross-family counter-review, the fact-check pass,
+  and the architecture-scribe (§26.4/§26.6) — real added cost per review — and that cost is
+  currently **unmeasured and unbounded**: §26.7's cost ceiling has no accumulator or production call
+  site until Step 70 ships (§7.1). This widening was not sized before it shipped.
+- **Sensitive-path detection is genuinely better**, not merely different. A binary file committed
+  under a sensitive path — the shape committed credential material or a compiled artifact typically
+  takes — previously produced no path at all and triggered nothing. It now routes deep like any other
+  sensitive-glob hit. This is a real closing of a blind spot, not a side effect to apologize for; it
+  is named here as a security improvement alongside the cost consequence, not folded into it.
 
 **Triage as a two-axis decision, not one — independently validated in production.** The rules above
 decide *which path* a PR gets (model/effort tier). A second, narrower axis this section did not
@@ -1530,7 +1552,7 @@ bounded, not merely observed.
 cost.** The running total this checks against **does not already exist and is owned by this
 mechanism** — an earlier draft of this paragraph asserted that §7.1 "already rolls up" every
 `step_finish.cost`, main lane and sub-tasks alike, into one running total per turn. It does not:
-§7.1's own phasing assigns no Step to the data-side summation, only Steps 80/81 to *rendering* a
+§7.1's own phasing assigns no Step to the data-side summation, only Steps 82/83 to *rendering* a
 per-sub-task cost, and §7.1 separately records that a per-step model attribution is still missing
 from `step_finish`. The accumulator is therefore work this section owns, not an inherited given,
 and the distinction is load-bearing — a ceiling checked against a total nobody computes is not a
@@ -1672,16 +1694,20 @@ LLM tie-break — not designed now.
 
 ### 26.11 Phasing
 
-Steps 66-69, end of Phase 5 — see the Phase 5 renumbering note (IMPLEMENTATION_PLAN.md). 66
+Steps 66-69, end of Phase 5. 66
 (digest) → 67 (adequacy — needs 66's diff-derived summary as its reference text); 68 (triage) is
 independent of 66-67 and valuable alone (model/effort tiering per path) but sequenced before 69
 because the deep path must exist to route to; 69 (counter-review + measurement, **now also §26.6's
 fact-check pass and §26.7's cost budget**) needs 66's digest structure and 68's deep path, and
 rides Step 62's instrument. 66 extends Step 45's domain type, Step 47's posting tool, and Step 62's
 persistence — hence the whole chantier sits after Steps 62-65. §22.1.1's snippet anchoring ships
-inside Step 63, not this chantier, and has no dependency on Steps 66-69. UI: the review screen's
+inside Step 63, not this chantier, and has no dependency on Steps 66-69. Steps 70 (§26.7/§26.9's
+cost-budget wiring) and 71 (§26.4's post-hoc sub-task corroboration) close this chantier's two
+named residuals and sit immediately after 69, still inside Phase 5 and still before its milestone —
+review/automation scope belongs in Phase 5 regardless of when it ships, the same standing rule
+IMPLEMENTATION_PLAN.md's own Phase 5/6 boundary states. UI: the review screen's
 readout layout (digest first, collapsed appendix, contested-points block) lands with the existing
-review view Step (Step 82, Phase 7); no new screen.
+review view Step (Step 84, Phase 7); no new screen.
 
 ## 27. Enterprise sandbox glue (detailed design)
 
@@ -1978,7 +2004,7 @@ manufacturing complexity.
   (§4.1); a provider whose snapshot support differs by runtime (Modal gVisor vs VM runtime) cannot
   express that today. If VM-runtime sandboxes turn out snapshot-incapable, either `Capabilities`
   grows a per-spec dimension or Docker-requiring sessions document degraded recovery (resume-only,
-  §3.2) — decided at Step 72 implementation time against the provider's real behavior, not
+  §3.2) — decided at Step 74 implementation time against the provider's real behavior, not
   guessed here.
 - **Build-time secrets (§27.1, §19.8)**: rule (a) means shared-image builds run `setup.sh` with
   no user secrets. A `setup.sh` that hard-requires one (private package registry) fails its
@@ -1991,20 +2017,20 @@ manufacturing complexity.
   against the provider's real controls at implementation time — the fail-closed rule above is what
   keeps this honest either way.
 - **Snapshotting a running dockerd (§27.5)**: daemon/image-store state inside snapshots
-  (§3.2/§8.5's snapshot-restore path) is untested territory; Step 72 must add a §9.3-class
+  (§3.2/§8.5's snapshot-restore path) is untested territory; Step 74 must add a §9.3-class
   scenario for restore-with-docker before claiming it works.
 
 ### 27.9 Phasing
 
-Steps 70-72, opening Phase 6 — see the renumbering note (IMPLEMENTATION_PLAN.md). Placed there,
+Steps 72-74, opening Phase 6. Placed there,
 not in Phase 5, because this is rollout-enabling platform glue, not review/automation scope:
 §10-P6's own first line ("Config setup (automations, secrets, environments, settings,
 integrations)") already presumes these surfaces exist, and the config/data-seeding Step that opens
-the rest of Phase 6 seeds exactly what these Steps build. Step 70 (§27.1 + §27.2) extends Step
-53's mechanisms and needs Step 39's `Authorize`; Step 71 (§27.3 + §27.4) builds on 70's delivery
-family and the `static` rung stores through 70's table; Step 72 (§27.5 + §27.6's enforced half +
+the rest of Phase 6 seeds exactly what these Steps build. Step 72 (§27.1 + §27.2) extends Step
+53's mechanisms and needs Step 39's `Authorize`; Step 73 (§27.3 + §27.4) builds on 72's delivery
+family and the `static` rung stores through 72's table; Step 74 (§27.5 + §27.6's enforced half +
 §27.7) is the ports/substrate piece (Steps 12-16's seams, §19's image pipeline adjacency) and can
-run in parallel with 71. UI: no new screens — the Settings view (§12.2 item 5, Step 84) gains the
+run in parallel with 73. UI: no new screens — the Settings view (§12.2 item 5, Step 86) gains the
 secrets table it already mocks plus cloud/cluster bindings, per-Environment Docker/egress
 settings, and the OpenCode config editor.
 
@@ -2313,7 +2339,7 @@ timeouts entries. Exit criteria: contract round-trips green including the additi
 end-to-end integration test per direction (browser-shaped mint→PUT→confirm→download;
 sandbox-shaped mint→PUT→confirm→`artifact` event observed); a failed-verification case proving
 `failed(reason)` + the outboxed delete + the rail-visible event; and the oversized-mint refusal.
-UI consumption is Phase 7 (Step 81's artifacts rail — status chip + reason on upload rows; no new
+UI consumption is Phase 7 (Step 83's artifacts rail — status chip + reason on upload rows; no new
 view).
 
 ## 29. Codex via ChatGPT-account OAuth + reasoning-effort overrides (Step 59's remaining scope)
