@@ -79,17 +79,25 @@ type turnState struct {
 	// CALLED BY ANY PRODUCTION PATH" doc comment, costbudget.go) and this
 	// Step finally builds. Summed by addCost, called from dispatchPart's
 	// own "step-finish" case (sse.go) for EVERY step-finish this turn
-	// observes -- main lane AND every sub-task alike, since §7.1's own
-	// fan-out routes a sub-task's events back to this SAME turnState
-	// pointer (resolveEvent, adapter.go), tagged with its own subTaskId --
-	// dispatchPart itself is subTaskId-agnostic (it has no idea, and does
-	// not need to know, whether the step-finish it is looking at belongs
-	// to the main lane or a sub-task), so summing unconditionally here is
-	// exactly "main lane and every sub-task alike" by construction, not an
-	// extra case to wire in. Read back by Adapter.CurrentTurnSpentUSD
-	// (adapter.go), the one method cmd/sandbox-agent's own loopback
-	// review-cost-budget HTTP server (reviewcostbudgetserver.go) calls to
-	// answer a review agent's own GET /review-cost-budget check.
+	// observes outside a compaction window -- main lane AND every
+	// sub-task alike, since §7.1's own fan-out routes a sub-task's events
+	// back to this SAME turnState pointer (resolveEvent, adapter.go),
+	// tagged with its own subTaskId -- dispatchPart itself is
+	// subTaskId-agnostic (it has no idea, and does not need to know,
+	// whether the step-finish it is looking at belongs to the main lane
+	// or a sub-task), so summing unconditionally here is exactly "main
+	// lane and every sub-task alike" by construction, not an extra case
+	// to wire in. ALSO called directly (bypassing dispatchPart) from
+	// dispatchEvent's own "message.part.updated" isCompacting branch
+	// (sse.go, D1 fix) -- a compaction's own forceCompaction call
+	// (compact.go) is a real, billed call that emits its own genuine
+	// step-finish, and that cost must still be counted even though every
+	// OTHER effect of that part (hasText, wire-event translation) is
+	// deliberately suppressed for the whole compaction window. Read back
+	// by Adapter.CurrentTurnSpentUSD (adapter.go), the one method
+	// cmd/sandbox-agent's own loopback review-cost-budget HTTP server
+	// (reviewcostbudgetserver.go) calls to answer a review agent's own
+	// GET /review-cost-budget check.
 	spentUSD float64
 
 	// compacting/compactionAttempted implement §7.2's own compaction-retry

@@ -14,9 +14,13 @@ type CostBudget struct {
 	// all is §26.6's fact-check sub-task").
 	Light float64
 	// Deep is the deep path's own ceiling in USD -- checked once before
-	// each of up to three optional sub-tasks (architecture-scribe,
-	// fact-check, counter-reviewer), in whatever order the primary
-	// reviewer's own orchestration dispatches them (§26.7).
+	// each of the two optional sub-tasks this ceiling actually governs
+	// (fact-check, counter-reviewer), in whatever order the primary
+	// reviewer's own orchestration dispatches them (§26.7). architecture-
+	// scribe is excluded from this check entirely (§26.9): it always runs
+	// regardless of cost, since a budget-triggered scribe skip would floor
+	// nothing and appear nowhere -- the silent downgrade the v1 rigor
+	// invariant forbids.
 	Deep float64
 }
 
@@ -76,11 +80,13 @@ const CostBudgetSafetyMargin = 0.8
 // ShouldSkipOptionalPass is §26.7's own "Mechanism" -- the ONE exported
 // pure function checking accumulated spend against a per-path ceiling
 // BEFORE the primary reviewer's orchestration would dispatch the NEXT
-// optional sub-task (architecture-scribe, counter-reviewer, or §26.6's
-// fact-check sub-task): "checks that running total against a per-path
-// ceiling at a safety margin ... and skips the dispatch if already at or
-// over it". This is deliberately NOT a prediction of what the next pass
-// would itself cost (§26.7: "unknowable in advance ... it is a ceiling
+// optional sub-task this ceiling governs (counter-reviewer, or §26.6's
+// fact-check sub-task -- never architecture-scribe, which §26.9 excludes
+// from this check entirely and always runs regardless of cost): "checks
+// that running total against a per-path ceiling at a safety margin ...
+// and skips the dispatch if already at or over it". This is deliberately
+// NOT a prediction of what the next pass would itself cost (§26.7:
+// "unknowable in advance ... it is a ceiling
 // enforced BEFORE commitment") -- spentUSD is whatever has ALREADY been
 // spent on this review so far (§7.1's own cost roll-up: main lane plus
 // every sub-task already run), and ceilingUSD is the resolved CostBudget

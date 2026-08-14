@@ -1650,9 +1650,11 @@ derived (propose $0.50 light / $5 deep per review, matching this plan's own conv
 a concrete, explicitly-tunable starting figure rather than leaving a blank, §24.6's
 `auto_retrigger_count` budget is the precedent). Light path's own ceiling is a degenerate,
 one-checkpoint case (the one optional pass it can run at all is §26.6's fact-check sub-task); deep
-path's is checked once before each optional sub-task the primary's orchestration dispatches — up to
-three (`architecture-scribe`, fact-check, `counter-reviewer`), in whatever order that orchestration
-dispatches them.
+path's is checked once before each of the two optional sub-tasks this ceiling actually governs —
+fact-check and `counter-reviewer` — in whatever order that orchestration dispatches them.
+`architecture-scribe` is excluded from this check entirely (§26.9's own resolution: a
+budget-triggered scribe skip would floor nothing and appear nowhere, the silent downgrade the v1
+rigor invariant forbids) — it always runs regardless of cost.
 
 ### 26.8 Interplay with the workflow engine (§25)
 

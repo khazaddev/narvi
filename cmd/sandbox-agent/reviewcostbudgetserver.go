@@ -55,6 +55,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"strconv"
@@ -188,7 +189,19 @@ func reviewCostBudgetHandler(spentUSD func() (float64, bool)) http.HandlerFunc {
 		}
 
 		ceilingUSD, err := strconv.ParseFloat(r.URL.Query().Get("ceilingUsd"), 64)
-		if err != nil {
+		// strconv.ParseFloat happily accepts "NaN"/"Inf"/"+Inf"/"-Inf"/
+		// "Infinity" (any case) as successful parses with no error -- so a
+		// NaN/±Inf ceilingUsd must be rejected explicitly here, identically
+		// to a parse failure, or it would fall through to a 200 whose body
+		// then fails to encode (encoding/json cannot represent NaN/±Inf,
+		// json.NewEncoder.Encode below would error AFTER the 200 status
+		// header is already written), leaving the caller a 2xx status with
+		// an empty/truncated body -- exactly backwards for this endpoint's
+		// own fail-safe contract, where a malformed input must produce a
+		// non-2xx the agent's prompt already treats as "shouldSkip": true
+		// (this handler's own doc comment above), never a 2xx it might
+		// mistake for a real answer.
+		if err != nil || math.IsNaN(ceilingUSD) || math.IsInf(ceilingUSD, 0) {
 			http.Error(w, "sandbox-agent: review-cost-budget: missing or malformed ceilingUsd query parameter", http.StatusBadRequest)
 			return
 		}

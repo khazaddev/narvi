@@ -167,6 +167,16 @@ func TestReviewCostBudgetServer_WrongMethodRejected(t *testing.T) {
 // response identically to "shouldSkip": true, so this status IS the
 // fail-safe signal, not merely defensive plumbing (reviewcostbudgetserver.go's
 // own doc comment).
+//
+// D2's own regression cases: strconv.ParseFloat happily parses "NaN"/"Inf"/
+// "+Inf"/"Infinity" (and their lowercase spellings -- ParseFloat itself
+// ignores case) as successful, error-free parses, so without an explicit
+// math.IsNaN/math.IsInf check these would previously have skipped this
+// 400-rejection branch entirely and fallen through to a 200 whose body then
+// failed to encode (encoding/json cannot represent NaN/±Inf), leaving the
+// caller a 2xx status with an empty/truncated body -- exactly the case this
+// endpoint's own fail-safe-toward-caution contract must never produce for a
+// malformed input.
 func TestReviewCostBudgetServer_MissingCeilingRejected(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -175,6 +185,14 @@ func TestReviewCostBudgetServer_MissingCeilingRejected(t *testing.T) {
 		{"missing entirely", ""},
 		{"malformed, not a number", "?ceilingUsd=not-a-number"},
 		{"malformed, empty value", "?ceilingUsd="},
+		{"NaN", "?ceilingUsd=NaN"},
+		{"NaN, lowercase", "?ceilingUsd=nan"},
+		{"Inf", "?ceilingUsd=Inf"},
+		{"Inf, lowercase", "?ceilingUsd=inf"},
+		{"+Inf", "?ceilingUsd=%2BInf"},
+		{"-Inf", "?ceilingUsd=-Inf"},
+		{"Infinity", "?ceilingUsd=Infinity"},
+		{"Infinity, lowercase", "?ceilingUsd=infinity"},
 	}
 
 	for _, tt := range tests {

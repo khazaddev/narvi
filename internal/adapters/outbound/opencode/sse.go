@@ -208,6 +208,37 @@ func (a *Adapter) dispatchEvent(env sseEnvelope) {
 			// output (dispatchPart's own "text" case would otherwise call
 			// ts.markSawText, polluting hasText for whatever outcome
 			// eventually gets computed).
+			//
+			// Cost is the one deliberate exception to that suppression
+			// (D1 fix, post-Step-70 review): forceCompaction's own POST
+			// /summarize call (compact.go) is a real, synchronous,
+			// billed call on this SAME session, and it emits its own
+			// genuine step-finish with a real, non-zero p.Cost as part
+			// of this exact wave. Silently dropping it here would mean
+			// ts.spentUSD (§26.7/§7.1) under-reports true spend by the
+			// compaction call's own cost -- backwards for a
+			// fail-toward-caution cost gate, where GET
+			// /review-cost-budget must never report shouldSkip:false
+			// while real spend has already crossed the ceiling. Peek
+			// the part's own type discriminator the same way
+			// dispatchPart does, and if it's a step-finish, add its
+			// cost directly -- WITHOUT calling the full dispatchPart,
+			// so hasText/wire-event suppression for every other part
+			// type (and step-finish's own wire translation) is
+			// unchanged.
+			var partEnv partEnvelope
+			if err := json.Unmarshal(props.Part, &partEnv); err != nil {
+				slog.Warn("opencode: malformed part envelope during compaction, skipping cost check", "error", err)
+				return
+			}
+			if partEnv.Type == "step-finish" {
+				var p stepFinishPart
+				if err := json.Unmarshal(props.Part, &p); err != nil {
+					slog.Warn("opencode: malformed step-finish part during compaction, skipping cost", "error", err)
+					return
+				}
+				ts.addCost(p.Cost)
+			}
 			return
 		}
 		a.dispatchPart(ts, subTaskID, props.Part)
