@@ -3,12 +3,17 @@
 // exposing the three rollups that section names explicitly -- timeseries,
 // top-risk-driver breakdown, and the "Review finding outcomes" KPI
 // (§12.2 item 6) -- over the append-only review_verdicts history plus
-// review_findings' own mutable per-finding status. Every rollup is bounded
-// to platform.Timeouts.ReviewVerdictAnalyticsWindow (§21.1's own "bounded
-// from day one" discipline) and carries its own independent "not yet
-// computed" sentinel, distinct from a real, computed zero (§21.1: "a repo
-// with a real 0% dismiss rate and a repo with no data yet must never
-// render identically").
+// review_findings' own mutable per-finding status. Step 69, §26.5 adds a
+// fourth rollup, the digest contestation rate (appreviewverdict.
+// DigestContestationRate, internal/app/reviewverdict/digestcontestation.go)
+// -- the "digest precision (contestation rate)" KPI that section names,
+// over review_digest_section_feedback (§26.5's per-section contest/confirm
+// mechanism). Every rollup is bounded to platform.Timeouts.
+// ReviewVerdictAnalyticsWindow (§21.1's own "bounded from day one"
+// discipline) and carries its own independent "not yet computed"
+// sentinel, distinct from a real, computed zero (§21.1: "a repo with a
+// real 0% dismiss rate and a repo with no data yet must never render
+// identically").
 //
 // Gated by the EXISTING authz.ActionViewAnalytics (§13.3 row 1: admin,
 // maintainer, member, viewer -- every role, read-only) -- no new Action
@@ -99,6 +104,17 @@ func GetReviewAnalytics(reviewVerdictDeps appreviewverdict.Deps) http.HandlerFun
 				}
 			}
 			resp.FindingOutcomes = &statusCounts
+		}
+
+		if rate, computed, err := appreviewverdict.DigestContestationRate(ctx, reviewVerdictDeps, repoFullName, now); err != nil {
+			logger.Error("httpapi: compute digest contestation rate failed", "error", err)
+			// resp.DigestContestationRateComputed/resp.DigestContestationRatePercent
+			// stay false/nil -- their own zero values, the SAME rendering a
+			// genuine lack of data produces.
+		} else if computed {
+			resp.DigestContestationRateComputed = true
+			percent := rate * 100
+			resp.DigestContestationRatePercent = &percent
 		}
 
 		writeJSON(w, http.StatusOK, resp)

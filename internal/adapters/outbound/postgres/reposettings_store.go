@@ -2,12 +2,44 @@ package postgres
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 )
+
+// Float64ToNumeric converts v into a pgtype.Numeric suitable for a
+// NUMERIC column write (Step 69, §26.7's own review_cost_budget_light_usd/
+// review_cost_budget_deep_usd -- migrations/
+// 000085_repo_settings_review_cost_budget.up.sql's own doc comment: "pgx's
+// own NUMERIC mapping ... converted to/from a plain float64"). v == nil
+// (the caller's own "use the engine's own built-in default" case) yields
+// the zero pgtype.Numeric ({Valid: false}), which pgx encodes as a genuine
+// SQL NULL -- never a fabricated 0.00. strconv.FormatFloat with -1
+// precision renders the SHORTEST decimal string that round-trips back to
+// the exact same float64 (Go's own documented guarantee for that
+// precision value), then ScanScientific -- the same real-binary-verified
+// parser pgtype.Numeric's own Scan(string) path already uses -- parses it
+// into the Int/Exp pair NUMERIC actually stores, so this never goes
+// through a lossy fixed-precision fmt.Sprintf("%.2f", ...) that could
+// silently round a caller-supplied ceiling.
+func Float64ToNumeric(v *float64) pgtype.Numeric {
+	if v == nil {
+		return pgtype.Numeric{}
+	}
+	var n pgtype.Numeric
+	// strconv.FormatFloat never returns an error; ScanScientific's own
+	// error is defended against anyway (an invalid pgtype.Numeric --
+	// Valid: false -- is exactly the safe "no value" degradation a NULL
+	// write already represents, never a panic or a silently wrong value).
+	if err := n.ScanScientific(strconv.FormatFloat(*v, 'f', -1, 64)); err != nil {
+		return pgtype.Numeric{}
+	}
+	return n
+}
 
 // RepoSettingsStore is a thin, pass-through wrapper around the
 // sqlc-generated repo_settings queries (§8.2/Step 47, §21.2) -- see
@@ -146,6 +178,19 @@ func (s *RepoSettingsStore) UpsertReviewDepthConfig(ctx context.Context, repoFul
 		RepoFullName:         repoFullName,
 		ReviewDepthMode:      mode,
 		ReviewDepthDeepPaths: deepPathsJSON,
+	})
+}
+
+// UpsertReviewCostBudget writes this repo's own §26.7 cost-ceiling config
+// (Step 69) -- lightUSD/deepUSD nil means "use the engine's own built-in
+// default", persisted as a genuine SQL NULL (Float64ToNumeric below),
+// mirroring UpsertReviewDepthConfig's own identical nil-means-default
+// convention immediately above.
+func (s *RepoSettingsStore) UpsertReviewCostBudget(ctx context.Context, repoFullName string, lightUSD, deepUSD *float64) (sqlcgen.RepoSetting, error) {
+	return s.q.UpsertReviewCostBudget(ctx, sqlcgen.UpsertReviewCostBudgetParams{
+		RepoFullName:             repoFullName,
+		ReviewCostBudgetLightUsd: Float64ToNumeric(lightUSD),
+		ReviewCostBudgetDeepUsd:  Float64ToNumeric(deepUSD),
 	})
 }
 

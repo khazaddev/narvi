@@ -76,8 +76,8 @@ func (rig *decisionInboxTestRig) seedAutoApprovedVerdict(ctx context.Context, t 
 		ProposedShippable: review.ProposedShippableAuto,
 		FilesChanged:      3,
 	}
-	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
-	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, ""); err != nil {
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
+	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, prNumber, headSHA, pgtype.UUID{}, verdict, reviewpost.Digest{Summary: "Test-seeded verdict."}, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
 		t.Fatalf("seed auto-approved review_verdicts row for %s#%d: %v", repoFullName, prNumber, err)
 	}
 }

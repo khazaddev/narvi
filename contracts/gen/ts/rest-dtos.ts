@@ -411,7 +411,7 @@ export interface PlanActionResponse {
   turnId: string | null;
 }
 /**
- * Request body for POST /sessions/:id/review/verdict (Step 47, 'server-side verdict', §8.2/§5.2) -- the verdict-posting tool's own typed-fields call, validated server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself, which this endpoint always recomputes server-side (review.ComputeShippable) and NEVER accepts from a caller -- see that package's own Verdict.Shippable doc comment (verdict.go) for why.
+ * Request body for POST /sessions/:id/review/verdict (Step 47, 'server-side verdict', §8.2/§5.2) -- the verdict-posting tool's own typed-fields call, validated server-side (internal/domain/reviewpost.ValidateVerdictInput). Mirrors internal/domain/review.Verdict's own fields exactly, EXCEPT Shippable itself, which this endpoint always recomputes server-side (review.ComputeShippable) and NEVER accepts from a caller -- see that package's own Verdict.Shippable doc comment (verdict.go) for why. factCheck/factCheckKilled and counterReview are Step 69's own additions (§26.4/§26.6, 'review deep path: adversarial counter-review + readout measurement') -- see those two properties' own doc comments below.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "PostReviewVerdictRequest".
@@ -453,6 +453,18 @@ export interface PostReviewVerdictRequest {
    */
   findings?: PostedFinding[];
   digest: Digest;
+  /**
+   * Step 69's own addition (§26.6, 'diff-only fact-check pass, both paths'): whether the primary reviewer's orchestration spawned the diff-only fact-check sub-task (§7.1's engine-native fan-out, no tool access) before posting this verdict. Matches internal/domain/reviewpost.FactCheckStatus's own two values exactly. REQUIRED UNCONDITIONALLY -- both paths, not merely deep, since the fact-check pass itself runs on every review regardless of depth. Never an input to the server-computed Shippable -- 'skipped' can only mean published findings were not additionally pruned of provably-wrong ones, never that a real defect went unverified (the deliberate, load-bearing difference from counterReview below).
+   */
+  factCheck: 'done' | 'skipped';
+  /**
+   * Step 69's own addition (§26.6): the count of findings the fact-check pass actually removed as provably wrong from the diff alone. REQUIRED UNCONDITIONALLY, alongside factCheck above -- MUST be 0 when factCheck is 'skipped' (a skipped pass, by construction, removed nothing; internal/domain/reviewpost.ValidateVerdictInput's own ErrFactCheckKilledOnSkip rejects any other combination).
+   */
+  factCheckKilled: number;
+  /**
+   * Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'): whether the primary reviewer's orchestration spawned and adjudicated the counter-reviewer sub-task (§7.1's engine-native fan-out) before posting this verdict. One of 'done'/'skipped' when present, matching internal/domain/review.CounterReviewStatus's own two values -- deliberately modeled as an unconstrained nullable string here, not a schema-level enum (mirroring PostedFinding.sentinelKind's own identical precedent immediately above, itself mirroring UpdateMemberRoleRequest.role's precedent): null/absent is legal on every path (the light path never runs a counter-reviewer at all, §26.9), and the closed vocabulary plus the CONDITIONAL requirement (application-level REQUIRED whenever this session's own server-resolved review-depth is 'deep') are both enforced at the application layer (internal/domain/reviewpost.ValidateVerdictInput's own ErrInvalidCounterReview), which this JSON Schema cannot express (review-depth lives on the turn, not on this payload -- mirrors digest.archDecisions/stackRisks/unverifiedLimits' own identical conditional-requirement shape, Step 68). 'skipped' raises the server-computed Shippable floor to needs_human (review.CounterReviewFloor) -- the deliberate, load-bearing difference from factCheck above, which never raises anything.
+   */
+  counterReview?: string | null;
 }
 /**
  * One finding's own typed fields, as posted by the verdict-posting tool call (Step 48) -- NEVER carries an identity hash (server-computed, internal/domain/reviewpost.ComputeFindingIdentity, never client-supplied -- the same 'don't trust the model with anything authoritative' discipline as PostReviewVerdictRequest.proposedShippable).
@@ -515,6 +527,10 @@ export interface Digest {
    * Step 67's own addition (§26.2): the agent's OWN optional rewrite proposal for the pull request's body -- 'the agent MAY rewrite the PR body'. OPTIONAL, not validation-enforced: most reviews propose no rewrite at all. Rendered as a suggestion in the digest for every PR regardless of authorship; ALSO delivered as a real write only for a Narvi-authored PR with this repo's own descriptionAutofix flag on, both checks re-verified server-side at delivery time (never trusted from this payload alone). The PR's title is never rewritten automatically, in either case -- this field carries body content only.
    */
   proposedBody?: string | null;
+  /**
+   * Step 69's own addition (§26.4, 'the deep path: adversarial counter-review'): free-text prose naming where the primary reviewer's own findings/digest and the counter-reviewer sub-task's own adjudication genuinely disagreed -- 'inter-agent disagreement is precisely the signal that a human must decide'. OPTIONAL, not validation-enforced, on every path -- most deep reviews produce no disagreement at all, and there is no counter-reviewer on the light path to disagree with anything (§26.9).
+   */
+  contestedPoints?: string | null;
 }
 /**
  * One structural decision the diff makes (Digest.archDecisions, §26.1's own 'Architecture choices' section): what was decided, the alternative implicitly rejected, and conformance to the repo's own conventions (its agent instructions file -- CLAUDE.md/AGENTS.md -- and its established patterns, already visible to the reviewing agent via its own sandbox checkout, never fetched or injected by this endpoint). No individual field here is REQUIRED at the schema level (no minLength, no 'required' array on THIS object) -- internal/domain/reviewpost's own doc comment (digest.go) is explicit that a submitted-but-incomplete ArchDecision is rendered honestly (its blank field(s) render as empty, never silently dropped) rather than rejected. Digest.archDecisions as a WHOLE, however, is application-level required to contain at least one entry with real, non-blank content in ANY of these three fields whenever this session's own review-depth is 'deep' (Step 68, §26.3, now implemented) -- see Digest.archDecisions' own description, and internal/domain/reviewpost.ValidateVerdictInput's own hasNonBlankArchDecision check, for the exact rule this per-object schema cannot itself express.
@@ -718,6 +734,14 @@ export interface RepoSettings {
    * Step 68, §26.3: this repo's own additional deep-routing glob patterns, layered on top of (never replacing) the engine's own fixed sensitive-glob set (migrations/auth/infra-as-code/CI-workflow). Null means 'no repo-specific deep paths configured'. Gated by authz.ActionConfigureReviewDepth (admin only, same row as reviewDepthMode).
    */
   reviewDepthDeepPaths: string[] | null;
+  /**
+   * Step 69, §26.7: this repo's own light-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $0.50), never a magic sentinel number. Gated by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6, same row as reviewDepthMode) -- arming a non-default ceiling changes the dollar figure STATED to the reviewing agent's own prompt (internal/domain/review's own subAgentOrchestrationInstructions), which self-governs against it: §26.7 is a self-reported, best-effort check, not a server-enforced gate (this control plane has no channel to intervene inside an already-dispatched turn) -- reviewtriage.ShouldSkipOptionalPass, the pure function this ceiling would feed a real enforcement path, is not yet called by any production path. The same 'changes what an unattended review is TOLD, admin-gated' reasoning every sibling toggle in this row already carries, worded here to avoid overstating this as an active runtime gate.
+   */
+  reviewCostBudgetLightUsd: number | null;
+  /**
+   * Step 69, §26.7: this repo's own deep-path per-review cost ceiling, in USD. Null means 'not configured -- the engine's own built-in default applies' (internal/domain/reviewtriage.DefaultCostBudget, $5.00). Gated by authz.ActionConfigureReviewCostBudget, same row as reviewCostBudgetLightUsd -- see that field's own description for why this is a self-governed figure the agent reads, not a server-enforced spend cap.
+   */
+  reviewCostBudgetDeepUsd: number | null;
 }
 /**
  * Request body for PUT /api/repos/{owner}/{repo}/settings -- always the full, current desired state (never a partial patch), matching RepoSettings' own shape. sentinelAutofixEnabled (Step 48) is deliberately OPTIONAL, not required, exactly like every other additive field this schema has ever grown (e.g. CreateSessionRequest.buildModelId) -- an old caller that only ever knew about blockOnHighRisk keeps compiling/working unchanged; PutRepoSettings' own 'always the full desired state' semantics mean an old caller that omits this key simply (re)sets it to its own safe default (false) alongside whatever it DOES specify, never a partial-patch surprise. Step 62's own §21.2 fields (autoMergeEnabled/maxAutoApproveFilesChanged/sensitiveBlastRadiusTags) are DELIBERATELY NOT on this shared request: this endpoint's own handler requires EVERY permission its fields collectively need (PutRepoSettings' own doc comment, httpapi/reposettings.go), which would force a maintainer authorized only for the auto-approval-config row (§13.3 row 5) through this endpoint's admin-only gates (row 6) too -- see UpdateAutoApprovalSettingsRequest/UpdateAutoMergeToggleRequest below, each its own endpoint with its own single, correctly-scoped gate.
@@ -790,7 +814,23 @@ export interface UpdateReviewDepthConfigRequest {
   deepPaths: string[] | null;
 }
 /**
- * GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.
+ * Request body for PUT /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7) -- (re)configures this repo's own per-path cost ceilings. A SEPARATE endpoint, gated SOLELY by authz.ActionConfigureReviewCostBudget (admin only, §13.3 row 6) -- see UpdateRepoSettingsRequest's own doc comment for why this is not folded into the shared PUT /settings endpoint. Always the full, current desired state for these two fields specifically (never a partial patch).
+ *
+ * This interface was referenced by `RestDtos`'s JSON-Schema
+ * via the `definition` "UpdateReviewCostBudgetRequest".
+ */
+export interface UpdateReviewCostBudgetRequest {
+  /**
+   * Null means 'use the engine's own built-in default ($0.50)'. Validated application-side as strictly POSITIVE -- an explicit 0 is rejected 400, never silently stored: internal/domain/reviewtriage.CostBudget's own zero value means 'no ceiling configured', so a stored 0 here would collide with that sentinel and resolve to unlimited spend, the opposite of an explicit-zero operator's likely intent.
+   */
+  lightUsd: number | null;
+  /**
+   * Null means 'use the engine's own built-in default ($5.00)'. Validated application-side as strictly positive, the SAME 'zero collides with the unconfigured sentinel' reasoning as lightUsd above.
+   */
+  deepUsd: number | null;
+}
+/**
+ * GET /api/repos/{owner}/{repo}/review-analytics response body (Step 62, §21.1) -- the three analytics rollups named in that section's own scope, each bounded to platform.Timeouts.ReviewVerdictAnalyticsWindow (never an unbounded scan) and carrying its OWN independent 'not yet computed' sentinel: 'a repo with a real 0% dismiss rate and a repo with no data yet must never render identically' (§21.1). Step 69, §26.5 adds a fourth rollup, digestContestationRatePercent -- the 'digest precision (contestation rate)' KPI that section names, the SAME 'own independent not-yet-computed sentinel' discipline as the original three. Gated by the existing authz.ActionViewAnalytics (§13.3 row 1) -- every role including viewer.
  *
  * This interface was referenced by `RestDtos`'s JSON-Schema
  * via the `definition` "ReviewAnalytics".
@@ -824,6 +864,14 @@ export interface ReviewAnalytics {
    * Every reviewpost.FindingStatus present in the window, sorted by count descending then status ascending. Null iff findingOutcomesComputed is false -- like timeseries above, a real, computed result can never itself be an empty array (every counted status is non-empty by construction), so null is unambiguous here too.
    */
   findingOutcomes: ReviewAnalyticsFindingStatusCount[] | null;
+  /**
+   * Step 69, §26.5: false means zero deep-path verdicts have been posted for this repo within the window (only a deep-path review ever produces an arch recap at all, §26.4/§26.9) -- distinct from a real, computed 0% rate, the SAME 'not yet computed' sentinel discipline as RepoSettings.contradictionRateComputed (reposettings.go).
+   */
+  digestContestationRateComputed: boolean;
+  /**
+   * Null iff digestContestationRateComputed is false. The fraction of this window's deep-path arch-recap digest sections a maintainer contested (via the §26.5 'arch recap wrong: <reason>' command), as a 0-100 percentage -- §26.5's own 'digest precision (contestation rate)' KPI.
+   */
+  digestContestationRatePercent: number | null;
 }
 /**
  * One UTC calendar day's own Shippable-classification counts -- ReviewAnalytics.timeseries' own per-day row (internal/domain/reviewverdict.DayBucket).

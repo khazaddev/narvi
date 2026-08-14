@@ -525,3 +525,42 @@ func TestRenderVerdictComment_EmptyProposedBodyOmitsSuggestionSection(t *testing
 		t.Errorf("RenderVerdictComment() rendered a \"Suggested PR description\" section for an empty ProposedBody:\n%s", got)
 	}
 }
+
+// TestRenderVerdictComment_ContestedPointsRendersSection proves §26.4/Step
+// 69's own "Contested points" digest section renders, visibly, when
+// digest.ContestedPoints is non-blank -- the deep path's inter-agent
+// disagreement narrative reaching the human it exists for, rather than
+// being captured and silently dropped at render time.
+func TestRenderVerdictComment_ContestedPointsRendersSection(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{
+		Summary:         "No changes of note.",
+		ContestedPoints: "Primary flagged the retry loop as unbounded; counter-review found an explicit max-attempts guard the primary missed.",
+	}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if !strings.Contains(got, "### Contested points") {
+		t.Errorf("RenderVerdictComment() missing the \"### Contested points\" heading in:\n%s", got)
+	}
+	if !strings.Contains(got, digest.ContestedPoints) {
+		t.Errorf("RenderVerdictComment() missing the ContestedPoints text in:\n%s", got)
+	}
+}
+
+// TestRenderVerdictComment_EmptyContestedPointsOmitsSection proves the
+// common case (no disagreement, ContestedPoints empty -- every light-path
+// review, and most deep-path reviews too) never renders a dangling
+// "Contested points" heading with nothing under it -- mirroring
+// TestRenderVerdictComment_EmptyProposedBodyOmitsSuggestionSection's own
+// identical treatment of ProposedBody.
+func TestRenderVerdictComment_EmptyContestedPointsOmitsSection(t *testing.T) {
+	v := baseVerdict()
+	digest := reviewpost.Digest{Summary: "No changes of note."}
+
+	got := reviewpost.RenderVerdictComment(v, nil, digest, "Summary.", "narvi-bot", reviewpost.LabelLowRisk)
+
+	if strings.Contains(got, "Contested points") {
+		t.Errorf("RenderVerdictComment() rendered a \"Contested points\" section for an empty ContestedPoints:\n%s", got)
+	}
+}

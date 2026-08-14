@@ -1,0 +1,101 @@
+package reviewpost
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
+)
+
+// DigestSection names one section of the merge-readout digest a maintainer
+// can contest/confirm (§26.5, Step 69, "measuring the readout"). A closed,
+// small vocabulary -- unlike Finding's file-path-keyed identity
+// (finding.go), a digest section is not per-file, so this is the whole
+// "what" a piece of feedback is about.
+type DigestSection string
+
+// The digest sections a maintainer can currently give feedback on. Only
+// DigestSectionArchRecap has a dedicated capture COMMAND today (§26.5's
+// own "arch recap wrong: <reason>", mirroring Step 63's "false positive:
+// <reason>" exactly) -- the other four are named here so the read model
+// (per-section contest/confirm counts) and ComputeDigestSectionIdentity
+// below are never hard-coded to just one section, even though v1 ships
+// only one capture path onto them. DigestSectionContestedPoints (Step 69,
+// §26.4/§26.5) names the "Contested points" section (rendercomment.go's
+// own renderContestedPoints) so §26.5's per-section contest mechanism can
+// address it too, the same "named for the read model even without its own
+// capture command yet" treatment the pre-existing three already get.
+const (
+	DigestSectionSummary          DigestSection = "summary"
+	DigestSectionArchRecap        DigestSection = "arch_recap"
+	DigestSectionStackRisks       DigestSection = "stack_risks"
+	DigestSectionUnverifiedLimits DigestSection = "unverified_limits"
+	DigestSectionContestedPoints  DigestSection = "contested_points"
+)
+
+// digestSectionIdentitySeparator mirrors findingIdentitySeparator's own
+// choice exactly (finding.go) -- a NUL byte can never appear in a section
+// name or its own rendered text, so there is no ambiguity between e.g.
+// section="a", text="b" and section="a\x00b", text="" the way a plain
+// delimiter could introduce.
+const digestSectionIdentitySeparator = "\x00"
+
+// ComputeDigestSectionIdentity is §26.5's own extension of §22.1's
+// content-hash identity discipline (ComputeFindingIdentity, finding.go)
+// from findings to digest sections: "each contest reconciled by a content
+// hash of the digest section's own persisted text... never by section
+// index or position, which would suffer the exact churn-fragility problem
+// §22.1 already solved for findings: a PR update that merely reorders or
+// rewords an unrelated section must never make an already-contested
+// ArchDecision read as a new one."
+//
+// A sha256 hash over a canonical join of exactly two normalized
+// components: section (the fixed DigestSection vocabulary above -- never
+// normalized further, it is already a closed set of ASCII literals) and
+// text (the section's own persisted content, normalized via
+// normalizeDigestSectionText below -- the SAME whitespace-collapse+casefold
+// treatment normalizeFindingDescription already applies to a finding's own
+// description, for the identical reason: this survives WHITESPACE-level
+// regeneration of the same underlying recap, not PARAPHRASE-level, an
+// honest, named residual matching ComputeFindingIdentity's own).
+//
+// Server-computed, ALWAYS -- never accepted from a caller, the same
+// "don't trust the model with anything authoritative" discipline
+// ComputeFindingIdentity itself already establishes.
+func ComputeDigestSectionIdentity(section DigestSection, text string) string {
+	joined := string(section) + digestSectionIdentitySeparator + normalizeDigestSectionText(text)
+	sum := sha256.Sum256([]byte(joined))
+	return hex.EncodeToString(sum[:])
+}
+
+// normalizeDigestSectionText mirrors normalizeFindingDescription (finding.go)
+// exactly -- trims, casefolds, and collapses every run of whitespace to a
+// single space -- so a digest section re-rendered with only whitespace-
+// level differences (e.g. a trailing newline, doubled spaces) still hashes
+// identically across two different verdicts on the same PR.
+func normalizeDigestSectionText(text string) string {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	return strings.Join(strings.Fields(lower), " ")
+}
+
+// ArchRecapText renders decisions (a verdict's own Digest.ArchDecisions)
+// into the single canonical string ComputeDigestSectionIdentity hashes
+// for DigestSectionArchRecap (§26.5's own "arch recap wrong: <reason>"
+// contest command, internal/domain/archrecap) -- the RAW structured
+// content (Decision/RejectedAlternative/ConventionConformance), never the
+// rendered markdown comment (rendercomment.go): a purely decorative
+// rendering change (bullet style, heading text) must never make an
+// already-contested recap read as a new one, which hashing the rendered
+// markdown instead of this canonical join would risk. One line per
+// decision, each decision's own three fields pipe-joined, in the SAME
+// order Decision/RejectedAlternative/ConventionConformance already
+// appear on the ArchDecision struct itself -- ComputeDigestSectionIdentity's
+// own normalization (whitespace-collapse + casefold) is what actually
+// makes the result stable across insignificant whitespace, so this
+// function itself does no normalization of its own.
+func ArchRecapText(decisions []ArchDecision) string {
+	lines := make([]string, len(decisions))
+	for i, d := range decisions {
+		lines[i] = d.Decision + "|" + d.RejectedAlternative + "|" + d.ConventionConformance
+	}
+	return strings.Join(lines, "\n")
+}

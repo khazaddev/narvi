@@ -7,6 +7,7 @@ import (
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
 	"github.com/khazaddev/narvi/internal/domain/review"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // TestRenderTurnPrompt is a table-driven test over every branch
@@ -376,6 +377,15 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		// ErrInvalidDescriptionAdequacy/ErrEmptyAdequacyExplanation.
 		`"descriptionAdequacy"`, string(restdtos.DigestDescriptionAdequacyOk), string(restdtos.DigestDescriptionAdequacyDrift), string(restdtos.DigestDescriptionAdequacyMisleading),
 		`"adequacyExplanation"`, `"proposedBody"`,
+		// Step 69 (§26.4/§26.6): "factCheck"/"factCheckKilled" (REQUIRED,
+		// both paths) and "counterReview" (deep-path only) were completely
+		// absent from this template before this Step -- an agent following
+		// only the pre-Step-69 template could never emit them, and
+		// PostReviewVerdictRequest.factCheck/factCheckKilled are now
+		// REQUIRED, so every such call would be rejected 400 by
+		// reviewpost.ValidateVerdictInput's own ErrInvalidFactCheck.
+		`"factCheck"`, string(restdtos.PostReviewVerdictRequestFactCheckDone), string(restdtos.PostReviewVerdictRequestFactCheckSkipped),
+		`"factCheckKilled"`, `"counterReview"`, `"contestedPoints"`,
 	}
 	for _, want := range fieldsAndEnums {
 		if !strings.Contains(got, want) {
@@ -405,10 +415,17 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 	*unverifiedLimits = "example unverified limits"
 	proposedBody := restdtos.DigestProposedBody(new(string))
 	*proposedBody = "example proposed body"
+	contestedPoints := restdtos.DigestContestedPoints(new(string))
+	*contestedPoints = "example contested points"
+	counterReview := restdtos.PostReviewVerdictRequestCounterReview(new(string))
+	*counterReview = string(restdtos.PostReviewVerdictRequestFactCheckDone)
 	example := restdtos.PostReviewVerdictRequest{
-		BlastRadius:  []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
-		DocsDrift:    restdtos.PostReviewVerdictRequestDocsDriftNone,
-		FilesChanged: 1,
+		BlastRadius:     []restdtos.PostReviewVerdictRequestBlastRadiusElem{restdtos.PostReviewVerdictRequestBlastRadiusElemAuth},
+		DocsDrift:       restdtos.PostReviewVerdictRequestDocsDriftNone,
+		FilesChanged:    1,
+		FactCheck:       restdtos.PostReviewVerdictRequestFactCheckDone,
+		FactCheckKilled: 2,
+		CounterReview:   counterReview,
 		Findings: []restdtos.PostedFinding{
 			{
 				Description:  "example finding",
@@ -433,6 +450,7 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 			DescriptionAdequacy: restdtos.DigestDescriptionAdequacyOk,
 			AdequacyExplanation: "example adequacy explanation",
 			ProposedBody:        proposedBody,
+			ContestedPoints:     contestedPoints,
 		},
 	}
 	raw, err := json.Marshal(example)
@@ -443,9 +461,283 @@ func TestRenderTurnPrompt_VerdictToolJSONShapeMatchesContract(t *testing.T) {
 		`"riskLevel"`, `"premise"`, `"filesChanged"`, `"testsCoverage"`, `"docsDrift"`, `"proposedShippable"`, `"blastRadius"`, `"summary"`, `"findings"`,
 		`"digest"`, `"archDecisions"`, `"decision"`, `"rejectedAlternative"`, `"conventionConformance"`, `"stackRisks"`, `"unverifiedLimits"`,
 		`"descriptionAdequacy"`, `"adequacyExplanation"`, `"proposedBody"`,
+		`"factCheck"`, `"factCheckKilled"`, `"counterReview"`, `"contestedPoints"`,
 	} {
 		if !strings.Contains(string(raw), wantKey) {
 			t.Errorf("marshaled restdtos.PostReviewVerdictRequest = %s, want it to contain key %q", raw, wantKey)
 		}
+	}
+}
+
+// TestRenderTurnPrompt_FactCheckOrchestrationOnBothPaths is §26.6's own
+// pin: "runs on the light path too" -- the fact-check sub-task's own
+// orchestration guidance (naming review.FactCheckAgentName as the
+// "subagent_type" to spawn) must appear on EVERY rendered prompt,
+// regardless of ctx.DeepPath.
+func TestRenderTurnPrompt_FactCheckOrchestrationOnBothPaths(t *testing.T) {
+	t.Parallel()
+
+	for _, deep := range []bool{false, true} {
+		got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: deep})
+		if !strings.Contains(got, review.FactCheckAgentName) {
+			t.Errorf("DeepPath=%v: prompt does not mention %q, want the fact-check sub-task orchestrated on both paths", deep, review.FactCheckAgentName)
+		}
+	}
+}
+
+// TestRenderTurnPrompt_ArchitectureScribeAndCounterReviewerOnlyOnDeepPath
+// is §26.9's own invariant, stated for the orchestration guidance
+// specifically: "the light path's behavior remains exactly today's review
+// ... no scribe, no counter-reviewer on light" -- neither
+// review.ArchitectureScribeAgentName nor review.CounterReviewerAgentName
+// may appear anywhere in a light-path prompt.
+func TestRenderTurnPrompt_ArchitectureScribeAndCounterReviewerOnlyOnDeepPath(t *testing.T) {
+	t.Parallel()
+
+	light := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false})
+	if strings.Contains(light, review.ArchitectureScribeAgentName) {
+		t.Errorf("light-path prompt mentions %q, want it absent entirely (§26.9: no scribe on light)", review.ArchitectureScribeAgentName)
+	}
+	if strings.Contains(light, review.CounterReviewerAgentName) {
+		t.Errorf("light-path prompt mentions %q, want it absent entirely (§26.9: no counter-reviewer on light)", review.CounterReviewerAgentName)
+	}
+
+	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+	if !strings.Contains(deep, review.ArchitectureScribeAgentName) {
+		t.Errorf("deep-path prompt does not mention %q, want architecture-scribe orchestrated", review.ArchitectureScribeAgentName)
+	}
+	if !strings.Contains(deep, review.CounterReviewerAgentName) {
+		t.Errorf("deep-path prompt does not mention %q, want counter-reviewer orchestrated", review.CounterReviewerAgentName)
+	}
+}
+
+// TestRenderTurnPrompt_FunnelOrdering_FactCheckBeforeCounterReview is
+// §26.6's own explicit pin, one of this Step's own named mutation-test
+// targets: "fact-check running before counter-review in the funnel" --
+// proven here as a textual ordering property of the rendered deep-path
+// prompt itself, since that ordering IS the mechanism this system has for
+// conveying the funnel to the agent (§7's own anti-corruption-layer
+// boundary: the control plane cannot itself sequence sub-task dispatch
+// inside an already-running turn, see subAgentOrchestrationInstructions'
+// own doc comment for the full "why"). A mutation that reordered the two
+// sections in context.go's own subAgentOrchestrationInstructions would
+// fail this test.
+func TestRenderTurnPrompt_FunnelOrdering_FactCheckBeforeCounterReview(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+
+	factCheckIdx := strings.Index(got, review.FactCheckAgentName)
+	counterReviewerIdx := strings.Index(got, review.CounterReviewerAgentName)
+	if factCheckIdx < 0 {
+		t.Fatalf("prompt does not mention %q at all", review.FactCheckAgentName)
+	}
+	if counterReviewerIdx < 0 {
+		t.Fatalf("prompt does not mention %q at all", review.CounterReviewerAgentName)
+	}
+	if factCheckIdx >= counterReviewerIdx {
+		t.Errorf("fact-check (subagent_type %q) is not instructed BEFORE counter-review (subagent_type %q) in the rendered prompt -- funnel ordering violated:\n%s", review.FactCheckAgentName, review.CounterReviewerAgentName, got)
+	}
+}
+
+// TestRenderTurnPrompt_OrchestrationGuidancePrecedesVerdictToolInstructions
+// proves the orchestration guidance (subAgentOrchestrationInstructions)
+// renders BEFORE the verdict-posting JSON-body instructions
+// (verdictToolInstructions) in the FINAL assembled prompt -- an agent must
+// learn HOW to gather/adjudicate findings before it is told the shape to
+// report them in. Uses the POST line (present in every rendered prompt,
+// verdictToolInstructions' own unconditional text) as the verdict-tool
+// section's own marker.
+func TestRenderTurnPrompt_OrchestrationGuidancePrecedesVerdictToolInstructions(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+
+	factCheckIdx := strings.Index(got, review.FactCheckAgentName)
+	postIdx := strings.Index(got, "POST "+review.VerdictToolURLPlaceholder)
+	if factCheckIdx < 0 {
+		t.Fatalf("prompt does not mention %q at all", review.FactCheckAgentName)
+	}
+	if postIdx < 0 {
+		t.Fatalf("prompt does not contain the verdict-posting tool's own POST line")
+	}
+	if factCheckIdx >= postIdx {
+		t.Errorf("orchestration guidance does not precede the verdict-posting instructions:\n%s", got)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_RenderedOnlyWhenConfigured proves
+// §26.7's own ReviewCostBudgetUSD threading: a zero (unconfigured) ceiling
+// renders NO budget guidance at all -- never a fabricated "$0.00" ceiling,
+// which would read to the agent as "skip every optional pass" (this
+// field's own doc comment, context.go). A positive ceiling renders the
+// dollar figure, formatted to two decimals.
+func TestRenderTurnPrompt_CostBudget_RenderedOnlyWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	unconfigured := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 0})
+	if strings.Contains(unconfigured, "Cost budget:") {
+		t.Errorf("prompt with ReviewCostBudgetUSD=0 mentions a cost budget, want none at all:\n%s", unconfigured)
+	}
+
+	configured := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5})
+	if !strings.Contains(configured, "Cost budget:") {
+		t.Errorf("prompt with ReviewCostBudgetUSD=5 does not mention a cost budget at all:\n%s", configured)
+	}
+	if !strings.Contains(configured, "$5.00") {
+		t.Errorf("prompt with ReviewCostBudgetUSD=5 does not render \"$5.00\":\n%s", configured)
+	}
+
+	lightConfigured := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false, ReviewCostBudgetUSD: 0.5})
+	if !strings.Contains(lightConfigured, "$0.50") {
+		t.Errorf("light-path prompt with ReviewCostBudgetUSD=0.5 does not render \"$0.50\":\n%s", lightConfigured)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_NeverGatesThePrimaryPass is §26.7's own
+// explicit pin: "the budget gates optional passes only, NEVER the primary
+// findings-producing pass". The rendered cost-budget guidance must say so
+// in terms an agent reading it cannot miss.
+func TestRenderTurnPrompt_CostBudget_NeverGatesThePrimaryPass(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5})
+	if !strings.Contains(got, "never before your own primary findings pass, which always runs regardless of cost") {
+		t.Errorf("cost-budget guidance does not state the primary pass is exempt from the budget gate:\n%s", got)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_CounterReviewClausesOnlyOnDeep is B6's
+// own regression test: the cost-budget paragraph's own fact-check-vs-
+// counter-review tradeoff sentence ("err toward running fact-check ...
+// before skipping counter-review") and the "counterReview" field-name
+// mention in the "report the affected field(s)" clause both reference a
+// sub-task light path never runs at all (§26.9) -- nonsense there, since
+// fact-check is light's own ONLY optional pass, with nothing to weigh it
+// against. Both must render on deep, and NEITHER must render on light,
+// even though light still renders the rest of the cost-budget paragraph
+// (TestRenderTurnPrompt_CostBudget_RenderedOnlyWhenConfigured above
+// already pins that much).
+func TestRenderTurnPrompt_CostBudget_CounterReviewClausesOnlyOnDeep(t *testing.T) {
+	t.Parallel()
+
+	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5})
+	if !strings.Contains(deep, "err toward running fact-check") {
+		t.Errorf("deep-path cost-budget guidance is missing the fact-check-vs-counter-review tradeoff sentence:\n%s", deep)
+	}
+	if !strings.Contains(deep, "\"factCheck\"/\"counterReview\"") {
+		t.Errorf("deep-path cost-budget guidance does not list counterReview among the fields a skip may be reported on:\n%s", deep)
+	}
+
+	light := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false, ReviewCostBudgetUSD: 0.5})
+	budgetIdx := strings.Index(light, "Cost budget:")
+	if budgetIdx < 0 {
+		t.Fatalf("light-path prompt does not render the cost-budget paragraph at all:\n%s", light)
+	}
+	// Isolate just the cost-budget paragraph (up to the next blank-line
+	// break) -- "counterReview" legitimately appears ELSEWHERE in a
+	// light-path prompt too (the JSON-body instructions telling the agent
+	// to omit that field entirely), so a whole-prompt substring check
+	// would false-negative against that unrelated, correct mention.
+	budgetParagraph := light[budgetIdx:]
+	if end := strings.Index(budgetParagraph, "\n\n"); end >= 0 {
+		budgetParagraph = budgetParagraph[:end]
+	}
+	if !strings.Contains(budgetParagraph, "\"factCheck\"") {
+		t.Fatalf("light-path cost-budget paragraph does not mention \"factCheck\" at all:\n%s", budgetParagraph)
+	}
+	if strings.Contains(budgetParagraph, "err toward running fact-check") {
+		t.Errorf("light-path cost-budget paragraph renders the fact-check-vs-counter-review tradeoff sentence, which is nonsense on a path with no counter-review sub-task at all:\n%s", budgetParagraph)
+	}
+	if strings.Contains(budgetParagraph, "counterReview") {
+		t.Errorf("light-path cost-budget paragraph mentions \"counterReview\" at all, want it omitted entirely (light never runs that sub-task, §26.9):\n%s", budgetParagraph)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_SafetyMarginDerivedFromConstant is B5's
+// own regression test: the rendered "a rough X% margin" figure must be
+// genuinely DERIVED from PreFetchedContext.CostBudgetSafetyMarginPercent
+// (which every real caller sets from the exported reviewtriage.
+// CostBudgetSafetyMargin constant, costbudget.go), not a second,
+// independently hand-typed English literal that could silently
+// desynchronize if that constant ever changes. Sets an off-the-default
+// percentage (55, never reviewtriage.CostBudgetSafetyMargin's own actual
+// 80%) and asserts THAT figure -- not 80 -- appears in the rendered text,
+// which a test that merely checked for "80%" (true both before and after
+// a broken/no-op threading change) could never distinguish.
+func TestRenderTurnPrompt_CostBudget_SafetyMarginDerivedFromConstant(t *testing.T) {
+	t.Parallel()
+
+	const offDefaultPercent = 55
+	if offDefaultPercent == int(reviewtriage.CostBudgetSafetyMargin*100) {
+		t.Fatalf("test setup: offDefaultPercent (%d) must differ from reviewtriage.CostBudgetSafetyMargin's own real value (%d), or this test cannot distinguish genuine threading from a hardcoded fallback", offDefaultPercent, int(reviewtriage.CostBudgetSafetyMargin*100))
+	}
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5, CostBudgetSafetyMarginPercent: offDefaultPercent})
+	if !strings.Contains(got, "a rough 55% margin") {
+		t.Errorf("prompt with CostBudgetSafetyMarginPercent=55 does not render %q:\n%s", "a rough 55% margin", got)
+	}
+	if strings.Contains(got, "a rough 80% margin") {
+		t.Errorf("prompt with CostBudgetSafetyMarginPercent=55 still renders the OLD hardcoded %q text -- the threading is a no-op:\n%s", "a rough 80% margin", got)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_SafetyMarginFallsBackWhenUnset proves a
+// caller that predates the B5 fix (CostBudgetSafetyMarginPercent left at
+// its own zero value) still renders a plausible figure -- this Step's own
+// proposed 80%, matching reviewtriage.CostBudgetSafetyMargin's own real
+// value today -- never a nonsensical "a rough 0% margin", which would
+// read to the agent as "skip literally everything immediately".
+func TestRenderTurnPrompt_CostBudget_SafetyMarginFallsBackWhenUnset(t *testing.T) {
+	t.Parallel()
+
+	got := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5})
+	if !strings.Contains(got, "a rough 80% margin") {
+		t.Errorf("prompt with CostBudgetSafetyMarginPercent unset does not fall back to %q:\n%s", "a rough 80% margin", got)
+	}
+}
+
+// TestRenderTurnPrompt_CostBudget_GoldenParagraph is B8's own golden-pin
+// test: the FULL, exact cost-budget paragraph text, both light and deep,
+// asserted verbatim rather than via scattered substring checks -- so ANY
+// future edit to this prompt (a rewording, a reordering, a dropped
+// clause) shows up as an explicit, reviewable diff in this test's own
+// failure output, never a silent behavior change an agent's own prompt
+// quietly drifts through. Deliberately narrow (a single scenario per
+// path, not a table) -- a golden test's own value is in pinning the EXACT
+// current text, not in covering every input combination (the other tests
+// in this file already do that).
+func TestRenderTurnPrompt_CostBudget_GoldenParagraph(t *testing.T) {
+	t.Parallel()
+
+	deepGot := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true, ReviewCostBudgetUSD: 5, CostBudgetSafetyMarginPercent: 80})
+	deepWant := "\nCost budget: this review has an approximate ceiling of $5.00 for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\"/\"counterReview\") as \"skipped\" with the reason noted in your own free-text summary.\nThis is a judgment call on your part, not something this system measures for you mid-review -- err toward running fact-check (cheap, and it only ever prunes noise) before skipping counter-review (the more expensive pass) if you must choose.\n"
+	if !strings.Contains(deepGot, deepWant) {
+		t.Errorf("deep-path cost-budget paragraph =\n%s\nwant it to contain, verbatim:\n%s", deepGot, deepWant)
+	}
+
+	lightGot := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false, ReviewCostBudgetUSD: 0.5, CostBudgetSafetyMarginPercent: 80})
+	lightWant := "\nCost budget: this review has an approximate ceiling of $0.50 for the sub-tasks above, combined with your own main line of work. Before spawning EACH optional sub-task in the list above (never before your own primary findings pass, which always runs regardless of cost), use your own best judgment of how much of that ceiling this review has likely already consumed; if you judge yourself already at or near it (a rough 80% margin), SKIP the remaining optional sub-task(s) rather than spawning them, and report the affected field(s) (\"factCheck\") as \"skipped\" with the reason noted in your own free-text summary.\n"
+	if !strings.Contains(lightGot, lightWant) {
+		t.Errorf("light-path cost-budget paragraph =\n%s\nwant it to contain, verbatim:\n%s", lightGot, lightWant)
+	}
+}
+
+// TestRenderTurnPrompt_CounterReviewOmittedOnLightRequiredOnDeep is §26.4's
+// own field-level pin, one layer up from reviewpost.ValidateVerdictInput's
+// own equivalent check: the JSON-body instructions must tell a light-path
+// agent to OMIT "counterReview" entirely, and a deep-path agent that it is
+// REQUIRED.
+func TestRenderTurnPrompt_CounterReviewOmittedOnLightRequiredOnDeep(t *testing.T) {
+	t.Parallel()
+
+	light := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: false})
+	if !strings.Contains(light, `"counterReview" is OMITTED entirely on this light-path review`) {
+		t.Errorf("light-path prompt does not instruct omitting counterReview:\n%s", light)
+	}
+
+	deep := review.RenderTurnPrompt("review this", review.PreFetchedContext{DeepPath: true})
+	if !strings.Contains(deep, `"counterReview": "done" | "skipped" (REQUIRED on this deep-path review`) {
+		t.Errorf("deep-path prompt does not instruct counterReview as required:\n%s", deep)
 	}
 }

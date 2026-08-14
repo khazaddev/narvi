@@ -40,16 +40,17 @@
 //     with a converted ProposedShippable — see verdict.go's own doc
 //     comment.
 //
-// # Exactly four exported functions
-// This package exports exactly four functions that compute anything:
+// # Exactly five exported functions
+// This package exports exactly five functions that compute anything:
 // CoverageFloor (the coverage floor), PremiseFloor (the premise floor),
 // AdequacyFloor (the description-adequacy floor, §26.2/Step 67 — the
 // THIRD raise-only floor, added to the original two Step 45 established),
-// and ComputeShippable (the one composition seam a later Step calls).
-// Every other identifier besides these four functions and the types/
-// constants a caller needs to construct a Verdict is unexported — there is
-// no second path to any of these four results, and no method set
-// duplicating them.
+// CounterReviewFloor (the counter-review floor, §26.4/Step 69 — the
+// FOURTH raise-only floor), and ComputeShippable (the one composition seam
+// a later Step calls). Every other identifier besides these five functions
+// and the types/constants a caller needs to construct a Verdict is
+// unexported — there is no second path to any of these five results, and
+// no method set duplicating them.
 //
 // # Ranking is an explicit table, never iota order
 // Shippable's total order (auto < needs_human < block, most to least
@@ -88,6 +89,14 @@
 //   - DescriptionAdequacy: unrecognized ranks with
 //     DescriptionAdequacyMisleading (AdequacyFloor, adequacy.go, §26.2/
 //     Step 67).
+//   - CounterReviewStatus: unrecognized ranks with CounterReviewSkipped
+//     (CounterReviewFloor, counterreview.go, §26.4/Step 69) — see that
+//     type's own doc comment for the one deliberate exception to this
+//     package's usual "every enum feeds a floor on every verdict"
+//     framing: this field has no meaning at all on the light path, so
+//     reviewpost.BuildVerdict (never this package) is responsible for
+//     substituting CounterReviewDone before calling ComputeShippable on a
+//     light-path verdict.
 //   - DocsDriftState: unrecognized ranks with DocsDriftStateFound
 //     (documented on the type itself, docsdrift.go) — inert in THIS
 //     package today; see the design call below.
@@ -187,4 +196,25 @@
 //     exists to author" posture ComputeShippable's own doc comment
 //     already states for ProposedShippable, restated here because §26.2's
 //     own text calls it out by name for this specific floor.
+//
+//  7. (§26.4, Step 69) CounterReviewFloor is the FOURTH raise-only floor,
+//     composing into ComputeShippable the SAME way as the original
+//     three — max(rank), never a special case. Unlike coverage/premise/
+//     adequacy, this floor's own input has no meaning on the light path
+//     at all (§26.9: the light path never runs a counter-reviewer sub-
+//     task, so there is nothing to have "skipped") — this package still
+//     keeps CounterReviewFloor a pure function of ONLY CounterReviewStatus
+//     (no depth parameter), matching every other floor's own signature
+//     shape exactly, rather than growing the one function this package
+//     exports for path-awareness it otherwise has zero use for (doc.go's
+//     own "zero external imports" convention already forbids importing
+//     reviewtriage here to even ask the question). The substitution this
+//     requires — CounterReviewDone on every light-path verdict, so the
+//     floor is structurally a no-op there — is reviewpost.BuildVerdict's
+//     own responsibility (reviewpost already imports both review and
+//     reviewtriage), documented on that function and pinned by
+//     TestBuildVerdict_CounterReviewFloorInertOnLightPath
+//     (internal/domain/reviewpost/validate_test.go). Also unlike
+//     coverage/premise/adequacy, never touches RiskLevel, for the
+//     identical reason AdequacyFloor does not (design call #6 above).
 package review

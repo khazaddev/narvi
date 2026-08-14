@@ -1023,6 +1023,49 @@ func run() error {
 			}
 		}
 
+		// Step 69 (§26.4/§26.6): register the three review sub-agents
+		// (architecture-scribe, counter-reviewer, fact-check) into the
+		// SAME workspace opencode.json, UNCONDITIONALLY -- unlike the
+		// sentinel-fix block immediately above (gated on
+		// CapabilityRestricted, one kind of session only), every session
+		// gets these three custom agent DEFINITIONS: they are inert unless
+		// a turn's own prompt actually instructs the agent to spawn one via
+		// the "task" tool (review.RenderTurnPrompt's own
+		// subAgentOrchestrationInstructions, which ONLY a review turn's
+		// prompt ever renders, and only light-path-appropriate ones at
+		// that) -- see opencode/reviewsubagents.go's own
+		// MergeReviewSubAgentsConfig doc comment for the full "why
+		// unconditional is correct and not a rigor leak". Read-merge-write
+		// AGAIN here (rather than folding into the block above) because
+		// this must apply to EVERY session, review-restricted or not,
+		// while the sentinel-fix block above must stay conditioned on
+		// CapabilityRestricted alone -- two independent gates, so two
+		// independent (but sequential, same file) merges, mirroring how
+		// §27.2's own future OpenCode-config-storage injection is already
+		// expected to layer a THIRD merge onto this same file later.
+		// Same non-fatal-on-failure posture as the block above: a failed
+		// read/merge/write here degrades to "this session's review turns
+		// simply cannot spawn these three sub-agents", never a boot
+		// failure.
+		{
+			configPath := filepath.Join(cfg.WorkspaceDir, "opencode.json")
+			existing, readErr := os.ReadFile(configPath)
+			if readErr != nil && !os.IsNotExist(readErr) {
+				slog.Warn("sandbox-agent: read existing opencode.json for review sub-agents merge failed, proceeding without them", "error", readErr)
+			} else {
+				var counterReviewerModel string
+				if cfg.SessionConfig.ReviewCounterReviewerModel != nil {
+					counterReviewerModel = *cfg.SessionConfig.ReviewCounterReviewerModel
+				}
+				merged, mergeErr := opencode.MergeReviewSubAgentsConfig(existing, counterReviewerModel)
+				if mergeErr != nil {
+					slog.Warn("sandbox-agent: merge review sub-agents config failed, proceeding without them", "error", mergeErr)
+				} else if writeErr := os.WriteFile(configPath, merged, 0o644); writeErr != nil {
+					slog.Warn("sandbox-agent: write review sub-agents config failed, proceeding without them", "error", writeErr)
+				}
+			}
+		}
+
 		// Step 53 ("provider credential injection", §25.1/§25.3): resolve
 		// this session's own provider credentials (repo/environment/global/
 		// user scoped, most-specific-wins) BEFORE spawning `opencode serve`

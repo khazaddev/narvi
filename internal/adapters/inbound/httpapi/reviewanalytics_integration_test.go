@@ -13,10 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	narvipg "github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
+	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
 )
 
 // TestGetReviewAnalytics_ViewerAllowed_NothingComputedYet proves TWO
@@ -55,6 +57,12 @@ func TestGetReviewAnalytics_ViewerAllowed_NothingComputedYet(t *testing.T) {
 	if resp.FindingOutcomes != nil {
 		t.Errorf("FindingOutcomes = %v, want nil", resp.FindingOutcomes)
 	}
+	if resp.DigestContestationRateComputed {
+		t.Errorf("DigestContestationRateComputed = true, want false (no deep-path verdicts posted)")
+	}
+	if resp.DigestContestationRatePercent != nil {
+		t.Errorf("DigestContestationRatePercent = %v, want nil", resp.DigestContestationRatePercent)
+	}
 }
 
 // TestGetReviewAnalytics_RendersComputedRollups seeds one review_verdicts
@@ -81,14 +89,14 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 		ProposedShippable: review.ProposedShippableAuto,
 		FilesChanged:      2,
 	}
-	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK)
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
 	seededDigest := reviewpost.Digest{
 		Summary: "Test-seeded verdict.",
 		ArchDecisions: []reviewpost.ArchDecision{
 			{Decision: "Use a shared retry helper.", RejectedAlternative: "Inline retry logic per call site.", ConventionConformance: "Matches internal/platform's existing retry helper pattern."},
 		},
 	}
-	insertedRecord, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict, seededDigest, "")
+	insertedRecord, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 7, "deadbeef", pgtype.UUID{}, verdict, seededDigest, "", review.CounterReviewDone, reviewpost.FactCheckDone, 0)
 	if err != nil {
 		t.Fatalf("seed review_verdicts row: %v", err)
 	}
@@ -150,5 +158,58 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 	}
 	if got := (*resp.FindingOutcomes)[0]; got.Status != restdtos.ReviewAnalyticsFindingStatusCountStatusOpen || got.Count != 1 {
 		t.Errorf("FindingOutcomes[0] = %+v, want {open 1}", got)
+	}
+}
+
+// TestGetReviewAnalytics_DigestContestationRate_ComputedFromDeepPathAndContest
+// proves §26.5's own "digest precision (contestation rate)" KPI (Step 69)
+// is genuinely wired end to end through this HTTP surface -- not merely
+// present in restdtos, the exact defect B4 named (the capture path,
+// review_digest_section_feedback, and the pure DigestContestationRate
+// function all pre-existed this fix; nothing called it from the analytics
+// handler and no DTO field carried it). Seeds ONE deep-path verdict (the
+// denominator -- only a deep-path review ever produces an arch recap at
+// all, §26.4/§26.9) and ONE arch-recap contest against it (the numerator),
+// so the expected rate is unambiguous: 100%.
+func TestGetReviewAnalytics_DigestContestationRate_ComputedFromDeepPathAndContest(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	_, token := rig.createAuthenticatedUser(ctx, t)
+
+	const repoFullName = "acme/analytics-contested"
+
+	verdict := review.Verdict{
+		RiskLevel:         review.RiskLevelLow,
+		Premise:           review.PremiseStateOK,
+		TestsCoverage:     review.TestsCoverageStateAdequate,
+		DocsDrift:         review.DocsDriftStateNone,
+		ProposedShippable: review.ProposedShippableAuto,
+		FilesChanged:      1,
+	}
+	verdict.Shippable = review.ComputeShippable(verdict.RiskLevel, verdict.TestsCoverage, verdict.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
+	digest := reviewpost.Digest{Summary: "Deep-path test-seeded verdict."}
+	if _, err := appreviewverdict.Insert(ctx, rig.reviewVerdicts, repoFullName, 9, "deadbeef2", pgtype.UUID{}, verdict, digest, reviewtriage.DepthDeep, review.CounterReviewDone, reviewpost.FactCheckDone, 0); err != nil {
+		t.Fatalf("seed deep-path review_verdicts row: %v", err)
+	}
+
+	feedback := narvipg.NewReviewDigestSectionFeedbackStore(rig.pool)
+	if _, _, err := feedback.Upsert(ctx, repoFullName, 9, string(reviewpost.DigestSectionArchRecap), "recap-hash-1", "issue_comment", 555, "arch recap wrong: missed the actual migration risk", pgtype.UUID{}); err != nil {
+		t.Fatalf("seed review_digest_section_feedback row: %v", err)
+	}
+
+	var resp restdtos.ReviewAnalytics
+	status := rig.doJSON(t, http.MethodGet, "/api/repos/"+repoFullName+"/review-analytics", nil, &resp, token)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want %d", status, http.StatusOK)
+	}
+
+	if !resp.DigestContestationRateComputed {
+		t.Fatalf("DigestContestationRateComputed = false, want true (one deep-path verdict and one contest were seeded)")
+	}
+	if resp.DigestContestationRatePercent == nil {
+		t.Fatalf("DigestContestationRatePercent = nil, want a computed value")
+	}
+	if got := *resp.DigestContestationRatePercent; got != 100 {
+		t.Errorf("DigestContestationRatePercent = %v, want 100 (1 deep-path verdict, 1 contest)", got)
 	}
 }

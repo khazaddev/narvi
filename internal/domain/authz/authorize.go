@@ -160,6 +160,11 @@ var matrix = map[Action]actionRule{
 	ActionConfigureAutoApprove:        {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionTeachFalsePositivePattern:   {allow: roles(RoleAdmin, RoleMaintainer)},
 	ActionManageFalsePositivePatterns: {allow: roles(RoleAdmin, RoleMaintainer)},
+	// Step 69 (§26.5): contesting a deep-path arch-recap digest section
+	// via the `arch recap wrong: <reason>` PR-thread command -- same row,
+	// same reasoning as ActionTeachFalsePositivePattern immediately above
+	// (action.go's own doc comment).
+	ActionContestArchRecap: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 6: integrations/global secrets/template activation/members &
 	// roles/sentinel toggle/blockOnHighRisk -- admin only. Step 54
@@ -196,6 +201,11 @@ var matrix = map[Action]actionRule{
 	// doc comment: §26.3 names no tier itself, reasoned here to match
 	// every sibling unattended-behavior config).
 	ActionConfigureReviewDepth: {allow: roles(RoleAdmin)},
+	// Step 69 (§26.7): configuring the per-repo reviewCostBudget
+	// light/deep ceilings -- same row, same reasoning as
+	// ActionConfigureReviewDepth immediately above (action.go's own doc
+	// comment).
+	ActionConfigureReviewCostBudget: {allow: roles(RoleAdmin)},
 }
 
 // Authorize renders the §13.3 verdict for actor attempting action against

@@ -45,7 +45,7 @@ func TestVerdict_ShippableComputedFromFields(t *testing.T) {
 		DocsDrift:         review.DocsDriftStateNone,
 		ProposedShippable: review.ProposedShippableAuto,
 	}
-	v.Shippable = review.ComputeShippable(v.RiskLevel, v.TestsCoverage, v.Premise, review.DescriptionAdequacyOK)
+	v.Shippable = review.ComputeShippable(v.RiskLevel, v.TestsCoverage, v.Premise, review.DescriptionAdequacyOK, review.CounterReviewDone)
 
 	want := review.ShippableNeedsHuman // high baseline + insufficient floor, both needs_human; premise floor (questionable) also needs_human
 	if v.Shippable != want {

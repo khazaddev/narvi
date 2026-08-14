@@ -14,6 +14,7 @@ import (
 	"github.com/khazaddev/narvi/internal/app/releasereview"
 	"github.com/khazaddev/narvi/internal/app/reviewcontext"
 	appreviewtriage "github.com/khazaddev/narvi/internal/app/reviewtriage"
+	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/reposource"
 	"github.com/khazaddev/narvi/internal/domain/review"
 	domainreviewtriage "github.com/khazaddev/narvi/internal/domain/reviewtriage"
@@ -163,6 +164,32 @@ type Config struct {
 	// read vs. write -- but one concrete store, cmd/control-plane/
 	// main.go).
 	FalsePositivePatternCapture FalsePositivePatternCapturer
+
+	// ArchRecapContestCapture (Step 69, §26.5) is this handler's own
+	// dispatch-before-router capture surface for the `arch recap wrong:
+	// <reason>` command -- see archrecapcontest.go's own doc comment for
+	// the full "why before parseMention" reasoning (identical to
+	// FalsePositivePatternCapture's own). Nil-safe: nil (this package's
+	// own handler_test.go, or any other minimal wiring that doesn't care
+	// about this Step) simply skips capture detection entirely, falling
+	// through to the ordinary mention pipeline exactly as if every
+	// comment were an ordinary one. *postgres.
+	// ReviewDigestSectionFeedbackStore (cmd/control-plane/main.go)
+	// satisfies this directly.
+	ArchRecapContestCapture ArchRecapContestCapturer
+	// ArchRecapVerdicts (Step 69, §26.5) resolves the PR's own latest
+	// posted verdict so tryCaptureArchRecapContest can hash the CURRENTLY-
+	// CONTESTED arch recap content -- see that function's own doc comment.
+	// A zero-value appreviewverdict.Deps{} (ReviewVerdicts == nil) is
+	// explicitly guarded by tryCaptureArchRecapContest itself (never a nil-
+	// pointer panic through *postgres.ReviewVerdictStore's own un-nil-
+	// guarded methods) -- production wiring (cmd/control-plane/main.go)
+	// always sets this alongside ArchRecapContestCapture, but this field
+	// is independently defended anyway, mirroring this codebase's own
+	// established "guard a nil dependency defensively, never assume a
+	// sibling field's own non-nil-ness" convention (e.g. internal/app/
+	// reviewtriage.LoadConfig's own `deps.RepoSettings == nil` check).
+	ArchRecapVerdicts appreviewverdict.Deps
 
 	// Comments (Step 37/38 follow-up fix, Finding 1) posts the honest
 	// planAwaitingApprovalReplyText reply (planawaitingreply.go) back to a
@@ -386,6 +413,34 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			case falsePositiveNotApplicable:
+				// Not a capture command -- fall through to the ordinary
+				// mention pipeline below, completely unaffected.
+			}
+		}
+
+		// Step 69 (§26.5): an `arch recap wrong: <reason>` capture command
+		// is dispatched HERE, BEFORE parseMention -- dispatch-before-
+		// router, mirroring the false-positive capture check immediately
+		// above exactly (archrecapcontest.go's own doc comment). Checked
+		// only for the SAME two comment-bearing event types; cfg.
+		// ArchRecapContestCapture == nil (this package's own
+		// handler_test.go, or any other minimal wiring that doesn't care
+		// about this Step) falls through to the ordinary pipeline
+		// unchanged, exactly like every other nil-safe Config field above.
+		if cfg.ArchRecapContestCapture != nil && (eventType == eventTypeIssueComment || eventType == eventTypePullRequestReviewComment) {
+			switch tryCaptureArchRecapContest(ctx, logger, coalescer.Identities, coalescer.Users, coalescer.AuditLog, cfg.ArchRecapVerdicts, cfg.ArchRecapContestCapture, eventType, body) {
+			case archRecapContestHandled:
+				w.WriteHeader(http.StatusOK)
+				return
+			case archRecapContestFailed:
+				// Mirrors the false-positive capture's own identical
+				// error-path precedent immediately above.
+				if releaseErr := deliveries.Release(ctx, githubDeliveryProvider, deliveryID); releaseErr != nil {
+					logger.Error("github: release webhook delivery claim failed", "error", releaseErr, "delivery_id", deliveryID)
+				}
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			case archRecapContestNotApplicable:
 				// Not a capture command -- fall through to the ordinary
 				// mention pipeline below, completely unaffected.
 			}
@@ -629,6 +684,18 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 			flooredDepth = domainreviewtriage.Floor(triageDecision.Depth, priorReviewDepth)
 		}
 		prCtx.DeepPath = flooredDepth == domainreviewtriage.DepthDeep
+		// ReviewCostBudgetUSD (Step 69, §26.7): the SAME triageConfig
+		// ComputeDecision already resolved, above -- no second
+		// repo_settings read, mirroring internal/adapters/inbound/httpapi/
+		// reviewretrigger.go's own identical addition.
+		prCtx.ReviewCostBudgetUSD = triageConfig.CostBudget.ForDepth(flooredDepth)
+		// B5 fix: threads reviewtriage.CostBudgetSafetyMargin through as a
+		// whole percentage -- review.PreFetchedContext.
+		// CostBudgetSafetyMarginPercent's own doc comment for why this
+		// package (which already imports reviewtriage) is the one that
+		// must set it, never review itself (doc.go's own "zero external
+		// imports" convention).
+		prCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
 		if havePrCtx {
 			m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
 		}

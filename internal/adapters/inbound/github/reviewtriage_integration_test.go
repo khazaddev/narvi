@@ -277,6 +277,9 @@ func markTurnProcessing(ctx context.Context, t *testing.T, rig testRig, turnID p
 // fix means archDecisions/stackRisks/unverifiedLimits are REQUIRED, not
 // merely requested, on a turn whose own review_depth is "deep" (this
 // file's own end-to-end test posts this against exactly such a turn).
+// factCheck/factCheckKilled (Step 69, §26.6) are REQUIRED unconditionally,
+// both paths; counterReview (Step 69, §26.4) is REQUIRED on this deep-path
+// turn specifically.
 const validDeepVerdictRequestJSON = `{
 	"riskLevel": "high",
 	"premise": "ok",
@@ -295,7 +298,10 @@ const validDeepVerdictRequestJSON = `{
 		"unverifiedLimits": "Did not test against a production-sized table.",
 		"descriptionAdequacy": "ok",
 		"adequacyExplanation": "The PR body accurately describes the migration."
-	}
+	},
+	"factCheck": "done",
+	"factCheckKilled": 0,
+	"counterReview": "done"
 }`
 
 // TestGitHubIntegration_SensitiveGlobDiff_RoutesDeep_PersistsThroughVerdict
