@@ -578,6 +578,21 @@ type Timeouts struct {
 	// itself inserts, an entirely different kind of duration).
 	OpenCodeTransientRetryBackoff time.Duration
 
+	// SetupRerunRetryBackoff is the pause sandbox-agent inserts before its
+	// ONE retry of a failed full `setup.sh` rerun (§19.6's "retry the
+	// install on transient failure, then warn -- never fail the boot on
+	// it"). Deliberately its own field rather than a reuse of
+	// OpenCodeTransientRetryBackoff above, even though both are "one short
+	// pause before one retry": the two bound genuinely different
+	// operations whose constraints can diverge. That one paces a retry
+	// inside a live turn, where added delay is felt directly by a waiting
+	// human; this one paces a package-registry reinstall inside the boot
+	// sequence, which has its own separate overall budget and a slower,
+	// network-bound failure profile. Tuning one for turn latency must
+	// never silently retime the other's boot behaviour -- the same reason
+	// ProcessStopGracePeriod and SupervisorShutdownTimeout stay distinct.
+	SetupRerunRetryBackoff time.Duration
+
 	// --- Audit-remediation (inbound-hygiene lens, WS/REST hygiene batch)
 	// standalone additions: no ordering relationship with either
 	// invariant chain above (or with any prior Step's standalone
@@ -2233,6 +2248,8 @@ func DefaultTimeouts() Timeouts {
 		OpenCodeSummarizeTimeout: 120 * time.Second, // not specified; chosen generously (§7.2, a single non-streaming summarization call)
 
 		OpenCodeTransientRetryBackoff: 2 * time.Second, // not specified; chosen, short pause before retrying a transient (isRetryable) provider blip
+
+		SetupRerunRetryBackoff: 2 * time.Second, // not specified; chosen, short pause before the ONE setup.sh rerun retry (§19.6) -- same value as the OpenCode pause today, deliberately a separate field (see its doc comment)
 
 		ClientWSPingInterval:          30 * time.Second,       // not specified; chosen, matches SandboxWSHeartbeatInterval's own 30s cadence (§6.1)
 		ClientFetchHistoryMinInterval: 250 * time.Millisecond, // not specified; chosen, generous for real pagination while blocking a tight-loop hammer
