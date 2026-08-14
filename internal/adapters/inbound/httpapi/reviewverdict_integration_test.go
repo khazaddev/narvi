@@ -1151,3 +1151,85 @@ func TestPostReviewVerdict_FilesChangedDriftCanary_ServerComputedZero_NeverFires
 		t.Errorf("filesChanged drift canary fired against an unset (zero) server-computed count -- must be treated as no reliable signal, never as a real zero; full log:\n%s", buf.String())
 	}
 }
+
+// seedProcessingTurnWithUndeliveredDiff mirrors
+// seedProcessingTurnWithChangedFilesCount, but ALSO sets DiffEmpty/
+// DiffTruncated on the seeded review_depth_decision record -- D4's own
+// (adversarial review of PR #182, MEDIUM) end-to-end fixture: a
+// processing turn whose diff was never fully delivered to the reviewing
+// agent, used below to prove FilesChangedDrifted's own diffDelivered
+// guard actually suppresses the canary through the FULL httpapi wiring
+// (the unmarshal, the diffDelivered computation, and the call site) --
+// driftcanary_test.go already covers the pure function in isolation, this
+// proves the wiring around it too.
+func seedProcessingTurnWithUndeliveredDiff(ctx context.Context, t *testing.T, r testRig, sessionID pgtype.UUID, reviewHeadSHA string, serverComputedChangedFiles int, diffEmpty, diffTruncated bool) {
+	t.Helper()
+	recordJSON, err := json.Marshal(reviewtriage.DecisionRecord{ChangedFilesCount: serverComputedChangedFiles, DiffEmpty: diffEmpty, DiffTruncated: diffTruncated})
+	if err != nil {
+		t.Fatalf("marshal review depth decision record: %v", err)
+	}
+	if _, err := r.turns.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID:           sessionID,
+		Status:              sqlcgen.TurnStatusProcessing,
+		ReviewHeadSha:       &reviewHeadSHA,
+		ReviewDepthDecision: recordJSON,
+	}); err != nil {
+		t.Fatalf("seed processing turn with undelivered-diff review_depth_decision: %v", err)
+	}
+}
+
+// TestPostReviewVerdict_FilesChangedDriftCanary_DiffTruncated_NeverFires is
+// D4's own (adversarial review of PR #182, MEDIUM) end-to-end fix: the
+// EXACT SAME 25-vs-15 divergence as TestPostReviewVerdict_
+// FilesChangedDriftCanary_FiresOnDivergence_NeverAffectsVerdict above --
+// which clears both thresholds and fires there -- must NOT fire here,
+// because this turn's own review_depth_decision also records
+// DiffTruncated=true. The reviewing agent was handed only a partial diff
+// (with an explicit truncation notice, review.RenderTurnPrompt's own
+// doc comment), so its own under-count is the CORRECT, honest
+// consequence of what it actually saw -- not evidence of a skipped
+// review, and this canary must never blame it for a server-side delivery
+// failure that was never its own fault.
+func TestPostReviewVerdict_FilesChangedDriftCanary_DiffTruncated_NeverFires(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-drift-diff-truncated", 73)
+	seedProcessingTurnWithUndeliveredDiff(ctx, t, rig, session.ID, "sha-drift-truncated", 15, false, true)
+
+	buf := captureDefaultLoggerJSON(t)
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", driftFiringVerdictRequestJSON())
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	if hasLogEntry(t, buf, filesChangedDriftCanaryLogMsg) {
+		t.Errorf("filesChanged drift canary fired against a TRUNCATED diff -- the reviewer was never handed the full diff, so its own count divergence is not evidence of a skipped review; full log:\n%s", buf.String())
+	}
+}
+
+// TestPostReviewVerdict_FilesChangedDriftCanary_DiffEmpty_NeverFires is
+// TestPostReviewVerdict_FilesChangedDriftCanary_DiffTruncated_NeverFires's
+// own sibling for the OTHER diff-not-delivered case (D4): the diff fetch
+// itself never even succeeded (GetCompareDiff failed, review.
+// PreFetchedContext.Diff == ""), so review.RenderTurnPrompt rendered no
+// diff block at all -- the reviewing agent had nothing to count files
+// against, and its own self-report diverging from the server-computed
+// count is, again, not evidence of anything this canary should surface.
+func TestPostReviewVerdict_FilesChangedDriftCanary_DiffEmpty_NeverFires(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-drift-diff-empty", 74)
+	seedProcessingTurnWithUndeliveredDiff(ctx, t, rig, session.ID, "sha-drift-empty", 15, true, false)
+
+	buf := captureDefaultLoggerJSON(t)
+
+	status, _ := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", driftFiringVerdictRequestJSON())
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+
+	if hasLogEntry(t, buf, filesChangedDriftCanaryLogMsg) {
+		t.Errorf("filesChanged drift canary fired when the diff was never delivered at all (empty); full log:\n%s", buf.String())
+	}
+}

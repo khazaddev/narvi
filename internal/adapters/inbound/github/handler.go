@@ -713,7 +713,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// the LAST block prepended before RenderTurnPrompt below, so the
 		// final prompt text order is unchanged from before this Step.
 		if cfg.ReviewFindings != nil {
-			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, cfg.ReviewFindings, m.RepoFullName, m.PRNumber, prCtx.ChangedPaths); alreadyAnswered != "" {
+			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, cfg.ReviewFindings, m.RepoFullName, m.PRNumber, prCtx.ChangedPaths, prCtx.DiffTruncated); alreadyAnswered != "" {
 				m.CommentBody = alreadyAnswered + m.CommentBody
 			}
 		}
@@ -729,7 +729,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		if flooredDepth == domainreviewtriage.DepthDeep && coalescer.ReviewModelDeep == "" {
 			logger.Info("github: review routed deep but no deep-tier model configured (NARVI_REVIEW_MODEL_DEEP unset), dispatching with the default model at forced high effort", "repo", m.RepoFullName, "pr_number", m.PRNumber)
 		}
-		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort, prCtx.ChangedFilesCount))
+		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort, prCtx.ChangedFilesCount, prCtx.Diff == "", prCtx.DiffTruncated))
 		if triageRecordErr != nil {
 			logger.Warn("github: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo", m.RepoFullName, "pr_number", m.PRNumber)
 			triageRecordJSON = nil

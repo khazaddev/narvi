@@ -28,7 +28,7 @@ func (f *fakeFindingsFetcher) ListOpenAndRebutted(_ context.Context, _ string, _
 func TestFetchAlreadyAnswered_NilFetcher_ReturnsEmpty(t *testing.T) {
 	t.Parallel()
 
-	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), nil, "acme/widgets", 7, []string{"a.go"})
+	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), nil, "acme/widgets", 7, []string{"a.go"}, false)
 	if got != "" {
 		t.Errorf("FetchAlreadyAnswered() = %q, want empty for a nil fetcher", got)
 	}
@@ -38,7 +38,7 @@ func TestFetchAlreadyAnswered_FetchErrorDegradesToEmpty(t *testing.T) {
 	t.Parallel()
 
 	fetcher := &fakeFindingsFetcher{listErr: errors.New("db exploded")}
-	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), fetcher, "acme/widgets", 7, []string{"a.go"})
+	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), fetcher, "acme/widgets", 7, []string{"a.go"}, false)
 	if got != "" {
 		t.Errorf("FetchAlreadyAnswered() = %q, want empty on a fetch error", got)
 	}
@@ -61,7 +61,7 @@ func TestFetchAlreadyAnswered_ThreadsChangedPathsIntoRetirement(t *testing.T) {
 		},
 	}
 
-	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), fetcher, "acme/widgets", 7, []string{"internal/live.go"})
+	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), fetcher, "acme/widgets", 7, []string{"internal/live.go"}, false)
 
 	if !strings.Contains(got, "internal/stale.go") || !strings.Contains(got, "internal/live.go") {
 		t.Fatalf("FetchAlreadyAnswered() dropped a finding instead of noting retirement; got:\n%s", got)
@@ -101,8 +101,36 @@ func TestFetchAlreadyAnswered_NilChangedPathsNeverRetires(t *testing.T) {
 		},
 	}
 
-	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), fetcher, "acme/widgets", 7, nil)
+	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), fetcher, "acme/widgets", 7, nil, false)
 	if strings.Contains(got, "RETIRED:") {
 		t.Errorf("FetchAlreadyAnswered() = %q, want no RETIRED marker when changedPaths is nil (no reliable diff data)", got)
+	}
+}
+
+// TestFetchAlreadyAnswered_DiffTruncatedNeverRetires is D1's own SAFE-
+// direction test end-to-end (adversarial review of PR #182, BLOCKING):
+// even when changedPaths is a non-nil, non-empty list (the truncated
+// diff's own genuine byte PREFIX), a caller that also reports
+// diffTruncated=true must never let a finding whose file simply sorted
+// past the fetch's own size cut render RETIRED -- forwarded, unmodified,
+// through to reviewpost.RenderAlreadyAnsweredFacts.
+func TestFetchAlreadyAnswered_DiffTruncatedNeverRetires(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &fakeFindingsFetcher{
+		rows: []sqlcgen.ReviewFinding{
+			{IdentityHash: "abc123", FilePath: "internal/auth/token.go", Description: "Live finding on a file past the truncation cut.", Status: "open"},
+		},
+	}
+
+	// changedPaths reflects only the truncated diff's own captured
+	// prefix -- internal/auth/token.go is genuinely still changed, it
+	// simply never made it into this partial list.
+	got := reviewcontext.FetchAlreadyAnswered(context.Background(), discardLogger(), fetcher, "acme/widgets", 7, []string{"vendor/aaa_padding_asset.bin"}, true)
+	if strings.Contains(got, "RETIRED:") {
+		t.Errorf("FetchAlreadyAnswered() = %q, want no RETIRED marker when diffTruncated is true", got)
+	}
+	if !strings.Contains(got, "internal/auth/token.go") {
+		t.Errorf("FetchAlreadyAnswered() dropped the finding entirely instead of noting retirement was withheld: %q", got)
 	}
 }

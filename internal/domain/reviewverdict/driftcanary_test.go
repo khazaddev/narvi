@@ -11,81 +11,115 @@ func TestFilesChangedDrifted(t *testing.T) {
 		name           string
 		selfReported   int
 		serverComputed int
+		diffDelivered  bool
 		want           bool
 	}{
 		{
 			name:           "identical counts never drift",
 			selfReported:   10,
 			serverComputed: 10,
+			diffDelivered:  true,
 			want:           false,
 		},
 		{
 			name:           "small absolute difference on a small PR: ratio high but absolute below threshold",
 			selfReported:   1,
 			serverComputed: 2,
+			diffDelivered:  true,
 			want:           false,
 		},
 		{
 			name:           "small relative difference on a large PR: absolute above threshold but ratio below it",
 			selfReported:   495,
 			serverComputed: 500,
+			diffDelivered:  true,
 			want:           false,
 		},
 		{
 			name:           "both thresholds cleared: genuine drift",
 			selfReported:   1,
 			serverComputed: 20,
+			diffDelivered:  true,
 			want:           true,
 		},
 		{
 			name:           "self-reported zero against a real positive server count still fires",
 			selfReported:   0,
 			serverComputed: 20,
+			diffDelivered:  true,
 			want:           true,
 		},
 		{
 			name:           "server computed zero never fires, regardless of self-report -- indistinguishable from a failed GetPullRequest fetch",
 			selfReported:   500,
 			serverComputed: 0,
+			diffDelivered:  true,
 			want:           false,
 		},
 		{
 			name:           "server computed negative (should be unreachable, defensively handled identically to zero) never fires",
 			selfReported:   500,
 			serverComputed: -1,
+			diffDelivered:  true,
 			want:           false,
 		},
 		{
 			name:           "exactly at both thresholds fires (>= on both sides, not strictly >)",
 			selfReported:   5,
 			serverComputed: 10,
+			diffDelivered:  true,
 			want:           true,
 		},
 		{
 			name:           "absolute delta above threshold but ratio below it does not fire (large PR)",
 			selfReported:   94,
 			serverComputed: 100,
+			diffDelivered:  true,
 			want:           false,
 		},
 		{
 			name:           "just under the absolute threshold does not fire even with a large ratio",
 			selfReported:   0,
 			serverComputed: 4,
+			diffDelivered:  true,
 			want:           false,
 		},
 		{
 			name:           "self-reported drift in the other direction (over-report) fires identically",
 			selfReported:   40,
 			serverComputed: 2,
+			diffDelivered:  true,
 			want:           true,
+		},
+		{
+			// D4 (adversarial review of PR #182, MEDIUM): this is this
+			// function's own dedicated SAFE-direction case -- a genuine,
+			// both-thresholds-cleared divergence must still NOT fire when
+			// the diff was never fully delivered to the reviewing agent
+			// (empty or truncated), because the divergence in that case
+			// is not evidence of a skipped review, it is the CORRECT,
+			// honest consequence of the agent reporting only what it
+			// actually saw.
+			name:           "diffDelivered=false suppresses firing even on an otherwise-clearing divergence",
+			selfReported:   1,
+			serverComputed: 20,
+			diffDelivered:  false,
+			want:           false,
+		},
+		{
+			name:           "diffDelivered=false combined with serverComputed<=0 still never fires (both guards independently sufficient)",
+			selfReported:   500,
+			serverComputed: 0,
+			diffDelivered:  false,
+			want:           false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := reviewverdict.FilesChangedDrifted(tt.selfReported, tt.serverComputed)
+			got := reviewverdict.FilesChangedDrifted(tt.selfReported, tt.serverComputed, tt.diffDelivered)
 			if got != tt.want {
-				t.Errorf("FilesChangedDrifted(%d, %d) = %v, want %v", tt.selfReported, tt.serverComputed, got, tt.want)
+				t.Errorf("FilesChangedDrifted(%d, %d, %v) = %v, want %v", tt.selfReported, tt.serverComputed, tt.diffDelivered, got, tt.want)
 			}
 		})
 	}

@@ -285,9 +285,29 @@ func PostReviewVerdict(
 		// creation time -- reviewverdict.FilesChangedDrifted's own doc
 		// comment covers why treating that identically to "no reliable
 		// signal, never fire" is required, not merely convenient.
+		//
+		// diffDelivered (D4, adversarial review of PR #182, MEDIUM) is
+		// this SAME processing turn's own reviewtriage.DecisionRecord.
+		// DiffEmpty/DiffTruncated, collapsed into the ONE fact
+		// FilesChangedDrifted's own diffDelivered parameter needs: "was
+		// the reviewing agent actually handed a full diff to read at
+		// all." Deliberately initialized to false (never delivered) here
+		// -- NOT computed as "!decisionRecord.DiffEmpty &&
+		// !decisionRecord.DiffTruncated" against a decisionRecord that
+		// might itself be an unpopulated zero value: DiffEmpty/
+		// DiffTruncated both false is ALSO decisionRecord's own zero
+		// value (no processing turn found, a turn that predates this
+		// field, or a failed unmarshal, exactly the same three cases
+		// serverComputedChangedFiles' own comment names), and reading
+		// that as "confirmed delivered" would be exactly the unsafe
+		// misreading D1's own "authoritative-or-absent, never partial"
+		// principle forbids elsewhere in this same PR. Set true ONLY
+		// inside the successful-unmarshal branch below, from the real
+		// decisionRecord.
 		var verdictHeadSHA string
 		var reviewDepth reviewtriage.ReviewDepth
 		var serverComputedChangedFiles int
+		var diffDelivered bool
 		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
 			if errors.Is(turnErr, pgx.ErrNoRows) {
 				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
@@ -308,6 +328,7 @@ func PostReviewVerdict(
 						"error", unmarshalErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 				} else {
 					serverComputedChangedFiles = decisionRecord.ChangedFilesCount
+					diffDelivered = !decisionRecord.DiffEmpty && !decisionRecord.DiffTruncated
 				}
 			}
 		}
@@ -354,8 +375,13 @@ func PostReviewVerdict(
 		// §21.1's own second constraint ("must tolerate
 		// ChangedFilesCount == 0") is satisfied by FilesChangedDrifted
 		// itself, not by a guard here -- see that function's own doc
-		// comment.
-		if reviewverdict.FilesChangedDrifted(verdict.FilesChanged, serverComputedChangedFiles) {
+		// comment. diffDelivered (D4, resolved above) is FilesChangedDrifted's
+		// own THIRD guard, the exact symmetric case: a diff the reviewing
+		// agent was never fully handed (empty or truncated) must never
+		// make this canary blame the reviewer for a server-side delivery
+		// failure -- see that function's own doc comment for the full
+		// "why".
+		if reviewverdict.FilesChangedDrifted(verdict.FilesChanged, serverComputedChangedFiles, diffDelivered) {
 			logger.Warn("httpapi: review-verdict: filesChanged drift canary fired -- self-reported and server-computed changed-file counts diverge beyond both thresholds; diagnostic only, verdict unaffected",
 				"self_reported_files_changed", verdict.FilesChanged,
 				"server_computed_files_changed", serverComputedChangedFiles,

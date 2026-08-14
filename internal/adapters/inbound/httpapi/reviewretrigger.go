@@ -298,7 +298,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		// so the final prompt text order is unchanged from before this
 		// Step.
 		if reviewFindings != nil {
-			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, reviewFindings, prSession.RepoFullName, prSession.PrNumber, prCtx.ChangedPaths); alreadyAnswered != "" {
+			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, reviewFindings, prSession.RepoFullName, prSession.PrNumber, prCtx.ChangedPaths, prCtx.DiffTruncated); alreadyAnswered != "" {
 				prompt = alreadyAnswered + prompt
 			}
 		}
@@ -319,7 +319,7 @@ func RetriggerReview(pool *pgxpool.Pool, sessions *postgres.SessionStore, turns 
 		if flooredDepth == domainreviewtriage.DepthDeep && reviewModelDeep == "" {
 			logger.Info("httpapi: review routed deep but no deep-tier model configured (NARVI_REVIEW_MODEL_DEEP unset), dispatching with the default model at forced high effort", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 		}
-		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort, prCtx.ChangedFilesCount))
+		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort, prCtx.ChangedFilesCount, prCtx.Diff == "", prCtx.DiffTruncated))
 		if triageRecordErr != nil {
 			logger.Warn("httpapi: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
 			triageRecordJSON = nil

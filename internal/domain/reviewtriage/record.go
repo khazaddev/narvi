@@ -87,6 +87,45 @@ type DecisionRecord struct {
 	// never "zero files changed, so any non-zero self-report is massive
 	// drift".
 	ChangedFilesCount int `json:"changedFilesCount,omitempty"`
+
+	// DiffEmpty/DiffTruncated (D4, adversarial review of PR #182, MEDIUM)
+	// are review.PreFetchedContext's own "Diff == \"\"" and DiffTruncated
+	// facts (context.go) for THIS turn -- carried here for the identical
+	// reason ChangedFilesCount rides here (its own doc comment,
+	// immediately above): reviewverdict.FilesChangedDrifted, at
+	// verdict-POST time, needs to know not just WHAT the server-computed
+	// count was, but whether the reviewing agent was ever actually HANDED
+	// a diff to read at all.
+	//
+	// # D4: the canary used to blame the reviewer for a server-side delivery failure
+	//
+	// GetPullRequest can succeed (a real, positive ChangedFilesCount)
+	// while GetCompareDiff fails or truncates -- review.RenderTurnPrompt
+	// renders NO diff block at all when Diff == "" (that function's own
+	// doc comment: "never claim to have fetched something you don't
+	// actually have"), and an explicit truncation notice, not the full
+	// diff, when DiffTruncated is true. An agent never handed a diff (or
+	// handed only a PARTIAL one, and told so) can only ever report what it
+	// saw -- a self-reported FilesChanged that diverges from the SERVER's
+	// own full count in exactly that case is not a sign the reviewer
+	// skimmed the diff it was given; it is a sign the diff was never fully
+	// given. Before this fix, FilesChangedDrifted had no way to tell the
+	// two apart, and fired on both identically -- deterministically, on
+	// EVERY truncated-diff review, exactly the "cries wolf" failure §21.1
+	// already names as strictly worse than not having built the canary at
+	// all.
+	//
+	// Both false (their own zero value) for every turn that predates this
+	// fix, or whose own review_depth_decision marshal/unmarshal failed --
+	// see FilesChangedDrifted's own doc comment (reviewverdict package)
+	// for why httpapi.PostReviewVerdict's own local diffDelivered variable
+	// (computed from these two fields) is separately initialized to its
+	// OWN fail-safe default, false, rather than inheriting these two
+	// fields' zero value directly as "delivered": an unset DiffEmpty/
+	// DiffTruncated pair means "unknown", never "confirmed delivered", and
+	// this canary must never confidently fire on an unknown.
+	DiffEmpty     bool `json:"diffEmpty,omitempty"`
+	DiffTruncated bool `json:"diffTruncated,omitempty"`
 }
 
 // Provenance is internal/app/reviewtriage.ResolveProvenance's own return
@@ -110,14 +149,17 @@ type Provenance struct {
 // nice-to-have adversarial-review fix -- ModelAndEffort's own two return
 // values, computed by the caller from the SAME finalDepth passed here;
 // nil for both on the light path, mirroring ModelAndEffort's own "both
-// nil except on DepthDeep" contract), and changedFilesCount (§21.1's own
+// nil except on DepthDeep" contract), changedFilesCount (§21.1's own
 // filesChanged drift canary -- DecisionRecord.ChangedFilesCount's own doc
-// comment for the full "why" this rides here). Every one of this
+// comment for the full "why" this rides here), and diffEmpty/
+// diffTruncated (D4, adversarial review of PR #182 -- DecisionRecord.
+// DiffEmpty/DiffTruncated's own doc comment). Every one of this
 // function's three real callers already has review.PreFetchedContext.
-// ChangedFilesCount in scope at the SAME point it calls this function
-// (it is what Decide's own Signals were themselves built from, one call
-// earlier) -- passed straight through, never re-derived.
-func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, provenance Provenance, resolvedModelID, resolvedEffort *string, changedFilesCount int) DecisionRecord {
+// ChangedFilesCount/Diff/DiffTruncated in scope at the SAME point it
+// calls this function (Diff/ChangedFilesCount are what Decide's own
+// Signals were themselves built from, one call earlier) -- all passed
+// straight through, never re-derived.
+func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, provenance Provenance, resolvedModelID, resolvedEffort *string, changedFilesCount int, diffEmpty, diffTruncated bool) DecisionRecord {
 	tags := make([]string, len(decision.MatchedSensitiveTags))
 	for i, t := range decision.MatchedSensitiveTags {
 		tags[i] = string(t)
@@ -142,5 +184,7 @@ func NewDecisionRecord(decision Decision, cfg Config, finalDepth ReviewDepth, pr
 		NarviAuthored:        provenance.NarviAuthored,
 		AuthoringModel:       provenance.AuthoringModel,
 		ChangedFilesCount:    changedFilesCount,
+		DiffEmpty:            diffEmpty,
+		DiffTruncated:        diffTruncated,
 	}
 }

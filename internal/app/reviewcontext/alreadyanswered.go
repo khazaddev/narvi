@@ -64,7 +64,20 @@ type FindingsFetcher interface {
 // split) simply passes nil -- this function's own zero value -- and
 // retirement is skipped exactly like a failed diff fetch would skip it
 // (RenderAlreadyAnsweredFacts' own "nil means no reliable data" contract).
-func FetchAlreadyAnswered(ctx context.Context, logger *slog.Logger, fetcher FindingsFetcher, repoFullName string, prNumber int32, changedPaths []string) string {
+//
+// diffTruncated (D1, adversarial review of PR #182, BLOCKING) is that
+// SAME review.PreFetchedContext's own DiffTruncated -- forwarded verbatim
+// alongside changedPaths, for the identical reason: a truncated diff's
+// own changedPaths is a genuine but PARTIAL prefix of the real diff (git
+// emits file sections in path-sorted order, so everything past the
+// fetch's own byte-size cut is simply missing), and treating a partial
+// list as if it were complete is exactly the "confidently gone from the
+// diff" misreading RenderAlreadyAnsweredFacts' own doc comment now
+// forbids (D1's own root cause: the changed-path list must be treated as
+// authoritative-or-absent, never partial). Every real caller already has
+// this value in hand at the SAME point it has changedPaths -- both come
+// from the SAME review.PreFetchedContext.
+func FetchAlreadyAnswered(ctx context.Context, logger *slog.Logger, fetcher FindingsFetcher, repoFullName string, prNumber int32, changedPaths []string, diffTruncated bool) string {
 	if fetcher == nil {
 		return ""
 	}
@@ -93,5 +106,5 @@ func FetchAlreadyAnswered(ctx context.Context, logger *slog.Logger, fetcher Find
 		}
 	}
 
-	return reviewpost.RenderAlreadyAnsweredFacts(findings, changedPaths)
+	return reviewpost.RenderAlreadyAnsweredFacts(findings, changedPaths, diffTruncated)
 }
