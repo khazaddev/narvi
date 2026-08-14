@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -312,6 +313,104 @@ func readPermanentlyFailed(ctx context.Context, t *testing.T, reader *sdkmetric.
 			var total int64
 			for _, dp := range sum.DataPoints {
 				total += dp.Value
+			}
+			return total
+		}
+	}
+	return 0
+}
+
+// dataPointAttrString looks up a single string-valued attribute on a
+// metricdata data point's own attribute.Set -- shared by
+// readImageBuildAttemptTotal/sumImageBuildDurationCount below, mirroring
+// internal/sandboxagent/boot/telemetry_test.go's own
+// findHookRerunDurationDataPointForRepo precedent (dp.Attributes.Value(...))
+// for the identical "filter a cumulative, multi-test-binary metric stream
+// down to the one attribute combination this test cares about" need.
+func dataPointAttrString(attrs attribute.Set, key string) (string, bool) {
+	v, ok := attrs.Value(attribute.Key(key))
+	if !ok {
+		return "", false
+	}
+	return v.AsString(), true
+}
+
+// readImageBuildAttemptTotal sums every image_build_attempt_total data
+// point whose phase/outcome attributes match the given values -- Step
+// 43(c)'s own build-duration/failure-rate instrumentation (telemetry.go,
+// §19.9's closing paragraph). CUMULATIVE across every test in this binary
+// (readFailureStreak's own identical caveat, immediately above): callers
+// must diff a "before" and "after" reading around their own
+// PumpOnce/RefreshOnce call(s).
+func readImageBuildAttemptTotal(ctx context.Context, t *testing.T, reader *sdkmetric.ManualReader, phase, outcome string) int64 {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		if sm.Scope.Name != "narvi/imagebuild" {
+			continue
+		}
+		for _, m := range sm.Metrics {
+			if m.Name != "image_build_attempt_total" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("image_build_attempt_total metric data = %T, want metricdata.Sum[int64]", m.Data)
+			}
+			var total int64
+			for _, dp := range sum.DataPoints {
+				gotPhase, _ := dataPointAttrString(dp.Attributes, "phase")
+				gotOutcome, _ := dataPointAttrString(dp.Attributes, "outcome")
+				if gotPhase == phase && gotOutcome == outcome {
+					total += dp.Value
+				}
+			}
+			return total
+		}
+	}
+	return 0
+}
+
+// sumImageBuildDurationCount is readImageBuildAttemptTotal's own sibling
+// for the image_build_duration_seconds histogram -- same phase/outcome
+// filter, same cumulative-across-the-binary caveat, returning the summed
+// data-point COUNT (how many observations landed), not a value sum -- this
+// package's own tests only need to prove a real data point was recorded
+// for the right (phase, outcome), not any particular duration value (build
+// duration in these tests is dominated by test-harness/DB latency, not
+// anything meaningful to assert an exact bucket for).
+func sumImageBuildDurationCount(ctx context.Context, t *testing.T, reader *sdkmetric.ManualReader, phase, outcome string) uint64 {
+	t.Helper()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		if sm.Scope.Name != "narvi/imagebuild" {
+			continue
+		}
+		for _, m := range sm.Metrics {
+			if m.Name != "image_build_duration_seconds" {
+				continue
+			}
+			hist, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok {
+				t.Fatalf("image_build_duration_seconds metric data = %T, want metricdata.Histogram[float64]", m.Data)
+			}
+			var total uint64
+			for _, dp := range hist.DataPoints {
+				gotPhase, _ := dataPointAttrString(dp.Attributes, "phase")
+				gotOutcome, _ := dataPointAttrString(dp.Attributes, "outcome")
+				if gotPhase == phase && gotOutcome == outcome {
+					total += dp.Count
+				}
 			}
 			return total
 		}
@@ -2365,5 +2464,287 @@ func TestBuilderRun_RefreshPumpGoroutineStarts(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v, want context.Canceled", err)
+	}
+}
+
+// --- Step 43(c): build-time dependency cache (§19.1's closing paragraph) ---
+
+// TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion proves
+// attempt (PumpOnce's own per-row body) now populates ImageSpec.CacheMount
+// on every real BuildImage call, keyed EXACTLY as ports.CacheMount's own
+// doc comment specifies: domain/imagebuild.CacheVolumeKey(row.Base,
+// row.RuntimeVersion), with Paths carrying domain/imagebuild.
+// WellKnownCachePaths verbatim.
+func TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-cache-mount-claim"
+	seedPendingImageBuild(ctx, t, store, fingerprint) // Base="narvi/base:test", RuntimeVersion="1.0.0-test"
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:cache-mount-claim"}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 1 {
+		t.Fatalf("BuildImage call count = %d, want 1", got)
+	}
+	mount := provider.buildCalls[0].CacheMount
+	if mount == nil {
+		t.Fatal("BuildImage called with ImageSpec.CacheMount = nil, want it populated (§19.1's closing paragraph, Step 43(c))")
+	}
+	wantKey := domainimagebuild.CacheVolumeKey("narvi/base:test", "1.0.0-test")
+	if mount.Key != wantKey {
+		t.Errorf("CacheMount.Key = %q, want domain/imagebuild.CacheVolumeKey(base, runtimeVersion) = %q", mount.Key, wantKey)
+	}
+	if len(mount.Paths) != len(domainimagebuild.WellKnownCachePaths) {
+		t.Errorf("CacheMount.Paths = %v, want domain/imagebuild.WellKnownCachePaths verbatim (%v)", mount.Paths, domainimagebuild.WellKnownCachePaths)
+	}
+	for i, p := range domainimagebuild.WellKnownCachePaths {
+		if i >= len(mount.Paths) || mount.Paths[i] != p {
+			t.Errorf("CacheMount.Paths[%d] = %v, want %q", i, mount.Paths, p)
+			break
+		}
+	}
+}
+
+// TestPumpOnce_CacheMountKey_SharedAcrossDifferentRepoSets_SameBaseAndRuntime
+// is the core regression test for §19.1's own "keyed on Base +
+// RuntimeVersion ONLY -- never on repo content" requirement, exercised
+// through Builder's REAL claim-time build path rather than only at
+// domain/imagebuild.CacheVolumeKey's own unit-test level
+// (cachemount_test.go): two PENDING rows with genuinely different repo
+// sets (different Fingerprints -- see the two distinct fingerprint
+// constants and repo maps below) but the identical seeded Base/
+// RuntimeVersion (seedPendingImageBuildWithRepos always seeds
+// "narvi/base:test"/"1.0.0-test") must resolve to the SAME
+// CacheMount.Key on their own independent BuildImage calls -- proving the
+// cache volume really is shared across repo sets, not accidentally
+// re-partitioned by whatever a caller happens to pass alongside it.
+func TestPumpOnce_CacheMountKey_SharedAcrossDifferentRepoSets_SameBaseAndRuntime(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	seedPendingImageBuildWithRepos(ctx, t, store, "fp-cache-shared-a", map[string]string{
+		"frontend": "https://github.com/acme/frontend",
+	})
+	seedPendingImageBuildWithRepos(ctx, t, store, "fp-cache-shared-b", map[string]string{
+		"backend": "https://github.com/acme/backend",
+		"infra":   "https://github.com/acme/infra",
+	})
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:cache-shared"}
+	sourceControl := &fakeSourceControl{nextSHA: "sha-any"}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if got := provider.buildCallCount(); got != 2 {
+		t.Fatalf("BuildImage call count = %d, want 2 (both pending rows claimed in one batch)", got)
+	}
+
+	mountA := provider.buildCalls[0].CacheMount
+	mountB := provider.buildCalls[1].CacheMount
+	if mountA == nil || mountB == nil {
+		t.Fatalf("CacheMount = %v / %v, want both populated", mountA, mountB)
+	}
+	if mountA.Key != mountB.Key {
+		t.Errorf("CacheMount.Key diverged across two Fingerprints that differ ONLY in their repo set (%q vs %q) -- the cache key must never depend on repos", mountA.Key, mountB.Key)
+	}
+	// Sanity: the two BuildImage calls really did target different repo
+	// sets (i.e. this test is actually exercising two different
+	// Fingerprints, not accidentally the same row twice).
+	if len(provider.buildCalls[0].Repos) == len(provider.buildCalls[1].Repos) {
+		t.Fatalf("test setup invalid: both BuildImage calls saw the same repo count (%d) -- want genuinely different repo sets", len(provider.buildCalls[0].Repos))
+	}
+}
+
+// TestPumpOnce_Success_RecordsBuildDurationAndAttemptTotal_ClaimPhaseSuccess
+// proves the build-duration/failure-rate instrumentation §19.9's closing
+// paragraph calls for (telemetry.go) actually fires on a real, successful
+// claim-time BuildImage call, tagged phase="claim" outcome="success".
+func TestPumpOnce_Success_RecordsBuildDurationAndAttemptTotal_ClaimPhaseSuccess(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-telemetry-claim-success"
+	seedPendingImageBuild(ctx, t, store, fingerprint)
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:telemetry-claim-success"}
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	beforeAttempts := readImageBuildAttemptTotal(ctx, t, imagebuild.IntegrationOtelReader, "claim", "success")
+	beforeDuration := sumImageBuildDurationCount(ctx, t, imagebuild.IntegrationOtelReader, "claim", "success")
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if got := readImageBuildAttemptTotal(ctx, t, imagebuild.IntegrationOtelReader, "claim", "success") - beforeAttempts; got != 1 {
+		t.Errorf("image_build_attempt_total{phase=claim,outcome=success} delta = %d, want 1", got)
+	}
+	if got := sumImageBuildDurationCount(ctx, t, imagebuild.IntegrationOtelReader, "claim", "success") - beforeDuration; got != 1 {
+		t.Errorf("image_build_duration_seconds{phase=claim,outcome=success} observation-count delta = %d, want 1", got)
+	}
+}
+
+// TestPumpOnce_FailedBuild_RecordsBuildDurationAndAttemptTotal_ClaimPhaseFailure
+// is the failure-outcome sibling of the success test above -- a failed
+// claim-time BuildImage call must still record an observation, tagged
+// outcome="failure", proving the counter/histogram genuinely distinguish
+// outcomes rather than firing identically regardless.
+func TestPumpOnce_FailedBuild_RecordsBuildDurationAndAttemptTotal_ClaimPhaseFailure(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-telemetry-claim-failure"
+	seedPendingImageBuild(ctx, t, store, fingerprint)
+
+	provider := &fakeBuildProvider{nextErr: errors.New("simulated BuildImage failure")}
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	beforeAttempts := readImageBuildAttemptTotal(ctx, t, imagebuild.IntegrationOtelReader, "claim", "failure")
+	beforeDuration := sumImageBuildDurationCount(ctx, t, imagebuild.IntegrationOtelReader, "claim", "failure")
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if got := readImageBuildAttemptTotal(ctx, t, imagebuild.IntegrationOtelReader, "claim", "failure") - beforeAttempts; got != 1 {
+		t.Errorf("image_build_attempt_total{phase=claim,outcome=failure} delta = %d, want 1", got)
+	}
+	if got := sumImageBuildDurationCount(ctx, t, imagebuild.IntegrationOtelReader, "claim", "failure") - beforeDuration; got != 1 {
+		t.Errorf("image_build_duration_seconds{phase=claim,outcome=failure} observation-count delta = %d, want 1", got)
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusFailed {
+		t.Errorf("status = %q, want %q (this test's own real point is the metric, but the ordinary failure path must still hold)", row.Status, sqlcgen.ImageBuildStatusFailed)
+	}
+}
+
+// TestRefreshOnce_Success_RecordsBuildDurationAndAttemptTotal_RefreshPhaseSuccess
+// is the "refresh" phase's own sibling of the claim-phase telemetry tests
+// above -- a real, successful in-place refresh build must be tagged
+// phase="refresh", not "claim", so the two call sites (attempt vs.
+// attemptRefresh, builder.go) are genuinely distinguishable in the
+// resulting metrics.
+func TestRefreshOnce_Success_RecordsBuildDurationAndAttemptTotal_RefreshPhaseSuccess(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-telemetry-refresh-success"
+	seedReadyImageBuildWithRepos(ctx, t, store, fingerprint,
+		map[string]string{"repo1": "https://github.com/acme/repo1"},
+		map[string]string{"repo1": "sha-old"},
+		"narvi/built-image:telemetry-refresh-old")
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:telemetry-refresh-new"}
+	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
+
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	beforeAttempts := readImageBuildAttemptTotal(ctx, t, imagebuild.IntegrationOtelReader, "refresh", "success")
+	beforeDuration := sumImageBuildDurationCount(ctx, t, imagebuild.IntegrationOtelReader, "refresh", "success")
+
+	if err := builder.RefreshOnce(ctx); err != nil {
+		t.Fatalf("RefreshOnce: %v", err)
+	}
+
+	if got := readImageBuildAttemptTotal(ctx, t, imagebuild.IntegrationOtelReader, "refresh", "success") - beforeAttempts; got != 1 {
+		t.Errorf("image_build_attempt_total{phase=refresh,outcome=success} delta = %d, want 1", got)
+	}
+	if got := sumImageBuildDurationCount(ctx, t, imagebuild.IntegrationOtelReader, "refresh", "success") - beforeDuration; got != 1 {
+		t.Errorf("image_build_duration_seconds{phase=refresh,outcome=success} observation-count delta = %d, want 1", got)
+	}
+}
+
+// TestPumpOnce_ProviderIgnoresCacheMount_BuildStillSucceeds is Builder's
+// own (narrow) share of the pure-accelerator rule's dedicated test
+// coverage the task's own instructions call for: "a corrupted/unavailable/
+// declined cache must produce a successful cold build, never a failure."
+// fakeBuildProvider (this file) already never inspects ImageSpec.CacheMount
+// at all -- it always returns whatever (ref, err) the test configured,
+// completely independent of what was requested -- which is EXACTLY a
+// provider that has silently declined the cache mount, per ports.
+// CacheMount's own doc comment ("a caller must never be able to
+// distinguish 'the cache was used' from 'the cache was declined' from
+// BuildImage's return value alone"). This test makes that already-true
+// property explicit rather than merely incidental: Builder adds no
+// cache-conditional branch anywhere on its own success/failure path. The
+// DEEPER coverage of this same rule -- an adapter that actively reports
+// cache trouble (corrupted/locked/unavailable) still degrading to a
+// successful cold build -- lives at the one layer that can meaningfully
+// exercise it, internal/adapters/outbound/modal's own
+// TestProvider_BuildImage_CacheMountTrouble_FallsBackToColdBuild, since
+// that decline-and-retry mechanism is deliberately adapter-internal
+// (ports.CacheMount's own "per-provider semantics differ enough that the
+// port must not assume one" contract) and Builder itself has no visibility
+// into it at all.
+func TestPumpOnce_ProviderIgnoresCacheMount_BuildStillSucceeds(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprint = "fp-cache-declined-still-succeeds"
+	seedPendingImageBuild(ctx, t, store, fingerprint)
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:declined-cache-cold-build"}
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	// CacheMount WAS requested (Builder always populates it, see
+	// TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion
+	// above) -- proving this test genuinely exercises "requested but
+	// effectively declined/ignored," not merely "never requested at all."
+	if provider.buildCalls[0].CacheMount == nil {
+		t.Fatal("test setup invalid: CacheMount was not requested on this BuildImage call")
+	}
+
+	row, err := store.Get(ctx, fingerprint)
+	if err != nil {
+		t.Fatalf("get row: %v", err)
+	}
+	if row.Status != sqlcgen.ImageBuildStatusReady {
+		t.Errorf("status = %q, want %q -- a provider that silently ignores/declines CacheMount must still produce an ordinary successful (cold) build, never a failure", row.Status, sqlcgen.ImageBuildStatusReady)
+	}
+	if row.ImageRef == nil || *row.ImageRef != "narvi/built-image:declined-cache-cold-build" {
+		t.Errorf("image_ref = %v, want %q", row.ImageRef, "narvi/built-image:declined-cache-cold-build")
 	}
 }

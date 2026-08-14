@@ -58,6 +58,13 @@ type SandboxProvider interface {
 	// fallback-to-base-on-any-miss (§10 Phase 2) — is a later Step; this
 	// Step only requires the method to exist with a real implementation
 	// behind it.
+	//
+	// spec.CacheMount (§19.1's own "build-time dependency cache", Step
+	// 43(c)) optionally requests a persistent, provider-backed
+	// dependency-cache volume for this build — see CacheMount's own doc
+	// comment for the full contract (advisory only; a corrupted, locked,
+	// unavailable, or simply unsupported cache MUST degrade to an
+	// ordinary cold build, never a BuildImage failure).
 	BuildImage(ctx context.Context, spec ImageSpec) (BuildRef, error)
 
 	// DeleteImage deletes a previously built image. Optional per

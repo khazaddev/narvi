@@ -194,3 +194,68 @@ func classifyNetworkError(op ports.Op, err error) *ports.ProviderError {
 		Err:       err,
 	}
 }
+
+// --- Cache-mount decline detection (§19.1's closing paragraph, Step 43(c)) ---
+
+// cacheMountTroubleCodes is the fixed, closed set of error codes this
+// adapter's own invented wire protocol (doc.go: no real Modal account/API
+// reachable from this codebase) uses to signal that a BuildImage call
+// failed BECAUSE of the requested CacheVolume specifically — never because
+// of the underlying build itself. Provider.BuildImage's own
+// retry-without-cache fallback (provider.go) checks a failed attempt's
+// decoded Code against exactly this set (never a string-matched message,
+// §4.1) to decide whether to retry once, transparently, with CacheVolume
+// dropped.
+//
+// This is a DIFFERENT question from isTransientStatus's own
+// Transient/permanent table above: that table answers "should the CALLER
+// (app/imagebuild.Builder) retry this fingerprint later, with backoff";
+// this set answers "should THIS adapter itself retry, once, right now,
+// without the cache" — a corrupted or locked cache volume is presented
+// here as a permanent-status response (so a caller that ignored this
+// adapter's own fallback and retried the ORIGINAL request with the SAME
+// cache mount would not busy-loop against a condition that will not
+// self-heal), but that permanent/transient status never governs whether
+// THIS adapter falls back — membership in cacheMountTroubleCodes does,
+// unconditionally, regardless of Transient.
+//
+// Deliberately a closed set rather than a single catch-all "any error
+// while a cache mount was requested" heuristic: an ordinary build failure
+// (e.g. setup.sh itself failing inside the build sandbox) can occur on a
+// request that also happens to carry a cache mount, and must NOT be
+// silently retried as "maybe it was the cache" — that would mask a real
+// build defect behind an extra, slower, doomed-to-fail-identically retry.
+// Only a code this adapter's own protocol reserves specifically for cache
+// trouble triggers the fallback.
+var cacheMountTroubleCodes = map[string]bool{
+	// CACHE_MOUNT_CORRUPTED: the persistent volume's own contents failed
+	// whatever integrity check the (external, unmodeled) build service
+	// runs before handing it to a build.
+	"CACHE_MOUNT_CORRUPTED": true,
+	// CACHE_MOUNT_LOCKED: the volume is held by something the build
+	// service could not get safe concurrent access to — see
+	// ports.CacheMount's own "no lock" doc comment for why this codebase
+	// does not expect this to be a common outcome (every well-known cache
+	// path is content-addressed, so an ordinary concurrent build should
+	// never need to report this), but a provider's backing store is free
+	// to report it regardless (§19.1: "per-provider semantics differ
+	// enough that the port must not assume one").
+	"CACHE_MOUNT_LOCKED": true,
+	// CACHE_MOUNT_UNAVAILABLE: the volume could not be provisioned/reached
+	// at all for this build (e.g. the provider's own volume subsystem is
+	// degraded).
+	"CACHE_MOUNT_UNAVAILABLE": true,
+}
+
+// isCacheMountTrouble reports whether err is a *ports.ProviderError whose
+// Code names one of cacheMountTroubleCodes above — see that var's own doc
+// comment for the full reasoning. A nil err, or one that is not a
+// *ports.ProviderError at all (whether directly or wrapped), is never
+// cache trouble.
+func isCacheMountTrouble(err error) bool {
+	var pe *ports.ProviderError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	return cacheMountTroubleCodes[pe.Code]
+}

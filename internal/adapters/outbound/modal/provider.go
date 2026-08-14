@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // Provider is the Modal SandboxProvider adapter: it implements
@@ -149,6 +150,25 @@ func (p *Provider) RestoreFromSnapshot(ctx context.Context, id ports.SnapshotID,
 }
 
 // BuildImage POSTs to /v1/images.
+//
+// # Cache-mount decline-and-fall-back-to-cold-build (§19.1's closing
+// # paragraph, Step 43(c))
+//
+// When spec.CacheMount is set, the first attempt carries it as
+// req.CacheVolume. If that attempt fails with a *ports.ProviderError whose
+// Code names cache trouble specifically (isCacheMountTrouble, errors.go —
+// never an ordinary build failure), BuildImage retries EXACTLY ONCE with
+// CacheVolume dropped entirely — an ordinary cold build, indistinguishable
+// on the wire from a request that never asked for a cache mount in the
+// first place. This is this adapter's own concrete implementation of the
+// decline permission ports.CacheMount's own doc comment grants every
+// adapter: the caller (app/imagebuild.Builder) never sees a cache-specific
+// error and never needs to special-case one — a corrupted, locked, or
+// unavailable cache costs one extra HTTP round trip here, never a
+// BuildImage failure. A failure on the SECOND (cold) attempt is a genuine
+// build failure, unrelated to the cache, and is returned exactly as any
+// other BuildImage failure — no special handling, same retry/backoff path
+// through app/imagebuild.Builder's own recordFailure as always.
 func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.BuildRef, error) {
 	var repos map[string]imageBuildRequestRepo
 	if len(spec.Repos) > 0 {
@@ -161,12 +181,33 @@ func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.
 		Base:           spec.Base,
 		Repos:          repos,
 		RuntimeVersion: spec.RuntimeVersion,
+		CacheVolume:    cacheVolumeFromSpec(spec.CacheMount),
 	}
+
 	var resp buildResponse
-	if err := p.do(ctx, ports.OpBuildImage, http.MethodPost, "/v1/images", req, &resp); err != nil {
+	err := p.do(ctx, ports.OpBuildImage, http.MethodPost, "/v1/images", req, &resp)
+	if err != nil && req.CacheVolume != nil && isCacheMountTrouble(err) {
+		platform.Logger(ctx).Warn("modal: BuildImage: cache mount unavailable; retrying as an ordinary cold build (pure-accelerator fallback, §19.1)",
+			"cache_key", req.CacheVolume.Key, "error", err)
+		req.CacheVolume = nil
+		err = p.do(ctx, ports.OpBuildImage, http.MethodPost, "/v1/images", req, &resp)
+	}
+	if err != nil {
 		return "", err
 	}
 	return ports.BuildRef(resp.BuildID), nil
+}
+
+// cacheVolumeFromSpec translates a ports.CacheMount into this adapter's own
+// wire shape, or returns nil when mount is nil (no cache requested) —
+// keeping the "no CacheMount -> byte-for-byte identical request as before
+// this field existed" property wire.go's own imageBuildRequest.CacheVolume
+// doc comment promises.
+func cacheVolumeFromSpec(mount *ports.CacheMount) *imageBuildRequestCacheVolume {
+	if mount == nil {
+		return nil
+	}
+	return &imageBuildRequestCacheVolume{Key: mount.Key, Paths: mount.Paths}
 }
 
 // DeleteImage issues a DELETE to /v1/images/{id}.

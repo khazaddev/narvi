@@ -114,6 +114,11 @@ type Builder struct {
 	// app/reconciler.NewReconciler's own orphans_reaped precedent it in
 	// turn mirrors).
 	refreshClaimReclaimed metric.Int64Counter
+
+	// buildTelemetry bundles Step 43(c)'s own build-duration/failure-rate
+	// instrumentation (§19.9's closing paragraph; telemetry.go) -- recorded
+	// around every real BuildImage call in both attempt and attemptRefresh.
+	buildTelemetry buildTelemetry
 }
 
 // NewBuilder builds a Builder backed by store/pool (pool is needed
@@ -160,6 +165,11 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		return nil, fmt.Errorf("imagebuild: construct image_build_permanently_failed counter: %w", err)
 	}
 
+	buildTel, err := newBuildTelemetry(meter)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Builder{
 		store:                 store,
 		pool:                  pool,
@@ -170,7 +180,33 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		failureStreak:         failureStreak,
 		refreshClaimReclaimed: refreshClaimReclaimed,
 		permanentlyFailed:     permanentlyFailed,
+		buildTelemetry:        buildTel,
 	}, nil
+}
+
+// cacheMount builds the ports.CacheMount every real BuildImage call this
+// package makes now requests (§19.1's closing paragraph, Step 43(c)): Key
+// is domain/imagebuild.CacheVolumeKey(base, runtimeVersion) -- deliberately
+// NOT a function of repos, so every fingerprint sharing the same
+// (base, runtimeVersion) resolves to the identical cache volume regardless
+// of which repo set it is building (ports.CacheMount's own doc comment has
+// the full "keyed on Base + RuntimeVersion ONLY" reasoning). Never nil:
+// base and runtimeVersion are always present on a real image_builds row
+// (both NOT NULL columns), so there is no "nothing to key on" case here --
+// a row naming no repos (base+runtime only) still gets a cache mount, it
+// simply has no setup.sh of its own to populate it with, which is harmless
+// (an unused mount costs nothing, mirroring domain/imagebuild.
+// WellKnownCachePaths' own "an unused path costs nothing" reasoning).
+// Whether the requested mount is actually honored is entirely up to the
+// provider (ports.CacheMount: "purely advisory... a caller must never be
+// able to distinguish 'the cache was used' from 'the cache was declined'
+// from BuildImage's return value alone") -- this package never inspects or
+// branches on that.
+func (b *Builder) cacheMount(base, runtimeVersion string) *ports.CacheMount {
+	return &ports.CacheMount{
+		Key:   domainimagebuild.CacheVolumeKey(base, runtimeVersion),
+		Paths: domainimagebuild.WellKnownCachePaths,
+	}
 }
 
 // Run runs the process-wide image-build loop until ctx is done: TWO
@@ -384,11 +420,14 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 		builtRepoSHAs = resolved
 	}
 
+	buildStart := time.Now()
 	ref, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
 		Base:           row.Base,
 		Repos:          repos,
 		RuntimeVersion: row.RuntimeVersion,
+		CacheMount:     b.cacheMount(row.Base, row.RuntimeVersion),
 	})
+	b.buildTelemetry.record(ctx, "claim", time.Since(buildStart).Seconds(), buildErr != nil)
 	if buildErr != nil {
 		logger.Warn("imagebuild: BuildImage failed", "error", buildErr)
 		b.recordFailure(ctx, logger, row)
@@ -839,11 +878,14 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild, st
 	// generated doc comment and this function's own top doc comment.
 	claimedRefreshStartedAt := claimed.RefreshStartedAt
 
+	refreshBuildStart := time.Now()
 	ref, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
 		Base:           claimed.Base,
 		Repos:          repos,
 		RuntimeVersion: claimed.RuntimeVersion,
+		CacheMount:     b.cacheMount(claimed.Base, claimed.RuntimeVersion),
 	})
+	b.buildTelemetry.record(ctx, "refresh", time.Since(refreshBuildStart).Seconds(), buildErr != nil)
 	if buildErr != nil {
 		logger.Warn("imagebuild: refresh: BuildImage failed; releasing claim, old image_ref stays servable", "error", buildErr)
 		b.releaseRefreshClaim(ctx, logger, row.Fingerprint, claimedRefreshStartedAt)

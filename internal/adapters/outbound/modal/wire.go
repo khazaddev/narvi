@@ -40,6 +40,17 @@ type imageBuildRequest struct {
 	Base           string                           `json:"base"`
 	Repos          map[string]imageBuildRequestRepo `json:"repos,omitempty"`
 	RuntimeVersion string                           `json:"runtimeVersion,omitempty"`
+
+	// CacheVolume, when present, requests the build-time dependency cache
+	// (§19.1's closing paragraph, Step 43(c); ports.ImageSpec.CacheMount's
+	// own doc comment has the full contract). omitempty: a spec with no
+	// CacheMount produces a request byte-for-byte identical to what this
+	// adapter sent before this field existed — no behavior change for a
+	// caller that never opts in. Dropped to nil (never re-sent) by
+	// Provider.BuildImage's own cold-build retry the instant the fake
+	// wire protocol reports cache trouble — see errors.go's
+	// isCacheMountTrouble and provider.go's BuildImage.
+	CacheVolume *imageBuildRequestCacheVolume `json:"cacheVolume,omitempty"`
 }
 
 // imageBuildRequestRepo is imageBuildRequest.Repos' own value shape,
@@ -47,6 +58,16 @@ type imageBuildRequest struct {
 type imageBuildRequestRepo struct {
 	URL string `json:"url"`
 	SHA string `json:"sha"`
+}
+
+// imageBuildRequestCacheVolume is imageBuildRequest.CacheVolume's own value
+// shape, mirroring ports.CacheMount{Key, Paths} field-for-field — same
+// "invented, tested against a fake httptest.Server, not real Modal API
+// docs" posture as every other shape in this file (see this file's own top
+// doc comment).
+type imageBuildRequestCacheVolume struct {
+	Key   string   `json:"key"`
+	Paths []string `json:"paths,omitempty"`
 }
 
 // sandboxResponse is returned by CreateSandbox and RestoreFromSnapshot on

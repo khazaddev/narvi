@@ -111,6 +111,129 @@ type ImageSpec struct {
 	// RuntimeVersion is the pinned toolchain/runtime version baked into
 	// the image (part of the same fingerprint).
 	RuntimeVersion string
+
+	// CacheMount, when non-nil, asks BuildImage to accelerate the build by
+	// mounting a persistent, provider-backed cache volume into the build
+	// sandbox at CacheMount.Paths (§19.1's own "build-time dependency
+	// cache" — Step 43(c)). See CacheMount's own doc comment for the full
+	// contract; nil means "no cache requested" (every ImageSpec literal
+	// that predates this field, and every test fixture that never sets
+	// it, keeps behaving exactly as before this field existed).
+	CacheMount *CacheMount
+}
+
+// CacheMount is ImageSpec.CacheMount's own value type (§19.1's closing
+// paragraph, Step 43(c)): a persistent, provider-backed cache volume a
+// BuildImage call may mount into its build sandbox, to avoid re-downloading
+// every dependency from a cold, empty filesystem on every single build.
+//
+// # Purely advisory — never a promise, never a requirement
+//
+// CacheMount is a HINT, not a contract obligation on the caller's part or a
+// guarantee on the provider's: BuildImage's signature carries no
+// cache-specific error, and it must never grow one. §19.1's own words are
+// exact: "a corrupted, locked, or unavailable cache degrades to exactly
+// today's cold build and never fails one — this is the load-bearing
+// property: treat every cache error as 'proceed without cache', never as a
+// build error." Concretely: an adapter (or its backing build
+// infrastructure) that cannot safely mount this volume for ANY reason —
+// no persistent-volume primitive at all, a corrupted or stuck-locked
+// volume, one it simply cannot reach right now — MUST silently decline the
+// mount and perform an ordinary cold build instead, exactly as if
+// CacheMount had been nil. A caller (app/imagebuild.Builder) must never be
+// able to distinguish "the cache was used" from "the cache was declined"
+// from BuildImage's return value alone — both are success. Every adapter
+// whose Capabilities().ImageBuilds is false (RWX today, §4.1.1) never even
+// reaches this field; RWX's own content-addressed layer cache already
+// gives it this effect natively.
+//
+// # Key: Base + RuntimeVersion ONLY, never repo content
+//
+// Key is domain/imagebuild.CacheVolumeKey(spec.Base, spec.RuntimeVersion) —
+// deliberately excludes Repos, so every ImageSpec sharing the same Base and
+// RuntimeVersion resolves to the SAME cache volume regardless of which
+// repo set it is building (one shared cache across every Environment built
+// from the same base image and runtime, not one per Fingerprint). A cache
+// keyed on repo content would recreate the exact cold start this design
+// exists to remove: the very first build of a brand-new Environment would
+// get zero benefit from every OTHER Environment's already-warmed
+// dependency downloads.
+//
+// # No lock — the port's own documented concurrency contract
+//
+// §19.2's refresh pump makes concurrent BuildImage calls against the SAME
+// cache Key routine, not rare: it rebuilds every ready shared image
+// whenever its repos' tips move, and nothing serializes two different
+// fingerprints that happen to share a Base/RuntimeVersion pair. This port
+// deliberately takes NO lock — neither here nor in any caller — around
+// concurrent access to one cache volume. That is a considered decision,
+// not an oversight: every path in WellKnownCachePaths
+// (internal/domain/imagebuild) names a package manager's own
+// CONTENT-ADDRESSED cache (npm's _cacache, pip's HTTP cache, Go's module
+// and build caches, ...) — the filename under each of those paths IS the
+// content hash of what it holds, so two concurrent builds that both happen
+// to fetch the identical package version write the IDENTICAL bytes to the
+// IDENTICAL path. The "conflict" a lock would prevent is idempotent by
+// construction: at worst, two writers redundantly produce the same file: a
+// wasted download, never a corrupted cache. A lock would instead serialize
+// §19.2's refresh pump — this design's own steady state, not an edge case
+// — purely to guard against a collision that cannot corrupt anything.
+//
+// Two obligations follow from relying on that property instead of a lock,
+// and both bind whoever actually writes into one of these paths (in
+// practice the package-manager processes running inside the remote build
+// sandbox, e.g. npm's own _cacache implementation — this codebase's own Go
+// code performs no such write itself, since the mounting and the
+// dependency install both happen inside the provider's build
+// infrastructure, outside this repo's reach):
+//
+//  1. Every writer MUST rely on atomic rename semantics: write to a
+//     temporary path in the SAME directory as the file's own final
+//     content-addressed name, then rename it into place, rather than
+//     writing in place under the final name. A concurrent reader must
+//     never be able to observe a partially-written file under its final
+//     name — exactly what makes the "two writers, one path" case above
+//     safe rather than a race. Every ecosystem this codebase's own
+//     WellKnownCachePaths names already implements this internally.
+//  2. Writes must be committed to the persistent Key location only once
+//     the build that produced them has itself succeeded — a failed build
+//     must never leave partial or corrupt dependency-download artifacts
+//     poisoning the shared cache for whichever build runs against Key
+//     next. This is a contract on the provider/build-service side (the
+//     same "documented, not implemented in this repo" posture §19.1
+//     already takes for the full non-shallow clone and the baked
+//     self-description manifest, both likewise performed by an external,
+//     unmodeled build service) — BuildImage's own Go implementation
+//     cannot enforce it directly, only request it via this field and
+//     document the requirement here for whatever implements it.
+//
+// # Per-provider semantics differ — the port must not assume one
+//
+// §19.1: "concurrent builds sharing one cache volume need an explicit
+// concurrency story, and per-provider semantics differ enough that the
+// port must not assume one." This struct is the whole of that story at the
+// port level: a plain key plus a plain path list, no lock handle, no
+// provider-specific volume/mount object. HOW an adapter turns Key/Paths
+// into an actual mounted volume — and whether it can safely do so at all
+// for a given (Key, concurrent-access) situation — is entirely that
+// adapter's own decision (see internal/adapters/outbound/modal's own
+// BuildImage for the one implementation that exists today: it declines
+// the mount and transparently retries as a cold build the instant its own
+// wire protocol reports cache trouble).
+type CacheMount struct {
+	// Key names the ONE persistent cache volume this build should mount —
+	// domain/imagebuild.CacheVolumeKey(Base, RuntimeVersion). Opaque
+	// outside whichever adapter mounts it; this package makes no claim
+	// about its own format beyond "deterministic for a given
+	// (Base, RuntimeVersion) pair."
+	Key string
+
+	// Paths is the package-manager-agnostic, fixed, closed set of
+	// well-known cache directories to mount at Key inside the build
+	// sandbox — domain/imagebuild.WellKnownCachePaths, see that var's own
+	// doc comment for the full list and why it stays fixed rather than
+	// guessing which ecosystem(s) a given repo set actually uses.
+	Paths []string
 }
 
 // RepoRef names one repo's clone URL and the concrete SHA to build the

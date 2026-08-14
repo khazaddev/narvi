@@ -708,6 +708,243 @@ func TestProvider_BuildImage(t *testing.T) {
 	}
 }
 
+// --- BuildImage: CacheMount wiring + pure-accelerator fallback (§19.1's
+// closing paragraph, Step 43(c)) ---
+
+// TestProvider_BuildImage_CacheMount_SentOnWire proves a spec carrying
+// CacheMount produces a request whose cacheVolume field mirrors
+// ports.CacheMount{Key, Paths} exactly.
+func TestProvider_BuildImage_CacheMount_SentOnWire(t *testing.T) {
+	spec := ports.ImageSpec{
+		Base:           "base:v1",
+		RuntimeVersion: "go1.26",
+		CacheMount: &ports.CacheMount{
+			Key:   "cachekey-abc123",
+			Paths: []string{"/root/.npm/_cacache", "/root/.cache/pip"},
+		},
+	}
+	var got imageBuildRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(buildResponse{BuildID: "build-cached-1"})
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	ref, err := p.BuildImage(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("BuildImage() error = %v", err)
+	}
+	if ref != "build-cached-1" {
+		t.Errorf("BuildImage() = %q, want %q", ref, "build-cached-1")
+	}
+	if got.CacheVolume == nil {
+		t.Fatal("request body cacheVolume = nil, want it populated")
+	}
+	if got.CacheVolume.Key != "cachekey-abc123" {
+		t.Errorf("cacheVolume.Key = %q, want %q", got.CacheVolume.Key, "cachekey-abc123")
+	}
+	wantPaths := []string{"/root/.npm/_cacache", "/root/.cache/pip"}
+	if !reflect.DeepEqual(got.CacheVolume.Paths, wantPaths) {
+		t.Errorf("cacheVolume.Paths = %v, want %v", got.CacheVolume.Paths, wantPaths)
+	}
+}
+
+// TestProvider_BuildImage_NoCacheMount_OmitsCacheVolumeField proves a spec
+// with CacheMount left nil (every ImageSpec literal that predates this
+// field, and every caller that never opts in) produces a request with NO
+// cacheVolume key at all on the wire — not merely a null value — so this
+// change is invisible to a fake (or real) server that has no idea the
+// field exists.
+func TestProvider_BuildImage_NoCacheMount_OmitsCacheVolumeField(t *testing.T) {
+	var gotRaw map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotRaw); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(buildResponse{BuildID: "build-nocache-1"})
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	spec := ports.ImageSpec{Base: "base:v1", RuntimeVersion: "go1.26"}
+	if _, err := p.BuildImage(context.Background(), spec); err != nil {
+		t.Fatalf("BuildImage() error = %v", err)
+	}
+	if _, ok := gotRaw["cacheVolume"]; ok {
+		t.Error(`request body has a "cacheVolume" key, want it entirely absent when spec.CacheMount is nil`)
+	}
+}
+
+// cacheMountTroubleServer builds an httptest.Server standing in for a
+// build service that cannot honor a cache mount at all: the FIRST request
+// (the one carrying a non-nil cacheVolume) is rejected with troubleCode;
+// any SECOND request succeeds — modeling Provider.BuildImage's own
+// decline-and-retry-cold fallback. Returns the server and a pointer to the
+// observed request count.
+func cacheMountTroubleServer(t *testing.T, status int, troubleCode string) (*httptest.Server, *int) {
+	t.Helper()
+	requestCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req imageBuildRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.CacheVolume != nil {
+			// First attempt: this fake build service cannot honor the
+			// requested cache mount.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error": map[string]string{"code": troubleCode, "message": "cache mount trouble"},
+			})
+			return
+		}
+		// Second attempt (or any request with no cache mount at all): an
+		// ordinary successful cold build.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(buildResponse{BuildID: "build-cold-fallback"})
+	}))
+	return srv, &requestCount
+}
+
+// TestProvider_BuildImage_CacheMountTrouble_FallsBackToColdBuild is the
+// pure-accelerator rule's own dedicated test (task requirement: "a
+// corrupted/unavailable/declined cache must produce a successful cold
+// build, never a failure"): for each cache-trouble code this adapter's own
+// invented protocol recognizes, BuildImage must still return a successful
+// BuildRef — proving a cache problem can never surface as a caller-visible
+// BuildImage failure.
+func TestProvider_BuildImage_CacheMountTrouble_FallsBackToColdBuild(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		troubleCode string
+	}{
+		{name: "corrupted cache volume", status: http.StatusConflict, troubleCode: "CACHE_MOUNT_CORRUPTED"},
+		{name: "locked cache volume", status: http.StatusConflict, troubleCode: "CACHE_MOUNT_LOCKED"},
+		{name: "unavailable cache volume", status: http.StatusServiceUnavailable, troubleCode: "CACHE_MOUNT_UNAVAILABLE"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, requestCount := cacheMountTroubleServer(t, tt.status, tt.troubleCode)
+			defer srv.Close()
+
+			p, err := New(testConfig(srv.URL))
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+
+			spec := ports.ImageSpec{
+				Base:           "base:v1",
+				RuntimeVersion: "go1.26",
+				CacheMount:     &ports.CacheMount{Key: "trouble-key", Paths: []string{"/root/.npm/_cacache"}},
+			}
+			ref, err := p.BuildImage(context.Background(), spec)
+			if err != nil {
+				t.Fatalf("BuildImage() error = %v, want nil (pure accelerator: %s must degrade to a successful cold build)", err, tt.troubleCode)
+			}
+			if ref != "build-cold-fallback" {
+				t.Errorf("BuildImage() = %q, want %q (the cold-build fallback response)", ref, "build-cold-fallback")
+			}
+			if *requestCount != 2 {
+				t.Errorf("server observed %d requests, want 2 (one with the cache mount, one cold retry)", *requestCount)
+			}
+		})
+	}
+}
+
+// TestProvider_BuildImage_CacheMountTrouble_NoRetryWhenNoCacheRequested
+// proves the fallback is scoped to a request that itself carried a cache
+// mount: a plain BuildImage failure — including one that happens to use
+// the SAME error codes cacheMountTroubleCodes recognizes, purely by
+// coincidence — must never trigger a second request when spec.CacheMount
+// was nil to begin with. Guards against a broader "retry on this code,
+// unconditionally" implementation that would silently double every
+// ordinary failed build for callers who never asked for a cache at all.
+func TestProvider_BuildImage_CacheMountTrouble_NoRetryWhenNoCacheRequested(t *testing.T) {
+	requestCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{"code": "CACHE_MOUNT_CORRUPTED", "message": "coincidental code, no cache was ever requested"},
+		})
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	spec := ports.ImageSpec{Base: "base:v1", RuntimeVersion: "go1.26"} // CacheMount left nil
+	if _, err := p.BuildImage(context.Background(), spec); err == nil {
+		t.Fatal("BuildImage() error = nil, want a ProviderError (no cache was requested, so this is an ordinary build failure)")
+	}
+	if requestCount != 1 {
+		t.Errorf("server observed %d requests, want exactly 1 (no cold-build retry when spec.CacheMount was nil)", requestCount)
+	}
+}
+
+// TestProvider_BuildImage_OrdinaryFailureWithCacheMount_NotRetried proves
+// the fallback does NOT fire for an ordinary build failure that happens to
+// occur on a request that also carried a cache mount — only a code in
+// cacheMountTroubleCodes triggers the retry; every other failure (a
+// genuine setup.sh/build defect) must surface exactly once, unmasked.
+func TestProvider_BuildImage_OrdinaryFailureWithCacheMount_NotRetried(t *testing.T) {
+	requestCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]string{"code": "SETUP_SCRIPT_FAILED", "message": "setup.sh exited 1"},
+		})
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	spec := ports.ImageSpec{
+		Base:           "base:v1",
+		RuntimeVersion: "go1.26",
+		CacheMount:     &ports.CacheMount{Key: "some-key", Paths: []string{"/root/.npm/_cacache"}},
+	}
+	_, err = p.BuildImage(context.Background(), spec)
+	if err == nil {
+		t.Fatal("BuildImage() error = nil, want a ProviderError for a genuine (non-cache) build failure")
+	}
+	var pe *ports.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("BuildImage() error = %v, want *ports.ProviderError", err)
+	}
+	if pe.Code != "SETUP_SCRIPT_FAILED" {
+		t.Errorf("BuildImage() error.Code = %q, want %q (the real underlying failure, not masked)", pe.Code, "SETUP_SCRIPT_FAILED")
+	}
+	if requestCount != 1 {
+		t.Errorf("server observed %d requests, want exactly 1 (an ordinary build failure must not trigger the cache fallback retry)", requestCount)
+	}
+}
+
 func TestProvider_BuildImage_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnprocessableEntity)
