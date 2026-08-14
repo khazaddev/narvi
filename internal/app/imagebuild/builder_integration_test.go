@@ -2697,6 +2697,98 @@ func TestPumpOnce_MountedVersionImmuneToConcurrentPublish(t *testing.T) {
 	}
 }
 
+// TestPumpOnce_RecordsConfirmedPublishAndPrunesOldVersions exercises
+// recordCachePublish (builder.go:306) through the ONLY path any real build
+// reaches it: a PumpOnce call whose fakeBuildProvider echoes
+// PublishedCacheVersion back on success, exactly as a real adapter's
+// success-confirmation contract requires (see fakeBuildProvider's own doc
+// comment). Every other test in this file leaves echoPublishedCacheVersion
+// at its zero value (false), so recordCachePublish's own early-return guard
+// (`publishedCacheVersion == ""`) is the only branch any of them exercise —
+// this test is what actually drives PublishVersion/ListVersions/
+// DeleteVersions against real Postgres, closing the gap the adversarial
+// review of this Step's third iteration found: a safety mechanism that
+// reads correctly but nothing ever ran.
+func TestPumpOnce_RecordsConfirmedPublishAndPrunesOldVersions(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+	cacheVersionStore := narvipg.NewImageCacheVersionStore(pool)
+
+	const base = "narvi/base:test"
+	const runtimeVersion = "1.0.0-test"
+	key := domainimagebuild.CacheVolumeKey(base, runtimeVersion)
+
+	// Seed RetainedCacheVersions (5) already-confirmed versions, so this
+	// attempt's own confirmed publish is the (RetainedCacheVersions+1)th --
+	// exactly the boundary at which recordCachePublish's own prune call
+	// must remove exactly one version (the oldest) to stay at the cap.
+	var oldestSeeded int64
+	for i := 0; i < domainimagebuild.RetainedCacheVersions; i++ {
+		v, err := cacheVersionStore.MintVersion(ctx, key)
+		if err != nil {
+			t.Fatalf("seed: MintVersion: %v", err)
+		}
+		if err := cacheVersionStore.PublishVersion(ctx, key, v, "fp-seed"); err != nil {
+			t.Fatalf("seed: PublishVersion: %v", err)
+		}
+		if i == 0 {
+			oldestSeeded = v
+		}
+	}
+
+	seedPendingImageBuild(ctx, t, store, "fp-publish-confirm")
+
+	provider := &fakeBuildProvider{nextRef: "narvi/built-image:publish-confirm", echoPublishedCacheVersion: true}
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", cacheVersionStore)
+	if err != nil {
+		t.Fatalf("NewBuilder: %v", err)
+	}
+	if err := builder.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce: %v", err)
+	}
+
+	if len(provider.buildCalls) != 1 {
+		t.Fatalf("buildCalls = %d, want 1", len(provider.buildCalls))
+	}
+	cm := provider.buildCalls[0].CacheMount
+	if cm == nil {
+		t.Fatal("BuildImage called with CacheMount = nil, want it populated")
+	}
+
+	versions, err := cacheVersionStore.ListVersions(ctx, key)
+	if err != nil {
+		t.Fatalf("ListVersions after PumpOnce: %v", err)
+	}
+	if len(versions) != domainimagebuild.RetainedCacheVersions {
+		t.Fatalf("ListVersions after PumpOnce = %d versions, want %d (RetainedCacheVersions) -- the confirmed publish and/or the prune-to-cap step never ran", len(versions), domainimagebuild.RetainedCacheVersions)
+	}
+	publishedVersion, err := strconv.ParseInt(cm.PublishVersion, 10, 64)
+	if err != nil {
+		t.Fatalf("parse CacheMount.PublishVersion %q: %v", cm.PublishVersion, err)
+	}
+	found := false
+	for _, v := range versions {
+		if v == oldestSeeded {
+			t.Fatalf("ListVersions still contains the oldest seeded version %d after publishing a %dth version -- retention pruning never ran", oldestSeeded, domainimagebuild.RetainedCacheVersions+1)
+		}
+		if v == publishedVersion {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ListVersions %v does not contain this attempt's own published version %d -- PublishVersion never committed it", versions, publishedVersion)
+	}
+
+	latest, err := cacheVersionStore.LatestVersion(ctx, key)
+	if err != nil {
+		t.Fatalf("LatestVersion after PumpOnce: %v", err)
+	}
+	if latest != publishedVersion {
+		t.Errorf("LatestVersion = %d, want %d (this attempt's own confirmed publish)", latest, publishedVersion)
+	}
+}
+
 // TestPumpOnce_CacheMountKey_SharedAcrossDifferentRepoSets_SameBaseAndRuntime
 // is the core regression test for §19.1's own "keyed on Base +
 // RuntimeVersion ONLY -- never on repo content" requirement, exercised

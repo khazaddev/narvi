@@ -120,7 +120,7 @@ type SandboxProvider interface {
     ResumeSandbox(ctx, SandboxRef) error                  // optional per capabilities
     TakeSnapshot(ctx, SandboxRef) (SnapshotID, error)
     RestoreFromSnapshot(ctx, SnapshotID, CreateSpec) (SandboxRef, error)
-    BuildImage(ctx, ImageSpec) (BuildRef, error)          // image prebuilds are IN the interface
+    BuildImage(ctx, ImageSpec) (BuildOutcome, error)      // image prebuilds are IN the interface; BuildOutcome{Ref, PublishedCacheVersion} since Step 43(c)'s third iteration (§19.1)
     DeleteImage(ctx, ImageRef) error
     List(ctx) ([]SandboxRef, error)                       // for reconciliation/GC
 }

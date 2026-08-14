@@ -19,6 +19,22 @@
 -- a standard Postgres upsert-counter, safe under concurrent claimants via
 -- ordinary single-row locking (concurrent callers serialize on this one
 -- row rather than racing to compute the same number independently).
+--
+-- Uniqueness within THIS table is real: (cache_key, version) is
+-- image_cache_versions' own PRIMARY KEY, so two confirmed publishes can
+-- never collide in Postgres. What this counter cannot protect against is
+-- outside this repo's control entirely: if this control plane's database
+-- is ever restored from a backup taken before some already-confirmed
+-- version N, MintCacheVersion will eventually re-mint N as if it were
+-- fresh, and the provider's own object storage -- which this repo never
+-- resets in lockstep with a Postgres restore -- may still physically hold
+-- N's original bytes. A restore/reset of this control plane's database is
+-- therefore a build-service operational obligation, not something this
+-- schema can enforce: whoever performs it must also account for the
+-- provider's own cache namespace for every affected cache_key (e.g. by
+-- rotating Base or RuntimeVersion so CacheVolumeKey changes), the same
+-- class of documented-not-solved obligation this design already places on
+-- the build service for reclaiming pruned bytes.
 INSERT INTO image_cache_version_counters (cache_key, next_version)
 VALUES ($1, 1)
 ON CONFLICT (cache_key) DO UPDATE SET next_version = image_cache_version_counters.next_version + 1
