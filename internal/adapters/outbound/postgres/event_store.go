@@ -69,3 +69,27 @@ func (s *EventStore) ListRecentForSession(ctx context.Context, sessionID pgtype.
 		Limit:     limit,
 	})
 }
+
+// ListSubTaskStartsForGen and ListSubTaskFinishesForGen (Step 71, §26.4/
+// §7.1) back post-hoc sub-task corroboration: reading back this session's
+// own already-persisted sub_task_start/sub_task_finish trace, scoped to
+// ONE sandbox gen -- the gen the turn being verdicted was actually
+// dispatched at (turns.dispatched_sandbox_gen), never merely session_id
+// alone. See queries/events.sql's own doc comment on these two queries
+// for why gen-scoping (not just session-scoping) is a real correctness
+// requirement here, not an optimization.
+func (s *EventStore) ListSubTaskStartsForGen(ctx context.Context, sessionID pgtype.UUID, gen int32) ([]sqlcgen.Event, error) {
+	return s.q.ListSubTaskStartEventsForGen(ctx, sqlcgen.ListSubTaskStartEventsForGenParams{
+		SessionID: sessionID,
+		Gen:       gen,
+	})
+}
+
+// ListSubTaskFinishesForGen is ListSubTaskStartsForGen's own sibling --
+// see that method's doc comment immediately above for the full "why".
+func (s *EventStore) ListSubTaskFinishesForGen(ctx context.Context, sessionID pgtype.UUID, gen int32) ([]sqlcgen.Event, error) {
+	return s.q.ListSubTaskFinishEventsForGen(ctx, sqlcgen.ListSubTaskFinishEventsForGenParams{
+		SessionID: sessionID,
+		Gen:       gen,
+	})
+}

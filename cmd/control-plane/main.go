@@ -650,7 +650,7 @@ func serve() error {
 	// reviewpost.RerunGuidance) is built to be recognized by that SAME
 	// regex (§5.2).
 	router.Post("/sessions/{sessionID}/review/verdict",
-		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, reviewVerdictStore, turnStore, cfg.GitHubBotHandle, cfg.GitHubBotToken, sourceControl, findingRelocationResolver, cfg.Timeouts))
+		httpapi.PostReviewVerdict(pool, sandboxStore, sessionStore, githubPRSessionStore, repoSettingsStore, reviewFindingStore, sentinelFixStore, outboxStore, reviewVerdictStore, turnStore, eventStore, cfg.GitHubBotHandle, cfg.GitHubBotToken, sourceControl, findingRelocationResolver, cfg.Timeouts))
 
 	// workflow/step-outcome (Step 55, "workflow execution engine", §25.6):
 	// the GENERIC step-outcome-posting tool -- deliberately mounted

@@ -395,7 +395,11 @@ func TestDecodeTaskMetadata(t *testing.T) {
 
 // TestTranslateSubTaskStartFromTask directly tests the translation
 // function (matching translate_test.go's own established style), pinning
-// the Label-fallback behavior taskInputDescription implements.
+// the Label-fallback behavior taskInputDescription implements, and (Step
+// 71, §26.4/§7.1) the SubAgentType extraction taskInputSubAgentType
+// implements alongside it -- the real, reliable dispatch parameter
+// reviewverdict.CounterReviewCorroborated keys off, sourced from the SAME
+// task-tool input object as Label, just a different key.
 func TestTranslateSubTaskStartFromTask(t *testing.T) {
 	t.Parallel()
 
@@ -424,4 +428,81 @@ func TestTranslateSubTaskStartFromTask(t *testing.T) {
 			t.Error("Label is empty, want a non-empty fallback label")
 		}
 	})
+
+	t.Run("subagent_type present populates SubAgentType", func(t *testing.T) {
+		t.Parallel()
+		p := toolPart{
+			MessageID: "msg_3",
+			State:     toolPartState{Input: json.RawMessage(`{"description":"Adjudicate findings","prompt":"...","subagent_type":"counter-reviewer"}`)},
+		}
+		got := translateSubTaskStartFromTask(cmd, p, "ses_child3")
+		if got.SubAgentType == nil || *got.SubAgentType != "counter-reviewer" {
+			t.Errorf("SubAgentType = %v, want a pointer to %q", got.SubAgentType, "counter-reviewer")
+		}
+	})
+
+	t.Run("subagent_type absent leaves SubAgentType nil (omitted on the wire)", func(t *testing.T) {
+		t.Parallel()
+		p := toolPart{MessageID: "msg_4", State: toolPartState{Input: json.RawMessage(`{"description":"no subagent_type here"}`)}}
+		got := translateSubTaskStartFromTask(cmd, p, "ses_child4")
+		if got.SubAgentType != nil {
+			t.Errorf("SubAgentType = %q, want nil when the task tool's own input carries no subagent_type field", *got.SubAgentType)
+		}
+	})
+
+	t.Run("malformed input leaves SubAgentType nil, never an error", func(t *testing.T) {
+		t.Parallel()
+		p := toolPart{MessageID: "msg_5", State: toolPartState{Input: json.RawMessage(`{not json`)}}
+		got := translateSubTaskStartFromTask(cmd, p, "ses_child5")
+		if got.SubAgentType != nil {
+			t.Errorf("SubAgentType = %q, want nil on malformed input", *got.SubAgentType)
+		}
+	})
+}
+
+// TestTranslateSubTaskStart_LegacyPathNeverPopulatesSubAgentType pins
+// translateSubTaskStart's own (the legacy/unverified-live subtaskPart
+// fallback, ~line 210 of translate.go) deliberate exclusion from Step
+// 71's SubAgentType wiring: that path has no task-tool input to extract
+// "subagent_type" from at all, so its own built sandboxws.SubTaskStart
+// leaves SubAgentType at its own zero value, nil -- omitted on the wire
+// exactly like every producer that predates this field.
+func TestTranslateSubTaskStart_LegacyPathNeverPopulatesSubAgentType(t *testing.T) {
+	t.Parallel()
+
+	cmd := sandboxws.Prompt{SessionId: testSessionID, Gen: 4}
+	got := translateSubTaskStart(cmd, subtaskPart{ID: "prt_sub1", MessageID: "msg_5", Description: "Investigate flaky test"})
+	if got.SubAgentType != nil {
+		t.Errorf("SubAgentType = %q, want nil on the legacy subtaskPart path, which has no task-tool input to extract it from", *got.SubAgentType)
+	}
+}
+
+// TestTaskInputSubAgentType directly unit-tests the extraction helper
+// (matching taskInputDescription's own established indirect-test
+// precedent, but as its own direct test since this field is Step 71's
+// own new addition worth pinning independently of the translation
+// function that consumes it).
+func TestTaskInputSubAgentType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want string
+	}{
+		{"present", json.RawMessage(`{"description":"x","prompt":"y","subagent_type":"counter-reviewer"}`), "counter-reviewer"},
+		{"absent", json.RawMessage(`{"description":"x"}`), ""},
+		{"empty object", json.RawMessage(`{}`), ""},
+		{"malformed json", json.RawMessage(`{not json`), ""},
+		{"wrong type (not a string)", json.RawMessage(`{"subagent_type":42}`), ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := taskInputSubAgentType(tt.raw); got != tt.want {
+				t.Errorf("taskInputSubAgentType(%s) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
 }

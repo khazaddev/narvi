@@ -394,6 +394,7 @@ func TestGitHubIntegration_SensitiveGlobDiff_RoutesDeep_PersistsThroughVerdict(t
 		narvipg.NewOutboxStore(rig.pool),
 		narvipg.NewReviewVerdictStore(rig.pool),
 		rig.turns,
+		narvipg.NewEventStore(rig.pool),
 		testBotHandleIntegration,
 		"test-bot-token",
 		nil,

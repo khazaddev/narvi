@@ -53,8 +53,10 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -140,6 +142,12 @@ func PostReviewVerdict(
 	outbox *postgres.OutboxStore,
 	reviewVerdicts *postgres.ReviewVerdictStore,
 	turns *postgres.TurnStore,
+	// events (Step 71, §26.4/§7.1) backs post-hoc sub-task corroboration:
+	// reading back this session's own already-persisted sub_task_start/
+	// sub_task_finish trace, gen-scoped to turns' own
+	// dispatched_sandbox_gen -- see corroborateCounterReview's own doc
+	// comment below for the full call-site wiring.
+	events *postgres.EventStore,
 	botHandle string,
 	// botToken (Step 63, §22.1.1) is the SAME GitHub bot credential
 	// platform.Config.GitHubBotToken already supplies to every other
@@ -308,6 +316,18 @@ func PostReviewVerdict(
 		var reviewDepth reviewtriage.ReviewDepth
 		var serverComputedChangedFiles int
 		var diffDelivered bool
+		// dispatchedSandboxGen (Step 71, §26.4/§7.1) is this SAME
+		// processing turn's own turns.dispatched_sandbox_gen -- the
+		// sandbox gen this turn's prompt was actually dispatched to
+		// (migrations/000026_turn_dispatch_gen.up.sql). Nil (that
+		// column's own nullable zero value, "NULL before a turn's first
+		// real dispatch") for every case that skips or fails the turn
+		// lookup below, exactly like verdictHeadSHA/reviewDepth's own
+		// identical degradation -- corroborateCounterReview's own call
+		// site, further down, treats a nil value here as NOT corroborated
+		// rather than erroring or skipping the check (fail-conservative,
+		// see that call site's own doc comment).
+		var dispatchedSandboxGen *int32
 		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
 			if errors.Is(turnErr, pgx.ErrNoRows) {
 				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
@@ -321,6 +341,7 @@ func PostReviewVerdict(
 			if processingTurn.ReviewDepth != nil {
 				reviewDepth = reviewtriage.ReviewDepth(*processingTurn.ReviewDepth)
 			}
+			dispatchedSandboxGen = processingTurn.DispatchedSandboxGen
 			if len(processingTurn.ReviewDepthDecision) > 0 {
 				var decisionRecord reviewtriage.DecisionRecord
 				if unmarshalErr := json.Unmarshal(processingTurn.ReviewDepthDecision, &decisionRecord); unmarshalErr != nil {
@@ -352,6 +373,38 @@ func PostReviewVerdict(
 		}
 		for _, f := range req.Findings {
 			input.Findings = append(input.Findings, findingInputFromWire(f))
+		}
+
+		// Step 71 (§26.4/§7.1): post-hoc sub-task corroboration -- see
+		// reviewpost.VerdictInput.CounterReviewCorroborated's own doc
+		// comment and reviewpost.BuildVerdict's own "Second substitution"
+		// doc comment for what this feeds and why. The two corroboration
+		// queries (events.ListSubTaskStartsForGen/ListSubTaskFinishesForGen)
+		// are ONLY run when they could possibly matter -- deep path AND
+		// the self-report claims done -- so every light-path verdict, and
+		// every deep-path verdict that already self-reports "skipped",
+		// pays no extra DB round-trip at all: input.CounterReviewCorroborated
+		// simply stays at its own zero value, false, exactly as
+		// BuildVerdict's own gate (in.ReviewDepth == DepthDeep &&
+		// in.CounterReview == CounterReviewDone) already requires before
+		// this field can affect anything.
+		if reviewDepth == reviewtriage.DepthDeep && input.CounterReview == review.CounterReviewDone {
+			if dispatchedSandboxGen == nil {
+				// dispatched_sandbox_gen NULL (migrations/
+				// 000026_turn_dispatch_gen.up.sql: "NULL before a turn's
+				// first real dispatch") -- treated as NOT corroborated,
+				// fail-conservative, the same direction every other
+				// closed-enum default in this codebase already commits to
+				// (review/doc.go's own "fail-conservative policy for
+				// every closed enum" section), rather than erroring this
+				// request or silently skipping the check. input.
+				// CounterReviewCorroborated is simply left at its own
+				// zero value, false, below.
+				logger.Warn("httpapi: review-verdict: no dispatched_sandbox_gen on record for this turn, treating counter-review claim as uncorroborated",
+					"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			} else {
+				input.CounterReviewCorroborated = corroborateCounterReview(ctx, logger, events, sessionID, *dispatchedSandboxGen)
+			}
 		}
 
 		if err := reviewpost.ValidateVerdictInput(input); err != nil {
@@ -779,6 +832,114 @@ func counterReviewFromWire(v restdtos.PostReviewVerdictRequestCounterReview) rev
 		return ""
 	}
 	return review.CounterReviewStatus(*v)
+}
+
+// subTaskStartPayload/subTaskFinishPayload are the ONLY two fields this
+// call site needs out of each persisted sub_task_start/sub_task_finish
+// event's own `payload` JSONB column (contracts/sandbox-ws/v1/
+// events.schema.json's own SubTaskStart/SubTaskFinish defs) -- a small
+// local decode target, never the full generated sandboxws.SubTaskStart/
+// SubTaskFinish wire type, mirroring this file's own existing "decode
+// only what a call site actually reads" precedent (e.g.
+// reviewtriage.DecisionRecord's own unmarshal above, which does not
+// round-trip the WHOLE stored review_depth_decision shape either).
+type subTaskStartPayload struct {
+	SubTaskID    string `json:"subTaskId"`
+	SubAgentType string `json:"subAgentType"`
+}
+
+type subTaskFinishPayload struct {
+	SubTaskID string `json:"subTaskId"`
+	Outcome   string `json:"outcome"`
+}
+
+// corroborateCounterReview (§26.4, Step 71) is this handler's own I/O +
+// decode half of post-hoc sub-task corroboration -- the pure comparison
+// itself lives in reviewverdict.CounterReviewCorroborated (internal/
+// domain/reviewverdict/corroboration.go), which this function is the
+// ONE caller of in production. Queries this session's own already-
+// persisted sub_task_start/sub_task_finish trace, gen-scoped to gen (the
+// turn being verdicted's own dispatched_sandbox_gen -- see queries/
+// events.sql's own ListSubTaskStartEventsForGen/
+// ListSubTaskFinishEventsForGen doc comment for why gen-scoping, not
+// merely session-scoping, is a real correctness requirement: a session
+// can carry multiple review turns over its lifetime, §24's automatic
+// re-review chief among the reasons why, and an EARLIER turn's own real
+// counter-review trace must never spuriously corroborate a LATER turn's
+// self-report).
+//
+// A genuine store error on EITHER query, or a malformed payload on any
+// individual row, is logged and treated as NOT corroborated for that row/
+// call -- fail-conservative, never a reason to fail this whole verdict-
+// posting request: this computation only ever feeds a floor that makes
+// Shippable MORE conservative, mirroring every other degradation this
+// handler already treats this way (e.g. serverComputedChangedFiles' own
+// "a genuine store error... degrades... never a reason to fail this
+// whole tool call" precedent above). A single malformed row is skipped,
+// not fatal to the rest of the batch -- one corrupt event must not blind
+// this function to every OTHER, perfectly good row in the same trace.
+//
+// # The accepted race -- do not "fix" this into something more complex
+//
+// This corroboration query runs against whatever sub_task_start/
+// sub_task_finish rows are ALREADY committed to Postgres at the moment
+// THIS HTTP request is processed. The verdict-posting POST (this
+// handler) and the sandbox's own WS event stream (which carries
+// sub_task_finish, one of the six ack-guaranteed critical event types)
+// are two INDEPENDENT network round-trips from the sandbox, with no
+// server-side ordering guarantee between them. The deep-path review
+// prompt (review/context.go's own orchestration instructions) tells the
+// agent to wait for the counter-reviewer sub-task's own result before
+// composing the verdict it then POSTs here, so CAUSALLY the sub-task has
+// already resolved -- but that gives no guarantee its own sub_task_finish
+// event has actually landed in Postgres by the time this query runs. A
+// false negative here (real "done", but the trace is not visible yet)
+// fails toward NOT corroborated, which BuildVerdict's own second
+// substitution then floors to needs_human -- MORE conservative, never
+// less, the identical fail-conservative bias review.CounterReviewSkipped's
+// own doc comment already commits to. This is accepted, not a bug: no
+// retries, no polling, no new timeout constant belongs here to work
+// around it -- see reviewpost.BuildVerdict's own doc comment ("The
+// accepted race") for the fuller version of this same reasoning.
+func corroborateCounterReview(ctx context.Context, logger *slog.Logger, events *postgres.EventStore, sessionID pgtype.UUID, gen int32) bool {
+	startRows, err := events.ListSubTaskStartsForGen(ctx, sessionID, gen)
+	if err != nil {
+		logger.Warn("httpapi: review-verdict: list sub_task_start events for corroboration failed, treating counter-review claim as uncorroborated", "error", err)
+		return false
+	}
+	finishRows, err := events.ListSubTaskFinishesForGen(ctx, sessionID, gen)
+	if err != nil {
+		logger.Warn("httpapi: review-verdict: list sub_task_finish events for corroboration failed, treating counter-review claim as uncorroborated", "error", err)
+		return false
+	}
+
+	starts := make([]reviewverdict.SubTaskStartRecord, 0, len(startRows))
+	for _, row := range startRows {
+		var p subTaskStartPayload
+		if unmarshalErr := json.Unmarshal(row.Payload, &p); unmarshalErr != nil {
+			logger.Warn("httpapi: review-verdict: unmarshal sub_task_start payload for corroboration failed, skipping this row", "error", unmarshalErr)
+			continue
+		}
+		starts = append(starts, reviewverdict.SubTaskStartRecord{
+			SubTaskID:    p.SubTaskID,
+			SubAgentType: p.SubAgentType,
+		})
+	}
+
+	finishes := make([]reviewverdict.SubTaskFinishRecord, 0, len(finishRows))
+	for _, row := range finishRows {
+		var p subTaskFinishPayload
+		if unmarshalErr := json.Unmarshal(row.Payload, &p); unmarshalErr != nil {
+			logger.Warn("httpapi: review-verdict: unmarshal sub_task_finish payload for corroboration failed, skipping this row", "error", unmarshalErr)
+			continue
+		}
+		finishes = append(finishes, reviewverdict.SubTaskFinishRecord{
+			SubTaskID: p.SubTaskID,
+			Outcome:   p.Outcome,
+		})
+	}
+
+	return reviewverdict.CounterReviewCorroborated(starts, finishes)
 }
 
 // archDecisionStringField nil-safely dereferences one of restdtos.
