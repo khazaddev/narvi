@@ -138,74 +138,118 @@ type ImageSpec struct {
 // build error." Concretely: an adapter (or its backing build
 // infrastructure) that cannot safely mount this volume for ANY reason —
 // no persistent-volume primitive at all, a corrupted or stuck-locked
-// volume, one it simply cannot reach right now — MUST silently decline the
-// mount and perform an ordinary cold build instead, exactly as if
-// CacheMount had been nil. A caller (app/imagebuild.Builder) must never be
-// able to distinguish "the cache was used" from "the cache was declined"
-// from BuildImage's return value alone — both are success. Every adapter
-// whose Capabilities().ImageBuilds is false (RWX today, §4.1.1) never even
+// volume, one it simply cannot reach right now, or a hang/unparseable
+// response from whatever mounted it — MUST silently decline the mount and
+// perform an ordinary cold build instead, exactly as if CacheMount had
+// been nil. A caller (app/imagebuild.Builder) must never be able to
+// distinguish "the cache was used" from "the cache was declined" from
+// BuildImage's return value alone — both are success. Every adapter whose
+// Capabilities().ImageBuilds is false (RWX today, §4.1.1) never even
 // reaches this field; RWX's own content-addressed layer cache already
 // gives it this effect natively.
 //
-// # Key: Base + RuntimeVersion ONLY, never repo content
+// # Key: Base + RuntimeVersion + rotation epoch — never repo content
 //
-// Key is domain/imagebuild.CacheVolumeKey(spec.Base, spec.RuntimeVersion) —
-// deliberately excludes Repos, so every ImageSpec sharing the same Base and
-// RuntimeVersion resolves to the SAME cache volume regardless of which
-// repo set it is building (one shared cache across every Environment built
-// from the same base image and runtime, not one per Fingerprint). A cache
-// keyed on repo content would recreate the exact cold start this design
-// exists to remove: the very first build of a brand-new Environment would
-// get zero benefit from every OTHER Environment's already-warmed
-// dependency downloads.
+// Key is domain/imagebuild.CacheVolumeKey(spec.Base, spec.RuntimeVersion,
+// epoch) — deliberately excludes Repos, so every ImageSpec sharing the
+// same Base and RuntimeVersion (and rotation epoch) resolves to the SAME
+// cache volume regardless of which repo set it is building (one shared
+// cache across every Environment built from the same base image and
+// runtime, not one per Fingerprint). A cache keyed on repo content would
+// recreate the exact cold start this design exists to remove: the very
+// first build of a brand-new Environment would get zero benefit from
+// every OTHER Environment's already-warmed dependency downloads. epoch
+// (platform.Config.CacheVolumeEpoch, an operator-controlled value never
+// baked into Fingerprint — see CacheVolumeKey's own doc comment) is the
+// rotation escape hatch: it lets a stuck or oversized cache volume be
+// abandoned for a fresh one WITHOUT bumping RuntimeVersion, which would
+// otherwise also invalidate every shared IMAGE fleet-wide (§19.1's own
+// "simultaneous-invalidation cliff") purely to solve a problem confined to
+// the cache.
 //
-// # No lock — the port's own documented concurrency contract
+// # No lock — because nothing writes while a build can see this volume
 //
 // §19.2's refresh pump makes concurrent BuildImage calls against the SAME
 // cache Key routine, not rare: it rebuilds every ready shared image
 // whenever its repos' tips move, and nothing serializes two different
-// fingerprints that happen to share a Base/RuntimeVersion pair. This port
-// deliberately takes NO lock — neither here nor in any caller — around
-// concurrent access to one cache volume. That is a considered decision,
-// not an oversight: every path in WellKnownCachePaths
-// (internal/domain/imagebuild) names a package manager's own
-// CONTENT-ADDRESSED cache (npm's _cacache, pip's HTTP cache, Go's module
-// and build caches, ...) — the filename under each of those paths IS the
-// content hash of what it holds, so two concurrent builds that both happen
-// to fetch the identical package version write the IDENTICAL bytes to the
-// IDENTICAL path. The "conflict" a lock would prevent is idempotent by
-// construction: at worst, two writers redundantly produce the same file: a
-// wasted download, never a corrupted cache. A lock would instead serialize
-// §19.2's refresh pump — this design's own steady state, not an edge case
-// — purely to guard against a collision that cannot corrupt anything.
+// fingerprints that happen to share a Base/RuntimeVersion/epoch triple.
+// This port deliberately takes NO lock — neither here nor in any caller —
+// around concurrent access to one cache volume.
 //
-// Two obligations follow from relying on that property instead of a lock,
-// and both bind whoever actually writes into one of these paths (in
-// practice the package-manager processes running inside the remote build
-// sandbox, e.g. npm's own _cacache implementation — this codebase's own Go
-// code performs no such write itself, since the mounting and the
-// dependency install both happen inside the provider's build
-// infrastructure, outside this repo's reach):
+// An earlier draft of this design justified that with the paths under
+// WellKnownCachePaths being "content-addressed" — same package version in,
+// identical bytes out, so a concurrent write could only ever collide with
+// an identical one. That claim was checked against each package manager's
+// own real, documented on-disk layout and found FALSE for nearly every
+// mounted path (domain/imagebuild.WellKnownCachePaths' own doc comment has
+// the full, per-tool findings — Go's module cache ships its OWN lock file
+// for exactly this reason, npm/pip key their caches by request URL rather
+// than response content and mutate in place, Gradle's metadata cache is
+// guarded by a lock living INSIDE the mounted directory, and so on).
+// Worse, mounting a directory carrying a tool's own host-local lock file
+// across sandboxes on DIFFERENT hosts hands that tool a FALSE sense of
+// mutual exclusion it cannot actually provide.
 //
-//  1. Every writer MUST rely on atomic rename semantics: write to a
-//     temporary path in the SAME directory as the file's own final
-//     content-addressed name, then rename it into place, rather than
-//     writing in place under the final name. A concurrent reader must
-//     never be able to observe a partially-written file under its final
-//     name — exactly what makes the "two writers, one path" case above
-//     safe rather than a race. Every ecosystem this codebase's own
-//     WellKnownCachePaths names already implements this internally.
-//  2. Writes must be committed to the persistent Key location only once
-//     the build that produced them has itself succeeded — a failed build
-//     must never leave partial or corrupt dependency-download artifacts
-//     poisoning the shared cache for whichever build runs against Key
-//     next. This is a contract on the provider/build-service side (the
-//     same "documented, not implemented in this repo" posture §19.1
-//     already takes for the full non-shallow clone and the baked
-//     self-description manifest, both likewise performed by an external,
-//     unmodeled build service) — BuildImage's own Go implementation
-//     cannot enforce it directly, only request it via this field and
-//     document the requirement here for whatever implements it.
+// The no-lock decision itself still stands — but on a different basis:
+// every path in Paths is mounted READ-ONLY for the entire duration of the
+// build. Nothing writes into the shared, persistent volume while a build
+// can observe it, so there is no interleaving left to reason about, and a
+// tool's own host-local advisory lock becomes irrelevant because there is
+// nothing left for it to guard — concurrent corruption is impossible BY
+// CONSTRUCTION, not by an argument about filename schemes. Exactly ONE
+// write-back happens, merging whatever a build newly produced, and only
+// AFTER that build has itself succeeded — never before, and never for a
+// build that failed, preserving §19.1's original "writes committed only
+// after success" invariant unchanged. This is also the literal
+// implementation of what §19.1 already asked for and this design had not
+// yet built: "writes committed only after a successful build" was
+// asserted in prose but expressed nowhere in the port shape or the wire
+// request before this; read-only-during-build plus a single post-success
+// write-back is that sentence, taken literally, rather than an argument
+// about the writes package managers happen to make.
+//
+// A package manager that needs to WRITE during the build (nearly all of
+// them do, at least for a newly-resolved dependency) is given a private,
+// per-build writable layer at these same logical paths — an ordinary
+// read-through/write-back cache shape whose exact mechanism (a
+// copy-on-write overlay, a seeded scratch copy, ...) is the adapter's or
+// build service's own concern, external to this repository, exactly as
+// the mount itself and the dependency install already are (this
+// codebase's own Go code performs no such write itself). Every writer
+// still MUST rely on atomic rename semantics for its OWN writable layer
+// (write to a temp path in the same directory, then rename into place) —
+// that discipline was never about inter-build safety in the first place,
+// it is what keeps a single build's own concurrent readers (multiple
+// package-manager processes inside the SAME build) from observing a
+// partially-written file, and it stays required for that reason alone.
+//
+// One residual question this port does not resolve, and does not need to:
+// whether a package manager tolerates its cache directory literally
+// appearing read-only, absent that writable layer. Most of the eleven
+// tools WellKnownCachePaths names support either an explicit read-only/
+// no-cache mode or a separately configurable writable location (pip's
+// documented `--no-cache-dir`, Go's documented `GOCACHE=off`, ...); at
+// least one — Go's own module cache — is NOT documented to degrade
+// gracefully on its own, which is exactly why the writable layer above is
+// load-bearing rather than a nice-to-have: it makes every tool's own
+// read-only tolerance moot by never letting any of them observe read-only
+// in the first place.
+//
+// # Size is unbounded — a named gap, not a solved one
+//
+// Nothing in this design bounds, evicts, or expires anything in a cache
+// volume, and one volume is shared fleet-wide across every Environment
+// with the same Base/RuntimeVersion/epoch — so, left alone, it grows until
+// the provider's own storage quota is hit and an in-sandbox dependency
+// install starts failing with ENOSPC. No enforcement ships in this Step;
+// the rotation epoch above is today's only escape hatch (mint a fresh,
+// empty volume; the old one is simply abandoned, never explicitly
+// deleted — a provider-side GC/TTL policy on unreferenced volumes, if the
+// provider offers one, is the nearest thing to automatic reclamation
+// today). Real enforcement — a hard byte cap, LRU eviction inside the
+// volume, or both — is deliberately deferred to a later Step, named here
+// explicitly rather than left implicit, mirroring §19.2's own "newly
+// urgent, still deferred" image-GC posture.
 //
 // # Per-provider semantics differ — the port must not assume one
 //
@@ -214,25 +258,31 @@ type ImageSpec struct {
 // port must not assume one." This struct is the whole of that story at the
 // port level: a plain key plus a plain path list, no lock handle, no
 // provider-specific volume/mount object. HOW an adapter turns Key/Paths
-// into an actual mounted volume — and whether it can safely do so at all
-// for a given (Key, concurrent-access) situation — is entirely that
-// adapter's own decision (see internal/adapters/outbound/modal's own
-// BuildImage for the one implementation that exists today: it declines
-// the mount and transparently retries as a cold build the instant its own
-// wire protocol reports cache trouble).
+// into an actual read-only-during-build, write-back-on-success mounted
+// volume — and whether it can safely do so at all for a given Key — is
+// entirely that adapter's own decision (see internal/adapters/outbound/
+// modal's own BuildImage for the one implementation that exists today: it
+// declines the mount and transparently retries as a cold build the
+// instant its own wire protocol reports cache trouble — now broadened to
+// also cover a transport-level hang and an unparseable response, not only
+// three structured error codes; see modal/errors.go's isCacheMountTrouble
+// for the full, current set).
 type CacheMount struct {
 	// Key names the ONE persistent cache volume this build should mount —
-	// domain/imagebuild.CacheVolumeKey(Base, RuntimeVersion). Opaque
-	// outside whichever adapter mounts it; this package makes no claim
-	// about its own format beyond "deterministic for a given
-	// (Base, RuntimeVersion) pair."
+	// domain/imagebuild.CacheVolumeKey(Base, RuntimeVersion, epoch).
+	// Opaque outside whichever adapter mounts it; this package makes no
+	// claim about its own format beyond "deterministic for a given
+	// (Base, RuntimeVersion, epoch) triple."
 	Key string
 
 	// Paths is the package-manager-agnostic, fixed, closed set of
 	// well-known cache directories to mount at Key inside the build
-	// sandbox — domain/imagebuild.WellKnownCachePaths, see that var's own
-	// doc comment for the full list and why it stays fixed rather than
-	// guessing which ecosystem(s) a given repo set actually uses.
+	// sandbox, READ-ONLY for the duration of the build (see this struct's
+	// own "No lock" section above) — domain/imagebuild.WellKnownCachePaths(),
+	// see that function's own doc comment for the full list and why it
+	// stays fixed rather than guessing which ecosystem(s) a given repo set
+	// actually uses. A fresh slice on every call (never a shared backing
+	// array a caller could accidentally mutate across builds).
 	Paths []string
 }
 

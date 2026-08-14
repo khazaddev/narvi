@@ -155,20 +155,30 @@ func (p *Provider) RestoreFromSnapshot(ctx context.Context, id ports.SnapshotID,
 // # paragraph, Step 43(c))
 //
 // When spec.CacheMount is set, the first attempt carries it as
-// req.CacheVolume. If that attempt fails with a *ports.ProviderError whose
-// Code names cache trouble specifically (isCacheMountTrouble, errors.go —
-// never an ordinary build failure), BuildImage retries EXACTLY ONCE with
-// CacheVolume dropped entirely — an ordinary cold build, indistinguishable
-// on the wire from a request that never asked for a cache mount in the
-// first place. This is this adapter's own concrete implementation of the
-// decline permission ports.CacheMount's own doc comment grants every
-// adapter: the caller (app/imagebuild.Builder) never sees a cache-specific
-// error and never needs to special-case one — a corrupted, locked, or
-// unavailable cache costs one extra HTTP round trip here, never a
-// BuildImage failure. A failure on the SECOND (cold) attempt is a genuine
-// build failure, unrelated to the cache, and is returned exactly as any
-// other BuildImage failure — no special handling, same retry/backoff path
-// through app/imagebuild.Builder's own recordFailure as always.
+// req.CacheVolume — requesting the volume mounted READ-ONLY for this
+// build, with the (external, unmodeled) build service performing a single
+// write-back only after the build succeeds (ports.CacheMount's own doc
+// comment has the full contract; no separate wire field is needed to say
+// so, since a CacheVolume-bearing request means exactly this, unlike an
+// earlier draft that argued the mount could safely stay read-write because
+// every path was "content-addressed" — checked against the real caches
+// and found false). If that attempt fails with a *ports.ProviderError
+// isCacheMountTrouble (errors.go) recognizes as ambiguous enough to blame
+// on the cache — a structured cache-trouble code, a transport-level
+// hang/timeout, or an unparseable response on an otherwise-transient
+// status; never an ordinary, recognized build failure — BuildImage retries
+// EXACTLY ONCE with CacheVolume dropped entirely — an ordinary cold build,
+// indistinguishable on the wire from a request that never asked for a
+// cache mount in the first place. This is this adapter's own concrete
+// implementation of the decline permission ports.CacheMount's own doc
+// comment grants every adapter: the caller (app/imagebuild.Builder) never
+// sees a cache-specific error and never needs to special-case one — a
+// corrupted, locked, unavailable, hung, or unparseable-response cache
+// costs one extra HTTP round trip here, never a BuildImage failure. A
+// failure on the SECOND (cold) attempt is a genuine build failure,
+// unrelated to the cache, and is returned exactly as any other BuildImage
+// failure — no special handling, same retry/backoff path through
+// app/imagebuild.Builder's own recordFailure as always.
 func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.BuildRef, error) {
 	var repos map[string]imageBuildRequestRepo
 	if len(spec.Repos) > 0 {

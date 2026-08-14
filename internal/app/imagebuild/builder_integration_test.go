@@ -526,7 +526,7 @@ func TestRefreshOnce_StaleReadyRow_TipDiffers_RefreshesInPlace(t *testing.T) {
 	provider := &fakeBuildProvider{nextRef: "narvi/built-image:refreshed"}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -598,7 +598,7 @@ func TestRefreshOnce_FreshReadyRow_TipUnchanged_NoRefreshAttempted(t *testing.T)
 	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-same"}}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -644,7 +644,7 @@ func TestRefreshOnce_BaseOnlyReadyRow_NeverConsidered(t *testing.T) {
 	// resolveRepoSHAs would fail loudly on the missing SourceControl long
 	// before ever reaching BuildImage, so a zero build-call-count alone
 	// already proves the row was never even considered.
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -678,7 +678,7 @@ func TestRefreshOnce_NoCredentialConfigured_DegradesCleanly_OldRefStaysServable(
 
 	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -726,7 +726,7 @@ func TestRefreshOnce_BuildFails_ReleasesClaim_OldRefStaysServable(t *testing.T) 
 	provider := &fakeBuildProvider{nextErr: errors.New("provider: refresh build failed")}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -789,7 +789,7 @@ func TestRefreshOnce_OldRefStaysServableDuringRefresh(t *testing.T) {
 	provider := &blockingBuildProvider{nextRef: "narvi/built-image:refreshed", release: release}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -879,7 +879,7 @@ func TestRefreshOnce_BatchCap_BoundsRowsPerTickButPicksUpRemainderLater(t *testi
 	provider := &fakeBuildProvider{nextRef: "narvi/built-image:refreshed"}
 	sourceControl := &fakeSourceControl{nextSHA: currentSHA} // every repo not explicitly listed falls back to this
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1050,7 +1050,7 @@ func TestRefreshOnce_StarvationFreedom_GenuinelyStaleRowNotStarvedByStaticFrontC
 
 	provider := &fakeBuildProvider{nextRef: staleNewRef}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1204,7 +1204,7 @@ func TestPumpOnce_FailedBuild_BacksOffAndNotRetriedBeforeNextRetryAt(t *testing.
 	timeouts.ImageBuildBackoffBase = 200 * time.Millisecond
 	timeouts.ImageBuildBackoffMax = 500 * time.Millisecond
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1302,7 +1302,7 @@ func TestPumpOnce_FailureStreak_FiresAtThresholdNotBefore(t *testing.T) {
 	timeouts.ImageBuildBackoffBase = 1 * time.Millisecond
 	timeouts.ImageBuildBackoffMax = 5 * time.Millisecond
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1397,7 +1397,7 @@ func TestPumpOnce_RepoBearingRow_NoCredentialConfigured_DegradesCleanly(t *testi
 	// gitHubImageBuildToken is DELIBERATELY empty here -- the credential
 	// is not configured, mirroring a real deploy that has not yet
 	// provisioned it.
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1461,7 +1461,7 @@ func TestPumpOnce_RepoBearingRow_CredentialConfigured_ResolvesSHAsAndBuilds(t *t
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-resolved-repo1"}}
 
 	timeouts := platform.DefaultTimeouts()
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-platform-github-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-platform-github-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1560,7 +1560,7 @@ func TestPumpOnce_RepoBearingRow_UnsupportedHost_FailsCleanlyNeverCallsSourceCon
 	timeouts.ImageBuildBackoffBase = 200 * time.Millisecond
 	timeouts.ImageBuildBackoffMax = 500 * time.Millisecond
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1655,7 +1655,7 @@ func TestPumpOnce_RepoBearingRow_UnsupportedHost_ExampleOrg_FailsCleanly(t *test
 	sourceControl := &fakeSourceControl{nextErr: errors.New("fakeSourceControl: ResolveBranchSHA must never be called for a non-GitHub host")}
 	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1710,7 +1710,7 @@ func TestRefreshOnce_UnsupportedHost_FailsCleanlyNeverCallsSourceControl(t *test
 	sourceControl := &fakeSourceControl{nextErr: errors.New("fakeSourceControl: ResolveBranchSHA must never be called for a non-GitHub host")}
 	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1807,7 +1807,7 @@ func TestAttemptRefresh_DecodeRepoURLsFailure_TouchesOrderingKeyOnly(t *testing.
 	// but the zero-BuildImage-calls assertion below pins the decode branch
 	// specifically, not merely "something failed before BuildImage".
 	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1861,7 +1861,7 @@ func TestAttemptRefresh_ResolveRepoSHAsError_TouchesOrderingKeyOnly(t *testing.T
 	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
 	sourceControl := &fakeSourceControl{errFor: map[string]error{"repo1": errors.New("fake: repo renamed/deleted, or token lacks org access")}}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -1967,7 +1967,7 @@ func TestAttemptRefresh_ClaimForRefreshGenericError_TouchesOrderingKeyOnly(t *te
 	provider := &fakeBuildProvider{nextRef: "should-never-be-used"}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}} // genuinely stale -- NeedsRefresh must report true, reaching ClaimForRefresh
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2017,7 +2017,7 @@ func TestAttemptRefresh_RecordRefreshSuccessNoOp_ReleasesClaim(t *testing.T) {
 	provider := &blockingBuildProvider{nextRef: "narvi/built-image:should-not-persist", release: release}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2086,7 +2086,7 @@ func TestAttemptRefresh_RecordRefreshSuccessGenericError_ReleasesClaim(t *testin
 	provider := &fakeBuildProvider{nextRef: "narvi/built-image:should-not-persist"}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new\x00-poison"}}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2382,7 +2382,7 @@ func TestRefreshOnce_CrashRecovery_StaleClaimReclaimed(t *testing.T) {
 	timeouts := platform.DefaultTimeouts()
 	timeouts.ImageRefreshClaimStaleAfter = 5 * time.Minute // shorter than the simulated 1h-old claim
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2445,7 +2445,7 @@ func TestBuilderRun_RefreshPumpGoroutineStarts(t *testing.T) {
 	timeouts.ImageBuildPumpInterval = 20 * time.Millisecond
 	timeouts.ImageRefreshCheckInterval = 20 * time.Millisecond
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, timeouts, sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2473,8 +2473,10 @@ func TestBuilderRun_RefreshPumpGoroutineStarts(t *testing.T) {
 // attempt (PumpOnce's own per-row body) now populates ImageSpec.CacheMount
 // on every real BuildImage call, keyed EXACTLY as ports.CacheMount's own
 // doc comment specifies: domain/imagebuild.CacheVolumeKey(row.Base,
-// row.RuntimeVersion), with Paths carrying domain/imagebuild.
-// WellKnownCachePaths verbatim.
+// row.RuntimeVersion, epoch), with Paths carrying domain/imagebuild.
+// WellKnownCachePaths() verbatim. This Builder is constructed with an
+// empty cacheVolumeEpoch (NewBuilder's own final argument) -- the
+// ordinary, unrotated case.
 func TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -2485,7 +2487,7 @@ func TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion(t *test
 
 	provider := &fakeBuildProvider{nextRef: "narvi/built-image:cache-mount-claim"}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2501,18 +2503,89 @@ func TestPumpOnce_Success_RequestsCacheMountKeyedOnBaseAndRuntimeVersion(t *test
 	if mount == nil {
 		t.Fatal("BuildImage called with ImageSpec.CacheMount = nil, want it populated (§19.1's closing paragraph, Step 43(c))")
 	}
-	wantKey := domainimagebuild.CacheVolumeKey("narvi/base:test", "1.0.0-test")
+	wantKey := domainimagebuild.CacheVolumeKey("narvi/base:test", "1.0.0-test", "")
 	if mount.Key != wantKey {
-		t.Errorf("CacheMount.Key = %q, want domain/imagebuild.CacheVolumeKey(base, runtimeVersion) = %q", mount.Key, wantKey)
+		t.Errorf("CacheMount.Key = %q, want domain/imagebuild.CacheVolumeKey(base, runtimeVersion, epoch) = %q", mount.Key, wantKey)
 	}
-	if len(mount.Paths) != len(domainimagebuild.WellKnownCachePaths) {
-		t.Errorf("CacheMount.Paths = %v, want domain/imagebuild.WellKnownCachePaths verbatim (%v)", mount.Paths, domainimagebuild.WellKnownCachePaths)
+	wantPaths := domainimagebuild.WellKnownCachePaths()
+	if len(mount.Paths) != len(wantPaths) {
+		t.Errorf("CacheMount.Paths = %v, want domain/imagebuild.WellKnownCachePaths() verbatim (%v)", mount.Paths, wantPaths)
 	}
-	for i, p := range domainimagebuild.WellKnownCachePaths {
+	for i, p := range wantPaths {
 		if i >= len(mount.Paths) || mount.Paths[i] != p {
 			t.Errorf("CacheMount.Paths[%d] = %v, want %q", i, mount.Paths, p)
 			break
 		}
+	}
+}
+
+// TestPumpOnce_CacheMountKey_RotatesWithEpoch_WithoutTouchingFingerprint is
+// the rotation escape hatch's own end-to-end regression test (audit-
+// remediation finding: "no rotation escape hatch... CacheVolumeKey is a
+// pure function of (base, runtimeVersion) with no epoch"), exercised
+// through Builder's REAL claim-time build path: two otherwise-identical
+// Builders, differing ONLY in the cacheVolumeEpoch NewBuilder was
+// constructed with, must request DIFFERENT CacheMount.Key values for the
+// SAME (base, runtimeVersion) row -- proving an operator can mint a fresh
+// cache volume purely by redeploying with a new NARVI_CACHE_VOLUME_EPOCH,
+// with no image_builds row/Fingerprint ever touched.
+func TestPumpOnce_CacheMountKey_RotatesWithEpoch_WithoutTouchingFingerprint(t *testing.T) {
+	ctx := context.Background()
+	pool := newTestPool(t)
+	store := narvipg.NewImageBuildStore(pool)
+
+	const fingerprintA = "fp-cache-epoch-a"
+	const fingerprintB = "fp-cache-epoch-b"
+	seedPendingImageBuild(ctx, t, store, fingerprintA) // Base="narvi/base:test", RuntimeVersion="1.0.0-test"
+	seedPendingImageBuild(ctx, t, store, fingerprintB) // same Base/RuntimeVersion, different fingerprint row
+
+	providerEpoch0 := &fakeBuildProvider{nextRef: "narvi/built-image:epoch-0"}
+	builderEpoch0, err := imagebuild.NewBuilder(store, pool, providerEpoch0, platform.DefaultTimeouts(), nil, "", "epoch-0")
+	if err != nil {
+		t.Fatalf("NewBuilder (epoch-0): %v", err)
+	}
+	if err := builderEpoch0.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce (epoch-0): %v", err)
+	}
+	if got := providerEpoch0.buildCallCount(); got != 2 {
+		t.Fatalf("BuildImage call count (epoch-0) = %d, want 2", got)
+	}
+	mountEpoch0 := providerEpoch0.buildCalls[0].CacheMount
+	if mountEpoch0 == nil {
+		t.Fatal("CacheMount (epoch-0) = nil, want it populated")
+	}
+
+	// A SECOND Builder, same store/provider shape, differing ONLY in the
+	// configured epoch -- standing in for "the operator redeployed with a
+	// new NARVI_CACHE_VOLUME_EPOCH."
+	seedPendingImageBuild(ctx, t, store, "fp-cache-epoch-c")
+	providerEpoch1 := &fakeBuildProvider{nextRef: "narvi/built-image:epoch-1"}
+	builderEpoch1, err := imagebuild.NewBuilder(store, pool, providerEpoch1, platform.DefaultTimeouts(), nil, "", "epoch-1")
+	if err != nil {
+		t.Fatalf("NewBuilder (epoch-1): %v", err)
+	}
+	if err := builderEpoch1.PumpOnce(ctx); err != nil {
+		t.Fatalf("PumpOnce (epoch-1): %v", err)
+	}
+	if got := providerEpoch1.buildCallCount(); got != 1 {
+		t.Fatalf("BuildImage call count (epoch-1) = %d, want 1", got)
+	}
+	mountEpoch1 := providerEpoch1.buildCalls[0].CacheMount
+	if mountEpoch1 == nil {
+		t.Fatal("CacheMount (epoch-1) = nil, want it populated")
+	}
+
+	if mountEpoch0.Key == mountEpoch1.Key {
+		t.Errorf("CacheMount.Key identical across two different epochs (%q) for the SAME base/runtimeVersion -- epoch must rotate the cache volume", mountEpoch0.Key)
+	}
+
+	wantKeyEpoch0 := domainimagebuild.CacheVolumeKey("narvi/base:test", "1.0.0-test", "epoch-0")
+	wantKeyEpoch1 := domainimagebuild.CacheVolumeKey("narvi/base:test", "1.0.0-test", "epoch-1")
+	if mountEpoch0.Key != wantKeyEpoch0 {
+		t.Errorf("CacheMount.Key (epoch-0) = %q, want %q", mountEpoch0.Key, wantKeyEpoch0)
+	}
+	if mountEpoch1.Key != wantKeyEpoch1 {
+		t.Errorf("CacheMount.Key (epoch-1) = %q, want %q", mountEpoch1.Key, wantKeyEpoch1)
 	}
 }
 
@@ -2545,7 +2618,7 @@ func TestPumpOnce_CacheMountKey_SharedAcrossDifferentRepoSets_SameBaseAndRuntime
 	provider := &fakeBuildProvider{nextRef: "narvi/built-image:cache-shared"}
 	sourceControl := &fakeSourceControl{nextSHA: "sha-any"}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2587,7 +2660,7 @@ func TestPumpOnce_Success_RecordsBuildDurationAndAttemptTotal_ClaimPhaseSuccess(
 	seedPendingImageBuild(ctx, t, store, fingerprint)
 
 	provider := &fakeBuildProvider{nextRef: "narvi/built-image:telemetry-claim-success"}
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2621,7 +2694,7 @@ func TestPumpOnce_FailedBuild_RecordsBuildDurationAndAttemptTotal_ClaimPhaseFail
 	seedPendingImageBuild(ctx, t, store, fingerprint)
 
 	provider := &fakeBuildProvider{nextErr: errors.New("simulated BuildImage failure")}
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2669,7 +2742,7 @@ func TestRefreshOnce_Success_RecordsBuildDurationAndAttemptTotal_RefreshPhaseSuc
 	provider := &fakeBuildProvider{nextRef: "narvi/built-image:telemetry-refresh-new"}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}}
 
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -2720,7 +2793,7 @@ func TestPumpOnce_ProviderIgnoresCacheMount_BuildStillSucceeds(t *testing.T) {
 	seedPendingImageBuild(ctx, t, store, fingerprint)
 
 	provider := &fakeBuildProvider{nextRef: "narvi/built-image:declined-cache-cold-build"}
-	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	builder, err := imagebuild.NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}

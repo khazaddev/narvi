@@ -88,6 +88,24 @@ type Builder struct {
 	sourceControl         ports.SourceControl
 	gitHubImageBuildToken string
 
+	// cacheVolumeEpoch is the rotation escape hatch for Step 43(c)'s own
+	// build-time dependency cache (§19.1's closing paragraph,
+	// domain/imagebuild.CacheVolumeKey's own doc comment): an
+	// operator-controlled value (platform.Config.CacheVolumeEpoch) folded
+	// into every cache volume's own key ALONGSIDE base/runtimeVersion, but
+	// deliberately NEVER into Fingerprint — bumping it mints a brand-new,
+	// empty cache volume for every (base, runtimeVersion) pair at once
+	// WITHOUT invalidating a single already-`ready` image, unlike bumping
+	// RuntimeVersion (which is a Fingerprint input too, §19.1's own
+	// "simultaneous-invalidation cliff"). Empty string ("") is a
+	// completely ordinary, valid value -- "no rotation has ever been
+	// requested" -- not a degraded or unconfigured state the way an empty
+	// gitHubImageBuildToken above is; every fingerprint that predates this
+	// field (or a deploy that never sets NARVI_CACHE_VOLUME_EPOCH) simply
+	// keeps hashing an empty epoch field, byte-for-byte the same
+	// CacheVolumeKey this package always computed before rotation existed.
+	cacheVolumeEpoch string
+
 	failureStreak metric.Int64Counter
 
 	// permanentlyFailed counts every time a fingerprint is marked
@@ -129,13 +147,16 @@ type Builder struct {
 // drives), timeouts (for ImageBuildPumpInterval/ImageRefreshCheckInterval/
 // backoff config, consulted by Run/PumpOnce/RefreshOnce), sourceControl
 // (Step 42's own claim-time/freshness-pump SHA resolution, §19.2 -- may be
-// nil), and gitHubImageBuildToken (the new platform-level credential,
-// platform.Config.GitHubImageBuildToken -- may be empty).
+// nil), gitHubImageBuildToken (the new platform-level credential,
+// platform.Config.GitHubImageBuildToken -- may be empty), and
+// cacheVolumeEpoch (Step 43(c)'s own rotation escape hatch,
+// platform.Config.CacheVolumeEpoch -- may be empty; see the Builder field's
+// own doc comment).
 //
 // The image_build_failure_streak OTel counter is constructed exactly once,
 // here, at construction time -- not per-tick, not per-row -- mirroring
 // app/reconciler.NewReconciler's own orphans_reaped precedent exactly.
-func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider ports.SandboxProvider, timeouts platform.Timeouts, sourceControl ports.SourceControl, gitHubImageBuildToken string) (*Builder, error) {
+func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider ports.SandboxProvider, timeouts platform.Timeouts, sourceControl ports.SourceControl, gitHubImageBuildToken string, cacheVolumeEpoch string) (*Builder, error) {
 	meter := otel.Meter(meterName)
 
 	failureStreak, err := meter.Int64Counter(
@@ -177,6 +198,7 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		timeouts:              timeouts,
 		sourceControl:         sourceControl,
 		gitHubImageBuildToken: gitHubImageBuildToken,
+		cacheVolumeEpoch:      cacheVolumeEpoch,
 		failureStreak:         failureStreak,
 		refreshClaimReclaimed: refreshClaimReclaimed,
 		permanentlyFailed:     permanentlyFailed,
@@ -186,26 +208,30 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 
 // cacheMount builds the ports.CacheMount every real BuildImage call this
 // package makes now requests (§19.1's closing paragraph, Step 43(c)): Key
-// is domain/imagebuild.CacheVolumeKey(base, runtimeVersion) -- deliberately
-// NOT a function of repos, so every fingerprint sharing the same
-// (base, runtimeVersion) resolves to the identical cache volume regardless
-// of which repo set it is building (ports.CacheMount's own doc comment has
-// the full "keyed on Base + RuntimeVersion ONLY" reasoning). Never nil:
-// base and runtimeVersion are always present on a real image_builds row
-// (both NOT NULL columns), so there is no "nothing to key on" case here --
-// a row naming no repos (base+runtime only) still gets a cache mount, it
-// simply has no setup.sh of its own to populate it with, which is harmless
-// (an unused mount costs nothing, mirroring domain/imagebuild.
+// is domain/imagebuild.CacheVolumeKey(base, runtimeVersion,
+// b.cacheVolumeEpoch) -- deliberately NOT a function of repos, so every
+// fingerprint sharing the same (base, runtimeVersion, epoch) resolves to
+// the identical cache volume regardless of which repo set it is building
+// (ports.CacheMount's own doc comment has the full "keyed on Base +
+// RuntimeVersion + rotation epoch ONLY" reasoning). Never nil: base and
+// runtimeVersion are always present on a real image_builds row (both NOT
+// NULL columns), so there is no "nothing to key on" case here -- a row
+// naming no repos (base+runtime only) still gets a cache mount, it simply
+// has no setup.sh of its own to populate it with, which is harmless (an
+// unused mount costs nothing, mirroring domain/imagebuild.
 // WellKnownCachePaths' own "an unused path costs nothing" reasoning).
 // Whether the requested mount is actually honored is entirely up to the
 // provider (ports.CacheMount: "purely advisory... a caller must never be
 // able to distinguish 'the cache was used' from 'the cache was declined'
 // from BuildImage's return value alone") -- this package never inspects or
-// branches on that.
+// branches on that. Paths comes from domain/imagebuild.WellKnownCachePaths()
+// -- a function, not a shared package var, so every call here gets its own
+// fresh slice this Builder can never be accused of mutating out from under
+// a concurrent build.
 func (b *Builder) cacheMount(base, runtimeVersion string) *ports.CacheMount {
 	return &ports.CacheMount{
-		Key:   domainimagebuild.CacheVolumeKey(base, runtimeVersion),
-		Paths: domainimagebuild.WellKnownCachePaths,
+		Key:   domainimagebuild.CacheVolumeKey(base, runtimeVersion, b.cacheVolumeEpoch),
+		Paths: domainimagebuild.WellKnownCachePaths(),
 	}
 }
 

@@ -7,9 +7,23 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/khazaddev/narvi/internal/app/ports"
+)
+
+// networkErrorCode/networkTimeoutCode are classifyNetworkError's own two
+// Code values (below) — named as constants, rather than left as literals
+// inline in both classifyNetworkError and isCacheMountTrouble, so the two
+// functions can never drift apart on the exact string each checks for.
+// httpCodePrefix is classifyErrorResponse's own fallback-Code prefix
+// ("http_<status>"), used the same way by isCacheMountTrouble to recognize
+// "this response never decoded into a real, recognized code at all".
+const (
+	networkErrorCode   = "NETWORK_ERROR"
+	networkTimeoutCode = "NETWORK_TIMEOUT"
+	httpCodePrefix     = "http_"
 )
 
 // --- Config errors (New) — named, structured, fail-fast, matching the
@@ -147,7 +161,7 @@ func isTransientStatus(status int) bool {
 // logs — only the provider's own decoded Message (or a fixed fallback
 // string) ever goes there, never body's bytes.
 func classifyErrorResponse(op ports.Op, status int, body []byte) *ports.ProviderError {
-	code := fmt.Sprintf("http_%d", status)
+	code := fmt.Sprintf("%s%d", httpCodePrefix, status)
 	message := "no error body"
 
 	var parsed modalErrorBody
@@ -182,10 +196,10 @@ func classifyErrorResponse(op ports.Op, status int, body []byte) *ports.Provider
 // only; it never changes the Transient verdict, which is always true
 // here.
 func classifyNetworkError(op ports.Op, err error) *ports.ProviderError {
-	code := "NETWORK_ERROR"
+	code := networkErrorCode
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		code = "NETWORK_TIMEOUT"
+		code = networkTimeoutCode
 	}
 	return &ports.ProviderError{
 		Transient: true,
@@ -197,15 +211,23 @@ func classifyNetworkError(op ports.Op, err error) *ports.ProviderError {
 
 // --- Cache-mount decline detection (§19.1's closing paragraph, Step 43(c)) ---
 
-// cacheMountTroubleCodes is the fixed, closed set of error codes this
-// adapter's own invented wire protocol (doc.go: no real Modal account/API
-// reachable from this codebase) uses to signal that a BuildImage call
-// failed BECAUSE of the requested CacheVolume specifically — never because
-// of the underlying build itself. Provider.BuildImage's own
-// retry-without-cache fallback (provider.go) checks a failed attempt's
-// decoded Code against exactly this set (never a string-matched message,
-// §4.1) to decide whether to retry once, transparently, with CacheVolume
-// dropped.
+// cacheMountTroubleCodes is the fixed, closed set of STRUCTURED error codes
+// this adapter's own invented wire protocol (doc.go: no real Modal
+// account/API reachable from this codebase) uses to signal that a
+// BuildImage call failed BECAUSE of the requested CacheVolume specifically
+// — never because of the underlying build itself. This is the narrower of
+// TWO signals isCacheMountTrouble below checks; see that function's own
+// doc comment for the broader transport-level/unparseable-response signal
+// a structured-code-only check misses (an audit-remediation finding: a
+// degraded cache-volume subsystem typically HANGS rather than returning a
+// clean structured error, which used to fall through this set entirely
+// and fail the build instead of falling back — breaking the
+// pure-accelerator rule ports.CacheMount states absolutely).
+//
+// Provider.BuildImage's own retry-without-cache fallback (provider.go)
+// checks a failed attempt's decoded Code against exactly this set (never a
+// string-matched message, §4.1) to decide whether to retry once,
+// transparently, with CacheVolume dropped.
 //
 // This is a DIFFERENT question from isTransientStatus's own
 // Transient/permanent table above: that table answers "should the CALLER
@@ -226,20 +248,24 @@ func classifyNetworkError(op ports.Op, err error) *ports.ProviderError {
 // silently retried as "maybe it was the cache" — that would mask a real
 // build defect behind an extra, slower, doomed-to-fail-identically retry.
 // Only a code this adapter's own protocol reserves specifically for cache
-// trouble triggers the fallback.
+// trouble, or the broader ambiguous-failure signal below, triggers the
+// fallback.
 var cacheMountTroubleCodes = map[string]bool{
 	// CACHE_MOUNT_CORRUPTED: the persistent volume's own contents failed
 	// whatever integrity check the (external, unmodeled) build service
 	// runs before handing it to a build.
 	"CACHE_MOUNT_CORRUPTED": true,
 	// CACHE_MOUNT_LOCKED: the volume is held by something the build
-	// service could not get safe concurrent access to — see
-	// ports.CacheMount's own "no lock" doc comment for why this codebase
-	// does not expect this to be a common outcome (every well-known cache
-	// path is content-addressed, so an ordinary concurrent build should
-	// never need to report this), but a provider's backing store is free
-	// to report it regardless (§19.1: "per-provider semantics differ
-	// enough that the port must not assume one").
+	// service could not get safe concurrent access to — e.g. another
+	// build's own single post-success write-back into the SAME Key
+	// (ports.CacheMount's own "No lock" doc comment: the mount is
+	// read-only for the duration of a build, so the one moment worth
+	// locking at all is that write-back, which this codebase's own Go
+	// code never performs directly — see that doc comment for the full
+	// read-only/write-back contract). A provider's backing store is free
+	// to report this regardless of how it implements that (§19.1:
+	// "per-provider semantics differ enough that the port must not assume
+	// one").
 	"CACHE_MOUNT_LOCKED": true,
 	// CACHE_MOUNT_UNAVAILABLE: the volume could not be provisioned/reached
 	// at all for this build (e.g. the provider's own volume subsystem is
@@ -247,15 +273,64 @@ var cacheMountTroubleCodes = map[string]bool{
 	"CACHE_MOUNT_UNAVAILABLE": true,
 }
 
-// isCacheMountTrouble reports whether err is a *ports.ProviderError whose
-// Code names one of cacheMountTroubleCodes above — see that var's own doc
-// comment for the full reasoning. A nil err, or one that is not a
-// *ports.ProviderError at all (whether directly or wrapped), is never
-// cache trouble.
+// isCacheMountTrouble reports whether err is ambiguous enough, on a
+// request that itself carried a CacheMount, to justify Provider.
+// BuildImage's own one-shot cold-build retry (provider.go) — see that
+// function's own doc comment for why the retry itself is always scoped to
+// "this exact request asked for a cache mount", never a blanket retry of
+// every failure. Three progressively broader signals, all folded into one
+// boolean because provider.go's own call site only ever needs the
+// yes/no answer:
+//
+//  1. A STRUCTURED code this adapter's own protocol reserves specifically
+//     for cache trouble (cacheMountTroubleCodes above) — the narrowest,
+//     most confident signal: the build service told us, in an
+//     unambiguous, recognized vocabulary, that the cache itself was the
+//     problem.
+//  2. A TRANSPORT-LEVEL failure (classifyNetworkError's own
+//     "NETWORK_ERROR"/"NETWORK_TIMEOUT" codes) — the request never got a
+//     response to interrogate for a structured code at all. Audit-
+//     remediation finding: a degraded cache-volume subsystem typically
+//     HANGS rather than returning a clean error, so the request exceeds
+//     platform.Timeouts.ProviderHTTPClientTimeout and is classified
+//     NETWORK_TIMEOUT — which, before this broadening, matched nothing in
+//     cacheMountTroubleCodes, so the build FAILED instead of falling
+//     back, breaking the pure-accelerator rule the port states
+//     absolutely. This adapter knows, from req.CacheVolume on the exact
+//     request that produced this err (provider.go's own call site),
+//     that a mount was in play — that is what makes treating an otherwise
+//     content-free transport failure as cache trouble a reasonable bet
+//     rather than a guess about an unrelated request.
+//  3. An UNPARSEABLE or bodyless error response on an otherwise TRANSIENT
+//     status (classifyErrorResponse's own "http_<status>" fallback Code,
+//     used exactly when the body could not be decoded into this adapter's
+//     own structured envelope, or decoded with an empty Code) — e.g. a
+//     503 with a non-JSON body. Restricted to Transient statuses
+//     deliberately: this is what keeps the guard against masking a
+//     genuine build defect intact. A genuine build failure in this
+//     adapter's own invented protocol always carries a real, recognized
+//     code in a structured envelope (e.g. "SETUP_SCRIPT_FAILED") — never
+//     this fallback shape — so signal 3 only ever fires on a response
+//     this adapter cannot attribute to anything it recognizes, on a
+//     status class already documented as retry-worthy. Signals 2 and 3
+//     both cost at most one extra HTTP round trip if they turn out to be
+//     wrong (a genuine, unrelated defect that also happens to hang or
+//     return a malformed 5xx): the SECOND attempt runs cold, and if the
+//     underlying problem persists, it surfaces there as an ordinary
+//     BuildImage failure, unmasked — never silently retried forever.
+//
+// A nil err, or one that is not a *ports.ProviderError at all (whether
+// directly or wrapped), is never cache trouble.
 func isCacheMountTrouble(err error) bool {
 	var pe *ports.ProviderError
 	if !errors.As(err, &pe) {
 		return false
 	}
-	return cacheMountTroubleCodes[pe.Code]
+	if cacheMountTroubleCodes[pe.Code] {
+		return true
+	}
+	if pe.Code == networkErrorCode || pe.Code == networkTimeoutCode {
+		return true
+	}
+	return pe.Transient && strings.HasPrefix(pe.Code, httpCodePrefix)
 }

@@ -37,7 +37,15 @@
 //     paragraph, Step 43(c), ports.ImageSpec.CacheMount) is a PURE
 //     ACCELERATOR: a request carrying no CacheMount is byte-for-byte
 //     unaffected, and cache trouble reported by the (invented) wire
-//     protocol degrades to an ordinary cold build via one transparent
-//     retry rather than ever surfacing as a BuildImage failure — see
-//     provider.go's own BuildImage doc comment.
+//     protocol — including a transport-level hang and an unparseable
+//     response, not only a handful of structured error codes — degrades
+//     to an ordinary cold build via one transparent retry rather than
+//     ever surfacing as a BuildImage failure — see provider.go's own
+//     BuildImage doc comment and errors.go's isCacheMountTrouble. The
+//     mount itself is requested READ-ONLY for the build's duration, with
+//     a single write-back after success (ports.CacheMount's own doc
+//     comment) — not the "content-addressed, so concurrent writes can't
+//     collide" argument an earlier draft of this adapter's own comments
+//     made, which review found false against the real package-manager
+//     caches.
 package modal

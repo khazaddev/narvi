@@ -225,7 +225,7 @@ func TestAttemptRefresh_BaseOnlyGuard_TouchesOrderingKeyOnly(t *testing.T) {
 	}
 
 	provider := &whiteboxFakeBuildProvider{nextRef: "should-never-be-used"}
-	builder, err := NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "")
+	builder, err := NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestAttemptRefresh_ClaimForRefreshLostRace_TouchesOrderingKeyNoRelease(t *t
 	provider := &whiteboxFakeBuildProvider{nextRef: "should-never-be-used"}
 	sourceControl := &whiteboxFakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}} // genuinely stale -- NeedsRefresh must report true
 
-	builder, err := NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token")
+	builder, err := NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}

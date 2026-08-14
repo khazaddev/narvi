@@ -57,7 +57,7 @@ func TestResilienceScenario_RefreshInFlightSpawn_StillGetsOldReadyImage(t *testi
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{repoName: "sha-refresh-in-flight-new"}}
 
 	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, buildProvider, platform.DefaultTimeouts(),
-		sourceControl, "test-platform-github-token")
+		sourceControl, "test-platform-github-token", "")
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}

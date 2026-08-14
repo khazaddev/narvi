@@ -516,9 +516,14 @@ func serve() error {
 	// doc comment), both consulted only by the freshness pump's own
 	// per-repo tip-SHA resolution and by claim-time SHA resolution for a
 	// repo-bearing build (attempt) -- never by anything on the spawn path
-	// itself.
+	// itself. Step 43(c) adds the final cfg.CacheVolumeEpoch argument: the
+	// build-time dependency-cache rotation escape hatch (platform.Config.
+	// CacheVolumeEpoch's own doc comment) -- folded into every cache
+	// volume's own key, never into a fingerprint, so an operator can
+	// rotate a stuck/oversized cache volume without invalidating a single
+	// already-`ready` image.
 	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, sandboxProvider, cfg.Timeouts,
-		sourceControl, cfg.GitHubImageBuildToken)
+		sourceControl, cfg.GitHubImageBuildToken, cfg.CacheVolumeEpoch)
 	if err != nil {
 		return fmt.Errorf("construct image builder: %w", err)
 	}

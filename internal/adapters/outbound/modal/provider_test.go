@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -865,6 +866,159 @@ func TestProvider_BuildImage_CacheMountTrouble_FallsBackToColdBuild(t *testing.T
 				t.Errorf("server observed %d requests, want 2 (one with the cache mount, one cold retry)", *requestCount)
 			}
 		})
+	}
+}
+
+// TestProvider_BuildImage_CacheMountHang_FallsBackToColdBuild is the pure-
+// accelerator rule's own dedicated test for a HUNG cache mount request —
+// the audit-remediation finding this test is written against: "a degraded
+// volume subsystem typically hangs: the request exceeds
+// ProviderHTTPClientTimeout and is classified NETWORK_TIMEOUT, which does
+// not match [the three structured codes], so the build fails instead of
+// falling back." The first request (carrying the cache mount) blocks past
+// a short client timeout; BuildImage must still return a successful
+// BuildRef from the cold retry, never a failure.
+func TestProvider_BuildImage_CacheMountHang_FallsBackToColdBuild(t *testing.T) {
+	block := make(chan struct{})
+
+	// requestCount is an atomic.Int32, not a plain int: unlike every other
+	// cache-mount-trouble test in this file, the FIRST request's own
+	// handler goroutine here never returns (it blocks on <-block) before
+	// the SECOND (cold retry) request arrives on its own, separate
+	// goroutine — so there is no happens-before edge between the two
+	// handler invocations the way a normal request/response round trip
+	// would establish. A plain `int` here is a genuine data race under
+	// -race; this codebase runs go test -race always (§11).
+	var requestCount atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount.Add(1)
+		var req imageBuildRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.CacheVolume != nil {
+			// First attempt: never respond within the test's short client
+			// timeout — modeling a degraded cache-volume subsystem that
+			// hangs rather than returning a clean error.
+			<-block
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(buildResponse{BuildID: "build-cold-after-hang"})
+	}))
+	// Deferred in this order deliberately: httptest.Server.Close() blocks
+	// until every outstanding handler goroutine returns, including the
+	// still-blocked FIRST request's handler above — so block must be
+	// closed (unblocking that goroutine) BEFORE srv.Close() is called, or
+	// this test would deadlock on its own cleanup. defer runs LIFO, so
+	// declaring srv.Close() first and close(block) second is what makes
+	// close(block) run FIRST.
+	defer srv.Close()
+	defer close(block)
+
+	cfg := testConfig(srv.URL)
+	cfg.Timeouts.ProviderHTTPClientTimeout = 50 * time.Millisecond
+	cfg.Timeouts.ProviderWorstColdStart = 10 * time.Millisecond
+
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	spec := ports.ImageSpec{
+		Base:           "base:v1",
+		RuntimeVersion: "go1.26",
+		CacheMount:     &ports.CacheMount{Key: "hung-key", Paths: []string{"/root/.npm/_cacache"}},
+	}
+	ref, err := p.BuildImage(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("BuildImage() error = %v, want nil (pure accelerator: a HUNG cache mount request must degrade to a successful cold build)", err)
+	}
+	if ref != "build-cold-after-hang" {
+		t.Errorf("BuildImage() = %q, want %q", ref, "build-cold-after-hang")
+	}
+	if got := requestCount.Load(); got != 2 {
+		t.Errorf("server observed %d requests, want 2 (one that hung with the cache mount, one cold retry)", got)
+	}
+}
+
+// TestProvider_BuildImage_CacheMountUnparseableResponse_FallsBackToColdBuild
+// is the pure-accelerator rule's own dedicated test for an UNPARSEABLE
+// error response — the audit-remediation finding's own second example:
+// "Same for a 503 with a non-JSON body." The first request (carrying the
+// cache mount) gets a 503 with a plain-text, non-JSON body; BuildImage
+// must still return a successful BuildRef from the cold retry.
+func TestProvider_BuildImage_CacheMountUnparseableResponse_FallsBackToColdBuild(t *testing.T) {
+	requestCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req imageBuildRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.CacheVolume != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("upstream volume subsystem is degraded\n"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(buildResponse{BuildID: "build-cold-after-unparseable"})
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	spec := ports.ImageSpec{
+		Base:           "base:v1",
+		RuntimeVersion: "go1.26",
+		CacheMount:     &ports.CacheMount{Key: "unparseable-key", Paths: []string{"/root/.npm/_cacache"}},
+	}
+	ref, err := p.BuildImage(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("BuildImage() error = %v, want nil (pure accelerator: a 503 with a non-JSON body on a cache-mount request must degrade to a successful cold build)", err)
+	}
+	if ref != "build-cold-after-unparseable" {
+		t.Errorf("BuildImage() = %q, want %q", ref, "build-cold-after-unparseable")
+	}
+	if requestCount != 2 {
+		t.Errorf("server observed %d requests, want 2 (one 503/non-JSON with the cache mount, one cold retry)", requestCount)
+	}
+}
+
+// TestProvider_BuildImage_UnparseableResponse_PermanentStatus_NotRetried
+// guards the broadened signal against masking a genuine, non-retryable
+// rejection: an unparseable body on a PERMANENT status (422, not one of
+// the transient statuses isCacheMountTrouble's own third signal is scoped
+// to) must surface as an ordinary failure, never trigger the cold-build
+// retry — even though a cache mount was requested.
+func TestProvider_BuildImage_UnparseableResponse_PermanentStatus_NotRetried(t *testing.T) {
+	requestCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte("not json, and not a cache-mount problem either"))
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	spec := ports.ImageSpec{
+		Base:           "base:v1",
+		RuntimeVersion: "go1.26",
+		CacheMount:     &ports.CacheMount{Key: "some-key", Paths: []string{"/root/.npm/_cacache"}},
+	}
+	_, err = p.BuildImage(context.Background(), spec)
+	if err == nil {
+		t.Fatal("BuildImage() error = nil, want a ProviderError for a genuine, permanent, non-cache rejection")
+	}
+	if requestCount != 1 {
+		t.Errorf("server observed %d requests, want exactly 1 (an unparseable body on a PERMANENT status must not trigger the cache fallback retry)", requestCount)
 	}
 }
 

@@ -168,21 +168,35 @@
 // brand-new claim and attemptRefresh's own in-place refresh -- now also
 // requests a persistent, provider-backed dependency-cache volume via
 // ports.ImageSpec.CacheMount, built by the new cacheMount helper
-// (builder.go) from domain/imagebuild.CacheVolumeKey(base, runtimeVersion)
-// and domain/imagebuild.WellKnownCachePaths. Purely advisory (ports.
-// CacheMount's own doc comment): this package never inspects whether a
-// provider actually honored it, never branches on it, and its own
-// existing recordFailure/backoff path is entirely unchanged -- a cache
-// problem can only ever surface, if at all, as an ordinary BuildImage
-// failure indistinguishable from any other, which is exactly the
-// pure-accelerator property the port itself is designed to guarantee (see
-// internal/adapters/outbound/modal's own BuildImage for the one adapter
-// that implements the decline-and-fall-back-to-cold-build side of that
-// contract today). telemetry.go adds the build-duration/failure-rate
+// (builder.go) from domain/imagebuild.CacheVolumeKey(base, runtimeVersion,
+// b.cacheVolumeEpoch) and domain/imagebuild.WellKnownCachePaths(). Purely
+// advisory (ports.CacheMount's own doc comment): this package never
+// inspects whether a provider actually honored it, never branches on it,
+// and its own existing recordFailure/backoff path is entirely unchanged --
+// a cache problem can only ever surface, if at all, as an ordinary
+// BuildImage failure indistinguishable from any other, which is exactly
+// the pure-accelerator property the port itself is designed to guarantee
+// (see internal/adapters/outbound/modal's own BuildImage for the one
+// adapter that implements the decline-and-fall-back-to-cold-build side of
+// that contract today). telemetry.go adds the build-duration/failure-rate
 // instrumentation §19.9's own closing paragraph calls for alongside this
 // (ungated, shipped for the same "size the win, catch a regression"
 // reason §19.5's telemetry plays for (a)/(b), never a precondition to
 // ship (c) itself).
+//
+// The mounted volume is READ-ONLY for the duration of every build, with
+// exactly one write-back after a successful build -- not the "content-
+// addressed, so concurrent writes can't corrupt anything" argument an
+// earlier draft made, which review found FALSE against the real caches
+// (ports.CacheMount's own doc comment has the full correction). This
+// package's own contribution to that shape is cacheVolumeEpoch
+// (Builder's own field doc comment): an operator-controlled rotation
+// value folded into CacheVolumeKey but never into Fingerprint, so a stuck
+// or oversized cache volume can be abandoned for a fresh one without
+// forcing every shared image fleet-wide to rebuild the way bumping
+// RuntimeVersion would. Real size enforcement (a byte cap, eviction) is
+// still a named, deferred gap -- this Step ships the rotation escape
+// hatch, not a quota.
 //
 // Refresh NEVER degrades availability: the row's own `status` column
 // never leaves 'ready' for the whole duration a refresh build runs --

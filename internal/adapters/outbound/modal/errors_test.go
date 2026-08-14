@@ -1,6 +1,8 @@
 package modal
 
 import (
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +105,104 @@ func TestClassifyErrorResponse_UsesDecodedMessage(t *testing.T) {
 		t.Errorf("Code = %q, want %q", pe.Code, "INVALID_ARGUMENT")
 	}
 }
+
+// TestIsCacheMountTrouble covers isCacheMountTrouble's own three signals
+// (errors.go's doc comment has the full reasoning) — the audit-remediation
+// finding this test is written against: "the cold-build fallback fires
+// only on three structured provider error codes... a degraded volume
+// subsystem typically hangs... breaking the pure-accelerator rule the port
+// states absolutely." Table-driven, one entry per signal plus the guard
+// that must survive broadening it.
+func TestIsCacheMountTrouble(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error is never cache trouble",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "not a ProviderError at all",
+			err:  errors.New("some unrelated error"),
+			want: false,
+		},
+		{
+			name: "structured CACHE_MOUNT_CORRUPTED code",
+			err:  &ports.ProviderError{Transient: false, Code: "CACHE_MOUNT_CORRUPTED", Op: ports.OpBuildImage, Err: errors.New("corrupted")},
+			want: true,
+		},
+		{
+			name: "structured CACHE_MOUNT_LOCKED code",
+			err:  &ports.ProviderError{Transient: false, Code: "CACHE_MOUNT_LOCKED", Op: ports.OpBuildImage, Err: errors.New("locked")},
+			want: true,
+		},
+		{
+			name: "structured CACHE_MOUNT_UNAVAILABLE code",
+			err:  &ports.ProviderError{Transient: false, Code: "CACHE_MOUNT_UNAVAILABLE", Op: ports.OpBuildImage, Err: errors.New("unavailable")},
+			want: true,
+		},
+		{
+			name: "transport-level NETWORK_ERROR (connection never established)",
+			err:  classifyNetworkError(ports.OpBuildImage, errors.New("dial tcp: connection refused")),
+			want: true,
+		},
+		{
+			name: "transport-level NETWORK_TIMEOUT (a degraded cache volume subsystem typically hangs, not errors cleanly)",
+			err:  classifyNetworkError(ports.OpBuildImage, &timeoutError{}),
+			want: true,
+		},
+		{
+			name: "unparseable body on a transient 503 (e.g. a plain-text upstream error page)",
+			err:  classifyErrorResponse(ports.OpBuildImage, http.StatusServiceUnavailable, []byte("<html>Service Unavailable</html>")),
+			want: true,
+		},
+		{
+			name: "empty body on a transient 500",
+			err:  classifyErrorResponse(ports.OpBuildImage, http.StatusInternalServerError, nil),
+			want: true,
+		},
+		{
+			name: "unparseable body on a PERMANENT 422 must NOT be treated as cache trouble (guard against masking a real, non-retryable rejection)",
+			err:  classifyErrorResponse(ports.OpBuildImage, http.StatusUnprocessableEntity, []byte("not json at all")),
+			want: false,
+		},
+		{
+			name: "recognized, structured, non-cache build-failure code must NOT be treated as cache trouble even on a transient status",
+			err:  classifyErrorResponse(ports.OpBuildImage, http.StatusInternalServerError, []byte(`{"error":{"code":"INTERNAL_BUILD_ERROR","message":"the build sandbox itself crashed"}}`)),
+			want: false,
+		},
+		{
+			name: "recognized SETUP_SCRIPT_FAILED on a permanent 422 must NOT be treated as cache trouble (the exact 'genuine build defect' case the guard exists for)",
+			err:  classifyErrorResponse(ports.OpBuildImage, http.StatusUnprocessableEntity, []byte(`{"error":{"code":"SETUP_SCRIPT_FAILED","message":"setup.sh exited 1"}}`)),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isCacheMountTrouble(tt.err); got != tt.want {
+				t.Errorf("isCacheMountTrouble(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// timeoutError is a minimal net.Error stand-in whose Timeout() reports
+// true, so classifyNetworkError classifies it as networkTimeoutCode
+// exactly the way http.Client reports a client-side deadline exceeded —
+// without needing a real network round trip in this unit test.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 // TestRedactURLCredentials covers both the case url.URL.Redacted already
 // handles (a well-formed absolute URL) and the case it does NOT (a
