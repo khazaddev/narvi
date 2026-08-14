@@ -66,6 +66,11 @@ func TestReviewSubAgents_RegisterAgainstRealPinnedBinary(t *testing.T) {
 	sup := supervisor.New()
 	ctx, cancel := context.WithTimeout(context.Background(), testReadinessTimeout)
 	defer cancel()
+	// Known, honest gap -- see helpers_test.go's startServer (this same
+	// package), the canonical fuller explanation: this t.Cleanup never
+	// runs at all if the TEST BINARY itself is killed abruptly (SIGKILL,
+	// Ctrl-C's default SIGINT, `go test -timeout` firing) rather than
+	// exiting normally -- not something this function itself can fix.
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), testReadinessTimeout)
 		defer stopCancel()

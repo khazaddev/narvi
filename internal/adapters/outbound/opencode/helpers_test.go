@@ -110,6 +110,32 @@ func startServer(t *testing.T) string {
 	// runtime.Goexit() immediately; a t.Cleanup registered AFTER an
 	// `if err != nil { t.Fatalf(...) }` check would never run at all on
 	// that path, leaking a real orphaned OS process across test runs.
+	//
+	// Known, honest gap: this ENTIRE mechanism -- this t.Cleanup, and
+	// every other real-binary spawn helper in this codebase that follows
+	// the same sup.StopAll(..., grace) shape (internal/sandboxagent/
+	// opencodeproc/spawn_test.go's TestSpawn_RealBinary,
+	// sentinelfixagent_realbinary_test.go,
+	// reviewsubagents_realbinary_test.go) -- only runs at all if the Go
+	// runtime actually unwinds this goroutine's own deferred/cleanup
+	// stack, which requires the TEST BINARY itself to still be alive and
+	// running normal Go code. It does NOT run if the test binary is
+	// terminated abruptly from outside: a SIGKILL, an IDE "stop" button,
+	// Ctrl-C's default SIGINT disposition (no signal.Notify installed
+	// here to intercept it), or `go test -timeout` firing (which dumps
+	// goroutine stacks and force-exits the process rather than unwinding
+	// any single goroutine's defers). Confirmed, not merely suspected, to
+	// be exactly this codebase's own root cause for a real subset of the
+	// orphaned `opencode serve` processes observed in the wild -- this
+	// helper's OWN cleanup logic here was independently re-examined during
+	// that investigation and found already correct (proper SIGTERM-then-
+	// SIGKILL process-group escalation, via sup.StopAll ->
+	// supervisor.Process.Stop): there is nothing further this function
+	// itself can fix. A SIGKILL of the test binary is not recoverable from
+	// inside the test process by any means -- only running tests in an
+	// environment that avoids abruptly killing the test binary (or a
+	// periodic external reaper for anything still matching `opencode
+	// serve` older than a few hours) closes this residual gap.
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), testReadinessTimeout)
 		defer stopCancel()

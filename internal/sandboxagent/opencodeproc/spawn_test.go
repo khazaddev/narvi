@@ -45,6 +45,14 @@ func TestSpawn_RealBinary(t *testing.T) {
 	// runtime.Goexit() immediately; a t.Cleanup registered AFTER an
 	// `if err != nil { t.Fatalf(...) }` check would never run at all on
 	// that path, leaking a real orphaned OS process across test runs.
+	//
+	// Known, honest gap -- see internal/adapters/outbound/opencode/
+	// helpers_test.go's startServer, the canonical fuller explanation:
+	// this t.Cleanup (like every real-binary spawn helper following this
+	// same sup.StopAll shape) never runs at all if the TEST BINARY itself
+	// is killed abruptly (SIGKILL, Ctrl-C's default SIGINT, `go test
+	// -timeout` firing) rather than exiting normally -- not something this
+	// function itself can fix.
 	t.Cleanup(func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
