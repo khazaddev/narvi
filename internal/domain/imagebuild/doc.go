@@ -21,6 +21,15 @@
 //     Decision struct returned) and ImageBuildStreakThreshold mirroring
 //     sandbox.CircuitBreakerThreshold's own "plain int, not a duration"
 //     convention.
+//   - CacheVolumeKey/WellKnownCachePaths/PruneCacheVersions (cachemount.go):
+//     Step 43(c)'s own build-time dependency cache (§19.1's closing
+//     paragraph), third iteration — immutable versioned cache snapshots.
+//     CacheVolumeKey names a cache LINEAGE (base, runtimeVersion only,
+//     never repo content, never a rotation epoch — versions make rotation
+//     unnecessary, see that function's own doc comment); PruneCacheVersions
+//     is the pure "keep the newest RetainedCacheVersions" retention
+//     decision app/imagebuild.Builder applies to its own Postgres
+//     bookkeeping after every confirmed publish.
 //
 // Every function here is pure per §11: no I/O, no time.Now(), no
 // randomness -- "now" is always an explicit parameter, and backoff

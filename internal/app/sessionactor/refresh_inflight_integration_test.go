@@ -56,8 +56,9 @@ func TestResilienceScenario_RefreshInFlightSpawn_StillGetsOldReadyImage(t *testi
 	}
 	sourceControl := &fakeSourceControl{shaFor: map[string]string{repoName: "sha-refresh-in-flight-new"}}
 
+	cacheVersionStore := narvipg.NewImageCacheVersionStore(pool)
 	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, buildProvider, platform.DefaultTimeouts(),
-		sourceControl, "test-platform-github-token")
+		sourceControl, "test-platform-github-token", cacheVersionStore)
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}

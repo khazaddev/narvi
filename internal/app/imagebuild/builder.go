@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -88,6 +89,30 @@ type Builder struct {
 	sourceControl         ports.SourceControl
 	gitHubImageBuildToken string
 
+	// cacheVersionStore backs Step 43(c)'s own build-time dependency cache
+	// (§19.1's closing paragraph), third iteration: immutable versioned
+	// cache snapshots. Mints a fresh PublishVersion and resolves the most
+	// recent CONFIRMED MountVersion for a given cache key (cacheMount,
+	// below) before every real BuildImage attempt that requests
+	// acceleration, and records a confirmed publication (plus retention
+	// pruning, domain/imagebuild.PruneCacheVersions) after a success that
+	// BuildOutcome.PublishedCacheVersion confirms actually used the mount.
+	// May be nil (mirrors sourceControl's own optional-provider
+	// precedent immediately above) -- cacheMount degrades to "no cache
+	// mount requested this attempt" whenever it is, exactly like every
+	// other cache-computation failure this package treats as advisory,
+	// never fatal to a build.
+	//
+	// No rotation epoch anymore -- see domain/imagebuild.CacheVolumeKey's
+	// own doc comment for why an immutable-version model makes that
+	// escape hatch (platform.Config.CacheVolumeEpoch, attempt 2's own
+	// NARVI_CACHE_VOLUME_EPOCH) redundant rather than merely optional: a
+	// bad published version is escaped by pointing a later build's own
+	// MountVersion resolution at an earlier, known-good one (an operator
+	// deleting the bad row via ImageCacheVersionStore.DeleteVersions),
+	// never by a second, parallel rotation config surface.
+	cacheVersionStore *postgres.ImageCacheVersionStore
+
 	failureStreak metric.Int64Counter
 
 	// permanentlyFailed counts every time a fingerprint is marked
@@ -114,6 +139,11 @@ type Builder struct {
 	// app/reconciler.NewReconciler's own orphans_reaped precedent it in
 	// turn mirrors).
 	refreshClaimReclaimed metric.Int64Counter
+
+	// buildTelemetry bundles Step 43(c)'s own build-duration/failure-rate
+	// instrumentation (§19.9's closing paragraph; telemetry.go) -- recorded
+	// around every real BuildImage call in both attempt and attemptRefresh.
+	buildTelemetry buildTelemetry
 }
 
 // NewBuilder builds a Builder backed by store/pool (pool is needed
@@ -124,13 +154,15 @@ type Builder struct {
 // drives), timeouts (for ImageBuildPumpInterval/ImageRefreshCheckInterval/
 // backoff config, consulted by Run/PumpOnce/RefreshOnce), sourceControl
 // (Step 42's own claim-time/freshness-pump SHA resolution, §19.2 -- may be
-// nil), and gitHubImageBuildToken (the new platform-level credential,
-// platform.Config.GitHubImageBuildToken -- may be empty).
+// nil), gitHubImageBuildToken (the new platform-level credential,
+// platform.Config.GitHubImageBuildToken -- may be empty), and
+// cacheVersionStore (Step 43(c)'s own immutable-cache-version bookkeeping,
+// third iteration -- may be nil; see the Builder field's own doc comment).
 //
 // The image_build_failure_streak OTel counter is constructed exactly once,
 // here, at construction time -- not per-tick, not per-row -- mirroring
 // app/reconciler.NewReconciler's own orphans_reaped precedent exactly.
-func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider ports.SandboxProvider, timeouts platform.Timeouts, sourceControl ports.SourceControl, gitHubImageBuildToken string) (*Builder, error) {
+func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider ports.SandboxProvider, timeouts platform.Timeouts, sourceControl ports.SourceControl, gitHubImageBuildToken string, cacheVersionStore *postgres.ImageCacheVersionStore) (*Builder, error) {
 	meter := otel.Meter(meterName)
 
 	failureStreak, err := meter.Int64Counter(
@@ -160,6 +192,11 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		return nil, fmt.Errorf("imagebuild: construct image_build_permanently_failed counter: %w", err)
 	}
 
+	buildTel, err := newBuildTelemetry(meter)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Builder{
 		store:                 store,
 		pool:                  pool,
@@ -167,10 +204,133 @@ func NewBuilder(store *postgres.ImageBuildStore, pool *pgxpool.Pool, provider po
 		timeouts:              timeouts,
 		sourceControl:         sourceControl,
 		gitHubImageBuildToken: gitHubImageBuildToken,
+		cacheVersionStore:     cacheVersionStore,
 		failureStreak:         failureStreak,
 		refreshClaimReclaimed: refreshClaimReclaimed,
 		permanentlyFailed:     permanentlyFailed,
+		buildTelemetry:        buildTel,
 	}, nil
+}
+
+// cacheMount resolves the ports.CacheMount a real BuildImage call requests
+// to accelerate a build (§19.1's closing paragraph, Step 43(c), third
+// iteration: immutable versioned cache snapshots). Key is
+// domain/imagebuild.CacheVolumeKey(base, runtimeVersion) -- deliberately
+// NOT a function of repos, so every fingerprint sharing the same
+// (base, runtimeVersion) resolves to the identical cache lineage
+// regardless of which repo set it is building. MountVersion is the most
+// recently CONFIRMED version under Key (ImageCacheVersionStore.
+// LatestVersion) -- empty when none has ever been confirmed yet, an
+// ordinary "this lineage's first cache-requesting build" outcome, never an
+// error. PublishVersion is freshly minted for THIS attempt alone
+// (ImageCacheVersionStore.MintVersion) -- see that method's own doc
+// comment for why a reservation that never gets confirmed (this build
+// fails, or the adapter declines the mount) is simply, harmlessly
+// abandoned.
+//
+// Returns nil -- "no cache mount requested this attempt", exactly like a
+// caller that never opted in -- whenever b.cacheVersionStore is nil, or
+// EITHER Postgres call above fails for any reason other than "no version
+// confirmed yet" (pgx.ErrNoRows on LatestVersion, the one expected,
+// non-error outcome). This mirrors every other "cache computation problem
+// degrades to an ordinary cold build, never a BuildImage failure" path
+// this package and ports.CacheMount's own doc comment both establish --
+// resolving a MountVersion/PublishVersion pair is itself just one more
+// thing that can go wrong on the way to requesting acceleration, and it
+// must never become a reason a build doesn't happen at all.
+//
+// Whether the requested mount is actually honored is entirely up to the
+// provider (ports.CacheMount: "purely advisory... a caller must never be
+// able to distinguish 'the cache was used' from 'the cache was declined'
+// via any ERROR path") -- this method never inspects or branches on that;
+// only BuildOutcome.PublishedCacheVersion, consulted AFTER a successful
+// BuildImage call (recordCachePublish, below), does. Paths comes from
+// domain/imagebuild.WellKnownCachePaths() -- a function, not a shared
+// package var, so every call here gets its own fresh slice this Builder
+// can never be accused of mutating out from under a concurrent build.
+func (b *Builder) cacheMount(ctx context.Context, logger *slog.Logger, base, runtimeVersion string) *ports.CacheMount {
+	if b.cacheVersionStore == nil {
+		return nil
+	}
+
+	key := domainimagebuild.CacheVolumeKey(base, runtimeVersion)
+
+	mountVersion := ""
+	switch latest, err := b.cacheVersionStore.LatestVersion(ctx, key); {
+	case err == nil:
+		mountVersion = strconv.FormatInt(latest, 10)
+	case errors.Is(err, pgx.ErrNoRows):
+		// No version confirmed yet for this key -- ordinary and expected
+		// for a brand-new cache lineage; mountVersion stays "".
+	default:
+		logger.Warn("imagebuild: cache: resolve latest confirmed version failed; building without a cache mount this attempt", "cache_key", key, "error", err)
+		return nil
+	}
+
+	publishVersion, err := b.cacheVersionStore.MintVersion(ctx, key)
+	if err != nil {
+		logger.Warn("imagebuild: cache: mint publish version failed; building without a cache mount this attempt", "cache_key", key, "error", err)
+		return nil
+	}
+
+	return &ports.CacheMount{
+		Key:            key,
+		MountVersion:   mountVersion,
+		PublishVersion: strconv.FormatInt(publishVersion, 10),
+		Paths:          domainimagebuild.WellKnownCachePaths(),
+	}
+}
+
+// recordCachePublish confirms cm's own PublishVersion was genuinely
+// published -- publishedCacheVersion is BuildOutcome.PublishedCacheVersion
+// from the SAME successful BuildImage call cm was passed into, and it must
+// equal cm.PublishVersion for anything to be recorded at all (empty means
+// the adapter's own decline-and-retry-cold fallback dropped the mount
+// before the attempt that ultimately succeeded -- see BuildOutcome's own
+// doc comment for why this confirmation, not an optimistic "success means
+// it worked" assumption, is what this control plane records: recording a
+// version nothing actually published would point every future build's own
+// MountVersion at an object that was never created). On a genuine
+// confirmation, applies retention immediately afterward
+// (domain/imagebuild.PruneCacheVersions -- keep the newest
+// RetainedCacheVersions for this Key, prune the rest of this control
+// plane's OWN bookkeeping).
+//
+// Never blocks or fails the caller's own success path: every Postgres
+// error here is logged and this function simply returns -- a failed
+// confirmation only means a FUTURE build resolves an older MountVersion
+// (or none), never a build failure now or later (a stale/missing
+// MountVersion degrades via the adapter's own decline-and-retry-cold
+// fallback regardless, ports.CacheMount's own pure-accelerator rule). A
+// nil cm (no cache mount was ever requested this attempt) is a no-op.
+func (b *Builder) recordCachePublish(ctx context.Context, logger *slog.Logger, cm *ports.CacheMount, publishedCacheVersion, fingerprint string) {
+	if cm == nil || publishedCacheVersion == "" || publishedCacheVersion != cm.PublishVersion {
+		return
+	}
+
+	version, err := strconv.ParseInt(publishedCacheVersion, 10, 64)
+	if err != nil {
+		logger.Error("imagebuild: cache: parse published version failed; not recording", "cache_key", cm.Key, "published_cache_version", publishedCacheVersion, "error", err)
+		return
+	}
+
+	if err := b.cacheVersionStore.PublishVersion(ctx, cm.Key, version, fingerprint); err != nil {
+		logger.Warn("imagebuild: cache: record published version failed", "cache_key", cm.Key, "version", version, "error", err)
+		return
+	}
+
+	versions, err := b.cacheVersionStore.ListVersions(ctx, cm.Key)
+	if err != nil {
+		logger.Warn("imagebuild: cache: list versions for retention failed; skipping prune this attempt", "cache_key", cm.Key, "error", err)
+		return
+	}
+	prune := domainimagebuild.PruneCacheVersions(versions)
+	if len(prune) == 0 {
+		return
+	}
+	if err := b.cacheVersionStore.DeleteVersions(ctx, cm.Key, prune); err != nil {
+		logger.Warn("imagebuild: cache: prune old versions failed", "cache_key", cm.Key, "pruned_count", len(prune), "error", err)
+	}
 }
 
 // Run runs the process-wide image-build loop until ctx is done: TWO
@@ -384,16 +544,21 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 		builtRepoSHAs = resolved
 	}
 
-	ref, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
+	cm := b.cacheMount(ctx, logger, row.Base, row.RuntimeVersion)
+	buildStart := time.Now()
+	outcome, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
 		Base:           row.Base,
 		Repos:          repos,
 		RuntimeVersion: row.RuntimeVersion,
+		CacheMount:     cm,
 	})
+	b.buildTelemetry.record(ctx, "claim", time.Since(buildStart).Seconds(), buildErr != nil)
 	if buildErr != nil {
 		logger.Warn("imagebuild: BuildImage failed", "error", buildErr)
 		b.recordFailure(ctx, logger, row)
 		return
 	}
+	b.recordCachePublish(ctx, logger, cm, outcome.PublishedCacheVersion, row.Fingerprint)
 
 	builtAt := time.Now()
 	builtRepoSHAsJSON, err := json.Marshal(builtRepoSHAs)
@@ -406,7 +571,7 @@ func (b *Builder) attempt(ctx context.Context, row sqlcgen.ImageBuild) {
 		return
 	}
 
-	imageRef := string(ref)
+	imageRef := string(outcome.Ref)
 	if _, err := b.store.RecordSuccess(ctx, sqlcgen.RecordImageBuildSuccessParams{
 		Fingerprint:   row.Fingerprint,
 		ImageRef:      &imageRef,
@@ -839,16 +1004,21 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild, st
 	// generated doc comment and this function's own top doc comment.
 	claimedRefreshStartedAt := claimed.RefreshStartedAt
 
-	ref, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
+	cm := b.cacheMount(ctx, logger, claimed.Base, claimed.RuntimeVersion)
+	refreshBuildStart := time.Now()
+	outcome, buildErr := b.provider.BuildImage(ctx, ports.ImageSpec{
 		Base:           claimed.Base,
 		Repos:          repos,
 		RuntimeVersion: claimed.RuntimeVersion,
+		CacheMount:     cm,
 	})
+	b.buildTelemetry.record(ctx, "refresh", time.Since(refreshBuildStart).Seconds(), buildErr != nil)
 	if buildErr != nil {
 		logger.Warn("imagebuild: refresh: BuildImage failed; releasing claim, old image_ref stays servable", "error", buildErr)
 		b.releaseRefreshClaim(ctx, logger, row.Fingerprint, claimedRefreshStartedAt)
 		return
 	}
+	b.recordCachePublish(ctx, logger, cm, outcome.PublishedCacheVersion, row.Fingerprint)
 
 	builtRepoSHAsJSON, err := json.Marshal(current)
 	if err != nil {
@@ -860,7 +1030,7 @@ func (b *Builder) attemptRefresh(ctx context.Context, row sqlcgen.ImageBuild, st
 		return
 	}
 
-	imageRef := string(ref)
+	imageRef := string(outcome.Ref)
 	if _, err := b.store.RecordRefreshSuccess(ctx, sqlcgen.RecordImageRefreshSuccessParams{
 		Fingerprint:             row.Fingerprint,
 		ImageRef:                &imageRef,

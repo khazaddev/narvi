@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/khazaddev/narvi/internal/app/ports"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 // Provider is the Modal SandboxProvider adapter: it implements
@@ -149,7 +150,51 @@ func (p *Provider) RestoreFromSnapshot(ctx context.Context, id ports.SnapshotID,
 }
 
 // BuildImage POSTs to /v1/images.
-func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.BuildRef, error) {
+//
+// # Cache-mount decline-and-fall-back-to-cold-build (§19.1's closing
+// # paragraph, Step 43(c), third iteration: immutable versioned cache
+// # snapshots)
+//
+// When spec.CacheMount is set, the first attempt carries it as
+// req.CacheVolume — requesting spec.CacheMount.MountVersion mounted
+// READ-ONLY for this build (empty MountVersion = nothing to mount yet,
+// this key's first build) and spec.CacheMount.PublishVersion as the new,
+// distinct, immutable version this build's own outputs publish under if it
+// succeeds (ports.CacheMount's own doc comment has the full contract; no
+// separate wire field says "this write is safe" the way an earlier
+// draft's read-write design needed one to — MountVersion and
+// PublishVersion always naming two DIFFERENT, individually-immutable
+// objects is what makes the write safe, not a flag). If that attempt
+// fails with a *ports.ProviderError isCacheMountTrouble (errors.go)
+// recognizes as ambiguous enough to blame on the cache — a structured
+// cache-trouble code (corruption, unavailability, a build-service-
+// reported internal timeout, or MountVersion not found/already pruned) or
+// an unparseable response on an otherwise-transient status; never a raw
+// client-side transport timeout (see isCacheMountTrouble's own doc
+// comment for why that signal was removed rather than kept), and never an
+// ordinary, recognized build failure — BuildImage retries EXACTLY ONCE
+// with CacheVolume dropped entirely — an ordinary cold build,
+// indistinguishable on the wire from a request that never asked for a
+// cache mount in the first place. This is this adapter's own concrete
+// implementation of the decline permission ports.CacheMount's own doc
+// comment grants every adapter: the caller (app/imagebuild.Builder) never
+// sees a cache-specific error and never needs to special-case one — a
+// corrupted, unavailable, hung, not-found, or unparseable-response cache
+// costs one extra HTTP round trip here, never a BuildImage failure. A
+// failure on the SECOND (cold) attempt is a genuine build failure,
+// unrelated to the cache, and is returned exactly as any other BuildImage
+// failure — no special handling, same retry/backoff path through
+// app/imagebuild.Builder's own recordFailure as always.
+//
+// BuildOutcome.PublishedCacheVersion is set to req.CacheVolume.
+// PublishVersion ONLY when the EVENTUAL successful attempt's own request
+// still carried CacheVolume (i.e. it was never dropped by the fallback
+// above) — empty otherwise, including when spec.CacheMount was nil to
+// begin with. This is what lets app/imagebuild.Builder tell "a real
+// publish happened" from "the mount was silently declined" without
+// BuildImage ever growing a cache-specific error (BuildOutcome's own doc
+// comment has the full reasoning).
+func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.BuildOutcome, error) {
 	var repos map[string]imageBuildRequestRepo
 	if len(spec.Repos) > 0 {
 		repos = make(map[string]imageBuildRequestRepo, len(spec.Repos))
@@ -161,12 +206,44 @@ func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.
 		Base:           spec.Base,
 		Repos:          repos,
 		RuntimeVersion: spec.RuntimeVersion,
+		CacheVolume:    cacheVolumeFromSpec(spec.CacheMount),
 	}
+
 	var resp buildResponse
-	if err := p.do(ctx, ports.OpBuildImage, http.MethodPost, "/v1/images", req, &resp); err != nil {
-		return "", err
+	err := p.do(ctx, ports.OpBuildImage, http.MethodPost, "/v1/images", req, &resp)
+	if err != nil && req.CacheVolume != nil && isCacheMountTrouble(err) {
+		platform.Logger(ctx).Warn("modal: BuildImage: cache mount unavailable; retrying as an ordinary cold build (pure-accelerator fallback, §19.1)",
+			"cache_key", req.CacheVolume.Key, "mount_version", req.CacheVolume.MountVersion, "error", err)
+		req.CacheVolume = nil
+		err = p.do(ctx, ports.OpBuildImage, http.MethodPost, "/v1/images", req, &resp)
 	}
-	return ports.BuildRef(resp.BuildID), nil
+	if err != nil {
+		return ports.BuildOutcome{}, err
+	}
+	outcome := ports.BuildOutcome{Ref: ports.BuildRef(resp.BuildID)}
+	if req.CacheVolume != nil {
+		outcome.PublishedCacheVersion = req.CacheVolume.PublishVersion
+	}
+	return outcome, nil
+}
+
+// cacheVolumeFromSpec translates a ports.CacheMount into this adapter's own
+// wire shape, or returns nil when mount is nil (no cache requested) —
+// keeping the "no CacheMount -> byte-for-byte identical request as before
+// this field existed" property wire.go's own imageBuildRequest.CacheVolume
+// doc comment promises. Key, MountVersion, and PublishVersion all travel
+// verbatim — see imageBuildRequestCacheVolume's own doc comment for the
+// third-iteration MountVersion/PublishVersion fields.
+func cacheVolumeFromSpec(mount *ports.CacheMount) *imageBuildRequestCacheVolume {
+	if mount == nil {
+		return nil
+	}
+	return &imageBuildRequestCacheVolume{
+		Key:            mount.Key,
+		MountVersion:   mount.MountVersion,
+		PublishVersion: mount.PublishVersion,
+		Paths:          mount.Paths,
+	}
 }
 
 // DeleteImage issues a DELETE to /v1/images/{id}.

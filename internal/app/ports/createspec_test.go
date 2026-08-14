@@ -36,3 +36,32 @@ func TestCreateSpec_Validate(t *testing.T) {
 		}
 	})
 }
+
+// TestImageSpec_CacheMount_NilByDefault proves a zero-value/pre-existing
+// ImageSpec literal (every fixture written before this field existed)
+// still has CacheMount == nil — "no cache requested" must be the ordinary
+// zero value, not something a caller has to opt out of explicitly.
+func TestImageSpec_CacheMount_NilByDefault(t *testing.T) {
+	spec := ImageSpec{Base: "base:v1", RuntimeVersion: "1.0.0"}
+	if spec.CacheMount != nil {
+		t.Errorf("ImageSpec{}.CacheMount = %+v, want nil", spec.CacheMount)
+	}
+}
+
+// TestImageSpec_CacheMount_CarriesKeyAndPaths is a plain data-shape smoke
+// test: CacheMount round-trips exactly the Key/Paths it was constructed
+// with, with no hidden normalization/mutation.
+func TestImageSpec_CacheMount_CarriesKeyAndPaths(t *testing.T) {
+	mount := &CacheMount{
+		Key:   "deadbeef",
+		Paths: []string{"/root/.npm/_cacache", "/root/.cache/pip"},
+	}
+	spec := ImageSpec{Base: "base:v1", RuntimeVersion: "1.0.0", CacheMount: mount}
+
+	if spec.CacheMount.Key != "deadbeef" {
+		t.Errorf("CacheMount.Key = %q, want %q", spec.CacheMount.Key, "deadbeef")
+	}
+	if len(spec.CacheMount.Paths) != 2 {
+		t.Errorf("CacheMount.Paths = %v, want 2 entries", spec.CacheMount.Paths)
+	}
+}

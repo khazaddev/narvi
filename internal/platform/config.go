@@ -307,6 +307,19 @@ const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 // whichever the deploying operator provisions) -- never logged anywhere.
 const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 
+// NARVI_CACHE_VOLUME_EPOCH (Step 43(c)'s attempt-2 rotation escape hatch)
+// is GONE, deliberately, not merely unread: domain/imagebuild.
+// CacheVolumeKey (this Step's third iteration -- immutable versioned
+// cache snapshots) no longer takes an epoch argument at all. See that
+// function's own doc comment for why an immutable-version model makes a
+// separate rotation config surface redundant -- a bad published version
+// is escaped by pointing a later build's own MountVersion resolution at
+// an earlier, known-good one (an operator action against this control
+// plane's own version-history bookkeeping), never by an operator
+// redeploying with a new epoch value. Removed rather than left as a
+// silently-ignored env var precisely so this codebase never carries two
+// rotation mechanisms side by side, one live and one vestigial.
+
 // reviewModelDeepEnvVarName configures Step 68's ("review triage:
 // deterministic light/deep routing", §26.3) own deep-path model override,
 // read from NARVI_REVIEW_MODEL_DEEP. §26.3 states "depth drives model/

@@ -1561,6 +1561,18 @@ type ImageBuild struct {
 	PermanentlyFailed bool               `json:"permanently_failed"`
 }
 
+type ImageCacheVersion struct {
+	CacheKey    string             `json:"cache_key"`
+	Version     int64              `json:"version"`
+	Fingerprint string             `json:"fingerprint"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type ImageCacheVersionCounter struct {
+	CacheKey    string `json:"cache_key"`
+	NextVersion int64  `json:"next_version"`
+}
+
 type LinearAgentSession struct {
 	AgentSessionID string             `json:"agent_session_id"`
 	SessionID      pgtype.UUID        `json:"session_id"`

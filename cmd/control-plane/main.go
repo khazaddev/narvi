@@ -240,6 +240,15 @@ func serve() error {
 	wsTokenStore := postgres.NewWSTokenStore(pool)
 	environmentStore := postgres.NewEnvironmentStore(pool)
 	imageBuildStore := postgres.NewImageBuildStore(pool)
+	// imageCacheVersionStore is Step 43(c)'s own build-time dependency
+	// cache bookkeeping, third iteration: immutable versioned cache
+	// snapshots (§19.1's closing paragraph). Backs app/imagebuild.
+	// Builder's own cacheMount/recordCachePublish (mint a version before
+	// a real BuildImage attempt, resolve the latest confirmed version to
+	// mount, confirm a real publish afterward, prune old versions per
+	// domain/imagebuild.RetainedCacheVersions) -- see that store's own
+	// doc comment.
+	imageCacheVersionStore := postgres.NewImageCacheVersionStore(pool)
 
 	// automationStore/automationInvocationStore/automationRunStore are
 	// Step 51's ("automations: engine", §3.5) own three tables -- see
@@ -516,9 +525,14 @@ func serve() error {
 	// doc comment), both consulted only by the freshness pump's own
 	// per-repo tip-SHA resolution and by claim-time SHA resolution for a
 	// repo-bearing build (attempt) -- never by anything on the spawn path
-	// itself.
+	// itself. Step 43(c) adds the final imageCacheVersionStore argument:
+	// the build-time dependency cache's own version-history bookkeeping,
+	// third iteration (immutable versioned cache snapshots, §19.1's
+	// closing paragraph) -- no rotation-epoch config exists anymore (see
+	// domain/imagebuild.CacheVolumeKey's own doc comment for why an
+	// immutable-version model made that escape hatch redundant).
 	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, sandboxProvider, cfg.Timeouts,
-		sourceControl, cfg.GitHubImageBuildToken)
+		sourceControl, cfg.GitHubImageBuildToken, imageCacheVersionStore)
 	if err != nil {
 		return fmt.Errorf("construct image builder: %w", err)
 	}

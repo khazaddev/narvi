@@ -980,6 +980,13 @@ func TestLoadGitHubImageBuildToken(t *testing.T) {
 	})
 }
 
+// NARVI_CACHE_VOLUME_EPOCH no longer exists as a config surface (Step
+// 43(c)'s third iteration removes the rotation escape hatch attempt 2
+// added -- domain/imagebuild.CacheVolumeKey's own doc comment has the
+// full "why"). TestLoadCacheVolumeEpoch used to live here; deleted along
+// with the field and env var it tested, not left behind pointing at
+// nothing.
+
 // TestLoadGitHubReReviewLabel covers Step 46's ("review sessions", §8.2)
 // own optional NARVI_GITHUB_REREVIEW_LABEL -- mirrors
 // TestLoadGitHubImageBuildToken's own "unset succeeds, set carries through"
