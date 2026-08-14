@@ -56,13 +56,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sandboxws"
+	"github.com/khazaddev/narvi/internal/platform"
 )
 
 const pushTestTimeout = 45 * time.Second
@@ -328,9 +331,36 @@ func waitForRealClone(t *testing.T, workspaceDir string) {
 }
 
 // runSandboxAgent starts the real sandbox-agent binary against a real
-// SESSION_CONFIG pointing at fcp, returning the running *exec.Cmd (t.
-// Cleanup kills it) and a buffer capturing its combined output for
-// diagnostics.
+// SESSION_CONFIG pointing at fcp, returning a buffer capturing its
+// combined output for diagnostics.
+//
+// Both the normal per-test-completion path (t.Cleanup below) and the
+// pushTestTimeout path (cmd.Cancel/cmd.WaitDelay) stop it via
+// stopProcessGroup (processgroup_test.go): SIGTERM the whole process
+// group first, wait up to timeouts.SupervisorShutdownTimeout, only then
+// escalate to SIGKILL. An earlier version of this helper called only
+// cmd.Process.Kill() (an unconditional SIGKILL, no process group) -- since
+// SIGKILL cannot be intercepted, sandbox-agent never got a chance to run
+// its own already-correct graceful shutdown (main.go's
+// signal.NotifyContext -> sup.StopAll), which is what actually stops
+// whatever OpenCode/git/hook processes it had spawned (each in its own
+// process group, per internal/sandboxagent/supervisor.Spawn) -- silently
+// orphaning them instead. Sending SIGTERM first, and waiting the same
+// outer bound sandbox-agent's own StopAll is itself bounded by (main.go's
+// own shutdownCtx, built from SupervisorShutdownTimeout, NOT the shorter
+// per-process ProcessStopGracePeriod -- see timeouts.go's own doc comment
+// distinguishing the two), gives that existing graceful path a real
+// chance to run; SIGKILL is now only a backstop for sandbox-agent itself
+// failing to exit in time, not the default.
+//
+// Honest limit: none of this helps if the TEST BINARY itself (this `go
+// test` process) is killed abruptly -- a SIGKILL of it, or any other path
+// that skips t.Cleanup and never lets cmd.Cancel run, still leaves
+// sandbox-agent (and transitively whatever it hasn't yet stopped itself)
+// running. That failure mode is not recoverable from inside the test
+// process; see helpers_test.go's own startServer doc comment (internal/
+// adapters/outbound/opencode) for the same caveat in the in-process-spawn
+// case.
 func runSandboxAgent(t *testing.T, binPath, gitServerURL, workspaceDir string, fcp *fakeControlPlane) *bytes.Buffer {
 	t.Helper()
 
@@ -346,6 +376,8 @@ func runSandboxAgent(t *testing.T, binPath, gitServerURL, workspaceDir string, f
 	}`, fcp.wsURL(), gitServerURL+"/repo.git", fcp.sessionID)
 
 	credCacheDir := t.TempDir()
+
+	timeouts := platform.DefaultTimeouts()
 
 	ctx, cancel := context.WithTimeout(context.Background(), pushTestTimeout)
 	t.Cleanup(cancel)
@@ -368,12 +400,53 @@ func runSandboxAgent(t *testing.T, binPath, gitServerURL, workspaceDir string, f
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
+	// Own process group (mirrors internal/sandboxagent/supervisor.Spawn's
+	// own SysProcAttr{Setpgid: true} for every child IT spawns) so
+	// SIGTERM/SIGKILL aimed at cmd.Process.Pid below can never
+	// accidentally reach this TEST BINARY's own process group too, and so
+	// cmd.Process.Pid itself doubles as the group id stopProcessGroup
+	// needs.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// cmd.Cancel/WaitDelay (Go 1.20+) fire if ctx (pushTestTimeout) is hit
+	// before the process exits on its own. Without them,
+	// exec.CommandContext's default Cancel is an unconditional, immediate
+	// cmd.Process.Kill() (SIGKILL) -- exactly today's leak, just on the
+	// timeout path instead of the t.Cleanup path. Sending SIGTERM to the
+	// group here instead gives sandbox-agent's own graceful shutdown the
+	// same real chance to run on this path too.
+	cmd.Cancel = func() error {
+		return signalProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
+	}
+	cmd.WaitDelay = timeouts.SupervisorShutdownTimeout
+
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start sandbox-agent: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
+
+	// waitDone is closed exactly once, by this single background cmd.
+	// Wait() call -- exec.Cmd.Wait must never be called twice, so every
+	// OTHER path (this func's own t.Cleanup escalation below, and
+	// cmd.Cancel above) only ever SIGNALS the process group, never calls
+	// Wait itself.
+	//
+	// errgroup.Group.Go, not a bare `go` statement: §11's no-naked-
+	// goroutine rule (tools/lint/narvichecks/nakedgoroutine) applies to
+	// tests too -- mirrors internal/sandboxagent/supervisor.Supervisor's
+	// own `group` field precedent exactly (Spawn's reap goroutine): this
+	// local Group exists solely as a lint-satisfying Go() call site, never
+	// Wait()ed on -- waitDone, closed from inside the goroutine, is this
+	// function's own actual synchronization signal.
+	waitDone := make(chan struct{})
+	var reapGroup errgroup.Group
+	reapGroup.Go(func() error {
 		_ = cmd.Wait()
+		close(waitDone)
+		return nil
+	})
+
+	t.Cleanup(func() {
+		stopProcessGroup(cmd.Process.Pid, waitDone, timeouts.SupervisorShutdownTimeout)
 	})
 
 	return &out
