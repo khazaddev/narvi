@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -1267,13 +1268,19 @@ func deepPathVerdictRequestJSON(counterReview string) string {
 
 // seedProcessingDeepPathTurn (Step 71, §26.4/§7.1) creates a processing
 // turn on sessionID with review_depth "deep" (Step 68) and
-// dispatched_sandbox_gen stamped to gen -- the SAME gen a real sandbox
-// row created by createSandboxWithToken starts at (1, matching every
-// other test in this file that posts X-Sandbox-Gen: "1"). This is the
-// fixture every post-hoc-corroboration test below needs: a turn whose
-// own dispatched_sandbox_gen is what corroborateCounterReview's own
-// gen-scoped queries (ListSubTaskStartsForGen/ListSubTaskFinishesForGen)
-// actually filter on.
+// dispatched_sandbox_gen/dispatched_at stamped -- the SAME gen a real
+// sandbox row created by createSandboxWithToken starts at (1, matching
+// every other test in this file that posts X-Sandbox-Gen: "1"), and
+// dispatched_at stamped to "now" (mirroring tryPlanDispatch's own real
+// production behavior of stamping both together, dispatch.go). This is
+// the fixture every post-hoc-corroboration test below needs: a turn whose
+// own dispatched_sandbox_gen AND dispatched_at are what
+// corroborateCounterReview's own queries (ListSubTaskStartsForTurn/
+// ListSubTaskFinishesForTurn) actually filter on -- every caller of this
+// helper seeds its own sub_task_start/finish events AFTER calling this,
+// so their real, DB-assigned created_at naturally lands after this turn's
+// own dispatched_at, exactly like a genuine dispatch followed by genuine
+// sub-task activity would.
 func seedProcessingDeepPathTurn(ctx context.Context, t *testing.T, r testRig, sessionID pgtype.UUID, reviewHeadSHA string, gen int32) sqlcgen.Turn {
 	t.Helper()
 	deepDepth := string(reviewtriage.DepthDeep)
@@ -1289,10 +1296,11 @@ func seedProcessingDeepPathTurn(ctx context.Context, t *testing.T, r testRig, se
 	updated, err := r.turns.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
 		ID:                   created.ID,
 		Status:               sqlcgen.TurnStatusProcessing,
+		DispatchedAt:         pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		DispatchedSandboxGen: &gen,
 	})
 	if err != nil {
-		t.Fatalf("stamp dispatched_sandbox_gen on seeded deep-path turn: %v", err)
+		t.Fatalf("stamp dispatched_at/dispatched_sandbox_gen on seeded deep-path turn: %v", err)
 	}
 	return updated
 }
@@ -1420,5 +1428,158 @@ func TestPostReviewVerdict_CounterReviewUncorroborated_OnlyDifferentSubAgentType
 	}
 	if resp.Shippable != restdtos.PostReviewVerdictResponseShippableNeedsHuman {
 		t.Errorf("Shippable = %q, want %q (a different sub-agent's own completed trace must never corroborate the counter-reviewer's own claim)", resp.Shippable, restdtos.PostReviewVerdictResponseShippableNeedsHuman)
+	}
+}
+
+// TestPostReviewVerdict_CounterReviewCorroborated_MultipleSubAgentTypes_
+// NotFloored (Step 71, §26.4/§7.1; adversarial-review LOW finding) closes
+// an integration-level gap: before this test, only reviewverdict.
+// CounterReviewCorroborated's own pure-function test (corroboration_test.
+// go, "multiple unrelated sub-tasks alongside the real counter-reviewer
+// pair") covered a session+gen whose trace carries MORE THAN ONE
+// sub-agent type -- the real gen-scoped Postgres queries
+// (ListSubTaskStartEventsForTurn/ListSubTaskFinishEventsForTurn) were
+// never exercised against that exact shape at this level. Seeds a
+// genuine, completed fact-check sub-task pair ALONGSIDE the real
+// counter-reviewer pair, both at the SAME turn/gen, and confirms
+// Shippable is still NOT floored: corroborateCounterReview's own real I/O
+// path correctly finds the counter-reviewer's own trace among several,
+// not merely "some completed sub-task exists in this scope".
+func TestPostReviewVerdict_CounterReviewCorroborated_MultipleSubAgentTypes_NotFloored(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-corroborated-multi-agent", 83)
+	seedProcessingDeepPathTurn(ctx, t, rig, session.ID, "sha-corroborated-multi-agent", 1)
+	seedSubTaskStart(ctx, t, rig, session.ID, "msg-start-fact-check", "subtask-fact-check", "fact-check", 1)
+	seedSubTaskFinish(ctx, t, rig, session.ID, "msg-finish-fact-check", "subtask-fact-check", "completed", 1)
+	seedSubTaskStart(ctx, t, rig, session.ID, "msg-start-counter", "subtask-counter", review.CounterReviewerAgentName, 1)
+	seedSubTaskFinish(ctx, t, rig, session.ID, "msg-finish-counter", "subtask-counter", "completed", 1)
+
+	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", deepPathVerdictRequestJSON("done"))
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+	if resp.Shippable != restdtos.PostReviewVerdictResponseShippableAuto {
+		t.Errorf("Shippable = %q, want %q (a real counter-reviewer trace alongside an unrelated fact-check trace, same turn/gen, must still corroborate)", resp.Shippable, restdtos.PostReviewVerdictResponseShippableAuto)
+	}
+}
+
+// TestPostReviewVerdict_CounterReviewCorroborated_EarlierTurnSameGenDoesNot
+// Corroborate (Step 71, §26.4/§7.1) reproduces the EXACT bug an
+// adversarial review of this PR found, and this same commit fixes: gen-
+// scoping ALONE cannot distinguish two DIFFERENT turns on the SAME
+// session dispatched to the SAME still-live sandbox incarnation, because
+// tryPlanDispatch (internal/app/sessionactor/dispatch.go) stamps
+// turns.dispatched_sandbox_gen with the sandbox's CURRENT gen VERBATIM,
+// no bump, whenever a turn is dispatched to an already-Ready/Suspect
+// sandbox -- gen is bumped ONLY on a fresh spawn/restore/resume. This is
+// the ORDINARY case §24's automatic re-review on new commits already
+// describes as normal, not a rare corner case: a session's sandbox
+// routinely survives across multiple review turns.
+//
+// Setup: turn 1 is a genuine earlier deep-path review turn, dispatched
+// (dispatched_sandbox_gen=1, dispatched_at stamped deliberately WELL IN
+// THE PAST) with a REAL, genuine, completed counter-reviewer
+// sub_task_start/sub_task_finish pair persisted for it, then completes
+// (freeing turns_one_processing_per_session's own slot). Turn 2 (the SAME
+// session) is then dispatched to the SAME sandbox incarnation --
+// dispatched_sandbox_gen is ALSO 1, identical to turn 1's, and
+// dispatched_at is stamped deliberately WELL IN THE FUTURE relative to
+// when turn 1's own trace was persisted. Turn 2's own self-report claims
+// counterReview: done, but NO sub-task trace of its own is ever
+// persisted for it.
+//
+// Before this Step's fix (gen-scoping alone, no created_at bound):
+// corroborateCounterReview's query would match turn 1's OLD
+// sub_task_start/finish rows purely on (session_id, gen) -- exactly the
+// SAME gen turn 2 was ALSO dispatched at -- wrongly corroborating turn
+// 2's fabricated self-report and leaving Shippable at its permissive
+// "auto" value: this exact test fails without the fix. After the fix
+// (gen AND created_at >= this turn's own dispatched_at): turn 1's events
+// all have created_at strictly BEFORE turn 2's own dispatched_at, so they
+// are correctly excluded, corroboration returns false, and Shippable
+// floors to needs_human -- exactly the unverified-self-report bypass this
+// whole Step exists to close.
+func TestPostReviewVerdict_CounterReviewCorroborated_EarlierTurnSameGenDoesNotCorroborate(t *testing.T) {
+	rig := newTestRig(t)
+	ctx := context.Background()
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-earlier-turn-same-gen", 84)
+
+	var sameGen int32 = 1
+	turn1DispatchedAt := time.Now().Add(-24 * time.Hour)
+	turn2DispatchedAt := time.Now().Add(24 * time.Hour)
+	deepDepth := string(reviewtriage.DepthDeep)
+	turn1SHA := "sha-turn-1-same-gen"
+	turn2SHA := "sha-turn-2-same-gen"
+
+	// Turn 1: dispatched to sandbox gen 1, dispatched_at deliberately far
+	// in the past.
+	turn1, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID:     session.ID,
+		Status:        sqlcgen.TurnStatusProcessing,
+		ReviewHeadSha: &turn1SHA,
+		ReviewDepth:   &deepDepth,
+	})
+	if err != nil {
+		t.Fatalf("create turn 1: %v", err)
+	}
+	if _, err := rig.turns.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
+		ID:                   turn1.ID,
+		Status:               sqlcgen.TurnStatusProcessing,
+		DispatchedAt:         pgtype.Timestamptz{Time: turn1DispatchedAt, Valid: true},
+		DispatchedSandboxGen: &sameGen,
+	}); err != nil {
+		t.Fatalf("stamp turn 1 dispatched_at/gen: %v", err)
+	}
+
+	// Turn 1's OWN real, genuine counter-reviewer trace -- persisted
+	// while turn 1 was the live processing turn, well before turn 2 is
+	// ever dispatched below.
+	seedSubTaskStart(ctx, t, rig, session.ID, "msg-start-turn1-same-gen", "subtask-turn1-same-gen", review.CounterReviewerAgentName, sameGen)
+	seedSubTaskFinish(ctx, t, rig, session.ID, "msg-finish-turn1-same-gen", "subtask-turn1-same-gen", "completed", sameGen)
+
+	// Turn 1 completes -- freeing turns_one_processing_per_session's own
+	// partial-unique-index slot for turn 2, mirroring how a real turn
+	// genuinely finishes before the next one on the same session starts.
+	if _, err := rig.turns.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
+		ID:          turn1.ID,
+		Status:      sqlcgen.TurnStatusCompleted,
+		CompletedAt: pgtype.Timestamptz{Time: turn1DispatchedAt.Add(time.Minute), Valid: true},
+	}); err != nil {
+		t.Fatalf("complete turn 1: %v", err)
+	}
+
+	// Turn 2: a LATER re-review turn on the SAME session (§24's "once
+	// deep, stays deep" floor forces this to deep path too), dispatched
+	// to the SAME sandbox incarnation -- dispatched_sandbox_gen is ALSO
+	// 1, identical to turn 1's, because the sandbox never respawned
+	// between the two turns. dispatched_at is stamped deliberately far in
+	// the FUTURE relative to turn 1's own persisted trace above.
+	// Deliberately NO sub_task_start/finish events are ever persisted for
+	// turn 2 -- its own self-report below is entirely unverified.
+	turn2, err := rig.turns.Create(ctx, sqlcgen.CreateTurnParams{
+		SessionID:     session.ID,
+		Status:        sqlcgen.TurnStatusProcessing,
+		ReviewHeadSha: &turn2SHA,
+		ReviewDepth:   &deepDepth,
+	})
+	if err != nil {
+		t.Fatalf("create turn 2: %v", err)
+	}
+	if _, err := rig.turns.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
+		ID:                   turn2.ID,
+		Status:               sqlcgen.TurnStatusProcessing,
+		DispatchedAt:         pgtype.Timestamptz{Time: turn2DispatchedAt, Valid: true},
+		DispatchedSandboxGen: &sameGen,
+	}); err != nil {
+		t.Fatalf("stamp turn 2 dispatched_at/gen: %v", err)
+	}
+
+	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", deepPathVerdictRequestJSON("done"))
+	if status != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", status, http.StatusCreated)
+	}
+	if resp.Shippable != restdtos.PostReviewVerdictResponseShippableNeedsHuman {
+		t.Errorf("Shippable = %q, want %q (turn 2's fabricated counterReview:done self-report must NOT be corroborated by turn 1's own OLD trace, even though both turns share the identical dispatched_sandbox_gen)", resp.Shippable, restdtos.PostReviewVerdictResponseShippableNeedsHuman)
 	}
 }

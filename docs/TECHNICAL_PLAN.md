@@ -1429,14 +1429,25 @@ N× boot cost with no real independence gain — each sub-agent already has a cl
   - `internal/domain/reviewverdict.CounterReviewCorroborated` (pure, zero I/O) reports whether a
     `sub_task_start` record naming `review.CounterReviewerAgentName` and a `sub_task_finish` record
     for the SAME `subTaskId` with `outcome == "completed"` both exist in the trace it is handed.
-  - `httpapi.PostReviewVerdict` reads that trace back via two new gen-scoped queries
-    (`ListSubTaskStartEventsForGen`/`ListSubTaskFinishEventsForGen`, filtering the `events` table's
-    JSONB `payload->>'gen'`) — scoped to `turns.dispatched_sandbox_gen`, never merely `session_id`,
-    since one session can carry multiple review turns over its lifetime (§24's automatic
-    re-review) and an earlier turn's own real trace must never spuriously corroborate a later
-    turn's self-report. Only queried when it could matter at all: deep path and a self-reported
-    `done`. `dispatched_sandbox_gen` being `NULL` (a turn with no recorded dispatch) is treated as
-    NOT corroborated, fail-conservative like every other closed-enum default in this codebase.
+  - `httpapi.PostReviewVerdict` reads that trace back via two queries
+    (`ListSubTaskStartEventsForTurn`/`ListSubTaskFinishEventsForTurn`, filtering the `events`
+    table's JSONB `payload->>'gen'`) scoped to BOTH `turns.dispatched_sandbox_gen` AND a
+    `created_at >= <this turn's own dispatched_at>` lower bound — never merely `session_id`, and
+    (fixed post-review, see below) never gen alone either. Gen alone was found, by an adversarial
+    review of this Step's own PR, to be insufficient: `dispatched_sandbox_gen` is bumped only on a
+    fresh spawn/restore/resume, never on an ordinary dispatch to an already-live sandbox, so a
+    session whose sandbox survives across multiple review turns (§24's automatic re-review, the
+    ORDINARY case, not a corner case) dispatches every one of those turns at the SAME gen — letting
+    an earlier turn's own real trace spuriously corroborate a later turn's self-report purely
+    because both turns shared the same gen. The `dispatched_at` lower bound closes that gap:
+    `turns_one_processing_per_session`'s own unique partial index guarantees turns execute strictly
+    sequentially per session, so an earlier turn's own sub-task events always predate a later turn's
+    own `dispatched_at`. Gen-scoping still stays, alongside it, for the orthogonal case it alone
+    catches: a stale, late-arriving event from a genuinely different, now-dead sandbox incarnation.
+    Only queried when it could matter at all: deep path and a self-reported `done`.
+    `dispatched_sandbox_gen` or `dispatched_at` being unset (a turn with no recorded dispatch) is
+    treated as NOT corroborated, fail-conservative like every other closed-enum default in this
+    codebase.
   - `reviewpost.BuildVerdict` applies a SECOND, raise-only substitution (immediately after the
     existing light-path substitution, and gated explicitly on `ReviewDepth == DepthDeep` — never
     merely on the raw `CounterReview` value, which carries no validated meaning on the light path

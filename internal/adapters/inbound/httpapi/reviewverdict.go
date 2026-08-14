@@ -60,6 +60,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -144,9 +145,10 @@ func PostReviewVerdict(
 	turns *postgres.TurnStore,
 	// events (Step 71, §26.4/§7.1) backs post-hoc sub-task corroboration:
 	// reading back this session's own already-persisted sub_task_start/
-	// sub_task_finish trace, gen-scoped to turns' own
-	// dispatched_sandbox_gen -- see corroborateCounterReview's own doc
-	// comment below for the full call-site wiring.
+	// sub_task_finish trace, scoped to BOTH turns' own
+	// dispatched_sandbox_gen AND dispatched_at -- see corroborateCounterReview's
+	// own doc comment below for the full call-site wiring and why both are
+	// required together.
 	events *postgres.EventStore,
 	botHandle string,
 	// botToken (Step 63, §22.1.1) is the SAME GitHub bot credential
@@ -316,18 +318,25 @@ func PostReviewVerdict(
 		var reviewDepth reviewtriage.ReviewDepth
 		var serverComputedChangedFiles int
 		var diffDelivered bool
-		// dispatchedSandboxGen (Step 71, §26.4/§7.1) is this SAME
-		// processing turn's own turns.dispatched_sandbox_gen -- the
-		// sandbox gen this turn's prompt was actually dispatched to
-		// (migrations/000026_turn_dispatch_gen.up.sql). Nil (that
-		// column's own nullable zero value, "NULL before a turn's first
-		// real dispatch") for every case that skips or fails the turn
-		// lookup below, exactly like verdictHeadSHA/reviewDepth's own
-		// identical degradation -- corroborateCounterReview's own call
-		// site, further down, treats a nil value here as NOT corroborated
-		// rather than erroring or skipping the check (fail-conservative,
-		// see that call site's own doc comment).
+		// dispatchedSandboxGen/dispatchedAt (Step 71, §26.4/§7.1) are this
+		// SAME processing turn's own turns.dispatched_sandbox_gen/
+		// dispatched_at -- the sandbox gen this turn's prompt was actually
+		// dispatched to (migrations/000026_turn_dispatch_gen.up.sql) and
+		// the moment it was dispatched (migrations/000005_turns.up.sql).
+		// Both stay at their own nullable/invalid zero value for every
+		// case that skips or fails the turn lookup below, exactly like
+		// verdictHeadSHA/reviewDepth's own identical degradation --
+		// corroborateCounterReview's own call site, further down, treats
+		// either one being unset as NOT corroborated rather than erroring
+		// or skipping the check (fail-conservative, see that call site's
+		// own doc comment). BOTH are required together, not merely gen
+		// alone: see events.sql's own doc comment on ListSubTaskStart/
+		// FinishEventsForTurn for why gen-scoping alone was found to be
+		// insufficient (an adversarial review finding on this same PR) and
+		// dispatchedAt's own created_at lower bound is what actually closes
+		// that gap.
 		var dispatchedSandboxGen *int32
+		var dispatchedAt pgtype.Timestamptz
 		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
 			if errors.Is(turnErr, pgx.ErrNoRows) {
 				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
@@ -342,6 +351,7 @@ func PostReviewVerdict(
 				reviewDepth = reviewtriage.ReviewDepth(*processingTurn.ReviewDepth)
 			}
 			dispatchedSandboxGen = processingTurn.DispatchedSandboxGen
+			dispatchedAt = processingTurn.DispatchedAt
 			if len(processingTurn.ReviewDepthDecision) > 0 {
 				var decisionRecord reviewtriage.DecisionRecord
 				if unmarshalErr := json.Unmarshal(processingTurn.ReviewDepthDecision, &decisionRecord); unmarshalErr != nil {
@@ -379,7 +389,7 @@ func PostReviewVerdict(
 		// reviewpost.VerdictInput.CounterReviewCorroborated's own doc
 		// comment and reviewpost.BuildVerdict's own "Second substitution"
 		// doc comment for what this feeds and why. The two corroboration
-		// queries (events.ListSubTaskStartsForGen/ListSubTaskFinishesForGen)
+		// queries (events.ListSubTaskStartsForTurn/ListSubTaskFinishesForTurn)
 		// are ONLY run when they could possibly matter -- deep path AND
 		// the self-report claims done -- so every light-path verdict, and
 		// every deep-path verdict that already self-reports "skipped",
@@ -389,7 +399,8 @@ func PostReviewVerdict(
 		// in.CounterReview == CounterReviewDone) already requires before
 		// this field can affect anything.
 		if reviewDepth == reviewtriage.DepthDeep && input.CounterReview == review.CounterReviewDone {
-			if dispatchedSandboxGen == nil {
+			switch {
+			case dispatchedSandboxGen == nil:
 				// dispatched_sandbox_gen NULL (migrations/
 				// 000026_turn_dispatch_gen.up.sql: "NULL before a turn's
 				// first real dispatch") -- treated as NOT corroborated,
@@ -402,8 +413,22 @@ func PostReviewVerdict(
 				// zero value, false, below.
 				logger.Warn("httpapi: review-verdict: no dispatched_sandbox_gen on record for this turn, treating counter-review claim as uncorroborated",
 					"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
-			} else {
-				input.CounterReviewCorroborated = corroborateCounterReview(ctx, logger, events, sessionID, *dispatchedSandboxGen)
+			case !dispatchedAt.Valid:
+				// dispatched_at NULL (migrations/000005_turns.up.sql:
+				// nullable, set only once a turn is actually dispatched)
+				// -- the IDENTICAL fail-conservative treatment as the
+				// dispatchedSandboxGen-nil case immediately above, applied
+				// to this Step's own new second precondition. Should be
+				// genuinely unreachable in practice (a turn being
+				// verdicted right now is, by construction, already
+				// dispatched -- this very request is proof of that), but
+				// the code must never ASSUME that rather than checking it,
+				// exactly like the gen case does not assume gen is always
+				// set.
+				logger.Warn("httpapi: review-verdict: no dispatched_at on record for this turn, treating counter-review claim as uncorroborated",
+					"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+			default:
+				input.CounterReviewCorroborated = corroborateCounterReview(ctx, logger, events, sessionID, *dispatchedSandboxGen, dispatchedAt.Time)
 			}
 		}
 
@@ -858,15 +883,25 @@ type subTaskFinishPayload struct {
 // itself lives in reviewverdict.CounterReviewCorroborated (internal/
 // domain/reviewverdict/corroboration.go), which this function is the
 // ONE caller of in production. Queries this session's own already-
-// persisted sub_task_start/sub_task_finish trace, gen-scoped to gen (the
-// turn being verdicted's own dispatched_sandbox_gen -- see queries/
-// events.sql's own ListSubTaskStartEventsForGen/
-// ListSubTaskFinishEventsForGen doc comment for why gen-scoping, not
-// merely session-scoping, is a real correctness requirement: a session
-// can carry multiple review turns over its lifetime, §24's automatic
-// re-review chief among the reasons why, and an EARLIER turn's own real
-// counter-review trace must never spuriously corroborate a LATER turn's
-// self-report).
+// persisted sub_task_start/sub_task_finish trace, scoped to BOTH gen (the
+// turn being verdicted's own dispatched_sandbox_gen) AND a created_at
+// lower bound at dispatchedAt (that SAME turn's own turns.dispatched_at)
+// -- see queries/events.sql's own ListSubTaskStartEventsForTurn/
+// ListSubTaskFinishEventsForTurn doc comment for the full "why" both
+// conditions are required together, not gen alone: a session can carry
+// multiple review turns over its lifetime (§24's automatic re-review
+// chief among the reasons why), and because turns.dispatched_sandbox_gen
+// is bumped only on a fresh spawn/restore/resume -- never on an ordinary
+// dispatch to an already-live sandbox -- two turns on the same session can
+// (and, on the common "sandbox survives across re-review turns" path,
+// routinely do) share the identical gen. gen scoping ALONE was found, by
+// an adversarial review of this same PR, to let an EARLIER turn's own
+// real counter-review trace spuriously corroborate a LATER turn's
+// self-report in exactly that case; the dispatchedAt lower bound is what
+// actually closes that gap (turns_one_processing_per_session's own unique
+// partial index guarantees turns execute strictly sequentially per
+// session, so an earlier turn's own sub-task events all predate a later
+// turn's own dispatched_at).
 //
 // A genuine store error on EITHER query, or a malformed payload on any
 // individual row, is logged and treated as NOT corroborated for that row/
@@ -901,13 +936,13 @@ type subTaskFinishPayload struct {
 // retries, no polling, no new timeout constant belongs here to work
 // around it -- see reviewpost.BuildVerdict's own doc comment ("The
 // accepted race") for the fuller version of this same reasoning.
-func corroborateCounterReview(ctx context.Context, logger *slog.Logger, events *postgres.EventStore, sessionID pgtype.UUID, gen int32) bool {
-	startRows, err := events.ListSubTaskStartsForGen(ctx, sessionID, gen)
+func corroborateCounterReview(ctx context.Context, logger *slog.Logger, events *postgres.EventStore, sessionID pgtype.UUID, gen int32, dispatchedAt time.Time) bool {
+	startRows, err := events.ListSubTaskStartsForTurn(ctx, sessionID, gen, dispatchedAt)
 	if err != nil {
 		logger.Warn("httpapi: review-verdict: list sub_task_start events for corroboration failed, treating counter-review claim as uncorroborated", "error", err)
 		return false
 	}
-	finishRows, err := events.ListSubTaskFinishesForGen(ctx, sessionID, gen)
+	finishRows, err := events.ListSubTaskFinishesForTurn(ctx, sessionID, gen, dispatchedAt)
 	if err != nil {
 		logger.Warn("httpapi: review-verdict: list sub_task_finish events for corroboration failed, treating counter-review claim as uncorroborated", "error", err)
 		return false

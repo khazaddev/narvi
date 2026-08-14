@@ -86,11 +86,14 @@ type SubTaskFinishRecord struct {
 const counterReviewFinishOutcomeCompleted = "completed"
 
 // CounterReviewCorroborated reports whether starts/finishes -- BOTH
-// already scoped by the caller to the SAME session and the SAME sandbox
-// gen the turn being verdicted was actually dispatched at (see queries/
-// events.sql's own ListSubTaskStartEventsForGen/
-// ListSubTaskFinishEventsForGen doc comment for why gen-scoping, not just
-// session-scoping, is required here) -- together contain real, durable
+// already scoped by the caller to the SAME session, the SAME sandbox gen
+// the turn being verdicted was actually dispatched at, AND a created_at
+// lower bound at that same turn's own dispatched_at (see queries/
+// events.sql's own ListSubTaskStartEventsForTurn/
+// ListSubTaskFinishEventsForTurn doc comment for why gen-scoping ALONE was
+// found insufficient -- a real cross-turn contamination gap caught by
+// adversarial review -- and why the dispatched_at bound is required
+// alongside it, not merely session-scoping) -- together contain real, durable
 // evidence that the `counter-reviewer` sub-agent (review.
 // CounterReviewerAgentName, "counter-reviewer") was both dispatched and
 // actually completed.
