@@ -19,9 +19,12 @@ const meterName = "narvi/sandboxagent-boot"
 // hookRerunDurationHistogram is this Step's (§19.5(b)) own per-hook
 // wall-clock duration metric, joining the boot-phase-duration OTel
 // metrics §5.3 already lists ("boot phase durations") -- this is the
-// concrete measurement §19.4's own "expected to be fast" claim needs, and
-// the input §19.6's graduated setup-rerun ladder is gated on (Step 43
-// starts only once this shows full reruns eroding warm-boot latency).
+// concrete measurement §19.4's own "expected to be fast" claim needs.
+// §19.6's graduated setup-rerun ladder (Step 43) ships UNGATED on this
+// metric (§19.9 records why: it removes provably unnecessary work rather
+// than accelerating slow work) -- this histogram instead becomes the
+// post-ship confirmation that the ladder's own tiers actually help, and
+// the trigger for tuning them further.
 //
 // Resolved LAZILY, on first use (sync.OnceValue), rather than eagerly at
 // package-init time: this package has no per-process constructor object

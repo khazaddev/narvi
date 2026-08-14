@@ -95,7 +95,7 @@ func TestRunHooks_NonFatalFailureCapturesOutputTail(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: false}}
 
 	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		10*time.Second, time.Second)
+		nil, 10*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (a secondary repo's start.sh failure is only a warning)", err)
 	}
@@ -155,7 +155,7 @@ func TestRunHooks_FatalFailureAlsoLogsStructuredOutputTail(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeBuild, nil,
-		10*time.Second, time.Second)
+		nil, 10*time.Second, time.Second, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunHooks() error = nil, want an error (build mode's setup.sh failure is fatal)")
 	}

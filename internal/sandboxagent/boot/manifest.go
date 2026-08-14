@@ -51,6 +51,20 @@ type ImageManifest struct {
 	// compares each repo's POST-SyncAll checked-out SHA against this map's
 	// own entry for that repo's name.
 	BuiltRepoShas map[string]string `json:"built_repo_shas"`
+	// DependencyManifestDigests maps repo name to §19.6's own dependency-
+	// manifest (lockfile) digest, baked beside BuiltRepoShas at build time
+	// by whatever produced this image (an external, unmodeled build
+	// process -- see Fingerprint's own doc comment for the identical
+	// baked-vs-recomputed split) -- ComputeDependencyManifestDigest
+	// (depsladder.go) is this codebase's own canonical algorithm for that
+	// digest, both for the boot-side recompute this field is compared
+	// against AND as the specification any real build-time producer is
+	// expected to match (docs/environments.md states the same contract in
+	// prose). A repo genuinely absent from this map (an image built before
+	// this Step, or one whose build-time producer has not yet adopted the
+	// field) is handled identically to an absent BuiltRepoShas entry:
+	// DependencySkipIneligible, never treated as a match by omission.
+	DependencyManifestDigests map[string]string `json:"dependency_manifest_digests"`
 }
 
 // manifestWire is LoadImageManifest's own decode target -- built_at is
@@ -63,9 +77,10 @@ type ImageManifest struct {
 // (the document itself doesn't parse) reaches LoadImageManifest's error
 // return.
 type manifestWire struct {
-	Fingerprint   string            `json:"fingerprint"`
-	BuiltAt       json.RawMessage   `json:"built_at"`
-	BuiltRepoShas map[string]string `json:"built_repo_shas"`
+	Fingerprint               string            `json:"fingerprint"`
+	BuiltAt                   json.RawMessage   `json:"built_at"`
+	BuiltRepoShas             map[string]string `json:"built_repo_shas"`
+	DependencyManifestDigests map[string]string `json:"dependency_manifest_digests"`
 }
 
 // LoadImageManifest reads and parses path (ImageManifestPath in
@@ -76,8 +91,9 @@ type manifestWire struct {
 //     timestamp encoding this reader understands (see parseBuiltAt): that
 //     is logged (slog.Warn) and manifest.BuiltAt is left at its zero
 //     value, but found is still true and err is still nil, because
-//     BuiltRepoShas -- the only field anything downstream actually reads
-//     (§19.4's workspaceMoved) -- decoded successfully. An unreadable
+//     BuiltRepoShas/DependencyManifestDigests -- the fields anything
+//     downstream actually reads (§19.4's workspaceMoved, §19.6's setup-
+//     rerun ladder) -- decoded successfully. An unreadable
 //     built_at must NEVER be conflated with "no manifest at all" below:
 //     the log line above is exactly what lets an operator tell "the build
 //     service is emitting a timestamp shape we don't understand" apart
@@ -111,8 +127,9 @@ func LoadImageManifest(path string) (manifest ImageManifest, found bool, err err
 	}
 
 	manifest = ImageManifest{
-		Fingerprint:   wire.Fingerprint,
-		BuiltRepoShas: wire.BuiltRepoShas,
+		Fingerprint:               wire.Fingerprint,
+		BuiltRepoShas:             wire.BuiltRepoShas,
+		DependencyManifestDigests: wire.DependencyManifestDigests,
 	}
 	if raw := bytes.TrimSpace(wire.BuiltAt); len(raw) > 0 && !bytes.Equal(raw, []byte("null")) {
 		if builtAt, ok := parseBuiltAt(raw); ok {
