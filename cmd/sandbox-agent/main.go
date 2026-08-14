@@ -1608,9 +1608,22 @@ func runBootSequence(
 		setupRerunLadder = boot.ComputeSetupRerunLadder(manifest, manifestFound, len(pathScope) > 0, cfg.WorkspaceDir, postCloneFingerprint.RepoSHAs, timeouts.RepoSHADiscoveryTimeout)
 	}
 
+	// timeouts.OpenCodeTransientRetryBackoff (§19.6, Step 43 fix): reused
+	// rather than a new field -- see runSetupRerunLadder's own doc comment
+	// (hooks.go) for the retry this bounds. Both this and the OpenCode
+	// adapter's own use (the opencode.New call above) are the identical
+	// concept: one deliberate short pause before exactly one retry of an
+	// operation that just failed for a plausibly-transient reason, so a
+	// second field with the same value would only duplicate tuning
+	// surface without protecting any real independent-tuning need (unlike
+	// e.g. ProcessStopGracePeriod/ShutdownGracePeriod or
+	// WebhookTimestampFreshnessWindow/LinearWebhookTimestampWindow, which
+	// stay distinct fields because those subsystems' operational
+	// constraints could plausibly diverge).
 	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, reportBootProgress,
 		timeouts.HookTimeout, timeouts.ProcessStopGracePeriod,
-		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval); err != nil {
+		timeouts.ServiceReadinessTimeout, timeouts.ServiceReadinessPollInterval,
+		timeouts.OpenCodeTransientRetryBackoff); err != nil {
 		return fmt.Errorf("boot: %w", err)
 	}
 

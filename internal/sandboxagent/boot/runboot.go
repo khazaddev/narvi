@@ -43,6 +43,12 @@ import (
 // ladder (§19.6, Step 43) is passed straight through to runRepoHooks
 // alongside workspaceMoved, for the identical reason and the identical
 // services.yml-branch exemption.
+//
+// setupRetryDelay (§19.6, Step 43 fix) is likewise passed straight through
+// to runRepoHooks -- consulted only inside its own full-setup.sh retry
+// path (runSetupRerunLadder's own doc comment), so it is a safe input
+// regardless of which branch (services.yml or hook-contract) a given repo
+// actually takes.
 func RunBoot(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -52,7 +58,7 @@ func RunBoot(
 	workspaceMoved map[string]bool,
 	ladder map[string]SetupRerunLadder,
 	reporter services.ProgressReporter,
-	hookTimeout, stopGrace, readinessTimeout, readinessPollInterval time.Duration,
+	hookTimeout, stopGrace, readinessTimeout, readinessPollInterval, setupRetryDelay time.Duration,
 ) error {
 	for _, repo := range repos {
 		repoDir := filepath.Join(workspaceDir, repo.Name)
@@ -63,7 +69,7 @@ func RunBoot(
 		}
 
 		if !found {
-			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, hookTimeout, stopGrace); err != nil {
+			if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, hookTimeout, stopGrace, setupRetryDelay); err != nil {
 				return err
 			}
 			continue

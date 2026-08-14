@@ -16,8 +16,11 @@ package boot_test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,7 +59,7 @@ func TestResilienceScenario_StaleImageBoot_WorkspaceMovedFiresSetupReruns(t *tes
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil (a moved workspace's setup.sh rerun must be non-fatal)", err)
 	}
@@ -92,7 +95,7 @@ func TestResilienceScenario_StaleImageBoot_WorkspaceUnmoved_SetupSkipped(t *test
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil", err)
 	}
@@ -135,7 +138,7 @@ func TestResilienceScenario_NonIdempotentSetupBoot_NonFatalFailure_VisibleInOutp
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil (a non-idempotent setup.sh's rerun failure must be non-fatal -- boot still succeeds)", err)
 	}
@@ -221,7 +224,7 @@ func TestResilienceScenario_RepoAbsentFromWorkspaceMoved_SetupStillReruns(t *tes
 	repos := []boot.RepoInfo{{Name: "repo-no-sha", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
-		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil (a repo absent from workspaceMoved must still rerun setup.sh non-fatally, per the safe default)", err)
 	}
@@ -239,4 +242,156 @@ func gitRevParseHEAD(t *testing.T, dir string) string {
 		t.Fatalf("DiscoverRepoSHAs found no entry for %s", dir)
 	}
 	return sha
+}
+
+// countingFailThenSucceedScript returns a setup.sh body that counts its own
+// invocations via an on-disk counter file (the only way a plain shell
+// script can distinguish "this is my first run" from "this is my retry"
+// without a test-only hook into runSetupRerunLadder itself): it fails on
+// invocation 1 and succeeds (touching successMarker) on invocation 2
+// onward.
+func countingFailThenSucceedScript(counterPath, successMarker string) string {
+	return fmt.Sprintf(`
+count=0
+if [ -f %[1]q ]; then count=$(cat %[1]q); fi
+count=$((count+1))
+echo "$count" > %[1]q
+if [ "$count" -eq 1 ]; then
+	echo "attempt $count: simulated transient failure" >&2
+	exit 1
+fi
+touch %[2]q
+`, counterPath, successMarker)
+}
+
+// countingAlwaysFailScript is countingFailThenSucceedScript's own
+// companion: counts its own invocations identically, but ALWAYS fails,
+// echoing the attempt number to stderr so a test can tell which attempt's
+// own output_tail it is looking at.
+func countingAlwaysFailScript(counterPath string) string {
+	return fmt.Sprintf(`
+count=0
+if [ -f %[1]q ]; then count=$(cat %[1]q); fi
+count=$((count+1))
+echo "$count" > %[1]q
+echo "attempt $count: still broken" >&2
+exit 1
+`, counterPath)
+}
+
+// TestResilienceScenario_FullSetupRetry_FirstFailsSecondSucceeds proves
+// §19.6's own required retry (the manifest-digest bullet: "retry the
+// install on transient failure, then warn -- never fail the boot on it"):
+// a full-setup.sh rerun whose FIRST attempt fails is retried EXACTLY ONCE,
+// and when that retry succeeds the boot ends up with the dependency
+// actually installed -- not the pre-fix single-attempt warn-and-continue
+// outcome that would have left successMarker never created. The attempts
+// counter proves the retry fired ONCE, never zero times (no retry at all,
+// the pre-fix bug this test guards against) and never more than once (an
+// unbounded loop, which §19.6 explicitly rules out: "not an unbounded
+// backoff loop").
+func TestResilienceScenario_FullSetupRetry_FirstFailsSecondSucceeds(t *testing.T) {
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	mkdirAll(t, repoDir)
+	initGitRepo(t, repoDir)
+
+	attemptsCounter := filepath.Join(workspaceDir, "attempts")
+	successMarker := filepath.Join(workspaceDir, "success-marker")
+	writeScript(t, filepath.Join(repoDir, "setup.sh"), countingFailThenSucceedScript(attemptsCounter, successMarker))
+
+	currentSHA := gitRevParseHEAD(t, repoDir)
+	manifest := boot.ImageManifest{
+		Fingerprint:   "fp-retry-then-succeed",
+		BuiltRepoShas: map[string]string{"repo1": "sha-different-from-current-" + currentSHA[:8]},
+	}
+	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, map[string]string{"repo1": currentSHA})
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
+
+	// ladder: nil -- ladderFor's own missing-key default (DependencySkip:
+	// Ineligible, DeltaEligible: false) sends this straight to the
+	// full-setup.sh floor, the ONE tier this test exercises.
+	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
+		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, 10*time.Millisecond)
+	if err != nil {
+		t.Fatalf("RunBoot() error = %v, want nil", err)
+	}
+
+	assertFileExists(t, successMarker)
+
+	raw, readErr := os.ReadFile(attemptsCounter)
+	if readErr != nil {
+		t.Fatalf("read attempts counter: %v", readErr)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "2" {
+		t.Errorf("setup.sh ran %s time(s), want exactly 2 (one failed attempt + one successful retry)", got)
+	}
+}
+
+// TestResilienceScenario_FullSetupRetry_BothAttemptsFail proves the other
+// half of §19.6's own retry rule: a full-setup.sh rerun whose retry ALSO
+// fails must still warn and continue -- the boot itself never fails on it
+// -- and the retry stops at exactly one extra attempt, never an unbounded
+// loop.
+func TestResilienceScenario_FullSetupRetry_BothAttemptsFail(t *testing.T) {
+	// Not t.Parallel(): swaps slog's global default logger, mirroring
+	// TestResilienceScenario_NonIdempotentSetupBoot_NonFatalFailure_VisibleInOutputTail's
+	// own identical precedent.
+	handler := &recordingHandler{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	mkdirAll(t, repoDir)
+	initGitRepo(t, repoDir)
+
+	attemptsCounter := filepath.Join(workspaceDir, "attempts")
+	writeScript(t, filepath.Join(repoDir, "setup.sh"), countingAlwaysFailScript(attemptsCounter))
+
+	currentSHA := gitRevParseHEAD(t, repoDir)
+	manifest := boot.ImageManifest{
+		Fingerprint:   "fp-retry-still-fails",
+		BuiltRepoShas: map[string]string{"repo1": "sha-different-from-current-" + currentSHA[:8]},
+	}
+	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, map[string]string{"repo1": currentSHA})
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
+
+	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved,
+		nil, noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, 10*time.Millisecond)
+	if err != nil {
+		t.Fatalf("RunBoot() error = %v, want nil (a retried failure must still be non-fatal -- boot still succeeds)", err)
+	}
+
+	raw, readErr := os.ReadFile(attemptsCounter)
+	if readErr != nil {
+		t.Fatalf("read attempts counter: %v", readErr)
+	}
+	if got := strings.TrimSpace(string(raw)); got != "2" {
+		t.Errorf("setup.sh ran %s time(s), want exactly 2 (one attempt + exactly one retry, never an unbounded loop)", got)
+	}
+
+	rawTail, ok := handler.findAttr("output_tail")
+	if !ok {
+		t.Fatal("no Warn log line carried an output_tail attribute for the retried failure")
+	}
+	lines, ok := rawTail.Any().([]string)
+	if !ok {
+		t.Fatalf("output_tail attribute = %T, want []string", rawTail.Any())
+	}
+	found := false
+	for _, line := range lines {
+		if line == "attempt 2: still broken" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("output_tail = %v, want it to contain the SECOND (retried) attempt's own diagnostic output -- proves findAttr's own most-recent-first scan actually surfaced the retry's outcome, not just the first attempt's", lines)
+	}
 }

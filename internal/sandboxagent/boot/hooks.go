@@ -97,6 +97,12 @@ type RepoInfo struct {
 // safe input (every entry defaults to the conservative "fall through to
 // full setup.sh" floor, via ladderFor) -- matching workspaceMoved's own nil
 // precedent exactly.
+//
+// setupRetryDelay (§19.6, Step 43 fix) is the pause runSetupRerunLadder
+// waits between the full-setup.sh tier's first failed attempt and its own
+// single required retry (see that function's own doc comment) -- consulted
+// ONLY inside that one retry path, so any value is a safe input for every
+// OTHER call site/outcome.
 func RunHooks(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -105,10 +111,10 @@ func RunHooks(
 	mode sandboxboot.BootMode,
 	workspaceMoved map[string]bool,
 	ladder map[string]SetupRerunLadder,
-	hookTimeout, stopGrace time.Duration,
+	hookTimeout, stopGrace, setupRetryDelay time.Duration,
 ) error {
 	for _, repo := range repos {
-		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, hookTimeout, stopGrace); err != nil {
+		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, hookTimeout, stopGrace, setupRetryDelay); err != nil {
 			return err
 		}
 	}
@@ -141,7 +147,7 @@ func runRepoHooks(
 	mode sandboxboot.BootMode,
 	workspaceMoved map[string]bool,
 	ladder map[string]SetupRerunLadder,
-	hookTimeout, stopGrace time.Duration,
+	hookTimeout, stopGrace, setupRetryDelay time.Duration,
 ) error {
 	moved := workspaceMovedFor(workspaceMoved, repo.Name)
 
@@ -174,7 +180,7 @@ func runRepoHooks(
 		// through to the plain runHook call below, completely unchanged
 		// from before this Step.
 		if hook == sandboxboot.HookSetup && mode == sandboxboot.BootModeRepoImage && moved {
-			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), moved, hookTimeout, stopGrace)
+			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), moved, hookTimeout, stopGrace, setupRetryDelay)
 			continue
 		}
 
@@ -266,9 +272,19 @@ func runRepoHooks(
 //     attempt sync.sh IS this tier's own decision; whether that attempt
 //     then succeeded is a separate, already-logged runtime outcome, not a
 //     second ladder decision).
-//  3. FULL setup.sh: today's unconditional repo_image rerun, unchanged --
-//     the ladder's own floor, reached whenever neither tier above actually
-//     resolved the decision. Logged reason=full.
+//  3. FULL setup.sh: today's unconditional repo_image rerun, largely
+//     unchanged -- the ladder's own floor, reached whenever neither tier
+//     above actually resolved the decision. Logged reason=full. §19.6 fix
+//     (the manifest-digest bullet: "retry the install on transient
+//     failure, then warn -- never fail the boot on it"): a FAILED first
+//     attempt here is retried EXACTLY ONCE, after a pause of
+//     setupRetryDelay (never an unbounded backoff loop -- §19.6 asks for a
+//     retry, not a resilience framework), logged as its own decision
+//     (reason=retry) before the second attempt runs. The retry itself
+//     never changes severity: a second failure still warns and continues,
+//     identical to today's single-attempt outcome -- this tier's own
+//     unconditional non-fatal-by-construction guarantee (this function's
+//     own top doc comment) covers both attempts equally.
 //
 // moved is workspaceMoved for this exact repo -- always true at the one
 // production call site (runRepoHooks only enters this function inside its
@@ -276,7 +292,13 @@ func runRepoHooks(
 // explicitly (rather than hardcoded) so the HookDelta EvaluateHook
 // consultation below uses the real value, and so a white-box test can
 // exercise the B4 wiring directly (depsladder_internal_test.go).
-func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, moved bool, hookTimeout, stopGrace time.Duration) {
+//
+// setupRetryDelay is the pause between the full-setup.sh tier's first
+// failed attempt and its own single retry (item 3 above) -- irrelevant to
+// every other path through this function (the digest skip, the delta
+// tier, and a full-setup.sh attempt that succeeds on its first try never
+// consult it at all).
+func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, moved bool, hookTimeout, stopGrace, setupRetryDelay time.Duration) {
 	logger := platform.Logger(ctx)
 	repoDir := filepath.Join(workspaceDir, repo.Name)
 
@@ -333,7 +355,67 @@ func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, worksp
 
 	logger.Info("boot: setup-rerun ladder decision",
 		"repo", repo.Name, "tier", "full", "outcome", string(RerunReasonFull))
+	ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, hookTimeout, stopGrace)
+	if !ran || ok {
+		// ran == false: no setup.sh on disk at all (routine, silent,
+		// nothing to retry). ok == true: the first attempt already
+		// succeeded -- no retry needed, and none of §19.6's own retry
+		// language ("on transient failure") applies to a run that never
+		// failed.
+		return
+	}
+
+	// §19.6 fix (the manifest-digest bullet): "retry the install on
+	// transient failure, then warn -- never fail the boot on it". The
+	// FIRST attempt's own failure was already logged by
+	// runNamedHookNonFatal above (its own "boot: hook failed, continuing"
+	// Warn, carrying output_tail per §19.5(a)) -- this line records the
+	// RETRY decision itself, before the second attempt runs, so an
+	// operator can tell "gave up after one try" apart from "retried once,
+	// per §19.6" purely from the boot log.
+	logger.Info("boot: setup-rerun ladder decision",
+		"repo", repo.Name, "tier", "full", "outcome", string(RerunReasonRetry))
+
+	if !waitSetupRetryDelay(ctx, setupRetryDelay) {
+		// ctx is already done -- boot is being torn down. The first
+		// attempt's own failure is already logged above; attempting a
+		// second spawn against an already-cancelled/expired context would
+		// not be a meaningfully different attempt, so this simply stops
+		// here, exactly matching today's single-attempt warn-and-continue
+		// outcome.
+		return
+	}
+
+	// Exactly ONE retry -- not a loop: the return value is intentionally
+	// discarded here (never a THIRD attempt regardless of outcome).
+	// Success or failure, this second attempt's own outcome is already
+	// fully logged by runNamedHookNonFatal itself (nothing on success; a
+	// "boot: hook failed, continuing" Warn with output_tail on failure) --
+	// a second failure therefore still warns and continues, identical in
+	// severity to today's single-attempt behavior, never escalated to
+	// fatal.
 	runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, hookTimeout, stopGrace)
+}
+
+// waitSetupRetryDelay waits d, honoring ctx cancellation -- mirrors
+// internal/adapters/outbound/opencode's own waitTransientRetryBackoff
+// precedent exactly (time.NewTimer + deferred Stop, not time.After, so the
+// timer is released immediately rather than lingering until it would have
+// fired): the identical shape for the identical need, a single bounded
+// pause before one retry of an operation that just failed. Returns true if
+// d elapsed normally, false if ctx was done first -- a bool return (rather
+// than mirroring that precedent's own error return) is all this caller
+// needs, since runSetupRerunLadder never returns an error itself (its own
+// top doc comment: always non-fatal by construction).
+func waitSetupRetryDelay(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // runNamedHookNonFatal runs the script at repoDir/scriptName if present,

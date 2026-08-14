@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"time"
 )
@@ -338,6 +339,32 @@ func evaluateDependencySkip(manifestFound bool, bakedDigest string, bakedOK bool
 	return DependencySkipMismatch
 }
 
+// builtSHAPattern matches a full, lowercase, 40-character hex commit sha --
+// the only shape a REAL `git rev-parse HEAD` (image-build-time, an
+// EXTERNAL, unmodeled build service -- ImageManifest's own doc comment)
+// ever produces for a BuiltRepoShas entry. Mirrors
+// internal/app/sessionactor/previewpr.go's own pushedShaPattern: this
+// codebase's existing, already-shipped fix for the identical class of
+// problem -- an externally-produced string (there, a sandbox-reported push
+// sha arriving over the wire; here, ImageManifest.BuiltRepoShas[name],
+// decoded straight from /narvi/image-manifest.json's own JSON, manifest.go,
+// with no schema constraint on shape) reaching a git subprocess ARGUMENT
+// with no shell in between.
+//
+// This is never shell injection (exec.CommandContext passes argv directly,
+// no shell parses it) -- it is git ARGUMENT injection, and setupUnchangedSinceBuild's
+// own "--" (which ends OPTION parsing for everything after it) does nothing
+// to protect builtSHA specifically: builtSHA is passed BEFORE that "--", in
+// git's own option/revision zone, so a value beginning with "-" (e.g.
+// something shaped like "--upload-pack=...") is consumed by git's own
+// argument parser as an OPTION, not a revision -- silently changing what
+// the diff command means, and therefore what this predicate concludes.
+// That matters here specifically because this exact predicate now gates
+// the digest-tier skip (§19.6): a manipulated verdict would re-open the
+// "skip setup.sh when it should have run" hole this Step's own ladder
+// exists to close.
+var builtSHAPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
 // setupUnchangedSinceBuild answers §19.6's third-bullet delta-script
 // eligibility predicate EXACTLY as specified, no new hashing scheme: `git
 // -C repoDir diff --quiet builtSHA HEAD -- setup.sh`. A clean (exit 0) diff
@@ -350,10 +377,22 @@ func evaluateDependencySkip(manifestFound bool, bakedDigest string, bakedOK bool
 // disappearance as a real diff on that path, exit 1, handled identically to
 // any other content change.
 //
+// builtSHA is validated against builtSHAPattern BEFORE it ever reaches
+// exec.CommandContext below -- see that var's own doc comment for why "--"
+// alone does not protect this specific argument. A malformed value (empty,
+// non-hex, wrong length, or shaped like an option) is returned as a genuine
+// error here, exactly like every other failure this function reports; it is
+// NEVER silently treated as "unchanged". The caller, ComputeSetupRerunLadder,
+// already folds any non-nil error from this function into DeltaEligible:
+// false -- §19.6's own "any git error on this check is conservative:
+// ineligible, fall through to full setup.sh" rule, so a rejected builtSHA
+// resolves to the SAME conservative "ineligible" outcome §19.6 requires,
+// never a spurious skip.
+//
 // Any OTHER outcome (git itself missing, builtSHA not resolvable in this
 // repo's own object store, a timeout, any exit code other than 0/1) is
-// returned as a genuine error -- §19.6's own "any git error on this check
-// is conservative: ineligible, fall through to full setup.sh".
+// likewise returned as a genuine error -- §19.6's own "any git error on
+// this check is conservative: ineligible, fall through to full setup.sh".
 //
 // Run via a bare exec.CommandContext, NOT through the supervisor -- exactly
 // DiscoverRepoSHAs/repoHeadSHA's own established precedent (fingerprint.go)
@@ -362,6 +401,10 @@ func evaluateDependencySkip(manifestFound bool, bakedDigest string, bakedOK bool
 // sequence, before RunBoot's own supervised-process machinery is ever
 // exercised.
 func setupUnchangedSinceBuild(repoDir, builtSHA string, timeout time.Duration) (bool, error) {
+	if !builtSHAPattern.MatchString(builtSHA) {
+		return false, fmt.Errorf("boot: image manifest built_repo_shas entry for %s is not a well-formed git object id: %q", repoDir, builtSHA)
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -419,10 +462,12 @@ type SetupRerunLadder struct {
 
 // RerunReason is the closed, structured vocabulary §19.6's own instruction
 // requires every ladder decision to log (§5.3): "skip / delta / full /
-// ineligible-fallback". internal/sandboxagent/boot's own runSetupRerunLadder
-// logs one line per tier actually consulted, each carrying exactly one of
-// these four values as its own "outcome" attribute -- so a single repo's
-// boot can produce more than one logged decision (e.g. "digest tier:
+// ineligible-fallback", extended by RerunReasonRetry below for the
+// full-setup.sh tier's own required retry (§19.6's manifest-digest bullet).
+// internal/sandboxagent/boot's own runSetupRerunLadder logs one line per
+// tier/decision actually consulted, each carrying exactly one of these
+// values as its own "outcome" attribute -- so a single repo's boot can
+// produce more than one logged decision (e.g. "digest tier:
 // ineligible-fallback" immediately followed by "delta tier: delta"), each
 // individually auditable, not merely the final result.
 type RerunReason string
@@ -445,6 +490,17 @@ const (
 	// falls through to the next one down, conservatively, never a silent
 	// skip.
 	RerunReasonIneligibleFallback RerunReason = "ineligible-fallback"
+	// RerunReasonRetry reports that the FULL setup.sh tier's own first
+	// attempt failed and §19.6's own required retry (the manifest-digest
+	// bullet: "retry the install on transient failure, then warn -- never
+	// fail the boot on it") is about to make ONE more attempt, before
+	// falling back to the same warn-and-continue outcome as today. Logged
+	// as its own decision -- distinct from RerunReasonFull's own "the
+	// floor was reached, about to run" line -- so an operator reading the
+	// boot log can tell "ran once, succeeded" apart from "ran once,
+	// failed, retried" purely from structured log lines, consistent with
+	// §19.6's own "every ladder decision logs a structured reason" rule.
+	RerunReasonRetry RerunReason = "retry"
 )
 
 // ComputeSetupRerunLadder computes §19.6's own two additional per-repo

@@ -140,7 +140,7 @@ func TestRunBoot_MixedManifestAndHookFallback(t *testing.T) {
 	}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, reporter.report, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+		nil, reporter.report, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil", err)
 	}
@@ -166,7 +166,7 @@ func TestRunBoot_AbsentManifestFallsBackToHooks(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+		nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunBoot() error = %v, want nil", err)
 	}
@@ -197,7 +197,7 @@ func TestRunBoot_MalformedManifestIsAFatalError(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: true}}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+		nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunBoot() error = nil, want an error for a malformed services.yml")
 	}
@@ -237,7 +237,7 @@ func TestRunBoot_FatalFailureInRepoAStopsBeforeRepoB(t *testing.T) {
 	}
 
 	err := boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+		nil, noopReporter, 5*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval, time.Millisecond)
 	if err == nil {
 		t.Fatal("RunBoot() error = nil, want a fatal error (repo-a's primary service crashed)")
 	}

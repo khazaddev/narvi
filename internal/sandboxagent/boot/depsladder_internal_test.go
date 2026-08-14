@@ -435,6 +435,82 @@ func TestSetupUnchangedSinceBuild_UnresolvableSHAIsAnError(t *testing.T) {
 	}
 }
 
+// TestSetupUnchangedSinceBuild_RejectsMalformedBuiltSHA is C1's own
+// mutation-detecting core: builtSHA sits BEFORE setupUnchangedSinceBuild's
+// own "--" separator in the `git diff --quiet <builtSHA> HEAD -- setup.sh`
+// invocation, i.e. in git's own option/revision zone, so a malformed value
+// (most dangerously one beginning with "-", which git's own argument parser
+// would otherwise consume as an OPTION rather than a revision) must never
+// reach exec.CommandContext at all -- builtSHAPattern's own doc comment has
+// the full "why '--' does not protect this argument" reasoning. Every
+// invalid case here asserts on the VALIDATION error's own distinctive
+// message (rather than merely "err != nil"), so this test would fail if the
+// gate were ever removed and a downstream git-level error masqueraded as
+// the same "ineligible" outcome for a different reason.
+func TestSetupUnchangedSinceBuild_RejectsMalformedBuiltSHA(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mkdirAllInternal(t, dir)
+	initGitRepoInternal(t, dir)
+
+	tests := []struct {
+		name     string
+		builtSHA string
+	}{
+		{"leading dash (option-shaped)", "-upload-pack=touch /tmp/pwned-0000000"},
+		{"empty string", ""},
+		{"non-hex character", "g23456789012345678901234567890123456789"},
+		{"over-long value", strings.Repeat("a", 41)},
+		{"under-long value", strings.Repeat("a", 39)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := setupUnchangedSinceBuild(dir, tc.builtSHA, 5*time.Second)
+			if err == nil {
+				t.Fatalf("setupUnchangedSinceBuild(builtSHA=%q) error = nil, want a validation error", tc.builtSHA)
+			}
+			if !strings.Contains(err.Error(), "not a well-formed git object id") {
+				t.Errorf("setupUnchangedSinceBuild(builtSHA=%q) error = %v, want the builtSHAPattern validation error specifically (not a downstream git error)", tc.builtSHA, err)
+			}
+		})
+	}
+}
+
+// TestSetupUnchangedSinceBuild_AcceptsValidFullSHA is the companion "zero
+// regression" half: a well-formed, resolvable 40-character hex sha must
+// still pass validation and reach the real git diff -- proving
+// builtSHAPattern's own gate never rejects the one shape a real build
+// service actually produces.
+func TestSetupUnchangedSinceBuild_AcceptsValidFullSHA(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mkdirAllInternal(t, dir)
+	initGitRepoInternal(t, dir)
+
+	if err := os.WriteFile(filepath.Join(dir, "setup.sh"), []byte("#!/bin/sh\necho hi\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runGitInternal(t, dir, "add", "setup.sh")
+	runGitInternal(t, dir, "commit", "-m", "add setup.sh")
+	builtSHA := gitHeadInternal(t, dir)
+
+	if len(builtSHA) != 40 {
+		t.Fatalf("precondition failed: git rev-parse HEAD returned %q (%d chars), want a 40-character sha", builtSHA, len(builtSHA))
+	}
+
+	unchanged, err := setupUnchangedSinceBuild(dir, builtSHA, 5*time.Second)
+	if err != nil {
+		t.Fatalf("setupUnchangedSinceBuild() error = %v, want nil (a well-formed, resolvable sha must pass validation)", err)
+	}
+	if !unchanged {
+		t.Error("setupUnchangedSinceBuild() = false, want true (setup.sh was never touched since builtSHA)")
+	}
+}
+
 func gitHeadInternal(t *testing.T, dir string) string {
 	t.Helper()
 	cmd := exec.Command("git", "-C", dir, "rev-parse", "HEAD")
@@ -487,7 +563,7 @@ func TestRunSetupRerunLadder_ConsultsHookDeltaPolicy(t *testing.T) {
 	sup := supervisor.New()
 	repo := RepoInfo{Name: "repo1", Primary: true}
 
-	runSetupRerunLadder(context.Background(), sup, workspaceDir, repo, ladder, false, 5*time.Second, time.Second)
+	runSetupRerunLadder(context.Background(), sup, workspaceDir, repo, ladder, false, 5*time.Second, time.Second, time.Millisecond)
 
 	if _, err := os.Stat(syncMarker); err == nil {
 		t.Error("sync.sh ran despite EvaluateHook(BootModeRepoImage, HookDelta, primary, moved=false).ShouldRun = false -- HookDelta policy row not actually consulted (B4 regression)")
