@@ -174,7 +174,7 @@ func runRepoHooks(
 		// through to the plain runHook call below, completely unchanged
 		// from before this Step.
 		if hook == sandboxboot.HookSetup && mode == sandboxboot.BootModeRepoImage && moved {
-			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), hookTimeout, stopGrace)
+			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), moved, hookTimeout, stopGrace)
 			continue
 		}
 
@@ -235,45 +235,82 @@ func runRepoHooks(
 // vocabulary):
 //
 //  1. DEPENDENCY-DIGEST SKIP (§19.6 first bullet): ladder.DependencySkip ==
-//     DependencySkipMatch -- setup.sh is skipped ENTIRELY, logged
-//     reason=skip. Anything else falls through, logged reason=
-//     ineligible-fallback (an unreadable/absent/unrecognized baked digest,
-//     or a boot-side compute error) for BOTH the genuinely-ineligible case
-//     and a clean, proven digest MISMATCH -- both behave identically here
-//     (fall through to the delta tier), even though a mismatch is, per
-//     §19.6's own text, positive proof dependencies moved rather than an
-//     absence of information; that distinction is still preserved for an
-//     operator via the separate "digest_outcome" attribute logged
+//     DependencySkipMatch AND ladder.DeltaEligible -- setup.sh is skipped
+//     ENTIRELY, logged reason=skip. Adversarial-review finding B3: a
+//     digest match ALONE never licenses this skip. It only proves the
+//     dependency-manifest (lockfile) surface is unchanged; it says nothing
+//     about setup.sh's own non-package-manager work (§19.4's own "may
+//     provision local service stacks, run codegen, seed local state"), so
+//     the skip additionally requires ladder.DeltaEligible -- the SAME
+//     "setup.sh itself is provably unchanged since the built SHA" fact the
+//     delta tier below is built on (SetupRerunLadder.DeltaEligible's own
+//     doc comment). Anything else falls through, logged reason=
+//     ineligible-fallback -- an unreadable/absent/unrecognized baked
+//     digest, a boot-side compute error, a clean proven digest MISMATCH, OR
+//     (the B3 addition) a digest match undermined by a changed/unverifiable
+//     setup.sh -- all behave identically here (fall through to the delta
+//     tier), even though each represents a different underlying reason;
+//     that distinction is still preserved for an operator via the
+//     "digest_outcome" and "setup_sh_unchanged" attributes logged
 //     alongside.
-//  2. DELTA SCRIPT (§19.6 third bullet onward): ladder.DeltaEligible --
-//     sync.sh runs INSTEAD of setup.sh, sharing hookTimeout (never a new
-//     timeout constant). A repo with no sync.sh on disk falls through
-//     silently (reason=ineligible-fallback), exactly like any other absent
-//     hook always has. A delta-script FAILURE (non-fatal) also falls
-//     through to full setup.sh -- the failure ladder's own "delta fails ->
-//     warn -> run full setup.sh" step -- logged reason=delta regardless
-//     (choosing to attempt sync.sh IS this tier's own decision; whether
-//     that attempt then succeeded is a separate, already-logged runtime
-//     outcome, not a second ladder decision).
+//  2. DELTA SCRIPT (§19.6 third bullet onward): sandboxboot.EvaluateHook's
+//     own HookDelta policy row (adversarial-review finding B4: previously
+//     dead code -- nothing in production ever called it, so flipping that
+//     row had no effect) ShouldRun, AND ladder.DeltaEligible -- sync.sh
+//     runs INSTEAD of setup.sh, sharing hookTimeout (never a new timeout
+//     constant). A repo with no sync.sh on disk falls through silently
+//     (reason=ineligible-fallback), exactly like any other absent hook
+//     always has. A delta-script FAILURE (non-fatal) also falls through to
+//     full setup.sh -- the failure ladder's own "delta fails -> warn -> run
+//     full setup.sh" step -- logged reason=delta regardless (choosing to
+//     attempt sync.sh IS this tier's own decision; whether that attempt
+//     then succeeded is a separate, already-logged runtime outcome, not a
+//     second ladder decision).
 //  3. FULL setup.sh: today's unconditional repo_image rerun, unchanged --
 //     the ladder's own floor, reached whenever neither tier above actually
 //     resolved the decision. Logged reason=full.
-func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, hookTimeout, stopGrace time.Duration) {
+//
+// moved is workspaceMoved for this exact repo -- always true at the one
+// production call site (runRepoHooks only enters this function inside its
+// own `mode == BootModeRepoImage && moved` branch), threaded through
+// explicitly (rather than hardcoded) so the HookDelta EvaluateHook
+// consultation below uses the real value, and so a white-box test can
+// exercise the B4 wiring directly (depsladder_internal_test.go).
+func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, moved bool, hookTimeout, stopGrace time.Duration) {
 	logger := platform.Logger(ctx)
 	repoDir := filepath.Join(workspaceDir, repo.Name)
 
-	if ladder.DependencySkip == DependencySkipMatch {
+	// B3: a digest match can only skip setup.sh entirely when setup.sh
+	// itself is ALSO provably unchanged -- see SetupRerunLadder.DeltaEligible's
+	// own doc comment for why this is the identical fact the delta tier
+	// below consults, not a new check.
+	if ladder.DependencySkip == DependencySkipMatch && ladder.DeltaEligible {
 		logger.Info("boot: setup-rerun ladder decision",
 			"repo", repo.Name, "tier", "digest", "outcome", string(RerunReasonSkip),
 			"digest_outcome", string(ladder.DependencySkip))
 		return
 	}
-	logger.Info("boot: setup-rerun ladder decision",
-		"repo", repo.Name, "tier", "digest", "outcome", string(RerunReasonIneligibleFallback),
-		"digest_outcome", string(ladder.DependencySkip))
+	if ladder.DependencySkip == DependencySkipMatch {
+		logger.Info("boot: setup-rerun ladder decision",
+			"repo", repo.Name, "tier", "digest", "outcome", string(RerunReasonIneligibleFallback),
+			"digest_outcome", string(ladder.DependencySkip), "setup_sh_unchanged", ladder.DeltaEligible)
+	} else {
+		logger.Info("boot: setup-rerun ladder decision",
+			"repo", repo.Name, "tier", "digest", "outcome", string(RerunReasonIneligibleFallback),
+			"digest_outcome", string(ladder.DependencySkip))
+	}
 
-	if ladder.DeltaEligible {
-		ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookDelta), sandboxboot.BootModeRepoImage, true, hookTimeout, stopGrace)
+	// B4: the delta tier's own eligibility now ALSO routes through
+	// sandboxboot.EvaluateHook's HookDelta policy row -- the canonical
+	// policy table, not a second, hand-duplicated envelope check. In every
+	// real boot this evaluates to the same envelope runRepoHooks already
+	// gated entry to this function on (mode == BootModeRepoImage &&
+	// moved), so this changes no observable behavior today; it makes that
+	// policy row the actual authority for sync.sh, matching HookSetup and
+	// HookStart, so a future edit to the row is no longer silently ignored.
+	deltaPolicy := sandboxboot.EvaluateHook(sandboxboot.BootModeRepoImage, sandboxboot.HookDelta, repo.Primary, moved)
+	if deltaPolicy.ShouldRun && ladder.DeltaEligible {
+		ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookDelta), sandboxboot.BootModeRepoImage, moved, hookTimeout, stopGrace)
 		if ran {
 			logger.Info("boot: setup-rerun ladder decision",
 				"repo", repo.Name, "tier", "delta", "outcome", string(RerunReasonDelta), "succeeded", ok)
@@ -296,7 +333,7 @@ func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, worksp
 
 	logger.Info("boot: setup-rerun ladder decision",
 		"repo", repo.Name, "tier", "full", "outcome", string(RerunReasonFull))
-	runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, true, hookTimeout, stopGrace)
+	runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, hookTimeout, stopGrace)
 }
 
 // runNamedHookNonFatal runs the script at repoDir/scriptName if present,

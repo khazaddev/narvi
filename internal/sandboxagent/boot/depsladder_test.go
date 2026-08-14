@@ -70,9 +70,12 @@ func TestSetupRerunLadder_DigestMatch_SkipsSetupEntirely(t *testing.T) {
 	runGit(t, repoDir, "add", "unrelated.txt")
 	runGit(t, repoDir, "commit", "-m", "unrelated change")
 
-	bakedDigest, err := boot.ComputeDependencyManifestDigest(repoDir)
+	bakedDigest, found, err := boot.ComputeDependencyManifestDigest(repoDir)
 	if err != nil {
 		t.Fatalf("ComputeDependencyManifestDigest() error = %v", err)
+	}
+	if !found {
+		t.Fatal("precondition failed: found = false, want true (repoDir has a real package-lock.json)")
 	}
 
 	currentSHA := gitRevParseHEAD(t, repoDir)
@@ -85,7 +88,7 @@ func TestSetupRerunLadder_DigestMatch_SkipsSetupEntirely(t *testing.T) {
 	if !workspaceMoved["repo1"] {
 		t.Fatalf("precondition failed: workspaceMoved[repo1] = false, want true")
 	}
-	ladder := boot.ComputeSetupRerunLadder(manifest, true, workspaceDir, currentSHAs, 5*time.Second)
+	ladder := boot.ComputeSetupRerunLadder(manifest, true, false, workspaceDir, currentSHAs, 5*time.Second)
 
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
@@ -132,7 +135,7 @@ func TestSetupRerunLadder_DeltaEligible_RunsSyncInsteadOfSetup(t *testing.T) {
 	if !workspaceMoved["repo1"] {
 		t.Fatalf("precondition failed: workspaceMoved[repo1] = false, want true")
 	}
-	ladder := boot.ComputeSetupRerunLadder(manifest, true, workspaceDir, currentSHAs, 5*time.Second)
+	ladder := boot.ComputeSetupRerunLadder(manifest, true, false, workspaceDir, currentSHAs, 5*time.Second)
 	if !ladder["repo1"].DeltaEligible {
 		t.Fatalf("precondition failed: ladder[repo1].DeltaEligible = false, want true (setup.sh was never touched since builtSHA)")
 	}
@@ -173,7 +176,7 @@ func TestSetupRerunLadder_DeltaFails_FallsBackToFullSetup(t *testing.T) {
 	manifest := boot.ImageManifest{BuiltRepoShas: map[string]string{"repo1": builtSHA}}
 	currentSHAs := map[string]string{"repo1": currentSHA}
 	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, currentSHAs)
-	ladder := boot.ComputeSetupRerunLadder(manifest, true, workspaceDir, currentSHAs, 5*time.Second)
+	ladder := boot.ComputeSetupRerunLadder(manifest, true, false, workspaceDir, currentSHAs, 5*time.Second)
 	if !ladder["repo1"].DeltaEligible {
 		t.Fatalf("precondition failed: ladder[repo1].DeltaEligible = false, want true")
 	}
@@ -214,7 +217,7 @@ func TestSetupRerunLadder_DeltaIneligible_SetupChanged_RunsFullSetup(t *testing.
 	manifest := boot.ImageManifest{BuiltRepoShas: map[string]string{"repo1": builtSHA}}
 	currentSHAs := map[string]string{"repo1": currentSHA}
 	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, currentSHAs)
-	ladder := boot.ComputeSetupRerunLadder(manifest, true, workspaceDir, currentSHAs, 5*time.Second)
+	ladder := boot.ComputeSetupRerunLadder(manifest, true, false, workspaceDir, currentSHAs, 5*time.Second)
 	if ladder["repo1"].DeltaEligible {
 		t.Fatalf("precondition failed: ladder[repo1].DeltaEligible = true, want false (setup.sh WAS changed since builtSHA)")
 	}
@@ -269,7 +272,7 @@ func TestSetupRerunLadder_DigestMismatch_FallsThroughToFullSetup(t *testing.T) {
 	}
 	currentSHAs := map[string]string{"repo1": currentSHA}
 	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, currentSHAs)
-	ladder := boot.ComputeSetupRerunLadder(manifest, true, workspaceDir, currentSHAs, 5*time.Second)
+	ladder := boot.ComputeSetupRerunLadder(manifest, true, false, workspaceDir, currentSHAs, 5*time.Second)
 	if ladder["repo1"].DependencySkip != boot.DependencySkipMismatch {
 		t.Fatalf("precondition failed: ladder[repo1].DependencySkip = %q, want %q", ladder["repo1"].DependencySkip, boot.DependencySkipMismatch)
 	}
@@ -291,6 +294,176 @@ func TestSetupRerunLadder_DigestMismatch_FallsThroughToFullSetup(t *testing.T) {
 	}
 }
 
+// TestSetupRerunLadder_DigestMatchButSetupChanged_RunsFullSetup proves the
+// B3 adversarial-review fix directly, end to end: package-lock.json stays
+// byte-identical since the built SHA (the digest tier's own evidence says
+// "unchanged"), but setup.sh ITSELF was edited in the same later commit --
+// a digest match must NEVER skip setup.sh's rerun in that case, because the
+// digest can only speak for the dependency-manifest surface, never for
+// setup.sh's own non-package-manager work (§19.4: "may provision local
+// service stacks, run codegen, seed local state"). The pre-fix ladder would
+// have returned on DependencySkipMatch alone and silently skipped the
+// CHANGED setup.sh entirely.
+func TestSetupRerunLadder_DigestMatchButSetupChanged_RunsFullSetup(t *testing.T) {
+	originalLogger := slog.Default()
+	var logBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(originalLogger)
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	setupMarkerV1 := filepath.Join(workspaceDir, "setup-v1-should-not-run")
+	setupMarkerV2 := filepath.Join(workspaceDir, "setup-v2-should-run")
+
+	builtSHA := buildRepoAtBuiltSHA(t, repoDir, setupMarkerV1, `{"lockfileVersion":1}`)
+
+	bakedDigest, found, err := boot.ComputeDependencyManifestDigest(repoDir)
+	if err != nil {
+		t.Fatalf("ComputeDependencyManifestDigest() error = %v", err)
+	}
+	if !found {
+		t.Fatal("precondition failed: found = false, want true (repoDir has a real package-lock.json)")
+	}
+
+	// A later commit that changes setup.sh ITSELF (a new version, touching
+	// a DIFFERENT marker so the test can tell which version actually ran)
+	// but leaves package-lock.json byte-identical -- the digest tier's own
+	// evidence still matches, but setup.sh's own logic moved.
+	writeScript(t, filepath.Join(repoDir, "setup.sh"), "touch "+setupMarkerV2)
+	runGit(t, repoDir, "add", "setup.sh")
+	runGit(t, repoDir, "commit", "-m", "change setup.sh, keep package-lock.json")
+
+	currentSHA := gitRevParseHEAD(t, repoDir)
+	manifest := boot.ImageManifest{
+		BuiltRepoShas:             map[string]string{"repo1": builtSHA},
+		DependencyManifestDigests: map[string]string{"repo1": bakedDigest},
+	}
+	currentSHAs := map[string]string{"repo1": currentSHA}
+	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, currentSHAs)
+	if !workspaceMoved["repo1"] {
+		t.Fatalf("precondition failed: workspaceMoved[repo1] = false, want true")
+	}
+	ladder := boot.ComputeSetupRerunLadder(manifest, true, false, workspaceDir, currentSHAs, 5*time.Second)
+	if ladder["repo1"].DependencySkip != boot.DependencySkipMatch {
+		t.Fatalf("precondition failed: ladder[repo1].DependencySkip = %q, want %q (package-lock.json is unchanged)",
+			ladder["repo1"].DependencySkip, boot.DependencySkipMatch)
+	}
+	if ladder["repo1"].DeltaEligible {
+		t.Fatalf("precondition failed: ladder[repo1].DeltaEligible = true, want false (setup.sh WAS changed since builtSHA)")
+	}
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
+
+	err = boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder,
+		noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+	if err != nil {
+		t.Fatalf("RunBoot() error = %v, want nil", err)
+	}
+
+	// The CHANGED setup.sh (v2) must have actually run -- a digest match
+	// alone must never have skipped it.
+	assertFileExists(t, setupMarkerV2)
+	assertFileAbsent(t, setupMarkerV1)
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, `"digest_outcome":"match"`) {
+		t.Errorf("log output missing digest_outcome=match; full log:\n%s", logged)
+	}
+	if !strings.Contains(logged, `"setup_sh_unchanged":false`) {
+		t.Errorf("log output missing setup_sh_unchanged=false; full log:\n%s", logged)
+	}
+	if !strings.Contains(logged, `"tier":"full"`) {
+		t.Errorf("log output missing a full-setup.sh tier decision; full log:\n%s", logged)
+	}
+}
+
+// TestSetupRerunLadder_ScopedSession_DigestTierAlwaysIneligible proves the
+// B5 adversarial-review fix (§19.7): under a scoped Environment, the
+// digest tier must resolve to Ineligible regardless of what the
+// (necessarily scope-truncated) recompute would find -- even when, as
+// here, the baked digest and an UNSCOPED recompute would have matched
+// perfectly (this is otherwise the identical scenario to
+// TestSetupRerunLadder_DigestMatch_SkipsSetupEntirely above). Shared
+// images are always built unscoped (§19.1: "No sparse-checkout at build
+// time, ever"), so a scoped boot's own on-disk tree can never be trusted
+// as complete evidence for this tier, and the ladder must fall through to
+// the tiers below exactly as if no baked digest existed at all -- never a
+// false "match", and (§19.7's own explicit requirement) never a false
+// "mismatch" either.
+func TestSetupRerunLadder_ScopedSession_DigestTierAlwaysIneligible(t *testing.T) {
+	originalLogger := slog.Default()
+	var logBuf bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+	defer slog.SetDefault(originalLogger)
+
+	workspaceDir := t.TempDir()
+	repoDir := filepath.Join(workspaceDir, "repo1")
+	setupMarker := filepath.Join(workspaceDir, "setup-should-run")
+
+	builtSHA := buildRepoAtBuiltSHA(t, repoDir, setupMarker, `{"lockfileVersion":1}`)
+
+	bakedDigest, found, err := boot.ComputeDependencyManifestDigest(repoDir)
+	if err != nil {
+		t.Fatalf("ComputeDependencyManifestDigest() error = %v", err)
+	}
+	if !found {
+		t.Fatal("precondition failed: found = false, want true (repoDir has a real package-lock.json)")
+	}
+
+	// An unrelated later commit -- moves workspaceMoved, never touches
+	// package-lock.json: an UNSCOPED recompute at this point would match
+	// bakedDigest exactly.
+	writeFileHelper(t, filepath.Join(repoDir, "unrelated.txt"), "unrelated")
+	runGit(t, repoDir, "add", "unrelated.txt")
+	runGit(t, repoDir, "commit", "-m", "unrelated change")
+
+	currentSHA := gitRevParseHEAD(t, repoDir)
+	manifest := boot.ImageManifest{
+		BuiltRepoShas:             map[string]string{"repo1": builtSHA},
+		DependencyManifestDigests: map[string]string{"repo1": bakedDigest},
+	}
+	currentSHAs := map[string]string{"repo1": currentSHA}
+	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, currentSHAs)
+	if !workspaceMoved["repo1"] {
+		t.Fatalf("precondition failed: workspaceMoved[repo1] = false, want true")
+	}
+
+	// scoped=true is the ONLY difference from
+	// TestSetupRerunLadder_DigestMatch_SkipsSetupEntirely's own identical
+	// setup, which resolves to DependencySkipMatch and skips setup.sh
+	// entirely.
+	ladder := boot.ComputeSetupRerunLadder(manifest, true, true, workspaceDir, currentSHAs, 5*time.Second)
+	if ladder["repo1"].DependencySkip != boot.DependencySkipIneligible {
+		t.Fatalf("ladder[repo1].DependencySkip = %q, want %q (a scoped session must never trust the digest tier, even on what looks like an exact match)",
+			ladder["repo1"].DependencySkip, boot.DependencySkipIneligible)
+	}
+
+	sup := supervisor.New()
+	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}
+
+	err = boot.RunBoot(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeRepoImage, workspaceMoved, ladder,
+		noopReporter, 10*time.Second, time.Second, testReadinessTimeout, testReadinessPollInterval)
+	if err != nil {
+		t.Fatalf("RunBoot() error = %v, want nil", err)
+	}
+
+	// The ladder must fall all the way through (digest ineligible, no
+	// sync.sh present) to the full setup.sh floor.
+	assertFileExists(t, setupMarker)
+
+	logged := logBuf.String()
+	if !strings.Contains(logged, `"tier":"digest"`) || !strings.Contains(logged, `"outcome":"ineligible-fallback"`) {
+		t.Errorf("log output missing a digest-tier ineligible-fallback decision; full log:\n%s", logged)
+	}
+	if strings.Contains(logged, `"digest_outcome":"match"`) {
+		t.Errorf("log output claims digest_outcome=match for a scoped session -- must never be logged as a trustworthy match; full log:\n%s", logged)
+	}
+	if strings.Contains(logged, `"digest_outcome":"mismatch"`) {
+		t.Errorf("log output claims digest_outcome=mismatch for a scoped session -- §19.7 requires never a false mismatch; full log:\n%s", logged)
+	}
+}
+
 // mustDigestForContent computes the digest a repo whose ONLY lockfile is
 // package-lock.json with exactly this content would produce -- by writing
 // it to a throwaway directory and calling the real, exported
@@ -300,9 +473,12 @@ func mustDigestForContent(t *testing.T, packageLockContent string) string {
 	t.Helper()
 	dir := t.TempDir()
 	writeFileHelper(t, filepath.Join(dir, "package-lock.json"), packageLockContent)
-	digest, err := boot.ComputeDependencyManifestDigest(dir)
+	digest, found, err := boot.ComputeDependencyManifestDigest(dir)
 	if err != nil {
 		t.Fatalf("ComputeDependencyManifestDigest() error = %v", err)
+	}
+	if !found {
+		t.Fatal("precondition failed: found = false, want true")
 	}
 	return digest
 }
@@ -337,7 +513,7 @@ func TestSetupRerunLadder_LogsStructuredDecisionsForEachTier(t *testing.T) {
 	manifest := boot.ImageManifest{BuiltRepoShas: map[string]string{"repo1": builtSHA}}
 	currentSHAs := map[string]string{"repo1": currentSHA}
 	workspaceMoved := boot.ComputeWorkspaceMoved(manifest, true, currentSHAs)
-	ladder := boot.ComputeSetupRerunLadder(manifest, true, workspaceDir, currentSHAs, 5*time.Second)
+	ladder := boot.ComputeSetupRerunLadder(manifest, true, false, workspaceDir, currentSHAs, 5*time.Second)
 
 	sup := supervisor.New()
 	repos := []boot.RepoInfo{{Name: "repo1", Primary: true}}

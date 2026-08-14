@@ -1596,7 +1596,16 @@ func runBootSequence(
 		// setup.sh`) rather than a new timeout constant -- the identical
 		// class of operation DiscoverRepoSHAs' own repoHeadSHA already
 		// bounds with this exact field.
-		setupRerunLadder = boot.ComputeSetupRerunLadder(manifest, manifestFound, cfg.WorkspaceDir, postCloneFingerprint.RepoSHAs, timeouts.RepoSHADiscoveryTimeout)
+		//
+		// len(pathScope) > 0 (adversarial-review finding B5, §19.7): this
+		// exact same pathScope slice was already computed above and passed
+		// to CloneAll/SyncAll, so re-using it here (rather than re-deriving
+		// it from cfg.SessionConfig.PathScope a second time) keeps the two
+		// call sites' own notion of "is this session scoped" structurally
+		// unable to drift. See ComputeSetupRerunLadder's own doc comment
+		// for why a scoped session must always resolve the digest tier to
+		// ineligible.
+		setupRerunLadder = boot.ComputeSetupRerunLadder(manifest, manifestFound, len(pathScope) > 0, cfg.WorkspaceDir, postCloneFingerprint.RepoSHAs, timeouts.RepoSHADiscoveryTimeout)
 	}
 
 	if err := boot.RunBoot(ctx, sup, cfg.WorkspaceDir, repos, cfg.BootMode, workspaceMoved, setupRerunLadder, reportBootProgress,
