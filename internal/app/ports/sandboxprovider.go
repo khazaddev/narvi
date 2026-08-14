@@ -60,12 +60,18 @@ type SandboxProvider interface {
 	// behind it.
 	//
 	// spec.CacheMount (§19.1's own "build-time dependency cache", Step
-	// 43(c)) optionally requests a persistent, provider-backed
-	// dependency-cache volume for this build — see CacheMount's own doc
-	// comment for the full contract (advisory only; a corrupted, locked,
-	// unavailable, or simply unsupported cache MUST degrade to an
-	// ordinary cold build, never a BuildImage failure).
-	BuildImage(ctx context.Context, spec ImageSpec) (BuildRef, error)
+	// 43(c); third iteration — immutable versioned cache snapshots)
+	// optionally requests a specific, immutable, already-published cache
+	// version be mounted read-only for this build, plus a NEW version to
+	// publish if this build succeeds — see CacheMount's own doc comment
+	// for the full contract (advisory only; a corrupted, unavailable,
+	// hung, not-found/pruned, or simply unsupported cache MUST degrade to
+	// an ordinary cold build, never a BuildImage failure).
+	// BuildOutcome.PublishedCacheVersion reports back whether THIS
+	// successful call's own request still carried that CacheMount, so a
+	// caller can tell whether to record a real publication or nothing at
+	// all — see BuildOutcome's own doc comment.
+	BuildImage(ctx context.Context, spec ImageSpec) (BuildOutcome, error)
 
 	// DeleteImage deletes a previously built image. Optional per
 	// Capabilities().ImageBuilds.

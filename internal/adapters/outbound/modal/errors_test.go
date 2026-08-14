@@ -106,13 +106,18 @@ func TestClassifyErrorResponse_UsesDecodedMessage(t *testing.T) {
 	}
 }
 
-// TestIsCacheMountTrouble covers isCacheMountTrouble's own three signals
-// (errors.go's doc comment has the full reasoning) — the audit-remediation
-// finding this test is written against: "the cold-build fallback fires
-// only on three structured provider error codes... a degraded volume
-// subsystem typically hangs... breaking the pure-accelerator rule the port
-// states absolutely." Table-driven, one entry per signal plus the guard
-// that must survive broadening it.
+// TestIsCacheMountTrouble covers isCacheMountTrouble's own two signals
+// (errors.go's doc comment has the full reasoning), third iteration
+// (immutable versioned cache snapshots): the fixed, closed set of
+// structured codes (now including CACHE_MOUNT_TIMEOUT and
+// CACHE_VERSION_NOT_FOUND, and no longer CACHE_MOUNT_LOCKED — a lock is
+// meaningless once nothing is ever mutated in place, ports.CacheMount's
+// own doc comment), and an unparseable/bodyless response on a transient
+// status. Table-driven, one entry per signal, the guards that must
+// survive broadening it, AND the two network-level cases that MUST NOT be
+// treated as cache trouble anymore (the harmful-broadening fix this
+// iteration makes: a bare client-side timeout is not evidence of cache
+// trouble).
 func TestIsCacheMountTrouble(t *testing.T) {
 	t.Parallel()
 
@@ -137,24 +142,34 @@ func TestIsCacheMountTrouble(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "structured CACHE_MOUNT_LOCKED code",
-			err:  &ports.ProviderError{Transient: false, Code: "CACHE_MOUNT_LOCKED", Op: ports.OpBuildImage, Err: errors.New("locked")},
-			want: true,
-		},
-		{
 			name: "structured CACHE_MOUNT_UNAVAILABLE code",
 			err:  &ports.ProviderError{Transient: false, Code: "CACHE_MOUNT_UNAVAILABLE", Op: ports.OpBuildImage, Err: errors.New("unavailable")},
 			want: true,
 		},
 		{
-			name: "transport-level NETWORK_ERROR (connection never established)",
-			err:  classifyNetworkError(ports.OpBuildImage, errors.New("dial tcp: connection refused")),
+			name: "structured CACHE_MOUNT_TIMEOUT code (the build service's OWN internal timeout, reported fast and honestly)",
+			err:  &ports.ProviderError{Transient: true, Code: "CACHE_MOUNT_TIMEOUT", Op: ports.OpBuildImage, Err: errors.New("cache mount subsystem timed out")},
 			want: true,
 		},
 		{
-			name: "transport-level NETWORK_TIMEOUT (a degraded cache volume subsystem typically hangs, not errors cleanly)",
-			err:  classifyNetworkError(ports.OpBuildImage, &timeoutError{}),
+			name: "structured CACHE_VERSION_NOT_FOUND code (the pinned MountVersion was already pruned/reclaimed)",
+			err:  &ports.ProviderError{Transient: false, Code: "CACHE_VERSION_NOT_FOUND", Op: ports.OpBuildImage, Err: errors.New("version not found")},
 			want: true,
+		},
+		{
+			name: "CACHE_MOUNT_LOCKED is no longer a recognized code — a lock is meaningless under immutable versions, this code must NOT be treated as cache trouble",
+			err:  &ports.ProviderError{Transient: false, Code: "CACHE_MOUNT_LOCKED", Op: ports.OpBuildImage, Err: errors.New("locked")},
+			want: false,
+		},
+		{
+			name: "transport-level NETWORK_ERROR (connection never established) must NOT be treated as cache trouble — no response was ever received to attribute to the cache specifically",
+			err:  classifyNetworkError(ports.OpBuildImage, errors.New("dial tcp: connection refused")),
+			want: false,
+		},
+		{
+			name: "transport-level NETWORK_TIMEOUT must NOT be treated as cache trouble — the harmful broadening this iteration removes: a bare client timeout already consumed the full ProviderHTTPClientTimeout budget, so retrying cold can only be slower, never evidence of cache trouble",
+			err:  classifyNetworkError(ports.OpBuildImage, &timeoutError{}),
+			want: false,
 		},
 		{
 			name: "unparseable body on a transient 503 (e.g. a plain-text upstream error page)",

@@ -367,7 +367,8 @@ func TestImageBuildPipeline_MissCreatesPendingRow_NoCredentialConfigured_SpawnSt
 	// cannot resolve any repo's SHA, so BuildImage must never even be
 	// called, and the row is recorded as a retryable failure rather than
 	// getting stuck in 'building'.
-	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, provider, platform.DefaultTimeouts(), nil, "", "")
+	cacheVersionStore := narvipg.NewImageCacheVersionStore(pool)
+	builder, err := imagebuild.NewBuilder(imageBuildStore, pool, provider, platform.DefaultTimeouts(), nil, "", cacheVersionStore)
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}

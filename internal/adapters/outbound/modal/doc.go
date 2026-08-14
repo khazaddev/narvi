@@ -34,18 +34,25 @@
 //     the configurable egress proxy") is honored when configured, and
 //     bypassed (direct connection) when not.
 //   - BuildImage's optional build-time dependency cache (§19.1's closing
-//     paragraph, Step 43(c), ports.ImageSpec.CacheMount) is a PURE
-//     ACCELERATOR: a request carrying no CacheMount is byte-for-byte
-//     unaffected, and cache trouble reported by the (invented) wire
-//     protocol — including a transport-level hang and an unparseable
-//     response, not only a handful of structured error codes — degrades
-//     to an ordinary cold build via one transparent retry rather than
-//     ever surfacing as a BuildImage failure — see provider.go's own
-//     BuildImage doc comment and errors.go's isCacheMountTrouble. The
-//     mount itself is requested READ-ONLY for the build's duration, with
-//     a single write-back after success (ports.CacheMount's own doc
-//     comment) — not the "content-addressed, so concurrent writes can't
-//     collide" argument an earlier draft of this adapter's own comments
-//     made, which review found false against the real package-manager
-//     caches.
+//     paragraph, Step 43(c), third iteration: immutable versioned cache
+//     snapshots, ports.ImageSpec.CacheMount) is a PURE ACCELERATOR: a
+//     request carrying no CacheMount is byte-for-byte unaffected, and
+//     cache trouble reported by the (invented) wire protocol — a
+//     structured code (corruption, unavailability, a build-service-
+//     reported internal timeout, or a not-found/pruned version) or an
+//     unparseable response, deliberately NOT a raw client-side transport
+//     timeout (isCacheMountTrouble's own doc comment explains why that
+//     signal was removed rather than broadened) — degrades to an ordinary
+//     cold build via one transparent retry rather than ever surfacing as
+//     a BuildImage failure — see provider.go's own BuildImage doc comment
+//     and errors.go's isCacheMountTrouble. MountVersion is requested
+//     READ-ONLY; PublishVersion, a distinct freshly-minted version, is
+//     what a success publishes — never the same identifier, and never an
+//     in-place write to whatever MountVersion named (ports.CacheMount's
+//     own doc comment has the full "why" — this adapter's own comments
+//     used to argue no-lock-because-content-addressed, and separately,
+//     read-only-plus-one-write-back-is-safe; review found the first false
+//     against the real package-manager caches and the second still an
+//     unguarded write into state a concurrent reader could observe — this
+//     iteration removes the write window rather than arguing about it).
 package modal

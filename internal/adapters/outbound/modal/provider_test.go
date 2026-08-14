@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -696,12 +697,15 @@ func TestProvider_BuildImage(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	ref, err := p.BuildImage(context.Background(), spec)
+	outcome, err := p.BuildImage(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("BuildImage() error = %v", err)
 	}
-	if ref != "build-1" {
-		t.Errorf("BuildImage() = %q, want %q", ref, "build-1")
+	if outcome.Ref != "build-1" {
+		t.Errorf("BuildImage() = %q, want %q", outcome.Ref, "build-1")
+	}
+	if outcome.PublishedCacheVersion != "" {
+		t.Errorf("BuildImage() PublishedCacheVersion = %q, want empty (no CacheMount was requested)", outcome.PublishedCacheVersion)
 	}
 	wantRepos := map[string]imageBuildRequestRepo{"narvi": {URL: "https://github.com/acme/narvi.git", SHA: "abc123"}}
 	if !reflect.DeepEqual(got, imageBuildRequest{Base: spec.Base, Repos: wantRepos, RuntimeVersion: spec.RuntimeVersion}) {
@@ -714,14 +718,19 @@ func TestProvider_BuildImage(t *testing.T) {
 
 // TestProvider_BuildImage_CacheMount_SentOnWire proves a spec carrying
 // CacheMount produces a request whose cacheVolume field mirrors
-// ports.CacheMount{Key, Paths} exactly.
+// ports.CacheMount{Key, MountVersion, PublishVersion, Paths} exactly, and
+// that a successful build echoes PublishVersion back as
+// BuildOutcome.PublishedCacheVersion (§19.1's closing paragraph, third
+// iteration: immutable versioned cache snapshots).
 func TestProvider_BuildImage_CacheMount_SentOnWire(t *testing.T) {
 	spec := ports.ImageSpec{
 		Base:           "base:v1",
 		RuntimeVersion: "go1.26",
 		CacheMount: &ports.CacheMount{
-			Key:   "cachekey-abc123",
-			Paths: []string{"/root/.npm/_cacache", "/root/.cache/pip"},
+			Key:            "cachekey-abc123",
+			MountVersion:   "41",
+			PublishVersion: "42",
+			Paths:          []string{"/root/.npm/_cacache", "/root/.cache/pip"},
 		},
 	}
 	var got imageBuildRequest
@@ -739,12 +748,15 @@ func TestProvider_BuildImage_CacheMount_SentOnWire(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	ref, err := p.BuildImage(context.Background(), spec)
+	outcome, err := p.BuildImage(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("BuildImage() error = %v", err)
 	}
-	if ref != "build-cached-1" {
-		t.Errorf("BuildImage() = %q, want %q", ref, "build-cached-1")
+	if outcome.Ref != "build-cached-1" {
+		t.Errorf("BuildImage() = %q, want %q", outcome.Ref, "build-cached-1")
+	}
+	if outcome.PublishedCacheVersion != "42" {
+		t.Errorf("BuildImage() PublishedCacheVersion = %q, want %q (spec.CacheMount.PublishVersion, echoed back on a successful cache-mount-bearing request)", outcome.PublishedCacheVersion, "42")
 	}
 	if got.CacheVolume == nil {
 		t.Fatal("request body cacheVolume = nil, want it populated")
@@ -752,9 +764,70 @@ func TestProvider_BuildImage_CacheMount_SentOnWire(t *testing.T) {
 	if got.CacheVolume.Key != "cachekey-abc123" {
 		t.Errorf("cacheVolume.Key = %q, want %q", got.CacheVolume.Key, "cachekey-abc123")
 	}
+	if got.CacheVolume.MountVersion != "41" {
+		t.Errorf("cacheVolume.MountVersion = %q, want %q", got.CacheVolume.MountVersion, "41")
+	}
+	if got.CacheVolume.PublishVersion != "42" {
+		t.Errorf("cacheVolume.PublishVersion = %q, want %q", got.CacheVolume.PublishVersion, "42")
+	}
 	wantPaths := []string{"/root/.npm/_cacache", "/root/.cache/pip"}
 	if !reflect.DeepEqual(got.CacheVolume.Paths, wantPaths) {
 		t.Errorf("cacheVolume.Paths = %v, want %v", got.CacheVolume.Paths, wantPaths)
+	}
+}
+
+// TestProvider_BuildImage_CacheMount_FirstBuildHasNoMountVersion proves a
+// spec with no MountVersion yet (this cache key's very first build) still
+// sends a well-formed request — MountVersion omitted from the wire
+// (omitempty), PublishVersion always present — and still confirms
+// publication on success.
+func TestProvider_BuildImage_CacheMount_FirstBuildHasNoMountVersion(t *testing.T) {
+	spec := ports.ImageSpec{
+		Base:           "base:v1",
+		RuntimeVersion: "go1.26",
+		CacheMount: &ports.CacheMount{
+			Key:            "cachekey-first",
+			MountVersion:   "",
+			PublishVersion: "1",
+			Paths:          []string{"/root/.npm/_cacache"},
+		},
+	}
+	var gotRaw map[string]json.RawMessage
+	var got imageBuildRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &gotRaw); err != nil {
+			t.Errorf("decode request (raw): %v", err)
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(buildResponse{BuildID: "build-first-1"})
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	outcome, err := p.BuildImage(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("BuildImage() error = %v", err)
+	}
+	if outcome.PublishedCacheVersion != "1" {
+		t.Errorf("BuildImage() PublishedCacheVersion = %q, want %q", outcome.PublishedCacheVersion, "1")
+	}
+	var cacheVolumeRaw map[string]json.RawMessage
+	if err := json.Unmarshal(gotRaw["cacheVolume"], &cacheVolumeRaw); err != nil {
+		t.Fatalf("decode request cacheVolume: %v", err)
+	}
+	if _, ok := cacheVolumeRaw["mountVersion"]; ok {
+		t.Error(`request body cacheVolume has a "mountVersion" key, want it omitted when MountVersion is empty (this key's first build)`)
+	}
+	if got.CacheVolume.PublishVersion != "1" {
+		t.Errorf("cacheVolume.PublishVersion = %q, want %q", got.CacheVolume.PublishVersion, "1")
 	}
 }
 
@@ -823,21 +896,33 @@ func cacheMountTroubleServer(t *testing.T, status int, troubleCode string) (*htt
 }
 
 // TestProvider_BuildImage_CacheMountTrouble_FallsBackToColdBuild is the
-// pure-accelerator rule's own dedicated test (task requirement: "a
-// corrupted/unavailable/declined cache must produce a successful cold
-// build, never a failure"): for each cache-trouble code this adapter's own
-// invented protocol recognizes, BuildImage must still return a successful
-// BuildRef — proving a cache problem can never surface as a caller-visible
-// BuildImage failure.
+// pure-accelerator rule's own MANDATORY test (task requirement: "an
+// unavailable, declined, hung, or pruned cache produces a successful cold
+// build, never a failure"): for each structured cache-trouble code this
+// adapter's own invented protocol recognizes — including a build-service-
+// reported internal timeout (DECLINED because the cache subsystem itself
+// HUNG, reported honestly and fast rather than via a client-side timeout —
+// see isCacheMountTrouble's own doc comment for why) and a not-found/
+// PRUNED version — BuildImage must still return a successful BuildOutcome,
+// with PublishedCacheVersion empty (the fallback dropped the mount, so
+// nothing was published), proving a cache problem can never surface as a
+// caller-visible BuildImage failure.
+//
+// This test MUST fail if cacheMountTroubleCodes/isCacheMountTrouble's own
+// structured-code recognition is ever removed or narrowed to miss one of
+// these: deleting a case's own membership from cacheMountTroubleCodes
+// turns its sub-test's "want nil (pure accelerator...)" into an actual
+// returned error and its own requestCount assertion from 2 to 1.
 func TestProvider_BuildImage_CacheMountTrouble_FallsBackToColdBuild(t *testing.T) {
 	tests := []struct {
 		name        string
 		status      int
 		troubleCode string
 	}{
-		{name: "corrupted cache volume", status: http.StatusConflict, troubleCode: "CACHE_MOUNT_CORRUPTED"},
-		{name: "locked cache volume", status: http.StatusConflict, troubleCode: "CACHE_MOUNT_LOCKED"},
-		{name: "unavailable cache volume", status: http.StatusServiceUnavailable, troubleCode: "CACHE_MOUNT_UNAVAILABLE"},
+		{name: "corrupted cache version", status: http.StatusConflict, troubleCode: "CACHE_MOUNT_CORRUPTED"},
+		{name: "unavailable cache subsystem (declined)", status: http.StatusServiceUnavailable, troubleCode: "CACHE_MOUNT_UNAVAILABLE"},
+		{name: "build service's own internal cache-mount timeout (hung, reported fast and honestly)", status: http.StatusGatewayTimeout, troubleCode: "CACHE_MOUNT_TIMEOUT"},
+		{name: "pinned MountVersion not found (already pruned)", status: http.StatusNotFound, troubleCode: "CACHE_VERSION_NOT_FOUND"},
 	}
 
 	for _, tt := range tests {
@@ -853,14 +938,17 @@ func TestProvider_BuildImage_CacheMountTrouble_FallsBackToColdBuild(t *testing.T
 			spec := ports.ImageSpec{
 				Base:           "base:v1",
 				RuntimeVersion: "go1.26",
-				CacheMount:     &ports.CacheMount{Key: "trouble-key", Paths: []string{"/root/.npm/_cacache"}},
+				CacheMount:     &ports.CacheMount{Key: "trouble-key", MountVersion: "7", PublishVersion: "8", Paths: []string{"/root/.npm/_cacache"}},
 			}
-			ref, err := p.BuildImage(context.Background(), spec)
+			outcome, err := p.BuildImage(context.Background(), spec)
 			if err != nil {
 				t.Fatalf("BuildImage() error = %v, want nil (pure accelerator: %s must degrade to a successful cold build)", err, tt.troubleCode)
 			}
-			if ref != "build-cold-fallback" {
-				t.Errorf("BuildImage() = %q, want %q (the cold-build fallback response)", ref, "build-cold-fallback")
+			if outcome.Ref != "build-cold-fallback" {
+				t.Errorf("BuildImage() = %q, want %q (the cold-build fallback response)", outcome.Ref, "build-cold-fallback")
+			}
+			if outcome.PublishedCacheVersion != "" {
+				t.Errorf("BuildImage() PublishedCacheVersion = %q, want empty (the cold retry dropped the cache mount entirely, so nothing was published)", outcome.PublishedCacheVersion)
 			}
 			if *requestCount != 2 {
 				t.Errorf("server observed %d requests, want 2 (one with the cache mount, one cold retry)", *requestCount)
@@ -869,26 +957,32 @@ func TestProvider_BuildImage_CacheMountTrouble_FallsBackToColdBuild(t *testing.T
 	}
 }
 
-// TestProvider_BuildImage_CacheMountHang_FallsBackToColdBuild is the pure-
-// accelerator rule's own dedicated test for a HUNG cache mount request —
-// the audit-remediation finding this test is written against: "a degraded
-// volume subsystem typically hangs: the request exceeds
-// ProviderHTTPClientTimeout and is classified NETWORK_TIMEOUT, which does
-// not match [the three structured codes], so the build fails instead of
-// falling back." The first request (carrying the cache mount) blocks past
-// a short client timeout; BuildImage must still return a successful
-// BuildRef from the cold retry, never a failure.
-func TestProvider_BuildImage_CacheMountHang_FallsBackToColdBuild(t *testing.T) {
+// TestProvider_BuildImage_ClientSideTimeout_NeverRetriedCold is the
+// dedicated regression test for the harmful NETWORK_TIMEOUT broadening
+// this iteration removes: "a build that legitimately exceeds
+// ProviderHTTPClientTimeout now retries cold — strictly slower than the
+// attempt that just timed out — so it times out again, doubling wall
+// clock and guaranteeing failure where one slow-but-viable attempt
+// existed before." The first (and, this test proves, ONLY) request —
+// carrying the cache mount — blocks past a short client timeout,
+// modeling a build that is simply slow (for a reason unrelated to the
+// cache) and would have succeeded given enough time. BuildImage must
+// return the ORIGINAL timeout error, unmodified, and must NEVER attempt a
+// second, cold request — retrying here would only re-run the identical
+// budget against STRICTLY MORE work (a full cold download), doubling wall
+// clock for no chance of success.
+//
+// This test MUST fail if isCacheMountTrouble is ever broadened back to
+// treat NETWORK_TIMEOUT as cache trouble: requestCount would become 2 and
+// err would become nil.
+func TestProvider_BuildImage_ClientSideTimeout_NeverRetriedCold(t *testing.T) {
 	block := make(chan struct{})
 
-	// requestCount is an atomic.Int32, not a plain int: unlike every other
-	// cache-mount-trouble test in this file, the FIRST request's own
-	// handler goroutine here never returns (it blocks on <-block) before
-	// the SECOND (cold retry) request arrives on its own, separate
-	// goroutine — so there is no happens-before edge between the two
-	// handler invocations the way a normal request/response round trip
-	// would establish. A plain `int` here is a genuine data race under
-	// -race; this codebase runs go test -race always (§11).
+	// requestCount is an atomic.Int32: the FIRST request's own handler
+	// goroutine here never returns before the test itself observes
+	// BuildImage's own result (it blocks on <-block, released only by this
+	// test's own deferred cleanup) — a plain `int` would be a genuine data
+	// race under -race (§11).
 	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount.Add(1)
@@ -897,20 +991,24 @@ func TestProvider_BuildImage_CacheMountHang_FallsBackToColdBuild(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		if req.CacheVolume != nil {
-			// First attempt: never respond within the test's short client
-			// timeout — modeling a degraded cache-volume subsystem that
-			// hangs rather than returning a clean error.
+			// Never respond within the test's short client timeout —
+			// modeling a build that is simply slow, for a reason unrelated
+			// to the cache mount (e.g. a large dependency set, or
+			// non-package-manager setup work, §19.4).
 			<-block
 			return
 		}
+		// A cold retry must never reach here — if it does, requestCount
+		// alone already proves the regression; this response exists only
+		// so the test would fail loudly rather than hang if it somehow did.
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(buildResponse{BuildID: "build-cold-after-hang"})
+		_ = json.NewEncoder(w).Encode(buildResponse{BuildID: "build-should-never-be-reached"})
 	}))
 	// Deferred in this order deliberately: httptest.Server.Close() blocks
 	// until every outstanding handler goroutine returns, including the
-	// still-blocked FIRST request's handler above — so block must be
-	// closed (unblocking that goroutine) BEFORE srv.Close() is called, or
-	// this test would deadlock on its own cleanup. defer runs LIFO, so
+	// still-blocked request's handler above — so block must be closed
+	// (unblocking that goroutine) BEFORE srv.Close() is called, or this
+	// test would deadlock on its own cleanup. defer runs LIFO, so
 	// declaring srv.Close() first and close(block) second is what makes
 	// close(block) run FIRST.
 	defer srv.Close()
@@ -928,17 +1026,21 @@ func TestProvider_BuildImage_CacheMountHang_FallsBackToColdBuild(t *testing.T) {
 	spec := ports.ImageSpec{
 		Base:           "base:v1",
 		RuntimeVersion: "go1.26",
-		CacheMount:     &ports.CacheMount{Key: "hung-key", Paths: []string{"/root/.npm/_cacache"}},
+		CacheMount:     &ports.CacheMount{Key: "slow-key", MountVersion: "3", PublishVersion: "4", Paths: []string{"/root/.npm/_cacache"}},
 	}
-	ref, err := p.BuildImage(context.Background(), spec)
-	if err != nil {
-		t.Fatalf("BuildImage() error = %v, want nil (pure accelerator: a HUNG cache mount request must degrade to a successful cold build)", err)
+	_, err = p.BuildImage(context.Background(), spec)
+	if err == nil {
+		t.Fatal("BuildImage() error = nil, want the original client-side timeout error — a bare timeout is not evidence of cache trouble and must never trigger a cold retry")
 	}
-	if ref != "build-cold-after-hang" {
-		t.Errorf("BuildImage() = %q, want %q", ref, "build-cold-after-hang")
+	var pe *ports.ProviderError
+	if !errors.As(err, &pe) {
+		t.Fatalf("BuildImage() error = %v, want *ports.ProviderError", err)
 	}
-	if got := requestCount.Load(); got != 2 {
-		t.Errorf("server observed %d requests, want 2 (one that hung with the cache mount, one cold retry)", got)
+	if pe.Code != networkTimeoutCode {
+		t.Errorf("BuildImage() error.Code = %q, want %q (the original, un-retried timeout)", pe.Code, networkTimeoutCode)
+	}
+	if got := requestCount.Load(); got != 1 {
+		t.Errorf("server observed %d requests, want exactly 1 (a client-side timeout must never trigger a cold-build retry)", got)
 	}
 }
 
@@ -974,14 +1076,17 @@ func TestProvider_BuildImage_CacheMountUnparseableResponse_FallsBackToColdBuild(
 	spec := ports.ImageSpec{
 		Base:           "base:v1",
 		RuntimeVersion: "go1.26",
-		CacheMount:     &ports.CacheMount{Key: "unparseable-key", Paths: []string{"/root/.npm/_cacache"}},
+		CacheMount:     &ports.CacheMount{Key: "unparseable-key", MountVersion: "9", PublishVersion: "10", Paths: []string{"/root/.npm/_cacache"}},
 	}
-	ref, err := p.BuildImage(context.Background(), spec)
+	outcome, err := p.BuildImage(context.Background(), spec)
 	if err != nil {
 		t.Fatalf("BuildImage() error = %v, want nil (pure accelerator: a 503 with a non-JSON body on a cache-mount request must degrade to a successful cold build)", err)
 	}
-	if ref != "build-cold-after-unparseable" {
-		t.Errorf("BuildImage() = %q, want %q", ref, "build-cold-after-unparseable")
+	if outcome.Ref != "build-cold-after-unparseable" {
+		t.Errorf("BuildImage() = %q, want %q", outcome.Ref, "build-cold-after-unparseable")
+	}
+	if outcome.PublishedCacheVersion != "" {
+		t.Errorf("BuildImage() PublishedCacheVersion = %q, want empty (the cold retry dropped the cache mount)", outcome.PublishedCacheVersion)
 	}
 	if requestCount != 2 {
 		t.Errorf("server observed %d requests, want 2 (one 503/non-JSON with the cache mount, one cold retry)", requestCount)

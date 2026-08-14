@@ -307,31 +307,18 @@ const gitHubBotTokenEnvVarName = "NARVI_GITHUB_BOT_TOKEN"
 // whichever the deploying operator provisions) -- never logged anywhere.
 const gitHubImageBuildTokenEnvVarName = "NARVI_GITHUB_IMAGE_BUILD_TOKEN"
 
-// cacheVolumeEpochEnvVarName configures Step 43(c)'s own build-time
-// dependency-cache rotation escape hatch (§19.1's closing paragraph,
-// domain/imagebuild.CacheVolumeKey), read from NARVI_CACHE_VOLUME_EPOCH.
-//
-// An audit-remediation finding on this Step: CacheVolumeKey was originally
-// a pure function of (base, runtimeVersion) with no way to escape a
-// cache volume that had become unusable (corrupted beyond a build
-// service's own integrity check, or grown past a size bound with no
-// eviction — this design's own named, deferred gap) other than bumping
-// RuntimeVersion, which ALSO invalidates every shared IMAGE fleet-wide
-// (§19.1's own "simultaneous-invalidation cliff") since RuntimeVersion is
-// a Fingerprint input too. epoch decouples the two: it joins
-// CacheVolumeKey but deliberately never Fingerprint, so an operator can
-// mint a brand-new, empty cache volume for every (base, runtimeVersion)
-// pair at once, purely by changing this value and redeploying, without
-// forcing a single already-`ready` image to rebuild.
-//
-// Deliberately OPTIONAL, matching gitHubImageBuildTokenEnvVarName's own
-// precedent immediately above: an unset value degrades to the empty
-// string, which is a completely ordinary, valid epoch ("no rotation has
-// ever been requested"), not a degraded state the way an unset
-// GitHubImageBuildToken is. No MissingRequiredEnvError is ever appended
-// for it. Plain string, not a secret -- fine to log, fine to see in
-// process listings, unlike every *Token field this file reads.
-const cacheVolumeEpochEnvVarName = "NARVI_CACHE_VOLUME_EPOCH"
+// NARVI_CACHE_VOLUME_EPOCH (Step 43(c)'s attempt-2 rotation escape hatch)
+// is GONE, deliberately, not merely unread: domain/imagebuild.
+// CacheVolumeKey (this Step's third iteration -- immutable versioned
+// cache snapshots) no longer takes an epoch argument at all. See that
+// function's own doc comment for why an immutable-version model makes a
+// separate rotation config surface redundant -- a bad published version
+// is escaped by pointing a later build's own MountVersion resolution at
+// an earlier, known-good one (an operator action against this control
+// plane's own version-history bookkeeping), never by an operator
+// redeploying with a new epoch value. Removed rather than left as a
+// silently-ignored env var precisely so this codebase never carries two
+// rotation mechanisms side by side, one live and one vestigial.
 
 // reviewModelDeepEnvVarName configures Step 68's ("review triage:
 // deterministic light/deep routing", §26.3) own deep-path model override,
@@ -932,15 +919,6 @@ type Config struct {
 	// OPTIONAL and how it differs from GitHubBotToken. Never logged.
 	GitHubImageBuildToken string
 
-	// CacheVolumeEpoch is Step 43(c)'s own build-time dependency-cache
-	// rotation escape hatch, read from NARVI_CACHE_VOLUME_EPOCH -- see
-	// cacheVolumeEpochEnvVarName's own doc comment for the full "why" and
-	// how it differs from every *Token field on this struct (not a
-	// secret, and an empty value is ordinary, not degraded). Threaded
-	// through to app/imagebuild.NewBuilder, folded into every cache
-	// volume's own domain/imagebuild.CacheVolumeKey.
-	CacheVolumeEpoch string
-
 	// ReviewModelDeep is Step 68's own optional deep-path model override,
 	// read from NARVI_REVIEW_MODEL_DEEP -- empty string means "not
 	// configured" (see reviewModelDeepEnvVarName's own doc comment for
@@ -1268,12 +1246,6 @@ func Load() (*Config, error) {
 	// configuration, not a boot-time failure.
 	gitHubImageBuildToken := os.Getenv(gitHubImageBuildTokenEnvVarName)
 
-	// cacheVolumeEpoch (Step 43(c)) is likewise DELIBERATELY OPTIONAL --
-	// see cacheVolumeEpochEnvVarName's own doc comment. An empty value
-	// here is ordinary ("no rotation requested"), not degraded -- no
-	// MissingRequiredEnvError is ever appended for it.
-	cacheVolumeEpoch := os.Getenv(cacheVolumeEpochEnvVarName)
-
 	// reviewModelDeep (Step 68, §26.3): OPTIONAL, no default -- an empty
 	// value here is a valid, expected, degraded-gracefully configuration
 	// (reviewModelDeepEnvVarName's own doc comment), not a boot-time
@@ -1512,7 +1484,6 @@ func Load() (*Config, error) {
 		GitHubReleaseBranchPattern: gitHubReleaseBranchPattern,
 		GitHubBotToken:             gitHubBotToken,
 		GitHubImageBuildToken:      gitHubImageBuildToken,
-		CacheVolumeEpoch:           cacheVolumeEpoch,
 		ReviewModelDeep:            reviewModelDeep,
 		PublicBaseURL:              publicBaseURL,
 		TokenEncryptionKey:         tokenEncryptionKey,

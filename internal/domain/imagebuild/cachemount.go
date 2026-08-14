@@ -3,6 +3,7 @@ package imagebuild
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
 )
 
 // WellKnownCachePaths is the fixed, closed, package-manager-agnostic set of
@@ -25,50 +26,84 @@ import (
 // arbitrary repos, and guessing... would be exactly the kind of second,
 // magical decision path this system avoids everywhere else").
 //
-// # Mounted read-only for the build's duration — never as a claim about content-addressing
+// # Mounted read-only, from one specific IMMUTABLE version — never a claim
+// # about content-addressing, and never a lock
 //
-// An earlier draft of this design mounted these paths READ-WRITE and
-// justified skipping a lock on the grounds that every path here is a
-// package manager's own "content-addressed" cache, so concurrent writers
-// could only ever produce identical bytes at the identical name. That
-// premise was checked against each package manager's own real, documented
-// on-disk layout and found false for nearly every path below: Go's module
-// cache ships its OWN lock file (`cache/lock`) and mutable `@v/list`
-// version listings precisely because concurrent access is NOT safe without
-// coordination; Gradle's `caches/modules-2` is binary metadata mutated in
-// place, guarded by its own `modules-2.lock`/`journal-1.lock`; Cargo
-// guards its registry with `.package-cache` (not even mounted here); npm's
-// own `_cacache/index-v5` entries are keyed by the hash of the REQUEST URL,
-// not the response content, and are written by APPEND, not atomic rename;
-// pip's cache key is the SHA-224 of the request URL, and its `wheels/`
-// subtree holds locally built artifacts; Composer, Bundler, and Yarn are
-// similar. Worse, mounting a directory that carries a tool's own
-// host-local lock file across sandboxes on DIFFERENT hosts hands that tool
-// a FALSE sense of mutual exclusion — an advisory lock is invisible across
-// hosts by construction.
+// This design has now been through three iterations, and the first two are
+// recorded here because the mistakes are instructive, not merely historical.
 //
-// The fix is not a smarter lock, it is removing the thing a lock would
-// have to guard: every path below is mounted READ-ONLY for the entire
-// duration of a build, so nothing can write into the SHARED, persistent
-// copy while a build is in flight — there is no interleaving to reason
-// about, and a tool's own host-local advisory lock becomes irrelevant
-// because there is nothing left for it to guard. Exactly one write-back,
-// merging whatever this build newly produced, happens after that build
-// has itself succeeded (CacheVolumeKey's own doc comment and
-// ports.CacheMount have the full contract) — never before, and never for
-// a build that failed. A package manager that needs to WRITE during the
-// build (nearly all of them do, at least for a newly-resolved package) is
-// given a private, per-build writable layer at these same logical paths —
-// an ordinary read-through/write-back cache shape, whose exact mechanism
-// (a copy-on-write overlay, a seeded scratch copy, ...) is the adapter's
-// or build service's own concern, external to this repository, exactly as
-// the mount itself and the dependency install already are (ports.
-// CacheMount's own doc comment). This is what makes "read-only" compatible
+// Attempt 1 mounted these paths READ-WRITE and justified skipping a lock on
+// the grounds that every path here is a package manager's own
+// "content-addressed" cache, so concurrent writers could only ever produce
+// identical bytes at the identical name. That premise was checked against
+// each package manager's own real, documented on-disk layout and found
+// false for nearly every path below: Go's module cache ships its OWN lock
+// file (`cache/lock`) and mutable `@v/list` version listings precisely
+// because concurrent access is NOT safe without coordination; Gradle's
+// `caches/modules-2` is binary metadata mutated in place, guarded by its
+// own `modules-2.lock`/`journal-1.lock`; Cargo guards its registry with
+// `.package-cache` (not even mounted here); npm's own `_cacache/index-v5`
+// entries are keyed by the hash of the REQUEST URL, not the response
+// content, and are written by APPEND, not atomic rename; pip's cache key is
+// the SHA-224 of the request URL, and its `wheels/` subtree holds locally
+// built artifacts; Composer, Bundler, and Yarn are similar.
+//
+// Attempt 2 mounted every path READ-ONLY for the duration of a build, with
+// exactly one write-back merged into the SAME shared volume after that
+// build succeeded — no lock, because "nothing writes while a build can
+// observe it." That was still wrong: the write-back was ITSELF an
+// unguarded writer into the shared volume, at exactly the moment some
+// OTHER build could be reading from it. Narrowing the write window from
+// "the whole build" to "one write-back" is not the same as removing it —
+// a lock-free write into state a concurrent reader can observe is the
+// identical hazard attempt 1 had, just smaller.
+//
+// This (third) attempt removes the write window rather than narrowing it
+// further. Nothing is ever mutated in place, by anyone, ever. Every
+// successful build publishes a brand-new, immutable, distinctly-named
+// version; a build mounts exactly one specific, already-published version,
+// read-only, for its entire duration, and there is no operation anywhere
+// in this design that writes into a version once it has been published.
+// Two consequences follow directly:
+//
+//   - A lock becomes MEANINGLESS, not merely unnecessary — there is no
+//     shared mutable state left for a lock to guard. Two builds mounting
+//     the SAME version are both reading the identical, already-finished,
+//     never-again-written object; two builds publishing DIFFERENT versions
+//     under the same key are each creating their own distinct object that
+//     no one else's mount can observe until it exists in full. The
+//     "content-addressed, so concurrent writers can only collide
+//     harmlessly" argument attempt 1 got wrong for these specific tools no
+//     longer needs to be made at all, for any tool, because there is no
+//     concurrent writing into shared state to reason about in the first
+//     place.
+//   - Rotation (attempt 2's own `NARVI_CACHE_VOLUME_EPOCH` escape hatch,
+//     minted for exactly one reason: force a fresh cache volume when the
+//     current one had gone bad) falls out for free instead of needing its
+//     own mechanism. A bad published version is escaped by pointing a new
+//     build's own MountVersion at an earlier, known-good one — ordinary
+//     history, not a rotation primitive. See ports.CacheMount's own doc
+//     comment for exactly how that happens in this codebase today
+//     (operator-driven, via the same version-history table retention
+//     already prunes from) and why no config-level epoch is needed
+//     anymore.
+//
+// A package manager that needs to WRITE during a build (nearly all of them
+// do, at least for a newly-resolved dependency) still needs somewhere to
+// write: the build gets a private, per-build writable layer at these same
+// logical paths, seeded read-through from the mounted MountVersion — an
+// ordinary copy-on-write overlay shape whose exact mechanism is the
+// adapter's or build service's own concern, external to this repository,
+// exactly as the mount itself and the dependency install already are. On
+// success, that private layer's own accumulated changes are what gets
+// published as the new PublishVersion — a DISTINCT object, never a mutation
+// of MountVersion's own bytes. This is what makes "read-only" compatible
 // with a tool like Go's module cache that is not documented to tolerate a
-// literal, unassisted read-only cache directory on its own — see that
-// struct's own doc comment for the per-tool read-only-cache posture this
-// design could actually verify, and the one tool (Go's own GOMODCACHE) it
-// could not confirm degrades gracefully without that writable layer.
+// literal, unassisted read-only cache directory on its own — see
+// ports.CacheMount's own doc comment for the per-tool read-only-cache
+// posture this design could actually verify, and the one tool (Go's own
+// GOMODCACHE) it could not confirm degrades gracefully without that
+// writable layer.
 //
 // Every path is a home-relative cache directory at its package manager's
 // OWN documented default, assuming the build sandbox runs as root — the
@@ -157,53 +192,127 @@ func WellKnownCachePaths() []string {
 	return paths
 }
 
-// CacheVolumeKey deterministically names the ONE persistent cache volume a
-// build against (base, runtimeVersion, epoch) should mount (§19.1's own
-// closing paragraph: "keyed on Base + RuntimeVersion... plus an explicit
-// rotation epoch — never on repo content"). Deliberately NOT Fingerprint:
+// CacheVolumeKey deterministically names the ONE cache lineage a build
+// against (base, runtimeVersion) publishes immutable versions into and
+// mounts them from (§19.1's own closing paragraph: "keyed on Base +
+// RuntimeVersion... never on repo content"). Deliberately NOT Fingerprint:
 // Fingerprint additionally hashes the repo set, which is exactly the input
 // this key must exclude — two fingerprints sharing the same
-// (base, runtimeVersion, epoch) but naming different repos MUST resolve to
-// the SAME cache volume, or the cache would recreate the very cold start
-// it exists to remove (§19.1: "a cache that is not shared across repo sets
+// (base, runtimeVersion) but naming different repos MUST resolve to the
+// SAME cache key, or the cache would recreate the very cold start it
+// exists to remove (§19.1: "a cache that is not shared across repo sets
 // recreates the very cold-start it exists to remove"). This is what makes
-// the volume useful the very first time a SECOND Environment (a different
+// the key useful the very first time a SECOND Environment (a different
 // repo set, same base image and runtime) is ever built, rather than only
 // on a repeat build of the identical repo set Fingerprint itself already
 // caches at the image level.
 //
-// # epoch: the rotation escape hatch Base/RuntimeVersion alone do not give
+// # No rotation-epoch parameter — versions make one unnecessary
 //
-// Before epoch existed, the ONLY way to force a fresh cache volume for a
-// (base, runtimeVersion) pair that had become unusable (corrupted beyond
-// whatever a build service's own integrity check catches, or simply
-// grown past a size bound with no eviction, §19.1's own named size-bound
-// gap) was to bump RuntimeVersion — but RuntimeVersion is also a
-// Fingerprint input (§19.1), so that same bump invalidates every shared
-// IMAGE fleet-wide too (§19.1's own "simultaneous-invalidation cliff"),
-// forcing every Environment's first post-bump build into the same window
-// purely to escape a cache-volume problem that has nothing to do with the
-// images themselves. epoch decouples the two: it participates in
-// CacheVolumeKey but deliberately NOT in Fingerprint, so bumping it (an
-// operator-controlled value, platform.Config.CacheVolumeEpoch, threaded
-// through app/imagebuild.Builder — never a hard-coded literal) mints a
-// brand-new, empty cache volume for every (base, runtimeVersion) pair at
-// once, while every already-`ready` image stays exactly as valid and
-// servable as before — the CACHE is purely an accelerator (ports.
-// CacheMount's own "purely advisory" contract), so rotating it can never
-// invalidate anything that matters for correctness, only reset how warm
-// the next build's cache starts out.
+// Earlier iterations of this design (attempt 2) took a third argument,
+// epoch (platform.Config.CacheVolumeEpoch, an operator-controlled value):
+// the ONLY way to force a fresh cache when the current shared, MUTABLE
+// volume for a (base, runtimeVersion) pair had gone bad (corrupted, or
+// grown past a size bound with no eviction) without also bumping
+// RuntimeVersion — which is ALSO a Fingerprint input, so that same bump
+// invalidated every shared IMAGE fleet-wide too (§19.1's own
+// "simultaneous-invalidation cliff"), forcing every Environment's first
+// post-bump build into the same window purely to escape a cache problem
+// that had nothing to do with the images themselves.
 //
-// A plain SHA-256 hex digest over base, runtimeVersion, and epoch,
-// NUL-separated (mirroring Fingerprint's own writeField/collision-
-// avoidance reasoning: base="a"+runtimeVersion="bc" must never collide
-// with base="ab"+runtimeVersion="c", now extended to a third field) — not
-// cryptographically sensitive, a deterministic cache key exactly like
-// Fingerprint itself, not a secret.
-func CacheVolumeKey(base, runtimeVersion, epoch string) string {
+// Once every version under a key is immutable and individually addressable
+// (ports.CacheMount.MountVersion/PublishVersion), that escape hatch is no
+// longer needed: a bad version is escaped by pointing a new build's own
+// MountVersion at an earlier, known-good one — ordinary history, not a
+// rotation primitive requiring its own config surface. This function
+// therefore keeps its original two-argument shape rather than growing (or
+// keeping) a third — see ports.CacheMount's own doc comment for exactly
+// how "point at an earlier good version" is realized operationally in this
+// codebase today.
+//
+// A plain SHA-256 hex digest over base and runtimeVersion, NUL-separated
+// (mirroring Fingerprint's own writeField/collision-avoidance reasoning:
+// base="a"+runtimeVersion="bc" must never collide with base="ab"+
+// runtimeVersion="c") — not cryptographically sensitive, a deterministic
+// cache key exactly like Fingerprint itself, not a secret.
+func CacheVolumeKey(base, runtimeVersion string) string {
 	h := sha256.New()
 	writeField(h, base)
 	writeField(h, runtimeVersion)
-	writeField(h, epoch)
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// RetainedCacheVersions is the fixed number of most-recently-published
+// immutable cache versions app/imagebuild.Builder keeps tracked, per cache
+// key, in this control plane's own bookkeeping (image_cache_versions) —
+// §19.1's own named retention policy: "Immutable versions accumulate, which
+// makes the unbounded-size problem worse, not better. Specify the
+// retention policy."
+//
+// 5, not 1: keeping only the single newest version would make EVERY
+// concurrently in-flight build (§19.2's refresh pump routinely runs many
+// builds sharing one cache key at once, across different fingerprints on
+// the same Base/RuntimeVersion) race retention itself — a build that
+// resolved MountVersion two publishes ago, and is still running when a
+// third and fourth publish land, would find its own already-sent
+// MountVersion pruned from this control plane's bookkeeping before it
+// even finishes (harmless per PruneCacheVersions' own doc comment, but
+// needlessly wasteful — one more avoidable cold-fallback round trip). 5
+// versions of headroom absorbs that ordinary in-flight concurrency without
+// requiring this codebase to track which versions are still actively
+// mounted (a reference-counting mechanism this design deliberately does
+// NOT build — see PruneCacheVersions' own doc comment for why pruning is
+// safe without one regardless), while still bounding the unbounded-growth
+// gap this constant exists to close, rather than leaving it fully open.
+// Not configurable: unlike the rotation epoch this design retires (see
+// CacheVolumeKey's own doc comment), retention is a fixed policy, not an
+// operator escape hatch — an operator who needs to force a specific
+// earlier version back into service does so by pointing a build's own
+// resolution at it directly (ports.CacheMount's own doc comment), not by
+// tuning how many versions are kept.
+const RetainedCacheVersions = 5
+
+// PruneCacheVersions decides which of versions (every version currently
+// tracked for ONE cache key, in any order, exactly as
+// ImageCacheVersionStore.ListVersions returns them) this control plane's
+// own bookkeeping should stop tracking: everything beyond the newest
+// RetainedCacheVersions. Returns the versions to PRUNE (app/imagebuild.
+// Builder's own ImageCacheVersionStore.DeleteVersions input), never the
+// versions to keep — the caller has no separate use for the kept set.
+//
+// Pure and total per §11: no I/O, no time.Now(), no randomness — a slice
+// copy, a sort, and a slice. versions is never mutated (PruneCacheVersions
+// sorts its OWN copy) so a caller passing a slice it still holds a
+// reference to elsewhere is never surprised by an in-place reorder.
+//
+// len(versions) <= RetainedCacheVersions returns an empty (nil) slice —
+// there is nothing yet to prune, the ordinary case for a cache key that
+// has not accumulated many versions.
+//
+// # What a reader does if its own pinned version was pruned
+//
+// Nothing special: PruneCacheVersions only ever removes THIS control
+// plane's OWN bookkeeping row for a version (ImageCacheVersionStore.
+// DeleteVersions' own doc comment) — it is never a request to reclaim the
+// version's underlying bytes at the provider, and it never touches
+// anything an already-in-flight build has already resolved and sent as
+// its own MountVersion. A build that DOES eventually try to mount a
+// version the provider has separately, independently reclaimed degrades
+// exactly like any other cache-mount trouble — the adapter's own
+// decline-and-retry-cold fallback (internal/adapters/outbound/modal),
+// which recognizes a "version not found" structured code alongside its
+// other cache-trouble signals — never a build failure, per the port's own
+// pure-accelerator rule (ports.CacheMount's own doc comment).
+func PruneCacheVersions(versions []int64) []int64 {
+	if len(versions) <= RetainedCacheVersions {
+		return nil
+	}
+
+	sorted := make([]int64, len(versions))
+	copy(sorted, versions)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] > sorted[j] })
+
+	prune := make([]int64, len(sorted)-RetainedCacheVersions)
+	copy(prune, sorted[RetainedCacheVersions:])
+	return prune
 }

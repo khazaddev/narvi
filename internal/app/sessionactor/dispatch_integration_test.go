@@ -187,7 +187,7 @@ func (f *fakeSpawnProvider) RestoreFromSnapshot(_ context.Context, id ports.Snap
 	f.restoreCalls = append(f.restoreCalls, fakeRestoreCall{snapshotID: id, spec: spec})
 	return f.nextRestoreRef, f.nextRestoreErr
 }
-func (f *fakeSpawnProvider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.BuildRef, error) {
+func (f *fakeSpawnProvider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.BuildOutcome, error) {
 	f.mu.Lock()
 	f.buildCalls = append(f.buildCalls, spec)
 	block := f.buildBlock
@@ -203,10 +203,10 @@ func (f *fakeSpawnProvider) BuildImage(ctx context.Context, spec ports.ImageSpec
 		select {
 		case <-block:
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return ports.BuildOutcome{}, ctx.Err()
 		}
 	}
-	return ref, err
+	return ports.BuildOutcome{Ref: ref}, err
 }
 
 func (f *fakeSpawnProvider) buildCallCount() int {

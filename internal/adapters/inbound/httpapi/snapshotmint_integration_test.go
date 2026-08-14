@@ -61,8 +61,8 @@ func (f *fakeSnapshotProvider) TakeSnapshot(_ context.Context, ref ports.Sandbox
 func (f *fakeSnapshotProvider) RestoreFromSnapshot(context.Context, ports.SnapshotID, ports.CreateSpec) (ports.SandboxRef, error) {
 	return ports.SandboxRef{}, errNotImplemented
 }
-func (f *fakeSnapshotProvider) BuildImage(context.Context, ports.ImageSpec) (ports.BuildRef, error) {
-	return "", errNotImplemented
+func (f *fakeSnapshotProvider) BuildImage(context.Context, ports.ImageSpec) (ports.BuildOutcome, error) {
+	return ports.BuildOutcome{}, errNotImplemented
 }
 func (f *fakeSnapshotProvider) DeleteImage(context.Context, ports.ImageRef) error {
 	return errNotImplemented

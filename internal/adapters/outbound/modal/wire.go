@@ -61,13 +61,24 @@ type imageBuildRequestRepo struct {
 }
 
 // imageBuildRequestCacheVolume is imageBuildRequest.CacheVolume's own value
-// shape, mirroring ports.CacheMount{Key, Paths} field-for-field — same
-// "invented, tested against a fake httptest.Server, not real Modal API
-// docs" posture as every other shape in this file (see this file's own top
-// doc comment).
+// shape, mirroring ports.CacheMount{Key, MountVersion, PublishVersion,
+// Paths} field-for-field — same "invented, tested against a fake
+// httptest.Server, not real Modal API docs" posture as every other shape
+// in this file (see this file's own top doc comment). MountVersion/
+// PublishVersion are Step 43(c)'s third iteration (immutable versioned
+// cache snapshots, ports.CacheMount's own doc comment): MountVersion names
+// the one already-published, immutable version to mount read-only (empty =
+// nothing to mount yet, this cache key's first build); PublishVersion
+// names the brand-new version this build's own outputs publish under if it
+// succeeds. Both travel on the wire as plain strings — this adapter makes
+// no claim about their format beyond "opaque, minted by
+// app/imagebuild.Builder via internal/adapters/outbound/postgres.
+// ImageCacheVersionStore".
 type imageBuildRequestCacheVolume struct {
-	Key   string   `json:"key"`
-	Paths []string `json:"paths,omitempty"`
+	Key            string   `json:"key"`
+	MountVersion   string   `json:"mountVersion,omitempty"`
+	PublishVersion string   `json:"publishVersion"`
+	Paths          []string `json:"paths,omitempty"`
 }
 
 // sandboxResponse is returned by CreateSandbox and RestoreFromSnapshot on

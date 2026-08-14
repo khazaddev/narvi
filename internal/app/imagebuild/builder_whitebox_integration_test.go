@@ -160,9 +160,9 @@ func (f *whiteboxFakeBuildProvider) TakeSnapshot(context.Context, ports.SandboxR
 func (f *whiteboxFakeBuildProvider) RestoreFromSnapshot(context.Context, ports.SnapshotID, ports.CreateSpec) (ports.SandboxRef, error) {
 	return ports.SandboxRef{}, errors.New("whiteboxFakeBuildProvider: RestoreFromSnapshot not implemented")
 }
-func (f *whiteboxFakeBuildProvider) BuildImage(context.Context, ports.ImageSpec) (ports.BuildRef, error) {
+func (f *whiteboxFakeBuildProvider) BuildImage(context.Context, ports.ImageSpec) (ports.BuildOutcome, error) {
 	f.buildCalls++
-	return f.nextRef, nil
+	return ports.BuildOutcome{Ref: f.nextRef}, nil
 }
 func (f *whiteboxFakeBuildProvider) DeleteImage(context.Context, ports.ImageRef) error {
 	return errors.New("whiteboxFakeBuildProvider: DeleteImage not implemented")
@@ -225,7 +225,8 @@ func TestAttemptRefresh_BaseOnlyGuard_TouchesOrderingKeyOnly(t *testing.T) {
 	}
 
 	provider := &whiteboxFakeBuildProvider{nextRef: "should-never-be-used"}
-	builder, err := NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", "")
+	cacheVersionStore := narvipg.NewImageCacheVersionStore(pool)
+	builder, err := NewBuilder(store, pool, provider, platform.DefaultTimeouts(), nil, "", cacheVersionStore)
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}
@@ -306,7 +307,8 @@ func TestAttemptRefresh_ClaimForRefreshLostRace_TouchesOrderingKeyNoRelease(t *t
 	provider := &whiteboxFakeBuildProvider{nextRef: "should-never-be-used"}
 	sourceControl := &whiteboxFakeSourceControl{shaFor: map[string]string{"repo1": "sha-new"}} // genuinely stale -- NeedsRefresh must report true
 
-	builder, err := NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", "")
+	cacheVersionStore := narvipg.NewImageCacheVersionStore(pool)
+	builder, err := NewBuilder(store, pool, provider, platform.DefaultTimeouts(), sourceControl, "test-token", cacheVersionStore)
 	if err != nil {
 		t.Fatalf("NewBuilder: %v", err)
 	}

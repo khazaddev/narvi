@@ -14,12 +14,14 @@ import (
 )
 
 // networkErrorCode/networkTimeoutCode are classifyNetworkError's own two
-// Code values (below) — named as constants, rather than left as literals
-// inline in both classifyNetworkError and isCacheMountTrouble, so the two
-// functions can never drift apart on the exact string each checks for.
+// Code values (below), named as constants purely for classifyNetworkError's
+// own internal consistency (never left as ad-hoc literals). Neither is
+// consulted by isCacheMountTrouble — see that function's own doc comment
+// for why a network-level failure (timeout or otherwise) is deliberately
+// NOT one of its signals.
 // httpCodePrefix is classifyErrorResponse's own fallback-Code prefix
-// ("http_<status>"), used the same way by isCacheMountTrouble to recognize
-// "this response never decoded into a real, recognized code at all".
+// ("http_<status>"), used by isCacheMountTrouble to recognize "this
+// response never decoded into a real, recognized code at all".
 const (
 	networkErrorCode   = "NETWORK_ERROR"
 	networkTimeoutCode = "NETWORK_TIMEOUT"
@@ -217,12 +219,8 @@ func classifyNetworkError(op ports.Op, err error) *ports.ProviderError {
 // BuildImage call failed BECAUSE of the requested CacheVolume specifically
 // — never because of the underlying build itself. This is the narrower of
 // TWO signals isCacheMountTrouble below checks; see that function's own
-// doc comment for the broader transport-level/unparseable-response signal
-// a structured-code-only check misses (an audit-remediation finding: a
-// degraded cache-volume subsystem typically HANGS rather than returning a
-// clean structured error, which used to fall through this set entirely
-// and fail the build instead of falling back — breaking the
-// pure-accelerator rule ports.CacheMount states absolutely).
+// doc comment for the broader unparseable-response signal a structured-
+// code-only check misses.
 //
 // Provider.BuildImage's own retry-without-cache fallback (provider.go)
 // checks a failed attempt's decoded Code against exactly this set (never a
@@ -233,10 +231,10 @@ func classifyNetworkError(op ports.Op, err error) *ports.ProviderError {
 // Transient/permanent table above: that table answers "should the CALLER
 // (app/imagebuild.Builder) retry this fingerprint later, with backoff";
 // this set answers "should THIS adapter itself retry, once, right now,
-// without the cache" — a corrupted or locked cache volume is presented
-// here as a permanent-status response (so a caller that ignored this
-// adapter's own fallback and retried the ORIGINAL request with the SAME
-// cache mount would not busy-loop against a condition that will not
+// without the cache" — a corrupted or unavailable cache volume is
+// presented here as a permanent-status response (so a caller that ignored
+// this adapter's own fallback and retried the ORIGINAL request with the
+// SAME cache mount would not busy-loop against a condition that will not
 // self-heal), but that permanent/transient status never governs whether
 // THIS adapter falls back — membership in cacheMountTroubleCodes does,
 // unconditionally, regardless of Transient.
@@ -250,27 +248,49 @@ func classifyNetworkError(op ports.Op, err error) *ports.ProviderError {
 // Only a code this adapter's own protocol reserves specifically for cache
 // trouble, or the broader ambiguous-failure signal below, triggers the
 // fallback.
+//
+// # No CACHE_MOUNT_LOCKED — a lock is meaningless under immutable versions
+//
+// Attempt 2 (the read-only-mount-plus-one-write-back design) reserved
+// CACHE_MOUNT_LOCKED for exactly one scenario: another build's own
+// unguarded write-back into the SAME shared, mutable volume this request
+// was trying to read from. That scenario cannot occur under this
+// (third) iteration's own immutable-version model — there is no shared
+// mutable state left for anything to lock (ports.CacheMount's own "a lock
+// is meaningless" doc comment has the full reasoning) — so keeping this
+// code in this adapter's own vocabulary would silently contradict that
+// design claim: nothing a conformant build service does under this
+// contract could ever legitimately report it. Dropped, not merely
+// unused.
 var cacheMountTroubleCodes = map[string]bool{
-	// CACHE_MOUNT_CORRUPTED: the persistent volume's own contents failed
-	// whatever integrity check the (external, unmodeled) build service
-	// runs before handing it to a build.
+	// CACHE_MOUNT_CORRUPTED: the specific version named by MountVersion
+	// failed whatever integrity check the (external, unmodeled) build
+	// service runs before handing it to a build.
 	"CACHE_MOUNT_CORRUPTED": true,
-	// CACHE_MOUNT_LOCKED: the volume is held by something the build
-	// service could not get safe concurrent access to — e.g. another
-	// build's own single post-success write-back into the SAME Key
-	// (ports.CacheMount's own "No lock" doc comment: the mount is
-	// read-only for the duration of a build, so the one moment worth
-	// locking at all is that write-back, which this codebase's own Go
-	// code never performs directly — see that doc comment for the full
-	// read-only/write-back contract). A provider's backing store is free
-	// to report this regardless of how it implements that (§19.1:
-	// "per-provider semantics differ enough that the port must not assume
-	// one").
-	"CACHE_MOUNT_LOCKED": true,
-	// CACHE_MOUNT_UNAVAILABLE: the volume could not be provisioned/reached
-	// at all for this build (e.g. the provider's own volume subsystem is
-	// degraded).
+	// CACHE_MOUNT_UNAVAILABLE: the cache subsystem could not be reached at
+	// all for this build (e.g. the provider's own volume/storage
+	// subsystem is degraded).
 	"CACHE_MOUNT_UNAVAILABLE": true,
+	// CACHE_MOUNT_TIMEOUT: the build service's OWN internal timeout on the
+	// cache-mount step fired, and it reported that cleanly and fast —
+	// distinct from, and this adapter's own honest replacement for, a
+	// bare CLIENT-side transport timeout (see isCacheMountTrouble's own
+	// doc comment for why a raw client timeout is deliberately NOT a
+	// cache-trouble signal in this iteration, and why a well-behaved
+	// build service reporting its OWN timeout structurally, well inside
+	// the client's own ProviderHTTPClientTimeout budget, is the honest
+	// way to represent "the cache subsystem hung" without that defect).
+	"CACHE_MOUNT_TIMEOUT": true,
+	// CACHE_VERSION_NOT_FOUND: the specific version named by MountVersion
+	// no longer exists at the provider — e.g. this control plane's own
+	// retention pruning (domain/imagebuild.PruneCacheVersions) had already
+	// stopped offering it as a MountVersion candidate by the time some
+	// OTHER, already-in-flight request named it, or the provider's own,
+	// independent lifecycle reclaimed it. This is the concrete mechanism
+	// behind ports.CacheMount's own "what a reader does if its pinned
+	// version has been pruned" answer: exactly this decline-and-retry-cold
+	// path, never a build failure.
+	"CACHE_VERSION_NOT_FOUND": true,
 }
 
 // isCacheMountTrouble reports whether err is ambiguous enough, on a
@@ -278,30 +298,17 @@ var cacheMountTroubleCodes = map[string]bool{
 // BuildImage's own one-shot cold-build retry (provider.go) — see that
 // function's own doc comment for why the retry itself is always scoped to
 // "this exact request asked for a cache mount", never a blanket retry of
-// every failure. Three progressively broader signals, all folded into one
-// boolean because provider.go's own call site only ever needs the
-// yes/no answer:
+// every failure. Two signals, folded into one boolean because provider.
+// go's own call site only ever needs the yes/no answer:
 //
 //  1. A STRUCTURED code this adapter's own protocol reserves specifically
 //     for cache trouble (cacheMountTroubleCodes above) — the narrowest,
 //     most confident signal: the build service told us, in an
 //     unambiguous, recognized vocabulary, that the cache itself was the
-//     problem.
-//  2. A TRANSPORT-LEVEL failure (classifyNetworkError's own
-//     "NETWORK_ERROR"/"NETWORK_TIMEOUT" codes) — the request never got a
-//     response to interrogate for a structured code at all. Audit-
-//     remediation finding: a degraded cache-volume subsystem typically
-//     HANGS rather than returning a clean error, so the request exceeds
-//     platform.Timeouts.ProviderHTTPClientTimeout and is classified
-//     NETWORK_TIMEOUT — which, before this broadening, matched nothing in
-//     cacheMountTroubleCodes, so the build FAILED instead of falling
-//     back, breaking the pure-accelerator rule the port states
-//     absolutely. This adapter knows, from req.CacheVolume on the exact
-//     request that produced this err (provider.go's own call site),
-//     that a mount was in play — that is what makes treating an otherwise
-//     content-free transport failure as cache trouble a reasonable bet
-//     rather than a guess about an unrelated request.
-//  3. An UNPARSEABLE or bodyless error response on an otherwise TRANSIENT
+//     problem, including its OWN internal cache-mount timeout
+//     (CACHE_MOUNT_TIMEOUT) reported cleanly and fast, well inside this
+//     client's own ProviderHTTPClientTimeout budget.
+//  2. An UNPARSEABLE or bodyless error response on an otherwise TRANSIENT
 //     status (classifyErrorResponse's own "http_<status>" fallback Code,
 //     used exactly when the body could not be decoded into this adapter's
 //     own structured envelope, or decoded with an empty Code) — e.g. a
@@ -310,14 +317,63 @@ var cacheMountTroubleCodes = map[string]bool{
 //     genuine build defect intact. A genuine build failure in this
 //     adapter's own invented protocol always carries a real, recognized
 //     code in a structured envelope (e.g. "SETUP_SCRIPT_FAILED") — never
-//     this fallback shape — so signal 3 only ever fires on a response
+//     this fallback shape — so signal 2 only ever fires on a response
 //     this adapter cannot attribute to anything it recognizes, on a
-//     status class already documented as retry-worthy. Signals 2 and 3
-//     both cost at most one extra HTTP round trip if they turn out to be
-//     wrong (a genuine, unrelated defect that also happens to hang or
-//     return a malformed 5xx): the SECOND attempt runs cold, and if the
-//     underlying problem persists, it surfaces there as an ordinary
-//     BuildImage failure, unmasked — never silently retried forever.
+//     status class already documented as retry-worthy. This signal costs
+//     at most one extra HTTP round trip if it turns out to be wrong (a
+//     genuine, unrelated defect that also happens to return a malformed
+//     5xx): the SECOND attempt runs cold, and if the underlying problem
+//     persists, it surfaces there as an ordinary BuildImage failure,
+//     unmasked — never silently retried forever.
+//
+// # Network-level failures (classifyNetworkError's own NETWORK_ERROR and
+// # NETWORK_TIMEOUT codes) are deliberately NOT a signal here — narrowed,
+// # not merely renamed
+//
+// An earlier draft of this adapter treated a transport-level failure —
+// most importantly NETWORK_TIMEOUT — as cache trouble, on the reasoning
+// that "a degraded cache-volume subsystem typically hangs rather than
+// returning a clean error." That broadening was itself a defect, not a
+// fix, and the clearest way to see why is the timeout case specifically:
+// a request that already timed out has, by definition, already consumed
+// this client's ENTIRE platform.Timeouts.ProviderHTTPClientTimeout
+// budget — for a reason this adapter cannot distinguish from the outside,
+// since neither NETWORK_TIMEOUT nor NETWORK_ERROR carries a structured
+// code to interrogate at all; the request never got far enough to
+// interrogate one from. Retrying cold after a timeout can only cost the
+// SAME budget again, doing STRICTLY MORE work (a full cold download
+// instead of a cache-accelerated one) — so whenever the original timeout
+// was NOT actually caused by the cache (the build itself is simply
+// large/slow, e.g. §19.4's own "may provision local service stacks, run
+// codegen, seed local state"), the cold retry is slower still and, having
+// the identical budget, times out again — doubling wall clock and
+// converting one slow-but-viable attempt into a guaranteed failure. A bare
+// timeout is not evidence of cache trouble; it is evidence only that SOME
+// request took too long.
+//
+// NETWORK_ERROR (every other transport-level failure — connection
+// refused, DNS failure, ...) is excluded for the same underlying reason,
+// generalized: this adapter's own invented protocol is a single POST
+// endpoint (/v1/images) carrying both the build and the cache-mount
+// request together, so a failure to connect AT ALL says something about
+// reaching the whole build service, never something specific to the
+// cache — there is no scenario in this protocol where the connection
+// itself fails BECAUSE of the cache mount specifically but would have
+// succeeded without one. Retrying cold when the endpoint is unreachable
+// cannot plausibly change that outcome; it only adds a wasted round trip
+// (never a wall-clock-doubling failure the way the timeout case does, but
+// motivated by the identical principle stated below).
+//
+// The general principle: a signal only belongs in this function if it is
+// SPECIFIC to the cache mount on THIS request — a genuine reply the build
+// service sent back after processing (however imperfectly formed), never
+// the mere ABSENCE of a reply. The genuine "the cache subsystem itself
+// hung" case a client-side timeout used to (mis)represent is now
+// represented honestly instead: a well-behaved build service reports its
+// OWN internal cache-mount timeout via the structured CACHE_MOUNT_TIMEOUT
+// code (signal 1 above), fast, before the client's own budget is anywhere
+// near exhausted — only THAT structured self-report is trusted, never an
+// inference from this client's own timeout or connection failure.
 //
 // A nil err, or one that is not a *ports.ProviderError at all (whether
 // directly or wrapped), is never cache trouble.
@@ -327,9 +383,6 @@ func isCacheMountTrouble(err error) bool {
 		return false
 	}
 	if cacheMountTroubleCodes[pe.Code] {
-		return true
-	}
-	if pe.Code == networkErrorCode || pe.Code == networkTimeoutCode {
 		return true
 	}
 	return pe.Transient && strings.HasPrefix(pe.Code, httpCodePrefix)

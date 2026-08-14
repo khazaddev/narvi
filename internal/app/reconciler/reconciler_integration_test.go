@@ -271,8 +271,8 @@ func (f *fakeReconcileProvider) RestoreFromSnapshot(context.Context, ports.Snaps
 	return ports.SandboxRef{}, errors.New("fakeReconcileProvider: RestoreFromSnapshot not implemented")
 }
 
-func (f *fakeReconcileProvider) BuildImage(context.Context, ports.ImageSpec) (ports.BuildRef, error) {
-	return "", errors.New("fakeReconcileProvider: BuildImage not implemented")
+func (f *fakeReconcileProvider) BuildImage(context.Context, ports.ImageSpec) (ports.BuildOutcome, error) {
+	return ports.BuildOutcome{}, errors.New("fakeReconcileProvider: BuildImage not implemented")
 }
 
 func (f *fakeReconcileProvider) DeleteImage(context.Context, ports.ImageRef) error {

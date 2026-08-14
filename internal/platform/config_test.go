@@ -980,39 +980,12 @@ func TestLoadGitHubImageBuildToken(t *testing.T) {
 	})
 }
 
-// TestLoadCacheVolumeEpoch covers Step 43(c)'s own build-time dependency-
-// cache rotation escape hatch -- DELIBERATELY OPTIONAL, mirroring
-// TestLoadGitHubImageBuildToken's own "unset succeeds, set carries
-// through" shape exactly, except an unset epoch is an entirely ORDINARY
-// value ("no rotation requested"), never a degraded configuration the way
-// an unset credential would be.
-func TestLoadCacheVolumeEpoch(t *testing.T) {
-	t.Run("unset succeeds with an empty value", func(t *testing.T) {
-		setRequiredEnv(t)
-		t.Setenv("NARVI_CACHE_VOLUME_EPOCH", "")
-
-		cfg, err := platform.Load()
-		if err != nil {
-			t.Fatalf("Load() error = %v, want nil (this value is optional)", err)
-		}
-		if cfg.CacheVolumeEpoch != "" {
-			t.Errorf("Load().CacheVolumeEpoch = %q, want empty when unset", cfg.CacheVolumeEpoch)
-		}
-	})
-
-	t.Run("set carries the real value through", func(t *testing.T) {
-		setRequiredEnv(t)
-		t.Setenv("NARVI_CACHE_VOLUME_EPOCH", "2")
-
-		cfg, err := platform.Load()
-		if err != nil {
-			t.Fatalf("Load() error = %v, want nil", err)
-		}
-		if cfg.CacheVolumeEpoch != "2" {
-			t.Errorf("Load().CacheVolumeEpoch = %q, want %q", cfg.CacheVolumeEpoch, "2")
-		}
-	})
-}
+// NARVI_CACHE_VOLUME_EPOCH no longer exists as a config surface (Step
+// 43(c)'s third iteration removes the rotation escape hatch attempt 2
+// added -- domain/imagebuild.CacheVolumeKey's own doc comment has the
+// full "why"). TestLoadCacheVolumeEpoch used to live here; deleted along
+// with the field and env var it tested, not left behind pointing at
+// nothing.
 
 // TestLoadGitHubReReviewLabel covers Step 46's ("review sessions", §8.2)
 // own optional NARVI_GITHUB_REREVIEW_LABEL -- mirrors

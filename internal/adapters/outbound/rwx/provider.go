@@ -331,8 +331,8 @@ func (p *Provider) RestoreFromSnapshot(_ context.Context, _ ports.SnapshotID, _ 
 // builds anything (§4.1.1: RWX's own content-addressed layer cache
 // already provides the warm-boot effect §19 builds by hand for Modal, so
 // this costs little).
-func (p *Provider) BuildImage(_ context.Context, _ ports.ImageSpec) (ports.BuildRef, error) {
-	return "", &ports.ProviderError{
+func (p *Provider) BuildImage(_ context.Context, _ ports.ImageSpec) (ports.BuildOutcome, error) {
+	return ports.BuildOutcome{}, &ports.ProviderError{
 		Transient: false,
 		Code:      "UNSUPPORTED_OPERATION",
 		Op:        ports.OpBuildImage,

@@ -7,96 +7,65 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/imagebuild"
 )
 
-// TestCacheVolumeKey_Deterministic proves the same (base, runtimeVersion,
-// epoch) always produces the identical key — the same "same inputs, same
-// output" property Fingerprint itself carries (fingerprint_test.go's own
+// TestCacheVolumeKey_Deterministic proves the same (base, runtimeVersion)
+// always produces the identical key — the same "same inputs, same output"
+// property Fingerprint itself carries (fingerprint_test.go's own
 // TestFingerprint_DeterministicRegardlessOfMapIterationOrder), minus any
 // map to iterate at all here.
 func TestCacheVolumeKey_Deterministic(t *testing.T) {
 	t.Parallel()
 
-	first := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15", "")
+	first := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15")
 	if first == "" {
 		t.Fatal("CacheVolumeKey returned empty string")
 	}
 
 	for i := 0; i < 50; i++ {
-		got := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15", "")
+		got := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15")
 		if got != first {
 			t.Fatalf("iteration %d: CacheVolumeKey = %q, want %q (same inputs must always key identically)", i, got, first)
 		}
 	}
 }
 
-// TestCacheVolumeKey_DifferentInputsProduceDifferentKeys proves all three
-// fingerprinted inputs (base, runtimeVersion, epoch) are load-bearing.
+// TestCacheVolumeKey_DifferentInputsProduceDifferentKeys proves both
+// fingerprinted inputs (base, runtimeVersion) are load-bearing.
 func TestCacheVolumeKey_DifferentInputsProduceDifferentKeys(t *testing.T) {
 	t.Parallel()
 
-	baseline := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15", "")
+	baseline := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15")
 
 	tests := []struct {
 		name           string
 		base           string
 		runtimeVersion string
-		epoch          string
 	}{
-		{name: "different base", base: "narvi/base:v2", runtimeVersion: "1.17.15", epoch: ""},
-		{name: "different runtime version", base: "narvi/base:v1", runtimeVersion: "1.18.0", epoch: ""},
-		{name: "different epoch", base: "narvi/base:v1", runtimeVersion: "1.17.15", epoch: "2"},
+		{name: "different base", base: "narvi/base:v2", runtimeVersion: "1.17.15"},
+		{name: "different runtime version", base: "narvi/base:v1", runtimeVersion: "1.18.0"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := imagebuild.CacheVolumeKey(tc.base, tc.runtimeVersion, tc.epoch)
+			got := imagebuild.CacheVolumeKey(tc.base, tc.runtimeVersion)
 			if got == baseline {
-				t.Errorf("CacheVolumeKey(%q, %q, %q) = %q, want different from baseline %q", tc.base, tc.runtimeVersion, tc.epoch, got, baseline)
+				t.Errorf("CacheVolumeKey(%q, %q) = %q, want different from baseline %q", tc.base, tc.runtimeVersion, got, baseline)
 			}
 		})
 	}
 }
 
-// TestCacheVolumeKey_EpochRotatesIndependentlyOfFingerprint is the epoch
-// rotation escape hatch's own regression test (audit-remediation finding:
-// "no rotation escape hatch... CacheVolumeKey is a pure function of (base,
-// runtimeVersion) with no epoch"): bumping epoch alone must change
-// CacheVolumeKey (a genuinely NEW, empty cache volume) while leaving
-// Fingerprint completely untouched (no image rebuild, no fleet-wide
-// invalidation cliff) — proving the cache-volume rotation and the image
-// fingerprint are two independent axes, exactly as CacheVolumeKey's own
-// doc comment states.
-func TestCacheVolumeKey_EpochRotatesIndependentlyOfFingerprint(t *testing.T) {
-	t.Parallel()
-
-	repos := map[string]string{"narvi": "https://github.com/acme/narvi.git"}
-
-	fpBeforeRotation := imagebuild.Fingerprint("narvi/base:v1", repos, "1.17.15")
-	keyEpoch0 := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15", "0")
-
-	fpAfterRotation := imagebuild.Fingerprint("narvi/base:v1", repos, "1.17.15")
-	keyEpoch1 := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15", "1")
-
-	if fpBeforeRotation != fpAfterRotation {
-		t.Errorf("Fingerprint changed (%q -> %q) from an epoch bump alone; epoch must never reach Fingerprint (it would defeat the whole point of a rotation escape hatch decoupled from image invalidation)", fpBeforeRotation, fpAfterRotation)
-	}
-	if keyEpoch0 == keyEpoch1 {
-		t.Error("CacheVolumeKey did not change across an epoch bump; epoch must be load-bearing so a stuck/oversized volume can be rotated")
-	}
-}
-
-// TestCacheVolumeKey_IgnoresEverythingButBaseRuntimeVersionAndEpoch is the
-// core regression test for §19.1's own "keyed on Base + RuntimeVersion +
-// epoch ONLY — never on repo content" requirement: CacheVolumeKey's
-// signature already structurally excludes repos (it takes no repos
-// parameter at all), but this pins the CONSEQUENCE that matters — two
-// Fingerprints that diverge only in their repo set must still resolve to
-// the identical cache volume key when their base/runtimeVersion/epoch
-// agree, proving the cache is shared across repo sets rather than
-// accidentally re-partitioned by whatever a caller happens to pass
-// alongside it.
-func TestCacheVolumeKey_IgnoresEverythingButBaseRuntimeVersionAndEpoch(t *testing.T) {
+// TestCacheVolumeKey_IgnoresEverythingButBaseAndRuntimeVersion is the core
+// regression test for §19.1's own "keyed on Base + RuntimeVersion ONLY —
+// never on repo content" requirement: CacheVolumeKey's signature already
+// structurally excludes repos (it takes no repos parameter at all), but
+// this pins the CONSEQUENCE that matters — two Fingerprints that diverge
+// only in their repo set must still resolve to the identical cache key
+// when their base/runtimeVersion agree, proving the cache is shared across
+// repo sets rather than accidentally re-partitioned by whatever a caller
+// happens to pass alongside it.
+func TestCacheVolumeKey_IgnoresEverythingButBaseAndRuntimeVersion(t *testing.T) {
 	t.Parallel()
 
 	reposA := map[string]string{"frontend": "https://github.com/acme/frontend.git"}
@@ -111,52 +80,24 @@ func TestCacheVolumeKey_IgnoresEverythingButBaseRuntimeVersionAndEpoch(t *testin
 		t.Fatal("test setup invalid: reposA and reposB must produce different Fingerprints")
 	}
 
-	keyA := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15", "")
-	keyB := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15", "")
+	keyA := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15")
+	keyB := imagebuild.CacheVolumeKey("narvi/base:v1", "1.17.15")
 	if keyA != keyB {
 		t.Errorf("CacheVolumeKey diverged (%q vs %q) for a repo-set-only difference in Fingerprint inputs — the cache key must never depend on repos", keyA, keyB)
 	}
 }
 
 // TestCacheVolumeKey_NoAmbiguousConcatenationCollision mirrors
-// fingerprint_test.go's own TestFingerprint_NoAmbiguousConcatenationCollision,
-// extended to all three fields now that epoch joined the hash: naive
-// concatenation without a field separator would let base="a"+
-// runtimeVersion="bc"+epoch="" collide with base="ab"+runtimeVersion="c"+
-// epoch="", and would let a value moving from one field to the next
-// (runtimeVersion="bc"+epoch="" vs runtimeVersion="b"+epoch="c") collide
-// too.
+// fingerprint_test.go's own TestFingerprint_NoAmbiguousConcatenationCollision:
+// naive concatenation without a field separator would let base="a"+
+// runtimeVersion="bc" collide with base="ab"+runtimeVersion="c".
 func TestCacheVolumeKey_NoAmbiguousConcatenationCollision(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		a    [3]string
-		b    [3]string
-	}{
-		{
-			name: "base/runtimeVersion boundary shifts",
-			a:    [3]string{"a", "bc", ""},
-			b:    [3]string{"ab", "c", ""},
-		},
-		{
-			name: "runtimeVersion/epoch boundary shifts",
-			a:    [3]string{"base", "bc", ""},
-			b:    [3]string{"base", "b", "c"},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			key1 := imagebuild.CacheVolumeKey(tc.a[0], tc.a[1], tc.a[2])
-			key2 := imagebuild.CacheVolumeKey(tc.b[0], tc.b[1], tc.b[2])
-			if key1 == key2 {
-				t.Fatalf("CacheVolumeKey(%q, %q, %q) == CacheVolumeKey(%q, %q, %q) = %q: naive concatenation collision not prevented",
-					tc.a[0], tc.a[1], tc.a[2], tc.b[0], tc.b[1], tc.b[2], key1)
-			}
-		})
+	key1 := imagebuild.CacheVolumeKey("a", "bc")
+	key2 := imagebuild.CacheVolumeKey("ab", "c")
+	if key1 == key2 {
+		t.Fatalf("CacheVolumeKey(%q, %q) == CacheVolumeKey(%q, %q) = %q: naive concatenation collision not prevented", "a", "bc", "ab", "c", key1)
 	}
 }
 
@@ -227,5 +168,83 @@ func TestWellKnownCachePaths_CallerCannotMutateSharedBackingArray(t *testing.T) 
 	}
 	if len(second) != len(first) {
 		t.Fatalf("WellKnownCachePaths() second call has %d entries, want %d", len(second), len(first))
+	}
+}
+
+// TestPruneCacheVersions_KeepsNewestRetainedCacheVersions is
+// PruneCacheVersions' own core regression test: given more versions than
+// domain/imagebuild.RetainedCacheVersions, it must prune EXACTLY the
+// oldest overflow, never the newest — this MUST fail if the mechanism were
+// ever removed or reverted to "prune everything"/"prune nothing".
+func TestPruneCacheVersions_KeepsNewestRetainedCacheVersions(t *testing.T) {
+	t.Parallel()
+
+	// 8 versions, unsorted, retention is 5 -> versions 4,3,2,1 (the oldest
+	// 3) must be pruned; 8,7,6,5,... wait: newest 5 of {1..8} are 8,7,6,5,4
+	// -> prune {1,2,3}.
+	versions := []int64{5, 1, 8, 3, 7, 2, 6, 4}
+
+	got := imagebuild.PruneCacheVersions(versions)
+
+	wantPruned := map[int64]bool{1: true, 2: true, 3: true}
+	if len(got) != len(wantPruned) {
+		t.Fatalf("PruneCacheVersions(%v) = %v (len %d), want %d entries", versions, got, len(got), len(wantPruned))
+	}
+	for _, v := range got {
+		if !wantPruned[v] {
+			t.Errorf("PruneCacheVersions(%v) pruned %d, want only the oldest overflow (%v)", versions, v, wantPruned)
+		}
+	}
+
+	kept := map[int64]bool{4: true, 5: true, 6: true, 7: true, 8: true}
+	for _, v := range got {
+		if kept[v] {
+			t.Errorf("PruneCacheVersions(%v) pruned %d, which is among the newest %d versions and must be KEPT", versions, v, imagebuild.RetainedCacheVersions)
+		}
+	}
+}
+
+// TestPruneCacheVersions_AtOrBelowRetentionPrunesNothing proves the
+// ordinary, common-case outcome: a cache key that has not yet accumulated
+// more than RetainedCacheVersions versions has nothing to prune.
+func TestPruneCacheVersions_AtOrBelowRetentionPrunesNothing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		versions []int64
+	}{
+		{name: "empty", versions: nil},
+		{name: "one version", versions: []int64{1}},
+		{name: "exactly at the retention limit", versions: []int64{5, 4, 3, 2, 1}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := imagebuild.PruneCacheVersions(tc.versions); len(got) != 0 {
+				t.Errorf("PruneCacheVersions(%v) = %v, want empty", tc.versions, got)
+			}
+		})
+	}
+}
+
+// TestPruneCacheVersions_NeverMutatesInput proves the input slice is left
+// untouched — a caller (app/imagebuild.Builder) that still holds a
+// reference to the slice it passed in must never see it silently reordered.
+func TestPruneCacheVersions_NeverMutatesInput(t *testing.T) {
+	t.Parallel()
+
+	versions := []int64{3, 1, 4, 1, 5, 9, 2, 6}
+	original := make([]int64, len(versions))
+	copy(original, versions)
+
+	imagebuild.PruneCacheVersions(versions)
+
+	for i := range versions {
+		if versions[i] != original[i] {
+			t.Fatalf("PruneCacheVersions mutated its input in place: got %v, want unchanged %v", versions, original)
+		}
 	}
 }
