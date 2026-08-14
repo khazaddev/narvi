@@ -1,2 +1,9 @@
 .DS_Store
 .env
+
+# Compiled binaries produced by `go build ./cmd/...` at the repo root.
+# Listed explicitly rather than by a wildcard: these two names shadow the
+# cmd/ package directories they are built from, so a bare pattern risks
+# ignoring source. Keep in sync with cmd/.
+/control-plane
+/sandbox-agent

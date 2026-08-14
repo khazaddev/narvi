@@ -42,7 +42,12 @@
 // present, run() spawns `opencode serve` (via opencodeproc.Spawn, which
 // itself reuses the SAME Supervisor already tracking every other
 // supervised process -- StopAll's own existing graceful shutdown reaps it
-// too, no new cleanup code needed) BEFORE the WS bridge starts accepting
+// too, so this path adds no cleanup code of its own; that reaping is
+// CONDITIONAL on this process receiving a catchable signal, since StopAll
+// runs off the signal.NotifyContext below -- anything that SIGKILLs
+// sandbox-agent strands `opencode serve` as an orphan, because the
+// supervisor spawns every child into its own process group and so nothing
+// else will ever signal it) BEFORE the WS bridge starts accepting
 // commands -- a "prompt" command can arrive as soon as the bridge connects,
 // concurrently with the boot/clone sequence (Step 16's own design), so the
 // adapter must already exist by then. commandHandler.HandlePrompt now
