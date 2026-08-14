@@ -265,7 +265,24 @@ while true; do :; done`,
 		t.Errorf("stopProcessGroup() took %v, want well under 5s", elapsed)
 	}
 
+	// Poll rather than assert once. processGroupMemberAlive is kill(pid, 0),
+	// which SUCCEEDS for a zombie -- and SIGKILLing a descendant leaves
+	// exactly that for a moment: the leader is already gone, so the
+	// descendant has been reparented to init, and it stays a zombie until
+	// init reaps it. A single check immediately after stopProcessGroup()
+	// returns therefore races the reaper. It happened to pass on darwin and
+	// failed on the linux runner, which is the wrong way round for a test
+	// whose whole job is to prove descendants do not survive.
+	//
+	// This does NOT weaken the assertion: without the SIGKILL escalation the
+	// stubborn child (trap '' TERM) survives indefinitely, so it is still
+	// alive long past this deadline and the test still fails -- which is
+	// exactly what the mutation check confirms.
+	deadline := time.Now().Add(5 * time.Second) // _test.go is exempt from notimeliteral
 	for name, pid := range pids {
+		for processGroupMemberAlive(pid) && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
 		if processGroupMemberAlive(pid) {
 			t.Errorf("%s pid %d still alive after stopProcessGroup() -- descendant orphaned", name, pid)
 		}
