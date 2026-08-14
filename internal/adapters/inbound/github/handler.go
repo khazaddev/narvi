@@ -571,10 +571,24 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// or any other minimal wiring that doesn't care about this Step)
 		// simply skips the fetch entirely, leaving m.CommentBody as the
 		// turn's own prompt verbatim -- today's pre-Step-46 behavior.
-		// Step 48 (§22.1): prepend this PR's own already-answered facts
-		// BEFORE the diff/stack/tool-instructions blocks below -- prepended
-		// to, never replacing, the mention's own prose text captured as
-		// mentionText above.
+		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement, this Step): prepend
+		// this PR's own already-answered facts BEFORE the diff/stack/
+		// tool-instructions blocks below -- prepended to, never replacing,
+		// the mention's own prose text captured as mentionText above. This
+		// call is DELIBERATELY placed AFTER prCtx is resolved below (moved
+		// by this Step; it used to sit here, immediately after the
+		// false-positive-patterns block) so it can pass prCtx.ChangedPaths
+		// through to FetchAlreadyAnswered for §22.1.2's own out-of-diff
+		// retirement check -- see that function's own doc comment for why
+		// reordering it after the diff fetch changes nothing about
+		// correctness (neither read depends on the other) while still
+		// producing byte-for-byte the SAME final prompt text order as
+		// before this Step: the "m.CommentBody = X + m.CommentBody"
+		// prepend idiom used throughout this handler means the LAST block
+		// prepended ends up FIRST in the rendered prompt, so moving this
+		// call later in EXECUTION order, while keeping it the LAST prepend
+		// before RenderTurnPrompt, preserves its own existing FIRST
+		// position in the text exactly.
 		// Step 63 (§22.3): prepend this repo's own currently-active
 		// learned false-positive patterns FIRST (broadest, repo-wide
 		// context), before the PR-specific already-answered facts below --
@@ -585,11 +599,6 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		if cfg.FalsePositivePatterns != nil {
 			if advisory := reviewcontext.FetchFalsePositivePatterns(ctx, logger, cfg.FalsePositivePatterns, m.RepoFullName); advisory != "" {
 				m.CommentBody = advisory + m.CommentBody
-			}
-		}
-		if cfg.ReviewFindings != nil {
-			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, cfg.ReviewFindings, m.RepoFullName, m.PRNumber); alreadyAnswered != "" {
-				m.CommentBody = alreadyAnswered + m.CommentBody
 			}
 		}
 		// fetchedHeadSHA (§62 review finding C2, CRITICAL, fixed) is
@@ -696,6 +705,18 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		// must set it, never review itself (doc.go's own "zero external
 		// imports" convention).
 		prCtx.CostBudgetSafetyMarginPercent = int(domainreviewtriage.CostBudgetSafetyMargin * 100)
+		// Step 48 (§22.1)/Step 70 (§22.1.2 retirement): see this block's
+		// own earlier comment (where it used to sit, right after the
+		// false-positive-patterns block) for why it moved here --
+		// prCtx.ChangedPaths is only known now, after the diff fetch
+		// above, and §22.1.2's retirement check needs it. This is still
+		// the LAST block prepended before RenderTurnPrompt below, so the
+		// final prompt text order is unchanged from before this Step.
+		if cfg.ReviewFindings != nil {
+			if alreadyAnswered := reviewcontext.FetchAlreadyAnswered(ctx, logger, cfg.ReviewFindings, m.RepoFullName, m.PRNumber, prCtx.ChangedPaths, prCtx.DiffTruncated); alreadyAnswered != "" {
+				m.CommentBody = alreadyAnswered + m.CommentBody
+			}
+		}
 		if havePrCtx {
 			m.CommentBody = review.RenderTurnPrompt(m.CommentBody, prCtx)
 		}
@@ -708,7 +729,7 @@ func NewHandler(coalescer *SessionCoalescer, deliveries *postgres.WebhookDeliver
 		if flooredDepth == domainreviewtriage.DepthDeep && coalescer.ReviewModelDeep == "" {
 			logger.Info("github: review routed deep but no deep-tier model configured (NARVI_REVIEW_MODEL_DEEP unset), dispatching with the default model at forced high effort", "repo", m.RepoFullName, "pr_number", m.PRNumber)
 		}
-		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort))
+		triageRecordJSON, triageRecordErr := json.Marshal(domainreviewtriage.NewDecisionRecord(triageDecision, triageConfig, flooredDepth, triageProvenance, triageModelID, triageEffort, prCtx.ChangedFilesCount, prCtx.Diff == "", prCtx.DiffTruncated))
 		if triageRecordErr != nil {
 			logger.Warn("github: marshal review-depth decision record failed, turn will carry review_depth but no review_depth_decision", "error", triageRecordErr, "repo", m.RepoFullName, "pr_number", m.PRNumber)
 			triageRecordJSON = nil

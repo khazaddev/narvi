@@ -33,11 +33,11 @@ func TestExtractChangedPaths(t *testing.T) {
 			[]string{"a.go", "b.go"},
 		},
 		{
-			// Adversarial-review fix (D3): a deleted file's own
-			// "+++ /dev/null" header used to contribute NO path entry at
-			// all -- this pins the fix instead: the paired "--- a/<path>"
-			// side (this SAME file section's own pre-change path) is now
-			// harvested.
+			// Adversarial-review fix (D3, prior Step): a deleted file's
+			// own "+++ /dev/null" header used to contribute NO path entry
+			// at all -- this pins the fix instead: the paired
+			// "--- a/<path>" side (this SAME file section's own
+			// pre-change path) is now harvested.
 			"deleted file's own pre-change path is harvested via +++ /dev/null pairing",
 			"diff --git a/gone.go b/gone.go\n--- a/gone.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n",
 			[]string{"gone.go"},
@@ -49,11 +49,11 @@ func TestExtractChangedPaths(t *testing.T) {
 			[]string{"a.go"},
 		},
 		{
-			// Adversarial-review fix (D3): a 100%-similarity rename (no
-			// content change at all) emits neither a "---" nor a "+++"
-			// line -- the ONLY place either path appears is "rename
-			// from"/"rename to". Both the vacated old location and the
-			// new one are real changes to the tree.
+			// Adversarial-review fix (D3, prior Step): a 100%-similarity
+			// rename (no content change at all) emits neither a "---" nor
+			// a "+++" line -- the ONLY place either path appears is
+			// "rename from"/"rename to". Both the vacated old location and
+			// the new one are real changes to the tree.
 			"pure rename (100% similarity, no content change) harvests both paths",
 			"diff --git a/old/widget.go b/new/widget.go\nsimilarity index 100%\nrename from old/widget.go\nrename to new/widget.go\n",
 			[]string{"old/widget.go", "new/widget.go"},
@@ -76,6 +76,61 @@ func TestExtractChangedPaths(t *testing.T) {
 			"diff --git a/deleted.go b/deleted.go\n--- a/deleted.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n" +
 				"diff --git a/added.go b/added.go\n--- /dev/null\n+++ b/added.go\n@@ -0,0 +1 @@\n+x\n",
 			[]string{"deleted.go", "added.go"},
+		},
+		{
+			// Adversarial-review fix (D2, adversarial review of PR #182,
+			// BLOCKING): a BINARY file's own change carries no "---"/
+			// "+++" pair at all -- "Binary files a/x and b/x differ" is
+			// deliberately never parsed (D2's own doc comment: ambiguous
+			// to split reliably) -- the path is instead recovered from
+			// this section's own "diff --git a/<old> b/<new>" header, the
+			// fallback ExtractChangedPaths now applies whenever a file
+			// section produces no path any other way.
+			"binary file change is harvested via the diff --git header fallback",
+			"diff --git a/image.png b/image.png\nindex abc1234..def5678 100644\nBinary files a/image.png and b/image.png differ\n",
+			[]string{"image.png"},
+		},
+		{
+			// Adversarial-review fix (D2): a MODE-ONLY change (the
+			// executable bit flipped, content unchanged) carries no
+			// "---"/"+++" pair either -- "this script is now
+			// world-executable, unjustified" is exactly the kind of
+			// finding this gap used to silently blind the sensitive-glob
+			// signal to.
+			"mode-only change is harvested via the diff --git header fallback",
+			"diff --git a/script.sh b/script.sh\nold mode 100644\nnew mode 100755\n",
+			[]string{"script.sh"},
+		},
+		{
+			// Adversarial-review fix (D2): a git-quoted non-ASCII path
+			// (core.quotePath's own default C-style quoting, e.g.
+			// `+++ "b/uni_caf\303\251.go"`) used to fail the OLD, unquoted-
+			// only "+++ b/" prefix test entirely, contributing no path at
+			// all for an ORDINARY modified file. The octal escapes below
+			// (\303\251) decode to the UTF-8 bytes for "é" -- want is the
+			// real, decoded filename.
+			"git-quoted non-ASCII path is unquoted and harvested from the ordinary +++/--- pair",
+			"diff --git \"a/uni_caf\\303\\251.go\" \"b/uni_caf\\303\\251.go\"\n" +
+				"index 111..222 100644\n" +
+				"--- \"a/uni_caf\\303\\251.go\"\n" +
+				"+++ \"b/uni_caf\\303\\251.go\"\n" +
+				"@@ -1 +1 @@\n" +
+				"-old\n" +
+				"+new\n",
+			[]string{"uni_café.go"},
+		},
+		{
+			// Adversarial-review fix (D2): the quoted form of the
+			// "diff --git" header-fallback path itself (a BINARY file
+			// whose own path also needs C-style quoting) -- exercises
+			// parseDiffGitHeaderLine's own quoted-quoted branch directly,
+			// not just the ordinary +++/--- extraction path the previous
+			// case already covers.
+			"binary file with a git-quoted non-ASCII path uses the quoted diff --git header fallback",
+			"diff --git \"a/uni_caf\\303\\251.png\" \"b/uni_caf\\303\\251.png\"\n" +
+				"index abc1234..def5678 100644\n" +
+				"Binary files \"a/uni_caf\\303\\251.png\" and \"b/uni_caf\\303\\251.png\" differ\n",
+			[]string{"uni_café.png"},
 		},
 	}
 	for _, tt := range tests {

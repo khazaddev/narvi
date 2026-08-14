@@ -77,6 +77,7 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/review"
 	"github.com/khazaddev/narvi/internal/domain/reviewpost"
 	"github.com/khazaddev/narvi/internal/domain/reviewtriage"
+	"github.com/khazaddev/narvi/internal/domain/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -271,8 +272,42 @@ func PostReviewVerdict(
 		// further down, unchanged by this fix) the review_verdicts
 		// insert is skipped -- never a reason to fail this whole tool
 		// call.
+		// serverComputedChangedFiles (§21.1's own filesChanged drift
+		// canary) is this SAME processing turn's own reviewtriage.
+		// DecisionRecord.ChangedFilesCount, unmarshaled from
+		// review_depth_decision below -- the server-computed count from
+		// THIS turn's own context fetch, never re-derived here. Stays 0
+		// (that field's own zero value, and DecisionRecord's own doc
+		// comment: "indistinguishable from... genuinely empty diff") for
+		// every case that skips or fails the unmarshal below -- no
+		// processing turn found, a turn that predates this field, or a
+		// turn whose own review_depth_decision marshal failed at
+		// creation time -- reviewverdict.FilesChangedDrifted's own doc
+		// comment covers why treating that identically to "no reliable
+		// signal, never fire" is required, not merely convenient.
+		//
+		// diffDelivered (D4, adversarial review of PR #182, MEDIUM) is
+		// this SAME processing turn's own reviewtriage.DecisionRecord.
+		// DiffEmpty/DiffTruncated, collapsed into the ONE fact
+		// FilesChangedDrifted's own diffDelivered parameter needs: "was
+		// the reviewing agent actually handed a full diff to read at
+		// all." Deliberately initialized to false (never delivered) here
+		// -- NOT computed as "!decisionRecord.DiffEmpty &&
+		// !decisionRecord.DiffTruncated" against a decisionRecord that
+		// might itself be an unpopulated zero value: DiffEmpty/
+		// DiffTruncated both false is ALSO decisionRecord's own zero
+		// value (no processing turn found, a turn that predates this
+		// field, or a failed unmarshal, exactly the same three cases
+		// serverComputedChangedFiles' own comment names), and reading
+		// that as "confirmed delivered" would be exactly the unsafe
+		// misreading D1's own "authoritative-or-absent, never partial"
+		// principle forbids elsewhere in this same PR. Set true ONLY
+		// inside the successful-unmarshal branch below, from the real
+		// decisionRecord.
 		var verdictHeadSHA string
 		var reviewDepth reviewtriage.ReviewDepth
+		var serverComputedChangedFiles int
+		var diffDelivered bool
 		if processingTurn, turnErr := turns.GetProcessingTurnForSession(ctx, sessionID); turnErr != nil {
 			if errors.Is(turnErr, pgx.ErrNoRows) {
 				logger.Warn("httpapi: review-verdict: no processing turn found for session, skipping review_verdicts insert", "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
@@ -285,6 +320,16 @@ func PostReviewVerdict(
 			}
 			if processingTurn.ReviewDepth != nil {
 				reviewDepth = reviewtriage.ReviewDepth(*processingTurn.ReviewDepth)
+			}
+			if len(processingTurn.ReviewDepthDecision) > 0 {
+				var decisionRecord reviewtriage.DecisionRecord
+				if unmarshalErr := json.Unmarshal(processingTurn.ReviewDepthDecision, &decisionRecord); unmarshalErr != nil {
+					logger.Warn("httpapi: review-verdict: unmarshal review_depth_decision failed, filesChanged drift canary has no server-computed count to compare against",
+						"error", unmarshalErr, "repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+				} else {
+					serverComputedChangedFiles = decisionRecord.ChangedFilesCount
+					diffDelivered = !decisionRecord.DiffEmpty && !decisionRecord.DiffTruncated
+				}
 			}
 		}
 
@@ -316,6 +361,32 @@ func PostReviewVerdict(
 
 		verdict := reviewpost.BuildVerdict(input)
 		findings := reviewpost.BuildFindings(input)
+
+		// §21.1's own filesChanged drift canary, now wired: compares
+		// verdict.FilesChanged (the reviewing agent's own self-report,
+		// just built above) against serverComputedChangedFiles (this
+		// SAME turn's own server-computed count, resolved above). Purely
+		// diagnostic, by construction, not merely by convention --
+		// reviewverdict.FilesChangedDrifted returns a plain bool, and
+		// this call site does nothing with a true result but log: verdict
+		// itself is never touched, no field on it is read again below
+		// this point, and nothing here can affect Shippable, the formal
+		// review event, the synced label, or this request's own response.
+		// §21.1's own second constraint ("must tolerate
+		// ChangedFilesCount == 0") is satisfied by FilesChangedDrifted
+		// itself, not by a guard here -- see that function's own doc
+		// comment. diffDelivered (D4, resolved above) is FilesChangedDrifted's
+		// own THIRD guard, the exact symmetric case: a diff the reviewing
+		// agent was never fully handed (empty or truncated) must never
+		// make this canary blame the reviewer for a server-side delivery
+		// failure -- see that function's own doc comment for the full
+		// "why".
+		if reviewverdict.FilesChangedDrifted(verdict.FilesChanged, serverComputedChangedFiles, diffDelivered) {
+			logger.Warn("httpapi: review-verdict: filesChanged drift canary fired -- self-reported and server-computed changed-file counts diverge beyond both thresholds; diagnostic only, verdict unaffected",
+				"self_reported_files_changed", verdict.FilesChanged,
+				"server_computed_files_changed", serverComputedChangedFiles,
+				"repo_full_name", prSession.RepoFullName, "pr_number", prSession.PrNumber)
+		}
 
 		// verdictHeadSHA/reviewDepth (§62 review finding C2 / Step 68,
 		// §26.3) were both already resolved above, before
