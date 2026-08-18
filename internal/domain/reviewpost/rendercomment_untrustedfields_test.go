@@ -151,3 +151,67 @@ func TestRenderVerdictComment_FindingFilePathEscapedInEveryLineShape(t *testing.
 		}
 	}
 }
+
+// TestRenderVerdictComment_NarrativeSummaryIsEscaped covers the ONE
+// model-authored free-text field RenderVerdictComment renders that the
+// Phase 5 audit's MEDIUM finding did NOT name: the narrative `summary`
+// parameter (VerdictInput.Summary -- the verdict's own "why" line,
+// rendered immediately under the header bullets). The finding's own
+// explicit scope was the fields Steps 66/67/69 ADDED (every Digest
+// field, plus Finding.FilePath); this parameter predates Step 66 and so
+// fell outside it -- but it is the identical hazard, in the identical
+// function, one line above "### What this PR does": same untrusted
+// provenance (the reviewing model authors it as open prose), same
+// renderer (GitHub markdown), same failure -- an unclosed "<details>"
+// here swallows EVERY section below it, hiding exactly the merge-
+// decision content §26.1 front-loads this readout around.
+//
+// Table-driven over the two shapes
+// TestRenderVerdictComment_UntrustedDigestFieldsAreEscaped already uses
+// for the Digest fields: the "<details>"-swallowing payload and the
+// plain "List<int>" generic (both carried by digestInjectionPayload
+// above, reused here so the two tests can never drift apart on what
+// "an injection" means).
+func TestRenderVerdictComment_NarrativeSummaryIsEscaped(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		summary string
+		want    string
+	}{
+		{
+			name:    "details-swallowing payload plus generic",
+			summary: digestInjectionPayload,
+			want:    digestInjectionEscaped,
+		},
+		{
+			name:    "bare generic a model plausibly writes about the diff",
+			summary: "Refactors the List<int> cache; note that a < b now holds.",
+			want:    "Refactors the List&lt;int&gt; cache; note that a &lt; b now holds.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			digest := reviewpost.Digest{Summary: "No changes of note."}
+
+			got := reviewpost.RenderVerdictComment(baseVerdict(), nil, digest, tt.summary, "narvi-bot", reviewpost.LabelLowRisk)
+
+			if strings.Contains(got, "<details><summary>evil</summary>") || strings.Contains(got, "List<int>") {
+				t.Errorf("RenderVerdictComment() rendered an UNESCAPED injection from the narrative summary (%s) -- want '<'/'>' escaped, got:\n%s", tt.name, got)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("RenderVerdictComment() missing the escaped narrative summary (%s), want to contain %q, got:\n%s", tt.name, tt.want, got)
+			}
+			// The escaping must neutralize the injection WITHOUT
+			// dropping the section that follows it -- the whole point
+			// of the fix is that "What this PR does" survives.
+			if !strings.Contains(got, "### What this PR does") {
+				t.Errorf("RenderVerdictComment() lost the \"What this PR does\" heading after an injected narrative summary (%s):\n%s", tt.name, got)
+			}
+		})
+	}
+}

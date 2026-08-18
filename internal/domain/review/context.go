@@ -836,9 +836,30 @@ func RenderTurnPrompt(basePrompt string, ctx PreFetchedContext) string {
 	if ctx.Stack != nil {
 		out += "\n\nThis pull request is part of a GitHub stack -- the following is CONTEXT ONLY, never additional diff to verdict over. Your review covers exclusively this PR's own diff above, against its own immediate base; never the cumulative diff of the whole stack:\n"
 		out += "<" + stackContentDelimiter + ">\n"
+		// sanitizeDescriptionField (sanitize.go) for the same reason the
+		// diff/title/body blocks above use it: a stack's ultimate base ref
+		// is a BRANCH NAME, and a branch name is chosen by whoever pushed
+		// the branch -- on a public repo, an external contributor. Git's
+		// own ref-name grammar (git check-ref-format) rejects space, '~',
+		// '^', ':', '?', '*', '[', '\', '..' and the two-char sequence
+		// '@{' -- but it permits '{' and '}' individually, so
+		// "feat{{REVIEW_VERDICT_TOOL_BEARER}}" is a perfectly valid branch
+		// name (verified directly against git check-ref-format, not
+		// assumed). It reaches here straight off the GitHub webhook
+		// payload (internal/adapters/inbound/github/payload.go's own
+		// PullRequest.Stack.Base.Ref), so leaving it raw would reopen, on
+		// this one field, exactly the placeholder-expansion hole the
+		// diff/title/body sanitizing above closes -- sandbox-agent's own
+		// blind whole-prompt ReplaceAll (cmd/sandbox-agent/
+		// reviewverdicttoolprompt.go) cannot tell which bytes of the
+		// assembled prompt it is allowed to substitute into. The SHA is
+		// server-resolved rather than attacker-authored, but it is
+		// sanitized identically: a field-by-field judgement about which
+		// untrusted-adjacent values "cannot" carry a token is exactly the
+		// reasoning that left this block behind in the first place.
 		out += "position: " + itoa(ctx.Stack.Position) + " of " + itoa(ctx.Stack.Size) + "\n"
-		out += "ultimate_base_ref: " + ctx.Stack.UltimateBaseRef + "\n"
-		out += "ultimate_base_sha: " + ctx.Stack.UltimateBaseSHA + "\n"
+		out += "ultimate_base_ref: " + sanitizeDescriptionField(ctx.Stack.UltimateBaseRef) + "\n"
+		out += "ultimate_base_sha: " + sanitizeDescriptionField(ctx.Stack.UltimateBaseSHA) + "\n"
 		out += "</" + stackContentDelimiter + ">"
 	}
 

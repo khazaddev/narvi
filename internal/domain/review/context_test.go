@@ -893,6 +893,57 @@ func TestRenderTurnPrompt_PlaceholderTokensInDiffTitleBodyAreNeutralized(t *test
 	}
 }
 
+// TestRenderTurnPrompt_PlaceholderTokensInStackFieldsAreNeutralized covers
+// the stack block's own two string fields, which the first pass at closing
+// this hole left raw while sanitizing Diff/Title/Body -- found by asking
+// "which OTHER untrusted values does this function interpolate?" rather
+// than by re-reading the fields already known to be attacker-controlled.
+//
+// UltimateBaseRef is a BRANCH NAME off the GitHub webhook payload
+// (internal/adapters/inbound/github/payload.go's PullRequest.Stack.Base.
+// Ref), and git's own ref-name grammar permits '{' and '}' individually
+// (only the two-char sequence '@{' is rejected) -- so
+// "feat{{REVIEW_VERDICT_TOOL_BEARER}}" is a valid branch name any external
+// contributor can push, verified directly against `git check-ref-format
+// --branch`, never assumed from the grammar docs. Same baseline-comparison
+// shape as the Diff/Title/Body test above, for the same reason.
+func TestRenderTurnPrompt_PlaceholderTokensInStackFieldsAreNeutralized(t *testing.T) {
+	t.Parallel()
+
+	baseline := review.RenderTurnPrompt("@narvi-bot please review", review.PreFetchedContext{
+		Stack: &review.StackContext{Position: 1, Size: 2, UltimateBaseRef: "main", UltimateBaseSHA: "abc123"},
+	})
+
+	var poison strings.Builder
+	for _, tok := range allPlaceholderTokens {
+		poison.WriteString(tok)
+	}
+	// A realistic hostile branch name: a plausible prefix so it survives a
+	// human skim of the PR's own base, with every token appended.
+	poisonedRef := "feat/stacked-" + poison.String()
+
+	got := review.RenderTurnPrompt("@narvi-bot please review", review.PreFetchedContext{
+		Stack: &review.StackContext{
+			Position:        1,
+			Size:            2,
+			UltimateBaseRef: poisonedRef,
+			UltimateBaseSHA: poison.String(),
+		},
+	})
+
+	for _, tok := range allPlaceholderTokens {
+		wantCount := strings.Count(baseline, tok)
+		gotCount := strings.Count(got, tok)
+		if gotCount > wantCount {
+			t.Errorf("RenderTurnPrompt() token %q appears %d times with a poisoned Stack.UltimateBaseRef/UltimateBaseSHA, vs %d legitimate occurrence(s) in an otherwise-identical unpoisoned baseline -- a branch name an external contributor controls introduced %d new occurrence(s) sandbox-agent's own blind whole-prompt substitution would expand into a REAL live secret. Full output:\n%s", tok, gotCount, wantCount, gotCount-wantCount, got)
+		}
+	}
+
+	if !strings.Contains(got, "feat/stacked-") {
+		t.Errorf("RenderTurnPrompt() dropped the branch name's own non-token prefix -- want only the placeholder tokens stripped, the rest of the ref preserved so the reviewer still sees which branch the stack targets:\n%s", got)
+	}
+}
+
 // TestRenderTurnPrompt_SplitPlaceholderTokenAcrossFragmentsIsNeutralized
 // proves stripPlaceholderTokens' own fixed-point loop actually matters: a
 // SINGLE pass over placeholderTokens could, in principle, remove one

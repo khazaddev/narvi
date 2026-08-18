@@ -111,7 +111,7 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 	fmt.Fprintf(&b, "- **Description adequacy**: %s -- %s\n", digest.DescriptionAdequacy, escapeFindingDescription(strings.TrimSpace(digest.AdequacyExplanation)))
 	fmt.Fprintf(&b, "- **Shippable**: %s (server-computed)\n\n", v.Shippable)
 
-	b.WriteString(strings.TrimSpace(summary))
+	b.WriteString(escapeFindingDescription(strings.TrimSpace(summary)))
 	b.WriteString("\n\n")
 
 	// --- 2. "What this PR does" (§26.1 item 2).
@@ -301,11 +301,23 @@ func renderArchDecision(ad ArchDecision) string {
 // introduced for Finding.Description alone), this is now this FILE's
 // general untrusted-free-text escaper: every field VerdictInput's POST
 // body lets the reviewing model author as open prose -- Finding.Description
-// (finding.go's own doc comment), and, since a Phase 5 audit finding
-// closed the gap Step 66/67/69 opened, every Digest field of the SAME
+// (finding.go's own doc comment); since a Phase 5 audit finding closed
+// the gap Step 66/67/69 opened, every Digest field of the SAME
 // provenance (Summary, AdequacyExplanation, StackRisks, UnverifiedLimits,
-// ProposedBody, ContestedPoints, and each ArchDecision's own three fields)
-// -- shares the identical hazard and now goes through this SAME escaper.
+// ProposedBody, ContestedPoints, and each ArchDecision's own three
+// fields); and the verdict's own narrative `summary` parameter
+// (VerdictInput.Summary -- RenderVerdictComment's why-line, rendered
+// immediately under the header bullets) -- all share the identical
+// hazard and all now go through this SAME escaper. That narrative
+// summary was NOT part of the audit finding's own explicitly-scoped
+// field list (it pre-dates Step 66, so it was not one of the fields
+// those Steps added), but it is the identical hazard in the identical
+// function, one line above "### What this PR does": an unclosed
+// "<details>" there swallows EVERY section below it -- What this PR
+// does, Architecture choices, Risks to the stack, Contested points --
+// which is the same "hides the merge-decision content" failure the
+// audit finding traced through Digest.Summary, reached through a field
+// that merely happened to predate the Steps under audit.
 // All of it can legitimately contain generics, tags, or comparisons (e.g.
 // "List<int>", "a < b") -- left unescaped, GitHub's own markdown renderer
 // would read an unescaped '<' as the start of a literal HTML tag rather
