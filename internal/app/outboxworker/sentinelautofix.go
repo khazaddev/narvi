@@ -28,13 +28,26 @@ import (
 // reason this Step's own design settled on: sessionactor cannot import
 // httpapi (§24.3, TECHNICAL_PLAN.md:846, already documents this
 // constraint for a structurally identical problem), but this notifier
-// MUST call httpapi.SpawnChildSession (the one sanctioned way to create a
-// session with a parent/provenance tag, childsession.go) -- outboxworker
+// MUST call httpapi's own session-creation machinery (the one sanctioned
+// way to create a session with a parent/provenance tag) -- outboxworker
 // is already the "real outbound network/side-effect work, never
 // synchronously in the HTTP request" layer every other Notifier in this
 // package lives at, and is free to import httpapi the same way internal/
 // adapters/inbound/github's own coalesce.go already does (that package's
 // own doc comment: "already callable from outside httpapi by design").
+//
+// Audit fix (double-spawn): Deliver below calls httpapi.CreateSessionOnTx
+// and httpapi.TriggerDispatch directly (spawnClaimedChildSession), inline
+// on a transaction this file opens and holds its OWN atomic
+// SentinelFixStore.LockForUpdate claim on -- NOT httpapi.SpawnChildSession
+// (childsession.go), which is a correct, general-purpose helper but opens
+// its OWN separate transaction, incompatible with composing an atomic
+// claim-then-spawn the way this notifier needs. See
+// spawnClaimedChildSession's own doc comment, and coalesce.go's own
+// CreateOrJoin, for the identical "claim a row, then create a session
+// under that SAME lock" precedent this mirrors. SpawnChildSession itself
+// is unchanged and still exported for a future caller with no
+// already-open transaction of its own.
 
 // sentinelFixBranchPrefix names Deliver's own generated, distinct fix-
 // branch names -- confirmed-finding fix, see Deliver's own doc comment
@@ -82,9 +95,9 @@ type sentinelAutoFixNotifier struct {
 	// epistemicCheckDefault (F6, adversarial review, Step 61) is the SAME
 	// platform.Config.EpistemicCheckDefault value every other
 	// CreateSessionOnTx-reaching caller in this codebase now threads
-	// through -- Deliver's own SpawnChildSession call below is an ordinary
-	// (never review-session) build session, so no F7-style hardcoded-false
-	// carve-out applies here.
+	// through -- spawnClaimedChildSession's own httpapi.CreateSessionOnTx
+	// call below is an ordinary (never review-session) build session, so
+	// no F7-style hardcoded-false carve-out applies here.
 	epistemicCheckDefault bool
 }
 
@@ -138,12 +151,13 @@ func sentinelAutoFixPromptText(descriptions []string) string {
 	return b.String()
 }
 
-// Deliver implements ports.Notifier: unmarshals payload, checks
-// idempotency (a child session already spawned for this claim -- a
-// redelivered/retried outbox entry is a no-op, never a double-spawn),
-// creates the fix session's own distinct upstream branch, then spawns the
-// child session and records it back onto BOTH the sentinel_fixes row and
-// every finding it addresses.
+// Deliver implements ports.Notifier: unmarshals payload, checks the
+// cheap, non-atomic idempotency fast path (a child session already
+// spawned for this claim -- skip straight to the MarkFixPending tail,
+// never re-spawn), otherwise atomically claims the sentinel_fixes row and
+// spawns the child session together (spawnClaimedChildSession), then
+// records the winning child session back onto every finding this
+// delivery's own payload addresses (markFindingsFixPending).
 //
 // # Confirmed-finding fix: the fix session needs its OWN branch
 //
@@ -184,6 +198,62 @@ func sentinelAutoFixPromptText(descriptions []string) string {
 // fixes) -- the outbox worker's own existing backoff/retry machinery
 // retries this delivery later; nothing user-visible has happened yet (no
 // child session, no push, no PR), so a retry is safe.
+//
+// # Audit fix: atomic dedupe guard (spawn + claim-write, one transaction)
+//
+// Before this fix, the ONLY dedupe guard was a plain FixChildSessionID.
+// Valid check, and the row was only marked spawned AFTER
+// httpapi.SpawnChildSession had already committed ITS OWN, separate
+// transaction and fired TriggerDispatch -- two writes, not atomic. Outbox
+// delivery is at-least-once (builder.go's own recordFailure reschedules on
+// any returned error): if deliverCtx's own OutboxDeliveryTimeout expired
+// (or a transient pool error, or the pod died) BETWEEN those two writes, a
+// redelivered/retried Deliver call would still see FixChildSessionID.Valid
+// == false, createFixBranch would be a harmless no-op (githubapi.
+// CreateBranch treats 422 "already exists" as success), and the spawn
+// would run AGAIN -- a genuine second sandbox session, pushing to the SAME
+// deterministic sentinelFixBranchName, for the SAME sentinel_fixes row.
+//
+// Fixed by spawnClaimedChildSession below: the row's own SELECT ... FOR
+// UPDATE lock (SentinelFixStore.LockForUpdate), the session insert
+// (httpapi.CreateSessionOnTx, called INLINE on that SAME transaction --
+// never httpapi.SpawnChildSession, which would need its OWN, separate
+// transaction), and the fix_child_session_id write
+// (SentinelFixStore.UpdateChildSession) all run on ONE transaction --
+// mirroring internal/adapters/inbound/github's own coalesce.go
+// CreateOrJoin (EnsureRow+LockForUpdate, then CreateSessionOnTx inline,
+// then the guard write, then commit) for the structurally identical
+// "claim a row, then create a session under that SAME lock" problem, and
+// CreateSessionOnTx's own doc comment (create.go), which names exactly
+// this shape ("an atomic per-resource claim lock ... before ever reaching
+// this function") as the reason it takes an already-open tx rather than
+// owning one itself. A concurrent or redelivered claimant blocks on the
+// FOR UPDATE lock until the winner's transaction resolves: a commit means
+// it observes FixChildSessionID already valid and never spawns; a
+// rollback (a crash/cancellation before commit, or an error partway
+// through) leaves NO trace at all -- Postgres aborts the whole
+// transaction, including the row lock -- so a following retry starts
+// completely clean, never wedged in a half-claimed state. TriggerDispatch
+// still fires strictly AFTER commit, exactly like every other
+// CreateSessionOnTx caller (create.go's own CreateSessionCore, coalesce.
+// go's own WINNER path) -- firing it before commit would risk dispatching
+// against a session a subsequent rollback then makes disappear.
+//
+// A caller that has ALREADY spawned -- either the cheap fast-path check
+// below, or spawnClaimedChildSession losing its own FOR UPDATE race --
+// does NOT return early: Deliver always still runs markFindingsFixPending
+// using whichever fix_child_session_id actually won. This matters for two
+// distinct reasons: (1) Finding 2 below -- an earlier attempt may have
+// spawned successfully but failed partway through ITS OWN
+// markFindingsFixPending tail, and only a following redelivery gets a
+// chance to finish it; (2) reviewverdict.go's own SentinelFixStore.Claim
+// only sets fix_child_session_id HERE, in this notifier, never at claim
+// time -- so two DIFFERENT qualifying findings posted concurrently on the
+// SAME PR can each legitimately enqueue their OWN
+// NotificationKindSentinelAutoFix outbox row against the SAME
+// sentinel_fixes id, each carrying its OWN FindingIdentityHashes, and the
+// second one to reach spawnClaimedChildSession never spawns anything
+// itself but must still mark its own findings fix_pending.
 func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification ports.Notification) error {
 	if notification.Kind != ports.NotificationKindSentinelAutoFix {
 		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: unrecognized notification kind %q", notification.Kind)
@@ -203,21 +273,51 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 	if err != nil {
 		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: get sentinel_fixes row: %w", err)
 	}
-	if fix.FixChildSessionID.Valid {
-		// Already spawned by an earlier delivery attempt (or a race with
-		// another qualifying finding's own claim) -- idempotent no-op,
-		// never a second child session for the SAME claim.
-		return nil
+
+	fixChildSessionID := fix.FixChildSessionID
+	if !fixChildSessionID.Valid {
+		// Cheap, non-atomic fast path: skips createFixBranch's two GitHub
+		// round trips and the claim transaction entirely on the common
+		// "nothing left to do" redelivery. NOT the correctness guard --
+		// see spawnClaimedChildSession's own doc comment for the real,
+		// atomic one this falls through to whenever this read is stale or
+		// simply wrong (a race against a concurrent claimant).
+		spawned, err := n.spawnClaimedChildSession(ctx, payload)
+		if err != nil {
+			return err
+		}
+		fixChildSessionID = spawned
 	}
 
+	return n.markFindingsFixPending(ctx, payload, fixChildSessionID)
+}
+
+// spawnClaimedChildSession creates the fix session's own distinct
+// upstream branch (createFixBranch, OUTSIDE any transaction -- a real
+// outbound GitHub API call must never hold a Postgres transaction open,
+// mirroring coalesce.go's own identical "network call always outside any
+// tx" discipline), then atomically claims the sentinel_fixes row (a
+// SELECT ... FOR UPDATE lock, SentinelFixStore.LockForUpdate) and spawns
+// the child session on ONE transaction -- see Deliver's own "Audit fix:
+// atomic dedupe guard" doc comment above for the full "why".
+//
+// Returns the child session id that won the claim: either the one THIS
+// call just created, or -- if another claimant (a concurrent Deliver call
+// for a genuinely different outbox row targeting the SAME claim, or a
+// redelivery of this SAME row that raced an earlier, still-in-flight
+// attempt of itself) already committed one first -- that winner's own id,
+// read back under the SAME lock. Never spawns twice: only the caller that
+// observes FixChildSessionID.Valid == false under the lock proceeds to
+// httpapi.CreateSessionOnTx.
+func (n *sentinelAutoFixNotifier) spawnClaimedChildSession(ctx context.Context, payload ports.SentinelAutoFixPayload) (pgtype.UUID, error) {
 	var parentSessionID pgtype.UUID
 	if err := parentSessionID.Scan(payload.OriginReviewSessionID); err != nil {
-		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: malformed originReviewSessionId %q: %w", payload.OriginReviewSessionID, err)
+		return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: malformed originReviewSessionId %q: %w", payload.OriginReviewSessionID, err)
 	}
 
 	branch, err := n.createFixBranch(ctx, payload)
 	if err != nil {
-		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: create fix session's own upstream branch: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: create fix session's own upstream branch: %w", err)
 	}
 
 	prompt := sentinelAutoFixPromptText(payload.FindingDescriptions)
@@ -245,28 +345,127 @@ func (n *sentinelAutoFixNotifier) Deliver(ctx context.Context, notification port
 		},
 	}
 
-	childSession, cerr := httpapi.SpawnChildSession(ctx, n.pool, n.sessions, n.turns, n.environments, n.auditLog, n.registry, req, parentSessionID, 1, provenance.SentinelAutoFix, n.epistemicCheckDefault)
+	tx, err := n.pool.Begin(ctx)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: begin claim-and-spawn tx: %w", err)
+	}
+	committed := false
+	// Rollback is a safety net for every return path other than a
+	// successful Commit below -- mirrors coalesce.go's own CreateOrJoin
+	// and httpapi's own create.go identical pattern.
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	txFixes := n.sentinelFixes.WithTx(tx)
+
+	// Locks the claim row for the rest of THIS transaction -- any
+	// concurrent or redelivered claimant for the SAME (repoFullName,
+	// originPRNumber) blocks here until this transaction commits or rolls
+	// back. See LockForUpdate's own doc comment (sentinelfixes_store.go)
+	// and this method's own doc comment above.
+	locked, err := txFixes.LockForUpdate(ctx, payload.RepoFullName, payload.OriginPRNumber)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: lock sentinel_fixes row: %w", err)
+	}
+	if locked.FixChildSessionID.Valid {
+		// Lost the race under the lock -- another claimant already spawned
+		// and committed first (see this method's own doc comment for the
+		// two distinct ways that can happen). Never spawn a second child
+		// session for the SAME claim: roll back (the deferred Rollback
+		// above handles it; committed is still false -- there is nothing
+		// to undo anyway, since createFixBranch above is idempotent and
+		// this transaction has not written anything) and report the
+		// winner's own id.
+		return locked.FixChildSessionID, nil
+	}
+
+	// provenanceTag is a local copy: httpapi.ChildSessionOptions.
+	// ProvenanceTag wants a *string, and provenance.SentinelAutoFix is a
+	// Go const -- its address cannot be taken directly.
+	provenanceTag := provenance.SentinelAutoFix
+	created, hasPrompt, cerr := httpapi.CreateSessionOnTx(ctx, tx, n.sessions, n.turns, n.environments, n.auditLog, req, pgtype.UUID{}, n.epistemicCheckDefault, httpapi.ChildSessionOptions{
+		ParentSessionID: parentSessionID,
+		SpawnDepth:      1,
+		ProvenanceTag:   &provenanceTag,
+	})
 	if cerr != nil {
-		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: spawn child session: %s", cerr.Message)
+		return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: spawn child session: %s", cerr.Message)
 	}
 
-	if _, err := n.sentinelFixes.UpdateChildSession(ctx, fix.ID, childSession.ID); err != nil {
-		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: record child session on sentinel_fixes: %w", err)
+	if _, err := txFixes.UpdateChildSession(ctx, locked.ID, created.ID); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: record child session on sentinel_fixes: %w", err)
 	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("outboxworker: sentinelAutoFixNotifier: commit claim-and-spawn tx: %w", err)
+	}
+	committed = true
+
+	// Fire-and-forget, OUTSIDE the transaction above, and ONLY if a prompt
+	// was actually created -- mirrors every other CreateSessionOnTx
+	// caller's own post-commit TriggerDispatch sequencing (create.go's own
+	// CreateSessionCore, coalesce.go's own WINNER path). hasPrompt is
+	// always true in practice here (sentinelAutoFixPromptText always
+	// returns non-empty text), but checked anyway, matching every other
+	// caller's own identical gate.
+	if hasPrompt {
+		httpapi.TriggerDispatch(ctx, n.registry, created.ID)
+	}
+
+	return created.ID, nil
+}
+
+// markFindingsFixPending records fixChildSessionID onto every finding
+// payload.FindingIdentityHashes addresses (§17.3: suppresses the manual
+// apply-suggestion action for each). Called from Deliver both right after
+// a fresh spawn and on the "someone else already spawned" path -- always
+// with whichever fix_child_session_id actually won the claim (see
+// Deliver's own doc comment for why this must run in both cases).
+//
+// Finding 2 audit fix: a genuine per-finding store failure (anything but
+// pgx.ErrNoRows) is now COLLECTED and returned, never silently discarded.
+// Before this fix, this loop's own `continue` discarded it with a doc
+// comment claiming it was "logged by the delivery worker's own caller
+// (builder.go's attempt)" -- that claim was false: builder.go's attempt
+// only logs what Deliver itself RETURNS, and this error never used to
+// propagate there at all. A transient Postgres error on one finding used
+// to leave it (and, since the old code `continue`d rather than stopped,
+// every finding after it that ALSO failed) stuck in its pre-fix state
+// forever, with the child session already running and the outbox row
+// marked delivered -- and nothing logged it.
+//
+// Every hash is still attempted even after an earlier one fails in the
+// SAME call (mirrors the original loop's own "one finding's own row must
+// not block the rest of the batch" isolation) -- but now the accumulated
+// real failures are joined and returned once the loop finishes, so
+// builder.go's own recordFailure retries the WHOLE Deliver call. That
+// retry is safe: spawnClaimedChildSession never spawns twice (Deliver's
+// own doc comment), and MarkReviewFindingFixPending's own guard (status
+// IN ('open', 'fix_pending'), queries/reviewfindings.sql) makes
+// re-running this SAME write harmless even for a finding this loop
+// already reached successfully on an earlier, partially-failed attempt --
+// either it is still 'fix_pending' with the SAME fixChildSessionID (a
+// pure no-op rewrite) or it has since progressed past fix_pending
+// (fix_open/fix_merged/fix_applied, e.g. the fix session finished and
+// pushed before the retry ran), in which case the guard makes THIS a
+// no-op pgx.ErrNoRows too, never a regression back to fix_pending.
+//
+// A bare pgx.ErrNoRows (this finding's own row having since disappeared,
+// never having qualified, or already past fix_pending -- see the guard
+// above) is still a benign, expected no-op, exactly as before.
+func (n *sentinelAutoFixNotifier) markFindingsFixPending(ctx context.Context, payload ports.SentinelAutoFixPayload, fixChildSessionID pgtype.UUID) error {
+	var errs []error
 	for _, hash := range payload.FindingIdentityHashes {
-		if _, err := n.reviewFindings.MarkFixPending(ctx, payload.RepoFullName, payload.OriginPRNumber, hash, childSession.ID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			// Best-effort per-finding: one finding's own row having since
-			// disappeared/changed must not fail the whole delivery (the
-			// child session itself is already correctly spawned and
-			// recorded above) -- logged by the delivery worker's own
-			// caller (builder.go's attempt), not here (this package's own
-			// Notifier implementations carry no logger of their own,
-			// matching every sibling notifier's identical convention).
-			continue
+		if _, err := n.reviewFindings.MarkFixPending(ctx, payload.RepoFullName, payload.OriginPRNumber, hash, fixChildSessionID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			errs = append(errs, fmt.Errorf("mark finding %q fix-pending: %w", hash, err))
 		}
 	}
-
+	if len(errs) > 0 {
+		return fmt.Errorf("outboxworker: sentinelAutoFixNotifier: %w", errors.Join(errs...))
+	}
 	return nil
 }
 

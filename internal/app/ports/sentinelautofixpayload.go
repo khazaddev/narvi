@@ -10,10 +10,11 @@ package ports
 //
 // Defined HERE, in ports, specifically because those two packages cannot
 // import each other directly without a cycle: the notifier must import
-// httpapi (to call SpawnChildSession, mirroring internal/adapters/inbound/
-// github's own coalesce.go "already callable from outside httpapi by
-// design" precedent), so httpapi cannot import outboxworker back for this
-// one type. ports is already imported by both, imports neither -- the
+// httpapi (to call its exported session-creation machinery -- today,
+// CreateSessionOnTx/TriggerDispatch directly, mirroring internal/adapters/
+// inbound/github's own coalesce.go "already callable from outside httpapi
+// by design" precedent), so httpapi cannot import outboxworker back for
+// this one type. ports is already imported by both, imports neither -- the
 // same arm's-length layer every other Notification's own Kind/Payload
 // pairing already lives at (notifier.go).
 type SentinelAutoFixPayload struct {

@@ -28,7 +28,9 @@ func NewSentinelFixStore(pool *pgxpool.Pool) *SentinelFixStore {
 // pool this store was built with -- mirrors every other store's own
 // identical WithTx convention. The Claim sequence below (InsertIfAbsent +
 // GetForUpdate) is ALWAYS called on a WithTx-scoped store, exactly like
-// github_pr_sessions' own identical two-step claim.
+// github_pr_sessions' own identical two-step claim -- and so is
+// LockForUpdate (below), the outbox worker's own later, SEPARATE atomic
+// claim of the SAME row (see that method's own doc comment).
 func (s *SentinelFixStore) WithTx(tx pgx.Tx) *SentinelFixStore {
 	return &SentinelFixStore{q: s.q.WithTx(tx)}
 }
@@ -64,6 +66,42 @@ func (s *SentinelFixStore) Claim(ctx context.Context, repoFullName string, origi
 // session itself were deleted).
 func (s *SentinelFixStore) GetByID(ctx context.Context, id pgtype.UUID) (sqlcgen.SentinelFix, error) {
 	return s.q.GetSentinelFixByID(ctx, id)
+}
+
+// LockForUpdate locks the (repoFullName, originPRNumber) claim row for the
+// rest of the caller's own transaction, returning its CURRENT row --
+// callers branch on the returned row's own FixChildSessionID.Valid to
+// decide whether a spawn is still needed. MUST be called on a
+// WithTx-scoped store. Mirrors GitHubPRSessionStore.LockForUpdate's own
+// identical shape (githubprsession_store.go) for the SAME class of "the
+// claim row already exists (created via Claim, above, in a PRIOR,
+// already-committed transaction), now serialize concurrent claimants
+// against it" problem.
+//
+// internal/app/outboxworker's own sentinelAutoFixNotifier.Deliver
+// (sentinelautofix.go) is this method's own one real caller, closing a
+// confirmed audit finding: Deliver used to spawn the child session
+// (httpapi.SpawnChildSession, its own separate transaction) and THEN
+// write fix_child_session_id back onto this row as a SEPARATE,
+// non-atomic write -- so a redelivered/retried Deliver call whose earlier
+// attempt committed the child session but crashed/timed out (or hit a
+// transient error) before that second write could spawn a SECOND child
+// session for the SAME claim. Deliver now takes THIS lock, then calls
+// httpapi.CreateSessionOnTx and the fix_child_session_id write both
+// inline on the SAME transaction this lock is held on -- mirroring
+// internal/adapters/inbound/github's own coalesce.go CreateOrJoin
+// (EnsureRow+LockForUpdate, then CreateSessionOnTx inline, then the guard
+// write, then commit) for the structurally identical "claim a row, then
+// create a session under that SAME lock" problem. A concurrent or
+// redelivered claimant blocks here until the winner's own transaction
+// commits (and then observes FixChildSessionID already valid) or rolls
+// back (leaving NO trace at all -- Postgres aborts the whole transaction
+// -- so a following retry starts clean).
+func (s *SentinelFixStore) LockForUpdate(ctx context.Context, repoFullName string, originPRNumber int32) (sqlcgen.SentinelFix, error) {
+	return s.q.GetSentinelFixForUpdate(ctx, sqlcgen.GetSentinelFixForUpdateParams{
+		RepoFullName:   repoFullName,
+		OriginPrNumber: originPRNumber,
+	})
 }
 
 // Get is a plain, unlocked read -- the merge-gating webhook's own lookup
