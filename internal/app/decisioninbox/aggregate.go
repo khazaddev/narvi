@@ -530,12 +530,24 @@ func computeRealEligibility(ctx context.Context, deps Deps, repoFullName string,
 	}
 
 	// §62 review finding C1: ChangedFileCount/TouchedBlastRadius are BOTH
-	// derived here from pr.ChangedFiles -- pr is this call's own
-	// already-fetched, server-side ports.OpenPR (buildPRItems' own live
-	// SCMCache.ListOpenPRsForUser read), never the posted verdict's own
+	// derived here from pr -- pr is this call's own already-fetched,
+	// server-side ports.OpenPR (buildPRItems' own live SCMCache.
+	// ListOpenPRsForUser read), never the posted verdict's own
 	// self-reported FilesChanged/BlastRadius. No new I/O.
-	changedFileCount := len(pr.ChangedFiles)
+	//
+	// Phase 5 audit findings 1+2 (both fixed): changedFileCount is
+	// pr.ChangedFilesCount, GitHub's own authoritative scalar -- never
+	// len(pr.ChangedFiles), which githubapi caps at one page and which
+	// used to also silently read as 0 whenever the underlying GitHub
+	// fetch failed outright. touchedBlastRadiusKnown mirrors
+	// revalidateCore's own identical wiring (revalidate.go) -- see
+	// ports.OpenPR.ChangedFilesListDegraded's own doc comment for the
+	// two independent ways it can go true (a failed fetch, or a
+	// genuinely large diff whose listing was truncated at GitHub's own
+	// one-page cap).
+	changedFileCount := pr.ChangedFilesCount
 	touchedBlastRadius := autoapproval.ClassifyChangedPaths(pr.ChangedFiles)
+	touchedBlastRadiusKnown := !pr.ChangedFilesListDegraded
 
 	// §62 review finding T1 (BLOCKER, also a genuine correctness bug,
 	// fixed): computed ONCE, ignoring BOTH human-disagreement signals --
@@ -576,13 +588,14 @@ func computeRealEligibility(ctx context.Context, deps Deps, repoFullName string,
 	// have approved this on its own criteria", independent of which
 	// human-disagreement signal (if any) is ALSO present.
 	eligibleIgnoringHumanSignals, _ := autoapproval.ComputeEligible(autoapproval.EligibilityInput{
-		Verdict:            record.Verdict,
-		VerdictHeadSHA:     record.HeadSHA,
-		CurrentHeadSHA:     pr.HeadSHA,
-		CIGreen:            ciGreen,
-		HasNeedsHumanLabel: false,
-		ChangedFileCount:   changedFileCount,
-		TouchedBlastRadius: touchedBlastRadius,
+		Verdict:                 record.Verdict,
+		VerdictHeadSHA:          record.HeadSHA,
+		CurrentHeadSHA:          pr.HeadSHA,
+		CIGreen:                 ciGreen,
+		HasNeedsHumanLabel:      false,
+		ChangedFileCount:        changedFileCount,
+		TouchedBlastRadius:      touchedBlastRadius,
+		TouchedBlastRadiusKnown: touchedBlastRadiusKnown,
 	}, cfg)
 	eligible := eligibleIgnoringHumanSignals && !hasNeedsHuman
 

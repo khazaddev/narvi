@@ -8,11 +8,19 @@
 //
 // SpawnChildSession is EXPORTED specifically so a package that can import
 // httpapi -- but that httpapi itself must never import back, avoiding a
-// cycle -- can call it: internal/app/outboxworker's own sentinel-auto-fix
-// notifier (sentinelautofix.go), mirroring the EXACT precedent internal/
-// adapters/inbound/github's own coalesce.go already establishes for
+// cycle -- can call it, mirroring the EXACT precedent internal/adapters/
+// inbound/github's own coalesce.go already establishes for
 // CreateSessionOnTx/CreateTurnForBot ("already callable from outside
-// httpapi by design").
+// httpapi by design"). internal/app/outboxworker's own sentinel-auto-fix
+// notifier (sentinelautofix.go) is the reason this exists, but -- since
+// the Finding-1 audit fix -- is no longer this function's caller: that
+// notifier needs to compose the session insert with its OWN atomic
+// per-claim lock, on ITS OWN already-open transaction, so it calls
+// CreateSessionOnTx/TriggerDispatch directly instead (see
+// sentinelautofix.go's own top-of-file doc comment for the full "why").
+// SpawnChildSession itself is unchanged, still exported, and remains the
+// right entry point for any FUTURE child-session caller that does NOT
+// already hold an open transaction of its own to compose with.
 
 package httpapi
 
@@ -48,12 +56,14 @@ import (
 //
 // epistemicCheckDefault (F6, adversarial review, Step 61) mirrors
 // CreateSessionOnTx's own identical required parameter -- see that
-// function's own doc comment. internal/app/outboxworker's own
-// sentinelAutoFixNotifier (this function's one real caller) passes the
-// real, operator-configured platform.Config.EpistemicCheckDefault: a
-// sentinel-auto-fix child session is an ordinary build session (it edits
-// test/doc files to fix a finding), never a review session, so no F7-style
-// hardcoded-false carve-out applies here.
+// function's own doc comment. A sentinel-auto-fix child session is an
+// ordinary build session (it edits test/doc files to fix a finding),
+// never a review session, so no F7-style hardcoded-false carve-out
+// applies to it -- the real, operator-configured
+// platform.Config.EpistemicCheckDefault is always the right value to pass
+// (whether through this function, or -- as internal/app/outboxworker's
+// own sentinelAutoFixNotifier now does, since the Finding-1 audit fix --
+// through the identical CreateSessionOnTx parameter directly).
 func SpawnChildSession(
 	ctx context.Context,
 	pool *pgxpool.Pool,

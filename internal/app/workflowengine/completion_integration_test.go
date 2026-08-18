@@ -109,11 +109,21 @@ func TestOnTurnCompleted_SingleStepLane_FailTrigger_EscalatesRun(t *testing.T) {
 }
 
 // TestOnTurnCompleted_HITLAfterStep_MarksAwaitingDecision_RunStaysRunning
-// proves §25.9's HITL gate for the ONE built-in step that carries it
-// (plan lane's step 1): OnTurnCompleted never calls workflow.NextStep at
-// all here -- the step-run lands in awaiting_decision (not completed), and
-// the RUN's own status is completely untouched (still running), exactly
+// proves §25.9's HITL gate: OnTurnCompleted never calls workflow.NextStep
+// at all here -- the step-run lands in awaiting_decision (not completed),
+// and the RUN's own status is completely untouched (still running), exactly
 // where Step 56's own decide endpoint is meant to pick it up.
+//
+// Exercises a CUSTOM (non-built-in) hitl_after step (seedCustomHITLAfterStep,
+// dispatch_integration_test.go), not the built-in plan workflow: migration
+// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up, an
+// audit-found design incoherence -- see that migration's own header comment
+// and docs/TECHNICAL_PLAN.md §25.8) made the built-in plan workflow a
+// genuine single-step passthrough carrying no HITL, so classic plan mode
+// (§8.1, Steps 37/38) stays the SOLE plan-approval authority; this test's
+// own subject -- the HITLAfter branch in OnTurnCompleted itself -- is
+// otherwise completely unchanged and now proven against the shape any
+// future custom workflow (e.g. a Phase 7 canvas-authored one) would use.
 func TestOnTurnCompleted_HITLAfterStep_MarksAwaitingDecision_RunStaysRunning(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -122,23 +132,17 @@ func TestOnTurnCompleted_HITLAfterStep_MarksAwaitingDecision_RunStaysRunning(t *
 	workflows := postgres.NewWorkflowStore(pool)
 	deps := testDeps(pool, turns, workflows)
 
-	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	if _, err := sessions.UpdateIntentDecisionIfNull(ctx, session.ID, []byte(`{"target":"request","mode":"plan"}`)); err != nil {
-		t.Fatalf("seed intent_decision: %v", err)
-	}
-	session, err = sessions.Get(ctx, session.ID)
-	if err != nil {
-		t.Fatalf("re-fetch session: %v", err)
-	}
+	const (
+		customDefID  = "10000000-0000-4000-8000-000000000021"
+		customStepID = "10000000-0000-4000-8000-000000000022"
+	)
+	session := seedCustomHITLAfterStep(t, ctx, pool, sessions, customDefID, customStepID, "acme/hitl-completion")
 
-	row, res := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "draft a plan", nil, true)
-	if row.stepDefID.String() != builtInPlanStep1ID {
-		t.Fatalf("step-run step id = %s, want the built-in plan step 1 %s (test setup assumption)", row.stepDefID.String(), builtInPlanStep1ID)
+	row, res := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "do the hitl-gated thing", nil, false)
+	if row.stepDefID.String() != customStepID {
+		t.Fatalf("step-run step id = %s, want the custom HITLAfter step %s (test setup assumption)", row.stepDefID.String(), customStepID)
 	}
-	if res.Prompt != "draft a plan" {
+	if res.Prompt != "do the hitl-gated thing" {
 		t.Fatalf("res.Prompt = %q, want unchanged (test setup assumption)", res.Prompt)
 	}
 

@@ -80,8 +80,14 @@ type CreateSessionParams struct {
 // §17.2, migrations/000045) are likewise sqlc.narg/COALESCE-defaulted --
 // every EXISTING call site (every session created before this Step) keeps
 // compiling and behaving identically: parent_session_id stays NULL,
-// spawn_depth stays 0. httpapi.SpawnChildSession (childsession.go) is this
-// Step's own one real caller that supplies non-default values.
+// spawn_depth stays 0. httpapi.CreateSessionOnTx's own ChildSessionOptions
+// (create.go) is this Step's own mechanism that supplies non-default
+// values -- either via httpapi.SpawnChildSession (childsession.go, a
+// caller with no already-open transaction of its own) or, since the
+// Finding-1 audit fix, internal/app/outboxworker's own sentinelautofix.go,
+// which calls CreateSessionOnTx directly, inline on its own
+// claim-locked transaction (see that file's own doc comment for why it
+// cannot go through SpawnChildSession's separate transaction instead).
 //
 // epistemic_check_enabled (Step 61, "builder epistemic pre-action check",
 // §20.4, migrations/000066) mirrors build_model_id's own sqlc.narg

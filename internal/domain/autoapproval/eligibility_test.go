@@ -35,16 +35,21 @@ func cleanVerdict() review.Verdict {
 // the SAME small/non-sensitive shape cleanVerdict's own (now-inert)
 // FilesChanged/BlastRadius already modeled, so this baseline's own
 // "eligible" outcome means the same thing it always did, just gated on
-// the correct fields now.
+// the correct fields now. TouchedBlastRadiusKnown is explicitly true --
+// Phase 5 audit findings 1+2's own fix: this field's zero value is
+// "unknown" (fail closed), so a clean baseline must set it explicitly,
+// exactly like every OTHER field here is explicitly set rather than
+// relying on a Go zero value to mean "clean".
 func cleanInput() autoapproval.EligibilityInput {
 	return autoapproval.EligibilityInput{
-		Verdict:            cleanVerdict(),
-		VerdictHeadSHA:     "abc123",
-		CurrentHeadSHA:     "abc123",
-		CIGreen:            true,
-		HasNeedsHumanLabel: false,
-		ChangedFileCount:   5,
-		TouchedBlastRadius: []review.Tag{review.TagPublicAPI}, // present, but NOT in the default sensitive list
+		Verdict:                 cleanVerdict(),
+		VerdictHeadSHA:          "abc123",
+		CurrentHeadSHA:          "abc123",
+		CIGreen:                 true,
+		HasNeedsHumanLabel:      false,
+		ChangedFileCount:        5,
+		TouchedBlastRadius:      []review.Tag{review.TagPublicAPI}, // present, but NOT in the default sensitive list
+		TouchedBlastRadiusKnown: true,
 	}
 }
 
@@ -181,7 +186,57 @@ func TestComputeEligible(t *testing.T) {
 			wantReason:   autoapproval.ReasonNone,
 		},
 
-		// --- criterion 6: no sensitive path touched -- §62 review finding
+		// --- criterion 6: the changed-file facts must actually be
+		// KNOWN before TouchedBlastRadius is trusted at all -- Phase 5
+		// audit findings 1+2 (both fixed): a failed or page-truncated
+		// GitHub changed-files fetch must refuse here, distinctly from
+		// "we checked and it IS sensitive" (criterion 7 immediately
+		// below). Mutation-test target: reverting this check (deleting
+		// the `if !in.TouchedBlastRadiusKnown` branch in eligibility.go)
+		// must turn the FIRST case below from refused back into eligible
+		// (TouchedBlastRadius is nil here, which touchesSensitivePath
+		// reads as "nothing sensitive" if this gate is ever removed). ---
+		{
+			name:         "changed-file facts unknown (e.g. a swallowed GitHub fetch error) is never eligible, even with an empty blast radius",
+			in:           withTouchedBlastRadiusKnown(cleanInput(), false),
+			cfg:          cfg,
+			wantEligible: false,
+			wantReason:   autoapproval.ReasonBlastRadiusUnknown,
+		},
+		{
+			// Isolates the check-ORDER: a diff already too large is
+			// refused on ITS OWN criterion first, never on the
+			// blast-radius-unknown one, even when both facts are true at
+			// once -- ComputeEligible must never depend on the caller
+			// having populated TouchedBlastRadiusKnown correctly before
+			// its OWN, earlier, independently-reliable size gate runs.
+			name: "an oversized diff refuses on diff size, not on blast-radius-unknown, even when the blast radius is ALSO unknown",
+			in: func() autoapproval.EligibilityInput {
+				in := withChangedFileCount(cleanInput(), cfg.MaxFilesChanged+1)
+				return withTouchedBlastRadiusKnown(in, false)
+			}(),
+			cfg:          cfg,
+			wantEligible: false,
+			wantReason:   autoapproval.ReasonDiffTooLarge,
+		},
+		{
+			// The "known-empty" case Phase 5's own fix must keep legal:
+			// a GENUINELY confirmed, complete fetch that found zero
+			// changed files (TouchedBlastRadiusKnown=true) is NOT the
+			// same as "unknown" and must be evaluated normally, not
+			// refused merely for being empty.
+			name: "a confirmed, complete changed-file listing that is genuinely empty is evaluated normally (known-empty is legal, distinct from unknown)",
+			in: func() autoapproval.EligibilityInput {
+				in := withChangedFileCount(cleanInput(), 0)
+				in = withTouchedBlastRadius(in, nil)
+				return withTouchedBlastRadiusKnown(in, true)
+			}(),
+			cfg:          cfg,
+			wantEligible: true,
+			wantReason:   autoapproval.ReasonNone,
+		},
+
+		// --- criterion 7: no sensitive path touched -- §62 review finding
 		// C1: now gated on TouchedBlastRadius (the server-DERIVED fact,
 		// autoapproval.ClassifyChangedPaths over the PR's real changed
 		// files), never Verdict.BlastRadius. ---
@@ -255,13 +310,14 @@ func TestComputeEligible_IgnoresModelSelfReportedFilesChangedAndBlastRadius(t *t
 	t.Run("diff size: real 300-file PR refuses despite a lying low FilesChanged", func(t *testing.T) {
 		t.Parallel()
 		in := autoapproval.EligibilityInput{
-			Verdict:            lyingVerdict,
-			VerdictHeadSHA:     "sha-under-attack",
-			CurrentHeadSHA:     "sha-under-attack",
-			CIGreen:            true,
-			HasNeedsHumanLabel: false,
-			ChangedFileCount:   300, // TRUTH: GitHub itself reports 300 changed files.
-			TouchedBlastRadius: nil,
+			Verdict:                 lyingVerdict,
+			VerdictHeadSHA:          "sha-under-attack",
+			CurrentHeadSHA:          "sha-under-attack",
+			CIGreen:                 true,
+			HasNeedsHumanLabel:      false,
+			ChangedFileCount:        300, // TRUTH: GitHub itself reports 300 changed files.
+			TouchedBlastRadius:      nil,
+			TouchedBlastRadiusKnown: true,
 		}
 		eligible, reason := autoapproval.ComputeEligible(in, cfg)
 		if eligible {
@@ -288,7 +344,8 @@ func TestComputeEligible_IgnoresModelSelfReportedFilesChangedAndBlastRadius(t *t
 			// the full integration level, through the real classifier
 			// over real ports.OpenPR.ChangedFiles rather than a
 			// pre-computed TouchedBlastRadius literal.
-			TouchedBlastRadius: []review.Tag{review.TagMigrations, review.TagAuth},
+			TouchedBlastRadius:      []review.Tag{review.TagMigrations, review.TagAuth},
+			TouchedBlastRadiusKnown: true, // confirmed, complete listing -- this subtest is about the SENSITIVE-PATH criterion, not the unknown-facts one
 		}
 		eligible, reason := autoapproval.ComputeEligible(in, cfg)
 		if eligible {
@@ -312,13 +369,14 @@ func TestComputeEligible_IgnoresModelSelfReportedFilesChangedAndBlastRadius(t *t
 		overReportingVerdict.BlastRadius = []review.Tag{review.TagAuth, review.TagMigrations, review.TagSecrets}
 
 		in := autoapproval.EligibilityInput{
-			Verdict:            overReportingVerdict,
-			VerdictHeadSHA:     "sha-clean",
-			CurrentHeadSHA:     "sha-clean",
-			CIGreen:            true,
-			HasNeedsHumanLabel: false,
-			ChangedFileCount:   1,
-			TouchedBlastRadius: nil,
+			Verdict:                 overReportingVerdict,
+			VerdictHeadSHA:          "sha-clean",
+			CurrentHeadSHA:          "sha-clean",
+			CIGreen:                 true,
+			HasNeedsHumanLabel:      false,
+			ChangedFileCount:        1,
+			TouchedBlastRadius:      nil,
+			TouchedBlastRadiusKnown: true,
 		}
 		eligible, reason := autoapproval.ComputeEligible(in, cfg)
 		if !eligible {
@@ -370,5 +428,9 @@ func withChangedFileCount(in autoapproval.EligibilityInput, n int) autoapproval.
 }
 func withTouchedBlastRadius(in autoapproval.EligibilityInput, tags []review.Tag) autoapproval.EligibilityInput {
 	in.TouchedBlastRadius = tags
+	return in
+}
+func withTouchedBlastRadiusKnown(in autoapproval.EligibilityInput, known bool) autoapproval.EligibilityInput {
+	in.TouchedBlastRadiusKnown = known
 	return in
 }

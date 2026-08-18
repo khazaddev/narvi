@@ -525,12 +525,65 @@ type OpenPR struct {
 	// page, per_page=100 -- mirrors mergedbetween.go's own
 	// fetchChangedPathPrefixes precedent and its identical "an honestly-
 	// scoped approximation" acceptance) -- the input a caller feeds to
-	// ResolveCodeOwners' own Paths, and to a diff-size/sensitive-path
-	// eligibility check, without a second round-trip to re-fetch what this
-	// call already had in hand.
+	// ResolveCodeOwners' own Paths, without a second round-trip to
+	// re-fetch what this call already had in hand.
+	//
+	// Phase 5 audit findings 1+2 (both fixed): this field is deliberately
+	// NOT what the auto-approval eligibility engine's diff-size gate
+	// compares against threshold anymore -- len(ChangedFiles) silently
+	// undercounts any PR over the one-page cap above, and used to also
+	// silently read as "0 files" whenever the separate Pull Request Files
+	// fetch that populates it failed outright (nil, indistinguishable
+	// from a confirmed-empty diff). ChangedFilesCount below is the
+	// authoritative count the size gate now uses; ChangedFilesListDegraded
+	// below is whether THIS field can still be trusted for sensitive-path
+	// classification. ChangedFiles itself is unchanged by this fix (still
+	// nil on a genuine fetch failure, still capped at one page on a
+	// genuinely large PR) -- ResolveCodeOwners' own consumption of it
+	// remains the same honestly-scoped approximation it always was; only
+	// the auto-approval eligibility gate's OWN reading of this data
+	// changed.
 	ChangedFiles []string
-	Additions    int
-	Deletions    int
+	// ChangedFilesCount is this PR's own CURRENT changed-file count,
+	// GitHub's own authoritative "changed_files" scalar on the SAME "Get
+	// a pull request" response ChangedFiles' own first paragraph already
+	// reads -- Additions/Deletions' own sibling scalar, immediately below,
+	// and exactly as reliable: the central detail fetch either succeeds,
+	// in which case GitHub reports this field on every real PR resource,
+	// or fails outright, in which case buildOpenPR/GetOpenPR both drop
+	// the whole row rather than return a half-built OpenPR (their own doc
+	// comments) -- there is no partial-success state in which this
+	// specific field is present but wrong the way ChangedFiles' own
+	// SEPARATE, independent Pull Request Files fetch can fail or
+	// truncate. Phase 5 audit finding 2 (fixed): the auto-approval
+	// eligibility engine's diff-size gate (autoapproval.ComputeEligible,
+	// EligibilityInput.ChangedFileCount) compares THIS field against
+	// EligibilityConfig.MaxFilesChanged -- never len(ChangedFiles), which
+	// a PR author fully controls the ability to game past a page boundary
+	// (filenames and diff order are both attacker-influenceable).
+	ChangedFilesCount int
+	// ChangedFilesListDegraded is true iff ChangedFiles above is NOT a
+	// complete listing of this PR's changed paths -- either the Pull
+	// Request Files fetch itself failed outright (ChangedFiles is nil),
+	// OR it succeeded but was truncated at its own one-page cap
+	// (ChangedFilesCount above, the authoritative total, exceeds
+	// len(ChangedFiles)). Phase 5 audit findings 1+2 (both fixed): a
+	// caller deriving sensitive-path facts (autoapproval.
+	// ClassifyChangedPaths) from ChangedFiles MUST treat a true value
+	// here as "these facts are UNKNOWN, never confirmed clean" -- see
+	// EligibilityInput.TouchedBlastRadiusKnown's own doc comment
+	// (internal/domain/autoapproval/eligibility.go) for where this is
+	// actually enforced, fail-closed. false (the zero value) alongside a
+	// nil/empty ChangedFiles legitimately means "confirmed: this PR
+	// touches zero files" -- the SAME "confirmed negative" vs. "could not
+	// confirm" distinction ReviewDecisionDegraded/CIConclusionUnknown
+	// already draw elsewhere on this same struct, applied here to the
+	// identical ambiguity §62 review finding C1 originally fixed for
+	// Verdict.FilesChanged/BlastRadius, now closed for THIS field's own
+	// failure/truncation modes too.
+	ChangedFilesListDegraded bool
+	Additions                int
+	Deletions                int
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

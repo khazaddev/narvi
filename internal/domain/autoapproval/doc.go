@@ -30,13 +30,27 @@
 //     computed against the code actually under consideration.
 //  3. CIGreen -- must be true.
 //  4. Verdict.Shippable == review.ShippableAuto.
-//  5. Verdict.FilesChanged <= cfg.MaxFilesChanged (diff size).
-//  6. No cfg.SensitiveTags member appears in Verdict.BlastRadius (no
-//     sensitive path touched).
+//  5. EligibilityInput.ChangedFileCount <= cfg.MaxFilesChanged (diff
+//     size) -- GitHub's own authoritative changed-file scalar, never
+//     Verdict.FilesChanged, and (Phase 5 audit finding 2, fixed) never
+//     a possibly page-truncated len() of the fetched path listing
+//     either.
+//  6. EligibilityInput.TouchedBlastRadiusKnown is true (Phase 5 audit
+//     findings 1+2, fixed) -- the sensitive-path facts check 7 below
+//     relies on must have actually been established from GitHub; a
+//     failed or page-truncated changed-files fetch refuses here rather
+//     than silently reading as "nothing sensitive touched".
+//  7. No cfg.SensitiveTags member appears in EligibilityInput.
+//     TouchedBlastRadius (no sensitive path touched) -- never
+//     Verdict.BlastRadius.
 //
 // "No floor raised: neither the coverage floor nor the premise floor
-// ... is above its baseline" is DELIBERATELY not a separate, seventh
-// check here. internal/domain/review's own ComputeShippable composes
+// ... is above its baseline" is DELIBERATELY not a separate check of its
+// own anywhere in the numbered list above (never conflate this with
+// check 6, Phase 5 audit findings 1+2's own "is the fact even knowable"
+// gate above, which exists for an entirely different reason: whether
+// GitHub's changed-files data could be fetched at all, nothing to do
+// with floors). internal/domain/review's own ComputeShippable composes
 // RiskLevel's baseline with CoverageFloor/PremiseFloor via max(rank) --
 // a RAISE-ONLY composition (review/shippable.go's own doc comment: "this
 // function never returns a Shippable ranked BELOW baselineFromRisk(risk)
