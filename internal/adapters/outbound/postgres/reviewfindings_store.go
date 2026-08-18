@@ -80,7 +80,13 @@ func (s *ReviewFindingStore) MarkRebutted(ctx context.Context, repoFullName stri
 
 // MarkFixPending records that a sentinel-auto-fix child session has been
 // spawned to address this finding (§17.2) -- suppresses the manual
-// apply-suggestion action for it (§17.3).
+// apply-suggestion action for it (§17.3). Guarded (status IN ('open',
+// 'fix_pending'), see MarkReviewFindingFixPending's own generated doc
+// comment) -- pgx.ErrNoRows (unwrapped) now means EITHER "no such finding"
+// OR "this finding already progressed past fix_pending", both a benign,
+// safe-to-ignore no-op for the caller. This guard is what makes a retried
+// call with the SAME fixChildSessionID safe (internal/app/outboxworker's
+// own sentinelAutoFixNotifier.Deliver relies on it).
 func (s *ReviewFindingStore) MarkFixPending(ctx context.Context, repoFullName string, prNumber int32, identityHash string, fixChildSessionID pgtype.UUID) (sqlcgen.ReviewFinding, error) {
 	return s.q.MarkReviewFindingFixPending(ctx, sqlcgen.MarkReviewFindingFixPendingParams{
 		RepoFullName:      repoFullName,

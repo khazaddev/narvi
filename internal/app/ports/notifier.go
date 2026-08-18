@@ -97,8 +97,9 @@ const (
 
 	// NotificationKindSentinelAutoFix is Step 48's own addition
 	// ("sentinels + suggestions", §17.2): routes to internal/app/
-	// outboxworker's own sentinel-auto-fix notifier, which spawns a
-	// child session (httpapi.SpawnChildSession) pre-loaded with the
+	// outboxworker's own sentinel-auto-fix notifier, which atomically
+	// claims its sentinel_fixes row and spawns a child session
+	// (httpapi.CreateSessionOnTx, sentinelautofix.go) pre-loaded with the
 	// origin diff and the specific coverage/doc-drift finding(s) that
 	// triggered it -- see SentinelAutoFixPayload's own doc comment for
 	// the payload shape, and reviewverdict.go for the ONE place this Kind

@@ -54,8 +54,16 @@ const scopedEnvironmentProvenanceTag = provenance.ScopedEnvironment
 // no change of its own: omitting the argument entirely is exactly the
 // same as passing a zero-value ChildSessionOptions{}, which sets nothing.
 //
-// SpawnSentinelFixChildSession (childsession.go) is this Step's own ONE
-// real caller that supplies a non-zero value.
+// SpawnChildSession (childsession.go) is this Step's own general-purpose
+// supplier of a non-zero value, for a caller with no already-open
+// transaction of its own. internal/app/outboxworker's own
+// sentinelAutoFixNotifier (sentinelautofix.go) is, since the Finding-1
+// audit fix, a SECOND supplier that instead calls CreateSessionOnTx
+// directly (never through SpawnChildSession): that notifier needs to
+// compose the session insert with its OWN atomic per-claim row lock, on
+// its own already-open transaction -- exactly the shape this function's
+// own doc comment above describes ("an atomic per-resource claim lock ...
+// before ever reaching this function").
 type ChildSessionOptions struct {
 	// ParentSessionID is the review session that spawned this child
 	// session (§17.2) -- pgtype.UUID{} (invalid/NULL) for every ordinary

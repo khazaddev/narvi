@@ -72,9 +72,11 @@ func IsScopedEnvironment(tag *string) bool {
 }
 
 // SentinelAutoFix is the sessions.provenance_tag value a sentinel-auto-fix
-// child session (§17.2) is created with, set once, at spawn time
-// (httpapi.SpawnChildSession, childsession.go) -- NEVER set on any other
-// kind of session. Three independent things key off this exact value:
+// child session (§17.2) is created with, set once, at spawn time (via
+// httpapi.ChildSessionOptions.ProvenanceTag on a CreateSessionOnTx call --
+// internal/app/outboxworker's own sentinelAutoFixNotifier,
+// sentinelautofix.go) -- NEVER set on any other kind of session. Three
+// independent things key off this exact value:
 //
 //  1. §17.1's own "no recursion" rule: a review verdict posted on a PR
 //     whose OWN session carries this tag never itself triggers ANOTHER
