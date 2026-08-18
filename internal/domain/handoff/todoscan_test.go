@@ -155,6 +155,75 @@ func TestScanTODOs_TableDriven(t *testing.T) {
 				{FilePath: "foo_test.go", Line: 2, Text: "// TODO: assert the error case too"},
 			},
 		},
+		{
+			// The bug this test guards against: an ADDED line whose own
+			// source text starts with "++ " becomes, once the diff's own
+			// leading "+" is prepended, a raw diff line starting with
+			// "+++ " -- colliding with the diff FILE header's own prefix.
+			// A parser that treats "+++ " as a header ANYWHERE (not just
+			// in the per-file header block, before the first "@@") would
+			// misread this hunk-body line as a bogus new file header,
+			// losing the TODO marker it carries and corrupting
+			// currentFile for every line after it. This also asserts a
+			// later, ordinary added line ("+// TODO: still attributed to
+			// notes.md") is still correctly attributed to notes.md
+			// afterward, proving the file/line state was never
+			// corrupted.
+			name: "added line whose source starts with '++ ' is not misread as a file header",
+			diff: "diff --git a/notes.md b/notes.md\n" +
+				"--- a/notes.md\n" +
+				"+++ b/notes.md\n" +
+				"@@ -1,1 +1,4 @@\n" +
+				" # Notes\n" +
+				"+++ TODO: revisit this bullet\n" +
+				"+another line\n" +
+				"+// TODO: still attributed to notes.md\n",
+			want: []handoff.TODOFinding{
+				{FilePath: "notes.md", Line: 2, Text: "++ TODO: revisit this bullet"},
+				{FilePath: "notes.md", Line: 4, Text: "// TODO: still attributed to notes.md"},
+			},
+		},
+		{
+			// The mirror case for a REMOVED line whose own source starts
+			// with "-- " (becomes a raw diff line starting with "--- ",
+			// colliding with the diff file header's own old-file prefix).
+			// It must still be treated as an ordinary removed line (never
+			// reported, new-side line counter untouched), and a
+			// subsequent added TODO in the same file must still be
+			// attributed correctly.
+			name: "removed line whose source starts with '-- ' is not misread as a file header",
+			diff: "diff --git a/notes.md b/notes.md\n" +
+				"--- a/notes.md\n" +
+				"+++ b/notes.md\n" +
+				"@@ -1,2 +1,2 @@\n" +
+				" # Notes\n" +
+				"--- old separator, not a header\n" +
+				"+// TODO: still attributed to notes.md\n",
+			want: []handoff.TODOFinding{
+				{FilePath: "notes.md", Line: 2, Text: "// TODO: still attributed to notes.md"},
+			},
+		},
+		{
+			// A second file's REAL "--- "/"+++ " header must still be
+			// recognized after the first file's hunk body has already
+			// turned inHeaderBlock off -- guards against overcorrecting
+			// the fix above into never treating "+++ " as a header again.
+			name: "second file's real header is still recognized after the first file's hunk body",
+			diff: "diff --git a/a.ts b/a.ts\n" +
+				"--- a/a.ts\n" +
+				"+++ b/a.ts\n" +
+				"@@ -1,1 +1,1 @@\n" +
+				" line1\n" +
+				"diff --git a/b.ts b/b.ts\n" +
+				"--- a/b.ts\n" +
+				"+++ b/b.ts\n" +
+				"@@ -1,1 +1,2 @@\n" +
+				" line1\n" +
+				"+// TODO: in b, correctly attributed\n",
+			want: []handoff.TODOFinding{
+				{FilePath: "b.ts", Line: 2, Text: "// TODO: in b, correctly attributed"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

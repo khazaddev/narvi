@@ -6591,7 +6591,7 @@ func (j *WorkflowStepDecideResponse) UnmarshalJSON(value []byte) error {
 // (§18.6); '{{prompt}}' is the caller's own text.
 type WorkflowStepDefinition struct {
 	// §25.10's optional canvas-layout attachment: this step's node position on the
-	// visual editor's canvas (Step 79, §25.12). OPAQUE server-side -- stored verbatim
+	// visual editor's canvas (Step 88, §25.12). OPAQUE server-side -- stored verbatim
 	// (workflow_step_definitions.canvas_position JSONB), round-tripped, never
 	// interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like
 	// CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has
@@ -6641,7 +6641,7 @@ type WorkflowStepDefinition struct {
 }
 
 // §25.10's optional canvas-layout attachment: this step's node position on the
-// visual editor's canvas (Step 79, §25.12). OPAQUE server-side -- stored verbatim
+// visual editor's canvas (Step 88, §25.12). OPAQUE server-side -- stored verbatim
 // (workflow_step_definitions.canvas_position JSONB), round-tripped, never
 // interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like
 // CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has

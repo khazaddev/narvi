@@ -17,10 +17,13 @@
 // # Why a SEPARATE package from internal/domain/review, not more files in it
 //
 // internal/domain/review's own doc.go is explicit and deliberate: "This
-// package exports exactly three functions that compute anything:
-// CoverageFloor, PremiseFloor, and ComputeShippable... every other
-// identifier besides these three functions and the types/constants a
-// caller needs to construct a Verdict is unexported." Adding
+// package exports exactly eight functions that compute anything:
+// CoverageFloor, PremiseFloor, AdequacyFloor, CounterReviewFloor,
+// ComputeShippable, ShouldRunAggregateReview,
+// ComputeReleaseManifestFindings, and RenderTurnPrompt ... every other
+// identifier besides these eight functions and the types/constants a
+// caller needs to construct a Verdict [or drive one of the three later
+// additions] is unexported." Adding
 // ComputeFormalReviewEvent/RiskLabel/ComputeLabelSync/RenderVerdictComment/
 // RerunGuidance/ValidateVerdictInput as new exported functions directly in
 // that package would silently break an invariant its own maintainers

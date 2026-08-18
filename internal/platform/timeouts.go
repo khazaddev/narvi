@@ -2375,7 +2375,7 @@ func DefaultTimeouts() Timeouts {
 		DecisionInboxStaleAfter:         48 * time.Hour,      // Step 60, §16.1, explicit ("stale items (>48h, configurable)")
 		DecisionInboxLatencyWindow:      30 * 24 * time.Hour, // Step 60, §16.2; not specified, chosen as a month of decision history -- long enough for a stable median, bounded per §21.1
 
-		ReviewVerdictAnalyticsWindow:   30 * 24 * time.Hour, // Step 62, §21.1; not specified, mirrors DecisionInboxLatencyWindow's own identical "a month, bounded" reasoning
+		ReviewVerdictAnalyticsWindow:   30 * 24 * time.Hour, // Step 62, §21.1, explicit ("bounded from day one ... default 30 days, mirroring the decision inbox's own DecisionInboxLatencyWindow, §16.2 -- never DecisionInboxStaleAfter's own much narrower 48h item-staleness flag, §16.1, a different concept entirely") -- mirrors DecisionInboxLatencyWindow's own identical "a month, bounded" reasoning
 		AutoMergePumpInterval:          60 * time.Second,    // Step 62, §21.2; not specified, mirrors AutomationEnginePumpInterval's own identical periodic-background-policy-engine reasoning
 		AutoMergeCandidateLookback:     7 * 24 * time.Hour,  // Step 62, §21.2; not specified, chosen generously -- every candidate is re-confirmed live regardless
 		DigestPumpInterval:             5 * time.Minute,     // Step 62, §21.3; not specified, chosen -- a digest fires at most once per channel per day, so coarse polling is ample

@@ -40,17 +40,26 @@
 //     with a converted ProposedShippable — see verdict.go's own doc
 //     comment.
 //
-// # Exactly five exported functions
-// This package exports exactly five functions that compute anything:
-// CoverageFloor (the coverage floor), PremiseFloor (the premise floor),
-// AdequacyFloor (the description-adequacy floor, §26.2/Step 67 — the
-// THIRD raise-only floor, added to the original two Step 45 established),
-// CounterReviewFloor (the counter-review floor, §26.4/Step 69 — the
-// FOURTH raise-only floor), and ComputeShippable (the one composition seam
-// a later Step calls). Every other identifier besides these five functions
-// and the types/constants a caller needs to construct a Verdict is
-// unexported — there is no second path to any of these five results, and
-// no method set duplicating them.
+// # Exactly eight exported functions
+// This package exports exactly eight functions that compute anything.
+// The original five this section named when it was first written, all
+// feeding directly into Shippable: CoverageFloor (the coverage floor),
+// PremiseFloor (the premise floor), AdequacyFloor (the
+// description-adequacy floor, §26.2/Step 67 — the THIRD raise-only floor,
+// added to the original two Step 45 established), CounterReviewFloor (the
+// counter-review floor, §26.4/Step 69 — the FOURTH raise-only floor), and
+// ComputeShippable (the one composition seam a later Step calls). Plus
+// three more this package has since grown to also own, each its own pure
+// decision/render function unrelated to any Shippable floor:
+// ShouldRunAggregateReview (§15.3's own conditional aggregate-diff-review
+// trigger, aggregatereview.go), ComputeReleaseManifestFindings (§15's own
+// release-manifest red-at-merge/stale-approval finding computation,
+// manifestcheck.go), and RenderTurnPrompt (the review turn's own prompt
+// renderer, context.go). Every other identifier besides these eight
+// functions and the types/constants a caller needs to construct a Verdict
+// or drive one of these three later additions is unexported — there is no
+// second path to any of these eight results, and no method set
+// duplicating them.
 //
 // # Ranking is an explicit table, never iota order
 // Shippable's total order (auto < needs_human < block, most to least

@@ -17,7 +17,7 @@ import (
 // as a new field on review.Verdict or a new exported function in review
 // itself -- for the exact reason reviewpost/doc.go's own top-level comment
 // already gives for every other type in this package: review/doc.go pins
-// "exactly three exported functions" in that package on purpose, and
+// "exactly eight exported functions" in that package on purpose, and
 // extending review's own EXPORT SURFACE (as opposed to extending its types
 // from a sibling package, the established precedent this package's own
 // VerdictInput/BuildVerdict already set) would silently break an invariant

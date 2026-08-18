@@ -10,7 +10,7 @@ package reviewpost
 // alongside review.CounterReviewStatus (counterreview.go): unlike
 // CounterReviewStatus, this type feeds NO Shippable floor at all -- it
 // has no business in review's own closed, floor-input-only universe (that
-// package's own doc.go: "exactly five exported functions... no second
+// package's own doc.go: "exactly eight exported functions... no second
 // path to any of these results"). See this type's own doc comment below
 // for the full "why never a floor" reasoning -- the SAME reasoning that
 // makes it safe for this pass to run on the light path in the first
