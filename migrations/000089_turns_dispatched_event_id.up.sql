@@ -1,0 +1,66 @@
+-- turns.dispatched_event_id: the events-log high-water mark at the moment
+-- a turn's prompt was actually dispatched -- MAX(events.id) for that
+-- session, stamped by internal/app/sessionactor's own tryPlanDispatch and
+-- tryPlanReenqueue (dispatch.go) in the SAME transaction, and alongside,
+-- the dispatched_at/dispatched_sandbox_gen stamps that already happen
+-- there.
+--
+-- # Why a monotonic id and not a timestamp
+--
+-- Step 71's own post-hoc counter-review corroboration
+-- (ListSubTaskStartEventsForTurn/ListSubTaskFinishEventsForTurn,
+-- queries/events.sql) needs to answer exactly one question: "does this
+-- event belong to THIS turn's own dispatch, or to an earlier one?".  It
+-- originally answered it with `events.created_at >= turns.dispatched_at`.
+-- That comparison straddles TWO DIFFERENT CLOCKS and is therefore not
+-- sound:
+--
+--   * events.created_at (migrations/000008_events.up.sql) defaults to
+--     now() -- stamped by the POSTGRES SERVER.
+--   * turns.dispatched_at (migrations/000005_turns.up.sql) is passed in by
+--     the caller as a Go time.Time -- stamped by the APPLICATION PROCESS,
+--     on a different host in any real deployment.
+--
+-- Those two clocks agree only to whatever precision NTP happens to be
+-- holding at that instant. The comparison is therefore correct only by
+-- luck, and the direction of the luck matters: an app clock running BEHIND
+-- the database widens the window and lets an EARLIER turn's trace back
+-- into range -- eroding precisely the cross-turn guard that bound was
+-- added to provide -- while an app clock running AHEAD silently drops this
+-- turn's own genuine events and floors an honest verdict to needs_human.
+--
+-- events.id sidesteps the question entirely: it is a BIGSERIAL PRIMARY KEY
+-- (migrations/000008_events.up.sql) assigned by the one database, so
+-- "events belonging to this dispatch" becomes `events.id >
+-- turns.dispatched_event_id` -- a total order with no clock in it at all,
+-- and one the existing events_session_id_id_idx (session_id, id) index
+-- already serves. turns.dispatched_at is deliberately LEFT IN PLACE and
+-- unchanged: it still has a genuine, correct consumer in
+-- turn.EvaluateTurnDeadline (internal/app/sessionactor/timerfired.go),
+-- which compares it against the application's OWN time.Now() -- same
+-- clock, sound comparison. Re-sourcing that column from the database
+-- clock to fix corroboration would have broken the deadline instead;
+-- these are two different clock domains and one column cannot serve both.
+--
+-- # Fail-conservative under concurrency
+--
+-- Sequence values are allocated before commit, so an event inserted by an
+-- earlier turn can receive its id before this turn is dispatched and only
+-- become visible afterwards. Taken as MAX(id) at dispatch, such an event
+-- has id <= the watermark and is therefore EXCLUDED. That is the
+-- fail-conservative direction this codebase already commits to for this
+-- check (review/doc.go's "fail-conservative policy for every closed enum",
+-- and queries/events.sql's own "fails toward matches nothing, never toward
+-- over-matches"): the cost is a genuine counter-review occasionally going
+-- uncorroborated (verdict floored to needs_human, a human looks), never a
+-- fabricated self-report being wrongly corroborated.
+--
+-- Nullable -- NULL before a turn's first real dispatch, so every existing
+-- turns row and every existing CreateTurnParams call site stays valid
+-- unchanged, exactly as dispatched_sandbox_gen
+-- (migrations/000026_turn_dispatch_gen.up.sql) already is. Every consumer
+-- treats NULL as "cannot corroborate" rather than as "no lower bound",
+-- the same fail-conservative NULL handling corroborateCounterReview
+-- (internal/adapters/inbound/httpapi/reviewverdict.go) already applies to
+-- a NULL dispatched_sandbox_gen.
+ALTER TABLE turns ADD COLUMN dispatched_event_id BIGINT;

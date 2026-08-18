@@ -70,11 +70,20 @@ WHERE id = $1;
 -- dispatched_sandbox_gen only, never re-transitions status) for a
 -- Processing turn whose prompt needs re-sending to a respawned sandbox
 -- incarnation.
+--
+-- dispatched_event_id (migrations/000089_turns_dispatched_event_id.up.sql)
+-- is stamped by those SAME two call sites, in the SAME write, from
+-- MaxEventIDForSession (queries/events.sql): the events-log high-water
+-- mark at the instant of dispatch, which the Step 71 corroboration
+-- queries use as their lower bound instead of a timestamp. It follows the
+-- identical sqlc.narg + COALESCE "absent argument leaves the column
+-- untouched" convention as the three columns above it.
 UPDATE turns
 SET status = $2,
     dispatched_at = COALESCE(sqlc.narg('dispatched_at'), dispatched_at),
     completed_at = COALESCE(sqlc.narg('completed_at'), completed_at),
-    dispatched_sandbox_gen = COALESCE(sqlc.narg('dispatched_sandbox_gen'), dispatched_sandbox_gen)
+    dispatched_sandbox_gen = COALESCE(sqlc.narg('dispatched_sandbox_gen'), dispatched_sandbox_gen),
+    dispatched_event_id = COALESCE(sqlc.narg('dispatched_event_id'), dispatched_event_id)
 WHERE id = $1
 RETURNING *;
 
