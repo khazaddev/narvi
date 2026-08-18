@@ -2880,8 +2880,9 @@ the port: `CreateReview` (`verdictpost.go:51`), `AddLabels`, `RemoveLabel`, `Pos
 (`adapter.go:990`), `CreateCommitStatus` (`adapter.go:1032`)); the synchronous ingress-side
 replies (GitHub sign-in/not-authorized/plan-awaiting comments, the Slack ack and interactive
 responses, Linear's synchronous activities — §30.3); the customer-destined subset of the 19
-`ports.NotificationKind` outbox kinds (§30.2 — including the two hybrid kinds whose internal work
-passes through while their external writes are caught one layer down, at the decorated port); the
+`ports.NotificationKind` outbox kinds (§30.2 — including the one hybrid kind, `sentinel_auto_fix`,
+whose internal work passes through while its external write is caught one layer down, at the
+decorated port); the
 sandbox's end-of-turn `git push` (§30.4); and
 `rwx_preview_dispatch` — a public preview build executing customer code is a trace on the RWX
 cloud and on the open internet, so it is suppressed structurally even though it is naturally
@@ -2922,8 +2923,10 @@ capability-starvation lever applies to `scm-credentials` only.
 with one seam: there is exactly **one** production construction site for the GitHub adapter
 (`cmd/control-plane/main.go:198`, `githubapi.New(nil, githubAPIBaseURL)`), and the package
 constructs no second HTTP client — every request rides the constructor-injected `a.httpClient`
-(the `doGet`/`doPost`/`doPut`/`doPatch` helpers at `adapter.go:346/525/1305/1345`, plus the two
-inline requests: `CreatePR`'s POST and `RemoveLabel`'s DELETE, `verdictpost.go:110`). A shadow
+(the `doGet`/`doPost`/`doPut`/`doPatch` helpers at `adapter.go:346/525/1305/1345`, plus four
+inline requests: `CreatePR`'s POST (`adapter.go:149`), `RemoveLabel`'s DELETE
+(`verdictpost.go:114`), `GetPullRequestDiff`'s GET (`adapter.go:860`), and `GetCompareDiff`'s GET
+(`adapter.go:944`) — eight sites total, all riding `a.httpClient`). A shadow
 `http.RoundTripper` installed *inside* the adapter therefore sees everything: in shadow, GET/HEAD
 pass; **every mutating verb is intercepted by default** — deny-by-default, no host allowlist for
 writes — recorded (method, path, decoded intention, payload) into the §30.6 ledger, and answered
@@ -2937,9 +2940,12 @@ place that class of leak is contained.
 
 **Layer 1 — the port decorator (typed recording + compile-time tripwire).** An **explicit,
 non-embedded** decorator of `ports.SourceControl` (`internal/app/ports/sourcecontrol.go`)
-installed at the wiring site: each of the 6 writes becomes a typed "would-have-done" ledger entry
-with a coherent synthetic result (`CreatePR`'s `PRRef`, `MergePR`'s SHA — see §30.6 and §30.7 for
-why those results must be impossible to mistake for real ones). Because the decorator implements
+installed at the wiring site: each of the 6 writes becomes a typed "would-have-done" ledger entry.
+Five of the six additionally return a coherent synthetic result (`CreatePR`'s `PRRef` — see §30.6
+for why those results must be impossible to mistake for real ones); the sixth, `MergePR`, returns
+no synthetic result at all — a fabricated merge success is a false-record generator, not a stand-in
+— and instead returns the typed `ShadowSuppressed` sentinel (§30.7 is the sole authority for this
+one). Because the decorator implements
 the interface explicitly — never by embedding — **adding a method to the port breaks the build**
 until the decorator handles it. The transport gate remains the net for everything the port never
 sees. The two layers are deliberate redundancy in one direction only: the decorator records with
@@ -2971,10 +2977,18 @@ before any traffic, is the strongest available equivalent (the same reasoning §
 timeout hierarchy's invariant test). Classification: SUPPRESS for every customer-destined kind;
 **PASS-THROUGH is mandatory** for `blob_delete` (Narvi-internal storage hygiene — suppressing it
 leaks orphaned blobs forever; the trap in any blanket suppress-everything reading), for
-`sentinel_auto_fix` and `github_description_autofix` (hybrids: their `Deliver` performs internal
-work that must run — the child-session spawn in `internal/app/outboxworker/sentinelautofix.go` —
-while their external writes go through the decorated port), and for `linear_digest` (a deliberate
-dead-letter, unchanged).
+`sentinel_auto_fix` (the **one** hybrid kind: its `Deliver` performs internal work that must run —
+the child-session spawn in `internal/app/outboxworker/sentinelautofix.go` — while its external
+writes go through the decorated port), and for `linear_digest` (a deliberate dead-letter,
+unchanged). `github_description_autofix` is **not** a hybrid and is **SUPPRESS**, not
+PASS-THROUGH: `descriptionAutofixNotifier.Deliver`
+(`internal/app/outboxworker/descriptionautofix.go`) performs zero internal state mutation of its
+own — every precondition it checks (`DescriptionAdequacy`, the repo's autofix flag, PR
+authorship, the PR's current body) is a read; its only effect is the external `UpdatePRBody` call,
+which the §30.2 Layer 1 decorator already covers. Nothing is lost by suppressing it at the outbox
+like every other customer-destined kind — its one write was never going to reach GitHub either
+way — and doing so keeps the classification uniform instead of resting the codebase's only
+customer-visible PR-description rewrite on the port decorator and transport gate alone.
 
 ### 30.3 The synchronous ingress writes: honestly non-structural, with three required compensating controls
 
@@ -3006,9 +3020,40 @@ all three required, none sufficient alone:
   (`newAckClient` moves behind the injected seam). Linear caution: a verb-level transport guard
   does not work there — everything is `POST /graphql` — so suppression is at the **client-method
   level, never the transport**.
-- **A CI arch-test** (depguard/forbidigo): importing `net/http` or `os/exec` is forbidden outside
-  `internal/adapters/outbound` and the `internal/sandboxagent` tree — mechanical enforcement at
-  merge time, the closest thing Go offers to compile-time for this class.
+- **A CI arch-test** (depguard/forbidigo), scoped to what it can actually enforce. Banning the
+  `net/http` **import** outside `internal/adapters/outbound` and the sandbox-agent trees fails the
+  repo on day one: verified, 58 non-test files across 11 packages outside those trees import
+  `net/http` today — every handler in `internal/adapters/inbound/httpapi` (34 files) plus
+  `inbound/auth`, `inbound/automationwebhook`, `inbound/github`, `inbound/identitylink`,
+  `inbound/linear`, `inbound/slack`, `inbound/wshub`, `internal/platform`, `cmd/control-plane`,
+  and `cmd/sandbox-agent` — all for the **server** side (`http.ResponseWriter`, `*http.Request`,
+  status constants, `http.HandlerFunc`), which an import-level ban cannot distinguish from the
+  **client** side it exists to forbid. (`os/exec` outside those trees is genuinely clean — 0 files
+  — so its import ban is unchanged.) The rule is therefore two different mechanisms: `os/exec`
+  stays an **import ban**; `net/http` becomes a ban on constructing or invoking **client-side
+  symbols** — `http.Client`, `http.DefaultClient`, `http.DefaultTransport`,
+  `http.NewRequest`/`NewRequestWithContext`, `http.Get`/`Post`/`Head`, `http.Transport` — with
+  server-side `net/http` explicitly permitted everywhere (receiving/answering a request is not an
+  egress capability). Both mechanisms' allowed trees are `internal/adapters/outbound`,
+  `internal/sandboxagent`, **and `cmd/sandbox-agent`** (verified NOT inside the
+  `internal/sandboxagent` tree, but the same binary in every sense that matters here — its own
+  `net/http` use today, `reviewcostbudgetserver.go`, is server-side); `cmd/control-plane` also
+  carries the client-side exception, but narrowly — as the composition root, it is the one place a
+  concrete `*http.Client` is legitimately constructed and wired into an outbound adapter's
+  constructor (`chatgptoauth.New(http.DefaultClient, …)`, `main.go:386`; `githubapi.New`'s own
+  wiring line, until Step 91 removes its `nil` default) — never used there to issue a request
+  directly. **Ratcheted, not repo-wide, from the moment Step 96 lands**: two pre-existing
+  client-side call sites outside the allowed trees are real and audited, not oversights, and are
+  pinned into the arch-test's initial baseline rather than silently grandfathered — GitHub's own
+  identity-read calls made during OAuth sign-in (`fetchGitHubUser`, `fetchVerifiedPrimaryEmail`,
+  `checkOrgMembership`/`checkAnyOrgMembership`, all GETs, `internal/adapters/inbound/auth/callback.go`
+  — reads, never a customer-repo write, and no different in kind from the API GETs §30.1 already
+  excludes from the guarantee) and the pre-Step-96 `newAckClient`/`SlackHTTPClient` construction in
+  `internal/adapters/inbound/slack/{ack.go,handler.go}` — the exact site this Step's first
+  compensating control retires by moving it behind the injected seam, so it drops out of the
+  baseline once this Step ships. Any client-side symbol anywhere else, including a 6th baseline
+  entry, fails CI — mechanical enforcement at merge time, the closest thing Go offers to
+  compile-time for this class.
 - **Credential starvation in the evaluation deployment** (§30.4): if no write-capable secret
   exists in the process or the sandbox, an ungoverned future code path is harmless by
   construction. This is the only control that survives the 12th caller, the 6th notifier, and the
@@ -3198,9 +3243,13 @@ adversarial finding: realistic-looking synthetic refs are **durable poison** —
 (`internal/app/decisioninbox/aggregate.go`; same pattern in the description-autofix path), and
 GitHub's PR counter is monotonic, so collision between a synthetic PR number and a real future
 customer PR #N is a guaranteed-eventual event — after which live auto-merge could act on a
-customer PR Narvi never authored. Therefore: **negative numbers and a non-https URL scheme
-(`shadow://…`), imposed at the type level**, so no synthetic ref can ever match a real GitHub URL
-and any accidental use against the real API fails loudly. (The remaining question — how far the
+customer PR Narvi never authored. Therefore: a **dedicated synthetic-ref constructor — unexported,
+negative numbers and the `shadow://…` scheme baked in — the only way any code in the codebase can
+produce a value claiming to be synthetic**, pinned by a test that it is the sole production call
+site, so no synthetic ref can ever match a real GitHub URL and any accidental use against the real
+API fails loudly. (An ordinary integer/string field carries no such guarantee on its own — the
+constructor's exclusivity is what does the work, the same capability-token idiom §30.2's live/shadow
+transport constructors and §30.8's resolver package already use.) (The remaining question — how far the
 synthetic scheme propagates into downstream lanes — is Step 97's chain-synthesis decision, §30.9.)
 
 **The operator view is a read model, not new state** (§16.2's own rule). The in-plan precedents
@@ -3210,11 +3259,16 @@ Platform shadow is the same form at scale: a repo card in Settings → Environme
 sentinel-autofix and auto-merge toggles already live), a ledger summary (N comments suppressed,
 M PRs, K pushes refused, LLM spend, links into sessions), and **Activate as the graduation
 gesture** — which applies §30.8's promotion fence. The read is a UNION over marked outbox rows +
-`shadow_scm_writes`. Access is role-gated (admin/maintainer, the §13.3 audit-view threshold): the
-ledger contains customer code at rest. A flag flip is an `audit_log` entry; individual
-suppressions are deliberately not (no human actor; they would drown the view). Retention/PII
-policy for ledger content is a deferred decision (§30.9); the cheap enabling move — a separate
-heavy-content column so a later null-out doesn't rewrite the table — is taken at schema time.
+`shadow_scm_writes`. Access is **admin-only, pending the §30.9 visibility decision** (admin-only
+vs maintainer+) — not settled here: §13.3's permission matrix has no audit-view row (the closest
+existing thing, Settings → Members' audit log, sits on that matrix's admin-only row), and this
+ledger exposes strictly more — full suppressed-write payloads plus customer source, beyond what
+even that row covers. Admin-only is the safe default until §30.9 resolves, matching this plan's
+own precedent for comparable exposure (§16.1's dead-lettered-outbox-deliveries row is admin-only
+for the same reason). A flag flip is an `audit_log` entry; individual suppressions are
+deliberately not (no human actor; they would drown the view). Retention/PII policy for ledger
+content is a deferred decision (§30.9); the cheap enabling move — a separate heavy-content column
+so a later null-out doesn't rewrite the table — is taken at schema time.
 
 ### 30.7 State coherence: where "return synthesized success" would lie
 
@@ -3364,9 +3418,12 @@ rather than being silently defaulted; none is resolved by this section:
 - **RWX preview in shadow**: the public dispatch is suppressed either way (§30.1 — a public
   preview URL is a trace); the open choice is whether an internal, non-public rendering ships as
   an evaluator feature (a new product surface) or previews are simply absent in shadow.
-- **Ledger retention/PII** (customer code at rest): retention window, null-out policy, and the
-  visibility threshold (admin-only vs maintainer+). The schema-time enabling move is taken
-  (§30.6); the policy is not.
+- **Ledger retention/PII** (customer code at rest): retention window and null-out policy — the
+  schema-time enabling move is taken (§30.6), the policy is not, and nothing gates Step 98's ship
+  on it. The **visibility threshold** (admin-only vs maintainer+) is the one part of this bullet
+  that does gate a Step: it must be chosen before Step 98 ships its role-gated ledger view (same
+  pattern as the chat-trigger and mirror decisions above); admin-only is the default absent that
+  choice (§30.6, §16.1's dead-lettered-outbox-deliveries precedent).
 - **Downstream-chain synthesis vs single-hop validation** (§30.7's echo problem — Step 97's
   second half).
 - **Mid-session flip semantics**: next-turn-boundary (the design as written, §30.8) vs
