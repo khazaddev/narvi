@@ -945,7 +945,7 @@ func TestRenderTurnPrompt_PlaceholderTokensInStackFieldsAreNeutralized(t *testin
 }
 
 // TestRenderTurnPrompt_SplitPlaceholderTokenAcrossFragmentsIsNeutralized
-// proves stripPlaceholderTokens' own fixed-point loop actually matters: a
+// proves StripPlaceholderTokens' own fixed-point loop actually matters: a
 // SINGLE pass over placeholderTokens could, in principle, remove one
 // token's own literal and thereby splice two surrounding fragments into a
 // DIFFERENT token's exact literal (sanitize.go's own doc comment gives the

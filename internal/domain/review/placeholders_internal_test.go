@@ -26,7 +26,7 @@ import (
 // If internal/domain/turn ever renames or rotates one of these three
 // without a matching update to placeholderTokens (sanitize.go), this test
 // fails CI immediately -- rather than silently reopening the exact
-// bearer-token-leak vulnerability stripPlaceholderTokens exists to close
+// bearer-token-leak vulnerability StripPlaceholderTokens exists to close
 // (an attacker-controlled diff/title/body containing a STALE copy of a
 // since-rotated turn placeholder would no longer be neutralized).
 func TestPlaceholderTokensMatchTurnPackage(t *testing.T) {

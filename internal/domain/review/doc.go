@@ -59,7 +59,11 @@
 // functions and the types/constants a caller needs to construct a Verdict
 // or drive one of these three later additions is unexported — there is no
 // second path to any of these eight results, and no method set
-// duplicating them.
+// duplicating them. (A ninth exported function, StripPlaceholderTokens, was
+// added on top of these eight by a later Step — see design call #8 below
+// for why it does not reopen this section's own count or its "no second
+// path" discipline: it computes none of the eight RESULTS this section
+// enumerates.)
 //
 // # Ranking is an explicit table, never iota order
 // Shippable's total order (auto < needs_human < block, most to least
@@ -226,4 +230,37 @@
 //     (internal/domain/reviewpost/validate_test.go). Also unlike
 //     coverage/premise/adequacy, never touches RiskLevel, for the
 //     identical reason AdequacyFloor does not (design call #6 above).
+//
+//  8. (Step 62 hardening, adversarial review) A NINTH exported function,
+//     StripPlaceholderTokens (sanitize.go), was added on top of the eight
+//     above without renumbering that section's own count -- a deliberate
+//     choice, not an oversight the "exactly eight" wording failed to catch.
+//     The eight are specifically the Verdict-computation surface ("no
+//     second path to any of these eight RESULTS, and no method set
+//     duplicating them") -- StripPlaceholderTokens computes no Verdict
+//     field, floor, label, or rendered prompt text at all; it is a narrow
+//     security utility (destroy every literal secret-substitution
+//     placeholder token in a string, fixed-point) this package already
+//     used internally (formerly unexported stripPlaceholderTokens, called
+//     only by sanitizeDiffField/sanitizeDescriptionField for THIS
+//     package's own read/prompt path, RenderTurnPrompt) and now also
+//     exports for internal/domain/reviewpost's own SanitizeDigest
+//     (reviewpost/sanitize.go) to call directly, hardening the WRITE path
+//     (internal/app/reviewverdict.Insert persisting a review verdict's own
+//     model-authored digest fields) against the identical placeholder-
+//     forgery class the Phase 5 audit's CRITICAL finding closed on the
+//     read path. The alternative -- reviewpost hand-duplicating
+//     placeholderTokens a fourth time, mirroring how review/upload already
+//     duplicate each OTHER's tokens as raw literals -- was rejected
+//     because reviewpost, unlike review/upload, has no "zero external
+//     imports" self-restriction forcing that duplication (reviewpost/
+//     doc.go already permits exactly one non-stdlib import, this package,
+//     for the Verdict/RiskLevel/Shippable/Tag types it needs regardless);
+//     reusing this package's own single, already-drift-tested,
+//     already-canonical list (placeholderdrift_internal_test.go's own
+//     whole-internal/domain source scan) is what makes reviewpost's own
+//     write-path sanitizer pick up a future eleventh placeholder family
+//     automatically, exactly like this package's read path already does,
+//     with no second scan-test to maintain. See StripPlaceholderTokens'
+//     own doc comment (sanitize.go) for the full reasoning.
 package review

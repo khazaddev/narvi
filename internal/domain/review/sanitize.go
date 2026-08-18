@@ -80,7 +80,7 @@ const (
 //
 // internal/domain/upload already solved this EXACT problem for its own
 // untrusted Filename/ContentType fields (sanitizeUntrustedField,
-// upload/prompt.go) -- this var and stripPlaceholderTokens (below) are
+// upload/prompt.go) -- this var and StripPlaceholderTokens (below) are
 // this package's own mirror of that mechanism, applied at the one place
 // THIS package embeds untrusted content into a rendered prompt
 // (RenderTurnPrompt's own ctx.Diff/ctx.Title/ctx.Body handling).
@@ -136,7 +136,7 @@ func removeAllOccurrences(s, tok string) string {
 	return string(out)
 }
 
-// stripPlaceholderTokens destroys every exact occurrence of every literal
+// StripPlaceholderTokens destroys every exact occurrence of every literal
 // in placeholderTokens from s -- see that var's own doc comment for the
 // full attack this closes. Loops to a fixed point (repeats until a full
 // pass over every token changes nothing) rather than a single pass, for
@@ -151,8 +151,37 @@ func removeAllOccurrences(s, tok string) string {
 //
 // Deliberately does NOT touch '<'/'>' or any other byte -- see
 // sanitizeDiffField's own doc comment for why the diff specifically must
-// stay byte-for-byte faithful outside of placeholder tokens.
-func stripPlaceholderTokens(s string) string {
+// stay byte-for-byte faithful outside of placeholder tokens; a caller that
+// also needs '<'/'>' neutralized (sanitizeDescriptionField below, and
+// reviewpost's own write-path digest sanitizer, next paragraph) composes
+// this with its own separate escaping step instead.
+//
+// EXPORTED (Step 62 hardening, review digest write-path sanitization):
+// this function was unexported until this Step, called only by
+// sanitizeDiffField/sanitizeDescriptionField below for THIS package's own
+// read/prompt path (RenderTurnPrompt). internal/domain/reviewpost's own
+// SanitizeDigest (reviewpost/sanitize.go) -- the persistence-side sibling
+// that neutralizes a review verdict's own model-authored digest fields
+// (Summary/StackRisks/UnverifiedLimits/AdequacyExplanation/ProposedBody/
+// ContestedPoints/ArchDecision.*) before internal/app/reviewverdict.Insert
+// ever writes them to Postgres -- calls this EXACT function, rather than
+// hand-duplicating placeholderTokens a fourth time (review/upload already
+// each duplicate the other's tokens as raw literals, for their OWN
+// "zero external imports" reasons; reviewpost has no such restriction --
+// its own doc.go already permits exactly one non-stdlib import, this
+// package, for the Verdict/RiskLevel/Shippable/Tag types it needs anyway).
+// Exporting the ALREADY-canonical, ALREADY-drift-tested list this package
+// maintains (placeholderdrift_internal_test.go's own whole-internal/domain
+// source scan, which finds every placeholder family and fails CI the
+// moment placeholderTokens goes stale) is what makes reviewpost's own
+// write-path sanitizer pick up a future eleventh placeholder family
+// automatically, the same way this package's own read path already does --
+// a fourth hand-copied list, by contrast, would need its OWN drift test to
+// get that property, duplicating machinery this package already owns
+// rather than reusing it. See doc.go's own updated "exactly eight
+// functions" section for why this one further export does not reopen the
+// export-surface discipline that section documents.
+func StripPlaceholderTokens(s string) string {
 	for {
 		before := s
 		for _, tok := range placeholderTokens {
@@ -206,7 +235,7 @@ func escapeAngleBrackets(s string) string {
 // mitigation for the diff's own delimiter-fence risk, unchanged by this
 // fix.
 func sanitizeDiffField(s string) string {
-	return stripPlaceholderTokens(s)
+	return StripPlaceholderTokens(s)
 }
 
 // sanitizeDescriptionField neutralizes ctx.Title/ctx.Body (PreFetchedContext,
@@ -227,5 +256,5 @@ func sanitizeDiffField(s string) string {
 // judged an acceptable, defensible trade-off for prose metadata the way it
 // would NOT be for the diff's own code content.
 func sanitizeDescriptionField(s string) string {
-	return stripPlaceholderTokens(escapeAngleBrackets(s))
+	return StripPlaceholderTokens(escapeAngleBrackets(s))
 }
