@@ -320,8 +320,14 @@ func escalationNoticeText(runID pgtype.UUID) string {
 // re-parsed (§5.2), pointing at the real decide endpoint rather than
 // claiming any deterministic reply keyword works here (unlike plan mode's
 // own approve/reject/revise: text-reply support, this Step's own decide
-// endpoint has no text-parsing entry point on Slack/Linear -- see
-// completion.go's own call site for GitHub's own EditPrefix exception).
+// endpoint has no text-parsing entry point on Slack/Linear/GitHub at all --
+// a deterministic GitHub `EditPrefix` keyword was drafted for this Step but
+// never had a reachable call site (no built-in workflow ever parks a HITL
+// decision post migration 000088_plan_builtin_passthrough's own corrective
+// fix, §25.8/§25.9) and was removed as dead code rather than shipped
+// speculatively; a future Step reintroduces an equivalent GitHub-comment
+// affordance if/when the Phase 7 canvas editor (§25.12) makes a custom,
+// HITL-carrying workflow definition reachable).
 func awaitingDecisionNoticeText(runID, stepRunID pgtype.UUID) string {
 	return fmt.Sprintf("A workflow step (run %s, attempt %s) is awaiting your decision. Approve, reject, or revise it via POST /api/workflow-runs/%s/steps/%s/decide.",
 		runID.String(), stepRunID.String(), runID.String(), stepRunID.String())

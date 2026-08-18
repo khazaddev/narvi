@@ -1,0 +1,129 @@
+-- Corrective follow-up to Step 56 ("workflow HITL gate + circuit
+-- breaker", §25.9), still within that Step's own scope: an audit found
+-- migration 000057's own built-in `plan` workflow seed (2 steps, HITL
+-- after step 1, one needs_fix self-loop edge) is a genuine design
+-- incoherence, never load-bearing, and this migration corrects it by
+-- making the built-in `plan` workflow a single-step passthrough --
+-- identical in shape to the built-in `review`/`request` workflows.
+--
+-- # The two-gate conflict
+--
+-- `internal/adapters/inbound/httpapi/turn.go`'s `createTurnLocked`
+-- (Step 55, §25.6) unconditionally calls `workflowengine.
+-- ResolveStepForNewTurn` for EVERY new turn, including plan-mode ones.
+-- `workflow.LaneFor` (`internal/domain/workflow/lane.go`) resolves the
+-- `plan` lane exactly when `intent.ModePlan` is set -- i.e. exactly when
+-- classic plan mode (Steps 37/38, §8.1: `plans.status`, `plan.
+-- MatchVerdict`/`MatchRevise`, and `turn.go`'s own `ErrPlanAwaitingApproval`
+-- gate, which unconditionally blocks a new ordinary turn on ANY session
+-- carrying a `plans` row in `StatusAwaitingApproval`) is ALREADY active
+-- on that session. Wiring the workflow engine into that same dispatch
+-- path therefore parked a SECOND, independent HITL gate on top of the
+-- first: this table's own `hitl_after = true` on the plan built-in's
+-- step 1 made `internal/app/workflowengine.OnTurnCompleted` (Step 56,
+-- completion.go) park that step's own attempt in `awaiting_decision`
+-- EVERY time a plan-mode session's first turn finished -- a workflow-level
+-- decision only `POST /api/workflow-runs/:runId/steps/:stepRunId/decide`
+-- can resolve, running concurrently with, and structurally unaware of,
+-- classic plan mode's own `plans` row on the identical session.
+--
+-- Confirmed, concrete consequences of the two gates coexisting:
+--
+--   - The workflow run reaches `awaiting_decision` and then simply sits
+--     there forever: nothing in this codebase's own plan-mode UI/Slack/
+--     Linear/GitHub surfaces ever calls the workflow decide endpoint for
+--     a plan-lane run (that endpoint has no plan-mode caller anywhere),
+--     so the run is permanently stuck `running` with a live
+--     `awaiting_decision` step-run underneath it -- a real, user-visible
+--     bug, not a theoretical one.
+--   - A duplicate "awaiting decision" notice: `OnTurnCompleted`'s own
+--     `awaitingDecisionNoticeText` (advance.go) fires ALONGSIDE classic
+--     plan mode's own pre-existing "a plan is awaiting your approval"
+--     notification for the exact same session, telling a human two
+--     different, incompatible things to go do.
+--   - `workflowengine.dispatchNextAttempt` (advance.go), the ONLY path
+--     that could ever advance the plan-lane run past its parked step 1,
+--     inserts its own next-step turn via a direct `deps.Turns.Create`
+--     call -- deliberately bypassing `createTurnLocked` entirely (by
+--     design, for every OTHER lane: a system-triggered advance must skip
+--     the open-turn/busy checks that make no sense for it) -- which also
+--     means it bypasses `turn.go`'s own §23.2 persisted-state
+--     awaiting-plan gate. Had a plan-lane run ever actually been decided
+--     through the workflow endpoint, this would have inserted a build
+--     turn while classic plan mode's OWN `plans` row could simultaneously
+--     still read as awaiting approval -- exactly the "two authorities
+--     disagreeing about the same fact" failure §5.1 (Postgres as sole
+--     source of truth) exists to rule out.
+--
+-- # The resolution (owner-approved, not reopened here)
+--
+-- Classic plan mode (Steps 37/38) remains the SOLE plan-approval
+-- authority, unconditionally, for every plan-mode session -- exactly
+-- today's behavior, byte-for-byte, per §25.4's own zero-config
+-- discipline ("the built-in review/request workflows... exercised by
+-- 100% of production traffic from day one" must never mean "changes
+-- behavior for 100% of production traffic"). The built-in `plan`
+-- workflow becomes a genuine single-step passthrough (`hitl_after =
+-- false`, no second step, no edge) -- workflow-engine resolution for a
+-- plan-mode session is now provably inert: same prompt, same model,
+-- no HITL park, no `awaiting_decision`, no duplicate notice. This
+-- mirrors the built-in `review`/`request` workflows' own shape exactly
+-- (migration 000057's own header: "review/request: ONE step each...
+-- no HITL, no edges").
+--
+-- Workflow-driven plan HITL -- a REAL, useful capability, e.g. a
+-- multi-step plan → build workflow with a genuine human checkpoint in
+-- between -- is not abandoned, only DEFERRED: it becomes reachable once
+-- the Phase 7 canvas editor (Step 88, §25.12) lets an operator author a
+-- CUSTOM (non-built-in) workflow definition and bind it explicitly, at
+-- which point that operator has made an affirmative choice to run
+-- workflow-driven HITL instead of classic plan mode for that lane/repo
+-- -- never something the zero-config built-in silently does underneath
+-- classic plan mode's own back. The HITL mechanism itself (`hitl_after`,
+-- `workflow_step_runs.status = 'awaiting_decision'`, the decide
+-- endpoint, `loopguard`'s circuit breaker) is untouched by this
+-- migration and stays fully available to any custom workflow that wants
+-- it -- only the built-in `plan` SEED changes here.
+--
+-- # This migration's statements
+--
+-- 1. `hitl_after = false` on the plan built-in's step 1 (id ...031, the
+--    step that survives): the passthrough shape's defining property.
+-- 2. A defensive `DELETE FROM workflow_step_runs` for step ...032 (the
+--    step this migration is about to remove) BEFORE removing it:
+--    `workflow_step_runs.step_definition_id` is a PLAIN `REFERENCES
+--    workflow_step_definitions(id)` with no `ON DELETE` clause (migration
+--    000057), i.e. Postgres's default `NO ACTION` -- an attempt to delete
+--    a still-referenced step_definitions row fails outright. Per this
+--    migration's own analysis above, the two-gate conflict means step
+--    ...032 could never legitimately be reached in practice (nothing
+--    ever decides the workflow run that would advance to it), so no real
+--    deployment is expected to have a row here at all -- but this
+--    statement makes the migration succeed unconditionally either way,
+--    rather than trusting that expectation. Safe to discard
+--    unconditionally: any such row would itself only ever exist as a
+--    symptom of the exact stuck-run bug this migration fixes, never as
+--    a legitimately completed or in-progress step a human is waiting on.
+-- 3. `DELETE FROM workflow_edges` for the whole plan definition: removes
+--    the needs_fix self-loop edge (id ...041, step 1 → step 1) seeded by
+--    000057 -- a single-step definition has no outcome left to route.
+-- 4. `DELETE FROM workflow_step_definitions` for step ...032 itself,
+--    now safe (no remaining `workflow_step_runs`/`workflow_edges`
+--    referrer).
+--
+-- workflow_definitions itself, workflow_bindings' own global plan-lane
+-- row (id ...053), and step ...031 are all left exactly as 000057 seeded
+-- them (ids, `is_built_in`, `version`) -- only the SHAPE downstream of
+-- step ...031 changes.
+UPDATE workflow_step_definitions
+SET hitl_after = false, updated_at = now()
+WHERE id = '00000000-0000-4000-8000-000000000031';
+
+DELETE FROM workflow_step_runs
+WHERE step_definition_id = '00000000-0000-4000-8000-000000000032';
+
+DELETE FROM workflow_edges
+WHERE workflow_definition_id = '00000000-0000-4000-8000-000000000003';
+
+DELETE FROM workflow_step_definitions
+WHERE id = '00000000-0000-4000-8000-000000000032';
