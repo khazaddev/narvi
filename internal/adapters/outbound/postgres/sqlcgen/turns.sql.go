@@ -15,7 +15,7 @@ const createTurn = `-- name: CreateTurn :one
 
 INSERT INTO turns (session_id, status, prompt, model_id, plan_mode, effort, review_head_sha, answer_only, review_depth, review_depth_decision)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id
 `
 
 type CreateTurnParams struct {
@@ -107,12 +107,13 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.AnswerOnly,
 		&i.ReviewDepth,
 		&i.ReviewDepthDecision,
+		&i.DispatchedEventID,
 	)
 	return i, err
 }
 
 const getProcessingTurnForSession = `-- name: GetProcessingTurnForSession :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id FROM turns
 WHERE session_id = $1 AND status = 'processing'
 `
 
@@ -147,12 +148,13 @@ func (q *Queries) GetProcessingTurnForSession(ctx context.Context, sessionID pgt
 		&i.AnswerOnly,
 		&i.ReviewDepth,
 		&i.ReviewDepthDecision,
+		&i.DispatchedEventID,
 	)
 	return i, err
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id FROM turns
 WHERE id = $1
 `
 
@@ -178,12 +180,13 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.AnswerOnly,
 		&i.ReviewDepth,
 		&i.ReviewDepthDecision,
+		&i.DispatchedEventID,
 	)
 	return i, err
 }
 
 const listTurnsForSession = `-- name: ListTurnsForSession :many
-SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision FROM turns
+SELECT id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id FROM turns
 WHERE session_id = $1
 ORDER BY created_at ASC
 `
@@ -219,6 +222,7 @@ func (q *Queries) ListTurnsForSession(ctx context.Context, sessionID pgtype.UUID
 			&i.AnswerOnly,
 			&i.ReviewDepth,
 			&i.ReviewDepthDecision,
+			&i.DispatchedEventID,
 		); err != nil {
 			return nil, err
 		}
@@ -297,9 +301,10 @@ UPDATE turns
 SET status = $2,
     dispatched_at = COALESCE($3, dispatched_at),
     completed_at = COALESCE($4, completed_at),
-    dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen)
+    dispatched_sandbox_gen = COALESCE($5, dispatched_sandbox_gen),
+    dispatched_event_id = COALESCE($6, dispatched_event_id)
 WHERE id = $1
-RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision
+RETURNING id, session_id, status, conversation_id, created_at, dispatched_at, completed_at, prompt, model_id, plan_mode, dispatched_sandbox_gen, progress_notified_at, effort, epistemic_outcome, review_head_sha, answer_only, review_depth, review_depth_decision, dispatched_event_id
 `
 
 type UpdateTurnStatusParams struct {
@@ -308,6 +313,7 @@ type UpdateTurnStatusParams struct {
 	DispatchedAt         pgtype.Timestamptz `json:"dispatched_at"`
 	CompletedAt          pgtype.Timestamptz `json:"completed_at"`
 	DispatchedSandboxGen *int32             `json:"dispatched_sandbox_gen"`
+	DispatchedEventID    *int64             `json:"dispatched_event_id"`
 }
 
 // Sets a turn's status, plus dispatched_at/completed_at/
@@ -328,6 +334,14 @@ type UpdateTurnStatusParams struct {
 // dispatched_sandbox_gen only, never re-transitions status) for a
 // Processing turn whose prompt needs re-sending to a respawned sandbox
 // incarnation.
+//
+// dispatched_event_id (migrations/000089_turns_dispatched_event_id.up.sql)
+// is stamped by those SAME two call sites, in the SAME write, from
+// MaxEventIDForSession (queries/events.sql): the events-log high-water
+// mark at the instant of dispatch, which the Step 71 corroboration
+// queries use as their lower bound instead of a timestamp. It follows the
+// identical sqlc.narg + COALESCE "absent argument leaves the column
+// untouched" convention as the three columns above it.
 func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusParams) (Turn, error) {
 	row := q.db.QueryRow(ctx, updateTurnStatus,
 		arg.ID,
@@ -335,6 +349,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		arg.DispatchedAt,
 		arg.CompletedAt,
 		arg.DispatchedSandboxGen,
+		arg.DispatchedEventID,
 	)
 	var i Turn
 	err := row.Scan(
@@ -356,6 +371,7 @@ func (q *Queries) UpdateTurnStatus(ctx context.Context, arg UpdateTurnStatusPara
 		&i.AnswerOnly,
 		&i.ReviewDepth,
 		&i.ReviewDepthDecision,
+		&i.DispatchedEventID,
 	)
 	return i, err
 }

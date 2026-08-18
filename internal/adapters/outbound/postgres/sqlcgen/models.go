@@ -1853,6 +1853,7 @@ type Turn struct {
 	AnswerOnly           *bool                 `json:"answer_only"`
 	ReviewDepth          *string               `json:"review_depth"`
 	ReviewDepthDecision  []byte                `json:"review_depth_decision"`
+	DispatchedEventID    *int64                `json:"dispatched_event_id"`
 }
 
 type User struct {

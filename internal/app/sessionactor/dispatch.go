@@ -581,6 +581,27 @@ func (a *Actor) tryPlanReenqueue(
 	}
 
 	dispatchedGen := sandboxRow.Gen
+	// The events-log high-water mark, read inside this SAME transaction so
+	// it cannot straddle a concurrent insert: every event this turn's own
+	// (re)dispatch goes on to produce lands strictly above it. Step 71's
+	// corroboration queries use it as their lower bound, replacing a
+	// created_at >= dispatched_at comparison that straddled the Postgres
+	// and application clocks -- see
+	// migrations/000089_turns_dispatched_event_id.up.sql.
+	//
+	// Note this DOES advance on re-enqueue, where dispatched_at
+	// deliberately does not (this call site has never re-stamped it: a
+	// re-enqueued turn keeps its ORIGINAL dispatch time). That difference
+	// is intended, and it agrees with the gen filter rather than fighting
+	// it: a re-enqueue re-sends this turn's prompt to a DIFFERENT sandbox
+	// incarnation, so the only trace that can honestly corroborate it is
+	// the one the new incarnation produces. Events from the previous,
+	// now-dead incarnation carry the OLD gen and are already excluded by
+	// the gen filter; advancing the watermark excludes them by id too.
+	dispatchedEventID, err := a.stores.event.WithTx(tx).MaxEventIDForSession(ctx, a.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: read events high-water mark for reenqueue: %w", err)
+	}
 	if _, err := a.stores.turn.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
 		ID: target.ID,
 		// The turn's own CURRENT status, passed back unchanged -- this is
@@ -589,6 +610,7 @@ func (a *Actor) tryPlanReenqueue(
 		// this shared query's own required, non-COALESCE'd Status column.
 		Status:               target.Status,
 		DispatchedSandboxGen: &dispatchedGen,
+		DispatchedEventID:    &dispatchedEventID,
 	}); err != nil {
 		return nil, fmt.Errorf("sessionactor: stamp dispatched_sandbox_gen for reenqueue: %w", err)
 	}
@@ -1330,11 +1352,24 @@ func (a *Actor) tryPlanDispatch(
 	// now-superseded one" (see migrations/000026_turn_dispatch_gen.up.sql's
 	// own doc comment for the full reasoning).
 	dispatchedGen := sandboxRow.Gen
+	// Stamped alongside dispatched_at/dispatched_sandbox_gen, in the SAME
+	// write and the SAME transaction: the events-log high-water mark at
+	// this instant. Step 71's corroboration queries use it as a clock-free
+	// lower bound for "this turn's own dispatch", replacing a created_at >=
+	// dispatched_at comparison that straddled the Postgres and application
+	// clocks -- see migrations/000089_turns_dispatched_event_id.up.sql.
+	// dispatched_at itself stays exactly as it was: it still has a
+	// genuine, same-clock consumer in turn.EvaluateTurnDeadline.
+	dispatchedEventID, err := a.stores.event.WithTx(tx).MaxEventIDForSession(ctx, a.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("sessionactor: read events high-water mark for dispatch: %w", err)
+	}
 	if _, err := a.stores.turn.WithTx(tx).UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
 		ID:                   turnID,
 		Status:               sqlcgen.TurnStatus(toDispatched),
 		DispatchedAt:         pgtype.Timestamptz{Time: now, Valid: true},
 		DispatchedSandboxGen: &dispatchedGen,
+		DispatchedEventID:    &dispatchedEventID,
 	}); err != nil {
 		return nil, fmt.Errorf("sessionactor: update turn status to dispatched: %w", err)
 	}
