@@ -70,17 +70,35 @@ func ScanTODOs(diff string) []TODOFinding {
 	var currentFile string
 	var inFile bool
 	var newLine int
+	// inHeaderBlock is true exactly while a "--- "/"+++ " line means what
+	// it conventionally means (this file's own old/new diff header):
+	// true at the very start (a bare, git-less unified diff/patch may
+	// open directly with "--- "/"+++ ", no "diff --git" line at all) and
+	// reset true on every "diff --git " line -- git's own, and GitHub's
+	// .diff media type's own, unambiguous per-file boundary marker. It
+	// goes false the moment this file's first "@@" hunk header is seen,
+	// since from that point on a line starting with "+++ " (or "--- ")
+	// is a HUNK BODY line whose own added (or removed) source text
+	// happens to start with "++ " (or "-- ") -- a real added line of
+	// code (a C-style increment, a comment, a markdown list item), not a
+	// new file's header. Treating "+++ " as a header unconditionally,
+	// anywhere, misattributes or drops exactly that line.
+	inHeaderBlock := true
 
 	for _, line := range strings.Split(diff, "\n") {
 		switch {
-		case strings.HasPrefix(line, "+++ "):
+		case strings.HasPrefix(line, "diff --git "):
+			inHeaderBlock = true
+			inFile = false
+		case inHeaderBlock && strings.HasPrefix(line, "+++ "):
 			currentFile = normalizeNewFilePath(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")))
 			inFile = currentFile != ""
-		case strings.HasPrefix(line, "--- "):
+		case inHeaderBlock && strings.HasPrefix(line, "--- "):
 			// Old-file header -- ScanTODOs never reports against the
 			// old/pre-image side, so there is nothing to record here;
 			// "+++ " (above) is the sole authority on the current file.
 		case strings.HasPrefix(line, "@@"):
+			inHeaderBlock = false
 			if m := hunkHeaderRE.FindStringSubmatch(line); m != nil {
 				if n, err := strconv.Atoi(m[1]); err == nil {
 					newLine = n
@@ -107,8 +125,8 @@ func ScanTODOs(diff string) []TODOFinding {
 			// Unchanged context line -- exists in both old and new content.
 			newLine++
 		default:
-			// e.g. "diff --git a/x b/x", "index abc..def 100644", or
-			// "\ No newline at end of file" -- not part of any hunk's own
+			// e.g. "index abc..def 100644", or "\ No newline at end of
+			// file" -- not part of any hunk's own
 			// line-numbered content.
 		}
 	}
