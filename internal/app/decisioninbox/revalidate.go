@@ -198,20 +198,35 @@ func revalidateCore(ctx context.Context, deps Deps, repoFullName string, prNumbe
 		return false, "", "", fmt.Errorf("decisioninbox: revalidate for merge: load eligibility config: %w", cfgErr)
 	}
 	// §62 review finding C1: ChangedFileCount/TouchedBlastRadius are BOTH
-	// derived here from target.ChangedFiles -- target is revalidateCore's
-	// own already-fetched, server-side ports.OpenPR (RevalidateForMerge's
+	// derived here from target -- target is revalidateCore's own
+	// already-fetched, server-side ports.OpenPR (RevalidateForMerge's
 	// live ListOpenPRsForUser search, or RevalidateForAutoMerge's live
 	// GetOpenPR call), never the posted verdict's own self-reported
-	// FilesChanged/BlastRadius. No new I/O: ChangedFiles was already
-	// fetched by the SAME call that produced target.
+	// FilesChanged/BlastRadius. No new I/O: every field read here was
+	// already fetched by the SAME call that produced target.
+	//
+	// Phase 5 audit findings 1+2 (both fixed, the SAME root cause C1
+	// fixed for the verdict's own self-report, now closed for THIS
+	// adapter-fetched data too): ChangedFileCount is target.
+	// ChangedFilesCount, GitHub's own authoritative scalar -- never
+	// len(target.ChangedFiles), which githubapi caps at one page and
+	// which used to also silently read as 0 whenever the underlying
+	// GitHub fetch failed outright. TouchedBlastRadiusKnown is
+	// !target.ChangedFilesListDegraded -- see that field's own doc
+	// comment (ports.OpenPR) for the two independent ways it can go
+	// true (a failed fetch, or a genuinely large diff whose listing was
+	// truncated at GitHub's own one-page cap): either way,
+	// ComputeEligible now refuses this PR rather than silently trusting
+	// an incomplete-or-absent classification of target.ChangedFiles.
 	eligible, eligReason := autoapproval.ComputeEligible(autoapproval.EligibilityInput{
-		Verdict:            record.Verdict,
-		VerdictHeadSHA:     record.HeadSHA,
-		CurrentHeadSHA:     target.HeadSHA,
-		CIGreen:            ciGreen,
-		HasNeedsHumanLabel: hasNeedsHuman,
-		ChangedFileCount:   len(target.ChangedFiles),
-		TouchedBlastRadius: autoapproval.ClassifyChangedPaths(target.ChangedFiles),
+		Verdict:                 record.Verdict,
+		VerdictHeadSHA:          record.HeadSHA,
+		CurrentHeadSHA:          target.HeadSHA,
+		CIGreen:                 ciGreen,
+		HasNeedsHumanLabel:      hasNeedsHuman,
+		ChangedFileCount:        target.ChangedFilesCount,
+		TouchedBlastRadius:      autoapproval.ClassifyChangedPaths(target.ChangedFiles),
+		TouchedBlastRadiusKnown: !target.ChangedFilesListDegraded,
 	}, cfg)
 	if !eligible {
 		return false, "", fmt.Sprintf("this pull request no longer meets the auto-approval eligibility criteria: %s", eligReason), nil

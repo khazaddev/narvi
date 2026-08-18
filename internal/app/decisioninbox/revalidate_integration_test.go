@@ -200,6 +200,72 @@ func TestRevalidateForMerge_NegativeCases(t *testing.T) {
 		}
 	})
 
+	// Phase 5 audit finding 1 (fixed) at the real revalidateCore wiring,
+	// the audit's own named scenario: "GET /pulls/{n}/files returns 502
+	// during aggregation or auto-merge revalidation". ChangedFiles stays
+	// nil/empty (its own honest zero value, exactly what githubapi now
+	// still returns on a fetch failure) -- ChangedFilesListDegraded=true
+	// alone must refuse, never silently pass as "confirmed zero files,
+	// nothing sensitive". Mutation-test target: reverting revalidateCore
+	// back to `TouchedBlastRadiusKnown: true` unconditionally (or
+	// dropping the field from the EligibilityInput literal entirely) must
+	// turn this subtest's own "ok = true" assertion from a failure back
+	// into a pass.
+	t.Run("ChangedFilesListDegraded_Refused", func(t *testing.T) {
+		const repoFullName = "acme/revalidate-changed-files-degraded"
+		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 101)
+		pr.ChangedFilesListDegraded = true
+		rs.replaceTargetPR(actorGitHubID, pr)
+
+		ok, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
+		if err != nil {
+			t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
+		}
+		if ok {
+			t.Fatal("RevalidateForMerge() ok = true, want false -- a degraded/swallowed changed-files read (a failed or page-truncated GitHub fetch) must never silently pass as 'confirmed clean'")
+		}
+		if reason == "" {
+			t.Error("reason is empty, want a human-readable explanation")
+		}
+	})
+
+	// Phase 5 audit finding 2 (fixed): the diff-size gate must use
+	// ports.OpenPR.ChangedFilesCount (GitHub's own authoritative scalar),
+	// never len(ChangedFiles) -- deliberately kept ChangedFilesListDegraded
+	// FALSE here (unlike the subtest immediately above) to isolate the
+	// size gate specifically: a caller that reverted to deriving
+	// ChangedFileCount from len(target.ChangedFiles) would see only 3
+	// harmless-looking paths and pass, even though GitHub's own scalar
+	// says this PR genuinely touches far more files than this repo's
+	// configured threshold allows. Mutation-test target: reverting
+	// revalidateCore's `ChangedFileCount: target.ChangedFilesCount` back
+	// to `len(target.ChangedFiles)` must turn this subtest's own
+	// "ok = true" assertion from a failure back into a pass.
+	t.Run("ChangedFilesCountScalarExceedsThreshold_RefusedDespiteSmallFetchedListing", func(t *testing.T) {
+		const repoFullName = "acme/revalidate-changed-files-scalar"
+		pr := rs.eligiblePR(ctx, t, pool, actorGitHubID, repoFullName, 102)
+		// A truncated GitHub Pull Request Files page would realistically
+		// cap at 100 entries, not 3 -- but this fixture only needs SOME
+		// small, non-sensitive listing to prove the size gate does not
+		// read it via len(), so an intentionally tiny slice makes the
+		// point most clearly.
+		pr.ChangedFiles = []string{"README.md", "go.mod", "go.sum"}
+		pr.ChangedFilesCount = 9999 // GitHub's own authoritative scalar: a genuinely huge diff
+		pr.ChangedFilesListDegraded = false
+		rs.replaceTargetPR(actorGitHubID, pr)
+
+		ok, _, reason, err := decisioninbox.RevalidateForMerge(ctx, rs.deps, rs.sourceControl, actorGitHubID, repoFullName, pr.Number, "tok")
+		if err != nil {
+			t.Fatalf("RevalidateForMerge() error = %v, want nil", err)
+		}
+		if ok {
+			t.Fatal("RevalidateForMerge() ok = true, want false -- the diff-size gate must read ChangedFilesCount (GitHub's own scalar), never len(ChangedFiles), which a PR author can pad past a page boundary")
+		}
+		if reason == "" {
+			t.Error("reason is empty, want a human-readable explanation")
+		}
+	})
+
 	// Paired with review:low-risk deliberately -- an otherwise-fully-
 	// eligible risk label -- so needs-human is provably the ONE thing
 	// keeping this refused, not a coincidental "no/unrecognized risk
@@ -569,6 +635,20 @@ func TestRevalidateForMerge_LyingVerdictAgainstReal300FileSensitivePR(t *testing
 		CIConclusion: ports.CIConclusionSuccess,
 		Labels:       []string{"review:low-risk"},
 		ChangedFiles: changedFiles,
+		// Phase 5 audit finding 2: the diff-size gate now reads
+		// ChangedFilesCount (GitHub's own authoritative scalar), never
+		// len(ChangedFiles) -- set explicitly here so this fixture's own
+		// "both criteria independently refuse" claim below stays true
+		// after the fix, exactly as it was before it. A real 300-file PR
+		// would ACTUALLY truncate its own Pull Request Files fetch at
+		// GitHub's own per_page=100 cap (ChangedFilesListDegraded=true in
+		// production -- see TestListOpenPRsForUser_ChangedFilesCountAndDegraded,
+		// internal/adapters/outbound/githubapi, for that adapter-level
+		// behavior in isolation); this fixture deliberately keeps
+		// ChangedFilesListDegraded at its own honest false, since THIS
+		// test's own job is proving the size/sensitive-path criteria
+		// themselves, not re-proving truncation detection a second time.
+		ChangedFilesCount: len(changedFiles),
 	}
 	rs.sourceControl.openPRsByExternalID[actorGitHubID] = append(rs.sourceControl.openPRsByExternalID[actorGitHubID], pr)
 

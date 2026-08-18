@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -505,6 +506,136 @@ func TestListOpenPRsForUser_ReviewDecisionReducesToLatestPerReviewer(t *testing.
 			}
 			if prs[0].HasChangesRequested != tc.wantChangesRequested {
 				t.Errorf("HasChangesRequested = %v, want %v", prs[0].HasChangesRequested, tc.wantChangesRequested)
+			}
+		})
+	}
+}
+
+// TestListOpenPRsForUser_ChangedFilesCountAndDegraded is the Phase 5 audit
+// (findings 1+2, both fixed) regression test at the adapter level, where
+// both holes actually originated. ports.OpenPR.ChangedFilesCount must
+// reflect GitHub's own authoritative "changed_files" scalar on the PR
+// detail response (never len() of the SEPARATE, page-capped Pull Request
+// Files listing) -- finding 2's own root cause, a PR author fully
+// controls both filenames and diff order, so len() alone is gameable past
+// a page boundary. ChangedFilesListDegraded must be set true whenever
+// that separate listing cannot be trusted as a COMPLETE picture -- either
+// because the fetch itself failed outright (finding 1: the exact
+// GET /pulls/{n}/files 502 scenario the audit names), or because it
+// succeeded but GitHub's own scalar total exceeds what one page
+// (per_page=100) returned (finding 2's own truncation half). Mutation-test
+// target: reverting fetchChangedFilePaths' wiring in buildOpenPRFromDetail
+// back to trusting len(files) alone (dropping the detail.ChangedFiles >
+// len(files) comparison) must turn the "large PR" case below from
+// degraded=true back to degraded=false.
+func TestListOpenPRsForUser_ChangedFilesCountAndDegraded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                  string
+		changedFilesScalar    int
+		filesEndpointStatus   int // 0 means respond 200 with a files page
+		filesResponseCount    int // number of file entries the /files page returns
+		wantChangedFilesCount int
+		wantListDegraded      bool
+		wantChangedFilesLen   int
+	}{
+		{
+			name:                  "small PR: scalar and the one-page listing agree, never degraded",
+			changedFilesScalar:    3,
+			filesResponseCount:    3,
+			wantChangedFilesCount: 3,
+			wantListDegraded:      false,
+			wantChangedFilesLen:   3,
+		},
+		{
+			// The Finding 2 scenario: GitHub's own authoritative scalar
+			// (150) exceeds what fetchChangedFilePaths' own per_page=100
+			// cap returned (100) -- a genuine, truncated PREFIX. The
+			// SCALAR, not len(), is what ChangedFilesCount must report.
+			name:                  "large PR: scalar exceeds the one-page cap -- degraded, but ChangedFilesCount still reports the real scalar, never len()",
+			changedFilesScalar:    150,
+			filesResponseCount:    100,
+			wantChangedFilesCount: 150,
+			wantListDegraded:      true,
+			wantChangedFilesLen:   100,
+		},
+		{
+			// The Finding 1 scenario: the audit's own named example is
+			// "GET /pulls/{n}/files returns 502 during aggregation" --
+			// the separate changed-files fetch fails outright, but the
+			// scalar (from the ALREADY-SUCCEEDED, separate detail call)
+			// is still honestly reported.
+			name:                  "changed-files fetch fails outright -- degraded, listing nil, but the scalar (from the separate, already-succeeded detail call) is still reported",
+			changedFilesScalar:    42,
+			filesEndpointStatus:   http.StatusInternalServerError,
+			wantChangedFilesCount: 42,
+			wantListDegraded:      true,
+			wantChangedFilesLen:   0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.URL.Path == "/user/1":
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "login": "octocat"})
+				case r.URL.Path == "/search/issues" && strings.Contains(r.URL.Query().Get("q"), "assignee:octocat"):
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"items": []map[string]any{{"number": 5, "repository_url": "https://api.github.com/repos/acme/widgets"}},
+					})
+				case r.URL.Path == "/search/issues" && strings.Contains(r.URL.Query().Get("q"), "review-requested:octocat"):
+					_ = json.NewEncoder(w).Encode(map[string]any{"items": []map[string]any{}})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"number": 5, "title": "x", "html_url": "u", "head": map[string]any{"sha": "s"}, "base": map[string]any{"ref": "main"},
+						"changed_files": tc.changedFilesScalar,
+					})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5/reviews":
+					_ = json.NewEncoder(w).Encode([]map[string]any{})
+				case r.URL.Path == "/repos/acme/widgets/commits/s/status":
+					_ = json.NewEncoder(w).Encode(map[string]any{"state": "success"})
+				case r.URL.Path == "/repos/acme/widgets/commits/s/check-runs":
+					_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{}})
+				case r.URL.Path == "/repos/acme/widgets/pulls/5/files":
+					if tc.filesEndpointStatus != 0 {
+						w.WriteHeader(tc.filesEndpointStatus)
+						return
+					}
+					files := make([]map[string]any, tc.filesResponseCount)
+					for i := range files {
+						files[i] = map[string]any{"filename": "file" + strconv.Itoa(i) + ".go"}
+					}
+					_ = json.NewEncoder(w).Encode(files)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+
+			adapter := githubapi.New(server.Client(), server.URL)
+
+			prs, _, err := adapter.ListOpenPRsForUser(context.Background(), ports.ListOpenPRsForUserSpec{GitHubExternalID: "1", Token: "tok"})
+			if err != nil {
+				t.Fatalf("ListOpenPRsForUser() error = %v, want nil", err)
+			}
+			if len(prs) != 1 {
+				t.Fatalf("ListOpenPRsForUser() returned %d PRs, want 1", len(prs))
+			}
+			pr := prs[0]
+			if pr.ChangedFilesCount != tc.wantChangedFilesCount {
+				t.Errorf("ChangedFilesCount = %d, want %d", pr.ChangedFilesCount, tc.wantChangedFilesCount)
+			}
+			if pr.ChangedFilesListDegraded != tc.wantListDegraded {
+				t.Errorf("ChangedFilesListDegraded = %v, want %v", pr.ChangedFilesListDegraded, tc.wantListDegraded)
+			}
+			if len(pr.ChangedFiles) != tc.wantChangedFilesLen {
+				t.Errorf("len(ChangedFiles) = %d, want %d", len(pr.ChangedFiles), tc.wantChangedFilesLen)
 			}
 		})
 	}
