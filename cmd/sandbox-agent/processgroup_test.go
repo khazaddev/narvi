@@ -233,6 +233,7 @@ func TestStopProcessGroup_KillsCooperativeAndStubbornDescendants(t *testing.T) {
 
 	cooperativePIDFile := filepath.Join(t.TempDir(), "cooperative-pid")
 	stubbornPIDFile := filepath.Join(t.TempDir(), "stubborn-pid")
+	leaderPIDFile := filepath.Join(t.TempDir(), "leader-pid")
 
 	// The leader itself also ignores TERM (mirroring supervisor_test.go's
 	// own TestStop_ForcefulEscalation/TestSupervisor_StopAll precedent).
@@ -259,39 +260,65 @@ func TestStopProcessGroup_KillsCooperativeAndStubbornDescendants(t *testing.T) {
 	// instead of proving the trap -- and the SIGKILL escalation --
 	// actually work. Writing the pid file from inside, after `trap`, makes
 	// its mere existence proof that the trap is already active.
+	//
+	// The LEADER now does the exact same thing (echo $$ after its own
+	// `trap`), which this test waits on below instead of doing a single,
+	// non-retried processGroupMemberAlive(leaderPID) check against the pid
+	// captured synchronously right after Start(). That single check used
+	// to intermittently fail with "leader pid not alive before
+	// stopProcessGroup()" under a sufficiently loaded/starved scheduler --
+	// it proved nothing about whether the leader's own trap was active
+	// yet, only that SOME process with that pid existed at one arbitrary
+	// instant, well before there was any proof the script had progressed
+	// past its own backgrounding of the two descendants. Waiting on its
+	// own pid file instead both confirms it is alive (it just wrote to
+	// disk) and confirms its trap is already installed, exactly like the
+	// two descendants.
+	//
+	// Each loop body is `sleep 0.05` rather than a tight `while true; do
+	// :; done` busy-spin: this does not weaken anything the test proves --
+	// SIGKILL is unblockable regardless of what a process is doing between
+	// loop iterations, and a shell's trap fires between commands (sleep is
+	// interruptible) exactly the same either way -- but it cuts this
+	// test's own CPU footprint by roughly two orders of magnitude. With
+	// t.Parallel() and -count=N, every concurrent instance was spawning
+	// three 100%-CPU spinners; that self-inflicted load was itself a
+	// measured source of the elapsed-time flakiness fixed below.
 	script := fmt.Sprintf(
-		`sh -c 'trap "exit 0" TERM; echo $$ > %s; while true; do :; done' &
-sh -c 'trap "" TERM; echo $$ > %s; while true; do :; done' &
+		`sh -c 'trap "exit 0" TERM; echo $$ > %s; while true; do sleep 0.05; done' &
+sh -c 'trap "" TERM; echo $$ > %s; while true; do sleep 0.05; done' &
 trap '' TERM
-while true; do :; done`,
-		cooperativePIDFile, stubbornPIDFile,
+echo $$ > %s
+while true; do sleep 0.05; done`,
+		cooperativePIDFile, stubbornPIDFile, leaderPIDFile,
 	)
 
 	leaderPID, waitDone := spawnTestProcessGroup(t, script)
 
+	leaderPIDFromFile := waitForTestChildPID(t, leaderPIDFile)
+	if leaderPIDFromFile != leaderPID {
+		t.Fatalf("leader pid from its own pid file = %d, want %d (cmd.Process.Pid)", leaderPIDFromFile, leaderPID)
+	}
 	cooperativePID := waitForTestChildPID(t, cooperativePIDFile)
 	stubbornPID := waitForTestChildPID(t, stubbornPIDFile)
 
 	pids := map[string]int{"leader": leaderPID, "cooperative": cooperativePID, "stubborn": stubbornPID}
-	for name, pid := range pids {
-		if !processGroupMemberAlive(pid) {
-			t.Fatalf("%s pid %d not alive before stopProcessGroup()", name, pid)
-		}
-	}
 
 	const shortGrace = 300 * time.Millisecond // _test.go is exempt from notimeliteral
 
 	start := time.Now()
 	stopProcessGroup(leaderPID, waitDone, shortGrace)
-	elapsed := time.Since(start)
-
-	// stopProcessGroup returning at all (rather than the test timing out)
-	// already proves the SIGKILL escalation fired and unblocked it; the
-	// bound below is a generous sanity check, well above the actual OS
-	// signal delivery latency.
-	if elapsed >= 5*time.Second {
-		t.Errorf("stopProcessGroup() took %v, want well under 5s", elapsed)
-	}
+	// Not asserted: stopProcessGroup returning at all (rather than the
+	// test timing out under `go test`'s own -timeout) already proves the
+	// SIGKILL escalation fired and unblocked it -- a wall-clock upper
+	// bound here adds no diagnostic value a hang wouldn't already get from
+	// the test binary's own timeout, and this value WAS observed to blow
+	// out to 19s, 30s, even 2m31s on a machine under concurrent I/O/CPU
+	// load unrelated to this test's own correctness (dozens of parallel
+	// instances' worth of spinner shells, see the loop-softening note
+	// above). That made it pure flake surface with no unique signal, so it
+	// is logged for human debugging rather than asserted.
+	t.Logf("stopProcessGroup() took %v", time.Since(start))
 
 	// Poll rather than assert once. processGroupMemberAlive is kill(pid, 0),
 	// which SUCCEEDS for a zombie -- and SIGKILLing a descendant leaves
@@ -311,6 +338,77 @@ while true; do :; done`,
 	// let an earlier pid's reap latency silently eat into a later pid's
 	// allotted time, understating how long that later pid was actually
 	// given to disappear.
+	for name, pid := range pids {
+		deadline := time.Now().Add(5 * time.Second) // _test.go is exempt from notimeliteral
+		for processGroupMemberAlive(pid) && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if processGroupMemberAlive(pid) {
+			t.Errorf("%s pid %d still alive after stopProcessGroup() -- descendant orphaned", name, pid)
+		}
+	}
+}
+
+// TestStopProcessGroup_KillsStubbornDescendant_CooperativeLeader is the
+// regression test for the actual bug fix this Step's own commit made
+// (deleting the early `return` under `case <-waitDone:`), which
+// TestStopProcessGroup_KillsCooperativeAndStubbornDescendants above does
+// NOT exercise: that test's leader is deliberately stubborn -- its own
+// TERM trap has an empty body, so it ignores the signal entirely -- and
+// so it never dies from the initial SIGTERM; waitDone can only
+// possibly close as a RESULT of stopProcessGroup's own trailing SIGKILL --
+// which is sent AFTER the select already returned. waitDone is therefore
+// causally incapable of firing before the grace timer in that test; the
+// select's `case <-waitDone:` branch (the one the fix changed) is simply
+// never taken, so re-introducing the deleted `return` there does not
+// change that test's outcome at all (confirmed by mutation testing: it
+// still passes 40/40 with the bug reintroduced).
+//
+// This test's leader is COOPERATIVE instead (exits promptly on the first
+// SIGTERM), while its backgrounded descendant is STUBBORN (ignores
+// SIGTERM). The leader's own exit closes waitDone well before the
+// shortGrace timer elapses, so stopProcessGroup's select DOES take the
+// `case <-waitDone:` branch. With the bug (an early `return` there)
+// reintroduced, stopProcessGroup returns as soon as the leader exits,
+// without ever sending the follow-up SIGKILL, leaving the stubborn
+// descendant running forever -- exactly the orphan this Step's fix
+// closes. This test fails in that case and passes with the fix in place.
+func TestStopProcessGroup_KillsStubbornDescendant_CooperativeLeader(t *testing.T) {
+	t.Parallel()
+
+	stubbornPIDFile := filepath.Join(t.TempDir(), "stubborn-pid")
+	leaderPIDFile := filepath.Join(t.TempDir(), "leader-pid")
+
+	// Both the leader and its descendant write their OWN pid file, from
+	// inside themselves, AFTER their own `trap` has already run -- same
+	// technique and same reasoning as the test above.
+	script := fmt.Sprintf(
+		`sh -c 'trap "" TERM; echo $$ > %s; while true; do sleep 0.05; done' &
+trap "exit 0" TERM
+echo $$ > %s
+while true; do sleep 0.05; done`,
+		stubbornPIDFile, leaderPIDFile,
+	)
+
+	leaderPID, waitDone := spawnTestProcessGroup(t, script)
+
+	leaderPIDFromFile := waitForTestChildPID(t, leaderPIDFile)
+	if leaderPIDFromFile != leaderPID {
+		t.Fatalf("leader pid from its own pid file = %d, want %d (cmd.Process.Pid)", leaderPIDFromFile, leaderPID)
+	}
+	stubbornPID := waitForTestChildPID(t, stubbornPIDFile)
+
+	pids := map[string]int{"leader": leaderPID, "stubborn": stubbornPID}
+
+	const shortGrace = 300 * time.Millisecond // _test.go is exempt from notimeliteral
+
+	start := time.Now()
+	stopProcessGroup(leaderPID, waitDone, shortGrace)
+	// See the sibling test above for why this is logged, not asserted.
+	t.Logf("stopProcessGroup() took %v", time.Since(start))
+
+	// Poll rather than assert once -- same zombie-vs-alive reasoning as
+	// the sibling test above, with each pid getting its own 5s budget.
 	for name, pid := range pids {
 		deadline := time.Now().Add(5 * time.Second) // _test.go is exempt from notimeliteral
 		for processGroupMemberAlive(pid) && time.Now().Before(deadline) {
