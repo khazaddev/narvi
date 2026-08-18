@@ -133,8 +133,16 @@ type openPRDetailResponse struct {
 	Draft     bool   `json:"draft"`
 	Additions int    `json:"additions"`
 	Deletions int    `json:"deletions"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	// ChangedFiles (Phase 5 audit finding 2, fixed) is GitHub's own
+	// top-level "changed_files" scalar on this SAME "Get a pull request"
+	// response -- mirrors pullRequestResponse.ChangedFiles' own identical
+	// field (adapter.go, Step 68), simply unparsed on THIS response shape
+	// until this fix: ports.OpenPR.ChangedFilesCount below is populated
+	// from this scalar, never from len() of the SEPARATE, page-capped
+	// Pull Request Files listing fetchChangedFilePaths (below) fetches.
+	ChangedFiles int    `json:"changed_files"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
 
 	User *simpleUserResponse `json:"user"`
 
@@ -340,9 +348,43 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 		ci = a.fetchCIConclusionLive(ctx, owner, repo, detail.Head.SHA, token)
 	}
 
+	// Phase 5 audit findings 1+2 (both fixed). Two INDEPENDENT ways this
+	// PR's changed-file LISTING can fail to be the complete picture
+	// detail.ChangedFiles (GitHub's own authoritative scalar, ALWAYS
+	// reliable here -- see ports.OpenPR.ChangedFilesCount's own doc
+	// comment for why) reports:
+	//
+	//  1. The fetch itself fails outright (finding 1) -- files is nil,
+	//     exactly like before this fix. Before this fix, THIS was the
+	//     silent-permissive hole: a caller reading len(nil)==0 as "zero
+	//     files changed" for an auto-merge eligibility gate.
+	//  2. The fetch succeeds but detail.ChangedFiles (the true total)
+	//     exceeds len(files) -- this one page (per_page=100,
+	//     fetchChangedFilePaths' own doc comment) is a genuine, truncated
+	//     PREFIX of a larger diff (finding 2). A PR author fully controls
+	//     both filenames and diff order, so this is attacker-
+	//     influenceable: padding a diff with 100+ innocuous files pushes
+	//     a genuinely sensitive one past the page boundary.
+	//
+	// Either way, changedFilesListDegraded is set true -- ports.OpenPR.
+	// ChangedFilesListDegraded's own doc comment for the fail-closed
+	// contract this signals to a caller deriving sensitive-path facts
+	// from files. files itself is left as whatever was actually fetched
+	// (nil on failure, a real but partial slice on truncation) rather
+	// than blanked out on truncation specifically -- ResolveCodeOwners'
+	// own consumption of ChangedFiles already accepts a page-capped
+	// listing as an honestly-scoped approximation (this field's own doc
+	// comment), and blanking a real partial listing would only make that
+	// unrelated, already-accepted use worse for no eligibility-side
+	// benefit (the eligibility gate reads changedFilesListDegraded
+	// directly, never files' own nil-ness, to decide "known" vs.
+	// "unknown").
 	files, filesErr := a.fetchChangedFilePaths(ctx, owner, repo, number, token)
+	changedFilesListDegraded := filesErr != nil
 	if filesErr != nil {
 		files = nil
+	} else if detail.ChangedFiles > len(files) {
+		changedFilesListDegraded = true
 	}
 
 	labels := make([]string, len(detail.Labels))
@@ -398,8 +440,13 @@ func (a *Adapter) buildOpenPRFromDetail(ctx context.Context, owner, repo string,
 		Labels:       labels,
 
 		ChangedFiles: files,
-		Additions:    detail.Additions,
-		Deletions:    detail.Deletions,
+		// Phase 5 audit findings 1+2: ChangedFilesCount is GitHub's own
+		// authoritative scalar (never len(files), which is truncated at
+		// one page); ChangedFilesListDegraded is set immediately above.
+		ChangedFilesCount:        detail.ChangedFiles,
+		ChangedFilesListDegraded: changedFilesListDegraded,
+		Additions:                detail.Additions,
+		Deletions:                detail.Deletions,
 	}
 	if t, parseErr := time.Parse(time.RFC3339, detail.CreatedAt); parseErr == nil {
 		pr.CreatedAt = t
