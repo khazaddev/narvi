@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/restdtos"
+	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	appreviewverdict "github.com/khazaddev/narvi/internal/app/reviewverdict"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/review"
@@ -41,7 +42,7 @@ import (
 // posture for the contradiction-rate read model immediately above it in
 // that file ("a degraded calibration read must never block viewing the
 // rest of this repo's own settings").
-func GetReviewAnalytics(reviewVerdictDeps appreviewverdict.Deps) http.HandlerFunc {
+func GetReviewAnalytics(reviewVerdictDeps appreviewverdict.Deps, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -50,9 +51,12 @@ func GetReviewAnalytics(reviewVerdictDeps appreviewverdict.Deps) http.HandlerFun
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		// fix/repo-scoped-authorization: role check above is necessary but
+		// not sufficient -- see reposettings.go's own resolveKnownRepo doc
+		// comment for why the URL's own repo must ALSO be confirmed known
+		// to this deployment before any store call below ever runs.
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 

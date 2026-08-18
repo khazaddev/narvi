@@ -1167,8 +1167,8 @@ func serve() error {
 	// configuring a setting, not the sandbox agent calling a tool).
 	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore, reviewVerdictDeps))
-		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore))
+		r.Get("/", httpapi.GetRepoSettings(repoSettingsStore, reviewVerdictDeps, githubPRSessionStore))
+		r.Put("/", httpapi.PutRepoSettings(repoSettingsStore, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/false-positive-patterns (Step 63, "review:
@@ -1182,8 +1182,8 @@ func serve() error {
 	// REST route in this package.
 	router.Route("/api/repos/{owner}/{repo}/false-positive-patterns", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Get("/", httpapi.ListFalsePositivePatterns(falsePositivePatternStore))
-		r.Post("/{patternID}/retire", httpapi.RetireFalsePositivePattern(falsePositivePatternStore, auditLogStore))
+		r.Get("/", httpapi.ListFalsePositivePatterns(falsePositivePatternStore, githubPRSessionStore))
+		r.Post("/{patternID}/retire", httpapi.RetireFalsePositivePattern(falsePositivePatternStore, auditLogStore, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/auto-approval-settings,
@@ -1196,11 +1196,11 @@ func serve() error {
 	// row 6, just to reach it).
 	router.Route("/api/repos/{owner}/{repo}/auto-approval-settings", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Put("/", httpapi.PutAutoApprovalSettings(repoSettingsStore, reviewVerdictDeps))
+		r.Put("/", httpapi.PutAutoApprovalSettings(repoSettingsStore, reviewVerdictDeps, githubPRSessionStore))
 	})
 	router.Route("/api/repos/{owner}/{repo}/auto-merge", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Put("/", httpapi.PutAutoMergeToggle(repoSettingsStore, reviewVerdictDeps))
+		r.Put("/", httpapi.PutAutoMergeToggle(repoSettingsStore, reviewVerdictDeps, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5): a
@@ -1209,7 +1209,7 @@ func serve() error {
 	// comment.
 	router.Route("/api/repos/{owner}/{repo}/auto-retrigger-review", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(repoSettingsStore))
+		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(repoSettingsStore, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2): a
@@ -1218,7 +1218,7 @@ func serve() error {
 	// PutDescriptionAutofixToggle doc comment.
 	router.Route("/api/repos/{owner}/{repo}/description-autofix", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Put("/", httpapi.PutDescriptionAutofixToggle(repoSettingsStore))
+		r.Put("/", httpapi.PutDescriptionAutofixToggle(repoSettingsStore, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3): a further,
@@ -1226,7 +1226,7 @@ func serve() error {
 	// httpapi/reposettings.go's own PutReviewDepthConfig doc comment.
 	router.Route("/api/repos/{owner}/{repo}/review-depth", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Put("/", httpapi.PutReviewDepthConfig(repoSettingsStore))
+		r.Put("/", httpapi.PutReviewDepthConfig(repoSettingsStore, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7): a
@@ -1234,7 +1234,7 @@ func serve() error {
 	// httpapi/reposettings.go's own PutReviewCostBudget doc comment.
 	router.Route("/api/repos/{owner}/{repo}/review-cost-budget", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Put("/", httpapi.PutReviewCostBudget(repoSettingsStore))
+		r.Put("/", httpapi.PutReviewCostBudget(repoSettingsStore, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1):
@@ -1245,7 +1245,7 @@ func serve() error {
 	// viewer), unlike every §21.2 write-side route above.
 	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps))
+		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps, githubPRSessionStore))
 	})
 
 	// /api/repos/{owner}/{repo}/provider-credentials,
@@ -1263,10 +1263,10 @@ func serve() error {
 	// sandbox agent fetching one).
 	router.Route("/api/repos/{owner}/{repo}/provider-credentials", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))
-		r.Post("/", httpapi.CreateRepoProviderCredential(providerCredentialStore, cfg.TokenEncryptionKey))
-		r.Get("/", httpapi.ListRepoProviderCredentials(providerCredentialStore))
-		r.Put("/{credentialID}", httpapi.UpdateRepoProviderCredentialValue(providerCredentialStore, cfg.TokenEncryptionKey))
-		r.Delete("/{credentialID}", httpapi.DeleteRepoProviderCredential(providerCredentialStore))
+		r.Post("/", httpapi.CreateRepoProviderCredential(providerCredentialStore, cfg.TokenEncryptionKey, githubPRSessionStore))
+		r.Get("/", httpapi.ListRepoProviderCredentials(providerCredentialStore, githubPRSessionStore))
+		r.Put("/{credentialID}", httpapi.UpdateRepoProviderCredentialValue(providerCredentialStore, cfg.TokenEncryptionKey, githubPRSessionStore))
+		r.Delete("/{credentialID}", httpapi.DeleteRepoProviderCredential(providerCredentialStore, githubPRSessionStore))
 	})
 	router.Route("/api/environments/{environmentID}/provider-credentials", func(r chi.Router) {
 		r.Use(auth.Middleware(userSessionStore, userStore))

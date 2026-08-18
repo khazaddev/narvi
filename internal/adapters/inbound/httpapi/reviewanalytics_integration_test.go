@@ -32,6 +32,7 @@ func TestGetReviewAnalytics_ViewerAllowed_NothingComputedYet(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleViewer)
+	rig.markRepoKnown(ctx, t, "acme/analytics-empty")
 
 	var resp restdtos.ReviewAnalytics
 	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/analytics-empty/review-analytics", nil, &resp, token)
@@ -79,6 +80,7 @@ func TestGetReviewAnalytics_RendersComputedRollups(t *testing.T) {
 	_, token := rig.createAuthenticatedUser(ctx, t)
 
 	const repoFullName = "acme/analytics-populated"
+	rig.markRepoKnown(ctx, t, repoFullName)
 
 	verdict := review.Verdict{
 		RiskLevel:         review.RiskLevelLow,
@@ -177,6 +179,7 @@ func TestGetReviewAnalytics_DigestContestationRate_ComputedFromDeepPathAndContes
 	_, token := rig.createAuthenticatedUser(ctx, t)
 
 	const repoFullName = "acme/analytics-contested"
+	rig.markRepoKnown(ctx, t, repoFullName)
 
 	verdict := review.Verdict{
 		RiskLevel:         review.RiskLevelLow,

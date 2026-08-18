@@ -25,6 +25,7 @@ func TestPutAutoApprovalSettings_MaintainerAllowed_RoundTrips(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, "acme/auto-approval-maintainer")
 
 	var putResp restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/auto-approval-maintainer/auto-approval-settings",
@@ -69,6 +70,7 @@ func TestPutAutoMergeToggle_AdminAllowed_RoundTrips(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/auto-merge-admin")
 
 	var putResp restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/auto-merge-admin/auto-merge", []byte(`{"enabled":true}`), &putResp, token)
@@ -122,6 +124,7 @@ func TestPutAutoApprovalSettings_PreservesAutoMergeToggle_ReadModifyWrite(t *tes
 	const repoFullName = "acme/rmw-preserve-automerge"
 	_, adminToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
 	_, maintainerToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, repoFullName)
 
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/"+repoFullName+"/auto-merge", []byte(`{"enabled":true}`), nil, adminToken)
 	if status != http.StatusOK {
@@ -149,6 +152,7 @@ func TestPutAutoMergeToggle_PreservesEligibilityConfig_ReadModifyWrite(t *testin
 	const repoFullName = "acme/rmw-preserve-eligibility"
 	_, adminToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
 	_, maintainerToken := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, repoFullName)
 
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/"+repoFullName+"/auto-approval-settings",
 		[]byte(`{"maxAutoApproveFilesChanged":7,"sensitiveBlastRadiusTags":["secrets"]}`), nil, maintainerToken)
@@ -177,6 +181,7 @@ func TestGetRepoSettings_ContradictionRate_NotYetComputed_DistinctFromZero(t *te
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/no-outcomes-yet")
 
 	var got restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/no-outcomes-yet/settings", nil, &got, token)
