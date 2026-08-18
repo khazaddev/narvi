@@ -23,6 +23,7 @@ func TestPutAutoRetriggerReviewToggle_AdminAllowed_RoundTrips(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/auto-retrigger-review-admin")
 
 	var putResp restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/auto-retrigger-review-admin/auto-retrigger-review", []byte(`{"enabled":true}`), &putResp, token)
@@ -72,6 +73,7 @@ func TestPutAutoRetriggerReviewToggle_PreservesAutoMergeToggle_ColumnScoped(t *t
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
 	repoFullName := "acme/auto-retrigger-review-column-scoped"
+	rig.markRepoKnown(ctx, t, repoFullName)
 
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/"+repoFullName+"/auto-merge", []byte(`{"enabled":true}`), nil, token)
 	if status != http.StatusOK {

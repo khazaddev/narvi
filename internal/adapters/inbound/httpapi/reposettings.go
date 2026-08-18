@@ -19,6 +19,15 @@
 // REST route in this package (unlike scm-credentials/snapshot-mint/
 // review-verdict, which are sandbox-bearer-authenticated: this is an
 // ADMIN, not the sandbox agent, configuring a policy flag).
+//
+// fix/repo-scoped-authorization: every route in this file, plus
+// reviewanalytics.go/falsepositivepatterns.go/providercredentials.go's own
+// repo-scoped route group, now ALSO confirms the URL's own {owner}/{repo}
+// is known to this deployment (resolveKnownRepo, below) before any store
+// call runs -- the role check above alone used to authorize with an EMPTY
+// authz.Resource{}, so the repo named in the URL never entered the
+// decision at all. See resolveKnownRepo's own doc comment for the full
+// defect and fix.
 
 package httpapi
 
@@ -43,19 +52,166 @@ import (
 	"github.com/khazaddev/narvi/internal/platform"
 )
 
-// repoFullNameFromRoute joins the {owner}/{repo} chi URL params into the
-// same "owner/repo" shape github_pr_sessions.repo_full_name/repo_settings.
+// resolveKnownRepo joins the {owner}/{repo} chi URL params into the same
+// "owner/repo" shape github_pr_sessions.repo_full_name/repo_settings.
 // repo_full_name already use -- both chi params are required by the route
 // pattern itself, so an empty owner or repo here means a route-mounting
 // bug, not malformed caller input; still guarded defensively rather than
-// building a bare "/repo" or "owner/" key.
-func repoFullNameFromRoute(r *http.Request) (string, bool) {
+// building a bare "/repo" or "owner/" key -- and then confirms this
+// deployment actually KNOWS the resulting repo (confirmRepoKnown, below).
+// Writes 404 "repo not found" -- the SAME status/message for a malformed
+// route AND an unknown repo, so a caller cannot distinguish "you mistyped
+// the URL" from "we don't know this repo" -- and returns ok=false on
+// either.
+//
+// # fix/repo-scoped-authorization (this batch)
+//
+// Every one of this package's repo-scoped handler families used to call
+// this function (then named repoFullNameFromRoute) for ONE job only --
+// joining the URL's {owner}/{repo} -- and authorize the caller's ROLE with
+// an empty authz.Resource{}, entirely independently: the repo named in the
+// URL never entered the authorization decision at all. That meant whoever
+// passed a role check for ONE repository passed it for EVERY repository,
+// simply by editing the URL -- confirmed, not theoretical (see this
+// batch's own commit message). This function is now the ONLY place in
+// this package that turns route params into a usable repoFullName: there
+// is no longer a standalone "just parse the URL" helper to reach for
+// instead, so a future handler copying this file's own pattern cannot
+// end up with a repo name that was never checked against this
+// deployment's own knowledge of what repos exist. providercredentials.go's
+// own repo-scoped route group calls this SAME function too (via its own
+// repoScopeTarget adapter) -- there is exactly one implementation of this
+// check in the package, not two independently-maintained copies.
+//
+// # Why github_pr_sessions is the entitlement signal, and why
+// repo_settings/sessions.repos are NOT
+//
+// Narvi has no per-repo membership/entitlement model at all (see
+// internal/domain/authz/doc.go, §13 -- role is global, one per user, never
+// per-repo) -- so this fix is deliberately narrower than "which members
+// may reach which repos": it only closes "a repository named in the URL
+// must be one this deployment actually knows about", never asserting
+// anything about who, among members holding the right role, may reach a
+// KNOWN repo. Inventing a broader membership model here would pre-empt an
+// open decision that is the repo owner's to make, not this fix's.
+//
+// Three tables in this schema carry a repo_full_name column (grepped for
+// every migration referencing it before choosing). Only ONE is a sound,
+// non-self-referential proof of "this deployment is genuinely attached to
+// this repo":
+//
+//   - repo_settings (migrations/000044) is disqualified twice over. Its
+//     own doc comment establishes "a row's ABSENCE means every flag
+//     defaults to its own safe value" as ordinary, expected behavior
+//     (GetRepoSettings' own doc comment: "never a 404: 'no row yet' is
+//     not an error condition") -- so a row's mere PRESENCE was never
+//     designed to mean "onboarded" either. Worse, it is SELF-REFERENTIAL
+//     for exactly the write endpoints this fix must gate: PutRepoSettings/
+//     PutAutoApprovalSettings/PutAutoMergeToggle/etc., below, themselves
+//     upsert this same table -- using its own existence as the gate would
+//     let a maintainer or admin who already holds the ROLE for one of
+//     those actions simply write a settings row for an arbitrary,
+//     never-onboarded repo first, then pass the "known repo" gate for
+//     that same fabricated repo forever after. That is the exact
+//     self-fulfilling bypass this fix exists to close, reintroduced by a
+//     different door.
+//   - sessions.repos (migrations/000018, a JSONB column) is disqualified
+//     for the identical reason: CreateSession (authz.ActionCreateSession,
+//     §13.3 row 2) lets any MEMBER start a session against any repo
+//     string they type into the request body, with no validation that the
+//     repo is real -- trivially self-serve at ordinary member privilege,
+//     never proof of anything.
+//   - github_pr_sessions (migrations/000028) is the one sound signal used
+//     here. Its ONLY writer, anywhere in this codebase, is
+//     internal/adapters/inbound/github's own webhook ingress
+//     (coalesce.go) -- reachable only by a request whose
+//     "X-Hub-Signature-256" HMAC verifies against this deployment's real,
+//     configured GitHub webhook secret (handler.go, platform.
+//     VerifyWebhookSignature). No httpapi REST handler writes this table
+//     at all (grepped for before writing this comment) -- a caller of any
+//     role, hitting any endpoint in this package, cannot cause a row to
+//     exist here as a side effect the way it can for the two tables
+//     above. And per coalesce.go's own single-transaction sequencing
+//     (EnsureRow, then LockForUpdate, then SetSessionID, committed only
+//     after SetSessionID succeeds -- see that file's own doc comment), a
+//     row only ever COMMITS with a non-NULL session_id: a denied or
+//     failed claim attempt rolls the whole transaction back, leaving no
+//     row behind at all. So bare existence (RepoKnownToDeployment, no
+//     separate session_id filter needed) already means "a real,
+//     HMAC-verified GitHub webhook genuinely produced a committed review
+//     session for this repo".
+//
+// # The honest limitation this leaves
+//
+// A freshly onboarded repo with zero PR mentions yet has no
+// github_pr_sessions row, so an admin cannot pre-configure repo settings
+// or provider credentials for it before its first PR is ever reviewed.
+// No other sound, non-self-referential signal exists in this schema today
+// (verified above) -- inventing one (e.g. a dedicated repo-onboarding/
+// allowlist table) would itself be a step toward the membership model
+// this fix deliberately does not build. Reported here plainly, not
+// silently worked around.
+func resolveKnownRepo(w http.ResponseWriter, r *http.Request, prSessions *postgres.GitHubPRSessionStore) (string, bool) {
 	owner := chi.URLParam(r, "owner")
 	repo := chi.URLParam(r, "repo")
 	if owner == "" || repo == "" {
+		writeError(w, http.StatusNotFound, "repo not found")
 		return "", false
 	}
-	return owner + "/" + repo, true
+	repoFullName := owner + "/" + repo
+	if !confirmRepoKnown(w, r, prSessions, repoFullName) {
+		return "", false
+	}
+	return repoFullName, true
+}
+
+// confirmRepoKnown checks repoFullName (already parsed/shape-validated by
+// the caller) against GitHubPRSessionStore.RepoKnown -- see
+// resolveKnownRepo's own extended doc comment (above) for the full "why
+// github_pr_sessions" reasoning. Writes 404 "repo not found" and returns
+// false on either a lookup error (fail-closed: an unconfirmable repo is
+// treated as unknown, never silently let through) or a genuinely unknown
+// repo. Split out from resolveKnownRepo so providercredentials.go's own
+// repo-scoped route group -- which resolves scopeTargetID slightly
+// differently, since its shared core functions also serve the
+// environment-/global-scoped route groups -- can reuse this SAME check
+// rather than a second, independently-maintained copy of it.
+func confirmRepoKnown(w http.ResponseWriter, r *http.Request, prSessions *postgres.GitHubPRSessionStore, repoFullName string) bool {
+	ctx := r.Context()
+	known, err := prSessions.RepoKnown(ctx, repoFullName)
+	if err != nil {
+		platform.Logger(ctx).Error("httpapi: check repo known to deployment failed", "error", err, "repo", repoFullName)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return false
+	}
+	if !known {
+		logUnknownRepoRefusal(r, repoFullName)
+		writeError(w, http.StatusNotFound, "repo not found")
+		return false
+	}
+	return true
+}
+
+// logUnknownRepoRefusal logs (app logger only, Warn level) a request that
+// passed its own role check but named a repo this deployment does not
+// know. This codebase's own audit_log table records completed STATE
+// CHANGES only -- every recordAuditLog call site in this package writes a
+// row for a change that already happened (session.create, plan.<verdict>,
+// false_positive_pattern.retire, ...), never a refusal of any kind -- and
+// a role-based authz refusal (helpers.go's own authorize, ErrForbidden
+// branch) is likewise never audit-logged today, only silently turned into
+// a 403. The one comparable precedent for a REFUSAL specifically is
+// internal/adapters/inbound/github/coalesce.go's own "denied by authz"
+// lines (logger.Warn, no audit_log row) -- this mirrors that, not
+// members.go's write-side audit rows.
+func logUnknownRepoRefusal(r *http.Request, repoFullName string) {
+	ctx := r.Context()
+	logger := platform.Logger(ctx)
+	userID := ""
+	if authUser, ok := platform.UserFromContext(ctx); ok {
+		userID = authUser.ID
+	}
+	logger.Warn("httpapi: repo-scoped request denied -- repo not known to this deployment", "repo", repoFullName, "user_id", userID, "path", r.URL.Path)
 }
 
 // GetRepoSettings backs GET /api/repos/{owner}/{repo}/settings: 403 if the
@@ -113,7 +269,7 @@ func authorizeAny(w http.ResponseWriter, r *http.Request, resource authz.Resourc
 // additive, read-only from this endpoint's own perspective (writes are
 // PutAutoApprovalSettings/PutAutoMergeToggle below, each its own
 // separately-gated endpoint).
-func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps appreviewverdict.Deps) http.HandlerFunc {
+func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps appreviewverdict.Deps, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -134,9 +290,12 @@ func GetRepoSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		// fix/repo-scoped-authorization: role check above is necessary but
+		// not sufficient -- see resolveKnownRepo's own doc comment for why
+		// the URL's own repo must ALSO be confirmed known to this
+		// deployment before any store call below ever runs.
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
@@ -271,7 +430,7 @@ func reviewTagsFromJSON(raw []byte) []review.Tag {
 // first; 400 for a malformed request body; 200 with the resulting
 // restdtos.RepoSettings otherwise. Idempotent create-or-update
 // (postgres.RepoSettingsStore.Upsert).
-func PutRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+func PutRepoSettings(repoSettings *postgres.RepoSettingsStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -283,9 +442,8 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc 
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
@@ -340,7 +498,7 @@ func PutRepoSettings(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc 
 // reverting a toggle an admin just armed/disarmed. No read-before-write
 // is needed anymore at all -- the column-scoped UPDATE simply never
 // touches the column it doesn't own, so there is nothing to preserve.
-func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps appreviewverdict.Deps) http.HandlerFunc {
+func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps appreviewverdict.Deps, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -349,9 +507,8 @@ func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVer
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
@@ -392,7 +549,7 @@ func PutAutoApprovalSettings(repoSettings *postgres.RepoSettingsStore, reviewVer
 // touches ONLY auto_merge_enabled, never the eligibility-config columns
 // PutAutoApprovalSettings above owns. See that handler's own doc comment
 // for the full "why" this replaces the previous read-modify-write.
-func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps appreviewverdict.Deps) http.HandlerFunc {
+func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictDeps appreviewverdict.Deps, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -401,9 +558,8 @@ func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictD
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
@@ -441,7 +597,7 @@ func PutAutoMergeToggle(repoSettings *postgres.RepoSettingsStore, reviewVerdictD
 // PutAutoMergeToggle, this store method already returns the FULL,
 // just-written repo_settings row, so no follow-up Get call is needed to
 // render every OTHER field on the response.
-func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -450,9 +606,8 @@ func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore) http
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
@@ -509,7 +664,7 @@ func PutAutoRetriggerReviewToggle(repoSettings *postgres.RepoSettingsStore) http
 // repo_settings row, so no follow-up Get call is needed to render every
 // OTHER field on the response, exactly like PutAutoRetriggerReviewToggle
 // above.
-func PutDescriptionAutofixToggle(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+func PutDescriptionAutofixToggle(repoSettings *postgres.RepoSettingsStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -518,9 +673,8 @@ func PutDescriptionAutofixToggle(repoSettings *postgres.RepoSettingsStore) http.
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
@@ -635,7 +789,7 @@ func reviewDepthModeString(mode restdtos.UpdateReviewDepthConfigRequestMode) (*s
 // just-written repo_settings row, so no follow-up Get call is needed to
 // render every OTHER field on the response, exactly like
 // PutAutoRetriggerReviewToggle/PutDescriptionAutofixToggle above.
-func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -644,9 +798,8 @@ func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore) http.Handler
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
@@ -721,7 +874,7 @@ func PutReviewDepthConfig(repoSettings *postgres.RepoSettingsStore) http.Handler
 // method already returns the FULL, just-written repo_settings row, so no
 // follow-up Get call is needed to render every OTHER field on the
 // response.
-func PutReviewCostBudget(repoSettings *postgres.RepoSettingsStore) http.HandlerFunc {
+func PutReviewCostBudget(repoSettings *postgres.RepoSettingsStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -730,9 +883,8 @@ func PutReviewCostBudget(repoSettings *postgres.RepoSettingsStore) http.HandlerF
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 

@@ -2,6 +2,7 @@ package reviewpost_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/khazaddev/narvi/internal/domain/review"
@@ -671,5 +672,186 @@ func TestComputeShippable_FactCheckSkippedNeverRaisesShippable(t *testing.T) {
 	}
 	if skippedVerdict.Shippable != doneVerdict.Shippable {
 		t.Errorf("skippedVerdict.Shippable = %q, doneVerdict.Shippable = %q -- FactCheck:skipped must NEVER raise Shippable (the deliberate difference from CounterReview:skipped)", skippedVerdict.Shippable, doneVerdict.Shippable)
+	}
+}
+
+// TestValidateVerdictInput_DigestLengthCaps is this Step's own regression
+// test for G3 (Step 62 hardening): table-driven, pinning the EXACT
+// boundary of every Max*Bytes cap declared above (validate.go) -- a field
+// AT the cap is legal, one byte OVER is rejected. strings.Repeat("a", n)
+// is used throughout (never a multi-byte rune) so len() (a byte count) and
+// the visible character count agree, keeping each boundary unambiguous.
+func TestValidateVerdictInput_DigestLengthCaps(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(in *reviewpost.VerdictInput)
+		wantErr error
+	}{
+		{
+			name: "digest.summary at the cap is legal",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.Summary = strings.Repeat("a", reviewpost.MaxDigestSummaryBytes)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "digest.summary one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.Summary = strings.Repeat("a", reviewpost.MaxDigestSummaryBytes+1)
+			},
+			wantErr: reviewpost.ErrDigestSummaryTooLong,
+		},
+		{
+			name: "digest.adequacyExplanation at the cap is legal",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.AdequacyExplanation = strings.Repeat("a", reviewpost.MaxDigestAdequacyExplanationBytes)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "digest.adequacyExplanation one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.AdequacyExplanation = strings.Repeat("a", reviewpost.MaxDigestAdequacyExplanationBytes+1)
+			},
+			wantErr: reviewpost.ErrDigestAdequacyExplanationTooLong,
+		},
+		{
+			name: "digest.stackRisks at the cap is legal",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.StackRisks = strings.Repeat("a", reviewpost.MaxDigestStackRisksBytes)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "digest.stackRisks one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.StackRisks = strings.Repeat("a", reviewpost.MaxDigestStackRisksBytes+1)
+			},
+			wantErr: reviewpost.ErrDigestStackRisksTooLong,
+		},
+		{
+			name: "digest.unverifiedLimits at the cap is legal",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.UnverifiedLimits = strings.Repeat("a", reviewpost.MaxDigestUnverifiedLimitsBytes)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "digest.unverifiedLimits one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.UnverifiedLimits = strings.Repeat("a", reviewpost.MaxDigestUnverifiedLimitsBytes+1)
+			},
+			wantErr: reviewpost.ErrDigestUnverifiedLimitsTooLong,
+		},
+		{
+			name: "digest.proposedBody at the cap is legal",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ProposedBody = strings.Repeat("a", reviewpost.MaxDigestProposedBodyBytes)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "digest.proposedBody one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ProposedBody = strings.Repeat("a", reviewpost.MaxDigestProposedBodyBytes+1)
+			},
+			wantErr: reviewpost.ErrDigestProposedBodyTooLong,
+		},
+		{
+			name: "digest.contestedPoints at the cap is legal",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ContestedPoints = strings.Repeat("a", reviewpost.MaxDigestContestedPointsBytes)
+			},
+			wantErr: nil,
+		},
+		{
+			name: "digest.contestedPoints one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ContestedPoints = strings.Repeat("a", reviewpost.MaxDigestContestedPointsBytes+1)
+			},
+			wantErr: reviewpost.ErrDigestContestedPointsTooLong,
+		},
+		{
+			name: "archDecision.decision at the cap is legal",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = []reviewpost.ArchDecision{{Decision: strings.Repeat("a", reviewpost.MaxArchDecisionFieldBytes)}}
+			},
+			wantErr: nil,
+		},
+		{
+			name: "archDecision.decision one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = []reviewpost.ArchDecision{{Decision: strings.Repeat("a", reviewpost.MaxArchDecisionFieldBytes+1)}}
+			},
+			wantErr: reviewpost.ErrDigestArchDecisionFieldTooLong,
+		},
+		{
+			name: "archDecision.rejectedAlternative one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = []reviewpost.ArchDecision{{RejectedAlternative: strings.Repeat("a", reviewpost.MaxArchDecisionFieldBytes+1)}}
+			},
+			wantErr: reviewpost.ErrDigestArchDecisionFieldTooLong,
+		},
+		{
+			name: "archDecision.conventionConformance one byte over the cap is rejected",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = []reviewpost.ArchDecision{{ConventionConformance: strings.Repeat("a", reviewpost.MaxArchDecisionFieldBytes+1)}}
+			},
+			wantErr: reviewpost.ErrDigestArchDecisionFieldTooLong,
+		},
+		{
+			name: "the SECOND element of archDecisions is checked too, not just the first",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.Digest.ArchDecisions = []reviewpost.ArchDecision{
+					{Decision: "short"},
+					{Decision: strings.Repeat("a", reviewpost.MaxArchDecisionFieldBytes+1)},
+				}
+			},
+			wantErr: reviewpost.ErrDigestArchDecisionFieldTooLong,
+		},
+		{
+			name: "oversized stackRisks is rejected on the LIGHT path too -- the cap is unconditional, unlike the non-blank requirement",
+			mutate: func(in *reviewpost.VerdictInput) {
+				in.ReviewDepth = reviewtriage.ReviewDepth("")
+				in.Digest.StackRisks = strings.Repeat("a", reviewpost.MaxDigestStackRisksBytes+1)
+			},
+			wantErr: reviewpost.ErrDigestStackRisksTooLong,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			in := validInput()
+			tc.mutate(&in)
+
+			err := reviewpost.ValidateVerdictInput(in)
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Errorf("ValidateVerdictInput() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Errorf("ValidateVerdictInput() = %v, want %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateVerdictInput_LengthCapsCheckedLastAmongExisting proves the
+// new length-cap block (G3) runs AFTER every pre-existing check, including
+// the deep-path-only block and the Findings loop -- a payload with BOTH an
+// invalid riskLevel AND an oversized digest.summary must still report
+// ErrInvalidRiskLevel, never a TooLong error, mirroring
+// TestValidateVerdictInput_DigestSummaryCheckedLastAmongExisting's own
+// identical "added at the end of the fixed order" proof above.
+func TestValidateVerdictInput_LengthCapsCheckedLastAmongExisting(t *testing.T) {
+	in := validInput()
+	in.RiskLevel = "bogus"
+	in.Digest.Summary = strings.Repeat("a", reviewpost.MaxDigestSummaryBytes+1)
+
+	err := reviewpost.ValidateVerdictInput(in)
+	if !errors.Is(err, reviewpost.ErrInvalidRiskLevel) {
+		t.Errorf("ValidateVerdictInput() = %v, want %v (riskLevel checked before the length caps)", err, reviewpost.ErrInvalidRiskLevel)
 	}
 }

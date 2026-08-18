@@ -41,6 +41,7 @@ func TestListFalsePositivePatterns_MaintainerAllowed(t *testing.T) {
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
 
 	const repoFullName = "acme/fp-list-repo"
+	rig.markRepoKnown(ctx, t, repoFullName)
 	seedFalsePositivePattern(ctx, t, rig, repoFullName, "first taught pattern", 810001)
 	seedFalsePositivePattern(ctx, t, rig, repoFullName, "second taught pattern", 810002)
 
@@ -85,6 +86,7 @@ func TestListFalsePositivePatterns_IncludesRetired(t *testing.T) {
 	admin, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
 
 	const repoFullName = "acme/fp-list-retired-repo"
+	rig.markRepoKnown(ctx, t, repoFullName)
 	row := seedFalsePositivePattern(ctx, t, rig, repoFullName, "will be retired", 810003)
 	if _, err := rig.falsePositivePatterns.Retire(ctx, row.ID, admin.ID, repoFullName); err != nil {
 		t.Fatalf("retire: %v", err)
@@ -109,6 +111,7 @@ func TestRetireFalsePositivePattern_MaintainerAllowed(t *testing.T) {
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
 
 	const repoFullName = "acme/fp-retire-repo"
+	rig.markRepoKnown(ctx, t, repoFullName)
 	row := seedFalsePositivePattern(ctx, t, rig, repoFullName, "to retire", 810004)
 
 	var got restdtos.FalsePositivePattern
@@ -162,6 +165,7 @@ func TestRetireFalsePositivePattern_AlreadyRetired_Conflict(t *testing.T) {
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
 
 	const repoFullName = "acme/fp-retire-twice-repo"
+	rig.markRepoKnown(ctx, t, repoFullName)
 	row := seedFalsePositivePattern(ctx, t, rig, repoFullName, "retired twice", 810006)
 
 	first := rig.doJSON(t, http.MethodPost, fmt.Sprintf("/api/repos/acme/fp-retire-twice-repo/false-positive-patterns/%s/retire", row.ID.String()), nil, nil, token)

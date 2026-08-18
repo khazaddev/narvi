@@ -23,6 +23,7 @@ func TestPutDescriptionAutofixToggle_AdminAllowed_RoundTrips(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/description-autofix-admin")
 
 	var putResp restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/description-autofix-admin/description-autofix", []byte(`{"enabled":true}`), &putResp, token)
@@ -51,6 +52,7 @@ func TestGetRepoSettings_DescriptionAutofixEnabled_NoRowYet_DefaultsOff(t *testi
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/description-autofix-no-row")
 
 	var getResp restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/description-autofix-no-row/settings", nil, &getResp, token)
@@ -109,6 +111,7 @@ func TestPutDescriptionAutofixToggle_PreservesAutoMergeToggle_ColumnScoped(t *te
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
 	repoFullName := "acme/description-autofix-column-scoped"
+	rig.markRepoKnown(ctx, t, repoFullName)
 
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/"+repoFullName+"/auto-merge", []byte(`{"enabled":true}`), nil, token)
 	if status != http.StatusOK {

@@ -144,3 +144,15 @@ func (s *GitHubPRSessionStore) MarkAutoRetriggerBudgetNoticeSent(ctx context.Con
 		PrNumber:     prNumber,
 	})
 }
+
+// RepoKnown is fix/repo-scoped-authorization's own entitlement signal:
+// reports whether ANY github_pr_sessions row exists for repoFullName --
+// see RepoKnownToDeployment's own generated doc comment for the full "why
+// this is a sound, externally-verified proof this deployment is genuinely
+// attached to repoFullName" reasoning. Used by httpapi's own
+// resolveKnownRepo (reposettings.go) to reject a request whose URL names a
+// repository this deployment has never actually seen GitHub webhook
+// traffic for.
+func (s *GitHubPRSessionStore) RepoKnown(ctx context.Context, repoFullName string) (bool, error) {
+	return s.q.RepoKnownToDeployment(ctx, repoFullName)
+}
