@@ -1189,7 +1189,7 @@ export interface WorkflowStepDefinition {
    */
   edges: WorkflowEdge[];
   /**
-   * §25.10's optional canvas-layout attachment: this step's node position on the visual editor's canvas (Step 79, §25.12). OPAQUE server-side -- stored verbatim (workflow_step_definitions.canvas_position JSONB), round-tripped, never interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has ever been saved for this step (true for every built-in and every API-authored definition until a canvas first saves one).
+   * §25.10's optional canvas-layout attachment: this step's node position on the visual editor's canvas (Step 88, §25.12). OPAQUE server-side -- stored verbatim (workflow_step_definitions.canvas_position JSONB), round-tripped, never interpreted for any behavior. Genuinely OPTIONAL (may be absent entirely, like CreateSessionRequest.pathScope) AND nullable: absent/null means no layout has ever been saved for this step (true for every built-in and every API-authored definition until a canvas first saves one).
    */
   canvasPosition?: {
     x: number;

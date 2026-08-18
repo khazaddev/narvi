@@ -58,9 +58,11 @@ func DefaultCostBudget() CostBudget {
 
 // CostBudgetSafetyMargin is §26.7's own proposed look-ahead safety margin
 // -- "propose 80%, mirroring OpenCodeReview's own 4/5 figure" -- expressed
-// as the FRACTION of the ceiling that must remain UNSPENT for another
-// optional pass to still be worth dispatching (i.e. dispatch is allowed
-// while spent <= ceiling * 0.8). A named, EXPORTED constant (B5 fix --
+// as the FRACTION of the ceiling a review is allowed to SPEND before
+// another optional pass stops being worth dispatching (i.e. dispatch is
+// allowed while spent <= ceiling * 0.8; the actual reserve held back,
+// UNSPENT, once the margin is hit is the complement, 1 - 0.8 = 20%). A
+// named, EXPORTED constant (B5 fix --
 // previously unexported and duplicated as a hardcoded "a rough 80%
 // margin" English literal in internal/domain/review/context.go's own
 // subAgentOrchestrationInstructions, the prompt text a reviewing agent
@@ -113,20 +115,27 @@ const CostBudgetSafetyMargin = 0.8
 // this function only ever recommends skipping MORE conservatively as
 // spend rises toward the ceiling, never the reverse.
 //
-// NOT YET CALLED BY ANY PRODUCTION PATH (B5 disclosure): §26.7's own
-// enforcement mechanism is the reviewing agent's OWN self-governed
-// judgment against the dollar ceiling stated in its prompt (review/
-// context.go's own subAgentOrchestrationInstructions -- see that
-// function's own "a self-governed, best-effort check, not a server-
-// enforced gate" doc comment for the full "why": this control plane has
-// no channel to intervene inside an already-dispatched turn at all).
-// This function is that same policy's REFERENCE implementation --
-// grepped for callers before writing this disclosure, and there are
-// none outside this package's own tests -- kept as a real, tested,
-// exported pure function against exactly the day a server-side
-// verification/audit path is built on top of it, but nothing calls it
-// today. A doc comment silent on this would read as though this ceiling
-// were actively, mechanically enforced somewhere; it is not, yet.
+// CALLED FROM cmd/sandbox-agent/reviewcostbudgetserver.go (Step 70,
+// reviewCostBudgetServer's GET /review-cost-budget handler) -- this
+// function's own first production call site. Before Step 70, §26.7's
+// enforcement mechanism was ENTIRELY the reviewing agent's own
+// self-governed judgment against the dollar ceiling stated in its
+// prompt (review/context.go's own subAgentOrchestrationInstructions),
+// and this function shipped in Step 69 as a tested, exported pure
+// function with zero production callers -- a reference implementation
+// with nothing calling it yet. Step 70 gives a review turn's own agent a
+// way to learn the real answer instead of estimating it: a tiny,
+// loopback-only HTTP server inside the sandbox that this function
+// backs directly, reachable via the agent's own tool use (bash/curl),
+// so "am I already at/over budget" becomes a real fact this function
+// computes rather than a number the agent guesses from its own prompt
+// text. It is still a SELF-GOVERNED check in the sense that nothing on
+// the control-plane side forces the agent to call this endpoint or to
+// honor what it returns (§7's own anti-corruption-layer boundary: there
+// is no channel to intervene inside an already-dispatched turn) -- but
+// the mechanism putting §26.7's policy into effect is, as of this Step,
+// this function, called for real, not merely a prose figure in a
+// prompt.
 func ShouldSkipOptionalPass(spentUSD, ceilingUSD float64) bool {
 	if ceilingUSD <= 0 {
 		return false

@@ -108,13 +108,16 @@ func maxShippable(a, b Shippable) Shippable {
 }
 
 // baselineFromRisk maps the reviewer's own overall RiskLevel to the
-// Shippable value that would apply BEFORE either floor is considered —
-// i.e. what Shippable would be if coverage and premise were both
-// perfectly clean. RiskLevel is not itself one of the two named
-// raise-only floors (only coverage and premise are, per §8.2/Step 45) —
-// see doc.go's design call #2 for why it is instead treated as the
-// baseline the two floors can only ever raise, never lower, keeping
-// "raise-only" uniform across all three inputs to ComputeShippable.
+// Shippable value that would apply BEFORE any floor is considered —
+// i.e. what Shippable would be if coverage, premise, description
+// adequacy, and counter-review were all perfectly clean. RiskLevel is not
+// itself one of the four named raise-only floors (coverage and premise,
+// per §8.2/Step 45; description adequacy, §26.2/Step 67; counter-review,
+// §26.4/Step 69 — see ComputeShippable's own doc comment below for the
+// full, current list) — see doc.go's design call #2 for why it is instead
+// treated as the baseline those four floors can only ever raise, never
+// lower, keeping "raise-only" uniform across all five inputs to
+// ComputeShippable.
 //
 //   - RiskLevelLow: ShippableAuto — the reviewer found nothing that
 //     itself warrants human gating; only a floor can raise this further.

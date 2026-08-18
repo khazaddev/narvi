@@ -11,11 +11,16 @@ package reviewtriage
 const EffortHigh = "high"
 
 // ModelAndEffort resolves depth into the (modelID, effort) override pair
-// a review turn's own creation call threads onto turns.model_id/effort
-// (the ALREADY-EXISTING, already-wired-end-to-end mechanism §26.3 calls
-// "the existing dedicated review-model selection" -- CreateTurnOptions.
-// Effort/the modelID parameter every review-turn-creation path already
-// accepts, Step 59's own reasoning-effort threading). Both return values
+// a review turn's own creation call threads onto turns.model_id/effort --
+// CreateTurnOptions.Effort/the modelID parameter every review-turn-creation
+// path already accepts, Step 59's own reasoning-effort threading, an
+// ALREADY-EXISTING, already-wired-end-to-end mechanism this Step reuses
+// rather than inventing a second one. "Dedicated review-model selection"
+// ITSELF is a separate claim -- §26.3 is explicit that no such mechanism
+// predates this Step at all (§8 item 2 names it only as a feature-set
+// line, never a built one, before now) -- Step 68 is what introduces it,
+// as an optional operator override layered on top of Step 59's own
+// pre-existing threading. Both return values
 // are nil for anything other than DepthDeep -- the light path leaves
 // BOTH completely unset, preserving §26.9's own invariant to the letter:
 // "the light path's behavior remains exactly today's review", for model

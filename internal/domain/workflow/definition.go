@@ -192,7 +192,7 @@ var (
 // exactly the check §25.12 requires the canvas editor to apply at save
 // time ("rejecting an undrawable-by-the-engine graph at save time, not
 // silently accepting it"), owned here so Steps 55-56 (load-time
-// defense) and Step 79 (save-time gate) share ONE rule set, never two
+// defense) and Step 88 (save-time gate) share ONE rule set, never two
 // drifting copies. First violation wins; nil means def is executable.
 //
 // Orders must be unique and >= 1 but NOT contiguous -- NextStep's
