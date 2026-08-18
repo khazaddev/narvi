@@ -90,7 +90,7 @@ var placeholderTokenLiteralPattern = regexp.MustCompile(`^\{\{[A-Z0-9_]+\}\}$`)
 // the ONLY way this package's own tests can ever check upload's three
 // literals stay in sync (a direct import would close an cycle). A literal
 // found here but absent from placeholderTokens means
-// stripPlaceholderTokens will not strip it from an untrusted diff/title/
+// StripPlaceholderTokens will not strip it from an untrusted diff/title/
 // body, reopening the exact bearer-token-exfiltration class the Phase 5
 // audit's CRITICAL finding closed -- this test is what makes the NEXT such
 // omission fail CI on its own, without anyone needing to remember to
@@ -155,7 +155,7 @@ func TestPlaceholderTokens_DiscoversEveryDomainPlaceholderLiteral(t *testing.T) 
 	}
 	for lit, files := range found {
 		if !known[lit] {
-			t.Errorf("found placeholder-shaped literal %q declared in %v, but it is NOT in placeholderTokens (sanitize.go) -- stripPlaceholderTokens will not strip it from an untrusted diff/title/body, silently reopening the Phase 5 audit's CRITICAL bearer-token-exfiltration finding; add it to placeholderTokens", lit, files)
+			t.Errorf("found placeholder-shaped literal %q declared in %v, but it is NOT in placeholderTokens (sanitize.go) -- StripPlaceholderTokens will not strip it from an untrusted diff/title/body, silently reopening the Phase 5 audit's CRITICAL bearer-token-exfiltration finding; add it to placeholderTokens", lit, files)
 		}
 	}
 }

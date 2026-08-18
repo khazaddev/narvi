@@ -42,6 +42,26 @@ import (
 // function does not itself re-validate that -- exactly like it does not
 // re-validate verdict's own fields, trusting its one caller
 // (httpapi.PostReviewVerdict) to have already done so.
+//
+// digest is NOT, however, forwarded byte-for-byte: reviewpost.
+// SanitizeDigest (Step 62 hardening, hardening the write path against the
+// class PR #188 closed on the read path) runs FIRST, over a local copy --
+// see that function's own doc comment (reviewpost/sanitize.go) for the
+// full "why the write path too" reasoning. Every model-authored free-text
+// digest field (Summary/StackRisks/UnverifiedLimits/AdequacyExplanation/
+// ProposedBody/ContestedPoints/each ArchDecision's own three fields) has
+// every literal secret-substitution placeholder token stripped and every
+// '<'/'>' HTML-entity-escaped before any of the marshaling/persistence
+// below ever sees it -- so the row this function writes can never carry a
+// placeholder token, whatever future read path re-injects a stored digest
+// into a later prompt (none does today). This does NOT double-escape the
+// SAME verdict's already-posted GitHub comment: RenderVerdictComment
+// (httpapi.PostReviewVerdict's own earlier call, reviewverdict.go) renders
+// the ORIGINAL, unsanitized in-memory digest -- Digest is passed by VALUE
+// into both this function and RenderVerdictComment, so this function's own
+// local sanitized copy is never visible to that already-completed
+// rendering. See reviewpost.SanitizeDigest's own doc comment for the full
+// "no double-escaping, verified not assumed" argument.
 // reviewPath (Step 68, §26.3) is the posting turn's own turns.
 // review_depth, forwarded verbatim -- empty ("", reviewtriage.ReviewDepth
 // zero value) is a legitimate, common value (a verdict whose own turn
@@ -66,6 +86,14 @@ func Insert(ctx context.Context, store *postgres.ReviewVerdictStore, repoFullNam
 	if headSHA == "" {
 		return reviewverdict.Record{}, fmt.Errorf("reviewverdict: insert: refusing to persist a verdict with no known head sha for %s#%d", repoFullName, prNumber)
 	}
+
+	// Step 62 hardening: sanitize a LOCAL copy of digest before anything
+	// below marshals or persists it -- see this function's own doc comment
+	// (above) and reviewpost.SanitizeDigest's own doc comment for the full
+	// "why" and the "no double-escaping" argument. digest (the parameter)
+	// is intentionally never reassigned in place beyond this one line --
+	// everything below reads only this new, sanitized value.
+	digest = reviewpost.SanitizeDigest(digest)
 
 	blastRadiusJSON, err := marshalTags(verdict.BlastRadius)
 	if err != nil {

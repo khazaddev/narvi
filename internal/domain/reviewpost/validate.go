@@ -121,6 +121,67 @@ type VerdictInput struct {
 	CounterReviewCorroborated bool
 }
 
+// MaxDigestSummaryBytes/MaxDigestAdequacyExplanationBytes/
+// MaxDigestStackRisksBytes/MaxDigestUnverifiedLimitsBytes/
+// MaxDigestProposedBodyBytes/MaxDigestContestedPointsBytes/
+// MaxArchDecisionFieldBytes (Step 62 hardening, G3) cap the byte length of
+// every model-authored free-text digest field ValidateVerdictInput
+// enforces below -- mirroring internal/domain/upload's own MaxFilenameBytes/
+// MaxContentTypeBytes precedent (upload/validate.go) for the identical
+// reason that doc comment gives: before this Step, none of these fields had
+// ANY length limit at all, which is both a token-budget denial-of-service
+// against §26.7's own per-review cost budget (an unbounded digest field
+// inflates every FUTURE prompt a knowledge/projection read path re-injects
+// it into, once one exists -- reviewpost/sanitize.go's own "why the write
+// path too" reasoning applies here verbatim) and an amplifier for the
+// SAME placeholder-token/delimiter-forgery injection surface
+// reviewpost.SanitizeDigest (sanitize.go) neutralizes the CONTENT of but
+// not the SIZE of.
+//
+// No field in §26.1/§26.2/§26.4's own spec text (docs/TECHNICAL_PLAN.md)
+// names a concrete byte limit for any of these, so each cap below is this
+// package's own deliberate choice, sized from what each field's own doc
+// comment (digest.go) says it should actually contain, with generous
+// headroom over the realistic case rather than a tight fit:
+//   - Digest.Summary is documented as "2-4 sentences" -- a few hundred
+//     bytes in practice; 2000 gives roughly 5x headroom.
+//   - Digest.AdequacyExplanation is documented as "a one-line explanation"
+//     -- shorter still; 1000 bytes is already generous for one line.
+//   - Digest.StackRisks/UnverifiedLimits/ContestedPoints are each a prose
+//     paragraph (coupling/deployment/reversibility risks; honest "not
+//     verified" limits; inter-agent disagreement) that may reasonably name
+//     several distinct points -- 4000 bytes (roughly 600-700 words) comfortably
+//     covers a real one without bounding it to a single sentence.
+//   - Digest.ProposedBody is categorically different: a full PR-body
+//     REWRITE proposal, not a summary sentence -- 20000 bytes is sized to
+//     comfortably hold even a long, multi-paragraph PR description while
+//     staying a small fraction of GitHub's own 65536-character PR-body
+//     ceiling.
+//   - Each ArchDecision field (Decision/RejectedAlternative/
+//     ConventionConformance) is documented via one-sentence examples
+//     ("introduced a new retry queue table rather than reusing the
+//     existing outbox") -- 2000 bytes per field, matching Digest.Summary's
+//     own cap, is generous for a single structural-decision sentence.
+//
+// Deliberately scoped to Digest's own fields ONLY (the write-path attack
+// surface this Step's own G1/G3 hardening targets, reviewpost/sanitize.go's
+// own top doc comment) -- VerdictInput.Summary (the pre-existing,
+// never-persisted-to-review_verdicts narrative, see insert.go's own
+// InsertReviewVerdictParams, which carries no plain "summary" column) and
+// Finding.Description (finding.go) are both out of scope for this Step,
+// neither named by G1's own "every model-authored free-text field on the
+// digest" framing nor written to review_verdicts by the digest_* columns
+// this hardening targets.
+const (
+	MaxDigestSummaryBytes             = 2000
+	MaxDigestAdequacyExplanationBytes = 1000
+	MaxDigestStackRisksBytes          = 4000
+	MaxDigestUnverifiedLimitsBytes    = 4000
+	MaxDigestProposedBodyBytes        = 20000
+	MaxDigestContestedPointsBytes     = 4000
+	MaxArchDecisionFieldBytes         = 2000
+)
+
 // The errors ValidateVerdictInput returns -- one per rejected field, named
 // distinctly so a caller (internal/adapters/inbound/httpapi/
 // reviewverdict.go) can render a specific, actionable 400 body rather than
@@ -202,6 +263,35 @@ var (
 	// treatment immediately above -- never checked at all on the light
 	// path, where counter-review has no meaning (§26.9).
 	ErrInvalidCounterReview = errors.New("reviewpost: counterReview must be one of done/skipped on a deep-path review")
+	// ErrDigestSummaryTooLong/ErrDigestAdequacyExplanationTooLong/
+	// ErrDigestStackRisksTooLong/ErrDigestUnverifiedLimitsTooLong/
+	// ErrDigestProposedBodyTooLong/ErrDigestContestedPointsTooLong/
+	// ErrDigestArchDecisionFieldTooLong (Step 62 hardening, G3) -- the
+	// MaxDigest*Bytes/MaxArchDecisionFieldBytes caps' own rejection errors
+	// (see those consts' own doc comment, above the errors block, for the
+	// full "why" and how each limit was chosen). Checked LAST of all,
+	// AFTER the Findings loop -- this function's own "each added at the
+	// end of the existing fixed order" discipline (top doc comment):
+	// appending these at the very end, rather than interleaving each cap
+	// beside its own field's existing non-blank/enum check, keeps every
+	// EXISTING malformed payload (one that already fails an earlier
+	// check) reporting the exact SAME first error it always did. Checked
+	// UNCONDITIONALLY -- never gated on in.ReviewDepth == DepthDeep,
+	// unlike ArchDecisions/StackRisks/UnverifiedLimits' own non-blank
+	// checks above: an oversized field is exactly as much of a
+	// token-budget/injection-surface hazard on the light path (where these
+	// fields are legal but optional) as on the deep path (where three of
+	// them are additionally required non-blank) -- "required" and
+	// "bounded" are independent axes, and this Step's own G3 scope is
+	// bounding, regardless of whether a given field happens to also be
+	// required on this verdict's own path.
+	ErrDigestSummaryTooLong             = errors.New("reviewpost: digest.summary exceeds the maximum length")
+	ErrDigestAdequacyExplanationTooLong = errors.New("reviewpost: digest.adequacyExplanation exceeds the maximum length")
+	ErrDigestStackRisksTooLong          = errors.New("reviewpost: digest.stackRisks exceeds the maximum length")
+	ErrDigestUnverifiedLimitsTooLong    = errors.New("reviewpost: digest.unverifiedLimits exceeds the maximum length")
+	ErrDigestProposedBodyTooLong        = errors.New("reviewpost: digest.proposedBody exceeds the maximum length")
+	ErrDigestContestedPointsTooLong     = errors.New("reviewpost: digest.contestedPoints exceeds the maximum length")
+	ErrDigestArchDecisionFieldTooLong   = errors.New("reviewpost: digest.archDecisions contains a field exceeding the maximum length")
 )
 
 // ValidateVerdictInput rejects a malformed or partial verdict-posting-tool
@@ -212,23 +302,26 @@ var (
 // fixed order (RiskLevel, Premise, TestsCoverage, DocsDrift,
 // ProposedShippable, BlastRadius, FilesChanged, Summary, Digest.Summary,
 // Digest.DescriptionAdequacy, Digest.AdequacyExplanation, FactCheck/
-// FactCheckKilled (§26.6/Step 69, unconditional), and -- Step 68, §26.3,
-// LAST of all -- Digest.ArchDecisions/StackRisks/UnverifiedLimits/
-// CounterReview (§26.4/Step 69), but ONLY when in.ReviewDepth ==
-// reviewtriage.DepthDeep) so a caller presenting more than one bad field
-// always gets the SAME, deterministic first error rather than one that
-// depends on map iteration order or similar. Digest.Summary is checked
-// next (Step 66, §26.1's own new required field), Digest.
-// DescriptionAdequacy/Digest.AdequacyExplanation follow (§26.2/Step 67's
-// own new required fields), FactCheck/FactCheckKilled follow those
-// (§26.6/Step 69's own new UNCONDITIONAL fields -- checked before the
-// deep-path-only block, never inside it, since they apply regardless of
-// depth), and the deep-path-only checks (three digest fields plus
-// CounterReview) are checked LAST of all -- each added at the end of the
-// existing fixed order rather than interleaved earlier, so no Step ever
-// changes which error an EXISTING malformed payload (one that already
-// fails an earlier-checked field) was already reporting before it
-// shipped.
+// FactCheckKilled (§26.6/Step 69, unconditional), Digest.ArchDecisions/
+// StackRisks/UnverifiedLimits/CounterReview (§26.4/Step 69, ONLY when
+// in.ReviewDepth == reviewtriage.DepthDeep), Findings (Step 48), and --
+// Step 62 hardening, G3, LAST of all -- the seven digest length caps
+// (Digest.Summary/AdequacyExplanation/StackRisks/UnverifiedLimits/
+// ProposedBody/ContestedPoints/each ArchDecision field, unconditional on
+// path)) so a caller presenting more than one bad field always gets the
+// SAME, deterministic first error rather than one that depends on map
+// iteration order or similar. Digest.Summary is checked next (Step 66,
+// §26.1's own new required field), Digest.DescriptionAdequacy/Digest.
+// AdequacyExplanation follow (§26.2/Step 67's own new required fields),
+// FactCheck/FactCheckKilled follow those (§26.6/Step 69's own new
+// UNCONDITIONAL fields -- checked before the deep-path-only block, never
+// inside it, since they apply regardless of depth), the deep-path-only
+// checks (three digest fields plus CounterReview) follow those, Findings
+// follows that, and the length caps are checked LAST of all -- each
+// addition appended at the end of the existing fixed order rather than
+// interleaved earlier, so no Step ever changes which error an EXISTING
+// malformed payload (one that already fails an earlier-checked field) was
+// already reporting before it shipped.
 //
 // Every one of review's four "closed enum" types has a Go zero value
 // ("") that is deliberately not a legal member (review/doc.go's own
@@ -402,6 +495,40 @@ func ValidateVerdictInput(in VerdictInput) error {
 	for _, f := range in.Findings {
 		if err := ValidateFindingInput(f); err != nil {
 			return err
+		}
+	}
+
+	// Digest field length caps (Step 62 hardening, G3) -- checked LAST of
+	// all, after every other check above including the Findings loop; see
+	// the Max*Bytes consts' own doc comment and each Err*TooLong error's
+	// own doc comment (both above) for the full "why here, why
+	// unconditional" reasoning. len() is a raw BYTE count (not a rune
+	// count) -- "hard byte cap", matching internal/domain/upload's own
+	// identical MaxFilenameBytes/MaxContentTypeBytes treatment
+	// (upload/validate.go).
+	if len(in.Digest.Summary) > MaxDigestSummaryBytes {
+		return ErrDigestSummaryTooLong
+	}
+	if len(in.Digest.AdequacyExplanation) > MaxDigestAdequacyExplanationBytes {
+		return ErrDigestAdequacyExplanationTooLong
+	}
+	if len(in.Digest.StackRisks) > MaxDigestStackRisksBytes {
+		return ErrDigestStackRisksTooLong
+	}
+	if len(in.Digest.UnverifiedLimits) > MaxDigestUnverifiedLimitsBytes {
+		return ErrDigestUnverifiedLimitsTooLong
+	}
+	if len(in.Digest.ProposedBody) > MaxDigestProposedBodyBytes {
+		return ErrDigestProposedBodyTooLong
+	}
+	if len(in.Digest.ContestedPoints) > MaxDigestContestedPointsBytes {
+		return ErrDigestContestedPointsTooLong
+	}
+	for _, ad := range in.Digest.ArchDecisions {
+		if len(ad.Decision) > MaxArchDecisionFieldBytes ||
+			len(ad.RejectedAlternative) > MaxArchDecisionFieldBytes ||
+			len(ad.ConventionConformance) > MaxArchDecisionFieldBytes {
+			return ErrDigestArchDecisionFieldTooLong
 		}
 	}
 
