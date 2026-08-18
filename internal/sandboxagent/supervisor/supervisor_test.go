@@ -218,6 +218,83 @@ func TestStop_ProcessGroupKill_AfterLeaderAlreadyExited(t *testing.T) {
 	}
 }
 
+// TestStop_ProcessGroupKill_LeaderExitsDuringGrace is the regression test
+// for the identical hole TestStop_ProcessGroupKill_AfterLeaderAlreadyExited
+// covers for the OTHER ordering: this one exercises a COOPERATIVE leader
+// (exits promptly on the initial SIGTERM) that has backgrounded a STUBBORN
+// descendant (ignores SIGTERM) into the same process group before doing
+// so. The leader's own doneCh therefore closes well before grace elapses,
+// taking Stop's `case <-p.doneCh:` branch. An earlier version of that
+// branch returned immediately there, without ever sweeping the group with
+// SIGKILL -- silently orphaning the stubborn descendant forever, since
+// nothing else in Stop would ever signal it again. Re-introducing that
+// early `return nil` must make this test fail.
+//
+// The descendant writes its OWN pid file, from inside itself, AFTER its
+// own `trap` statement has already run (via its own $$) -- not the leader
+// capturing `$!` right after backgrounding it -- so that the file's mere
+// existence is proof the TERM-ignoring trap is already installed, exactly
+// TestStopProcessGroup_KillsCooperativeAndStubbornDescendants's own
+// precedent in cmd/sandbox-agent/processgroup_test.go.
+func TestStop_ProcessGroupKill_LeaderExitsDuringGrace(t *testing.T) {
+	t.Parallel()
+
+	sup := New()
+	stubbornPIDFile := filepath.Join(t.TempDir(), "stubbornpid")
+
+	// sleep 0.05 instead of a tight `while true; do :; done` busy-loop:
+	// keeps this test's own CPU footprint low without weakening what it
+	// proves -- SIGKILL is unblockable and kills the descendant regardless
+	// of what its loop body does between iterations, and the shell's TERM
+	// trap (or lack thereof) is checked between commands either way.
+	script := fmt.Sprintf(
+		`sh -c 'trap "" TERM; echo $$ > %s; while true; do sleep 0.05; done' &
+trap "exit 0" TERM
+while true; do sleep 0.05; done`,
+		stubbornPIDFile,
+	)
+	proc := spawnShell(t, sup, script)
+
+	stubbornPID := waitForChildPID(t, stubbornPIDFile)
+	if !processAlive(stubbornPID) {
+		t.Fatalf("stubborn descendant pid %d not alive before Stop()", stubbornPID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Grace is generous and NOT raced against: the point isn't proving
+	// Stop() is fast, it's proving the descendant is dead once Stop()
+	// returns, regardless of which select branch got there.
+	start := time.Now()
+	if err := proc.Stop(ctx, 2*time.Second); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	t.Logf("Stop() took %v", time.Since(start))
+
+	// Poll rather than assert once: unlike TestStop_ProcessGroupKill (whose
+	// descendant has the DEFAULT SIGTERM disposition and so dies from the
+	// very first group signal, minutes before Stop()'s own full grace
+	// period elapses) or TestStop_ProcessGroupKill_AfterLeaderAlreadyExited
+	// (whose branch always blocks out the full grace period before ever
+	// sending SIGKILL), this test's fast path has Stop() return the instant
+	// the LEADER's own (already-closed) doneCh is observed -- it does not
+	// wait on the descendant at all. The final SIGKILL is issued only
+	// microseconds before Stop() returns, so a single immediate
+	// processAlive check races the kernel's own signal-delivery/zombie-reap
+	// latency: it can observe a zombie (kill(pid,0) still succeeds) rather
+	// than an actually-reaped pid. This does not weaken the assertion --
+	// without the fix the descendant is never signaled at all and stays
+	// alive indefinitely, so it is still alive long past this deadline.
+	deadline := time.Now().Add(5 * time.Second) // _test.go is exempt from notimeliteral
+	for processAlive(stubbornPID) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if processAlive(stubbornPID) {
+		t.Errorf("stubborn descendant pid %d still alive after Stop() -- leader's own exit short-circuited the SIGKILL sweep, orphan left behind", stubbornPID)
+	}
+}
+
 // waitForChildPID polls childPidFile until it contains a non-empty pid,
 // failing the test if it never appears.
 func waitForChildPID(t *testing.T, childPidFile string) int {
