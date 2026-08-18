@@ -43,10 +43,34 @@ import (
 // have been started with SysProcAttr{Setpgid: true} and no Pgid set, so
 // its pgid equals its own pid -- exactly runSandboxAgent's own
 // convention). Sends SIGTERM to the whole group, waits up to grace (or
-// until waitDone fires first, whichever comes first) for it to exit, then
-// -- if neither happened in time -- escalates to SIGKILL on the whole
-// group and blocks unconditionally on waitDone: SIGKILL cannot be caught
-// or ignored, so that final wait is bounded by the OS, not by this code.
+// until waitDone fires first, whichever comes first), then UNCONDITIONALLY
+// escalates to SIGKILL on the whole group and blocks on waitDone: SIGKILL
+// cannot be caught or ignored, so that final wait is bounded by the OS,
+// not by this code.
+//
+// The SIGKILL sweep runs even when waitDone fires first -- i.e. even when
+// the tracked LEADER has already exited. waitDone is closed by a single
+// cmd.Wait() on the leader alone; it carries no information about
+// descendants the leader backgrounded into the same process group before
+// exiting; a well-behaved leader has already stopped them itself by the
+// time it exits, in which case the group is empty and this sweep is a
+// harmless no-op (signalProcessGroup treats ESRCH as benign). But if the
+// leader exits -- gracefully, by crash, or by dying to the initial SIGTERM
+// itself, before its own descendants have been reaped -- while one of
+// those descendants is still ignoring SIGTERM, only this unconditional
+// sweep terminates it: POSIX guarantees a process group's pgid is never
+// reused for an unrelated process while any member of it remains alive
+// (SUSv4's kill()/setpgid() rationale), so -pgid still safely targets only
+// this group's own members even after the original leader is gone. An
+// earlier version of this function returned immediately without the sweep
+// whenever waitDone fired first, which silently orphaned any descendant
+// the leader had backgrounded and left running -- exactly the bug
+// process-group signaling exists to prevent. (The production analogue,
+// internal/sandboxagent/supervisor.Process.Stop, has the identical
+// unconditional-sweep fix for its own leader-already-exited-at-entry case,
+// but as of this writing still has this same hole open for its
+// leader-exits-during-grace case -- see its `case <-p.doneCh: return nil`
+// branch -- and is worth fixing the same way in a follow-up.)
 //
 // waitDone must be closed exactly once, by a single background goroutine
 // that has already called (or is about to call) cmd.Wait() -- exec.Cmd.
@@ -70,10 +94,12 @@ func stopProcessGroup(pgid int, waitDone <-chan struct{}, grace time.Duration) {
 
 	select {
 	case <-waitDone:
-		return
 	case <-time.After(grace):
 	}
 
+	// Always sweep the whole group, whichever branch fired above -- see
+	// the doc comment. If waitDone already fired, this simply blocks on an
+	// already-closed channel and returns immediately.
 	_ = signalProcessGroup(pgid, syscall.SIGKILL)
 	<-waitDone
 }
@@ -209,15 +235,17 @@ func TestStopProcessGroup_KillsCooperativeAndStubbornDescendants(t *testing.T) {
 	stubbornPIDFile := filepath.Join(t.TempDir(), "stubborn-pid")
 
 	// The leader itself also ignores TERM (mirroring supervisor_test.go's
-	// own TestStop_ForcefulEscalation/TestSupervisor_StopAll precedent) so
-	// the escalation branch is deterministically exercised: if the leader
-	// were cooperative and died from the initial group SIGTERM before its
-	// own stubborn descendant did, stopProcessGroup would return as soon
-	// as the leader exited, WITHOUT ever sending the follow-up SIGKILL --
-	// leaving that stubborn descendant (which independently ignored the
-	// same SIGTERM) orphaned. Keeping the leader stubborn too avoids that
-	// race entirely and guarantees the full SIGTERM-grace-SIGKILL path
-	// runs.
+	// own TestStop_ForcefulEscalation/TestSupervisor_StopAll precedent).
+	// stopProcessGroup now sweeps the whole group with SIGKILL
+	// unconditionally, whether waitDone or the grace timer fires first
+	// (see its own doc comment), so correctness no longer depends on a
+	// race between the leader's own exit and its descendant's -- both
+	// orderings converge on the same SIGKILL sweep. A stubborn leader is
+	// kept anyway: it usually forces stopProcessGroup's grace timer to
+	// actually expire (rather than returning early via waitDone the
+	// instant the leader dies to the initial SIGTERM), which is worth
+	// exercising even though it is no longer load-bearing for the test's
+	// pass/fail outcome.
 	//
 	// Each backgrounded descendant writes its OWN pid file itself (via its
 	// own $$), as its very first action AFTER its own `trap` statement has
@@ -278,8 +306,13 @@ while true; do :; done`,
 	// stubborn child (trap '' TERM) survives indefinitely, so it is still
 	// alive long past this deadline and the test still fails -- which is
 	// exactly what the mutation check confirms.
-	deadline := time.Now().Add(5 * time.Second) // _test.go is exempt from notimeliteral
+	// Each pid gets its OWN 5s budget, not one deadline shared across the
+	// (randomly ordered) map iteration -- a single shared deadline would
+	// let an earlier pid's reap latency silently eat into a later pid's
+	// allotted time, understating how long that later pid was actually
+	// given to disappear.
 	for name, pid := range pids {
+		deadline := time.Now().Add(5 * time.Second) // _test.go is exempt from notimeliteral
 		for processGroupMemberAlive(pid) && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 		}
