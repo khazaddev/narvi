@@ -1276,31 +1276,41 @@ func deepPathVerdictRequestJSON(counterReview string) string {
 // corroborateCounterReview's own queries (ListSubTaskStartsForTurn/
 // ListSubTaskFinishesForTurn) actually filter on.
 //
-// dispatched_at is stamped from the DATABASE's own clock (now() - a
-// deliberate seedDispatchBackdate cushion), NEVER from this test process's
-// time.Now(). That distinction is load-bearing, not stylistic. The
-// corroboration queries filter on `created_at >= dispatched_at`, and
-// events.created_at (migrations/000008_events.up.sql) defaults to the
-// POSTGRES server's own now(). Stamping dispatched_at from the Go host
-// clock therefore compared two DIFFERENT clocks -- the test process's and
-// the Postgres container's -- with the whole safety margin being only the
-// ~1-3ms of wall-clock elapsed between this UPDATE and the caller's own
-// subsequent seedSubTaskStart INSERT. Any moment the containerized DB
-// clock ran even a few ms behind the host's (ordinary drift for a Linux VM
-// under Docker/OrbStack on macOS, which resyncs periodically and can step
-// backward) pushed every seeded event's created_at BELOW dispatched_at,
-// silently emptying both queries and flooring Shippable to needs_human --
-// a genuinely non-deterministic, wrong-computed-value flake that hit only
-// the two POSITIVE (expect-"auto") corroboration tests, since dropping
-// events can only ever move a verdict toward needs_human, which is exactly
-// what the negative tests already assert.
+// Two dispatch columns are stamped here, and only ONE of them is what the
+// corroboration queries actually filter on:
 //
-// Sourcing both sides of that comparison from the one Postgres clock
-// removes the cross-clock dependency entirely, and the backdate cushion
-// additionally models what a real dispatch looks like: tryPlanDispatch
-// (dispatch.go) stamps dispatched_at when the prompt is SENT, and a real
-// counter-reviewer sub-task then starts and finishes seconds-to-minutes
-// later -- never the sub-millisecond gap the old fixture compressed it to.
+//   - dispatched_event_id -- the events-log high-water mark AS OF THIS
+//     CALL, i.e. before the caller seeds any sub-task events of its own.
+//     This is the real bound (`id > dispatched_event_id`,
+//     queries/events.sql), so every event a caller seeds afterwards gets a
+//     strictly higher BIGSERIAL id and lands in this turn's own scope.
+//     TestSeedProcessingDeepPathTurn_StampsWatermarkBelowItsOwnEvents pins
+//     exactly that ordering, because stamping it at the wrong moment would
+//     silently exclude the trace the positive tests assert on.
+//
+//   - dispatched_at -- still stamped, because the column still exists and
+//     still has a genuine consumer (turn.EvaluateTurnDeadline, which
+//     compares it against the application's own time.Now()), but NO LONGER
+//     read by corroboration at all.
+//
+// dispatched_at is sourced from the DATABASE's clock (now() - a
+// seedDispatchBackdate cushion) rather than this test process's time.Now().
+// That was originally load-bearing: the bound used to be `created_at >=
+// dispatched_at`, comparing a Postgres-stamped events.created_at against a
+// Go-stamped turns.dispatched_at, with the whole safety margin being the
+// ~1-3ms elapsed between this UPDATE and the caller's own subsequent
+// INSERT. A containerized DB clock a few ms behind the host's inverted the
+// comparison and silently emptied both queries -- a non-deterministic,
+// wrong-computed-value flake that could only ever hit the POSITIVE tests,
+// since dropping events moves a verdict toward needs_human only. Migration
+// 000089 removed that clock from the comparison entirely; the DB-clock
+// sourcing is kept here anyway, as the honest source for a column whose
+// sibling values all come from the database.
+//
+// The backdate cushion additionally models what a real dispatch looks
+// like: tryPlanDispatch (dispatch.go) stamps these columns when the prompt
+// is SENT, and a real counter-reviewer sub-task then starts and finishes
+// seconds-to-minutes later.
 func seedProcessingDeepPathTurn(ctx context.Context, t *testing.T, r testRig, sessionID pgtype.UUID, reviewHeadSHA string, gen int32) sqlcgen.Turn {
 	t.Helper()
 	deepDepth := string(reviewtriage.DepthDeep)
@@ -1313,24 +1323,35 @@ func seedProcessingDeepPathTurn(ctx context.Context, t *testing.T, r testRig, se
 	if err != nil {
 		t.Fatalf("seed processing deep-path turn: %v", err)
 	}
+	// The events-log high-water mark AS OF THIS MOMENT -- before any
+	// caller seeds its own sub_task_start/finish events, exactly as a real
+	// dispatch stamps it before the sub-task activity it later corroborates
+	// against exists. This is the bound the corroboration queries actually
+	// filter on (migrations/000089_turns_dispatched_event_id.up.sql); every
+	// event a caller seeds after this call gets a strictly higher id and is
+	// therefore in scope, with no clock involved on either side.
+	watermark, err := r.events.MaxEventIDForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("read events high-water mark for seeded deep-path turn: %v", err)
+	}
 	updated, err := r.turns.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
 		ID:                   created.ID,
 		Status:               sqlcgen.TurnStatusProcessing,
 		DispatchedAt:         pgtype.Timestamptz{Time: dbDispatchedAt(ctx, t, r), Valid: true},
 		DispatchedSandboxGen: &gen,
+		DispatchedEventID:    &watermark,
 	})
 	if err != nil {
-		t.Fatalf("stamp dispatched_at/dispatched_sandbox_gen on seeded deep-path turn: %v", err)
+		t.Fatalf("stamp dispatch columns on seeded deep-path turn: %v", err)
 	}
 	return updated
 }
 
 // seedDispatchBackdate is how far before the database's own now()
-// seedProcessingDeepPathTurn stamps dispatched_at. It exists to model a
-// real dispatch's lead time over the sub-task activity it later
-// corroborates against (see that helper's own doc comment); it is
-// deliberately far larger than any plausible clock jitter, yet far smaller
-// than the ±24h offsets TestPostReviewVerdict_CounterReviewCorroborated_
+// seedProcessingDeepPathTurn stamps dispatched_at. It models a real
+// dispatch's lead time over the sub-task activity that follows it (see
+// that helper's own doc comment). It is far smaller than the ±24h offsets
+// TestPostReviewVerdict_CounterReviewCorroborated_
 // EarlierTurnSameGenDoesNotCorroborate uses to separate its two turns, so
 // it cannot perturb that test's own ordering.
 const seedDispatchBackdate = 5 * time.Second
@@ -1508,75 +1529,72 @@ func TestPostReviewVerdict_CounterReviewCorroborated_MultipleSubAgentTypes_NotFl
 	}
 }
 
-// TestSeedProcessingDeepPathTurn_LeavesClockDriftProofCushion (Step 71,
-// §26.4/§7.1) is the regression test for a real, observed flake in the two
-// POSITIVE corroboration tests above (both intermittently reporting
-// Shippable "needs_human" where they assert "auto", on an unmodified tree).
+// TestSeedProcessingDeepPathTurn_StampsWatermarkBelowItsOwnEvents (Step 71,
+// §26.4/§7.1) guards the fixture invariant the corroboration queries now
+// depend on: a seeded turn's dispatched_event_id must sit strictly BELOW
+// every event that turn goes on to seed, so those events are in its own
+// scope.
 //
-// Root cause: this file's own fixture, not the production logic. The
-// corroboration queries filter `created_at >= dispatched_at`, where
-// events.created_at is stamped by the POSTGRES server's now() but
-// seedProcessingDeepPathTurn used to stamp dispatched_at from this test
-// process's own time.Now(). Those are two different clocks -- the host's
-// and the Postgres container's -- and the entire margin between them was
-// the ~1-3ms of wall-clock elapsed between the two statements. Ordinary
-// drift of a containerized DB clock a few ms behind the host's inverted
-// that comparison, silently emptying both queries and flooring the verdict.
-//
-// This test pins the invariant that makes the fixture immune to that:
-// measured ENTIRELY on the database's own clock (so the measurement itself
-// cannot straddle the two), a seeded turn's dispatched_at must precede its
-// own subsequently-seeded sub-task events by a cushion far larger than any
-// plausible clock jitter. Under the old host-clock fixture that margin was
-// ~1.5ms and this assertion fails deterministically; under the DB-clock
-// fixture it is seedDispatchBackdate-wide. It also asserts the real
-// production query itself actually returns the seeded row, so the cushion
-// is verified to have the effect it exists for, not merely to be numerically
-// large.
-func TestSeedProcessingDeepPathTurn_LeavesClockDriftProofCushion(t *testing.T) {
+// This replaces an earlier clock-cushion assertion. That test existed
+// because the bound used to be `created_at >= dispatched_at`, which
+// straddled the Postgres server clock and the test process's own -- a few
+// ms of ordinary drift silently emptied both queries and floored the
+// verdict. The bound is now `id > dispatched_event_id` over a BIGSERIAL
+// assigned by the one database
+// (migrations/000089_turns_dispatched_event_id.up.sql), so there is no
+// longer a clock on either side of it and no cushion left to protect;
+// what CAN still go wrong is a fixture that stamps the watermark at the
+// wrong moment -- after seeding its events rather than before -- which
+// would silently exclude the very trace the positive tests assert on.
+// That is what this pins.
+func TestSeedProcessingDeepPathTurn_StampsWatermarkBelowItsOwnEvents(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
-	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-drift-cushion", 85)
-	seedProcessingDeepPathTurn(ctx, t, rig, session.ID, "sha-drift-cushion", 1)
-	seedSubTaskStart(ctx, t, rig, session.ID, "msg-start-cushion", "subtask-cushion", review.CounterReviewerAgentName, 1)
-	seedSubTaskFinish(ctx, t, rig, session.ID, "msg-finish-cushion", "subtask-cushion", "completed", 1)
+	session := setupReviewSessionWithSandbox(ctx, t, rig, "acme/verdict-watermark", 85)
+	seedProcessingDeepPathTurn(ctx, t, rig, session.ID, "sha-watermark", 1)
+	seedSubTaskStart(ctx, t, rig, session.ID, "msg-start-watermark", "subtask-watermark", review.CounterReviewerAgentName, 1)
+	seedSubTaskFinish(ctx, t, rig, session.ID, "msg-finish-watermark", "subtask-watermark", "completed", 1)
 
-	// Both operands of this subtraction are Postgres-side values, so the
-	// margin is computed on ONE clock -- the same one the corroboration
-	// queries' own `created_at >= dispatched_at` compares.
-	var marginSeconds float64
-	if err := rig.pool.QueryRow(ctx, `
-		SELECT EXTRACT(EPOCH FROM (
-			(SELECT e.created_at FROM events e
-			  WHERE e.session_id = $1 AND e.type = 'sub_task_start'
-			  ORDER BY e.id ASC LIMIT 1)
-			- (SELECT tn.dispatched_at FROM turns tn
-			    WHERE tn.session_id = $1 AND tn.status = 'processing')
-		))`, session.ID).Scan(&marginSeconds); err != nil {
-		t.Fatalf("measure seeded dispatched_at -> created_at margin: %v", err)
-	}
-
-	// One second is >2 orders of magnitude above the ~1.5ms the old
-	// host-clock fixture left (so a regression to it fails here
-	// deterministically, drift or no drift), while staying safely under
-	// seedDispatchBackdate itself.
-	const minCushion = time.Second
-	if got := time.Duration(marginSeconds * float64(time.Second)); got < minCushion {
-		t.Errorf("seeded sub_task_start created_at leads dispatched_at by only %v, want >= %v (a cushion this thin lets ordinary host/container clock drift invert `created_at >= dispatched_at` and silently empty the corroboration queries)", got, minCushion)
-	}
-
-	// The cushion must actually buy what it exists for: the REAL production
-	// query, at the seeded gen and dispatched_at, still finds the row.
 	turnRow, err := rig.turns.GetProcessingTurnForSession(ctx, session.ID)
 	if err != nil {
 		t.Fatalf("get processing turn: %v", err)
 	}
-	starts, err := rig.events.ListSubTaskStartsForTurn(ctx, session.ID, *turnRow.DispatchedSandboxGen, turnRow.DispatchedAt.Time)
+	if turnRow.DispatchedEventID == nil {
+		t.Fatal("seeded turn has a NULL dispatched_event_id: corroboration would take the fail-conservative NULL path, and every positive test above would pass or fail for a reason unrelated to what it asserts")
+	}
+
+	// Every event this turn seeded must be strictly above its watermark.
+	var minSeededID int64
+	if err := rig.pool.QueryRow(ctx, `
+		SELECT MIN(id) FROM events
+		 WHERE session_id = $1 AND type IN ('sub_task_start', 'sub_task_finish')`,
+		session.ID).Scan(&minSeededID); err != nil {
+		t.Fatalf("read lowest seeded sub-task event id: %v", err)
+	}
+	if minSeededID <= *turnRow.DispatchedEventID {
+		t.Errorf("lowest seeded sub-task event id %d is at or below the turn's own watermark %d, so this turn's own trace falls outside its own corroboration scope", minSeededID, *turnRow.DispatchedEventID)
+	}
+
+	// The REAL production query, at the seeded gen and watermark, finds it.
+	starts, err := rig.events.ListSubTaskStartsForTurn(ctx, session.ID, *turnRow.DispatchedSandboxGen, *turnRow.DispatchedEventID)
 	if err != nil {
 		t.Fatalf("ListSubTaskStartsForTurn: %v", err)
 	}
 	if len(starts) == 0 {
-		t.Error("ListSubTaskStartsForTurn returned no rows for a freshly seeded counter-reviewer sub_task_start: the created_at >= dispatched_at bound excluded this turn's own event")
+		t.Error("ListSubTaskStartsForTurn returned no rows for a freshly seeded counter-reviewer sub_task_start: the id > dispatched_event_id bound excluded this turn's own event")
+	}
+
+	// ...and the bound is genuinely load-bearing, not incidentally
+	// satisfied: raising the watermark above those same events excludes
+	// them. Without this, the assertion above would still pass against a
+	// query that had quietly stopped filtering at all.
+	raised := minSeededID
+	excluded, err := rig.events.ListSubTaskStartsForTurn(ctx, session.ID, *turnRow.DispatchedSandboxGen, raised)
+	if err != nil {
+		t.Fatalf("ListSubTaskStartsForTurn (raised watermark): %v", err)
+	}
+	if len(excluded) != 0 {
+		t.Errorf("raising the watermark to %d still returned %d sub_task_start row(s): the id > dispatched_event_id bound is not actually filtering", raised, len(excluded))
 	}
 }
 
@@ -1639,13 +1657,21 @@ func TestPostReviewVerdict_CounterReviewCorroborated_EarlierTurnSameGenDoesNotCo
 	if err != nil {
 		t.Fatalf("create turn 1: %v", err)
 	}
+	// Turn 1's own watermark, read BEFORE its own trace is seeded below --
+	// so turn 1's events are genuinely in ITS own scope, exactly as a real
+	// dispatch would leave them.
+	turn1Watermark, err := rig.events.MaxEventIDForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("read turn 1 watermark: %v", err)
+	}
 	if _, err := rig.turns.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
 		ID:                   turn1.ID,
 		Status:               sqlcgen.TurnStatusProcessing,
 		DispatchedAt:         pgtype.Timestamptz{Time: turn1DispatchedAt, Valid: true},
 		DispatchedSandboxGen: &sameGen,
+		DispatchedEventID:    &turn1Watermark,
 	}); err != nil {
-		t.Fatalf("stamp turn 1 dispatched_at/gen: %v", err)
+		t.Fatalf("stamp turn 1 dispatch columns: %v", err)
 	}
 
 	// Turn 1's OWN real, genuine counter-reviewer trace -- persisted
@@ -1682,13 +1708,30 @@ func TestPostReviewVerdict_CounterReviewCorroborated_EarlierTurnSameGenDoesNotCo
 	if err != nil {
 		t.Fatalf("create turn 2: %v", err)
 	}
+	// Turn 2's own watermark, read now -- i.e. AFTER turn 1's genuine trace
+	// was already persisted above, exactly as a real later dispatch on the
+	// same session would see it. This is the value that must exclude turn
+	// 1's events: every one of them has an id at or below it.
+	//
+	// Stamping this is what keeps this test HONEST. Left NULL, the handler
+	// would refuse to corroborate on the fail-conservative NULL path and
+	// this test would still report needs_human -- passing for a reason that
+	// has nothing to do with the cross-turn bound it exists to guard.
+	turn2Watermark, err := rig.events.MaxEventIDForSession(ctx, session.ID)
+	if err != nil {
+		t.Fatalf("read turn 2 watermark: %v", err)
+	}
+	if turn2Watermark <= turn1Watermark {
+		t.Fatalf("turn 2 watermark %d must be strictly above turn 1's %d, otherwise this test cannot distinguish the two turns' traces at all", turn2Watermark, turn1Watermark)
+	}
 	if _, err := rig.turns.UpdateStatus(ctx, sqlcgen.UpdateTurnStatusParams{
 		ID:                   turn2.ID,
 		Status:               sqlcgen.TurnStatusProcessing,
 		DispatchedAt:         pgtype.Timestamptz{Time: turn2DispatchedAt, Valid: true},
 		DispatchedSandboxGen: &sameGen,
+		DispatchedEventID:    &turn2Watermark,
 	}); err != nil {
-		t.Fatalf("stamp turn 2 dispatched_at/gen: %v", err)
+		t.Fatalf("stamp turn 2 dispatch columns: %v", err)
 	}
 
 	status, resp := postReviewVerdict(t, rig, session.ID.String(), "sandbox-bearer-token", "1", deepPathVerdictRequestJSON("done"))

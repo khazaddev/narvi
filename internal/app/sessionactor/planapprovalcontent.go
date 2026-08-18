@@ -61,14 +61,15 @@ type tokenEventPayload struct {
 // ListRecentForSession, pool-based per EventStore's own doc comment, so
 // this is always a plain read of already-committed rows, safe to call from
 // inside completeProcessingTurn's own transact), for "token" events whose
-// own CreatedAt falls at/after processing's own DispatchedAt. Since the
+// own ID falls above processing's own DispatchedEventID. Since the
 // scan is newest-first, the FIRST such token event found is already the
 // LAST one by arrival order (§6.1: token text is cumulative per messageId,
 // so that one event's own Text is already the full, final rendered text) --
 // no need to keep scanning for a "latest so far" the way an oldest-first
-// scan would. The scan also stops as soon as it reaches an event older than
-// processing's own DispatchedAt: everything from there on (lower ids, in
-// this descending walk) belongs to an EARLIER turn's own streamed output,
+// scan would. The scan also stops as soon as it reaches an event at or
+// below processing's own DispatchedEventID: everything from there on
+// (lower ids, in this descending walk) belongs to an EARLIER turn's own
+// streamed output,
 // not this plan-mode turn's own (events carries no turn_id column, see
 // migrations/000008_events.up.sql's own doc comment) -- there is nothing
 // left to find. Never fails the caller: any read/decode error, or finding
@@ -83,7 +84,16 @@ func (a *Actor) planContentText(ctx context.Context, processing sqlcgen.Turn) st
 	}
 
 	for _, e := range events {
-		if processing.DispatchedAt.Valid && e.CreatedAt.Valid && e.CreatedAt.Time.Before(processing.DispatchedAt.Time) {
+		// Bounded by the monotonic events.id watermark stamped at dispatch
+		// (turns.dispatched_event_id), NOT by a created_at/dispatched_at
+		// timestamp comparison: the latter straddled the Postgres server
+		// clock (events.created_at) and the application clock
+		// (turns.dispatched_at), so a few ms of ordinary skew between them
+		// could truncate this scan early -- silently returning
+		// planContentFallbackText in place of a real, fully-streamed plan --
+		// or run it past this turn's own boundary into an earlier turn's
+		// output. See migrations/000089_turns_dispatched_event_id.up.sql.
+		if processing.DispatchedEventID != nil && e.ID <= *processing.DispatchedEventID {
 			break
 		}
 		if e.Type != "token" {

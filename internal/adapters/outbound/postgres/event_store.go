@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -78,32 +77,51 @@ func (s *EventStore) ListRecentForSession(ctx context.Context, sessionID pgtype.
 // sub-task corroboration: reading back this session's own already-persisted
 // sub_task_start/sub_task_finish trace, scoped to BOTH ONE sandbox gen
 // (the gen the turn being verdicted was actually dispatched at,
-// turns.dispatched_sandbox_gen) AND a created_at lower bound at that SAME
-// turn's own turns.dispatched_at. Neither alone is sufficient -- gen alone
-// cannot distinguish two turns dispatched to the SAME still-live sandbox
-// incarnation (gen is bumped only on spawn/restore/resume, never on an
-// ordinary dispatch to an already-Ready/Suspect sandbox); dispatched_at
+// turns.dispatched_sandbox_gen) AND an events.id lower bound at that SAME
+// turn's own turns.dispatched_event_id. Neither alone is sufficient -- gen
+// alone cannot distinguish two turns dispatched to the SAME still-live
+// sandbox incarnation (gen is bumped only on spawn/restore/resume, never on
+// an ordinary dispatch to an already-Ready/Suspect sandbox); the id bound
 // alone cannot distinguish a genuinely different, now-dead sandbox
-// incarnation's stale, late-arriving event. Both callers already validate
-// their own respective NULL case before reaching here (dispatchedAt is
-// never the zero time.Time on a real call -- see corroborateCounterReview,
+// incarnation's stale, late-arriving event.
+//
+// The lower bound is a monotonic events.id, NOT a timestamp: it was
+// originally turns.dispatched_at, which compared a Postgres-stamped
+// events.created_at against an application-stamped Go time.Time -- two
+// different clocks, sound only to whatever precision NTP happened to hold.
+// See migrations/000089_turns_dispatched_event_id.up.sql for the full "why"
+// and for why turns.dispatched_at itself is deliberately left untouched.
+//
+// Both callers already validate their own respective NULL case before
+// reaching here (dispatchedEventID is never derived from a NULL column on a
+// real call -- see corroborateCounterReview,
 // internal/adapters/inbound/httpapi/reviewverdict.go, for that NULL
 // handling and the fuller "why" this pair of conditions is required, not
 // merely an optimization).
-func (s *EventStore) ListSubTaskStartsForTurn(ctx context.Context, sessionID pgtype.UUID, gen int32, dispatchedAt time.Time) ([]sqlcgen.Event, error) {
+func (s *EventStore) ListSubTaskStartsForTurn(ctx context.Context, sessionID pgtype.UUID, gen int32, dispatchedEventID int64) ([]sqlcgen.Event, error) {
 	return s.q.ListSubTaskStartEventsForTurn(ctx, sqlcgen.ListSubTaskStartEventsForTurnParams{
-		SessionID:    sessionID,
-		Gen:          gen,
-		DispatchedAt: pgtype.Timestamptz{Time: dispatchedAt, Valid: true},
+		SessionID:         sessionID,
+		Gen:               gen,
+		DispatchedEventID: dispatchedEventID,
 	})
 }
 
 // ListSubTaskFinishesForTurn is ListSubTaskStartsForTurn's own sibling --
 // see that method's doc comment immediately above for the full "why".
-func (s *EventStore) ListSubTaskFinishesForTurn(ctx context.Context, sessionID pgtype.UUID, gen int32, dispatchedAt time.Time) ([]sqlcgen.Event, error) {
+func (s *EventStore) ListSubTaskFinishesForTurn(ctx context.Context, sessionID pgtype.UUID, gen int32, dispatchedEventID int64) ([]sqlcgen.Event, error) {
 	return s.q.ListSubTaskFinishEventsForTurn(ctx, sqlcgen.ListSubTaskFinishEventsForTurnParams{
-		SessionID:    sessionID,
-		Gen:          gen,
-		DispatchedAt: pgtype.Timestamptz{Time: dispatchedAt, Valid: true},
+		SessionID:         sessionID,
+		Gen:               gen,
+		DispatchedEventID: dispatchedEventID,
 	})
+}
+
+// MaxEventIDForSession returns this session's own events-log high-water
+// mark -- MAX(events.id), 0 when the session has no events yet. Stamped
+// into turns.dispatched_event_id at dispatch (tryPlanDispatch/
+// tryPlanReenqueue, internal/app/sessionactor/dispatch.go) so the two
+// corroboration queries above have a clock-free lower bound identifying
+// this turn's own dispatch.
+func (s *EventStore) MaxEventIDForSession(ctx context.Context, sessionID pgtype.UUID) (int64, error) {
+	return s.q.MaxEventIDForSession(ctx, sessionID)
 }

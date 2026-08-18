@@ -1431,23 +1431,42 @@ N× boot cost with no real independence gain — each sub-agent already has a cl
     for the SAME `subTaskId` with `outcome == "completed"` both exist in the trace it is handed.
   - `httpapi.PostReviewVerdict` reads that trace back via two queries
     (`ListSubTaskStartEventsForTurn`/`ListSubTaskFinishEventsForTurn`, filtering the `events`
-    table's JSONB `payload->>'gen'`) scoped to BOTH `turns.dispatched_sandbox_gen` AND a
-    `created_at >= <this turn's own dispatched_at>` lower bound — never merely `session_id`, and
+    table's JSONB `payload->>'gen'`) scoped to BOTH `turns.dispatched_sandbox_gen` AND an
+    `events.id > <this turn's own dispatched_event_id>` lower bound — never merely `session_id`, and
     (fixed post-review, see below) never gen alone either. Gen alone was found, by an adversarial
     review of this Step's own PR, to be insufficient: `dispatched_sandbox_gen` is bumped only on a
     fresh spawn/restore/resume, never on an ordinary dispatch to an already-live sandbox, so a
     session whose sandbox survives across multiple review turns (§24's automatic re-review, the
     ORDINARY case, not a corner case) dispatches every one of those turns at the SAME gen — letting
     an earlier turn's own real trace spuriously corroborate a later turn's self-report purely
-    because both turns shared the same gen. The `dispatched_at` lower bound closes that gap:
+    because both turns shared the same gen. The `dispatched_event_id` lower bound closes that gap:
     `turns_one_processing_per_session`'s own unique partial index guarantees turns execute strictly
-    sequentially per session, so an earlier turn's own sub-task events always predate a later turn's
-    own `dispatched_at`. Gen-scoping still stays, alongside it, for the orthogonal case it alone
-    catches: a stale, late-arriving event from a genuinely different, now-dead sandbox incarnation.
+    sequentially per session, so an earlier turn's own sub-task events always carry ids at or below
+    a later turn's own dispatch watermark. Gen-scoping still stays, alongside it, for the orthogonal
+    case it alone catches: a stale, late-arriving event from a genuinely different, now-dead sandbox
+    incarnation.
+
+    That lower bound is a monotonic `events.id`, **not** a timestamp. It was first written as
+    `created_at >= <this turn's own dispatched_at>`, which was not sound: `events.created_at` is
+    stamped by the Postgres server while `turns.dispatched_at` is a Go `time.Time` stamped by the
+    application process, on a different host in any real deployment. Two clocks, agreeing only to
+    whatever precision NTP happens to hold — and asymmetric in how they fail, since an application
+    clock running BEHIND the database widens the window and readmits an earlier turn's trace,
+    eroding exactly the guard the bound exists to provide. `turns.dispatched_event_id`
+    (migration `000089`) is the events-log high-water mark, `MAX(events.id)`, stamped in the same
+    transaction as the dispatch itself, so the comparison has no clock in it at all.
+    `turns.dispatched_at` is deliberately left in place and unchanged — it still has a genuine,
+    same-clock consumer in `turn.EvaluateTurnDeadline`, which compares it against the application's
+    own `time.Now()`; re-sourcing that column from the database clock to fix corroboration would
+    have broken the deadline instead. Sequence values are allocated before commit, so an event
+    from an earlier turn that receives its id before this turn's dispatch and commits afterwards
+    falls at or below the watermark and is EXCLUDED — the fail-conservative direction.
+
     Only queried when it could matter at all: deep path and a self-reported `done`.
-    `dispatched_sandbox_gen` or `dispatched_at` being unset (a turn with no recorded dispatch) is
-    treated as NOT corroborated, fail-conservative like every other closed-enum default in this
-    codebase.
+    `dispatched_sandbox_gen` or `dispatched_event_id` being unset (a turn with no recorded dispatch)
+    is treated as NOT corroborated, fail-conservative like every other closed-enum default in this
+    codebase — distinct from a watermark of `0`, which is a legitimate value (a turn dispatched
+    before the session had any events) that admits every event that follows.
   - `reviewpost.BuildVerdict` applies a SECOND, raise-only substitution (immediately after the
     existing light-path substitution, and gated explicitly on `ReviewDepth == DepthDeep` — never
     merely on the raw `CounterReview` value, which carries no validated meaning on the light path
