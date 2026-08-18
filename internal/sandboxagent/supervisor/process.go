@@ -65,12 +65,26 @@ func (p *Process) Exited() (ExitResult, bool) {
 // any descendant the leader had backgrounded -- exactly the bug
 // process-group signaling exists to prevent.
 //
-// If the leader is still running: signals SIGTERM to the group, waits up
-// to grace (or until ctx is done, whichever comes first) for it to exit;
-// if neither happens in time, escalates to SIGKILL on the whole group and
-// then blocks unconditionally until the background reap goroutine
-// observes the exit -- SIGKILL cannot be caught or ignored, so this final
-// wait is provably bounded by the OS, not by this code.
+// If the leader is still running: signals SIGTERM to the group, then
+// waits up to grace (or until ctx is done, or until the leader itself
+// exits, whichever comes first). It then UNCONDITIONALLY escalates to
+// SIGKILL on the whole group and blocks until the background reap
+// goroutine observes the leader's own exit -- SIGKILL cannot be caught or
+// ignored, so this final wait is provably bounded by the OS, not by this
+// code.
+//
+// The sweep runs even when the leader exits before grace elapses: doneCh
+// is closed by a single reap of the leader alone, and carries no
+// information about descendants the leader backgrounded into the same
+// process group before exiting. A well-behaved leader has already stopped
+// them itself by the time it exits, in which case the group is empty and
+// this sweep is a harmless ESRCH no-op (see signalGroup); but if the
+// leader exits -- gracefully, by crash, or by dying to the initial SIGTERM
+// itself -- while one of those descendants is still ignoring SIGTERM, only
+// this unconditional sweep terminates it. An earlier version of this
+// branch returned immediately without the sweep as soon as doneCh fired,
+// which silently orphaned any descendant the leader had backgrounded --
+// exactly the bug process-group signaling exists to prevent.
 //
 // If the leader has ALREADY exited (doneCh already closed): there is no
 // further doneCh-style event to wait on for a surviving descendant --
@@ -104,7 +118,10 @@ func (p *Process) Stop(ctx context.Context, grace time.Duration) error {
 
 	select {
 	case <-p.doneCh:
-		return nil
+		// The leader exiting does not mean the whole group is gone -- see
+		// the doc comment above. Deliberately no early return: fall
+		// through to the unconditional sweep below exactly like the other
+		// two cases.
 	case <-ctx.Done():
 		// Fall through to the forceful escalation below: a bounded
 		// shutdown must not wait out the rest of grace once its own
