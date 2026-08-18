@@ -3,9 +3,9 @@
 ## Context
 
 Narvi's technical specification (autonomous coding agents in sandboxes) is in
-[docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§30), and the nine-view UI design spec is in
-[docs/design/mockups.html](design/mockups.html). This plan breaks the 9 phases (0–8) into **98 ordered Steps**
-(including Phase 4's own 5 additive Steps, 40-44, and Phase 8's 9 shadow-mode Steps, 90-98), each individually shippable and CI-green,
+[docs/TECHNICAL_PLAN.md](TECHNICAL_PLAN.md) (§0–§31), and the nine-view UI design spec is in
+[docs/design/mockups.html](design/mockups.html). This plan breaks the 10 phases (0–9) into **104 ordered Steps**
+(including Phase 4's own 5 additive Steps, 40-44, Phase 8's 9 shadow-mode Steps, 90-98, and Phase 9's 6 knowledge Steps, 99-104), each individually shippable and CI-green,
 executable by a developer assisted by coding agents (Sonnet 5).
 Every Step references the technical-plan section that specifies it. Each Step becomes exactly one PR when
 implemented — but a Step's number (e.g. Step 06) is the plan's own row number, not the GitHub PR number it
@@ -226,6 +226,54 @@ graduates a repo with the promotion fence applied. The minimal *safe* subset is 
 Step 96 becomes mandatory once a customer's Slack or Linear is connected; Steps 97-98 make the
 evaluation good rather than merely safe.
 
+## Phase 9 — Per-repository knowledge, two modes (6 Steps)
+
+The two-mode per-repository knowledge base — mode A injects everything into the review prompt,
+mode B maintains a per-repo documentary corpus in OKF form with embeddings and hybrid RAG
+retrieval, strict per-repository isolation throughout (technical plan §31). On placement: by
+content this is review-lane work and Phase 5 is its substrate (the three prompt seams, the
+verdict schema, the §26.5 contestation instrument it measures on), but Phase 5's Steps were long
+since scoped and shipped — folding six Steps into a closed phase would rewrite history, and
+inserting them mid-sequence would shift Steps 72-98 (the Phase 4 standing rule) and buy nothing:
+no earlier Step depends on any of these. It therefore lands appended as its own phase, the same
+reasoning Phase 8's header gives for itself. Execution order: schedulable any time after Phase
+5's milestone; it does not wait on Phases 6-7, and of Phase 8 it needs only Steps 90/92 (the
+egress resolver and the verdict egress-mode stamp §31.8's in-query exclusions ride — Step 92 for
+Step 101's SELECT, Step 90 for Step 102's corpus stamp) and Step 98's Activate surface (which
+Step 102's graduation barrier extends). Two prerequisites are independent fixes already in
+flight, dependencies of this phase but deliberately not Steps of it: the repository-authorization
+fix on the four leaking handlers (`reviewanalytics.go`, `reposettings.go`,
+`falsepositivepatterns.go`, `providercredentials.go` — §31.4) and G1's write-path sanitization of
+the digest fields (§31.7). One decision gates whether Step 102 executes its content at all, not
+merely when it starts, and is resolved there, never silently defaulted: Step 102 ships its full
+mode B build only if Step 101's deterministic-arm baseline readout (§31.6 — the fork resolved as
+build-the-selector-first, which defers the commitment to embeddings, not their construction)
+engages the embeddings leg; if that readout kills engagement instead, Step 102's entire
+deliverable is a recorded kill decision, and Steps 103-104 (both of which need its corpus tables)
+never ship (§31.10).
+
+| Step | Title | Content | Ref. |
+|---|---|---|---|
+| 99 | approved-plan durability | `plan_documents` table keyed on `plans.id` (a separate table, never a snapshot column — content isolable for a later retention null-out, §30.6's schema-time motive): the approval path snapshots the approved version's prose at approval time, in the same transaction as the status transition; closes the defect that plan prose lives only in `events`, `ON DELETE CASCADE` from `sessions` (000008/000034) — an approved plan is cascade-deletable today. Orthogonal prerequisite owed independently of the corpus; the irreversible pre-Step loss (plans whose sessions were already deleted) is recorded in §31.3, never backfillable. Consumer: the existing approval path writes through it from day one; measurement: coverage — every post-Step approval has its `plan_documents` row | §31.3 |
+| 100 ∥ | per-repo entitlement (minimal) | The §31.4 decision's remainder (the four-handler URL-authorization fix is already in flight, independently): a per-repository entitlement predicate joining the `authz` path (`Actor` today carries only a deployment-global role; `Resource` only `OwnedOrJoined` — repository identity enters the vocabulary), and authorization of **every entry of `sessions.repos` at session creation** — before persistence, before any clone (closing the clone amplification: the sandbox credential helper serves whatever repo list the session row names, `gitclone/clone.go`); explicitly NOT a per-repo-roles RBAC rework. `knowledge.RepoScope` constructors take the actor alongside the trusted artifact once this predicate exists (§31.4); `sessions.repos` is lower-trust than `github_pr_sessions.repo_full_name` (verified webhook payload) and gets no safe `ScopeFromSession` without it. Blocks Steps 103 and 104; the webhook-path consumer (Step 101) is deliberately NOT behind it. Consumer: `CreateSession`'s repos gate enforcing on production session creation; measurement: denial rate surfaced as a metric + audit-logged denials, so a misconfigured entitlement is loud, never silent | §31.4 |
+| 101 | mode A: arch-decisions block, mode buffer, write hygiene | The full content pipeline mode B will only ever swap a SELECT out of: G3 length caps on `Decision`/`RejectedAlternative`/`ConventionConformance` at the `validate.go` site (G1's sanitization lands separately, in flight — this Step depends on it, never re-delivers it); `reviewcontext.FetchPriorArchDecisions` (exact sibling of `FetchFalsePositivePatterns`) at all three seams (`github/handler.go`, `httpapi/reviewretrigger.go`, `sessionactor/reviewretrigger.go`) + pure sanitizing render with fixed delimiter (G2, `RenderAdvisoryBlock`'s mirror, pinned by the placeholder-drift-test precedent); the SELECT is the **path-scoped deterministic selector** (§31.6: overlap of the PR's own `ChangedPaths`-derived tags/directory-roots — computed via `autoapproval.ClassifyChangedPaths`, never the posted `blast_radius` column, §21.2's own never-gate-on-the-verdict rule — against the same tags/roots stamped onto verdicts at INSERT, 000083's write-time precedent; recency fallback on empty overlap); the mode buffer (§31.2): `turns.review_knowledge_mode` set once at creation (000080's rule verbatim), knowledge-mode stamp on `review_verdicts` (in-query attribution, 000081 precedent), **G5's knowledge-influenced stamp on `review_verdicts`** (any turn whose prompt carried a prior-decisions block, either mode — first-class state from the day injection starts, §31.7, so no unstamped-but-influenced verdict ever enters the gatable population Step 102 will ingest), injected-ids JSONB record on the turn (ids + content hashes + selector used + degradation, 000083's shape — durable joinable state, never logs); token gauge on the TOTAL injected knowledge block (§31.2's flapping correction — never the false-positive block alone); merge-outcome capture from the GitHub `closed` webhook onto `github_pr_sessions` (arms G4 forward; no backfill, §31.3's forcing fact); the selector's SQL excludes shadow-epoch verdicts via the egress-mode stamp Step 92 already puts on every verdict row (§31.8 — no new stamp; the corpus rows' own `captured_live` arrives with Step 102). Consumer: all three production review paths from day one; measurement: the §26.5 contestation KPI (000086) joined contestation-×-injection on the verdict mode stamp | §31.6, §31.2, §31.7 |
+| 102 | mode B: index & retrieval | **Gated: starts only after Step 101's deterministic-arm baseline window is read** (§31.6 — engaged if the readout shows relevance misses path scoping cannot close, killed if the deterministic arm already sits at the contestation floor). **If killed, this Step does not execute at all** — its entire deliverable is a recorded kill decision citing Step 101's own baseline readout, and Phase 9 closes without a mode B flip (§31.9, §31.10). **If engaged, this is its content:** `ports.Embeddings` + one hosted-vendor adapter (wire-compatible adapter deferred, §31.5 — the port's shape already admits it); `knowledge_docs`/`knowledge_chunks` migrations (`real[]` embeddings — **no pgvector**, §31.5's cardinality argument; `tsvector` generated column + GIN, `'simple'` config; composite FK `(doc_id, repo_full_name)`; `captured_live` epoch stamp defaulting to the quarantined direction; G4 eligibility state defaulting non-retrievable; G6 provenance columns); (model, dims) recorded per corpus, mixed writes rejected, model pinned per deployment (§31.5); `RepoScope` + scoped handle + RLS (`FORCE` verified against real roles first, §31.9) + the two pinning tests + two-repo integration test, **with retrofit of the existing mode A fetchers (`falsepositive.go`, `alreadyanswered.go`) onto `RepoScope`** — the two shipped 000073 cross-repo bugs are the standing justification; `FuseRRF` in domain; retrieval service with the **cold-corpus fallback** (< k rows → mode A's SELECT, stamped) and provider-unavailable degradation to lexical-only, never empty; `repo_settings.review_knowledge_mode` flag + activation-time preflight (§31.2 — provider reachability; never boot-time) + ingestion watermark; G5 enforcement at ingestion (verdicts stamped knowledge-influenced since Step 101 enter with a permanently capped provenance tier — never `agent-authored, uncontested` — rather than being excluded, §31.7); contested-content hard exclusion in the retrieval SQL (§31.3); quarantine promotion (merged + 14-day proposed window + zero contests) and the shadow/Activate barrier + deactivation quarantine-then-purge (7-day proposed, §31.8). Consumer: the arch-decisions block of flipped repositories — swapping Step 101's SELECT on the proven pipeline; measurement: the A/B on mode-stamped verdicts operational from the first flip, plus the phase KPI — **contested-content injection rate** (contested ids appearing in injected-ids records; direct, and already armed by Step 101's record) | §31.5, §31.2, §31.7, §31.8 |
+| 103 | kb_search | After Steps 100 and 102. Pull tool for builder/plan sessions on the verdict-tool precedent (control-plane endpoint, URL/bearer/gen substituted at hand-off, `reviewverdicttoolprompt.go` — never loopback: the corpus lives in the control plane's Postgres); scope derived server-side from the session row AND verified against Step 100's entitlement predicate (derivation alone is laundering, §31.4); authorizes against the turn's **stamped** mode, never `repo_settings` live (§31.2); G2 sanitizing render at serve, on top of the in-flight write-path sanitization. Consumer: builder sessions of mode B repositories, tool announced only on stamped-mode-B turns; measurement: query/hit-rate/injected-ids journal + zero-result rate | §31.6, §31.2 |
+| 104 | OKF read-only export | After Steps 100 and 102 (100 for the entitlement gate; 102 because this renders from that Step's own corpus tables and does not exist under a kill decision, §31.10). Small, late, read-only: an authenticated, entitlement-gated endpoint rendering a repository's active concepts — `arch-decision`, the only type this corpus admits, §31.3 — as OKF documents on demand (§31.3's pure-render idiom) — an export surface, **never an authority, never the retrieval substrate, never written into any customer repository** (§30 collision); serves only promoted, live-epoch content (the same SQL exclusions as retrieval). Consumer: the operator/maintainer download surface; measurement: per-export `audit_log` row (customer-derived prose leaving the database as a document is an event worth a row) + served-count metric | §31.3, §31.6 |
+
+**Phase 9 milestone**: mode A's prior-decisions block live on all three review seams with the
+contestation-×-injection KPI reporting per verdict mode stamp, PLUS EITHER (a) one repository
+flipped to mode B serving retrieved context with the cold-corpus fallback observed (a flip on an
+empty index demonstrably falls back to the SELECT, stamped) with the two-repository isolation
+suite and both pinning tests green, OR (b) a recorded kill decision (§31.9) citing Step 101's own
+baseline readout in place of Step 102's build; contested and shadow-epoch content demonstrably
+excluded from live reads in the SQL whenever mode B exists at all. The minimal subset delivering
+the owner's decision is Steps 99 + 101, plus Step 102 conditional on Step 101's own readout (built
+if engaged, recorded as a kill decision if not, §31.10); Step 101 alone is already
+production-useful (mode A gains cross-PR memory). Steps 103-104 wait on Step 100's entitlement AND
+on Step 102 actually shipping — under a kill decision neither has a corpus to build against, and
+both stay unscheduled.
+
 ## Sequencing & parallelism
 
 - **Parallel streams in phase 1**: control-plane (07-08, 09-12, 18-20) ∥ sandbox-agent (13-17) — converge at 21.
@@ -276,10 +324,28 @@ evaluation good rather than merely safe.
   91-92 populate and extends Step 86's Settings surfaces, so it comes last. Phase 8 may execute
   any time after Phase 5's milestone — nothing in 90-97 waits on Phase 6 or 7 (§10-P8); only 98's
   Settings surface waits on Step 86.
+- **Phase 9**: 99 is independent of everything else in the phase (and of Phases 6-8) — it may run
+  first or in parallel. 100 is independent of 99 and 101 and gates only 103-104; it presumes the
+  in-flight four-handler authorization fix has landed (a dependency, not a Step). 101 needs Phase
+  5's milestone (the three seams, Step 62's persistence, Step 69's §26.5 instrument), Step 92's
+  verdict egress-mode stamp (its SELECT's shadow-epoch exclusion rides it, §31.8), and the
+  in-flight G1 write-path sanitization; 102 additionally needs Step 90's resolver (its corpus
+  rows' own `captured_live` stamp);
+  it does not need 99 or 100. 102 needs 101 (the pipeline whose SELECT it swaps, the instrument
+  its A/B reads) and **its start is gated on reading 101's baseline window** — a calendar gate,
+  not a code dependency, but one that may resolve to "never": if that readout kills engagement,
+  102 does not execute at all, and its whole deliverable is the recorded kill decision (§31.9,
+  §31.10). When 102 does ship, it also extends Step 98's Activate for graduation — the barrier
+  logic is part of 102's own (engaged-branch) content, wired into Activate when both exist; under
+  a kill decision there is no mode B graduation surface to extend. 103 needs 100 and 102. 104
+  needs 100 and 102 — the export renders from 102's corpus tables and serves only promoted,
+  live-epoch content, so the promotion state it filters on does not exist before 102. Both 103 and
+  104 are therefore unreachable under a kill decision, same as 102 itself. 103 and 104 may run in
+  parallel with each other.
 - Go/no-go after Step 21 (~1 month).
 
 ## Verification
 
 - Each Step: CI (lint, `go test -race`, contract tests) + its own criterion listed on its row.
-- Phase milestones = blocking gates: e2e via API/UI (P1), 12 resilience scenarios (P2), classifier shadow report (P3), review-verdict diff reviewed for precision (P5), flag-reversible rollout (P6), 9 views built to mockups + screenshot review (P7), a zero-egress evaluation run on a live customer repository verified against the suppression ledger (P8 — and P8 gates any customer-repo attachment, whatever the numeric order suggests). Phase 4 (Steps 40-44) is additive scope, not a blocking gate — its own milestone verifies warm-boot behavior and compaction-retry recovery but never holds up Phase 5.
+- Phase milestones = blocking gates: e2e via API/UI (P1), 12 resilience scenarios (P2), classifier shadow report (P3), review-verdict diff reviewed for precision (P5), flag-reversible rollout (P6), 9 views built to mockups + screenshot review (P7), a zero-egress evaluation run on a live customer repository verified against the suppression ledger (P8 — and P8 gates any customer-repo attachment, whatever the numeric order suggests), mode A live on all three seams with the mode-stamped KPI reporting, plus EITHER a mode B flip with the cold-corpus fallback observed and the isolation suite green OR a recorded kill decision in Step 102's place (§31.9) (P9). Phase 4 (Steps 40-44) is additive scope, not a blocking gate — its own milestone verifies warm-boot behavior and compaction-retry recovery but never holds up Phase 5.
 - Project end: `make dist` produces the standalone `narvi` binary; all phase gates green.

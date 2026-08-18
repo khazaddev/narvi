@@ -367,6 +367,10 @@ The SPA on the generated contracts, embedded in the control-plane binary.
 The zero-trace evaluation capability: egress-mode flag + fail-toward-suppress resolver; the GitHub transport gate, port decorator, and suppression ledger; outbox classification (fail-closed at boot) + epoch stamps on outbox rows and verdicts; OS-level UID isolation between sandbox-agent and the agent runtime; GitHub App fine-grained read-only installation tokens; the shadow credential mint with its cache/snapshot hygiene; the synchronous-ingress seams + the `net/http`/`os/exec` arch-test; git mirror + lane coherence (carrying the §30.9 mirror decision); the operator ledger view with "Activate" as graduation. Appended numerically after Phase 7, but in execution order it is the bridge between Phase 5's exit and any customer-facing activation: plugging Narvi into a repository it must leave no trace in is gated on this phase, regardless of Phase 6/7 status.
 *Exit: a dedicated evaluation deployment (`NARVI_SHADOW_MODE=1`, GitHub-only webhooks, credential-starved per §30.4) attached to a live customer repository completes real sessions end-to-end with zero customer-visible egress — reads only on the customer's audit surface — and the suppression ledger accounts for every would-have-been effect; per-repo Activate graduates a repo to live with §30.8's promotion fence applied.*
 
+**Phase 9 — Per-repository knowledge, two modes (Steps 99-104; see §31)**
+The two-mode knowledge capability: approved-plan durability; the per-repository entitlement predicate + `sessions.repos` authorization; the mode A prior-arch-decisions block with its path-scoped selector, mode buffer, injected-ids record, and merge-outcome capture; the mode B index and hybrid retrieval (`Embeddings` port, `real[]` + `tsvector` schema, `RepoScope` isolation layers, RRF fusion, cold-corpus fallback) with its quarantine/provenance/self-reinforcement guards; `kb_search`; the OKF read-only export. Appended numerically after Phase 8; in execution order it needs only Phase 5's milestone (the review chain and its §26.5 instrument) plus Phase 8's Steps 90/92 for the epoch stamps its in-query exclusions ride — Step 102's engagement additionally waits on Step 101's own baseline readout (§31.6).
+*Exit: mode A's block live on all three review seams with the contestation-×-injection KPI reporting per mode stamp, plus EITHER a repository flipped to mode B serving retrieved context with the cold-corpus fallback verified and the two-repository isolation suite green OR a recorded kill decision (§31.9) citing Step 101's own baseline readout in place of Step 102's build; contested and shadow-epoch content demonstrably excluded from live retrieval in the SQL whenever mode B exists at all.*
+
 ## 11. Working conventions for the implementing agent
 
 - Never put I/O, `time.Now()`, or randomness in `/internal/domain` — inject `Clock`/`IDGen`.
@@ -3439,3 +3443,805 @@ reachable in that configuration, and the ledger records. Step 96 becomes **manda
 a customer's Slack or Linear is connected**. Steps 97-98 are what make the evaluation *good*
 rather than merely safe: lanes observable end-to-end, and a product surface an operator can
 actually evaluate from and graduate with.
+
+## 31. Per-repository knowledge, two modes: full injection and a retrieved corpus (new capability)
+
+Problem this solves: Narvi's review lane already *learns* per repository — maintainer-taught
+false-positive patterns (§22.2) and, since Step 69, a typed architecture digest on every deep
+review — but only the first is ever read back, and it is read back by full injection into the
+prompt, a strategy whose cost is linear in what has been taught. At the target deployment scale
+(hundreds of repositories, thousands of PRs/week aggregate, hot repositories at 100–500 PRs/week)
+that strategy holds for some knowledge sources and provably breaks for others. The requirement,
+decided and not re-litigated here: **two per-repository modes — mode A injects everything into the
+review prompt (today's shipped pattern), mode B maintains a documentary corpus in OKF form,
+embedded and queried by RAG retrieval — with strict per-repository isolation and no cross-repo
+context leakage.** This section specifies both modes, the corpus, the isolation, and the poisoning
+surface the corpus opens; it synthesizes a grounded design pass plus four adversarial attacks
+whose corrections are folded in as requirements, not appended as caveats (the same provenance
+discipline §30's own intro records).
+
+The load-bearing discovery, stated first because everything else leans on it:
+`review_verdicts.digest_arch_decisions` (JSONB, migration 000077) is **required by the schema on
+every deep-path verdict** (`ErrEmptyDigestArchDecisions`,
+`internal/domain/reviewpost/validate.go`) and **never read back into any future prompt** —
+verified: its only consumers are the insert path (`internal/app/reviewverdict/insert.go`,
+`convert.go`), the SQL read models, and the §26.5 contestation hash
+(`internal/domain/reviewpost/digestsectionidentity.go`). Narvi already manufactures durable,
+typed, per-repository architectural knowledge on every deep review — contractually, not
+optionally — and then never reuses it. The mode B corpus is not content to invent; it is a reuse
+path for content already produced. It is also what makes the volume argument concrete:
+arch-decision accumulation is O(deep-path PRs) — at 300 PRs/week and a ~30% deep-path share,
+~15–50+ decisions per repository per week, thousands per year. Inject-all breaks provably on that
+source; retrieval is justified there and only there.
+
+### 31.1 The two modes, and mode as a per-SOURCE property
+
+**Mode A (low volume — the default, and today's shipped behavior extended).** Every knowledge
+block is injected in full into the review prompt: the maintainer-taught false-positive patterns
+(`internal/app/reviewcontext/falsepositive.go` → the LIMIT-less
+`ListActiveFalsePositivePatterns` query,
+`internal/adapters/outbound/postgres/queries/reviewfalsepositivepatterns.sql`), plus — new — a
+"prior architecture decisions" block fed by a bounded, deterministic SELECT over
+`review_verdicts.digest_arch_decisions` (§31.6 item 1 for the selector's exact shape). No
+embeddings, no index, no corpus artifact, no new external dependency of any kind.
+
+**Mode B (high volume).** A per-repository documentary corpus, rendered as OKF concept documents
+(front-matter + typed body, §31.3), **embedded and queried by hybrid RAG retrieval** (a vector
+leg and a lexical leg, fused by RRF — §31.5). The prior-decisions block is fed by retrieval
+instead of the bounded SELECT, and a pull-mode `kb_search` tool becomes available to builder/plan
+sessions (§31.6 item 2).
+
+**The structural point: the flag is per repository, but internally the mode is a property of each
+knowledge SOURCE — and only sources with two genuine strategies route on it.** The sources do not
+share a scaling regime, and the design reflects that rather than flattening it:
+
+| Source | Scaling regime | Mode A | Mode B |
+|---|---|---|---|
+| False-positive patterns (`review_false_positive_patterns`, migration 000073) | Bounded by human teaching throughput (`false positive:` commands behind maintainer+ RBAC, §22.2) — tens per repo, invariant to PR volume | inject-all | **inject-all (unchanged)** |
+| Architecture decisions (`review_verdicts.digest_arch_decisions`, migration 000077) | Linear in deep-path PRs — the one source that grows at machine speed; never read back today | bounded deterministic SELECT | **RAG retrieval** |
+| Already-answered facts (`ListOpenAndRebuttedReviewFindings`) | Bounded per (repo, pr_number) — does not grow with the fleet | inject-all per PR | inject-all per PR (§22.1.2 reaffirmed) |
+| Approved plans | Bounded by plan sessions; prose currently perishable (§31.3) | — | durable via Step 99; corpus ingestion out of Phase 9's scope (§31.3) |
+| `kb_search` (pull, builder/plan sessions) | — | absent | **present** |
+
+**The per-source doctrine is confirmed, not open**: a repository in mode B keeps its
+false-positive patterns injected in full. They are a maintainer's explicit standing instructions;
+their corpus is human-bounded by construction (RBAC + an explicit command + a mandatory
+retirement lifecycle, §22.4); and a retrieval pass that silently dropped one would be a trust
+break — a maintainer taught it precisely so it would always be present. The uniform alternative
+(route everything through retrieval for symmetry) was weighed and rejected on exactly that trust
+argument. The existing advisory-injection defense survives this section unchanged and is worth
+restating on its own terms: `internal/domain/falsepositive/advisory.go`'s renderer is
+"structurally incapable of acting as a filter" (its own doc-comment heading) — the reviewing
+model, not the pipeline, weighs the patterns. That defense implicitly assumed a human-bounded
+source; this section makes the bound explicit and keeps the defense standing on it.
+
+**Similarity over already-answered facts stays rejected, in both modes.** §22.1.2 rejects
+resemblance-based suppression by name, and that rejection is principled, not volumetric — high
+volume argues *for* it: a resemblance threshold that is wrong x% of the time silently drops
+*more* real findings as volume grows. The set is bounded per (repo, pr_number) and does not grow
+with the fleet; nothing in this section touches it, and no future Step may cite this section as
+grounds to revisit §22.1.2.
+
+### 31.2 The switch, and the mode buffer this codebase has already paid to learn
+
+**Residence and actor.** A nullable `repo_settings.review_knowledge_mode` column, `NULL` = mode A
+— the exact precedent of `review_depth_mode` (migration 000082) and the cost-budget columns
+(000085). Fail-safe: absent row, read error, or NULL all resolve to today's behavior. The flip is
+**manual, by an admin, never automatic**: every comparable unsupervised behavior in this codebase
+is an explicit admin config (000082, 000085, auto-approval 000069), and mode B changes what the
+reviewer sees for the one source that actually routes on it — the prior-arch-decisions block
+becomes a retrieved subset instead of a bounded recency window, while the false-positive patterns
+a maintainer taught stay injected in full, unchanged, in either mode (§31.1's per-source doctrine
+— this sentence does not contradict it, an earlier draft's wording did) — which is exactly the
+class of change this codebase keeps behind deliberate configuration.
+
+**The instrumented trigger — per source, because only one source can ever move it, and a
+combined gauge cannot motivate a flip at all.** A token gauge on the rendered knowledge block,
+emitted at the existing render site, split into three numbers: the false-positive-pattern block,
+the arch-decisions block, and the total. The split is load-bearing, not cosmetic — it corrects a
+defect a single combined gauge cannot escape: per §31.1's own table, false-positive patterns are
+inject-all in **both** modes, and the arch-decisions block is bounded in **both** (`ORDER BY
+created_at DESC LIMIT k` in mode A, top-N in mode B) — so no component a flip actually touches can
+grow past any threshold, and the one component that CAN grow (false-positive patterns) is the one
+a flip never touches. A single total gauge, alerted-on and flipped-on, therefore does not move
+after the flip — the exact operator flapping this correction exists to prevent, now closed at its
+root instead of relocated.
+
+**What the false-positive-pattern gauge is: a health metric, never a mode-B indicator.** It should
+still alert — a maintainer-taught corpus growing past a few thousand tokens is a real operational
+signal (teaching hygiene, retirement backlog, §22.4) — but because §31.1 never routes this source
+through retrieval, no threshold on it can ever correctly indicate mode B, and none is proposed
+here. (The retracted draft's thresholds were denominated in *pattern count* — ~100, ~200 — which
+was itself the tell: false-positive patterns are the only component a token count on this source
+could ever actually be counting.)
+
+**The real A→B indicator is relevance exhaustion, which no token gauge can observe — the §26.5
+instrument already measures it.** What degrades as a mode-A repository scales past the point
+retrieval exists to fix is not the arch-decisions block's *size* (bounded either way) but its
+*relevance*: the bounded recency window (§31.6's selector) covers a shrinking slice of real
+elapsed time as PR volume grows, so the injected decisions increasingly miss the one the current
+PR needs — exactly the "the motivating case is reached deterministically... at 300 PRs/week" vs.
+"2-3 days for raw recency" gap §31.6 itself names. The already-shipped §26.5 contestation KPI
+(migration 000086), joined on the verdict knowledge-mode stamp (item 2 below), is the instrument
+that actually observes this: a rising contestation rate on knowledge-influenced verdicts is the
+real trigger, corroborated by a rising `counter_review='skipped'` / `fact_check='skipped'` rate
+per verdict row since Step 69 — a growing knowledge block silently consumes the §26.7 budget's
+margin (`internal/domain/reviewtriage/costbudget.go`), so mode A's degradation shows up in
+*quality* (deep passes skipped) before it shows up in cost. Both discriminate cleanly where a
+token count cannot: they move only when the arch block's relevance is failing, never merely
+because it grew, and "A, degraded" is distinguished from "B, healthy" by the verdict mode stamp
+below.
+
+**The mode buffer — non-negotiable, because this codebase has already shipped and fixed two bugs
+of exactly this class.** Step 69's D2/D9 fixes in
+`internal/app/sessionactor/reviewretrigger.go` closed a pair of defects where a mutable
+`repo_settings` flag resolved at two different instants produced a self-contradictory decision
+record, and the hard-won rule is already written into the schema — `turns.review_depth`
+(migration 000080: "set exactly once, at creation … never re-derived") and
+`review_verdicts.review_path` (000081). This section applies that rule verbatim, and it is why
+the grounded pass's "zero new instrumentation" promise is **retracted: a schema change is
+mandatory**, cheap, and idiomatic (precedent 000081):
+
+1. **`turns.review_knowledge_mode`** — resolved once at turn creation, never re-derived.
+2. **A knowledge-mode column on `review_verdicts`, stamped at write.** Without it the flagship
+   A/B KPI (§31.6 item 1) is contaminated at the instant of any flip: `review_verdicts` is
+   append-only (§21.1), and joining the *current* flag against history attributes every pre-flip
+   verdict to the post-flip mode. The exclusion/attribution logic lives in the query, never at
+   call sites — the same in-query discipline §30.8 imposes on its egress-mode stamp.
+3. **`kb_search` authorizes against the turn's stamped mode, never against `repo_settings`
+   live** — otherwise a B→A flip mid-turn breaks a tool the prompt has already announced. The
+   precedent is the verdict tool itself: `cmd/sandbox-agent/reviewverdicttoolprompt.go` bakes
+   URL/bearer/gen into the prompt at hand-off and serves it minutes later.
+4. **The cold-corpus fallback, mandatory at every A→B flip.** The existing injection idiom
+   (`FetchFalsePositivePatterns`) proudly degrades to an empty string indistinguishable from "no
+   history" — correct for its source, catastrophic if copied here: the index is empty on flip
+   day, the block renders "", and the review is silently strictly worse than the day before.
+   Rule: **if retrieval returns fewer than k rows, fall back to mode A's SELECT** — a one-line
+   guard that fully neutralizes the regression — and stamp the degradation on the turn (it lands
+   in the same JSONB decision record as the injected ids, §31.6 item 1, so degraded turns are
+   excluded from the B arm of the KPI rather than contaminating it).
+5. **A per-repository ingestion watermark**, so a B→A→B cycle leaves no un-embedded hole for the
+   verdicts written in the interval.
+
+**Mode B's added requirements are checked at MODE ACTIVATION, never at boot.** Mode B is opt-in
+per repository, so its external dependencies — the embeddings provider's reachability and
+credentials, and, on the named upgrade path only (§31.5), the pgvector extension via a
+`pg_available_extensions` preflight — are validated when an admin flips a repository to B, with a
+loud typed refusal on failure. Nothing mode-B-shaped runs in `applyMigrations`'
+(`cmd/control-plane/main.go`) unconditional boot-time chain, which is what preserves §12.1's
+"one binary + Postgres" self-host contract verbatim for every deployment that never uses mode B.
+
+### 31.3 The mode B corpus: content, entry barrier, residence, chunking
+
+**Phase 9's corpus contains exactly one concept type: `arch-decision`.** Two more knowledge
+sources are adjacent but deliberately out of the corpus's scope for this phase — stated
+explicitly because §31.1's table names both and an earlier draft's "three concept types" framing
+implied a Phase 9 Step ingests them, when none does:
+
+- **`false-positive-pattern` is never a corpus member.** §31.1's doctrine already settles that it
+  is injected in full in **both** modes and never routes through retrieval — corpus membership
+  would only ever matter for `kb_search` or the export, and neither needs it against a source
+  inject-all already serves completely. A future Step may add it (so `kb_search` can surface it
+  alongside arch-decisions during a builder session), and that Step names its own ingestion and
+  chunking; nothing here presumes it.
+- **`approved-plan` gets its durability fix (Step 99) but not corpus ingestion.** The only agent
+  prose a human has explicitly signed (`plans.status='approved'`, human `decided_by`, migration
+  000034) lives today only in `events`, which is `ON DELETE CASCADE` from `sessions` (000008, and
+  the plans table's own session FK, 000034) — an approved plan is cascade-deletable, a defect
+  independent of any corpus. Step 99 snapshots the approved version's prose at approval time into
+  a dedicated **`plan_documents` table keyed on the plan** — a separate table, not a snapshot
+  column on `plans`, so the content is isolable for a later retention null-out without rewriting
+  the parent table (the same schema-time enabling move §30.6 takes for its ledger) — closing the
+  data-loss defect regardless of everything else in this section. Rendering that snapshot as an
+  OKF concept, chunking it (the `##`-section unit, below), embedding it, and serving it through
+  `kb_search`/the export is a later Step's scope, not named in Phase 9. **The irreversible loss is
+  recorded plainly: any plan whose session was deleted before Step 99 ships is gone, and no later
+  Step can ever recover it.**
+
+`arch-decision` — the typed triplet
+`ArchDecision{Decision, RejectedAlternative, ConventionConformance}`
+(`internal/domain/reviewpost/digest.go`). One OKF concept per decision: front-matter (content
+id, repo, source {pr_number, head_sha, review_path, counter_review}, provenance class, epoch,
+eligibility state, date), body = the three fields verbatim in three sections.
+`RejectedAlternative` is the irreplaceable payload: the road not taken leaves no trace in any
+checkout — no deterministic selector, and no amount of re-reading the repository, can
+reconstruct it.
+
+**Excluded, with reasons**: the per-PR digest prose (`Summary`, `StackRisks`,
+`UnverifiedLimits`, `ContestedPoints`) — one PR's commentary, valueless to another PR's review
+six months later; verdict scalars — analytics, already owned by the read models
+(`internal/domain/reviewverdict/rollup.go` and neighbors); un-promoted rebuttals — the codebase
+already has a deliberate promotion valve (`false positive: <reason>`, §22.2), and harvesting
+rebuttals automatically would bypass that maintainer gate.
+
+**The entry barrier: merged AND uncontested, no backfill, contested content hard-excluded — this
+is `arch-decision`'s own promotion condition, not a generic corpus-wide rule.** Promotion into
+retrievability (§31.7 G4) requires the source PR merged, a quarantine window elapsed, and zero
+contestations against the decision — a condition that presumes a source PR exists, which is true
+of the only concept type Phase 9's corpus admits (above). It is stated as this type's own
+condition, not the corpus's, deliberately: a future concept type ingested later must name its own
+promotion condition when it lands rather than silently inheriting "merged," which no non-PR-sourced
+concept could ever satisfy — a false-positive-pattern's natural gate would be capture (maintainer
+authority is already the gate, §22.2) and de-eligibility on retirement; an approved-plan's would be
+the human approval itself. G4's own "default = non-retrievable" (§31.7) stays the fail-closed rule
+regardless of type; what varies per type is only what *fires* it. Two consequences of this Step's
+own condition are decided, not open:
+
+- **No backfill, and the reason is a forcing fact, not taste: no COMPLETE reviewed-PR merge
+  signal is recorded in Postgres today, so historical rows can NEVER be gated retroactively on
+  one.** Three PARTIAL signals exist, each covering a different slice, none universal, and none
+  built for this purpose: `sentinel_fixes` (migration 000047) is keyed on the reviewed PR itself
+  (`UNIQUE (repo_full_name, origin_pr_number)`) and its status is advanced by that PR's own merge
+  flag (`handlePullRequestClosed` reads `payload.PullRequest.Merged`, marking the row abandoned
+  when false) — but only for the small subset of PRs where a sentinel auto-fix was actually
+  triggered; `auto_approval_outcomes.confirmed` (migration 000070) records a merge outcome too,
+  but only for PRs the auto-approval engine itself approved (§21.2) — a different, narrower subset
+  again; and `audit_log`'s `merge_pr` rows (`internal/adapters/inbound/httpapi/decisioninbox.go`)
+  capture a merge only when it went through the decision inbox's own 1-click endpoint, never a PR
+  merged directly on GitHub outside it. None of the three is a general-purpose "was this reviewed
+  PR merged" signal, and reconstructing one by unioning them would be exactly the kind of
+  inferred, never-designed-for-this-purpose join this section's own G4 (§31.7) exists to avoid.
+  Backfilling on any of them, or their union, would therefore still import ungatable content into
+  a corpus whose entire safety story *is* the gate — and the quarantine window is retroactively
+  vacuous for a backfill regardless (everything historical is already older than any window).
+  Instead, **merge-outcome capture starts now** (Step 101: the GitHub ingress records the
+  `closed`/merged outcome onto `github_pr_sessions`, already keyed `(repo_full_name, pr_number)`,
+  migration 000028) and the corpus fills forward.
+- **Contested decisions are hard-excluded at retrieval, and this does not contradict §22.3 —
+  different thing, different rule.** §22.3's advisory-never-a-filter posture protects *findings*
+  on their way to a **human** who can weigh an annotation; §22.1.2 extends the same care even to
+  retired findings (rendered, annotated, never silently dropped). What is excluded here is
+  content served to a **model as precedent** — which is exactly the poisoning vector §31.7
+  exists to close. Annotating a poisoned precedent and handing it to the model anyway is not the
+  cautious option; for machine-consumed precedent, exclusion is. The never-a-filter posture is
+  untouched where it applies: nothing here drops, or annotates away, any finding shown to a
+  human.
+
+**Residence: Postgres is the truth, OKF is a pure rendering — argued, and decided.**
+
+- **The truth and its lifecycle are already there.** Every source row and every mutation the
+  corpus must respect (`retired_at`, contestations — migration 000086 — plan approval) lives in
+  Postgres. A file-based corpus would have to mirror those mutations into git, and a retirement
+  by commit does not purge git history: a corpus repository is an exfiltration channel by
+  construction — customer-derived text in an unpurgeable history — with unreviewable PRs.
+- **§5.1 forbids a second state authority.** A git repo carrying the "real" corpus while
+  Postgres carries the lifecycle *is* a second authority, with a sync protocol as its failure
+  surface.
+- **Isolation becomes an auditable predicate** (a composite index prefix, §31.4), not a
+  directory convention.
+- **Rendering is the house idiom**: impure fetch / pure render
+  (`FetchFalsePositivePatterns` / `RenderAdvisoryBlock`). "Render this row as an OKF concept" is
+  one more pure function in a domain package, deterministic and reproducible on demand.
+
+What Postgres-as-truth deliberately does NOT give: a browsable tree, a git history of the
+knowledge's evolution, a review workflow on edits. The owner asked for OKF by name, and the
+honest form of that ask is decided: **a read-only rendered export ships, as a small, late,
+read-only Step** (§31.6 item 6) — an endpoint generating a repository's active concepts on
+demand, behind the per-repository entitlement (§31.4). It is an export surface, **never an
+authority, never the retrieval substrate, and never written into the customer's repository**
+(which would collide with §30's zero-trace guarantee the moment an evaluated repo was involved).
+
+**Chunking: the concept IS the chunk.** For `arch-decision` — the only type any Phase 9 Step
+actually chunks or embeds, above — measured shape is ~50–150 tokens. Sub-chunking one would be
+actively harmful: the knowledge is the *pair* decision / rejected-alternative (the struct's own
+doc comment: it states what was built AND what was not) — splitting it amputates the precedent of
+its alternative, which is precisely the retrievable insight. So: retrieval unit = whole concept,
+one embedding row per concept, embedded text = rendered body prefixed by a one-line typed header,
+the rest of the front-matter serving as filter columns. The remaining two rules are forward
+design guidance for whichever future Step ingests the other two concept types, not exercised by
+anything in this phase: a false-positive `reason` runs a sentence to a paragraph (~10–60 words) —
+same whole-concept-is-the-chunk rule; an `approved-plan` is the **one exception**, unbounded
+prose, unit = the `##` section, every chunk sharing the concept's id and metadata. No
+paragraph-level chunking anywhere.
+
+### 31.4 Per-repository isolation, structurally — and the entitlement boundary isolation cannot provide
+
+**Why per-query discipline is disqualified: two cross-repo bugs already shipped.** The
+false-positive queries file documents its own audit fixes:
+`GetFalsePositivePattern` and `RetireFalsePositivePattern` were "keyed on id alone"
+(`internal/adapters/outbound/postgres/queries/reviewfalsepositivepatterns.sql`, the file's own
+comments), letting a pattern belonging to a *different* repository be read — and retired —
+through the wrong repo's URL. A cross-repo read AND a cross-repo mutation, shipped, caught only
+by audit. `WHERE repo_full_name = $1` as a per-query convention is exactly the class of
+disciplinary guard §30 was written to replace with structure.
+
+**The four layers (deliberate one-way redundancy, §30.2's form):**
+
+1. **An opaque `knowledge.RepoScope` type** (unexported field,
+   `internal/domain/knowledge/scope.go`): every store method takes a `RepoScope`, never a
+   string — a caller holding only a string does not compile. The query type
+   (`knowledge.Query{Text, K}`) **carries no repo field at all**: a cross-repo query is
+   inexpressible; the vocabulary for naming a second repository does not exist. Constructors are
+   capability tokens taking a trusted typed artifact — `ScopeFromPRSession(row)`,
+   `ScopeFromWebhookMention(m)` — plus exactly one string-accepting constructor for authorized
+   admin routes, pinned by a single-call-site architecture test (the §30.6
+   synthetic-ref-constructor idiom). Zero value = fail closed, typed error.
+2. **A scoped handle**: `KnowledgeStore.ForRepo(scope) *ScopedKnowledge` — query methods have no
+   repo parameter; only the handle supplies the predicate from its captured scope. Forgetting
+   the WHERE becomes unwritable, not merely unlikely.
+3. **Schema-level confinement**: a composite FK `(doc_id, repo_full_name)` from chunks to docs —
+   a chunk claiming a different repository than its parent is a constraint violation at INSERT,
+   and no JOIN can smuggle foreign rows through; and **deliberately no global ANN index** — each
+   search is an exact scan over the repository's own B-tree slice (§31.5's cardinality argument
+   makes this free), so no cross-repository similarity structure exists anywhere for a bug to
+   traverse.
+4. **Fail-closed RLS on the knowledge tables only**: policy
+   `USING (repo_full_name = current_setting('narvi.repo_scope', true))`, the `SET LOCAL` issued
+   in exactly one place (inside the scoped handle). §30.8's polarity: an absent setting yields
+   NULL, the policy evaluates false, the query returns **zero rows, never a foreign row**. One
+   verification item before this layer is credited (§31.9): `FORCE ROW LEVEL SECURITY` is
+   required if the application role owns the tables.
+
+Tests: a two-repository integration test (the `*_store_integration_test.go` precedent), a
+zero-value unit test, and two pinning tests — the string constructor's single call site, and a
+mechanical CI scan that every named query in `knowledge.sql` carries the repo predicate.
+
+**What these four layers do NOT defend — the adversarial pass's blocking finding, and the
+entitlement decision that answers it.** The layers guarantee "one query reads exactly one
+repository." The required boundary is "a caller reaches only repositories it is entitled to."
+Narvi has no per-repository entitlement model today, and the gap is traversable:
+
+- `authz.Actor` carries a deployment-global role
+  (`internal/adapters/inbound/httpapi/helpers.go`); `authz.Resource` carries only
+  `OwnedOrJoined` (`internal/domain/authz/authorize.go`). No repository identity exists in the
+  authorization vocabulary, and no per-repo membership table exists in the schema.
+- **`kb_search` as naively sketched launders an attacker-supplied scope**: `CreateSession`
+  authorizes with `Resource{}` (`internal/adapters/inbound/httpapi/create.go` — correct for
+  "may this role create sessions", silent on *which repos*), the request's `repos` list is
+  validated in shape only and persisted verbatim into `sessions.repos` (migration 000018). A
+  `member` creates a session naming a repository they have no right to; `kb_search` derives its
+  scope "server-side" from that row — and serves the victim's corpus while all four isolation
+  layers pass cleanly: they guarantee the query is single-repo, they cannot see that it is the
+  *wrong* repo. Amplification: the sandbox clone uses the installation's credential helper for
+  every repo in the session's list (`internal/sandboxagent/gitclone/clone.go`) — the source
+  itself is clonable through the same laundering, independent of `kb_search`.
+- **Cross-repo reads leak today**: `GET /api/repos/{owner}/{repo}/review-analytics` authorizes
+  `ActionViewAnalytics` with `Resource{}` and then uses the route's repo only to scope the query
+  (`internal/adapters/inbound/httpapi/reviewanalytics.go`); the same shape exists in
+  `reposettings.go`, `falsepositivepatterns.go`, and `providercredentials.go`. **The four leaks
+  are role-scoped, not uniformly open — precise, verified against `authz/authorize.go`'s own
+  matrix**: `ActionViewAnalytics` admits every role including viewer, so any authenticated user
+  reads any repository's analytics by editing the URL. The other three do not have that width;
+  each still gates on its own RBAC action, just against the wrong repository.
+  `falsepositivepatterns.go`'s both routes (list and retire) gate on
+  `ActionManageFalsePositivePatterns` — admin+maintainer only, a member or viewer gets 403
+  regardless of URL — so the leak lets any maintainer or admin read (or retire) any repository's
+  taught patterns. `providercredentials.go` gates on `ActionManageRepoSecrets` (also
+  admin+maintainer), so the same leak lets any maintainer or admin rotate any repository's
+  provider credentials. `reposettings.go`'s fields split across several actions, some
+  admin+maintainer and some admin-only, each leaking within whichever tier that field already
+  requires. An OKF export would inherit this pattern with strictly more sensitive content.
+
+**The scope decision is taken: minimal, not an RBAC rework.** A per-repository entitlement
+predicate joins the authorization path, plus authorization of every `sessions.repos` entry at
+session creation — before persistence and before any clone, which closes the clone amplification
+in the same move. The full per-repo-roles RBAC rework is explicitly not this chantier. Two
+halves, two vehicles: **the four leaking handlers above are being closed right now as an
+independent fix already in flight** — repo-from-the-URL authorization added to
+`reviewanalytics.go`, `reposettings.go`, `falsepositivepatterns.go`, and
+`providercredentials.go`, not delivered by this section's Steps and not waited on as design
+work; **the remainder — the entitlement predicate itself and the `sessions.repos` gate — is this
+chantier's Step 100**, and `kb_search` and the OKF export are blocked behind it. Every
+`RepoScope` constructor takes the actor alongside the trusted artifact once the predicate
+exists; `sessions.repos` has a fundamentally different trust grade than
+`github_pr_sessions.repo_full_name` (established by a verified webhook payload), and no safe
+`ScopeFromSession` exists without the predicate. **The arch-decisions block on the webhook path
+is NOT blocked**: its repository identity descends from the verified payload, which is precisely
+why it is the flagship first consumer (§31.6).
+
+### 31.5 The index and the ports
+
+**Ship mode B without pgvector — the decisive fact is quantitative, and it falls out of the
+isolation constraint.** The §12.1 objection to a vector extension is real for one specific
+shipping choice: `applyMigrations` (`cmd/control-plane/main.go`) unrolls the whole embedded
+migration chain at every boot, and a `CREATE EXTENSION vector` in a numbered migration would
+fail the boot of every pure-mode-A deployment whose Postgres lacks the pgvector library (the
+official images — including the `postgres:17-alpine` this repo standardizes on — do not ship
+it; `IF NOT EXISTS` does not help when the extension is not *available* on the server). But the
+stronger fact: **strict per-repository isolation caps every search at one repository's corpus —
+and the calibration below is reconciled against §31's own volumetry, not against an
+understated baseline.** An earlier draft calibrated "hundreds to ~2,000 chunks" against a figure
+disconnected from the intro's own sizing; corrected: the intro's ~15–50+ decisions/repo/week (at
+the illustrative 300-PRs/week case) implies ~780–2,600+ `arch-decision` concepts in a repository's
+first year alone, and hot repositories — 100–500 PRs/week, this section's own stated range —
+scale roughly proportionally to ~1,300–4,300+/year at the top of that range. So a repository at
+the high-volume end mode B exists to serve can clear ~2,000 chunks within its first year, not at
+a distant horizon. The latency claim survives the correction regardless: an exact cosine scan
+over `real[]` rows is linear in row count at a small per-row cost (a few hundred `float32`s each),
+so single-digit-to-low-double-digit milliseconds holds through the low tens of thousands of rows,
+not merely at ~2,000 — an HNSW index at that cardinality is still pure overhead, and pgvector
+without an ANN index performs the same sequential scan anyway. So: embeddings stored as `real[]`
+in the ordinary migration chain, exact per-repo cosine in the control plane, zero extensions
+beyond the existing pgcrypto (migration 000001), **zero changes to the 28
+`tcpostgres.Run(ctx, "postgres:17-alpine", …)` test files or to `docker-compose.dev.yml`**, §12.1
+preserved verbatim, no schema-authority split. This is still, fully, "embeddings + RAG" in the
+sense of the owner's decision — only the storage primitive changes. pgvector is documented as the
+**named upgrade path**, activated per mode with the §31.2 activation-time preflight, with a
+concrete trigger: a per-repository corpus exceeding ~20,000 chunks. Restated honestly against the
+corrected steady state above rather than the retracted ~2,000-chunk baseline: **~20,000 is a
+~4–5 year runway for a sustained hot repository** (~4,300/year at the top of the stated range),
+not the "10× margin... distant horizon" an earlier draft claimed from the wrong denominator — a
+real multi-year margin, stated as one. No retention window is introduced on this basis alone; if
+a future repository's growth outpaces this, the trigger is the forcing function to revisit it, not
+a silently-outgrown assumption. Full volumetry, so the numbers are on the record:
+worst-case fleet-wide storage ~6 GB, typical ~0.6 GB; initial embedding of one repository
+worst-case ~500k tokens ≈ cents to low dollars; aggregate query load ~0.025 QPS — nothing, for
+Postgres.
+
+**The `Embeddings` port — separate from `LLM`, never merged.** `internal/app/ports/llm.go` is
+explicitly a structured-completion port; folding embeddings in would force a degenerate shape,
+and the provider sets are disjoint in practice — a merged interface would violate §11's
+"an interface must hold for more than one implementation" rule in the worst way. Shape
+(`internal/app/ports/embeddings.go`): `Embed(ctx, EmbeddingRequest) (EmbeddingResponse, error)`;
+request = {explicit Provider, Model, ordered `Inputs []string` batch, InputKind
+document|query}; response = {`Vectors [][]float32`, `Dimensions`, Usage, `CostUSD *float64`
+computed by the adapter, nil if unknown — the `CompletionResponse` contract}. A typed
+`*EmbeddingsError` mirroring `LLMError` exactly: typed codes, never string-matching (§18.1's
+rule). **The embeddings-specific correctness invariant**: vectors from different models or
+dimensions are incomparable — the store records (model, dims) per corpus, rejects mixed writes,
+and a model change forces an atomic re-embed of the corpus. **The model policy is decided:
+pinned per deployment**; the per-corpus model registry and a background re-embed job are
+deferred until a model migration is actually needed — the (model, dims) recording is what makes
+that deferral safe rather than a trap. **Adapters**: one hosted vendor
+(`internal/adapters/outbound/embeddings/<vendor>`) ships first; the
+**adapter for the de-facto-standard embeddings wire format — one adapter covering both a second
+hosted vendor and the local inference servers that speak the same wire, and therefore the mode-B
+path for air-gapped self-hosters — is deferred**, but the
+port is designed so it slots in without any interface change (that is what the explicit
+Provider field and the adapter-computed CostUSD are for), keeping §11's two-adapter rule
+satisfiable on the port's existing shape the day it lands.
+
+**The lexical leg, fusion, and degradation.**
+
+- **Lexical leg: core-Postgres `tsvector`** — a generated column + GIN index in a normal
+  numbered migration, working unchanged in all 28 test containers. `'simple'` config: corpus
+  text is prose dense with code identifiers, and English stemming mutilates them. `pg_trgm`
+  (contrib, present in the image) is deferred until a recall deficit on identifiers is actually
+  demonstrated.
+- **RRF fusion in the DOMAIN** (`internal/domain/knowledge/fuse.go`): pure arithmetic over two
+  ranked lists (score = Σ 1/(k+rank), k=60), zero I/O, table-testable with no database — exactly
+  what §11 wants in a domain package. The retrieval service (app layer) orchestrates: lexical
+  leg via the store, vector leg via `Embeddings` + cosine, `FuseRRF`, top-N fetch with
+  provenance, then the sanitizing render boundary (§31.7 G2).
+- **Provider-unavailable degradation**: mode B imports an availability dependency mode A does
+  not have — embedding the *query* at review time. Copying the degrade-to-empty idiom would
+  produce LESS context than mode A would have gotten from purely local data — a silent loss.
+  Rule: degrade to **the lexical leg alone** (provider-independent; RRF over one empty leg is
+  well defined) or to the mode A SELECT — **never to empty** — and stamp the degradation on the
+  turn (§31.2 item 4's record), without which degraded reviews contaminate the B arm of the KPI.
+- **§26.7 accounting**: control-plane embedding spend is invisible to the sandbox-side
+  accumulator (`turnState.spentUSD` — §26.7's own mechanism) and immaterial in dollars
+  (~$0.0002/query against $0.50/$5 ceilings), but it must have a displayed home: a per-repository
+  counter in the operator view, §30's surfaced-not-suppressed posture. It is deliberately NOT
+  wired into the review turn's own budget check — the loopback endpoint's semantics
+  (`ShouldSkipOptionalPass` over the turn's own spend) stay untouched.
+
+### 31.6 The consumers — each with its mode, its first production consumer, and its measurement
+
+Every mechanism below ships with its first production consumer and its measurement in the SAME
+Step (the rule Steps 70 and 71 exist to enforce, after this project twice shipped tested code
+with zero production callers).
+
+**1. The "prior architecture decisions" block — BOTH MODES. The flagship.** All three review-turn
+producers already prepend context blocks before `review.RenderTurnPrompt` in the impure-fetch /
+pure-render idiom (`internal/adapters/inbound/github/handler.go`;
+`internal/adapters/inbound/httpapi/reviewretrigger.go`;
+`internal/app/sessionactor/reviewretrigger.go`'s `composeAutoRetriggerPrompt`). A
+`reviewcontext.FetchPriorArchDecisions`, exact sibling of `FetchFalsePositivePatterns`, slots
+into all three seams with near-zero integration risk. Mode B swaps the SELECT for hybrid
+retrieval; everything else — render, sanitization, fixed delimiter, measurement — is shared. Why
+the low-volume intuition inverts at scale: at a few PRs/week, a 30-decision window covers months
+and recency approximates relevance; at hundreds of PRs/week the same window covers **days** of
+churn — the decision a payments-lane PR needs is four months and thousands of decisions back.
+
+**Mode A's SELECT is the deterministic path-scoped selector — the fork is resolved: build the
+selector first. Its key must be server-derived, and `blast_radius` is not — corrected here
+because an earlier draft got this backwards and the error falsified the poisoning argument below.**
+`review_verdicts.blast_radius` (JSONB, migration 000067) is not server-derived metadata: it is the
+reviewing model's own self-report, forwarded verbatim. `internal/domain/review/verdict.go`'s
+`Verdict` struct is exactly the posted verdict: `RiskLevel` and `Premise`, immediately above
+`BlastRadius` in the same struct, are documented in so many words as "the reviewer's own"
+assessment, and §21.2's own text confirms `BlastRadius` is populated the identical way — "The
+reviewing model reports a file count and a blast radius alongside its verdict." Nothing in
+`internal/app/reviewverdict/insert.go` re-derives it: the field is
+marshaled straight into the row (`marshalTags(verdict.BlastRadius)`); and the only server-side
+check anywhere in the write path is a vocabulary-membership test
+(`reviewpost.ValidateVerdictInput`'s loop over `in.BlastRadius`, rejecting anything outside the
+eight-tag enum via `ErrInvalidBlastRadiusTag`) — nothing compares it to the diff. §21.2 already
+states the rule this triggers, in terms: *"These last two are computed from the SERVER's own view
+of the diff — never from the verdict… both are display data and neither may gate anything"* —
+written after Step 62's first implementation made exactly this mistake for the auto-approval
+eligibility engine. Keying the selector on `blast_radius` would repeat it one section later: an
+attacker who induces a false `ArchDecision` can, in the same verdict call, induce whatever
+`blast_radius` tags they like, including the ones that later decide where the false decision
+surfaces — precisely the "determines its own retrieval" property this paragraph itself claims,
+below, only similarity retrieval has.
+
+**The selector is not dead — its key is wrong, and the fix already exists in the tree.**
+`autoapproval.ClassifyChangedPaths` (`internal/domain/autoapproval/blastradius.go`, package
+`autoapproval` — not, as an earlier draft mis-cited, `internal/domain/reviewtriage/sensitiveglob.go`;
+that file is package `reviewtriage` and holds `sensitiveTags`, documented in its own comment as
+"a DIFFERENT, smaller set" built for §26.3's triage question, a genuine but separate mechanism)
+derives the *same* eight-value `review.Tag` vocabulary `blast_radius` carries, but
+**deterministically from the PR's own server-fetched changed-file paths** — the identical
+admissible input §21.2 already names for the auto-approval engine — never from anything the model
+posts. `prCtx.ChangedPaths` is computed at all three review seams by the same adversarially
+hardened deterministic parser (`internal/app/reviewcontext/fetch.go`'s `Fetch`, via
+`reviewtriage.ExtractChangedPaths`); path-scoped injection over it is an already-shipped idiom
+(`FetchAlreadyAnswered` takes `ChangedPaths` at all three sites). Selector v1 = one sqlc query:
+decisions from verdicts whose **tags/directory-roots — stamped at INSERT time from
+`ClassifyChangedPaths(prCtx.ChangedPaths)`, never from the posted `blast_radius` column** —
+overlap the current PR's own freshly computed tags/roots (the 000083 write-time precedent;
+`turns.review_depth_decision`'s own already-stored "distinct roots" is the shape to follow) —
+`ORDER BY created_at DESC LIMIT k`, recency fallback when overlap is empty. At 300 PRs/week,
+path-scoped windows reach back **weeks to months** for typical roots, against 2–3 days for raw
+recency: the motivating case is reached deterministically. Its honestly-reported strengths,
+corrected: zero new ports, zero new vendors, zero new egress channel for customer-derived content;
+and, now that the key is genuinely server-derived, a real poisoning-profile advantage — under
+similarity retrieval an attacker's prose **determines its own retrieval** (write a "decision" that
+embeds near auth-shaped queries and it surfaces indefinitely), while under
+`ClassifyChangedPaths`-keyed deterministic selection the key is a fixed function of the paths the
+PR actually had to touch to make its change at all — real, reviewer-visible diff content, checked
+server-side, never a free-form self-report an attacker can set to anything — and recency decay
+quarantines automatically. Plus a real quality doubt in the other direction: the corpus is
+micro-records of 50–150 identifier-dense tokens — terrain where dense retrieval is notoriously
+weakest and path overlap is ground truth, not a proxy.
+
+**What this resolution does and does not defer — stated so the sequencing cannot be misread as
+re-litigating the owner's decision.** Every line of the selector is plumbing mode B needs anyway:
+same seam, same render, same sanitization, same injected-id recording, same KPI. Building it as
+mode A's SELECT defers the **commitment** to the embeddings leg, not its construction — and it
+arms the engagement decision with data instead of hypothesis. Precisely, because the two halves
+of the comparison do not exist at the same time: Step 101's window establishes the deterministic
+arm's own baseline on the §26.5 instrument — its contestation rate, the recency-fallback rate on
+empty overlap, and whether contestations cluster where path overlap was thin (the injected-ids
+record makes that attribution possible). The leg is engaged if that readout shows relevance
+misses path scoping cannot close, and killed if the deterministic arm already sits at the
+contestation floor; only once engaged does the full deterministic-vs-similarity A/B run, on
+mode-stamped verdicts from the first flip (Step 102's own measurement). The engagement gate
+is written into Step 102's own row. And the design's own honest counterpoint, kept: "build
+nothing" was already dead before this fork existed — `RejectedAlternative` is genuinely
+irreplaceable, the checkout does not record the road not taken — so the fork was only ever about
+*which retrieval*, never about *whether*.
+
+*Measurement (same-Step rule)*: per-repository A/B on the already-shipped §26.5 contestation KPI
+(migration 000086, the `arch recap wrong:` command), **joined on the verdict knowledge-mode
+stamp** (§31.2 item 2); plus a **durable record of the injected knowledge** — ids and content
+hashes of the injected decisions, in a JSONB column on the turn, the exact shape of
+`review_depth_decision` (migration 000083), carrying the selector actually used and any
+degradation. Not logs: logs are not durable joinable state, and without this record, when a
+maintainer contests a recap, no trace survives of which corpus rows induced it (the events
+stream is `ON DELETE CASCADE`) — the anti-poisoning loop would be a fiction. Corollary, per
+§31.3's barrier: already-contested decisions are excluded from retrieval.
+
+**2. `kb_search` — MODE B ONLY. Blocked behind Step 100's entitlement.** A pull tool for
+builder/plan sessions, on the verdict-tool precedent (a control-plane endpoint whose
+URL/bearer/gen are substituted into the prompt at hand-off,
+`cmd/sandbox-agent/reviewverdicttoolprompt.go`) — not the loopback precedent: the corpus lives in
+the control plane's Postgres, unreachable from the sandbox any other way. Pull beats push at high
+volume: builder turns are the most voluminous class and need nothing most of the time; pull costs
+only when the agent decides, with a query formed mid-task after exploring the checkout. Scope is
+derived server-side from the session row **and verified against the entitlement predicate**
+(§31.4 — derivation alone is laundering); authorization is against the turn's stamped mode
+(§31.2 item 3). *Measurement*: query/hit-rate/injected-ids journal, zero-result rate.
+
+**3. Approved-plan durability — an orthogonal prerequisite, owed anyway.** The cascade defect
+exists independently of any corpus (§31.3); the Step ships regardless of every other decision
+here. *Consumer*: the existing approval path writes the snapshot. *Measurement*: coverage —
+every post-Step approval has a `plan_documents` row.
+
+**4. False-positive patterns — mode A forever, zero code.** The deliverable is the per-source
+doctrine written down (§31.1). The advisory renderer's structural defense survives because it
+implicitly assumed a human-bounded source, and that bound is structural (RBAC + explicit command
++ mandatory retirement).
+
+**5. Similarity over already-answered facts — rejected, both modes, reaffirmed.** §31.1's last
+paragraph; recorded here so the consumer list is exhaustive and the rejection is part of it.
+
+**6. The OKF read-only export — decided yes, as a small late read-only Step, after Steps 100 and
+102** (100 for the entitlement gate; 102 because this renders from that Step's own corpus tables —
+Step 104's own Content already requires it, and §31.10's phasing is corrected to match). An
+authenticated, entitlement-gated endpoint rendering a repository's active concepts — `arch-decision`,
+the only type Phase 9's corpus admits, §31.3 — on demand (§31.3's residence argument). Never a
+write path, never the retrieval substrate, never written into any customer repository.
+*Consumer*: the operator/maintainer download surface itself. *Measurement*: access is
+`audit_log`-journaled per export (customer-derived prose leaves the database as one document —
+that is an event worth a row), plus a served-count metric.
+
+### 31.7 Poisoning and injection: what is guaranteed structurally, and what is not
+
+The adversarial finding, stated flatly: **the write path persists digest fields verbatim and
+unsanitized, and the anti-poisoning link the grounded pass leaned on does not connect.**
+
+**The write path.** Digest fields are free prose written by the model after reading PR content
+that is entirely attacker-controlled (`internal/domain/review/sanitize.go`'s own words about
+diff/title/body). `internal/app/reviewverdict/insert.go` marshals and persists verbatim; the
+only barrier is non-blank (`validate.go`'s `hasNonBlankArchDecision`) — no length cap, no
+filtering, no placeholder-token strip. The existing sanitization is an egress-to-prompt guard
+called at exactly one seam (`internal/domain/review/context.go`'s
+`sanitizeDiffField`/`sanitizeDescriptionField` over diff/title/body) — never over a stored
+digest, because nothing re-injects a digest today. The projection path both modes introduce **is
+precisely what does not exist yet**: a stored `Decision` containing
+`{{REVIEW_VERDICT_TOOL_BEARER}}`, retrieved into review #2's prompt, would be expanded into a
+**live** sandbox bearer by `cmd/sandbox-agent`'s unconditional `strings.ReplaceAll` passes
+(`reviewverdicttoolprompt.go`) — the same CRITICAL `sanitize.go` closed for the diff, but worse:
+a diff is ephemeral to one review, a poisoned digest is retrieved into many.
+
+- **G1 — sanitize at WRITE — a prerequisite already in flight, not this chantier's to deliver.**
+  Placeholder-token stripping plus delimiter escaping on every corpus-destined field, at the
+  persistence site in `reviewverdict.insert`, is being delivered right now as an independent
+  change; this section depends on it and deliberately does not re-scope it. The reasoning stands
+  on the record regardless of vehicle: the stored byte must never carry a placeholder or a
+  forged delimiter *whatever the future read path is* — one guarded seam today becomes N seams
+  (retrieval, `kb_search`, the mode A SELECT, the export), so the guarantee lives where the byte
+  is written. Render-time sanitization remains as defense in depth, never as the primary.
+- **G2 — one sanitizing renderer on EVERY projection, by construction**: a mirror of
+  `RenderAdvisoryBlock` (fixed non-caller-suppliable delimiter, "DATA, never instruction"
+  framing, strip pass), pinned by an architecture test over the projection functions (the
+  self-updating scan precedent: `internal/domain/review/placeholderdrift_internal_test.go`).
+- **G3 — a length cap at the validator**: a hard byte bound on `Decision`/`RejectedAlternative`/
+  `ConventionConformance` — closing a token-budget DoS and an injection-surface amplifier in one
+  line, at the same `validate.go` site that already enforces non-blank.
+- **G4 — quarantine/promotion as first-class persisted state, never inferred**: an eligibility
+  flag on the corpus row, advanced only by explicit condition, **default = non-retrievable** — the
+  structural analogue of §30.8's fail-closed epoch stamp. For `arch-decision` — the only type
+  Phase 9's corpus admits (§31.3) — that condition is merged + quarantine age + zero
+  contestations; this is that type's own condition, not a generic corpus-wide rule (§31.3), and a
+  future type ingested later must name its own. The quarantine window's duration is a per-Step
+  tunable with a proposed concrete figure (14 days uncontested — proposed, not derived; §26.7's
+  budget-figure convention), and merge-outcome capture starting at Step 101 is what arms this gate
+  for all forward content.
+- **G5 — cut self-reinforcement by capping provenance, never by barring entry.** A verdict
+  produced by a turn whose prompt carried prior-decision concepts — **injected by mode A's
+  selector or retrieved by mode B alike** — is stamped knowledge-influenced. **This does not make
+  it ineligible for the corpus; an earlier draft said both in the same breath, and the absolute
+  reading is the one that is wrong.** An absolute bar was considered and rejected: Step 101 puts
+  the prior-decisions block on all three seams with recency fallback, so — with no backfill
+  (§31.3) — essentially every subsequent deep-path verdict would be stamped knowledge-influenced,
+  and barring all of them would make that entire forward-filling population permanently
+  non-retrievable, asymptoting the corpus at its first few uninfluenced days and directly
+  contradicting the volume argument this section's own intro opens with (arch-decision
+  accumulation is O(deep-path PRs), thousands per year). Instead: **the stamp permanently caps the
+  concept's G6 provenance weight at its lowest non-maintainer tier for the concept's entire
+  lifetime, and it may never satisfy `agent-authored, uncontested` authority — whatever G4's
+  ordinary eligibility gate later resolves for it.** A knowledge-influenced decision can still
+  earn ordinary eligibility (merged + quarantine + uncontested) and be retrieved; it can simply
+  never present at full authority, so a poisoned convention cannot compound into stronger
+  "authentic" backing across cycles — review #2's own re-assertion is itself capped, not merely
+  its parent. Without the stamp at all, provenance laundering is automatic regardless of which
+  form is chosen: the poisoned concept biases review #2, whose digest re-asserts the false
+  convention with now-authentic authorship, cycle after cycle — and the loop needs no retrieval:
+  the mode A block closes it too, which is why the stamp is not scoped to mode B. Nothing in the
+  current schema records this influence, and it must not be inferred later by joining the
+  injected-ids record (G4's first-class-state lesson applies to it): **the stamp ships at Step 101
+  with the mode buffer** — injection starts there, so no unstamped-but-influenced verdict ever
+  exists in the population Step 102 ingests — and Step 102's ingestion applies the provenance cap.
+  The §31.6 injected-ids record is its evidence trail, never its substitute.
+- **G6 — provenance travels with every chunk and weights it**: source PR, author class,
+  merged/open, live/shadow epoch, review path, and G5's permanent knowledge-influenced cap
+  (above) as one more weighted axis, not a separate mechanism. Agent-authored-from-a-low-confidence-PR
+  content is structurally distinguishable from maintainer-taught, and the prompt framing forbids
+  treating the former — or anything G5 has capped — as authority.
+
+**The contestation hash is NOT an anti-poisoning control — recorded so no future Step credits it
+as one.** `ArchRecapText` (`internal/domain/reviewpost/digestsectionidentity.go`) canonicalizes
+and hashes **a verdict's entire recap**; the corpus chunks **per decision** — the
+"retract the contested concept by content hash" join the grounded pass assumed structurally
+matches nothing. Compounding: the hash's scope is per-verdict (the same poisoned decision
+re-emitted in PR #2's verdict hashes differently), it is paraphrase-fragile (documented in the
+file itself), and contest text is itself untrusted PR-thread content (a griefing vector for
+retracting a legitimate decision). The §26.5 contestation mechanism is good recap-quality UX and
+this section's KPI instrument; it is not a retraction mechanism for the corpus, and G4's
+per-decision eligibility state exists precisely because it cannot be.
+
+**The attack with no clean structural kill, said honestly: the semantic false precedent.** A PR
+whose narrative induces the model to record an `ArchDecision` asserting a false convention — in
+well-formed English, no tokens, no delimiters — survives every strip pass by construction.
+**G4, G5, and G6 ARE the defense**: the gate keeps unmerged and contested content out, the
+influence stamp prevents the false precedent from laundering itself into authentic authorship,
+and weighted provenance keeps a single low-confidence assertion from outranking maintainer-taught
+truth. They are structural and they ship with the mechanism in the same Step — but they bound
+and decay the attack rather than killing it, and this section says so rather than implying
+otherwise. (Mode A's deterministic selector narrows the attacker further — §31.6's poisoning
+comparison — which is itself one of the reasons the fork resolved as it did.)
+
+### 31.8 Interaction with platform shadow mode (§30)
+
+- **Capture continues in shadow.** §30.1's guarantee is zero writes to CUSTOMER systems;
+  internal Postgres writes are explicitly legitimate (§30.6), and the corpus accumulating during
+  an evaluation is part of what the operator evaluates.
+- **Epoch stamped at write, excluded in the query** (§30.8 verbatim) — with the stamp living
+  where each read's rows live. Every knowledge corpus row (Step 102) carries a `captured_live`
+  boolean stamped at write via Step 90's resolver, **spelled so the default resolves to
+  "captured-in-shadow" — the quarantined direction** (`NOT NULL DEFAULT false`, the
+  `live_egress_enabled` polarity). Mode A's SELECT reads `review_verdicts` directly and needs no
+  new stamp: it rides the egress-mode stamp §30.8 already puts on every verdict row (Step 92).
+  Either way the rule is the same: every live read — mode B retrieval AND mode A's SELECT alike
+  — excludes shadow-epoch rows **in the SQL, never at call sites**, the same in-query discipline
+  §30.8 imposes on auto-merge candidacy.
+- **Graduation at Activate**: shadow-epoch knowledge rows join §30.8's existing promotion
+  barrier — the operator explicitly promotes (an `audit_log` entry) or purges; the default with
+  no action is excluded-from-live, monotone toward quarantine. This extends Step 98's Activate
+  gesture, never a second graduation surface.
+- **Deactivation without graduation = purge**, structurally cheap (one DELETE per parent table,
+  the composite FK cascades). Embeddings are derived customer content at rest — the same class
+  as §30.9's retention concern. **The retention fork is resolved the same way here: a short
+  quarantine window before deletion** (proposed: 7 days — operator-error recovery, weighed
+  against customer-content-at-rest minimization), then hard delete.
+- **The embedding egress is itself surfaced**: embedding an evaluated repository's content sends
+  customer-derived text to the embeddings provider and burns spend — inherent to evaluating
+  mode B at all, displayed in the shadow operator view beside LLM spend (§30.1's
+  surfaced-not-suppressed posture). **The key fork is resolved: shadow runs use the
+  evaluation org's embedding key, never the customer's** — consistent with §30's posture that
+  the cost of evaluation is the evaluator's to see and to carry where it can be.
+
+### 31.9 Residual limits, open verification items, and what stays deferred
+
+**Residual limits, named:**
+
+1. **The entitlement boundary is only as delivered.** Until Step 100 lands, the four isolation
+   layers hold "one query, one repo" but not "the right repo for this caller"; `kb_search` and
+   the export stay blocked, and the webhook-path consumer is the only one running. The
+   in-flight four-handler fix closes today's known leaks; it does not create the predicate.
+2. **The semantic false precedent has no structural kill** (§31.7) — bounded and decayed by
+   G4/G5/G6, not eliminated. Anyone extending the corpus to new content types re-inherits this
+   limit and must re-argue it.
+3. **`repo_full_name` as the scope key**: a repository rename/transfer silently splits a corpus
+   that outlives any PR session. Consistency with `repo_settings` and `github_pr_sessions`
+   argues for keeping it and inheriting any future rename fix those tables get — accepted, and
+   noted rather than hidden.
+4. **A new egress channel exists in mode B** — the embeddings provider receives customer-derived
+   text. Surfaced (§31.8), key policy decided for shadow; the wire-compatible adapter (§31.5)
+   is the named path to closing it entirely for self-hosters, and it is deferred, not dropped.
+5. **No browsable corpus tree, no git history of knowledge evolution, no edit-review workflow**
+   — the deliberate price of Postgres-as-truth (§31.3); the read-only export is the answer to
+   the navigation half, and the other halves are out of scope until someone actually asks.
+6. **Pre-durability plan loss is permanent** (§31.3) — recorded so nobody later files it as a
+   backfill bug.
+
+**Open verification items** (must be resolved before the relevant layer is credited):
+
+1. **RLS role reality**: whether the application role owns the knowledge tables in the real
+   deployments — if yes, `FORCE ROW LEVEL SECURITY` is required or layer 4 is decorative
+   (§31.4).
+2. **Embedding-provider batch limits and input truncation behavior** for the chosen vendor at
+   the §31.3 chunk sizes — assumed unremarkable, verified at adapter time with a contract test.
+
+**Deliberately deferred, each surfacing at its Step rather than silently defaulted:**
+
+- **The embeddings-leg engagement readout** (§31.6 item 1): Step 102 does not start until
+  Step 101's deterministic-arm baseline window has been read; the criterion is written on
+  Step 102's row. **What is NOT deferred: the kill branch's own deliverable, stated explicitly so
+  it is never confused with the engaged branch's.** If the readout kills engagement, Step 102 is
+  never executed — its entire deliverable becomes a recorded kill decision citing Step 101's
+  baseline readout (contestation rate, recency-fallback rate, whether contestations cluster where
+  path overlap was thin), and Steps 103-104 (both of which need Step 102's corpus tables) never
+  ship either. Phase 9's exit (§10) and the implementation plan's own milestone and Verification
+  entries are each written as a disjunction — mode A alone plus this recorded kill decision
+  satisfies them exactly as fully as a mode B flip does — precisely so none of those four places
+  silently requires the engaged branch as if it were the only outcome this readout could produce.
+- **Approved-plan corpus ingestion** (§31.3) — Step 99 makes the prose durable; rendering it as an
+  OKF concept, chunking it, embedding it, and serving it through `kb_search`/the export is a
+  later Step's scope, not named in Phase 9.
+- **Per-corpus embedding-model registry + background re-embed job** — deferred until a model
+  migration is actually needed; the (model, dims) recording (§31.5) is the enabling move taken
+  now.
+- **The wire-compatible embeddings adapter** (self-host/air-gapped mode B) — deferred; the port
+  shape already accommodates it.
+- **pgvector** — the named upgrade path, trigger ~20,000 chunks per repository (§31.5).
+- **`pg_trgm` on the lexical leg** — deferred until an identifier-recall deficit is demonstrated
+  (§31.5).
+
+### 31.10 Phasing
+
+Phase 9, Steps 99–104 (implementation plan). The minimal subset delivering the owner's decision
+is Steps 99 + 101 (durability, and the mode A pipeline with its buffer and measurement); Step 101
+alone is already production-useful — mode A gains its cross-PR memory. **Step 102 is conditional,
+not minimal**: it ships — the mode B index/retrieval that swaps into Step 101's proven pipeline —
+only if Step 101's own baseline readout (§31.6, §31.9) engages the embeddings leg; if that readout
+kills engagement, Step 102's entire deliverable is a recorded kill decision, and Phase 9 closes on
+mode A alone. Step 100 (entitlement) runs in parallel and gates Steps 103 (`kb_search`) and 104
+(export); both additionally wait on Step 102 actually shipping — they render/query Step 102's own
+corpus tables, so neither exists at all under a kill decision. Two prerequisites are in flight as
+independent changes and are dependencies, not Steps: the four-handler repository-authorization fix
+and G1's write-path sanitization (§31.4, §31.7).
