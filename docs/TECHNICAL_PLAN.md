@@ -322,8 +322,10 @@ These run as automated scenarios against a real (or provider-faked) stack. Minim
 11. Dirty working tree at relaunch → stash → checkout session branch → pop; zero lost user edits.
 12. Deploy rollout (rolling restart) → zero sessions marked failed.
 
-### 9.4 Shadow mode (phases 3-4)
+### 9.4 Shadow mode (phases 3-4, and §30 for the platform-wide capability)
 Intent classifier and code review run in shadow mode (log-only) on real traffic before activation; divergence report per decision. **Shadow mode is a permanent capability, not a one-time launch gate** (§18.5): activating a classifier or reviewer on a surface must never delete the shadow code path, its config, or its telemetry — the same mechanism is used again for every future model swap, prompt change, or new surface, not just the first activation. Skipping the shadow window on the reasoning that tests alone prove equivalence is not a default; it requires an explicit, documented exception.
+
+Two different mechanisms carry the word "shadow", and only one of them exists before Phase 8. The classifier's shadow is **decision-level** (Step 36): the decision is computed and logged while the deterministic path still acts — it needs no egress control at all. Running code review — or any other lane — "in shadow" against a repository Narvi must leave no trace in is an **egress property of the whole platform**, delivered only by §30's suppression machinery (Phase 8, Steps 90-98). Until that phase ships, "review in shadow" can only honestly mean reviewing repositories where posting is acceptable and treating every verdict as untrusted until a human has checked it (the Phase 5 exit as corrected below) — never log-only operation against a customer repository.
 
 ## 10. Implementation phases
 
@@ -351,7 +353,7 @@ Shared, tip-tracking image prebuilds (§19): re-keyed fingerprint, fetch-aware `
 
 **Phase 5 — Code review & automations (2 wks)**
 Full §8.2 code review; automations engine + sweeps; RWX provider + previews; uploads; secrets scopes; model catalog + Codex OAuth.
-*Exit: code review in shadow on live PRs; verdicts reviewed for precision.*
+*Exit: code review exercised end-to-end on live PRs of repositories where posting is acceptable (Narvi's own), every verdict reviewed for precision before being trusted. An earlier wording of this line — "code review in shadow on live PRs" — promised a capability this plan did not yet contain: log-only operation against a repository Narvi must leave no trace in requires the platform egress-suppression machinery of §30 (Phase 8), not just §9.4's precision-review discipline. Shadow evaluation on customer repositories is Phase 8's exit, not this one's.*
 
 **Phase 6 — Rollout (1-2 wks)**
 Config setup (automations, secrets, environments, settings, integrations); cohort-based rollout of sessions; operational dashboards and runbooks; SLO alerts wired; a per-surface user guide (web/Slack/Linear/GitHub), each surface documenting what it accepts AND its own honest negatives — a CI check ties every documented command to the `/contracts` route or classifier routing record (§18.4) that actually implements it, and the guide documents only shipped behavior, never aspirational text — otherwise a hand-maintained prose guide is just a copy of that same behavior with no mechanism keeping it in sync, which is exactly what the CI check exists to close.
@@ -360,6 +362,10 @@ Config setup (automations, secrets, environments, settings, integrations); cohor
 **Phase 7 — Web UI (~3-4 wks; see §12)**
 The SPA on the generated contracts, embedded in the control-plane binary.
 *Exit: all nine views in §12.2 built to the mockups (including the decision-inbox home, §16) + the UX items (§12.3); screenshot-level review against the mockups; `make dist` produces the single self-contained binary.*
+
+**Phase 8 — Platform shadow mode (Steps 90-98; see §30)**
+The zero-trace evaluation capability: egress-mode flag + fail-toward-suppress resolver; the GitHub transport gate, port decorator, and suppression ledger; outbox classification (fail-closed at boot) + epoch stamps on outbox rows and verdicts; OS-level UID isolation between sandbox-agent and the agent runtime; GitHub App fine-grained read-only installation tokens; the shadow credential mint with its cache/snapshot hygiene; the synchronous-ingress seams + the `net/http`/`os/exec` arch-test; git mirror + lane coherence (carrying the §30.9 mirror decision); the operator ledger view with "Activate" as graduation. Appended numerically after Phase 7, but in execution order it is the bridge between Phase 5's exit and any customer-facing activation: plugging Narvi into a repository it must leave no trace in is gated on this phase, regardless of Phase 6/7 status.
+*Exit: a dedicated evaluation deployment (`NARVI_SHADOW_MODE=1`, GitHub-only webhooks, credential-starved per §30.4) attached to a live customer repository completes real sessions end-to-end with zero customer-visible egress — reads only on the customer's audit surface — and the suppression ledger accounts for every would-have-been effect; per-repo Activate graduates a repo to live with §30.8's promotion fence applied.*
 
 ## 11. Working conventions for the implementing agent
 
@@ -2826,3 +2832,553 @@ Data-model threading, mirroring `model_id`'s own established pair (the same prec
 7. **`accountId` handling on refresh**: the pinned binary preserves stored `accountId` across
    refreshes rather than re-deriving it each time; the CP refresher does the same. A user
    switching ChatGPT workspaces re-links — no silent account migration.
+
+## 30. Platform shadow mode: zero-trace evaluation on live customer repositories (new capability)
+
+Problem this solves: the project's next gate is plugging Narvi into real customer repositories to
+observe everything it does internally — while leaving **zero trace** in the customer's repos and
+systems. Platform-wide, not just the review lane; a single leaked comment, label, branch, PR,
+commit status, Slack message, or Linear activity is total failure of the capability. The plan
+already treats shadow as a permanent capability at the *decision* level (§9.4/§18.5 — classifier
+decisions logged, not acted on) and already stages automation behind observed calibration (§21.2 —
+auto-merge armed only once contradiction data justifies it). This section is the same shape at
+platform scale: every customer-visible egress surface suppressed and recorded, an operator view of
+the record, and "Activate" as an informed graduation gesture. The bar is structural: guarantees a
+future contributor cannot silently un-make — never per-call-site discipline, which is exactly what
+an egress inventory of this codebase shows accreting (five mutating GitHub methods already live
+outside the port; a private Slack client already lives inside an inbound adapter).
+
+Provenance, because it shaped the design: this section synthesizes an exhaustive egress inventory
+of the codebase plus two adversarial passes. The second pass attacked the sandbox side
+specifically and **invalidated the first draft's sandbox story as written**; its corrections are
+folded into §30.4-§30.5 as requirements, not appended as caveats. On the fork that pass surfaced —
+a conditional v1 resting on a conjunction of careful mitigations, or structural isolation — the
+decision taken is maximal: **both** GitHub App fine-grained read-only installation tokens (§30.4)
+**and** OS-level process isolation between sandbox-agent and the agent runtime it supervises
+(§30.5). The codebase already concedes, verbatim, that these are the two missing pieces —
+`internal/adapters/inbound/httpapi/scmcredentials.go`'s own top doc comment, closing its
+review-session credential fix: "This does not claim to make a bash-capable review agent
+structurally incapable of ever calling GitHub's API directly with SOME credential (that would
+require OS-level process isolation between sandbox-agent and the agent runtime it supervises, or
+GitHub App fine-grained/read-only installation tokens — neither of which this codebase has
+today)". That concession is the honest framing for the two Steps that build them: they are not
+shadow-mode features, they are the codebase's own named debt, and shadow mode is the requirement
+that finally makes them non-optional.
+
+The unifying principle, stated once: **the possibility of writing is removed at the lowest
+available level (HTTP transport, credential capability), and the typed recording of what *would*
+have been written happens at the highest available level (port, notifier)**. Every layer below is
+an instance of it.
+
+### 30.1 The guarantee, its exact scope, and what it deliberately excludes
+
+**Covered — suppressed and recorded**: every write into a customer-visible system reachable
+through Narvi's own egress paths. Concretely: the 11 mutating GitHub operations (6 on
+`ports.SourceControl` — `CreatePR`, `UpdateFileContent`, `UpdatePRBody`, `RegisterPRStack`,
+`CreateBranch`, `MergePR` — plus 5 that exist only on the concrete `*githubapi.Adapter`, outside
+the port: `CreateReview` (`verdictpost.go:51`), `AddLabels`, `RemoveLabel`, `PostIssueComment`
+(`adapter.go:990`), `CreateCommitStatus` (`adapter.go:1032`)); the synchronous ingress-side
+replies (GitHub sign-in/not-authorized/plan-awaiting comments, the Slack ack and interactive
+responses, Linear's synchronous activities — §30.3); the customer-destined subset of the 19
+`ports.NotificationKind` outbox kinds (§30.2 — including the two hybrid kinds whose internal work
+passes through while their external writes are caught one layer down, at the decorated port); the
+sandbox's end-of-turn `git push` (§30.4); and
+`rwx_preview_dispatch` — a public preview build executing customer code is a trace on the RWX
+cloud and on the open internet, so it is suppressed structurally even though it is naturally
+starved in shadow (the SHA it would build is never pushed); reliance on upstream starvation alone
+is never accepted anywhere in this design.
+
+**Explicitly excluded — reads.** Clones, API GETs, and bot-token reads appear in the customer's
+own GitHub audit surface, and no design can hide them while genuinely observing a live repository:
+observation *is* reading. The guarantee is therefore stated as **zero writes, not zero audit-log
+entries** — excluded explicitly here rather than left ambiguous, so nobody discovers the gap in a
+customer conversation. The same applies to GitHub webhook delivery logs on the customer side:
+Narvi receiving a webhook is visible to whoever configured it.
+
+**Excluded as a named v1 residual — arbitrary sandbox internet egress.** No sandbox network
+policy exists in this codebase: `platform.Config`'s Modal egress proxy
+(`NARVI_MODAL_EGRESS_PROXY_URL`, `internal/platform/config.go`) routes only the *control plane's*
+HTTP client to Modal, and has nothing to do with the sandbox's own outbound traffic. An agent —
+or a prompt injection steering it — can reach any third-party service the repo references. This
+is precisely why the whole sandbox story rests on capability starvation (§30.4) and isolation
+(§30.5): with those in place, an unrestricted `curl` from the sandbox holds nothing that writes
+to the customer's SCM and cannot recover anything that does. The v1 guarantee is exactly: *no
+trace via Narvi's own egress paths, no SCM-write capability inside the sandbox, and no credential
+recoverable by the agent runtime*. Full network closure is provider-infrastructure work,
+agent-degrading, and out of v1 scope — revisitable as a deferred decision (§30.9).
+
+**Surfaced, not suppressed — customer LLM spend.** Provider credentials delivered to the sandbox
+(`providercredentialsdelivery.go`) are customer-scoped (BYOK, ChatGPT OAuth): a shadow evaluation
+burns real customer provider credit with zero output visible to them. This is not suppressed —
+the agent actually running *is* the thing being evaluated, and cutting the models would empty
+"observe everything" of meaning — but the cost is surfaced as a dedicated line in the shadow
+operator view (§30.6), with a deferred decision (§30.9) on forcing an org-level evaluation key
+for shadow runs. Unlike SCM credentials, provider credentials **must** keep being minted; the
+capability-starvation lever applies to `scm-credentials` only.
+
+### 30.2 Layered enforcement on the control plane's own egress
+
+**Layer 0 — the transport gate (non-negotiable).** Two verified facts make this layer possible
+with one seam: there is exactly **one** production construction site for the GitHub adapter
+(`cmd/control-plane/main.go:198`, `githubapi.New(nil, githubAPIBaseURL)`), and the package
+constructs no second HTTP client — every request rides the constructor-injected `a.httpClient`
+(the `doGet`/`doPost`/`doPut`/`doPatch` helpers at `adapter.go:346/525/1305/1345`, plus the two
+inline requests: `CreatePR`'s POST and `RemoveLabel`'s DELETE, `verdictpost.go:110`). A shadow
+`http.RoundTripper` installed *inside* the adapter therefore sees everything: in shadow, GET/HEAD
+pass; **every mutating verb is intercepted by default** — deny-by-default, no host allowlist for
+writes — recorded (method, path, decoded intention, payload) into the §30.6 ledger, and answered
+with a synthesized success. Why this layer is structural where the port is not: it covers all 11
+current mutating methods, it covers the synchronous comments the GitHub ingress posts through the
+same adapter instance (`internal/adapters/inbound/github/actornotauthorizedreply.go`,
+`planawaitingreply.go` — which bypass both the port and the outbox), and it covers **any future
+mutating method added to the concrete type**. Five such methods already exist outside the port
+today; a 12th compiles cleanly and is invisible to every typed layer — the transport is the only
+place that class of leak is contained.
+
+**Layer 1 — the port decorator (typed recording + compile-time tripwire).** An **explicit,
+non-embedded** decorator of `ports.SourceControl` (`internal/app/ports/sourcecontrol.go`)
+installed at the wiring site: each of the 6 writes becomes a typed "would-have-done" ledger entry
+with a coherent synthetic result (`CreatePR`'s `PRRef`, `MergePR`'s SHA — see §30.6 and §30.7 for
+why those results must be impossible to mistake for real ones). Because the decorator implements
+the interface explicitly — never by embedding — **adding a method to the port breaks the build**
+until the decorator handles it. The transport gate remains the net for everything the port never
+sees. The two layers are deliberate redundancy in one direction only: the decorator records with
+types and keeps internal state machines coherent; the transport guarantees nothing escapes even
+when the decorator's coverage is stale.
+
+**The constructor signatures change, because the current defaults are an attractive nuisance.**
+All four outbound constructors document a `nil → http.DefaultClient` convention
+(`githubapi/adapter.go:76`, `slackapi/client.go`, `linearapi/client.go`,
+`rwx/dispatchclient.go`). A developer writing `githubapi.New(nil, baseURL)` in a new package gets
+a working, gate-free instance invisible to every layer above. Those defaults are **removed**: the
+transport/gate argument becomes mandatory and non-nil, and the *live* (pass-through) variant is
+constructible only from the package that resolves the shadow flag (an unexported constructor — a
+capability token for egress). A new construction site cannot compile without the gate in hand,
+and the zero value fails closed.
+
+**The outbox seam lives in the consumer's constructor, not at the wiring line.** All asynchronous
+egress flows through one `map[ports.NotificationKind]ports.Notifier` consumed by
+`internal/app/outboxworker` (`NewBuilder`, `builder.go:63`). The obvious wrap point — the map at
+its `main.go` population site — is **wrong**, and the reason is a standing trap: the map is
+mutated *after* wiring (`rwx_preview_dispatch`/`github_preview_link` inserted conditionally at
+`main.go:1509-1510`, `blob_delete` at `:1523`). A wrap mid-wiring would exempt every later insert
+— `github_preview_link` would post a real `narvi/preview` commit status onto customer commits in
+shadow. Classification therefore happens **inside `NewBuilder`**, which receives the finished
+map and **refuses to start** if any registered kind lacks an explicit External/Internal
+classification. Insertion order in `main.go` stops mattering, and a 20th kind cannot ship
+unclassified. Go cannot force registry exhaustiveness at compile time; failing closed at boot,
+before any traffic, is the strongest available equivalent (the same reasoning §5.4 applies to the
+timeout hierarchy's invariant test). Classification: SUPPRESS for every customer-destined kind;
+**PASS-THROUGH is mandatory** for `blob_delete` (Narvi-internal storage hygiene — suppressing it
+leaks orphaned blobs forever; the trap in any blanket suppress-everything reading), for
+`sentinel_auto_fix` and `github_description_autofix` (hybrids: their `Deliver` performs internal
+work that must run — the child-session spawn in `internal/app/outboxworker/sentinelautofix.go` —
+while their external writes go through the decorated port), and for `linear_digest` (a deliberate
+dead-letter, unchanged).
+
+### 30.3 The synchronous ingress writes: honestly non-structural, with three required compensating controls
+
+Four families of synchronous writes live in webhook handlers, outside both the outbox and the
+port — and they fire precisely in shadow's target scenario, webhooks from a live customer system:
+
+1. **GitHub**: the sign-in / not-authorized / plan-awaiting replies
+   (`internal/adapters/inbound/github/actornotauthorizedreply.go`, `planawaitingreply.go`).
+   `CommentPoster` (`planawaitingreply.go:45`) is already a narrow interface — a recording
+   implementation plugs in without refactoring — and the §30.2 transport gate covers these by
+   construction (same adapter instance).
+2. **Slack ack**: a private `chat.postMessage` client inside the inbound adapter
+   (`internal/adapters/inbound/slack/ack.go`, `newAckClient` — with its own `nil →
+   http.DefaultClient` default), whose doc comment says it is deliberately outside the Notifier
+   abstraction. The single-instance property that holds for GitHub **does not hold for Slack**.
+3. **Slack interactive**: direct `PostEphemeral`/`UpdateMessage`/`OpenView` calls on a concrete
+   `*slackapi.Client` (`internal/adapters/inbound/slack/interactive.go`).
+4. **Linear**: synchronous `CreateResponseActivity`/`CreateThoughtActivity` on a concrete
+   `*linearapi.Client` (`internal/adapters/inbound/linear/webhook.go`, `identity.go`).
+
+**This perimeter cannot be made 100% structural in Go, and the plan says so rather than
+pretending.** A fifth future synchronous reply path — a new config field, a new inline client;
+`ack.go` is the in-repo precedent — is caught by no type system. Three compensating controls,
+all three required, none sufficient alone:
+
+- **The same single-instance property GitHub has, imposed on Slack and Linear**: one client per
+  provider, built via the mandatory-gate constructors (§30.2), mutation methods behind decorated
+  interfaces, and ingress packages losing the ability to construct their own clients
+  (`newAckClient` moves behind the injected seam). Linear caution: a verb-level transport guard
+  does not work there — everything is `POST /graphql` — so suppression is at the **client-method
+  level, never the transport**.
+- **A CI arch-test** (depguard/forbidigo): importing `net/http` or `os/exec` is forbidden outside
+  `internal/adapters/outbound` and the `internal/sandboxagent` tree — mechanical enforcement at
+  merge time, the closest thing Go offers to compile-time for this class.
+- **Credential starvation in the evaluation deployment** (§30.4): if no write-capable secret
+  exists in the process or the sandbox, an ungoverned future code path is harmless by
+  construction. This is the only control that survives the 12th caller, the 6th notifier, and the
+  developer who imports `net/http` anyway.
+
+### 30.4 Sandbox capability: the read-only credential is the sole structural guard against sandbox SCM writes, and it becomes a GitHub App installation token
+
+**The model is sound by construction; the lever did not exist until now.** The mint
+`POST /sessions/{id}/scm-credentials` (`internal/adapters/inbound/httpapi/scmcredentials.go`) is
+the sandbox's only source of SCM credentials, verified: `SESSION_CONFIG` carries none
+(`contracts/gen/go/sessionconfig/sessionconfig.go` — `SandboxToken`, `SessionId`,
+`ControlPlaneWsUrl`, `Gen`, `Repos`; no git credential), nothing persists to `.git/config` (every
+git op passes the helper per-invocation via `-c credential.helper=…`,
+`internal/sandboxagent/gitclone/clone.go`; `RunStore` is a deliberate no-op), and the provider
+spec transports none. What the sandbox does not hold, it cannot use — robust even against a
+prompt-injected agent driving the GitHub API directly. But until this chantier, "refuse to mint
+write" and "refuse to mint at all" were the same thing: both mintable credentials are
+write-capable (the creator's OAuth token, full `repo` scope — `scmcredentials.go:497` — and the
+bot token that posts reviews), and the same mint serves the **clone**. Starving the mint breaks
+"Narvi must actually run".
+
+**The lever is substitution, and the substituted credential is a GitHub App fine-grained
+read-only installation token** — the decision taken, over the smaller operator-provisioned
+fine-grained-PAT stopgap the design also weighed (and over a CP-side git smart-HTTP proxy, the
+fallback if a customer can only ever provide OAuth). App plumbing does not exist in
+`internal/platform/config.go` today and is its own Step: App id + private key in config,
+installation-token minting scoped `contents:read` (+ `metadata:read`), short-lived and
+auto-refreshed. In shadow, the mint returns this token: the clone succeeds, and a push — from any
+holder, through any path, including paths this codebase has never seen — is refused by GitHub
+itself. Enforcement by capability closes at the root the entire residue class the adversarial
+pass found: a token that cannot write is equally harmless in a process environment, a disk cache,
+a baked image, or a restored snapshot.
+
+**Four corrections from the adversarial pass, each a hard requirement of the Step, none a
+recommendation:**
+
+1. **The substitution is a single server-side interception at the top of `ScmCredentials`,
+   covering both mint branches.** The handler returns write-capable credentials on two distinct
+   paths — review sessions get the bot token (`scmcredentials.go:403`), everything else the
+   creator's decrypted OAuth (`:497`) — and review sandboxes are exactly the common shadow
+   workload; substituting only the obvious creator branch would hand every shadow review sandbox
+   the fully write-capable bot token. And the interception must be **server-side only**: the
+   same-UID agent (until §30.5 lands) can recover the sandbox bearer from `/proc` and POST the
+   mint endpoint directly, so any client-side substitution is decorative. A dedicated test
+   asserts a review session in shadow receives a read-only credential.
+2. **The image-build path must never hold a write token — this is an in-repo bug, not an
+   external-service caveat.** `gitclone.CleanForImageBuild`
+   (`internal/sandboxagent/gitclone/sync.go:941`), the pre-snapshot cleanup for `BootModeBuild`,
+   cleans the repo trees under `/workspace` only — it never touches the credential cache, and by
+   the time it runs the clone has already written the minted token to disk
+   (`internal/sandboxagent/credentials/get.go`, `cache.go`). If the provider image captures the
+   filesystem, the token is baked into the shared image every future session reuses — shadow ones
+   included; a live-mode cross-session hygiene bug independent of shadow. Fix: force the
+   read-only mint for `BootModeBuild` (a build only needs read), **and** purge
+   `boot.Config.CredentialCacheDir` inside `CleanForImageBuild` before the snapshot — the
+   read-only mint is the primary fix, the purge defense-in-depth.
+3. **Snapshots must never contain a token, enforced at snapshot mint time.** The restore path
+   (`internal/app/sessionactor/dispatch.go`, `RestoreFromSnapshot`) restores the full filesystem,
+   and `freshCacheHit` (`credentials/get.go:47`) then serves a cached credential **without ever
+   calling the mint** — a write token cached during a live session and captured in a snapshot
+   arrives in a shadow session with no control-plane cooperation at all (gen/token-hash rotation
+   fences the CP bearer, not the GitHub token). The primary fix is purging the credential cache
+   at snapshot **mint** time (the sandbox side of the snapshot flow, `HandleSnapshot` /
+   `httpapi/snapshotmint.go`'s counterpart), so no snapshot ever contains a token regardless of
+   how it is later restored. A shadow bit recorded on each snapshot row, with restore refused on
+   mismatch at the store/dispatch level, is kept only as fail-closed defense-in-depth — and its
+   polarity is explicit: **an absent bit (every pre-existing snapshot) is treated as live and
+   restore into a shadow session is refused** — the same fail-toward-suppression polarity §30.8
+   imposes on the flag itself. A boot-time cache purge in all modes is also required, but it is
+   *not* load-bearing on its own: whether the provider's restore re-runs the boot sequence at all
+   is the open Modal warm-resume question (§30.9), and nothing here may rest on the unverified
+   answer.
+4. **Scope introspection, fail-closed, at boot and at mint.** Nothing in
+   `internal/platform/config.go` validates any token's scope today. An operator pasting a classic
+   `repo`-scoped credential into the shadow slot would silently re-arm every sandbox. The
+   evaluation deployment refuses to boot, and the mint refuses to serve, unless the credential's
+   introspected scope (`X-OAuth-Scopes` / the App installation's permissions) is read-only. An
+   ops mistake becomes a loud fail-closed, never a quiet regression.
+
+**The WS-push gate is consistency, not security — stated plainly because the first draft got it
+wrong.** Gating `sendPushBestEffort` (`internal/app/sessionactor/pushpr.go`) only stops the
+control plane from *asking* the sandbox to push. `HandlePush` in `cmd/sandbox-agent/main.go` runs
+`git push` with whatever the helper mints, and a same-UID agent needs no invitation: it can run
+the credential-helper subcommand itself, POST the mint directly with a `/proc`-recovered bearer,
+or read the cache file. The per-turn push decision (§30.8) exists so the turn's push/PR/preview
+trio resolves one mode atomically and the ledger gets its entry — UX and state coherence. The
+security is the read-only token (this section) and the UID boundary (§30.5), nothing else.
+
+**The invariant over the sandbox-facing API, stated because the adversarial pass verified it
+holds today and nothing keeps it true tomorrow**: *no sandbox-bearer endpoint may perform or
+enqueue an external SCM write except through the suppressed path.* The nine bearer endpoints
+(`cmd/control-plane/main.go:619-690`) were each traced: `scm-credentials` is the lever above;
+`review/verdict` performs **no synchronous external write** — the bot token in its request path
+serves only a diff *read*, while the actual `CreateReview` + label sync happen at outbox delivery
+(`githubapi.NewVerdictNotifier`, wired at `main.go:1422`) — so suppressing the `github_verdict`
+kind fully closes it, provided §30.2's fail-closed-at-boot classification stands; snapshot,
+provider-credentials, uploads (mint/complete/content), workflow/step-outcome and
+turn/epistemic-outcome touch internal state and Narvi-owned blob storage only.
+`provider-credentials` returns customer LLM credentials — an exfiltration concern, closed by
+§30.5's bearer starvation, not an SCM write. New bearer endpoints inherit the invariant as a
+review obligation plus the outbox classification's boot-time check for anything they enqueue.
+
+**The demotion TTL window, documented rather than hidden**: a write credential minted just before
+a live→shadow flip stays served until `ScmCredentialTTL` (15 min, `platform/timeouts.go`) plus
+the helper's cache buffer elapse, and the underlying OAuth token itself never expires on that
+clock. Demotion therefore **must terminate (or respawn) every sandbox of the repo** and cancel
+in-flight push signals. Under shadow-by-default-at-onboarding (§30.8), this window exists only
+for demotion of a formerly-live repo — a fresh evaluation's sandboxes have never held write.
+
+### 30.5 OS-level isolation between sandbox-agent and the agent runtime
+
+**The fact that reframes the whole sandbox analysis: there is no privilege boundary today.**
+`supervisor.Spawn` sets `SysProcAttr{Setpgid: true}` and nothing else
+(`internal/sandboxagent/supervisor/supervisor.go`) — no `Credential`, no UID change, no user
+namespace. The agent runtime, and any shell it spawns, runs as the **same UID** as sandbox-agent.
+Consequences, each verified: the env-strip in `opencodeproc/spawn.go:72`
+(`EnvWithout(SessionConfigEnvVar)`) is cosmetic — the value still sits in sandbox-agent's own
+`/proc/<pid>/environ`, one read away, along with the sandbox bearer; and the credential cache
+(`/tmp/narvi-credentials`, mode 0600, placed "outside `/workspace`" —
+`internal/sandboxagent/boot/config.go`) is a fictional boundary against a same-UID shell.
+
+**The decision: the agent runtime runs under a different UID (and, where the substrate allows, a
+user namespace) from sandbox-agent.** `supervisor.Spawn` grows a `Credential` in its
+`SysProcAttr`; the credential cache and sandbox-agent's own environment become unreadable to the
+runtime by kernel enforcement, not by placement convention. What this buys that the read-only
+token does **not**: the token closes SCM writes, but an injected agent could still exfiltrate the
+sandbox *bearer* — and with it drive every sandbox-bearer endpoint directly (§30.4's nine,
+`provider-credentials` — the customer's LLM credentials — included) — and read whatever the SCM
+cache holds. UID isolation
+starves the runtime of the bearer and the cache in every mode, live included; it is a
+platform-wide hardening that shadow merely makes non-optional, exactly as the
+`scmcredentials.go` concession frames it.
+
+Scoping discipline for the Step that builds it: inventory what the runtime *legitimately* uses
+and preserve exactly that — the workspace tree, its own injected per-turn provider credential
+(inherent: the runtime must call the LLM; isolation cannot and does not protect what the runtime
+is handed by design, which stays governed by §30.1's surfaced-spend posture), and the
+deliberately agent-facing loopback endpoints (Step 70's `127.0.0.1` review-cost-budget server —
+loopback stays shared; the network namespace is not the boundary being drawn). Anything that
+works today only by same-UID accident — reading the cache, reading `/proc/<sandbox-agent>`,
+invoking the credential-helper subcommand against the cache — is the attack surface being
+closed; if any of it turns out to be a real dependency of a legitimate agent behavior, that is a
+design smell to fix at the source, never a reason to widen the boundary back. Residuals stated:
+the runtime still shares the network namespace (arbitrary egress remains §30.1's residual, now
+empty-handed), and kernel-level escalation is the substrate's concern (the provider's isolation
+layer), not this Step's.
+
+### 30.6 The recording model: what a suppressed effect becomes
+
+Recording is the *product* of shadow mode — it is what the operator evaluates. The load-bearing
+observation: most of "observe everything" already exists and keeps working untouched.
+`review_verdicts`, `review_findings`, `events`, `artifacts`, `auto_approval_outcomes`
+(migrations 000067, 000046, 000008, 000012, 000070) are written in shadow exactly as live and
+render in Narvi's own UI with zero new work. The ledger covers only the **suppressed delta**.
+Three writes, one read:
+
+1. **Outbox rows**: the row already carries the full payload (migration 000010; never purged) —
+   it *is* the record. Shadow adds a `suppressed_in_shadow` mark **stamped at enqueue, in the
+   enqueuing transaction** (one column on `OutboxStore.Create` — a single choke point for every
+   enqueue site), plus the terminal mark when the worker "delivers" it into the ledger instead of
+   the world. The enqueue-time stamp is a §30.8 epoch requirement, not an implementation
+   convenience. A flag column, deliberately not a new status enum — the worker's claim/backoff
+   state machine stays untouched.
+2. **Direct SCM writes**: a new append-only `shadow_scm_writes` table (operation,
+   owner/repo/target, redacted spec JSONB, synthetic result JSONB, `session_id` `ON DELETE SET
+   NULL` — the `review_verdicts` precedent: history outlives the session — `correlation_id`,
+   `created_at`), written by the port decorator with **record-or-fail** semantics: suppression
+   returns success only if the insert commits. A suppressed-but-unrecorded effect is a contract
+   violation, and failing loudly is safe — nothing external happened. Specs enter through
+   **record types that carry no `Token` field**: today every write spec carries a plaintext
+   token (`ports/sourcecontrol.go`'s spec types; `decryptCreatorGitHubToken`'s documented
+   call-site sprawl, `sessionactor/githubtoken.go`), and excluding the credential from the ledger
+   is a compile error, not a redaction pass. The transport gate (§30.2 layer 0) records what it
+   intercepts into this same table; the shadow mint records its substitution the same way, and a
+   mint refused by the §30.4(4) scope check records the refusal. Medium-term, an opaque secret
+   type serializable only by the gated transport shrinks the plaintext surface further — noted,
+   not scoped here.
+3. **Timeline**: each ledger insert appends an `events` row (`shadow_egress_suppressed`, payload
+   = ledger id + summary) so suppressions appear inline in the session workspace the operator
+   already watches. `events` is surface, never durable truth (it cascades with the session);
+   the ledger rows are the record.
+
+**Synthetic results are a hard requirement with one open question.** A suppressed `CreatePR` must
+return a `PRRef` so internal state advances (the PR artifact record, `github_pr_sessions`). The
+adversarial finding: realistic-looking synthetic refs are **durable poison** —
+`isPlatformAuthored` is a pure string match over artifact URLs
+(`internal/app/decisioninbox/aggregate.go`; same pattern in the description-autofix path), and
+GitHub's PR counter is monotonic, so collision between a synthetic PR number and a real future
+customer PR #N is a guaranteed-eventual event — after which live auto-merge could act on a
+customer PR Narvi never authored. Therefore: **negative numbers and a non-https URL scheme
+(`shadow://…`), imposed at the type level**, so no synthetic ref can ever match a real GitHub URL
+and any accidental use against the real API fails loudly. (The remaining question — how far the
+synthetic scheme propagates into downstream lanes — is Step 97's chain-synthesis decision, §30.9.)
+
+**The operator view is a read model, not new state** (§16.2's own rule). The in-plan precedents
+are exact: §18.5's divergence metric + "Activate" for the classifier, §21.2's calibration stats
+displayed beside the auto-merge toggle so arming is "an informed decision, not a leap of faith".
+Platform shadow is the same form at scale: a repo card in Settings → Environments (where the
+sentinel-autofix and auto-merge toggles already live), a ledger summary (N comments suppressed,
+M PRs, K pushes refused, LLM spend, links into sessions), and **Activate as the graduation
+gesture** — which applies §30.8's promotion fence. The read is a UNION over marked outbox rows +
+`shadow_scm_writes`. Access is role-gated (admin/maintainer, the §13.3 audit-view threshold): the
+ledger contains customer code at rest. A flag flip is an `audit_log` entry; individual
+suppressions are deliberately not (no human actor; they would drown the view). Retention/PII
+policy for ledger content is a deferred decision (§30.9); the cheap enabling move — a separate
+heavy-content column so a later null-out doesn't rewrite the table — is taken at schema time.
+
+### 30.7 State coherence: where "return synthesized success" would lie
+
+Suppression must not wedge or corrupt the state machines that consume write results. Each case
+below replaces a naive success with something honest:
+
+**Auto-merge.** A suppressed `MergePR` returning fabricated success is a false-record generator:
+the worker would log "merged", write an `audit_log` row with an invented SHA, and
+`RecordConfirmed` would feed fake confirmations into the §21.2 contradiction-rate metric — the
+very instrument that justifies arming auto-merge for real. Meanwhile the PR (in a demotion
+scenario, a real one) stays open and re-candidates every tick. Instead the decorator returns a
+**typed `ShadowSuppressed` sentinel** — not an error, not success — which the auto-merge worker
+and the human merge handler both map to "recorded, not merged": a distinct audit action
+(`shadow.would_have_merged`), no `RecordConfirmed`, no `Merged: true` to the UI, and shadow
+outcomes excluded from the calibration read model by the same query-level stamp §30.8 requires
+of verdicts.
+
+**Sentinel auto-fix.** Per-write suppression composed naively is incoherent: `CreateBranch`
+suppressed → the fix branch never exists on the remote → the child session, pinned to that
+branch, fails its `git clone --branch` (`gitclone/clone.go`) → the one-shot claim
+(`FixChildSessionID`) wedges the lane permanently, and `markFindingsFixPending` has already
+flipped the findings to `fix_pending`, which also kills the *manual* apply-suggestion action
+(§17.3). The evaluator would conclude the sentinel lane is broken — a falsified evaluation. Two
+coherent resolutions exist and the choice is the §30.9 mirror decision: with a Narvi-owned git
+mirror (a bare repo per session), the branch is created on the mirror and the child session
+clones and pushes against it — the lane actually runs, end-to-end observable; without it, the
+lane short-circuits **before** the claim (one ledger entry: "would have created the branch and
+spawned the fix session"; findings stay `open`).
+
+**Apply-suggestion** (`httpapi/reviewfindings.go`). Naive suppression marks the finding
+`fix_applied` with a SHA that exists nowhere, and §24's re-review then re-detects the same
+defect on the unchanged real head — the system contradicts itself and duplicates findings.
+Instead: an explicit "recorded, not committed" response (SHA in the shadow scheme) and a
+dedicated `fix_recorded` status that re-review ingestion treats as still-open (an update, never
+a contradiction).
+
+**Chains closed by GitHub's echo.** With no real PR, GitHub never sends `pull_request` webhooks
+for Narvi's own PRs → no `github_pr_sessions` row → review-of-own-work, auto-approval,
+auto-merge, description-autofix, and handoff are **structurally unobservable** in shadow. Either
+the internal trigger is synthesized from the suppressed `CreatePR` record (create the
+`github_pr_session` on the shadow ref, so downstream lanes exercise internally — Step 97), or
+the plan documents that shadow validates single hops only. That choice is deferred (§30.9), but
+the default posture while it is unresolved is the honest one: no downstream-lane claims in the
+operator view beyond what actually ran.
+
+**Plan approval** is coherent by construction: the suppressed Slack message means
+`SetSlackMessageRef` (`internal/app/outboxworker/planslacknotifier.go`) never persists — no
+buttons exist to press — and nothing wedges, because decisions flow through the web REST path
+(`httpapi/decideplan.go` serves Slack/Linear/web identically). The shadow operator decides from
+Narvi's own UI, which is precisely the observation channel shadow keeps open.
+
+### 30.8 The flag: granularity, resolution, fail direction, and epoch discipline
+
+**One authority: Postgres.** `repo_settings.live_egress_enabled bool NOT NULL DEFAULT false`,
+read per call at each egress seam through the resolver package. The polarity is the entire
+point: the codebase's established repo-settings read idiom treats `ErrNoRows` *and any read
+error* as `false` (`sessionactor/reviewretrigger.go`'s auto-retrigger read;
+`appreviewverdict.AutoMergeEnabled`'s identical shape, `internal/app/reviewverdict/config.go`).
+With `live_egress_enabled`, that idiom yields **suppress-on-error for free**, and every newly
+connected repo starts in shadow — which is exactly the onboarding story this capability exists
+for. The inverted spelling (`shadow_mode bool`) would resolve a Postgres blip toward LIVE — the
+forbidden direction. A dedicated test pins the resolver to "suppress" on `ErrNoRows`, on
+arbitrary error, and on an absent row.
+
+**A deployment-level master switch**, `NARVI_SHADOW_MODE` (the `EpistemicCheckDefault`
+env-pattern), forces shadow for the whole process; effective mode = `platformShadow OR NOT
+live_egress_enabled`. Its sharp edge is named: the switch is per-process and the fleet is
+multi-pod (the outbox's `FOR UPDATE SKIP LOCKED` claim exists precisely because of that), so a
+rolling restart that changes it produces a mixed fleet in which a still-live pod really delivers
+rows a shadow pod enqueued. It is therefore reserved for **dedicated evaluation deployments**
+and documented "never flip on a running fleet"; the per-repo Postgres flag remains the
+transactional authority every pod sees. There is **no per-session "go live" override** — that
+would reintroduce the disciplinary leak this design exists to remove; a per-session
+*force-shadow* override (monotone toward suppression) is admissible later.
+
+**Epoch discipline — the unifying correction.** The system takes its *decisions* at
+enqueue/record time but the first draft read the flag at *effect* time; every lifecycle race
+reduces to that gap. The rule: **stamp the effective egress mode onto every durable decision
+artifact, and suppress if the stamp OR the current flag says shadow** — monotone toward
+suppression, in both directions. Concretely:
+
+- **Outbox rows born in shadow are terminally shadow** (the enqueue-time stamp, §30.6): retries
+  reaching ~35 minutes and documented indefinite backlogs mean a `github_verdict` or
+  `sentinel_auto_fix` row pending across a shadow→live flip would otherwise materialize as a
+  real review, branch, and PR. A born-shadow row can only end in the ledger. Rows born live and
+  delivered after a live→shadow demotion are suppressed by the delivery-time check —
+  suppress-wins both ways. The record-or-fail → backoff → retry-after-flip race is closed by the
+  same enqueue stamp.
+- **Shadow-era verdicts must never arm auto-merge after promotion.** The auto-merge worker's
+  candidate query (`ListLatestAutoApproved`, `internal/app/automerge/worker.go:111`, 7-day
+  lookback) has no way to distinguish a verdict that was never visibly delivered. Every
+  `review_verdicts` row is stamped with its egress mode at write time and the exclusion lives
+  **in the query, never at call sites**; promotion additionally sets a fence — only verdicts
+  after the promotion timestamp are candidates. The same stamp gates re-trigger and the §21.3
+  digest (a daily rollup would otherwise reveal phantom reviews to the customer's channels).
+- **The push/PR pair resolves its mode once per turn.** Push and `CreatePR` are two separate
+  async stages (`sessionactor/pushpr.go`); a flip between them yields either an orphan branch in
+  a customer repo or a live `CreatePR` on a never-pushed branch. The mode is resolved at push
+  send, persisted with the signal, and `createPRBestEffort` honors the persisted decision —
+  never a re-read. A flip takes effect at the next turn boundary, atomically for
+  push+PR+preview. (Whether a mid-session flip should instead apply only to sessions created
+  after it is a deferred semantic, §30.9.)
+- **Snapshots crossing modes** are §30.4(3)'s fail-closed bit; **demotion with live sandboxes**
+  is §30.4's mandatory termination; **live Slack buttons surviving demotion** (an Approve click
+  after the flip is a synchronous `chat.update` into the customer workspace) are covered by the
+  §30.3 interactive-client seam resolving the mode per request — with an optional last live act
+  at demotion: `chat.update` pending plan messages to remove their buttons.
+
+**Promotion (shadow→live)** is the safe direction on the sandbox side — a shadow repo's
+sandboxes have never held more than read-only. On the state side it requires the auto-merge
+fence above plus explicit quarantine of shadow-era artifacts (synthetic refs must never become
+live-actionable); Activate refuses, or explicitly quarantines, while shadow-era rows exist
+unhandled for the repo.
+
+### 30.9 Residual limits, open verification items, and decisions explicitly deferred
+
+**Open verification items** (unverifiable from this repo; must be resolved before the guarantee
+is declared complete):
+
+1. **Modal snapshot semantics.** The provider API is invented in-repo
+   (`internal/adapters/outbound/modal/wire.go`); whether restore is a cold re-boot (boot-time
+   purge runs) or a warm resume (it never does) is **load-bearing** for any boot-time cache
+   purge. The design does not rest on the answer — §30.4(3)'s snapshot-mint-time purge is the
+   control that holds either way — but the question must be answered before boot-time purging is
+   credited with anything.
+2. **The external image-build service.** Whether its own clone credential leaves residue in
+   baked images is out of this repo's reach; closing it is a contractual/audit requirement on
+   the service, tracked with the §30.4(2) in-repo fix but not satisfied by it.
+3. **Sandbox network egress** remains §30.1's named v1 residual: assumed, not omitted.
+
+**Decisions deliberately left open** — each is represented here so it surfaces at its Step
+rather than being silently defaulted; none is resolved by this section:
+
+- **Git mirror in v1** (gates Step 97's shape). For: without it the ledger loses its most
+  important entry — a suppressed push means no `push_complete`, so `createPRBestEffort` never
+  runs and no "would have opened PR …" is ever recorded; every turn surfaces a `push_error` that
+  makes Narvi look broken to the very evaluator shadow exists to convince; and the sentinel-fix
+  lane only runs coherently against a mirror (§30.7). Against: a real piece of per-session git
+  infrastructure. The fallback (short-circuit before the claim + documented single-hop
+  validation) is viable and smaller.
+- **Chat-originated triggers in shadow**: suppressing acks leaves Narvi silent in a real
+  workspace (confusing to anyone testing it there); refusing/ignoring Slack- and
+  Linear-originated triggers in shadow is cleaner but narrows the evaluation. One must be
+  chosen before Step 96 ships its Slack/Linear seams.
+- **Customer LLM spend**: accept as inherent (surfaced per §30.6) or force an org-level
+  evaluation key for shadow runs.
+- **RWX preview in shadow**: the public dispatch is suppressed either way (§30.1 — a public
+  preview URL is a trace); the open choice is whether an internal, non-public rendering ships as
+  an evaluator feature (a new product surface) or previews are simply absent in shadow.
+- **Ledger retention/PII** (customer code at rest): retention window, null-out policy, and the
+  visibility threshold (admin-only vs maintainer+). The schema-time enabling move is taken
+  (§30.6); the policy is not.
+- **Downstream-chain synthesis vs single-hop validation** (§30.7's echo problem — Step 97's
+  second half).
+- **Mid-session flip semantics**: next-turn-boundary (the design as written, §30.8) vs
+  applies-only-to-new-sessions.
+
+### 30.10 Phasing
+
+Phase 8, Steps 90-98 (implementation plan). The minimal *safe* subset is Steps 90-95: a
+dedicated evaluation deployment (`NARVI_SHADOW_MODE=1`, credential-starved, GitHub webhooks
+only) can then be attached to a real customer repository — the transport gate, the outbox
+classification, the read-only installation token, and the UID boundary close every path
+reachable in that configuration, and the ledger records. Step 96 becomes **mandatory the moment
+a customer's Slack or Linear is connected**. Steps 97-98 are what make the evaluation *good*
+rather than merely safe: lanes observable end-to-end, and a product surface an operator can
+actually evaluate from and graduate with.
