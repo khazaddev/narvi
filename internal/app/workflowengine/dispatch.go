@@ -101,14 +101,22 @@ func passthrough(callerPrompt string, callerModelID, callerEffort *string) Resol
 //     turn (§25.8: single-step, completes immediately once its turn
 //     finishes) reaches this branch every single time.
 //  2. A run IS running, and its own live (running/awaiting_decision)
-//     step-run's status is 'awaiting_decision': the built-in plan
-//     workflow's own revise loop (step 1's needs_fix self-loop, migration
-//     000057's seed) -- or, more generally, any HITLAfter-gated step
-//     waiting on a human. Step 56 owns the actual decision/re-execution
-//     machinery; creating a new attempt here without it would half-
-//     reimplement plan mode's own dispatch ahead of scope. Resolves that
-//     SAME live step's PromptTemplate/ModelID (inert for every built-in),
-//     Tracked=false.
+//     step-run's status is 'awaiting_decision': a HITLAfter-gated step
+//     waiting on a human. No BUILT-IN workflow reaches this case as of
+//     migration 000088_plan_builtin_passthrough (Step 56's own corrective
+//     follow-up, §25.8/§25.9: the built-in plan workflow's original
+//     hitl_after step 1 + needs_fix self-loop, migration 000057's seed,
+//     was a genuine design incoherence -- it silently double-parked a
+//     workflow-level HITL gate against classic plan mode's own
+//     pre-existing, unconditional persisted-state awaiting-plan gate on
+//     every plan-mode session, so it was corrected to a single-step
+//     passthrough, matching review/request) -- this case now exists
+//     purely for a CUSTOM (non-built-in) workflow definition's own
+//     hitl_after step, e.g. one authored via the Phase 7 canvas editor
+//     (§25.12). Step 56 owns the actual decision/re-execution machinery;
+//     creating a new attempt here without it would half-reimplement it
+//     ahead of scope. Resolves that SAME live step's PromptTemplate/
+//     ModelID (inert for every built-in), Tracked=false.
 //  3. A run IS running, and its own live step-run's status is 'running'
 //     (its own turn has not finished yet -- reachable only via
 //     CreateTurnPolicy.AlwaysQueue, GitHub bot ingress's own
@@ -216,11 +224,13 @@ func resolveWithinRunningRun(ctx context.Context, workflows *postgres.WorkflowSt
 		return passthrough(callerPrompt, callerModelID, callerEffort)
 	}
 
-	// Whether awaiting_decision (a HITL gate, e.g. the plan lane's own
-	// revise loop) or running (its own turn still in flight, only
-	// reachable via AlwaysQueue) -- either way this deliberately creates no
-	// new attempt (see this function's own doc comment above): resolve the
-	// SAME step's template/model/effort, untracked.
+	// Whether awaiting_decision (a HITL gate -- as of migration
+	// 000088_plan_builtin_passthrough, reachable only via a CUSTOM
+	// workflow's own hitl_after step, never a built-in; see this
+	// function's own doc comment above) or running (its own turn still in
+	// flight, only reachable via AlwaysQueue) -- either way this
+	// deliberately creates no new attempt: resolve the SAME step's
+	// template/model/effort, untracked.
 	return applyStep(ctx, step, callerPrompt, callerModelID, callerEffort, false, pgtype.UUID{})
 }
 

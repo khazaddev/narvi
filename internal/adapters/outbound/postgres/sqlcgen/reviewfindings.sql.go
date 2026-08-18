@@ -240,6 +240,7 @@ const markReviewFindingFixPending = `-- name: MarkReviewFindingFixPending :one
 UPDATE review_findings
 SET status = 'fix_pending', fix_child_session_id = $4
 WHERE repo_full_name = $1 AND pr_number = $2 AND identity_hash = $3
+  AND status IN ('open', 'fix_pending')
 RETURNING id, repo_full_name, pr_number, identity_hash, sentinel_kind, severity, file_path, line, description, suggested_fix, status, rebuttal_text, rebutted_by, rebutted_at, fix_child_session_id, fix_pr_number, first_seen_at, last_seen_at
 `
 
@@ -253,7 +254,22 @@ type MarkReviewFindingFixPendingParams struct {
 // Set the moment the sentinel-auto-fix outbox worker claims this finding
 // for a child session (§17.2) -- suppresses the manual apply-suggestion
 // action from this point on (§17.3: "the two remediation paths are
-// mutually exclusive per finding").
+// mutually exclusive per finding"). Guarded on status IN ('open',
+// 'fix_pending') -- audit fix, mirrors MarkReviewFindingFixOpen's own
+// identical "WHERE ... AND status = ..." discipline immediately below:
+// internal/app/outboxworker's own sentinelAutoFixNotifier.Deliver
+// (sentinelautofix.go) now RETURNS a genuine per-finding store failure
+// here instead of discarding it, so outboxworker's builder.go retries the
+// whole delivery -- and that retry re-runs this SAME write for every
+// finding in the payload, including ones an earlier, partially-failed
+// attempt already reached successfully. Re-running with status still
+// 'fix_pending' is a harmless no-op (same values rewritten); WITHOUT this
+// guard, re-running for a finding that has SINCE progressed past
+// fix_pending (fix_open/fix_merged/fix_applied -- e.g. the fix session
+// finished and its PR already opened before the retry ran) would silently
+// regress it back to fix_pending. With the guard, that case is instead a
+// harmless pgx.ErrNoRows no-op, exactly like a finding whose row has
+// since disappeared entirely.
 func (q *Queries) MarkReviewFindingFixPending(ctx context.Context, arg MarkReviewFindingFixPendingParams) (ReviewFinding, error) {
 	row := q.db.QueryRow(ctx, markReviewFindingFixPending,
 		arg.RepoFullName,

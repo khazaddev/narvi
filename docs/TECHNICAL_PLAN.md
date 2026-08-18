@@ -1144,9 +1144,19 @@ classifier and the review's single-completion calls, never an agentic turn with 
 - **review**: one step, `ModelID: nil`, prompt = today's unchanged text, no HITL. `Shippable`
   (§21.2) stays a separate axis, consumed after the step completes by the existing auto-approval
   machinery — never routed through `StepOutcomeStatus`.
-- **plan**: two steps (plan → build), HITL after step 1 reusing `ApproveKeywords`/`RejectKeywords`/
-  `RevisePrefix` unchanged (`internal/domain/plan/verdict.go`), a `needs_fix → same step` loop
-  explicitly exempted from the circuit breaker.
+- **plan**: one step, passthrough, no HITL of its own — **classic plan mode (Steps 37/38) remains
+  the sole plan-approval authority**. This section previously specified two steps (plan → build)
+  with a workflow-owned HITL gate after step 1; that shipped, and a Phase 5 audit found it put
+  *two* approval mechanisms on the same session. `workflow.LaneFor` returns `LanePlan` exactly when
+  `mode == intent.ModePlan` — i.e. precisely when plan mode's own `plan_status`/`decideplan.go`/
+  `plan.MatchVerdict` gate is already running — so the workflow gate's own `approve` verdict
+  dispatched a build turn through `workflowengine.dispatchNextAttempt`, which inserts a turn
+  directly and deliberately skips `createTurnLocked`'s checks, including §23.2's persisted-state
+  awaiting-plan gate. The plan built-in is therefore now a single passthrough step (migration
+  `000088`), matching review/request, and honoring §25.4's "zero-config default = today's exact
+  behavior" rule. Workflow-driven plan HITL is deferred until the Phase 7 canvas editor makes
+  custom workflows user-facing; the `hitl_before`/`hitl_after` mechanism and its `/decide` endpoint
+  remain in place for any non-built-in definition that opts into them.
 - **request**: one step, passthrough, no behavior change.
 
 The Gemini→Opus→Sonnet→Codex example is a non-built-in workflow bound as the **global** Request-lane
@@ -1163,11 +1173,20 @@ package: new `NotificationKind` values extending `planslacknotifier.go`/`linearn
 as this codebase's own precedent already does twice (`cmd/control-plane/main.go`'s notifier
 routing map). Three verdicts: approve (continue), reject (end the run), revise (human text →
 always a re-execution of the same step with the text as an extra instruction, never a direct
-substitution of a structured artifact). GitHub: a new deterministic `EditPrefix` keyword, the same
-strict, never-substring matching discipline as `plan.MatchVerdict`/`MatchRevise`
-(`internal/domain/plan/verdict.go:49,121`). Web endpoint: `POST /api/workflow-runs/:runId/steps/
-:stepRunId/decide`, the same shape as `decideplan.go`. Human-revision loops are exempt from the
-circuit breaker, mirroring §24.6's own exemption of manual re-triggers.
+substitution of a structured artifact). Web endpoint: `POST /api/workflow-runs/:runId/steps/
+:stepRunId/decide`, the same shape as `decideplan.go` — **the only decision surface that ships**.
+Human-revision loops are exempt from the circuit breaker, mirroring §24.6's own exemption of
+manual re-triggers.
+
+This section previously also specified a deterministic GitHub `EditPrefix` keyword. That keyword
+was built as a tested pure function and never wired to any ingress: a Phase 5 audit found
+`MatchEdit` had zero call sites, and `advance.go` carried a comment citing a call site in
+`completion.go` that does not exist — so a maintainer replying `edit: …` in a PR thread was parsed
+by nobody while the run stayed blocked. With the plan built-in now a passthrough (§25.8), no
+built-in workflow parks a HITL decision at all, so the keyword had no reachable trigger either;
+it is deleted rather than kept as speculative scaffolding. A GitHub-side affordance belongs with
+the Phase 7 canvas editor, when custom workflows that genuinely use `hitl_after` become
+user-facing — and should be built together with the ingress branch that routes it.
 
 The auto-fix loop itself needs no separate loop mechanism: `Edge{audit, needs_fix, fix}`,
 `Edge{fix, ok, audit}` — two ordinary edges `NextStep` already evaluates. `loopguard.Evaluate` is
@@ -1439,23 +1458,42 @@ N× boot cost with no real independence gain — each sub-agent already has a cl
     for the SAME `subTaskId` with `outcome == "completed"` both exist in the trace it is handed.
   - `httpapi.PostReviewVerdict` reads that trace back via two queries
     (`ListSubTaskStartEventsForTurn`/`ListSubTaskFinishEventsForTurn`, filtering the `events`
-    table's JSONB `payload->>'gen'`) scoped to BOTH `turns.dispatched_sandbox_gen` AND a
-    `created_at >= <this turn's own dispatched_at>` lower bound — never merely `session_id`, and
+    table's JSONB `payload->>'gen'`) scoped to BOTH `turns.dispatched_sandbox_gen` AND an
+    `events.id > <this turn's own dispatched_event_id>` lower bound — never merely `session_id`, and
     (fixed post-review, see below) never gen alone either. Gen alone was found, by an adversarial
     review of this Step's own PR, to be insufficient: `dispatched_sandbox_gen` is bumped only on a
     fresh spawn/restore/resume, never on an ordinary dispatch to an already-live sandbox, so a
     session whose sandbox survives across multiple review turns (§24's automatic re-review, the
     ORDINARY case, not a corner case) dispatches every one of those turns at the SAME gen — letting
     an earlier turn's own real trace spuriously corroborate a later turn's self-report purely
-    because both turns shared the same gen. The `dispatched_at` lower bound closes that gap:
+    because both turns shared the same gen. The `dispatched_event_id` lower bound closes that gap:
     `turns_one_processing_per_session`'s own unique partial index guarantees turns execute strictly
-    sequentially per session, so an earlier turn's own sub-task events always predate a later turn's
-    own `dispatched_at`. Gen-scoping still stays, alongside it, for the orthogonal case it alone
-    catches: a stale, late-arriving event from a genuinely different, now-dead sandbox incarnation.
+    sequentially per session, so an earlier turn's own sub-task events always carry ids at or below
+    a later turn's own dispatch watermark. Gen-scoping still stays, alongside it, for the orthogonal
+    case it alone catches: a stale, late-arriving event from a genuinely different, now-dead sandbox
+    incarnation.
+
+    That lower bound is a monotonic `events.id`, **not** a timestamp. It was first written as
+    `created_at >= <this turn's own dispatched_at>`, which was not sound: `events.created_at` is
+    stamped by the Postgres server while `turns.dispatched_at` is a Go `time.Time` stamped by the
+    application process, on a different host in any real deployment. Two clocks, agreeing only to
+    whatever precision NTP happens to hold — and asymmetric in how they fail, since an application
+    clock running BEHIND the database widens the window and readmits an earlier turn's trace,
+    eroding exactly the guard the bound exists to provide. `turns.dispatched_event_id`
+    (migration `000089`) is the events-log high-water mark, `MAX(events.id)`, stamped in the same
+    transaction as the dispatch itself, so the comparison has no clock in it at all.
+    `turns.dispatched_at` is deliberately left in place and unchanged — it still has a genuine,
+    same-clock consumer in `turn.EvaluateTurnDeadline`, which compares it against the application's
+    own `time.Now()`; re-sourcing that column from the database clock to fix corroboration would
+    have broken the deadline instead. Sequence values are allocated before commit, so an event
+    from an earlier turn that receives its id before this turn's dispatch and commits afterwards
+    falls at or below the watermark and is EXCLUDED — the fail-conservative direction.
+
     Only queried when it could matter at all: deep path and a self-reported `done`.
-    `dispatched_sandbox_gen` or `dispatched_at` being unset (a turn with no recorded dispatch) is
-    treated as NOT corroborated, fail-conservative like every other closed-enum default in this
-    codebase.
+    `dispatched_sandbox_gen` or `dispatched_event_id` being unset (a turn with no recorded dispatch)
+    is treated as NOT corroborated, fail-conservative like every other closed-enum default in this
+    codebase — distinct from a watermark of `0`, which is a legitimate value (a turn dispatched
+    before the session had any events) that admits every event that follows.
   - `reviewpost.BuildVerdict` applies a SECOND, raise-only substitution (immediately after the
     existing light-path substitution, and gated explicitly on `ReviewDepth == DepthDeep` — never
     merely on the raw `CounterReview` value, which carries no validated meaning on the light path

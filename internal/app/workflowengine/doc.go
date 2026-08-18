@@ -38,9 +38,17 @@
 // and applies the verdict: advance (create the next attempt -- see
 // completion.go's own doc comment on why this Step never auto-dispatches
 // one), complete the run, or escalate it to needs_review. A HITLAfter-gated
-// step (only the built-in plan workflow's step 1) never reaches NextStep at
-// all here -- its attempt lands in awaiting_decision and the run stays
-// running, exactly where Step 56's own decide endpoint picks it up.
+// step never reaches NextStep at all here -- its attempt lands in
+// awaiting_decision and the run stays running, exactly where Step 56's own
+// decide endpoint picks it up. As of migration
+// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up,
+// §25.8/§25.9), no BUILT-IN workflow carries hitl_after any longer -- the
+// built-in plan workflow's original 2-step, hitl_after-on-step-1 shape
+// double-parked a workflow-level HITL gate against classic plan mode's own
+// pre-existing, unconditional persisted-state awaiting-plan gate on every
+// plan-mode session, so it was corrected to a single-step passthrough,
+// matching review/request; this mechanism now only fires for a CUSTOM
+// (non-built-in) workflow's own hitl_after step.
 //
 // # Fail-open is the load-bearing safety property of this whole package
 //

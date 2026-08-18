@@ -56,6 +56,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -361,7 +362,45 @@ func waitForRealClone(t *testing.T, workspaceDir string) {
 // process; see helpers_test.go's own startServer doc comment (internal/
 // adapters/outbound/opencode) for the same caveat in the in-process-spawn
 // case.
-func runSandboxAgent(t *testing.T, binPath, gitServerURL, workspaceDir string, fcp *fakeControlPlane) *bytes.Buffer {
+// syncBuffer is a mutex-guarded io.Writer whose contents can be read back
+// safely WHILE the writer is still being written to.
+//
+// This exists because os/exec, for any cmd.Stdout/cmd.Stderr that is not
+// an *os.File, creates an OS pipe and spawns its OWN goroutine to copy
+// that pipe into the supplied io.Writer, running until the child exits
+// and cmd.Wait returns. runSandboxAgent below deliberately calls cmd.Wait
+// in a BACKGROUND goroutine (it must stay non-blocking so the test can
+// drive the child), so that copier goroutine is live for the whole body
+// of every test using it -- while each of those tests reads the captured
+// output back, from the TEST goroutine, inside its own failure paths
+// ("...; sandbox-agent output:\n%s").
+//
+// With a plain bytes.Buffer (which is NOT safe for concurrent use) those
+// two accesses are an unsynchronized write/read pair on the same value: a
+// genuine data race that -race reports with a stack trace through
+// bytes.Buffer. Because the reads sit only on failure paths, the race
+// fired only when a test was ALREADY failing (or had timed out), which
+// replaced the diagnostic output those call sites exist to print with a
+// confusing race report about bytes.Buffer instead -- masking the real
+// failure rather than explaining it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func runSandboxAgent(t *testing.T, binPath, gitServerURL, workspaceDir string, fcp *fakeControlPlane) *syncBuffer {
 	t.Helper()
 
 	sessionConfigJSON := fmt.Sprintf(`{
@@ -396,7 +435,13 @@ func runSandboxAgent(t *testing.T, binPath, gitServerURL, workspaceDir string, f
 		// "inherit this process's environment" convention.
 		"GIT_SSL_NO_VERIFY=true",
 	)
-	var out bytes.Buffer
+	// syncBuffer, not bytes.Buffer: os/exec writes this from its own copier
+	// goroutine while the tests below read it back from the test goroutine.
+	// See syncBuffer's own doc comment. Assigning the SAME writer to both
+	// Stdout and Stderr additionally makes os/exec reuse ONE pipe and ONE
+	// copier goroutine for the pair (it compares the two interface values),
+	// so the interleaving of the child's stdout and stderr is preserved.
+	var out syncBuffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 

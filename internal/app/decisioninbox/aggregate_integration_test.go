@@ -929,6 +929,87 @@ func TestBuild_HasChangesRequestedDemotesFromReadyToMerge(t *testing.T) {
 	}
 }
 
+// TestBuild_ChangedFilesListDegraded_NeverReadyToMerge is computeRealEligibility's
+// own (aggregate.go) Phase 5 audit finding 1 regression test -- the SAME
+// "otherwise fully eligible" fixture shape as
+// TestBuild_HasChangesRequestedDemotesFromReadyToMerge immediately above,
+// but perturbing ports.OpenPR.ChangedFilesListDegraded instead of
+// HasChangesRequested: a swallowed changed-files fetch error (githubapi's
+// own filesErr != nil path) must demote this PR out of ready_to_merge,
+// never silently read as "confirmed zero files, nothing sensitive".
+// Mutation-test target: reverting computeRealEligibility's own
+// `TouchedBlastRadiusKnown: touchedBlastRadiusKnown` wiring (aggregate.go)
+// back to always-true (or omitting the field) must turn this test's own
+// KindReadyToMerge assertion from a failure back into a pass.
+func TestBuild_ChangedFilesListDegraded_NeverReadyToMerge(t *testing.T) {
+	pool := newTestPool(t)
+	ctx := context.Background()
+
+	const actorGitHubExternalID = "5001"
+	tokenKey := []byte("01234567890123456789012345678901")
+	actor := decisionInboxActorFixture(ctx, t, pool, "phase5-actor@example.com", actorGitHubExternalID, tokenKey)
+
+	artifacts := narvipg.NewArtifactStore(pool)
+	const htmlURL = "https://github.com/acme/widgets/pull/50"
+	platformSession, err := narvipg.NewSessionStore(pool).Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceGithub, CreatedBy: actor.ID})
+	if err != nil {
+		t.Fatalf("create platform session: %v", err)
+	}
+	if _, err := artifacts.Create(ctx, sqlcgen.CreateArtifactParams{
+		SessionID: platformSession.ID, Type: sqlcgen.ArtifactTypePr, Url: htmlURL, Metadata: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("mark PR #50 platform-authored: %v", err)
+	}
+	seedAutoApprovedVerdict(ctx, t, pool, "acme/widgets", 50, "sha50")
+
+	fakeSCM := &fakeDecisionInboxSourceControl{
+		openPRsByExternalID: map[string][]ports.OpenPR{
+			actorGitHubExternalID: {
+				{
+					Owner: "acme", Repo: "widgets", Number: 50, Title: "otherwise fully eligible, but the changed-files read was degraded",
+					HTMLURL: htmlURL, HeadSHA: "sha50",
+					Assignees:    []ports.PRPerson{{ExternalID: actorGitHubExternalID, Login: "actor"}},
+					CIConclusion: ports.CIConclusionSuccess,
+					Labels:       []string{"review:low-risk"},
+					// ChangedFiles/ChangedFilesCount stay at their own
+					// honest zero values -- exactly what githubapi still
+					// reports on a fetch failure today. Degraded=true
+					// ALONE is what this test proves must demote the PR;
+					// a coincidentally-empty ChangedFiles is never, on its
+					// own, distinguishable from a genuinely clean PR
+					// without this flag.
+					ChangedFilesListDegraded: true,
+					CreatedAt:                time.Now(),
+				},
+			},
+		},
+	}
+
+	deps := decisioninbox.Deps{
+		Plans: narvipg.NewPlanStore(pool), Sessions: narvipg.NewSessionStore(pool), Participants: narvipg.NewParticipantStore(pool),
+		Automations: narvipg.NewAutomationStore(pool), Outbox: narvipg.NewOutboxStore(pool),
+		ReviewFindings: narvipg.NewReviewFindingStore(pool), SentinelFixes: narvipg.NewSentinelFixStore(pool),
+		Artifacts: artifacts, Identities: narvipg.NewIdentityStore(pool),
+		SCMCache:           decisioninbox.NewSCMCache(fakeSCM, platform.DefaultTimeouts()),
+		TokenEncryptionKey: tokenKey,
+		Timeouts:           platform.DefaultTimeouts(),
+		ReviewVerdict:      appreviewverdict.Deps{ReviewVerdicts: narvipg.NewReviewVerdictStore(pool), RepoSettings: narvipg.NewRepoSettingsStore(pool), ReviewFindings: narvipg.NewReviewFindingStore(pool), AutoApprovalOutcomes: narvipg.NewAutoApprovalOutcomeStore(pool), Timeouts: platform.DefaultTimeouts()},
+	}
+
+	result, err := decisioninbox.Build(ctx, deps, actor.ID, authz.RoleMember, time.Now())
+	if err != nil {
+		t.Fatalf("Build() error = %v, want nil", err)
+	}
+
+	pr50 := findItemByPR(result.Items, 50)
+	if pr50 == nil {
+		t.Fatal("PR #50 missing from the inbox entirely")
+	}
+	if pr50.Kind != decisioninboxdomain.KindNeedsReview {
+		t.Errorf("PR #50 (changed-files read degraded) Kind = %s, want needs_review -- a swallowed/degraded GitHub changed-files fetch must never silently render as ready_to_merge", pr50.Kind)
+	}
+}
+
 // TestBuild_CodeOwnersResolvedAgainstBaseRefNeverHead is the B3 regression
 // test named explicitly in the §60 review's TEST BATCH: "reverting Ref:
 // pr.BaseRef -> pr.HeadSHA... passes everything" because no test captured
