@@ -15,15 +15,18 @@ import (
 	"github.com/khazaddev/narvi/internal/domain/turn"
 )
 
-// The three seeded built-in definition/step ids (migration 000057's own
+// The seeded built-in request definition/step ids (migration 000057's own
 // header comment) -- mirrors internal/adapters/outbound/postgres's own
 // workflow_seed_integration_test.go identical constants (unreachable from
-// this external test package).
+// this external test package). No built-in plan constant is needed here:
+// as of migration 000088_plan_builtin_passthrough (Step 56's own
+// corrective follow-up, §25.8/§25.9), the built-in plan workflow is a
+// single-step passthrough carrying no HITL, so this package's own
+// HITLAfter-specific tests below exercise a CUSTOM (non-built-in) step
+// instead (seedCustomHITLAfterStep).
 const (
 	builtInRequestDefID  = "00000000-0000-4000-8000-000000000002"
 	builtInRequestStepID = "00000000-0000-4000-8000-000000000021"
-	builtInPlanDefID     = "00000000-0000-4000-8000-000000000003"
-	builtInPlanStep1ID   = "00000000-0000-4000-8000-000000000031"
 )
 
 // liveRow bundles the (workflow_run_id, step_run_id, step_definition_id)
@@ -120,6 +123,55 @@ func startRunAndAttachRealTurn(t *testing.T, ctx context.Context, sessions *post
 		turnID:         created.ID,
 		workflowsStore: workflows,
 	}, res
+}
+
+// seedCustomHITLAfterStep seeds a custom (non-built-in), single-step
+// workflow definition whose one step carries hitl_after = true, bound as a
+// repo override for the 'request' lane, plus a fresh session naming EXACTLY
+// that one repo -- so ResolveStepForNewTurn's own repo-override resolution
+// (resolveBinding, definition.go) deterministically routes new turns
+// through it, mirroring TestResolveStepForNewTurn_RepoOverrideBinding_
+// UsesOverrideNotGlobal's own seeding shape one field further (hitl_after
+// instead of a ModelID override).
+//
+// Exists so this package's own HITLAfter-specific tests no longer depend on
+// the built-in PLAN workflow's own shape: migration
+// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up, an
+// audit-found design incoherence -- see that migration's own header comment
+// and docs/TECHNICAL_PLAN.md §25.8) made the built-in plan workflow a
+// genuine single-step passthrough, identical to review/request, so classic
+// plan mode (§8.1, Steps 37/38) stays the SOLE plan-approval authority and
+// no built-in carries hitl_after any longer. The HITLAfter mechanism itself
+// (OnTurnCompleted's own HITLAfter branch, completion.go) is completely
+// unchanged by that migration and remains available to any future custom
+// workflow definition -- e.g. one authored via the Phase 7 canvas editor,
+// §25.12 -- which is exactly the shape this helper seeds directly.
+func seedCustomHITLAfterStep(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sessions *postgres.SessionStore, defID, stepID, repoFullName string) sqlcgen.Session {
+	t.Helper()
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workflow_definitions (id, lane, name, is_built_in, version) VALUES ($1, 'request', $2, false, 1)`,
+		defID, "custom-hitl-"+defID); err != nil {
+		t.Fatalf("seed custom HITL definition: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workflow_step_definitions (id, workflow_definition_id, step_order, kind, prompt_template, hitl_after)
+		VALUES ($1, $2, 1, 'agent', '{{prompt}}', true)`,
+		stepID, defID); err != nil {
+		t.Fatalf("seed custom HITL step: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO workflow_bindings (lane, repo_full_name, workflow_definition_id, definition_version)
+		VALUES ('request', $1, $2, 1)`, repoFullName, defID); err != nil {
+		t.Fatalf("seed repo override binding: %v", err)
+	}
+
+	repos := []byte(`[{"name":"repo","url":"https://github.com/` + repoFullName + `.git","branch":null}]`)
+	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb, Repos: repos})
+	if err != nil {
+		t.Fatalf("create session with repo: %v", err)
+	}
+	return session
 }
 
 func TestResolveStepForNewTurn_ZeroConfigRequestLane_StartsNewRunAndTracksFirstStep(t *testing.T) {
@@ -298,11 +350,17 @@ func TestResolveStepForNewTurn_MultiRepoSession_FallsBackToGlobalBinding(t *test
 
 // TestResolveStepForNewTurn_LiveAwaitingDecisionStep_ResolvesButDoesNotTrack
 // proves case 2 of ResolveStepForNewTurn's own doc comment: once a run's
-// live step-run is 'awaiting_decision' (the plan lane's own HITLAfter
-// gate), a SECOND call for the same session (simulating a "revise" turn)
-// resolves that SAME step's template/model but creates NO new
-// workflow_step_runs row -- never violating
-// workflow_step_runs_one_live_per_run.
+// live step-run is 'awaiting_decision' (a HITLAfter gate), a SECOND call
+// for the same session (simulating a "revise" turn) resolves that SAME
+// step's template/model but creates NO new workflow_step_runs row -- never
+// violating workflow_step_runs_one_live_per_run.
+//
+// Exercises a CUSTOM (non-built-in) hitl_after step (seedCustomHITLAfterStep)
+// rather than the built-in plan workflow: migration
+// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up)
+// removed hitl_after from every built-in, so this is now the only way to
+// reach case 2 at all -- see seedCustomHITLAfterStep's own doc comment for
+// the full "why".
 func TestResolveStepForNewTurn_LiveAwaitingDecisionStep_ResolvesButDoesNotTrack(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -310,20 +368,13 @@ func TestResolveStepForNewTurn_LiveAwaitingDecisionStep_ResolvesButDoesNotTrack(
 	turns := postgres.NewTurnStore(pool)
 	workflows := postgres.NewWorkflowStore(pool)
 
-	session, err := sessions.Create(ctx, sqlcgen.CreateSessionParams{SpawnSource: sqlcgen.SessionSpawnSourceWeb})
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	if _, err := sessions.UpdateIntentDecisionIfNull(ctx, session.ID,
-		[]byte(`{"target":"request","mode":"plan"}`)); err != nil {
-		t.Fatalf("seed intent_decision: %v", err)
-	}
-	session, err = sessions.Get(ctx, session.ID)
-	if err != nil {
-		t.Fatalf("re-fetch session: %v", err)
-	}
+	const (
+		customDefID  = "10000000-0000-4000-8000-000000000004"
+		customStepID = "10000000-0000-4000-8000-000000000005"
+	)
+	session := seedCustomHITLAfterStep(t, ctx, pool, sessions, customDefID, customStepID, "acme/hitl-resolve")
 
-	row, _ := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "draft a plan", nil, true)
+	row, _ := startRunAndAttachRealTurn(t, ctx, sessions, turns, workflows, session, "draft something", nil, false)
 	workflowengine.OnTurnCompleted(ctx, testDeps(pool, turns, workflows), session, row.turnID, turn.TriggerComplete)
 
 	stepRun, err := workflows.GetLiveStepRunForRun(ctx, row.runID)
@@ -339,7 +390,7 @@ func TestResolveStepForNewTurn_LiveAwaitingDecisionStep_ResolvesButDoesNotTrack(
 		t.Error("Tracked = true, want false (an awaiting_decision live step must not get a second attempt created by this Step's engine)")
 	}
 	if res2.Prompt != "revise: drop the retry" {
-		t.Errorf("Prompt = %q, want the caller's own text unchanged (built-in plan step 1 is passthrough)", res2.Prompt)
+		t.Errorf("Prompt = %q, want the caller's own text unchanged (the custom step's own passthrough template)", res2.Prompt)
 	}
 
 	var liveCount int

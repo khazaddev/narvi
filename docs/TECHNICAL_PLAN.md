@@ -1144,9 +1144,19 @@ classifier and the review's single-completion calls, never an agentic turn with 
 - **review**: one step, `ModelID: nil`, prompt = today's unchanged text, no HITL. `Shippable`
   (§21.2) stays a separate axis, consumed after the step completes by the existing auto-approval
   machinery — never routed through `StepOutcomeStatus`.
-- **plan**: two steps (plan → build), HITL after step 1 reusing `ApproveKeywords`/`RejectKeywords`/
-  `RevisePrefix` unchanged (`internal/domain/plan/verdict.go`), a `needs_fix → same step` loop
-  explicitly exempted from the circuit breaker.
+- **plan**: one step, passthrough, no HITL of its own — **classic plan mode (Steps 37/38) remains
+  the sole plan-approval authority**. This section previously specified two steps (plan → build)
+  with a workflow-owned HITL gate after step 1; that shipped, and a Phase 5 audit found it put
+  *two* approval mechanisms on the same session. `workflow.LaneFor` returns `LanePlan` exactly when
+  `mode == intent.ModePlan` — i.e. precisely when plan mode's own `plan_status`/`decideplan.go`/
+  `plan.MatchVerdict` gate is already running — so the workflow gate's own `approve` verdict
+  dispatched a build turn through `workflowengine.dispatchNextAttempt`, which inserts a turn
+  directly and deliberately skips `createTurnLocked`'s checks, including §23.2's persisted-state
+  awaiting-plan gate. The plan built-in is therefore now a single passthrough step (migration
+  `000088`), matching review/request, and honoring §25.4's "zero-config default = today's exact
+  behavior" rule. Workflow-driven plan HITL is deferred until the Phase 7 canvas editor makes
+  custom workflows user-facing; the `hitl_before`/`hitl_after` mechanism and its `/decide` endpoint
+  remain in place for any non-built-in definition that opts into them.
 - **request**: one step, passthrough, no behavior change.
 
 The Gemini→Opus→Sonnet→Codex example is a non-built-in workflow bound as the **global** Request-lane
@@ -1163,11 +1173,20 @@ package: new `NotificationKind` values extending `planslacknotifier.go`/`linearn
 as this codebase's own precedent already does twice (`cmd/control-plane/main.go`'s notifier
 routing map). Three verdicts: approve (continue), reject (end the run), revise (human text →
 always a re-execution of the same step with the text as an extra instruction, never a direct
-substitution of a structured artifact). GitHub: a new deterministic `EditPrefix` keyword, the same
-strict, never-substring matching discipline as `plan.MatchVerdict`/`MatchRevise`
-(`internal/domain/plan/verdict.go:49,121`). Web endpoint: `POST /api/workflow-runs/:runId/steps/
-:stepRunId/decide`, the same shape as `decideplan.go`. Human-revision loops are exempt from the
-circuit breaker, mirroring §24.6's own exemption of manual re-triggers.
+substitution of a structured artifact). Web endpoint: `POST /api/workflow-runs/:runId/steps/
+:stepRunId/decide`, the same shape as `decideplan.go` — **the only decision surface that ships**.
+Human-revision loops are exempt from the circuit breaker, mirroring §24.6's own exemption of
+manual re-triggers.
+
+This section previously also specified a deterministic GitHub `EditPrefix` keyword. That keyword
+was built as a tested pure function and never wired to any ingress: a Phase 5 audit found
+`MatchEdit` had zero call sites, and `advance.go` carried a comment citing a call site in
+`completion.go` that does not exist — so a maintainer replying `edit: …` in a PR thread was parsed
+by nobody while the run stayed blocked. With the plan built-in now a passthrough (§25.8), no
+built-in workflow parks a HITL decision at all, so the keyword had no reachable trigger either;
+it is deleted rather than kept as speculative scaffolding. A GitHub-side affordance belongs with
+the Phase 7 canvas editor, when custom workflows that genuinely use `hitl_after` become
+user-facing — and should be built together with the ingress branch that routes it.
 
 The auto-fix loop itself needs no separate loop mechanism: `Edge{audit, needs_fix, fix}`,
 `Edge{fix, ok, audit}` — two ordinary edges `NextStep` already evaluates. `loopguard.Evaluate` is

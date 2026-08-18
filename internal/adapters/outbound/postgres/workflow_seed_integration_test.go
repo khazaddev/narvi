@@ -25,12 +25,16 @@ import (
 
 // The fixed system-row ids migration 000057 seeds (see its own header
 // comment for why these are constants rather than gen_random_uuid()).
+// builtInPlanStep1ID is the ONE step that survives migration 000057's own
+// two-step plan seed -- migration 000088_plan_builtin_passthrough (Step
+// 56's own corrective follow-up, §25.8/§25.9) removed the second step
+// (originally id ...032) and its hitl_after=true, so there is no
+// builtInPlanStep2ID constant any longer.
 const (
 	builtInReviewDefID  = "00000000-0000-4000-8000-000000000001"
 	builtInRequestDefID = "00000000-0000-4000-8000-000000000002"
 	builtInPlanDefID    = "00000000-0000-4000-8000-000000000003"
 	builtInPlanStep1ID  = "00000000-0000-4000-8000-000000000031"
-	builtInPlanStep2ID  = "00000000-0000-4000-8000-000000000032"
 )
 
 // expectPgErrCode asserts err is a *pgconn.PgError with the given
@@ -54,12 +58,30 @@ func expectPgErrCode(t *testing.T, err error, code, constraint string) {
 }
 
 // TestWorkflowSeed_BuiltInDefinitions proves the three system templates
-// exist exactly as §25.8 shapes them: review/request are single
-// passthrough steps (ModelID nil so turns.model_id/sessions.
-// build_model_id inherit exactly as today -- Step 55's zero-config
-// proof), plan is the 2-step approve/build shape with HITL after step 1
-// and the ONE explicit needs_fix self-loop edge (the revise
-// re-execution loop).
+// exist exactly as §25.8 shapes them TODAY, post migration
+// 000088_plan_builtin_passthrough (Step 56's own corrective follow-up):
+// review/request/plan are now IDENTICALLY shaped single passthrough
+// steps (ModelID nil so turns.model_id/sessions.build_model_id inherit
+// exactly as today -- Step 55's zero-config proof), no HITL, no edges.
+//
+// Migration 000057 originally seeded plan as a 2-step approve/build
+// shape with HITL after step 1 and a needs_fix self-loop edge; an audit
+// found that shape was a genuine design incoherence -- it silently
+// double-parked a workflow-level HITL gate (workflow_step_runs.status =
+// 'awaiting_decision', resolved only via POST /api/workflow-runs/:runId/
+// steps/:stepRunId/decide) against classic plan mode's own pre-existing,
+// UNCONDITIONAL persisted-state awaiting-plan gate (Steps 37/38, §8.1:
+// plans.status, plan.MatchVerdict/MatchRevise, turn.go's own
+// ErrPlanAwaitingApproval) on every single plan-mode session, since
+// internal/adapters/inbound/httpapi's createTurnLocked (Step 55) wires
+// the workflow engine into EVERY new turn unconditionally. Migration
+// 000088 (see its own header comment for the full "why") corrected this:
+// classic plan mode stays the SOLE plan-approval authority, and the
+// built-in plan workflow became a genuine single-step passthrough,
+// matching review/request. Workflow-driven plan HITL is deferred to the
+// Phase 7 canvas editor (§25.12), where a custom (non-built-in)
+// definition can still use hitl_after -- the mechanism itself is
+// unaffected, only this built-in SEED changed.
 func TestWorkflowSeed_BuiltInDefinitions(t *testing.T) {
 	ctx := context.Background()
 	pool := newTestPool(t)
@@ -93,10 +115,16 @@ func TestWorkflowSeed_BuiltInDefinitions(t *testing.T) {
 		}
 	}
 
-	// review/request: exactly one passthrough step each, no edges.
-	for _, defID := range []string{builtInReviewDefID, builtInRequestDefID} {
+	// review/request/plan: exactly one passthrough step each, no edges --
+	// identically shaped since migration 000088 (see this test's own top
+	// doc comment). builtInPlanStep1ID (the plan lane's own single
+	// surviving step) is asserted directly below, alongside review/
+	// request's own step ids, rather than via a separate id constant per
+	// lane -- this loop already reads every step id it needs from the DB.
+	for _, defID := range []string{builtInReviewDefID, builtInRequestDefID, builtInPlanDefID} {
 		var (
 			stepCount, edgeCount int
+			id                   string
 			order                int
 			kind, prompt         string
 			modelID              *string
@@ -111,73 +139,27 @@ func TestWorkflowSeed_BuiltInDefinitions(t *testing.T) {
 			t.Fatalf("definition %s step count = %d, want 1 (single passthrough step, §25.8)", defID, stepCount)
 		}
 		err := pool.QueryRow(ctx, `
-			SELECT step_order, kind, model_id, prompt_template, execution_scope, conversation_continuity, hitl_before, hitl_after
+			SELECT id, step_order, kind, model_id, prompt_template, execution_scope, conversation_continuity, hitl_before, hitl_after
 			FROM workflow_step_definitions WHERE workflow_definition_id = $1`, defID).
-			Scan(&order, &kind, &modelID, &prompt, &scope, &continuity, &before, &after)
+			Scan(&id, &order, &kind, &modelID, &prompt, &scope, &continuity, &before, &after)
 		if err != nil {
 			t.Fatalf("read step for %s: %v", defID, err)
 		}
 		if order != 1 || kind != "agent" || modelID != nil || prompt != "{{prompt}}" ||
 			scope != "same_session" || continuity != "continue" || before || after {
-			t.Errorf("definition %s step = (order %d, kind %q, model %v, prompt %q, scope %q, continuity %q, hitl %v/%v), want the §25.8 passthrough shape",
-				defID, order, kind, modelID, prompt, scope, continuity, before, after)
+			t.Errorf("definition %s step = (id %s, order %d, kind %q, model %v, prompt %q, scope %q, continuity %q, hitl %v/%v), want the §25.8 passthrough shape",
+				defID, id, order, kind, modelID, prompt, scope, continuity, before, after)
+		}
+		if defID == builtInPlanDefID && id != builtInPlanStep1ID {
+			t.Errorf("plan step id = %s, want the surviving step %s", id, builtInPlanStep1ID)
 		}
 		if err := pool.QueryRow(ctx,
 			`SELECT count(*) FROM workflow_edges WHERE workflow_definition_id = $1`, defID).Scan(&edgeCount); err != nil {
 			t.Fatalf("count edges for %s: %v", defID, err)
 		}
 		if edgeCount != 0 {
-			t.Errorf("definition %s edge count = %d, want 0 (defaults only)", defID, edgeCount)
+			t.Errorf("definition %s edge count = %d, want 0 (migration 000088 removed plan's own needs_fix self-loop edge along with its second step)", defID, edgeCount)
 		}
-	}
-
-	// plan: two ordered steps, HITL after step 1 only, and exactly the
-	// needs_fix self-loop edge on step 1.
-	rows, err := pool.Query(ctx, `
-		SELECT id, step_order, model_id, prompt_template, hitl_before, hitl_after
-		FROM workflow_step_definitions WHERE workflow_definition_id = $1 ORDER BY step_order`, builtInPlanDefID)
-	if err != nil {
-		t.Fatalf("read plan steps: %v", err)
-	}
-	type stepRow struct {
-		id            string
-		order         int
-		modelID       *string
-		prompt        string
-		before, after bool
-	}
-	var steps []stepRow
-	for rows.Next() {
-		var s stepRow
-		if err := rows.Scan(&s.id, &s.order, &s.modelID, &s.prompt, &s.before, &s.after); err != nil {
-			rows.Close()
-			t.Fatalf("scan plan step: %v", err)
-		}
-		steps = append(steps, s)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate plan steps: %v", err)
-	}
-	if len(steps) != 2 {
-		t.Fatalf("plan step count = %d, want 2 (plan -> build, §25.8)", len(steps))
-	}
-	if steps[0].id != builtInPlanStep1ID || steps[0].order != 1 || steps[0].modelID != nil ||
-		steps[0].prompt != "{{prompt}}" || steps[0].before || !steps[0].after {
-		t.Errorf("plan step 1 = %+v, want (id %s, order 1, model nil, passthrough prompt, hitl_after only)", steps[0], builtInPlanStep1ID)
-	}
-	if steps[1].id != builtInPlanStep2ID || steps[1].order != 2 || steps[1].modelID != nil ||
-		steps[1].prompt != "{{prompt}}" || steps[1].before || steps[1].after {
-		t.Errorf("plan step 2 = %+v, want (id %s, order 2, model nil, passthrough prompt, no HITL)", steps[1], builtInPlanStep2ID)
-	}
-
-	var from, to, onStatus string
-	if err := pool.QueryRow(ctx, `
-		SELECT from_step_id, to_step_id, on_status FROM workflow_edges WHERE workflow_definition_id = $1`, builtInPlanDefID).
-		Scan(&from, &to, &onStatus); err != nil {
-		t.Fatalf("read plan edge (want exactly one): %v", err)
-	}
-	if from != builtInPlanStep1ID || to != builtInPlanStep1ID || onStatus != "needs_fix" {
-		t.Errorf("plan edge = (%s -> %s on %s), want the needs_fix self-loop on step 1 (§25.8's revise loop)", from, to, onStatus)
 	}
 }
 
@@ -282,10 +264,31 @@ func TestWorkflowSchema_StructuralInvariants(t *testing.T) {
 	})
 
 	t.Run("second edge for the same (step, outcome) rejected", func(t *testing.T) {
+		// Migration 000088 left every built-in definition edgeless (the
+		// plan built-in's own needs_fix self-loop went with its second
+		// step), so this constraint no longer has a seeded pair to
+		// collide against -- it is proven here by inserting one edge and
+		// then its exact duplicate, rather than by leaning on a seeded
+		// row that no longer exists. A self-loop is used because the plan
+		// definition now has exactly one step, and the composite
+		// (definition, step) FK forbids naming any other definition's.
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO workflow_edges (workflow_definition_id, from_step_id, to_step_id, on_status)
+			VALUES ($1, $2, $2, 'needs_fix')`,
+			builtInPlanDefID, builtInPlanStep1ID); err != nil {
+			t.Fatalf("insert first edge: %v", err)
+		}
+		t.Cleanup(func() {
+			if _, err := pool.Exec(ctx,
+				`DELETE FROM workflow_edges WHERE workflow_definition_id = $1`, builtInPlanDefID); err != nil {
+				t.Errorf("clean up inserted edge: %v", err)
+			}
+		})
+
 		_, err := pool.Exec(ctx, `
 			INSERT INTO workflow_edges (workflow_definition_id, from_step_id, to_step_id, on_status)
-			VALUES ($1, $2, $3, 'needs_fix')`,
-			builtInPlanDefID, builtInPlanStep1ID, builtInPlanStep2ID)
+			VALUES ($1, $2, $2, 'needs_fix')`,
+			builtInPlanDefID, builtInPlanStep1ID)
 		expectPgErrCode(t, err, "23505", "workflow_edges_from_status_uniq")
 	})
 
@@ -349,9 +352,14 @@ func TestWorkflowSchema_SequentialExecutionIndexes(t *testing.T) {
 		t.Fatalf("insert step attempt: %v", err)
 	}
 
+	// One LIVE attempt per RUN, whichever step it names -- proven here
+	// with the same step, since migration 000088 left the plan built-in
+	// single-step. That is if anything the stricter reading of the
+	// constraint: it rejects a second live attempt even for the step
+	// already running, not merely for a different one.
 	_, err = pool.Exec(ctx, `
 		INSERT INTO workflow_step_runs (workflow_run_id, step_definition_id)
-		VALUES ($1, $2)`, runID, builtInPlanStep2ID)
+		VALUES ($1, $2)`, runID, builtInPlanStep1ID)
 	expectPgErrCode(t, err, "23505", "workflow_step_runs_one_live_per_run")
 
 	if _, err := pool.Exec(ctx, `
