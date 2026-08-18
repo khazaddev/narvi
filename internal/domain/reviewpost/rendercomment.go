@@ -108,7 +108,7 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 	b.WriteString("### Code review verdict\n\n")
 	fmt.Fprintf(&b, "- **Risk**: %s\n", v.RiskLevel)
 	fmt.Fprintf(&b, "- **Premise**: %s\n", v.Premise)
-	fmt.Fprintf(&b, "- **Description adequacy**: %s -- %s\n", digest.DescriptionAdequacy, strings.TrimSpace(digest.AdequacyExplanation))
+	fmt.Fprintf(&b, "- **Description adequacy**: %s -- %s\n", digest.DescriptionAdequacy, escapeFindingDescription(strings.TrimSpace(digest.AdequacyExplanation)))
 	fmt.Fprintf(&b, "- **Shippable**: %s (server-computed)\n\n", v.Shippable)
 
 	b.WriteString(strings.TrimSpace(summary))
@@ -116,7 +116,7 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 
 	// --- 2. "What this PR does" (§26.1 item 2).
 	b.WriteString("### What this PR does\n\n")
-	b.WriteString(strings.TrimSpace(digest.Summary))
+	b.WriteString(escapeFindingDescription(strings.TrimSpace(digest.Summary)))
 	b.WriteString("\n\n")
 
 	// --- §26.2/Step 67: "Suggested PR description", when the agent
@@ -140,8 +140,8 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 
 	// --- 4. "Risks to the stack" (§26.1 item 4).
 	b.WriteString("### Risks to the stack\n\n")
-	stackRisks := strings.TrimSpace(digest.StackRisks)
-	unverifiedLimits := strings.TrimSpace(digest.UnverifiedLimits)
+	stackRisks := escapeFindingDescription(strings.TrimSpace(digest.StackRisks))
+	unverifiedLimits := escapeFindingDescription(strings.TrimSpace(digest.UnverifiedLimits))
 	if len(v.BlastRadius) > 0 {
 		tags := make([]string, len(v.BlastRadius))
 		for i, t := range v.BlastRadius {
@@ -196,13 +196,14 @@ func RenderVerdictComment(v review.Verdict, findings []Finding, digest Digest, s
 			// honest "position not found", never a guess dressed up as a
 			// real one.
 			description := escapeFindingDescription(f.Description)
+			filePath := escapeFilePathForCodeSpan(f.FilePath)
 			switch {
 			case f.StartLine != 0 && f.StartLine == f.EndLine:
-				fmt.Fprintf(&b, "- [%s/%s] `%s:%d`: %s\n", kind, f.Severity, f.FilePath, f.StartLine, description)
+				fmt.Fprintf(&b, "- [%s/%s] `%s:%d`: %s\n", kind, f.Severity, filePath, f.StartLine, description)
 			case f.StartLine != 0:
-				fmt.Fprintf(&b, "- [%s/%s] `%s:%d-%d`: %s\n", kind, f.Severity, f.FilePath, f.StartLine, f.EndLine, description)
+				fmt.Fprintf(&b, "- [%s/%s] `%s:%d-%d`: %s\n", kind, f.Severity, filePath, f.StartLine, f.EndLine, description)
 			default:
-				fmt.Fprintf(&b, "- [%s/%s] `%s`: %s\n", kind, f.Severity, f.FilePath, description)
+				fmt.Fprintf(&b, "- [%s/%s] `%s`: %s\n", kind, f.Severity, filePath, description)
 			}
 		}
 	}
@@ -243,7 +244,7 @@ func renderProposedBody(proposedBody string) string {
 	}
 	var b strings.Builder
 	b.WriteString("<details>\n<summary>Suggested PR description</summary>\n\n")
-	b.WriteString(trimmed)
+	b.WriteString(escapeFindingDescription(trimmed))
 	b.WriteString("\n\n</details>\n\n")
 	return b.String()
 }
@@ -272,7 +273,7 @@ func renderContestedPoints(contestedPoints string) string {
 	}
 	var b strings.Builder
 	b.WriteString("### Contested points\n\n")
-	b.WriteString(trimmed)
+	b.WriteString(escapeFindingDescription(trimmed))
 	b.WriteString("\n\n")
 	return b.String()
 }
@@ -288,32 +289,82 @@ func renderContestedPoints(contestedPoints string) string {
 // visibly incomplete to a human reader, never silently smoothed over.
 func renderArchDecision(ad ArchDecision) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "- **Decision**: %s\n", strings.TrimSpace(ad.Decision))
-	fmt.Fprintf(&b, "  **Alternative rejected**: %s\n", strings.TrimSpace(ad.RejectedAlternative))
-	fmt.Fprintf(&b, "  **Convention conformance**: %s\n", strings.TrimSpace(ad.ConventionConformance))
+	fmt.Fprintf(&b, "- **Decision**: %s\n", escapeFindingDescription(strings.TrimSpace(ad.Decision)))
+	fmt.Fprintf(&b, "  **Alternative rejected**: %s\n", escapeFindingDescription(strings.TrimSpace(ad.RejectedAlternative)))
+	fmt.Fprintf(&b, "  **Convention conformance**: %s\n", escapeFindingDescription(strings.TrimSpace(ad.ConventionConformance)))
 	return b.String()
 }
 
-// findingDescriptionEscaper escapes '<' and '>' in a Finding's own
-// Description before it is interpolated into the rendered comment body.
-// Description is model-authored free text (finding.go's own doc comment)
-// and can legitimately contain generics, tags, or comparisons (e.g.
+// findingDescriptionEscaper escapes '<' and '>' before untrusted,
+// model-authored free text is interpolated into the rendered comment body.
+// Despite its name (kept for historical/call-site continuity -- it was
+// introduced for Finding.Description alone), this is now this FILE's
+// general untrusted-free-text escaper: every field VerdictInput's POST
+// body lets the reviewing model author as open prose -- Finding.Description
+// (finding.go's own doc comment), and, since a Phase 5 audit finding
+// closed the gap Step 66/67/69 opened, every Digest field of the SAME
+// provenance (Summary, AdequacyExplanation, StackRisks, UnverifiedLimits,
+// ProposedBody, ContestedPoints, and each ArchDecision's own three fields)
+// -- shares the identical hazard and now goes through this SAME escaper.
+// All of it can legitimately contain generics, tags, or comparisons (e.g.
 // "List<int>", "a < b") -- left unescaped, GitHub's own markdown renderer
 // would read an unescaped '<' as the start of a literal HTML tag rather
-// than the model's own text, silently dropping or mangling it. Narrower
-// than html.EscapeString on purpose: '<'/'>' are the only characters that
-// can change how GitHub parses the SURROUNDING markdown structure here;
-// '&' (which html.EscapeString would also escape) has no equivalent
-// structural effect in this context, so leaving it alone avoids turning
-// ordinary prose like "fetch & retry" into "fetch &amp; retry" for no
-// safety benefit.
+// than the model's own text, silently dropping, mangling, or (worse, for
+// an unclosed "<details>") swallowing every section that follows it,
+// exactly the concrete failure the audit finding traced through
+// Digest.Summary. Narrower than html.EscapeString on purpose: '<'/'>' are
+// the only characters that can change how GitHub parses the SURROUNDING
+// markdown structure here; '&' (which html.EscapeString would also
+// escape) has no equivalent structural effect in this context, so leaving
+// it alone avoids turning ordinary prose like "fetch & retry" into "fetch
+// &amp; retry" for no safety benefit.
+//
+// internal/adapters/inbound/httpapi's own description-autofix delivery
+// path independently arrived at the identical treatment for a PR's
+// original body (RenderAutofixBody, autofixbody.go, this same package) --
+// this escaper, not a second one, is what that call site already reuses.
 var findingDescriptionEscaper = strings.NewReplacer("<", "&lt;", ">", "&gt;")
 
 // escapeFindingDescription applies findingDescriptionEscaper to s -- the
-// one call site every Description interpolation in this file goes
-// through, so the escaping discipline can never be forgotten at a new
-// call site the way an inline strings.NewReplacer call at each site
-// could be.
+// one call site every untrusted-free-text interpolation in this file goes
+// through (see findingDescriptionEscaper's own doc comment for the full,
+// now-broader, list of fields), so the escaping discipline can never be
+// forgotten at a new call site the way an inline strings.NewReplacer call
+// at each site could be.
 func escapeFindingDescription(s string) string {
 	return findingDescriptionEscaper.Replace(s)
+}
+
+// filePathCodeSpanEscaper neutralizes a Finding's own untrusted,
+// model-authored FilePath (finding.go's own doc comment) before it is
+// interpolated inside a SINGLE-backtick inline code span (e.g. "`%s:%d`",
+// RenderVerdictComment above) -- a different hazard from
+// findingDescriptionEscaper's own '<'/'>' concern, and so a DIFFERENT
+// escaper: inside a backtick code span, GitHub's markdown parser does not
+// interpret '<'/'>' (or any other markdown) at all, so
+// findingDescriptionEscaper would not even apply here -- but a backtick
+// INSIDE FilePath closes the single-backtick span early (the parser
+// matches the FIRST subsequent backtick, however short the run), and a
+// newline inside it breaks the bullet onto new line(s) that render as
+// ordinary markdown rather than code-span text -- either one lets an
+// attacker-controlled path splice attacker-chosen markdown/HTML (e.g. a
+// second "<details>") into the surrounding comment structure, exactly the
+// class of hazard findingDescriptionEscaper closes for Description, via a
+// different mechanical route specific to code spans. A backtick becomes a
+// visually similar apostrophe (removing it outright would silently
+// collapse "a`b" and "ab" into the same rendered path, which an
+// apostrophe substitution avoids while still being unambiguously not a
+// code-span delimiter); a newline (or the '\r' half of a CRLF pair)
+// becomes a single space, keeping the finding on its own one-line bullet
+// rather than splitting it across lines the surrounding markdown was
+// never structured for.
+var filePathCodeSpanEscaper = strings.NewReplacer("`", "'", "\n", " ", "\r", " ")
+
+// escapeFilePathForCodeSpan applies filePathCodeSpanEscaper to s -- the
+// one call site every Finding.FilePath interpolation inside a backtick
+// code span in this file goes through, mirroring escapeFindingDescription's
+// own "one call site, never inlined per-site" discipline immediately
+// above.
+func escapeFilePathForCodeSpan(s string) string {
+	return filePathCodeSpanEscaper.Replace(s)
 }
