@@ -515,8 +515,8 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	}
 	router.Route("/api/repos/{owner}/{repo}/settings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings, reviewVerdictDeps))
-		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings))
+		r.Get("/", httpapi.GetRepoSettings(rig.repoSettings, reviewVerdictDeps, rig.prSessions))
+		r.Put("/", httpapi.PutRepoSettings(rig.repoSettings, rig.prSessions))
 	})
 	// /api/repos/{owner}/{repo}/false-positive-patterns (Step 63, §22.4) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/
@@ -524,16 +524,16 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// comment).
 	router.Route("/api/repos/{owner}/{repo}/false-positive-patterns", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Get("/", httpapi.ListFalsePositivePatterns(rig.falsePositivePatterns))
-		r.Post("/{patternID}/retire", httpapi.RetireFalsePositivePattern(rig.falsePositivePatterns, rig.auditLog))
+		r.Get("/", httpapi.ListFalsePositivePatterns(rig.falsePositivePatterns, rig.prSessions))
+		r.Post("/{patternID}/retire", httpapi.RetireFalsePositivePattern(rig.falsePositivePatterns, rig.auditLog, rig.prSessions))
 	})
 	router.Route("/api/repos/{owner}/{repo}/auto-approval-settings", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Put("/", httpapi.PutAutoApprovalSettings(rig.repoSettings, reviewVerdictDeps))
+		r.Put("/", httpapi.PutAutoApprovalSettings(rig.repoSettings, reviewVerdictDeps, rig.prSessions))
 	})
 	router.Route("/api/repos/{owner}/{repo}/auto-merge", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Put("/", httpapi.PutAutoMergeToggle(rig.repoSettings, reviewVerdictDeps))
+		r.Put("/", httpapi.PutAutoMergeToggle(rig.repoSettings, reviewVerdictDeps, rig.prSessions))
 	})
 	// /api/repos/{owner}/{repo}/auto-retrigger-review (Step 65, §24.5) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/
@@ -541,7 +541,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// PutAutoRetriggerReviewToggle doc comment).
 	router.Route("/api/repos/{owner}/{repo}/auto-retrigger-review", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(rig.repoSettings))
+		r.Put("/", httpapi.PutAutoRetriggerReviewToggle(rig.repoSettings, rig.prSessions))
 	})
 	// /api/repos/{owner}/{repo}/description-autofix (Step 67, §26.2) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/
@@ -549,7 +549,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// PutDescriptionAutofixToggle doc comment).
 	router.Route("/api/repos/{owner}/{repo}/description-autofix", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Put("/", httpapi.PutDescriptionAutofixToggle(rig.repoSettings))
+		r.Put("/", httpapi.PutDescriptionAutofixToggle(rig.repoSettings, rig.prSessions))
 	})
 	// /api/repos/{owner}/{repo}/review-depth (Step 68, §26.3) -- mounted
 	// behind auth.Middleware, exactly like cmd/control-plane/main.go's own
@@ -562,7 +562,7 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// suite green).
 	router.Route("/api/repos/{owner}/{repo}/review-depth", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Put("/", httpapi.PutReviewDepthConfig(rig.repoSettings))
+		r.Put("/", httpapi.PutReviewDepthConfig(rig.repoSettings, rig.prSessions))
 	})
 	// /api/repos/{owner}/{repo}/review-cost-budget (Step 69, §26.7) --
 	// mounted behind auth.Middleware, exactly like cmd/control-plane/
@@ -574,14 +574,14 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// Step's own review round found went unnoticed.
 	router.Route("/api/repos/{owner}/{repo}/review-cost-budget", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Put("/", httpapi.PutReviewCostBudget(rig.repoSettings))
+		r.Put("/", httpapi.PutReviewCostBudget(rig.repoSettings, rig.prSessions))
 	})
 	// /api/repos/{owner}/{repo}/review-analytics (Step 62, §21.1) --
 	// mounted behind auth.Middleware exactly like cmd/control-plane/
 	// main.go's own wiring (see reviewanalytics.go's own doc comment).
 	router.Route("/api/repos/{owner}/{repo}/review-analytics", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps))
+		r.Get("/", httpapi.GetReviewAnalytics(reviewVerdictDeps, rig.prSessions))
 	})
 	// /api/repos/{owner}/{repo}/provider-credentials,
 	// /api/environments/{environmentID}/provider-credentials,
@@ -590,10 +590,10 @@ func newTestRig(t *testing.T, mutate ...func(*testRig)) testRig {
 	// wiring (see providercredentials.go's own doc comment).
 	router.Route("/api/repos/{owner}/{repo}/provider-credentials", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
-		r.Post("/", httpapi.CreateRepoProviderCredential(rig.providerCredentials, rig.tokenEncryptionKey))
-		r.Get("/", httpapi.ListRepoProviderCredentials(rig.providerCredentials))
-		r.Put("/{credentialID}", httpapi.UpdateRepoProviderCredentialValue(rig.providerCredentials, rig.tokenEncryptionKey))
-		r.Delete("/{credentialID}", httpapi.DeleteRepoProviderCredential(rig.providerCredentials))
+		r.Post("/", httpapi.CreateRepoProviderCredential(rig.providerCredentials, rig.tokenEncryptionKey, rig.prSessions))
+		r.Get("/", httpapi.ListRepoProviderCredentials(rig.providerCredentials, rig.prSessions))
+		r.Put("/{credentialID}", httpapi.UpdateRepoProviderCredentialValue(rig.providerCredentials, rig.tokenEncryptionKey, rig.prSessions))
+		r.Delete("/{credentialID}", httpapi.DeleteRepoProviderCredential(rig.providerCredentials, rig.prSessions))
 	})
 	router.Route("/api/environments/{environmentID}/provider-credentials", func(r chi.Router) {
 		r.Use(auth.Middleware(rig.userSessions, rig.users))
@@ -650,6 +650,29 @@ func (r testRig) createSession(ctx context.Context, t *testing.T) sqlcgen.Sessio
 		t.Fatalf("create test session: %v", err)
 	}
 	return row
+}
+
+// markRepoKnown seeds a committed github_pr_sessions row for repoFullName --
+// fix/repo-scoped-authorization's own entitlement signal (httpapi's own
+// resolveKnownRepo, reposettings.go): every repo-scoped route this batch
+// touches now 404s unless a row like this one exists, exactly mirroring
+// what a REAL, HMAC-verified GitHub webhook mention would have produced
+// (internal/adapters/inbound/github/coalesce.go's own EnsureRow ->
+// LockForUpdate -> SetSessionID sequence, reused directly here rather than
+// reinventing it -- the SAME pattern reviewfindings_integration_test.go/
+// reviewretrigger_integration_test.go/scmcredentials_integration_test.go
+// already establish for seeding a claimed PR). prNumber is fixed at 1 --
+// none of this package's own repo-scoped tests care about a specific PR
+// number, only that SOME committed row exists for repoFullName.
+func (r testRig) markRepoKnown(ctx context.Context, t *testing.T, repoFullName string) {
+	t.Helper()
+	session := r.createSession(ctx, t)
+	if err := r.prSessions.EnsureRow(ctx, repoFullName, 1); err != nil {
+		t.Fatalf("markRepoKnown: EnsureRow(%q): %v", repoFullName, err)
+	}
+	if err := r.prSessions.SetSessionID(ctx, repoFullName, 1, session.ID); err != nil {
+		t.Fatalf("markRepoKnown: SetSessionID(%q): %v", repoFullName, err)
+	}
 }
 
 // createAuthenticatedUser builds a real user + linked GitHub identity + a

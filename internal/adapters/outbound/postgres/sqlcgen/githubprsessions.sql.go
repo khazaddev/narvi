@@ -215,6 +215,34 @@ func (q *Queries) MarkAutoRetriggerBudgetNoticeSent(ctx context.Context, arg Mar
 	return i, err
 }
 
+const repoKnownToDeployment = `-- name: RepoKnownToDeployment :one
+SELECT EXISTS(
+    SELECT 1 FROM github_pr_sessions WHERE repo_full_name = $1
+) AS repo_known
+`
+
+// fix/repo-scoped-authorization's own entitlement signal: reports whether
+// ANY github_pr_sessions row exists for repoFullName, across every
+// pr_number -- the composite primary key's own leading column
+// (repo_full_name, pr_number) already indexes this efficiently, no new
+// index needed. This is a sound "this deployment is genuinely attached to
+// this repo" proof specifically because the ONLY writer of this table is
+// internal/adapters/inbound/github's own HMAC-verified webhook ingress
+// (coalesce.go/handler.go) -- no httpapi REST handler writes it -- and
+// because a row only ever COMMITS with a non-NULL session_id (coalesce.go's
+// own single-transaction EnsureRow+LockForUpdate+SetSessionID sequencing:
+// a denied/failed claim rolls back the whole transaction, leaving no row
+// behind), so a bare existence check needs no separate session_id IS NOT
+// NULL filter. See httpapi's own resolveKnownRepo (reposettings.go) for
+// the full "why this signal, and why repo_settings/sessions.repos are
+// NOT sound" reasoning.
+func (q *Queries) RepoKnownToDeployment(ctx context.Context, repoFullName string) (bool, error) {
+	row := q.db.QueryRow(ctx, repoKnownToDeployment, repoFullName)
+	var repo_known bool
+	err := row.Scan(&repo_known)
+	return repo_known, err
+}
+
 const setGitHubPRSessionID = `-- name: SetGitHubPRSessionID :exec
 UPDATE github_pr_sessions
 SET session_id = $3

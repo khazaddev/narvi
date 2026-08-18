@@ -73,7 +73,7 @@ func falsePositivePatternToWire(p sqlcgen.ReviewFalsePositivePattern) restdtos.F
 // pattern for this repo (active or retired), newest-first, bounded by an
 // optional ?limit= query param (mirrors ListAuditLog's own identical
 // clamp-to-[1,max] convention, members.go).
-func ListFalsePositivePatterns(patterns *postgres.FalsePositivePatternStore) http.HandlerFunc {
+func ListFalsePositivePatterns(patterns *postgres.FalsePositivePatternStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -82,9 +82,8 @@ func ListFalsePositivePatterns(patterns *postgres.FalsePositivePatternStore) htt
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 
@@ -122,7 +121,7 @@ func ListFalsePositivePatterns(patterns *postgres.FalsePositivePatternStore) htt
 // FalsePositivePattern otherwise. Writes a REAL audit_log row (actor_
 // user_id set to the authenticated caller), mirroring RebutReviewFinding's
 // own identical "a human-attributed action" precedent (reviewfindings.go).
-func RetireFalsePositivePattern(patterns *postgres.FalsePositivePatternStore, auditLog *postgres.AuditLogStore) http.HandlerFunc {
+func RetireFalsePositivePattern(patterns *postgres.FalsePositivePatternStore, auditLog *postgres.AuditLogStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		logger := platform.Logger(ctx)
@@ -131,9 +130,8 @@ func RetireFalsePositivePattern(patterns *postgres.FalsePositivePatternStore, au
 			return
 		}
 
-		repoFullName, ok := repoFullNameFromRoute(r)
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
 		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
 			return
 		}
 

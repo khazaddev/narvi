@@ -115,9 +115,13 @@ func parseProviderCredentialID(w http.ResponseWriter, r *http.Request) (pgtype.U
 // -- lowercase, hyphenated) -- this codebase has no standalone Environment
 // CRUD/reuse-by-id surface yet (migrations/000021_environments.up.sql's
 // own doc comment), so there is no environments row to verify existence
-// against here; this only validates the SHAPE is a well-formed UUID,
-// exactly like repoFullNameFromRoute validates its own shape (both owner
-// and repo non-empty) without checking the repo actually exists either.
+// against here; this only validates the SHAPE is a well-formed UUID, NOT
+// that the environment is known to this deployment -- unlike
+// resolveKnownRepo's own repo-scoped equivalent (reposettings.go), which
+// validates shape AND confirms the repo is known (fix/repo-scoped-
+// authorization) precisely because a sound, non-self-referential
+// "known environment" signal does not exist in this schema the way
+// github_pr_sessions does for repos (see that function's own doc comment).
 func environmentIDFromRoute(w http.ResponseWriter, r *http.Request) (string, bool) {
 	raw := chi.URLParam(r, "environmentID")
 	var id pgtype.UUID
@@ -169,15 +173,79 @@ func getProviderCredentialInScope(ctx context.Context, store *postgres.ProviderC
 	return row, nil
 }
 
+// scopeTargetResolver resolves THIS request's own scope target -- the
+// route's repoFullName (confirmed known to this deployment), the route's
+// environment id (shape-checked only), or nil for the global scope. Every
+// shared core function below calls this ONLY AFTER authorize() has already
+// succeeded, never before -- by construction, since it is the very next
+// statement in each function body -- so a role-denied caller never learns
+// anything about whether the named repo exists, matching every other
+// repo-scoped handler in this package (reposettings.go/reviewanalytics.go/
+// falsepositivepatterns.go, which all resolve+validate the route's repo
+// strictly after their own role check too).
+//
+// fix/repo-scoped-authorization: before this batch, each of this file's 4
+// exported Create/List/Update/Delete-Repo* wrappers resolved
+// {owner}/{repo} itself (via the since-removed repoFullNameFromRoute) and
+// passed the raw string straight to the shared core function below, which
+// then authorized the caller's ROLE against an empty authz.Resource{} --
+// the repo name reached postgres.ProviderCredentialStore having been
+// through NO check beyond "is this syntactically owner/repo shaped".
+// scopeTargetResolver is this file's OWN answer to the same structural gap
+// reposettings.go's resolveKnownRepo doc comment describes: repoScopeTarget
+// (below) is now the ONLY path from route params to a repoFullName this
+// file's shared core functions will accept, and it always confirms the
+// repo is known before returning one.
+type scopeTargetResolver func(w http.ResponseWriter, r *http.Request) (*string, bool)
+
+// repoScopeTarget is the scopeTargetResolver for the repo-scoped route
+// group -- delegates to reposettings.go's own resolveKnownRepo (the SAME
+// function, and SAME github_pr_sessions-backed check, every other
+// repo-scoped handler in this package uses; see that function's own doc
+// comment for the full "why" this is a sound entitlement signal).
+func repoScopeTarget(prSessions *postgres.GitHubPRSessionStore) scopeTargetResolver {
+	return func(w http.ResponseWriter, r *http.Request) (*string, bool) {
+		repoFullName, ok := resolveKnownRepo(w, r, prSessions)
+		if !ok {
+			return nil, false
+		}
+		return &repoFullName, true
+	}
+}
+
+// environmentScopeTarget is the scopeTargetResolver for the
+// environment-scoped route group -- unchanged behavior from before this
+// batch: only the SHAPE is validated (a well-formed UUID), never "known to
+// this deployment", because no environments row/CRUD/reuse-by-id surface
+// exists yet to check against at all (environmentIDFromRoute's own doc
+// comment) -- there is nothing sound to check here, unlike the repo case.
+func environmentScopeTarget(w http.ResponseWriter, r *http.Request) (*string, bool) {
+	id, ok := environmentIDFromRoute(w, r)
+	if !ok {
+		return nil, false
+	}
+	return &id, true
+}
+
+// globalScopeTarget is the trivial scopeTargetResolver for the global route
+// group -- there is no URL segment to resolve at all.
+func globalScopeTarget(_ http.ResponseWriter, _ *http.Request) (*string, bool) {
+	return nil, true
+}
+
 // createProviderCredential is the shared core POST handler body -- scope/
-// scopeTargetID/action are fixed per calling route group (see this file's
-// own exported Create*ProviderCredential wrappers below).
+// action are fixed, and resolveScope is chosen, per calling route group
+// (see this file's own exported Create*ProviderCredential wrappers below).
 func createProviderCredential(
 	w http.ResponseWriter, r *http.Request,
 	store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte,
-	action authz.Action, scope sqlcgen.ProviderCredentialScope, scopeTargetID *string,
+	action authz.Action, scope sqlcgen.ProviderCredentialScope, resolveScope scopeTargetResolver,
 ) {
 	if !authorize(w, r, action, authz.Resource{}) {
+		return
+	}
+	scopeTargetID, ok := resolveScope(w, r)
+	if !ok {
 		return
 	}
 	ctx := r.Context()
@@ -231,9 +299,13 @@ func createProviderCredential(
 func listProviderCredentials(
 	w http.ResponseWriter, r *http.Request,
 	store *postgres.ProviderCredentialStore,
-	action authz.Action, scope sqlcgen.ProviderCredentialScope, scopeTargetID *string,
+	action authz.Action, scope sqlcgen.ProviderCredentialScope, resolveScope scopeTargetResolver,
 ) {
 	if !authorize(w, r, action, authz.Resource{}) {
+		return
+	}
+	scopeTargetID, ok := resolveScope(w, r)
+	if !ok {
 		return
 	}
 	ctx := r.Context()
@@ -258,9 +330,13 @@ func listProviderCredentials(
 func updateProviderCredentialValue(
 	w http.ResponseWriter, r *http.Request,
 	store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte,
-	action authz.Action, scope sqlcgen.ProviderCredentialScope, scopeTargetID *string,
+	action authz.Action, scope sqlcgen.ProviderCredentialScope, resolveScope scopeTargetResolver,
 ) {
 	if !authorize(w, r, action, authz.Resource{}) {
+		return
+	}
+	scopeTargetID, scopeOK := resolveScope(w, r)
+	if !scopeOK {
 		return
 	}
 	ctx := r.Context()
@@ -317,9 +393,13 @@ func updateProviderCredentialValue(
 func deleteProviderCredential(
 	w http.ResponseWriter, r *http.Request,
 	store *postgres.ProviderCredentialStore,
-	action authz.Action, scope sqlcgen.ProviderCredentialScope, scopeTargetID *string,
+	action authz.Action, scope sqlcgen.ProviderCredentialScope, resolveScope scopeTargetResolver,
 ) {
 	if !authorize(w, r, action, authz.Resource{}) {
+		return
+	}
+	scopeTargetID, scopeOK := resolveScope(w, r)
+	if !scopeOK {
 		return
 	}
 	ctx := r.Context()
@@ -353,54 +433,40 @@ func deleteProviderCredential(
 
 // CreateRepoProviderCredential backs POST /api/repos/{owner}/{repo}/
 // provider-credentials -- see this file's own top doc comment for the
-// full route table and RBAC rationale.
-func CreateRepoProviderCredential(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
+// full route table and RBAC rationale, and repoScopeTarget's own doc
+// comment for the fix/repo-scoped-authorization "known repo" gate this
+// wrapper now applies via resolveScope.
+func CreateRepoProviderCredential(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
+	resolveScope := repoScopeTarget(prSessions)
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoFullName, ok := repoFullNameFromRoute(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
-			return
-		}
-		createProviderCredential(w, r, store, tokenEncryptionKey, authz.ActionManageRepoSecrets, sqlcgen.ProviderCredentialScopeRepo, &repoFullName)
+		createProviderCredential(w, r, store, tokenEncryptionKey, authz.ActionManageRepoSecrets, sqlcgen.ProviderCredentialScopeRepo, resolveScope)
 	}
 }
 
 // ListRepoProviderCredentials backs GET /api/repos/{owner}/{repo}/
 // provider-credentials.
-func ListRepoProviderCredentials(store *postgres.ProviderCredentialStore) http.HandlerFunc {
+func ListRepoProviderCredentials(store *postgres.ProviderCredentialStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
+	resolveScope := repoScopeTarget(prSessions)
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoFullName, ok := repoFullNameFromRoute(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
-			return
-		}
-		listProviderCredentials(w, r, store, authz.ActionManageRepoSecrets, sqlcgen.ProviderCredentialScopeRepo, &repoFullName)
+		listProviderCredentials(w, r, store, authz.ActionManageRepoSecrets, sqlcgen.ProviderCredentialScopeRepo, resolveScope)
 	}
 }
 
 // UpdateRepoProviderCredentialValue backs PUT /api/repos/{owner}/{repo}/
 // provider-credentials/{credentialID} -- rotates the encrypted value only.
-func UpdateRepoProviderCredentialValue(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
+func UpdateRepoProviderCredentialValue(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
+	resolveScope := repoScopeTarget(prSessions)
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoFullName, ok := repoFullNameFromRoute(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
-			return
-		}
-		updateProviderCredentialValue(w, r, store, tokenEncryptionKey, authz.ActionManageRepoSecrets, sqlcgen.ProviderCredentialScopeRepo, &repoFullName)
+		updateProviderCredentialValue(w, r, store, tokenEncryptionKey, authz.ActionManageRepoSecrets, sqlcgen.ProviderCredentialScopeRepo, resolveScope)
 	}
 }
 
 // DeleteRepoProviderCredential backs DELETE /api/repos/{owner}/{repo}/
 // provider-credentials/{credentialID}.
-func DeleteRepoProviderCredential(store *postgres.ProviderCredentialStore) http.HandlerFunc {
+func DeleteRepoProviderCredential(store *postgres.ProviderCredentialStore, prSessions *postgres.GitHubPRSessionStore) http.HandlerFunc {
+	resolveScope := repoScopeTarget(prSessions)
 	return func(w http.ResponseWriter, r *http.Request) {
-		repoFullName, ok := repoFullNameFromRoute(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, "repo not found")
-			return
-		}
-		deleteProviderCredential(w, r, store, authz.ActionManageRepoSecrets, sqlcgen.ProviderCredentialScopeRepo, &repoFullName)
+		deleteProviderCredential(w, r, store, authz.ActionManageRepoSecrets, sqlcgen.ProviderCredentialScopeRepo, resolveScope)
 	}
 }
 
@@ -410,11 +476,7 @@ func DeleteRepoProviderCredential(store *postgres.ProviderCredentialStore) http.
 // {environmentID}/provider-credentials.
 func CreateEnvironmentProviderCredential(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		environmentID, ok := environmentIDFromRoute(w, r)
-		if !ok {
-			return
-		}
-		createProviderCredential(w, r, store, tokenEncryptionKey, authz.ActionManageEnvSecrets, sqlcgen.ProviderCredentialScopeEnvironment, &environmentID)
+		createProviderCredential(w, r, store, tokenEncryptionKey, authz.ActionManageEnvSecrets, sqlcgen.ProviderCredentialScopeEnvironment, environmentScopeTarget)
 	}
 }
 
@@ -422,11 +484,7 @@ func CreateEnvironmentProviderCredential(store *postgres.ProviderCredentialStore
 // {environmentID}/provider-credentials.
 func ListEnvironmentProviderCredentials(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		environmentID, ok := environmentIDFromRoute(w, r)
-		if !ok {
-			return
-		}
-		listProviderCredentials(w, r, store, authz.ActionManageEnvSecrets, sqlcgen.ProviderCredentialScopeEnvironment, &environmentID)
+		listProviderCredentials(w, r, store, authz.ActionManageEnvSecrets, sqlcgen.ProviderCredentialScopeEnvironment, environmentScopeTarget)
 	}
 }
 
@@ -435,11 +493,7 @@ func ListEnvironmentProviderCredentials(store *postgres.ProviderCredentialStore)
 // encrypted value only.
 func UpdateEnvironmentProviderCredentialValue(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		environmentID, ok := environmentIDFromRoute(w, r)
-		if !ok {
-			return
-		}
-		updateProviderCredentialValue(w, r, store, tokenEncryptionKey, authz.ActionManageEnvSecrets, sqlcgen.ProviderCredentialScopeEnvironment, &environmentID)
+		updateProviderCredentialValue(w, r, store, tokenEncryptionKey, authz.ActionManageEnvSecrets, sqlcgen.ProviderCredentialScopeEnvironment, environmentScopeTarget)
 	}
 }
 
@@ -447,11 +501,7 @@ func UpdateEnvironmentProviderCredentialValue(store *postgres.ProviderCredential
 // {environmentID}/provider-credentials/{credentialID}.
 func DeleteEnvironmentProviderCredential(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		environmentID, ok := environmentIDFromRoute(w, r)
-		if !ok {
-			return
-		}
-		deleteProviderCredential(w, r, store, authz.ActionManageEnvSecrets, sqlcgen.ProviderCredentialScopeEnvironment, &environmentID)
+		deleteProviderCredential(w, r, store, authz.ActionManageEnvSecrets, sqlcgen.ProviderCredentialScopeEnvironment, environmentScopeTarget)
 	}
 }
 
@@ -464,14 +514,14 @@ func DeleteEnvironmentProviderCredential(store *postgres.ProviderCredentialStore
 // CreateGlobalProviderCredential backs POST /api/provider-credentials.
 func CreateGlobalProviderCredential(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		createProviderCredential(w, r, store, tokenEncryptionKey, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, nil)
+		createProviderCredential(w, r, store, tokenEncryptionKey, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, globalScopeTarget)
 	}
 }
 
 // ListGlobalProviderCredentials backs GET /api/provider-credentials.
 func ListGlobalProviderCredentials(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		listProviderCredentials(w, r, store, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, nil)
+		listProviderCredentials(w, r, store, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, globalScopeTarget)
 	}
 }
 
@@ -479,7 +529,7 @@ func ListGlobalProviderCredentials(store *postgres.ProviderCredentialStore) http
 // {credentialID} -- rotates the encrypted value only.
 func UpdateGlobalProviderCredentialValue(store *postgres.ProviderCredentialStore, tokenEncryptionKey []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		updateProviderCredentialValue(w, r, store, tokenEncryptionKey, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, nil)
+		updateProviderCredentialValue(w, r, store, tokenEncryptionKey, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, globalScopeTarget)
 	}
 }
 
@@ -487,6 +537,6 @@ func UpdateGlobalProviderCredentialValue(store *postgres.ProviderCredentialStore
 // {credentialID}.
 func DeleteGlobalProviderCredential(store *postgres.ProviderCredentialStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		deleteProviderCredential(w, r, store, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, nil)
+		deleteProviderCredential(w, r, store, authz.ActionManageGlobalSecrets, sqlcgen.ProviderCredentialScopeGlobal, globalScopeTarget)
 	}
 }

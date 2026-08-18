@@ -32,6 +32,7 @@ func TestPutReviewCostBudget_AdminAllowed_RoundTrips(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/cost-budget-admin")
 
 	var putResp restdtos.RepoSettings
 	body := []byte(`{"lightUsd":1.25,"deepUsd":10}`)
@@ -102,6 +103,7 @@ func TestPutReviewCostBudget_NegativeRejected_BadRequest(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/cost-budget-negative")
 
 	body := []byte(`{"lightUsd":-0.01,"deepUsd":null}`)
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/cost-budget-negative/review-cost-budget", body, nil, token)
@@ -128,6 +130,8 @@ func TestPutReviewCostBudget_ExplicitZeroRejected_BadRequest(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/cost-budget-zero-light")
+	rig.markRepoKnown(ctx, t, "acme/cost-budget-zero-deep")
 
 	body := []byte(`{"lightUsd":0,"deepUsd":null}`)
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/cost-budget-zero-light/review-cost-budget", body, nil, token)
@@ -159,6 +163,7 @@ func TestPutReviewCostBudget_PreservesAutoMergeToggle_ColumnScoped(t *testing.T)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
 	repoFullName := "acme/cost-budget-column-scoped"
+	rig.markRepoKnown(ctx, t, repoFullName)
 
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/"+repoFullName+"/auto-merge", []byte(`{"enabled":true}`), nil, token)
 	if status != http.StatusOK {

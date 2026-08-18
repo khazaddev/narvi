@@ -53,6 +53,7 @@ func TestCreateRepoProviderCredential_MaintainerAllowed(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, "acme/widgets")
 
 	var got restdtos.ProviderCredential
 	status := rig.doJSON(t, http.MethodPost, "/api/repos/acme/widgets/provider-credentials",
@@ -195,6 +196,7 @@ func TestProviderCredentials_RepoScoped_FullRoundTrip(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, "acme/roundtrip")
 
 	var created restdtos.ProviderCredential
 	status := rig.doJSON(t, http.MethodPost, "/api/repos/acme/roundtrip/provider-credentials",
@@ -255,6 +257,7 @@ func TestCreateProviderCredential_Duplicate_Conflict(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, "acme/dup")
 
 	status := rig.doJSON(t, http.MethodPost, "/api/repos/acme/dup/provider-credentials",
 		[]byte(`{"provider":"anthropic","value":"sk-first"}`), nil, token)
@@ -372,6 +375,7 @@ func TestCreateProviderCredential_InvalidProvider_BadRequest(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, "acme/invalid-provider")
 
 	status := rig.doJSON(t, http.MethodPost, "/api/repos/acme/invalid-provider/provider-credentials",
 		[]byte(`{"provider":"mistral","value":"sk-x"}`), nil, token)
@@ -411,6 +415,7 @@ func TestCreateProviderCredential_NULByteValue_BadRequest(t *testing.T) {
 			rig := newTestRig(t)
 			ctx := context.Background()
 			_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+			rig.markRepoKnown(ctx, t, "acme/nul-byte-create")
 
 			body := []byte(fmt.Sprintf(`{"provider":"anthropic","value":%s}`, tc.jsonValue))
 			status := rig.doJSON(t, http.MethodPost, "/api/repos/acme/nul-byte-create/provider-credentials", body, nil, token)
@@ -429,6 +434,7 @@ func TestUpdateProviderCredentialValue_NULByteValue_BadRequest(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, "acme/nul-byte-update")
 
 	var created restdtos.ProviderCredential
 	status := rig.doJSON(t, http.MethodPost, "/api/repos/acme/nul-byte-update/provider-credentials",

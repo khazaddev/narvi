@@ -42,6 +42,7 @@ func TestGetRepoSettings_MaintainerAllowed_ButPutStillAdminOnly(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleMaintainer)
+	rig.markRepoKnown(ctx, t, "acme/widgets")
 
 	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/widgets/settings", nil, nil, token)
 	if status != http.StatusOK {
@@ -78,6 +79,7 @@ func TestGetRepoSettings_NoRowYet_DefaultsFalse(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/never-configured")
 
 	var got restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/never-configured/settings", nil, &got, token)
@@ -98,6 +100,7 @@ func TestPutRepoSettings_AdminAllowed_RoundTrips(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/toggle-repo")
 
 	var putResp restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/toggle-repo/settings", []byte(`{"blockOnHighRisk":true}`), &putResp, token)
@@ -153,6 +156,7 @@ func TestGetRepoSettings_SentinelAutofixEnabled_NoRowYet_DefaultsOff(t *testing.
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/never-configured-sentinel")
 
 	var got restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodGet, "/api/repos/acme/never-configured-sentinel/settings", nil, &got, token)
@@ -171,6 +175,7 @@ func TestPutRepoSettings_SentinelAutofixEnabled_RoundTrips(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/sentinel-toggle-repo")
 
 	var putResp restdtos.RepoSettings
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/sentinel-toggle-repo/settings", []byte(`{"blockOnHighRisk":false,"sentinelAutofixEnabled":true}`), &putResp, token)

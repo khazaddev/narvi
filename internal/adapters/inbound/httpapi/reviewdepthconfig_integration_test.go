@@ -33,6 +33,7 @@ func TestPutReviewDepthConfig_AdminAllowed_RoundTrips(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/review-depth-admin")
 
 	var putResp restdtos.RepoSettings
 	body := []byte(`{"mode":"always_deep","deepPaths":["internal/billing"]}`)
@@ -123,6 +124,7 @@ func TestPutReviewDepthConfig_InvalidMode_BadRequest(t *testing.T) {
 	rig := newTestRig(t)
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
+	rig.markRepoKnown(ctx, t, "acme/review-depth-invalid-mode")
 
 	body := []byte(`{"mode":"sometimes","deepPaths":null}`)
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/acme/review-depth-invalid-mode/review-depth", body, nil, token)
@@ -145,6 +147,7 @@ func TestPutReviewDepthConfig_PreservesAutoMergeToggle_ColumnScoped(t *testing.T
 	ctx := context.Background()
 	_, token := createUserWithRole(ctx, t, rig, sqlcgen.UserRoleAdmin)
 	repoFullName := "acme/review-depth-column-scoped"
+	rig.markRepoKnown(ctx, t, repoFullName)
 
 	status := rig.doJSON(t, http.MethodPut, "/api/repos/"+repoFullName+"/auto-merge", []byte(`{"enabled":true}`), nil, token)
 	if status != http.StatusOK {

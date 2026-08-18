@@ -142,6 +142,26 @@ SET auto_retrigger_budget_notice_sent_at = now()
 WHERE repo_full_name = $1 AND pr_number = $2 AND auto_retrigger_budget_notice_sent_at IS NULL
 RETURNING *;
 
+-- name: RepoKnownToDeployment :one
+-- fix/repo-scoped-authorization's own entitlement signal: reports whether
+-- ANY github_pr_sessions row exists for repoFullName, across every
+-- pr_number -- the composite primary key's own leading column
+-- (repo_full_name, pr_number) already indexes this efficiently, no new
+-- index needed. This is a sound "this deployment is genuinely attached to
+-- this repo" proof specifically because the ONLY writer of this table is
+-- internal/adapters/inbound/github's own HMAC-verified webhook ingress
+-- (coalesce.go/handler.go) -- no httpapi REST handler writes it -- and
+-- because a row only ever COMMITS with a non-NULL session_id (coalesce.go's
+-- own single-transaction EnsureRow+LockForUpdate+SetSessionID sequencing:
+-- a denied/failed claim rolls back the whole transaction, leaving no row
+-- behind), so a bare existence check needs no separate session_id IS NOT
+-- NULL filter. See httpapi's own resolveKnownRepo (reposettings.go) for
+-- the full "why this signal, and why repo_settings/sessions.repos are
+-- NOT sound" reasoning.
+SELECT EXISTS(
+    SELECT 1 FROM github_pr_sessions WHERE repo_full_name = $1
+) AS repo_known;
+
 -- handleReviewRetriggerDebounceTimer's own read of pending_retrigger_head_
 -- sha/auto_retrigger_count/auto_retrigger_budget_notice_sent_at reuses the
 -- EXISTING GetGitHubPRSessionBySessionID above (a.sessionID is exactly
