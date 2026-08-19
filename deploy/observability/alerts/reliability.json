@@ -2,11 +2,11 @@
   "alerts": [
     {
       "name": "OutboxLagHigh",
-      "description": "The oldest still-due outbox row has been waiting longer than this system's own maximum legitimate backoff delay — delivery is genuinely stuck, not merely cooling down.",
+      "description": "The oldest still-due outbox row has been waiting longer than this system's own maximum legitimate cumulative retry-schedule age — delivery is genuinely stuck, not merely cooling down through an ordinary backoff cycle.",
       "metrics": ["outbox_lag_seconds"],
-      "condition": "p95(outbox_lag_seconds) > 300s for 10m",
+      "condition": "p95(outbox_lag_seconds) > 2400s for 10m",
       "severity": "warning",
-      "thresholdDerivation": "300s mirrors platform.Timeouts.OutboxBackoffMax (internal/platform/timeouts.go) — domain/outbox.EvaluateBackoff's own schedule never delays a retry longer than that ceiling, so a row still showing this much lag has exhausted every legitimate backoff window.",
+      "thresholdDerivation": "outbox_lag_seconds measures a row's CUMULATIVE age since creation (PumpOnce's own time.Since(oldestCreatedAt), internal/app/outboxworker/builder.go), not the delay of any single retry — so platform.Timeouts.OutboxBackoffMax (300s), which bounds only ONE retry interval, is the wrong quantity to compare it against: a row that has legitimately retried several times accumulates far more than 300s of age with nothing wrong. The correct ceiling is the cumulative age a row reaches after exhausting domain/outbox.MaxAttempts (10, internal/domain/outbox/backoff.go) attempts. EvaluateBackoff's schedule with the shipped defaults (OutboxBackoffBase 30s, OutboxBackoffMax 300s) produces retry delays, per attempt 1 through 9 (attempt 10 is the dead-lettering attempt — no further delay is ever scheduled after it): 30s, 60s, 120s, 240s, 300s, 300s, 300s, 300s, 300s. Sum = 30+60+120+240+(300*5) = 1950s — the age at which a row's own FINAL legitimate attempt becomes due, the ceiling of 'still legitimately retrying, never yet given up.' Add worst-case real-world overhead per retry cycle — up to OutboxPumpInterval (5s, waiting for a tick to claim a just-due row) plus OutboxDeliveryTimeout (15s, the bounded worst case for the failing Deliver call itself, which elapses BEFORE recordFailure stamps the next backoff window) — across the 9 cycles between attempts 1-10: 9 * (5s+15s) = 180s. Worst-case legitimate age: 1950s + 180s = 2130s (35.5min). 2400s (40min) sits comfortably above that with headroom, so this alert now fires only once a row has plausibly exhausted its ENTIRE legitimate retry budget without yet being dead-lettered — a real stuck condition (e.g. the outbox worker loop itself wedged, or a DB issue silently blocking claims), never ordinary backoff.",
       "runbook": "docs/runbooks/outbox-delivery.md"
     },
     {
