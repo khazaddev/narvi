@@ -55,11 +55,12 @@ func fakeDockerdScript(t *testing.T, delaySeconds float64, socketPath string, cr
 	scriptPath := filepath.Join(dir, "fake-dockerd.sh")
 
 	var body string
-	if exitCode != 0 {
+	switch {
+	case exitCode != 0:
 		body = fmt.Sprintf("#!/bin/sh\nexit %d\n", exitCode)
-	} else if createSocket {
+	case createSocket:
 		body = fmt.Sprintf("#!/bin/sh\nsleep %v\ntouch '%s'\nsleep 30\n", delaySeconds, socketPath)
-	} else {
+	default:
 		body = fmt.Sprintf("#!/bin/sh\nsleep %v\nsleep 30\n", delaySeconds)
 	}
 

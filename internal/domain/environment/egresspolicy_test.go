@@ -145,7 +145,8 @@ func TestAppendAllowlistFloor(t *testing.T) {
 				t.Fatalf("Mode = %q, want %q", got.Mode, tt.want.Mode)
 			}
 			gotSorted := append([]string(nil), got.Allowlist...)
-			if !reflect.DeepEqual(gotSorted, tt.want.Allowlist) && !(len(gotSorted) == 0 && len(tt.want.Allowlist) == 0) {
+			bothEmpty := len(gotSorted) == 0 && len(tt.want.Allowlist) == 0
+			if !bothEmpty && !reflect.DeepEqual(gotSorted, tt.want.Allowlist) {
 				t.Fatalf("Allowlist = %#v, want %#v", gotSorted, tt.want.Allowlist)
 			}
 			if !reflect.DeepEqual(tt.p.Allowlist, original) {

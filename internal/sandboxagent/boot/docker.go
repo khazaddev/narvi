@@ -29,6 +29,7 @@
 // services.waitReady's own structure closely enough to read as "the same
 // idea, applied to a different readiness primitive," not a fork of
 // unrelated logic.
+
 package boot
 
 import (

@@ -20,6 +20,7 @@
 // "no port interfaces either": a port is how I/O reaches this system, and
 // this package must stay reasoning-only regardless of which adapter is
 // live).
+
 package environment
 
 import "errors"
