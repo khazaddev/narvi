@@ -15,7 +15,9 @@ package linear_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -118,5 +120,118 @@ func TestWebhookHandler_Created_RolloutGate_EnrolledRepoStillCreatesSession(t *t
 	}
 	if !row.SessionID.Valid {
 		t.Error("agent session row has no session_id -- want a real created session for an enrolled repo")
+	}
+}
+
+// maintenanceDatabaseDSN rewrites connStr's own database name to
+// "postgres" -- every real Postgres server carries this built-in
+// maintenance database alongside whatever this test binary's own shared
+// container additionally created (tcpostgres.WithDatabase("narvi_test"),
+// sharedpool_integration_test.go), so it is reachable with the SAME
+// host/port/credentials while carrying NONE of this codebase's own
+// migrated tables. See TestWebhookHandler_Created_
+// TransientRolloutReadError_RetriesRatherThanTerminal's own doc comment
+// for why this, rather than a timing- or lock-based fault injection, is
+// the deterministic way to make exactly ONE query (repo_settings) fail
+// while every other query this test's own webhook request issues (on a
+// DIFFERENT, healthy pool) succeeds normally.
+func maintenanceDatabaseDSN(connStr string) (string, error) {
+	u, err := url.Parse(connStr)
+	if err != nil {
+		return "", fmt.Errorf("parse connection string: %w", err)
+	}
+	u.Path = "/postgres"
+	return u.String(), nil
+}
+
+// TestWebhookHandler_Created_TransientRolloutReadError_RetriesRatherThanTerminal
+// is the MUTATION-TESTABLE guard for Root Cause 2 of this Step's own
+// adversarial review: a repo_settings read failure that is NOT a
+// demonstrated policy decision (a database blip, a context cancellation,
+// a timeout) must refuse this ONE attempt but must NOT take the SAME
+// terminal, permanent-denial path TestWebhookHandler_Created_
+// RolloutRefusal_AcknowledgesReleasesOnlyAgentSessionClaim (immediately
+// above) proves for a GENUINE "this repo is not enrolled" refusal --
+// checkRolloutGate's own doc comment (rolloutgate.go) has the full "why".
+//
+// Fault injection: deps.Pool (the ONLY dependency httpapi.
+// CreateSessionCore uses to open its own fresh transaction --
+// create.go's own `tx, err := pool.Begin(ctx)`) is swapped for a pool
+// pointed at Postgres's own built-in "postgres" maintenance database
+// (maintenanceDatabaseDSN, above) -- reachable on the SAME server/
+// credentials as this test binary's shared container, but never
+// migrated. checkRolloutGate's own repoSettings.WithTx(tx).Get is the
+// FIRST query CreateSessionOnTx ever attempts on that fresh transaction
+// (right after validateCreateSessionRequest, which is pure, and BEFORE
+// this Step's own primary gate lets anything else run) -- so this
+// deterministically fails EXACTLY that one query with a genuine Postgres
+// error ("relation repo_settings does not exist"), with zero timing or
+// locking tricks, while every dependency THIS webhook request needs
+// BEFORE reaching CreateSessionCore (deps.Deliveries/deps.AgentSessions/
+// deps.IdentityLink -- handleCreated's own claim + authorize steps, both
+// well before its own httpapi.CreateSessionCore call) stays bound to the
+// real, healthy shared pool and succeeds normally.
+//
+// Mutation anchor: re-marking checkRolloutGate's own read-error refusal
+// as RolloutRefusal: true (reverting Root Cause 2's own fix) makes this
+// test fail -- the SAME cerr.RolloutRefusal check handleCreated already
+// has (webhook.go) would then take the terminal branch instead (status
+// 200, claim kept), exactly like TestWebhookHandler_Created_
+// RolloutRefusal_AcknowledgesReleasesOnlyAgentSessionClaim's own genuine-
+// refusal scenario, flipping every assertion below.
+func TestWebhookHandler_Created_TransientRolloutReadError_RetriesRatherThanTerminal(t *testing.T) {
+	ctx := context.Background()
+	pool, connStr := IntegrationTestPoolAndConnStr(t)
+	deps := newHandlerDeps(t, pool)
+	deps.RolloutMode = platform.RolloutModeCohort
+	deps.RepoSettings = narvipg.NewRepoSettingsStore(pool)
+
+	brokenDSN, err := maintenanceDatabaseDSN(connStr)
+	if err != nil {
+		t.Fatalf("derive maintenance-database DSN: %v", err)
+	}
+	brokenPool, err := narvipg.NewPool(ctx, brokenDSN)
+	if err != nil {
+		t.Fatalf("open pool against maintenance database: %v", err)
+	}
+	t.Cleanup(brokenPool.Close)
+	deps.Pool = brokenPool
+
+	agentSessionID := "agent-session-" + t.Name()
+	organizationID := "org-" + t.Name()
+	deliveryID := "delivery-" + t.Name()
+	body := agentSessionCreatedPayload(agentSessionID, organizationID)
+
+	rec := postWebhook(t, linear.NewWebhookHandler(deps), body, deliveryID)
+
+	// The RETRY path (NewWebhookHandler's own generic ok=false branch:
+	// release the webhook-delivery claim, answer 500) must run -- never
+	// the RolloutRefusal terminal path (200, claim kept).
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d (a transient repo_settings read failure must take the RETRY path, never the permanent-refusal path)", rec.Code, http.StatusInternalServerError)
+	}
+
+	// The webhook-delivery claim must have been RELEASED -- Claim on the
+	// SAME (provider, deliveryID) must report a fresh claim (Inserted ==
+	// true), proving a redelivery of this SAME Linear-Delivery id can
+	// actually retry once the database recovers -- the opposite of
+	// TestWebhookHandler_Created_RolloutRefusal_
+	// AcknowledgesReleasesOnlyAgentSessionClaim's own "claim KEPT" proof
+	// for a genuine, permanent refusal.
+	deliveries := narvipg.NewWebhookDeliveryStore(pool)
+	claim, err := deliveries.Claim(ctx, "linear", deliveryID)
+	if err != nil {
+		t.Fatalf("re-claim webhook delivery: %v", err)
+	}
+	if !claim.Inserted {
+		t.Error("webhook delivery claim was NOT re-claimable (Inserted = false) -- want it released so a redelivery can retry once Postgres recovers")
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE spawn_source = 'linear'`).Scan(&count); err != nil {
+		t.Fatalf("count sessions: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("sessions count = %d, want 0 -- a refused attempt (transient or not) must never create a session", count)
 	}
 }

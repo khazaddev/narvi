@@ -129,10 +129,37 @@ func resolveRolloutRepoFullName(rawURL string) (fullName string, ok bool) {
 // audit_log row: this codebase's own audit_log table records completed
 // STATE CHANGES only, never a refusal of any kind (reposettings.go's own
 // logUnknownRepoRefusal doc comment states this convention explicitly;
-// mirrored here, not reinvented). The returned *CreateSessionError
-// carries RolloutRefusal: true (CreateSessionError's own doc comment) so
-// every caller of CreateSessionOnTx can distinguish this permanent policy
-// refusal from a transient failure structurally.
+// mirrored here, not reinvented).
+//
+// Fail-closed vs. terminal (adversarial-review fix, §32): failing closed
+// on a degraded read and marking a refusal as a PERMANENT policy decision
+// are two different properties, and this function used to conflate them
+// -- every refusal, including one caused by nothing more than a
+// context-canceled or timed-out repo_settings query, came back with
+// CreateSessionError.RolloutRefusal set. The four ingress paths
+// (REST/create.go aside, which does not branch on it) use that field
+// structurally to decide terminal vs. retry (CreateSessionError's own doc
+// comment) -- so a momentary database blip did not merely refuse THIS
+// attempt, it made Linear ack terminally, Slack post a permanent denial,
+// GitHub stay silent while keeping its claim, and the sentinel-autofix
+// outbox skip terminally, permanently dropping legitimate work for a repo
+// that may be genuinely enrolled, with no retry ever attempted.
+//
+// The fix: this function still refuses the attempt EITHER way (fail-
+// closed stays fail-closed -- a repo whose enrollment could not be
+// verified is never silently admitted), but RolloutRefusal is now true
+// ONLY when the refusal is a genuine, DEMONSTRATED policy outcome (mode
+// is cohort and the repo's own repo_settings row -- or lack of one -- was
+// actually read; an unresolvable/unsupported-host URL is equally
+// terminal, since re-parsing the identical URL can never produce a
+// different answer). readErrored tracks, alongside admissions and in the
+// SAME order, which admissions were forced to Enrolled == false by a
+// genuine I/O error (an absent row, or a URL that could never resolve,
+// are real, reproducible facts -- never counted here) rather than a
+// demonstrated fact -- so whichever admission rollout.Decide's own
+// "first not-enrolled repo" stops at (decision.RepoFullName) can be
+// checked for whether THAT SPECIFIC refusal was read-error-caused, not
+// merely whether ANY repo in the request happened to hit one.
 func checkRolloutGate(ctx context.Context, tx pgx.Tx, repoSettings *postgres.RepoSettingsStore, mode platform.RolloutMode, req restdtos.CreateSessionRequest) *CreateSessionError {
 	if mode != rollout.ModeCohort {
 		return nil
@@ -141,12 +168,14 @@ func checkRolloutGate(ctx context.Context, tx pgx.Tx, repoSettings *postgres.Rep
 	logger := platform.Logger(ctx)
 
 	admissions := make([]rollout.RepoAdmission, 0, len(req.Repos))
+	readErrored := make([]bool, 0, len(req.Repos))
 	for _, repo := range req.Repos {
 		fullName, resolved := resolveRolloutRepoFullName(repo.Url)
 		if !resolved {
 			logger.Warn("httpapi: rollout gate: repo url could not be resolved to a trusted, host-verified owner/repo identity; treating as not enrolled",
 				"url", repo.Url, "spawn_source", string(req.SpawnSource), "rollout_mode", string(mode))
 			admissions = append(admissions, rollout.RepoAdmission{FullName: repo.Url, Enrolled: false})
+			readErrored = append(readErrored, false)
 			continue
 		}
 
@@ -154,19 +183,27 @@ func checkRolloutGate(ctx context.Context, tx pgx.Tx, repoSettings *postgres.Rep
 		switch {
 		case err == nil:
 			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: row.SessionsEnabled})
+			readErrored = append(readErrored, false)
 		case errors.Is(err, pgx.ErrNoRows):
 			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
+			readErrored = append(readErrored, false)
 		default:
-			// A genuine read error, on the transaction about to insert
-			// this very session -- fail-closed (§32, §62 finding C3's own
-			// precedent: widening policy on a degraded read is
-			// backwards), never treated as "no row, so unenrolled" without
-			// comment: logged distinctly so an operator can tell a real
-			// Postgres problem apart from an ordinary not-yet-enrolled
-			// repo.
+			// A genuine read error -- including a context-canceled or
+			// timed-out query, which surfaces here identically, never as
+			// some other classification -- on the transaction about to
+			// insert this very session -- fail-closed (§32, §62 finding
+			// C3's own precedent: widening policy on a degraded read is
+			// backwards), never treated as "no row, so unenrolled"
+			// without comment: logged distinctly so an operator can tell
+			// a real Postgres problem apart from an ordinary
+			// not-yet-enrolled repo. readErrored records this SPECIFICALLY
+			// so the refusal built below can tell a degraded read apart
+			// from a demonstrated policy fact -- see this function's own
+			// doc comment.
 			logger.Warn("httpapi: rollout gate: read repo_settings failed; failing closed (treating as not enrolled)",
 				"repo", fullName, "error", err, "spawn_source", string(req.SpawnSource), "rollout_mode", string(mode))
 			admissions = append(admissions, rollout.RepoAdmission{FullName: fullName, Enrolled: false})
+			readErrored = append(readErrored, true)
 		}
 	}
 
@@ -175,8 +212,43 @@ func checkRolloutGate(ctx context.Context, tx pgx.Tx, repoSettings *postgres.Rep
 		return nil
 	}
 
+	// rollout.Decide's own doc comment: "refuses on the FIRST [repo] that
+	// is not [enrolled]" -- mirrored here, over the SAME admissions slice
+	// in the SAME order, so refusalIsTransient always describes exactly
+	// the repo Decide's own decision.RepoFullName names, never a
+	// different one a later, unrelated read error happened to touch.
+	refusalIsTransient := false
+	for i, a := range admissions {
+		if !a.Enrolled {
+			refusalIsTransient = readErrored[i]
+			break
+		}
+	}
+
 	logger.Warn("httpapi: rollout gate: session creation refused, repo not enrolled",
-		"repo", decision.RepoFullName, "spawn_source", string(req.SpawnSource), "rollout_mode", string(mode))
+		"repo", decision.RepoFullName, "spawn_source", string(req.SpawnSource), "rollout_mode", string(mode), "transient", refusalIsTransient)
+
+	if refusalIsTransient {
+		// Fail-closed, but NOT a policy refusal: repo_settings could not be
+		// read for this repo (a context cancellation, a timeout, or any
+		// other degraded-read condition), so THIS attempt is refused, but
+		// RolloutRefusal stays false -- every one of the four ingress
+		// channels' own existing transient-failure retry path applies
+		// here exactly as it would for any other database hiccup, so the
+		// work is picked up again once Postgres recovers, rather than
+		// being dropped forever. Deliberately no session_rollout_refused_
+		// total increment here: that counter is §32's own "a repo was
+		// refused by policy" signal (its own metric doc comment) -- a
+		// degraded read is an infrastructure problem, not a rollout
+		// decision, and conflating the two would make this metric lie to
+		// an operator about how many repos are actually being kept out by
+		// the cohort gate.
+		return &CreateSessionError{
+			Status:  http.StatusServiceUnavailable,
+			Message: "repository enrollment could not be verified: " + decision.RepoFullName,
+		}
+	}
+
 	recordRolloutRefusal(ctx, string(req.SpawnSource))
 
 	return &CreateSessionError{

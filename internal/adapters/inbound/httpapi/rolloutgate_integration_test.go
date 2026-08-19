@@ -284,11 +284,13 @@ func TestCreateSessionOnTx_RolloutGate_CohortMode_CrossHostSpoofRefused(t *testi
 	}
 }
 
-// TestCreateSessionOnTx_RolloutGate_CohortMode_ReadErrorFailsClosed proves
-// §32's own "read error -> refused" fail-closed rule using this package's
-// established fault-injection idiom (an already-rolled-back tx standing
-// in for a genuine store outage -- RepoSettingsStore.WithTx's own doc
-// comment cites this exact precedent, TestBuild_
+// TestCreateSessionOnTx_RolloutGate_CohortMode_ReadErrorFailsClosedButNotAsPolicy
+// proves §32's own "read error -> refused, but retryably" rule (Root
+// Cause 2 of the adversarial review that found this Step's own original
+// version of this test locked in the WRONG expectation -- see below) using
+// this package's established fault-injection idiom (an already-rolled-back
+// tx standing in for a genuine store outage -- RepoSettingsStore.WithTx's
+// own doc comment cites this exact precedent, TestBuild_
 // CredentialResolutionErrorDegradesRatherThanRenderingNoGitHub in
 // internal/app/decisioninbox). Passing an already-closed tx as
 // CreateSessionOnTx's OWN transaction means checkRolloutGate's
@@ -297,11 +299,24 @@ func TestCreateSessionOnTx_RolloutGate_CohortMode_CrossHostSpoofRefused(t *testi
 // exercising the read-error branch specifically, not merely "some
 // downstream write failed".
 //
-// Mutation anchor: changing checkRolloutGate's own `default:` case (a
-// genuine read error) to treat it as enrolled=true instead of false would
-// make this test incorrectly succeed, flipping it from refused to
-// admitted.
-func TestCreateSessionOnTx_RolloutGate_CohortMode_ReadErrorFailsClosed(t *testing.T) {
+// Renamed from this test's own original ReadErrorFailsClosed: fail-closed
+// (cerr != nil, this repo is never silently admitted) is UNCHANGED and
+// still asserted below, but this test's own ORIGINAL assertion --
+// cerr.RolloutRefusal == true for a read error -- encoded exactly the bug
+// an adversarial review found: fail-closed and "this is a permanent
+// policy refusal" are different properties, and a degraded read is only
+// the first one. See checkRolloutGate's own doc comment (rolloutgate.go)
+// for the full "why" -- conflating them made a momentary database blip
+// permanently drop legitimate work on all four ingress channels, with no
+// retry.
+//
+// Mutation anchors: (1) changing checkRolloutGate's own `default:` case
+// (a genuine read error) to treat it as enrolled=true instead of false
+// would make this test incorrectly succeed, flipping it from refused to
+// admitted; (2) re-marking this refusal as RolloutRefusal: true (reverting
+// Root Cause 2's own fix) makes this test's own RolloutRefusal assertion
+// fail.
+func TestCreateSessionOnTx_RolloutGate_CohortMode_ReadErrorFailsClosedButNotAsPolicy(t *testing.T) {
 	ctx := context.Background()
 	pool := newCoreTestPool(t)
 	sessions := narvipg.NewSessionStore(pool)
@@ -323,13 +338,15 @@ func TestCreateSessionOnTx_RolloutGate_CohortMode_ReadErrorFailsClosed(t *testin
 	}
 	// tx is now closed -- any query against it (including checkRolloutGate's
 	// own repoSettings.WithTx(tx).Get) returns a genuine error, standing in
-	// for a real Postgres outage.
+	// for a real Postgres outage (including a context-canceled or timed-out
+	// query, which pgx surfaces the SAME way: a non-nil, non-ErrNoRows
+	// error on the query call).
 
 	_, _, cerr := CreateSessionOnTx(ctx, tx, sessions, turns, environments, auditLog, req, nilCreator, false, platform.RolloutModeCohort, repoSettings)
 	if cerr == nil {
 		t.Fatal("CreateSessionOnTx: got nil error, want refusal -- a genuine repo_settings read failure must fail CLOSED, never silently admit")
 	}
-	if !cerr.RolloutRefusal {
-		t.Errorf("cerr.RolloutRefusal = false, want true (status=%d message=%q)", cerr.Status, cerr.Message)
+	if cerr.RolloutRefusal {
+		t.Errorf("cerr.RolloutRefusal = true, want false -- a transient repo_settings read failure is NOT a demonstrated policy decision; the four ingress channels must take their retry path, not their permanent-denial path (status=%d message=%q)", cerr.Status, cerr.Message)
 	}
 }
