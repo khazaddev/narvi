@@ -98,6 +98,18 @@ func TestRunBootSequence_DockerRequired_SpawnsDockerdBeforeRunBoot(t *testing.T)
 	timeouts.DockerReadinessTimeout = 500 * time.Millisecond
 
 	sup := supervisor.New()
+	// The fake dockerd script this test spawns via writeFakeDockerdOnPath
+	// ends in `sleep 30` (it never exits on its own, standing in for a
+	// real long-lived daemon) -- without this cleanup it survives past
+	// the test, exactly the stranded-process class this repo has been
+	// bitten by before. Mirrors internal/sandboxagent/boot/runboot_test.
+	// go's own identical inline t.Cleanup shape (same package family,
+	// same sup.StopAll(ctx, time.Second) call).
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = sup.StopAll(ctx, time.Second)
+	})
 	cfg := boot.Config{
 		BootMode:           sandboxboot.BootModeFresh,
 		WorkspaceDir:       t.TempDir(),
