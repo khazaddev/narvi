@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -26,48 +25,41 @@ func wsEquivalentForTest(httpURL string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http") + "/sessions/sess-1/ws?type=sandbox"
 }
 
-// TestApplySandboxSecretEnv_SetsEachNameValuePair proves the real
-// mechanism this whole feature depends on: os.Setenv onto sandbox-agent's
-// own process environment, so a LATER supervisor.EnvWithout call picks it
-// up automatically. Not t.Parallel() -- mutates real process environment
-// variables.
-func TestApplySandboxSecretEnv_SetsEachNameValuePair(t *testing.T) {
-	t.Setenv("MY_FIRST_SECRET", "") // pre-register with t.Setenv so cleanup is automatic
-	t.Setenv("MY_SECOND_SECRET", "")
+// TestSandboxSecretSpawnEnv_BuildsSortedNameValueEntries proves the real
+// mechanism this whole feature depends on AFTER the adversarial-review
+// HIGH threading fix: a resolved map becomes a plain, sorted []string of
+// "NAME=VALUE" entries -- ready to thread into opencodeproc.Spawn/
+// boot.RunBoot, never os.Setenv'd onto this (or sandbox-agent's own)
+// process.
+func TestSandboxSecretSpawnEnv_BuildsSortedNameValueEntries(t *testing.T) {
+	t.Parallel()
 
-	got := applySandboxSecretEnv(map[string]string{
-		"MY_FIRST_SECRET":  "value-one",
+	got := sandboxSecretSpawnEnv(map[string]string{
 		"MY_SECOND_SECRET": "value-two",
+		"MY_FIRST_SECRET":  "value-one",
 	})
 
-	wantNames := []string{"MY_FIRST_SECRET", "MY_SECOND_SECRET"}
-	if len(got) != len(wantNames) {
-		t.Fatalf("applySandboxSecretEnv() returned names = %v, want %v", got, wantNames)
+	want := []string{"MY_FIRST_SECRET=value-one", "MY_SECOND_SECRET=value-two"}
+	if len(got) != len(want) {
+		t.Fatalf("sandboxSecretSpawnEnv() = %v, want %v", got, want)
 	}
-	for i, name := range wantNames {
-		if got[i] != name {
-			t.Errorf("applySandboxSecretEnv() returned names[%d] = %q, want %q (sorted)", i, got[i], name)
+	for i, entry := range want {
+		if got[i] != entry {
+			t.Errorf("sandboxSecretSpawnEnv()[%d] = %q, want %q (sorted by name)", i, got[i], entry)
 		}
-	}
-
-	if v := os.Getenv("MY_FIRST_SECRET"); v != "value-one" {
-		t.Errorf("os.Getenv(MY_FIRST_SECRET) = %q, want %q", v, "value-one")
-	}
-	if v := os.Getenv("MY_SECOND_SECRET"); v != "value-two" {
-		t.Errorf("os.Getenv(MY_SECOND_SECRET) = %q, want %q", v, "value-two")
 	}
 }
 
-// TestApplySandboxSecretEnv_EmptyMapIsNoop proves the overwhelming common
-// case (nothing configured for this session) touches nothing.
-func TestApplySandboxSecretEnv_EmptyMapIsNoop(t *testing.T) {
-	got := applySandboxSecretEnv(nil)
-	if got != nil {
-		t.Errorf("applySandboxSecretEnv(nil) = %v, want nil", got)
+// TestSandboxSecretSpawnEnv_EmptyMapIsNoop proves the overwhelming common
+// case (nothing configured for this session) produces a nil slice.
+func TestSandboxSecretSpawnEnv_EmptyMapIsNoop(t *testing.T) {
+	t.Parallel()
+
+	if got := sandboxSecretSpawnEnv(nil); got != nil {
+		t.Errorf("sandboxSecretSpawnEnv(nil) = %v, want nil", got)
 	}
-	got = applySandboxSecretEnv(map[string]string{})
-	if got != nil {
-		t.Errorf("applySandboxSecretEnv({}) = %v, want nil", got)
+	if got := sandboxSecretSpawnEnv(map[string]string{}); got != nil {
+		t.Errorf("sandboxSecretSpawnEnv({}) = %v, want nil", got)
 	}
 }
 
@@ -79,6 +71,8 @@ func TestApplySandboxSecretEnv_EmptyMapIsNoop(t *testing.T) {
 // only this package's own additional wrapping (building the client from
 // boot.Config, logging, degrade-on-failure).
 func TestFetchSandboxSecrets_RealRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"secrets": map[string]string{"MY_SECRET": "real-value"}})
@@ -94,17 +88,22 @@ func TestFetchSandboxSecrets_RealRoundTrip(t *testing.T) {
 		},
 	}
 
-	got := fetchSandboxSecrets(context.Background(), cfg, testSandboxSecretsFetchTimeout)
+	got, ok := fetchSandboxSecrets(context.Background(), cfg, testTimeouts())
+	if !ok {
+		t.Fatal("fetchSandboxSecrets() ok = false, want true")
+	}
 	if got["MY_SECRET"] != "real-value" {
 		t.Errorf("fetchSandboxSecrets() = %v, want map containing MY_SECRET=real-value", got)
 	}
 }
 
 // TestFetchSandboxSecrets_DegradesToNilOnFailure proves the whole "warn
-// and continue" posture directly: a CP server returning an error must
-// degrade to nil, never a panic or a propagated error the caller would
-// have to handle.
+// and continue" posture directly: a CP server returning a persistent
+// error must degrade to nil/false, never a panic or a propagated error
+// the caller would have to handle.
 func TestFetchSandboxSecrets_DegradesToNilOnFailure(t *testing.T) {
+	t.Parallel()
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -119,9 +118,95 @@ func TestFetchSandboxSecrets_DegradesToNilOnFailure(t *testing.T) {
 		},
 	}
 
-	got := fetchSandboxSecrets(context.Background(), cfg, testSandboxSecretsFetchTimeout)
+	got, ok := fetchSandboxSecrets(context.Background(), cfg, testTimeouts())
+	if ok {
+		t.Error("fetchSandboxSecrets() ok = true, want false on a persistent 500 response")
+	}
 	if got != nil {
 		t.Errorf("fetchSandboxSecrets() = %v, want nil on a 500 response", got)
+	}
+}
+
+// TestFetchSandboxSecrets_RetriesTransientFailureThenSucceeds is the
+// direct regression test for the adversarial-review MEDIUM fix (§27.1:
+// "with bounded retry"): a 500 on the first attempt, then a 2xx on the
+// second, must still succeed.
+func TestFetchSandboxSecrets_RetriesTransientFailureThenSucceeds(t *testing.T) {
+	t.Parallel()
+
+	attempt := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempt++
+		if attempt == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"secrets": map[string]string{"MY_SECRET": "real-value"}})
+	}))
+	defer server.Close()
+
+	cfg := boot.Config{
+		SessionConfig: &sessionconfig.SessionConfig{
+			ControlPlaneWsUrl: wsEquivalentForTest(server.URL),
+			SessionId:         "sess-1",
+			SandboxToken:      "tok",
+			Gen:               1,
+		},
+	}
+
+	timeouts := testTimeouts()
+	timeouts.SandboxSecretFetchMaxAttempts = 3
+	timeouts.SandboxSecretFetchRetryBaseDelay = 1
+	timeouts.SandboxSecretFetchRetryMaxDelay = 1
+
+	got, ok := fetchSandboxSecrets(context.Background(), cfg, timeouts)
+	if !ok {
+		t.Fatal("fetchSandboxSecrets() ok = false, want true (the second attempt succeeds)")
+	}
+	if got["MY_SECRET"] != "real-value" {
+		t.Errorf("fetchSandboxSecrets() = %v, want map containing MY_SECRET=real-value", got)
+	}
+	if attempt != 2 {
+		t.Errorf("server saw %d attempts, want exactly 2 (one failure, one success)", attempt)
+	}
+}
+
+// TestFetchSandboxSecrets_TerminalStatusNeverRetries is the direct
+// regression test for the OTHER half of the bounded-retry fix: a 403
+// ("no usable sandbox secret for this session" / gen mismatch -- one of
+// this delivery endpoint's own terminal handshake fences) must NOT be
+// retried.
+func TestFetchSandboxSecrets_TerminalStatusNeverRetries(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	cfg := boot.Config{
+		SessionConfig: &sessionconfig.SessionConfig{
+			ControlPlaneWsUrl: wsEquivalentForTest(server.URL),
+			SessionId:         "sess-1",
+			SandboxToken:      "tok",
+			Gen:               1,
+		},
+	}
+
+	timeouts := testTimeouts()
+	timeouts.SandboxSecretFetchMaxAttempts = 3
+	timeouts.SandboxSecretFetchRetryBaseDelay = 1
+	timeouts.SandboxSecretFetchRetryMaxDelay = 1
+
+	_, ok := fetchSandboxSecrets(context.Background(), cfg, timeouts)
+	if ok {
+		t.Error("fetchSandboxSecrets() ok = true, want false for a 403 response")
+	}
+	if attempts != 1 {
+		t.Errorf("server saw %d attempts, want exactly 1 (a 403 is a terminal fence, never retried)", attempts)
 	}
 }
 
@@ -147,5 +232,5 @@ func TestFetchSandboxSecrets_NilSessionConfigPanics(t *testing.T) {
 			t.Fatal("fetchSandboxSecrets(cfg with nil SessionConfig) did not panic, want a nil-pointer panic (see this test's own doc comment)")
 		}
 	}()
-	fetchSandboxSecrets(context.Background(), boot.Config{}, testSandboxSecretsFetchTimeout)
+	fetchSandboxSecrets(context.Background(), boot.Config{}, testTimeouts())
 }

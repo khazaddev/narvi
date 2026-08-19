@@ -2201,33 +2201,104 @@ type Timeouts struct {
 	ReviewCostBudgetServerReadHeaderTimeout time.Duration
 
 	// SandboxSecretFetchTimeout (Step 72, "sandbox secrets & opencode
-	// config", §27.1) bounds a single call to CP's
+	// config", §27.1) bounds a SINGLE ATTEMPT at CP's
 	// /sessions/{id}/sandbox-secrets delivery endpoint
 	// (internal/sandboxagent/credentials.CPClient.FetchSandboxSecrets),
-	// made once at boot, before the first hook runs and before `opencode
-	// serve` spawns (cmd/sandbox-agent/main.go). Not specified in the
-	// plan; chosen the SAME as ProviderCredentialFetchTimeout's own 10s --
-	// mirrors that field's own "lightweight mint call, not a large data
-	// transfer" reasoning exactly: this call resolves and decrypts at
-	// most a handful of name-keyed rows server-side, comparably
-	// lightweight. Deliberately its own field, not a reuse of
-	// ProviderCredentialFetchTimeout -- the two calls hit different CP
-	// endpoints for a different secret-storage table, and mirroring a
-	// SEPARATE field per delivery endpoint is this codebase's own
-	// established precedent (ProviderCredentialFetchTimeout's own doc
-	// comment makes the identical "deliberately its own field" choice
-	// against CredentialFetchTimeout).
+	// tried up to SandboxSecretFetchMaxAttempts times (below) at boot,
+	// before the first hook runs and before `opencode serve` spawns
+	// (cmd/sandbox-agent's own fetchSandboxSecrets, sandboxsecrets.go).
+	// Not specified in the plan; chosen the SAME as
+	// ProviderCredentialFetchTimeout's own 10s -- mirrors that field's own
+	// "lightweight mint call, not a large data transfer" reasoning
+	// exactly: this call resolves and decrypts at most a handful of
+	// name-keyed rows server-side, comparably lightweight. Deliberately
+	// its own field, not a reuse of ProviderCredentialFetchTimeout -- the
+	// two calls hit different CP endpoints for a different secret-storage
+	// table, and mirroring a SEPARATE field per delivery endpoint is this
+	// codebase's own established precedent (ProviderCredentialFetchTimeout's
+	// own doc comment makes the identical "deliberately its own field"
+	// choice against CredentialFetchTimeout).
+	//
+	// Adversarial-review MEDIUM fix (§27.1 explicitly says "with bounded
+	// retry" -- an earlier version of this Step made exactly one attempt,
+	// silently dropping every sandbox secret for a session's WHOLE
+	// lifetime on one transient blip, e.g. a control-plane rolling
+	// restart or an ingress 502, likeliest exactly at boot when CP is
+	// under spawn-burst load): this field's own MEANING changed from
+	// "the one and only attempt's budget" to "one attempt's budget,
+	// tried up to SandboxSecretFetchMaxAttempts times" -- its VALUE is
+	// unchanged (10s remains a reasonable single-attempt budget for this
+	// lightweight call).
 	SandboxSecretFetchTimeout time.Duration
 
-	// OpenCodeConfigFetchTimeout (Step 72, §27.2) bounds a single call to
-	// CP's /sessions/{id}/opencode-config delivery endpoint
+	// SandboxSecretFetchMaxAttempts/SandboxSecretFetchRetryBaseDelay/
+	// SandboxSecretFetchRetryMaxDelay configure platform.Retry's own
+	// doubling-capped-at-max backoff around fetchSandboxSecrets' own call
+	// to CPClient.FetchSandboxSecrets -- mirrors
+	// IdentityEmailFetchMaxAttempts/IdentityEmailFetchRetryBaseDelay/
+	// IdentityEmailFetchRetryMaxDelay's own identical shape (a foreground,
+	// in-process retry bounded by the caller's own budget), for the
+	// adversarial-review MEDIUM fix described on SandboxSecretFetchTimeout
+	// above. Only a transport error or a CP 5xx is retried -- a
+	// 401/403/404/410 is this delivery endpoint's own terminal handshake
+	// fence (mirrors providercredentialsdelivery.go's identical four-way
+	// shape) and is never worth retrying (cmd/sandbox-agent's own
+	// deliveryretry.go, classifyDeliveryFetchError).
+	//
+	// Chosen as 3 attempts / 500ms base / 2s max: unlike
+	// IdentityEmailFetchMaxAttempts (tightened to 2 specifically to fit
+	// Slack's own ~3s webhook-ack budget, a real external constraint this
+	// call has no equivalent of), sandbox boot's own real budget is
+	// FirstConnectBudget (240s, §3.2 -- the control plane's own liveness
+	// deadline for a sandbox's first WS connection, which every boot-time
+	// activity, including this fetch, happens inside). 3 genuine attempts
+	// -- two retries, not merely one -- rides out a longer transient CP
+	// disruption than 2 would, while the real worst case (3 attempts at
+	// the full 10s SandboxSecretFetchTimeout each, plus two backoff waits
+	// pessimistically at the 2s cap) is 3x10s+2x2s = 34s -- comfortably
+	// inside FirstConnectBudget even stacked with OpenCodeConfigFetch*'s
+	// own identical worst case (a further 34s, since the two fetches run
+	// sequentially, sandboxsecrets before opencodeconfig, in run()) and
+	// every OTHER boot-time activity (git clone, hooks) sharing that same
+	// 240s ceiling. 500ms/2s (unlike IdentityEmailFetch's own tuned-tight
+	// 100ms/150ms) is deliberately more generous -- there is no tight
+	// external ack window forcing this shorter, and a CP rolling restart
+	// realistically takes low-single-digit seconds to recover from, not
+	// hundreds of milliseconds.
+	SandboxSecretFetchMaxAttempts    int
+	SandboxSecretFetchRetryBaseDelay time.Duration
+	SandboxSecretFetchRetryMaxDelay  time.Duration
+
+	// OpenCodeConfigFetchTimeout (Step 72, §27.2) bounds a SINGLE ATTEMPT
+	// at CP's /sessions/{id}/opencode-config delivery endpoint
 	// (internal/sandboxagent/credentials.CPClient.FetchOpenCodeConfig),
-	// made once at boot alongside SandboxSecretFetchTimeout's own call,
-	// before `opencode serve` spawns. Not specified in the plan; chosen
-	// the SAME 10s -- this call returns at most 2 small JSON documents
-	// (global + this session's own environment config), comparably
-	// lightweight to the other 2 delivery-endpoint fetches above.
+	// tried up to OpenCodeConfigFetchMaxAttempts times (below) at boot,
+	// alongside SandboxSecretFetchTimeout's own call, before `opencode
+	// serve` spawns. Not specified in the plan; chosen the SAME 10s --
+	// this call returns at most 2 small JSON documents (global + this
+	// session's own environment config), comparably lightweight to the
+	// other 2 delivery-endpoint fetches above.
+	//
+	// Adversarial-review MEDIUM fix: this field's own MEANING changed
+	// identically to SandboxSecretFetchTimeout's own -- see that field's
+	// doc comment for the full "why" (applies here per §27.2's own
+	// "delivered at boot... same handshake" framing, so the identical
+	// gap and the identical fix apply to both OpenCode config documents,
+	// not just general sandbox secrets).
 	OpenCodeConfigFetchTimeout time.Duration
+
+	// OpenCodeConfigFetchMaxAttempts/OpenCodeConfigFetchRetryBaseDelay/
+	// OpenCodeConfigFetchRetryMaxDelay mirror
+	// SandboxSecretFetchMaxAttempts/SandboxSecretFetchRetryBaseDelay/
+	// SandboxSecretFetchRetryMaxDelay's own identical shape and identical
+	// values, for fetchOpenCodeConfig's own call to
+	// CPClient.FetchOpenCodeConfig -- see those fields' own doc comment
+	// for the full worst-case-budget arithmetic (which already accounts
+	// for BOTH fetches' own worst cases, run sequentially, summing to
+	// well under FirstConnectBudget).
+	OpenCodeConfigFetchMaxAttempts    int
+	OpenCodeConfigFetchRetryBaseDelay time.Duration
+	OpenCodeConfigFetchRetryMaxDelay  time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2417,8 +2488,14 @@ func DefaultTimeouts() Timeouts {
 
 		ReviewCostBudgetServerReadHeaderTimeout: 5 * time.Second, // Step 70, §26.7/§26.9; not specified, chosen -- matches RepoSHADiscoveryTimeout/CredentialFetchTimeout's own "lightweight, purely local" precedent, see field doc comment
 
-		SandboxSecretFetchTimeout:  10 * time.Second, // Step 72, §27.1; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
-		OpenCodeConfigFetchTimeout: 10 * time.Second, // Step 72, §27.2; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
+		SandboxSecretFetchTimeout:         10 * time.Second,       // Step 72, §27.1; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
+		SandboxSecretFetchMaxAttempts:     3,                      // adversarial-review MEDIUM fix (§27.1 "with bounded retry"); see field doc comment for the worst-case-budget arithmetic
+		SandboxSecretFetchRetryBaseDelay:  500 * time.Millisecond, // adversarial-review MEDIUM fix; see field doc comment
+		SandboxSecretFetchRetryMaxDelay:   2 * time.Second,        // adversarial-review MEDIUM fix; see field doc comment
+		OpenCodeConfigFetchTimeout:        10 * time.Second,       // Step 72, §27.2; not specified, chosen, matches ProviderCredentialFetchTimeout's own reasoning
+		OpenCodeConfigFetchMaxAttempts:    3,                      // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchMaxAttempts
+		OpenCodeConfigFetchRetryBaseDelay: 500 * time.Millisecond, // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchRetryBaseDelay
+		OpenCodeConfigFetchRetryMaxDelay:  2 * time.Second,        // adversarial-review MEDIUM fix; mirrors SandboxSecretFetchRetryMaxDelay
 	}
 }
 

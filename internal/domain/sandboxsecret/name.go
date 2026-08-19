@@ -29,6 +29,36 @@ const maxNameLength = 256
 // user-settable env surface ships").
 const narviReservedPrefix = "NARVI_"
 
+// OpenCodeReservedPrefix reserves the ENTIRE "OPENCODE_" env-var namespace
+// -- adversarial-review CRITICAL fix: §27.2's own injection owns
+// OPENCODE_CONFIG (OpenCode's documented "custom config" slot env var,
+// cmd/sandbox-agent/opencodeconfig.go), and a Step-72-child engine
+// version could grow OPENCODE_CONFIG_CONTENT (OpenCode's documented
+// "inline config" slot, ABOVE even the project slot in OpenCode's own
+// precedence -- see opencodeconfig.go's own top doc comment). Before this
+// fix, NEITHER name was rejected here, so a maintainer holding
+// ActionManageEnvSecrets could save a sandbox_secrets row literally named
+// "OPENCODE_CONFIG_CONTENT", which applySandboxSecretEnv/opencodeproc.
+// Spawn would then thread into `opencode serve`'s own env, letting a
+// customer-authored value at OpenCode's HIGHEST-precedence slot override
+// Step 48's sentinel-fix capability-restriction write (which targets the
+// LOWER-precedence project slot) -- exactly the "a customer-authored
+// config can never override the security-relevant agent restriction"
+// guarantee §27.2 claims, defeated by this Step's OWN sibling mechanism.
+//
+// A prefix (not an enumerated {OPENCODE_CONFIG, OPENCODE_CONFIG_CONTENT}
+// pair) is the fail-closed choice, exactly mirroring narviReservedPrefix's
+// own reasoning immediately above: it also rejects any OpenCode env var
+// this codebase does not yet inject (or does not yet know exists) without
+// ValidateName ever needing another edit. Exported (unlike
+// narviReservedPrefix) specifically so cmd/sandbox-agent/opencodeconfig.go
+// can build its own openCodeConfigEnvVar constant FROM this exact value
+// (openCodeConfigEnvVar = OpenCodeReservedPrefix + "CONFIG") rather than
+// repeating the literal "OPENCODE_" independently -- one source, so the
+// reservation and the injection can never drift apart again the way they
+// did before this fix (see that file's own doc comment).
+const OpenCodeReservedPrefix = "OPENCODE_"
+
 // posixEnvVarNamePattern is the classic POSIX "Environment Variable Name"
 // shape (IEEE Std 1003.1: "words consisting solely of uppercase letters,
 // digits, and the '_'... and do not begin with a digit") -- the same
@@ -61,6 +91,10 @@ var (
 	// ErrNameReservedNarviNamespace means name starts with
 	// narviReservedPrefix ("NARVI_") -- §19.8's own reservation.
 	ErrNameReservedNarviNamespace = errors.New("sandboxsecret: name is in the reserved NARVI_ namespace")
+	// ErrNameReservedOpenCodeNamespace means name starts with
+	// OpenCodeReservedPrefix ("OPENCODE_") -- adversarial-review CRITICAL
+	// fix, see that constant's own doc comment for the full "why".
+	ErrNameReservedOpenCodeNamespace = errors.New("sandboxsecret: name is in the reserved OPENCODE_ namespace")
 	// ErrNameReservedProviderCredential means name is exactly one of
 	// providercredential.AllEnvVarNames -- already owned by Step 53's
 	// provider-credential injection mechanism. §27.1's own "one owning
@@ -72,12 +106,14 @@ var (
 
 // ValidateName reports whether name is an acceptable sandbox_secrets env-
 // var name, per §27.1's own fail-closed rule: POSIX env-var shape, not in
-// the reserved NARVI_* namespace, and not one of the names
-// providercredential.EnvVarNames already owns. Returns nil when name is
-// acceptable. Pure -- no I/O, no time.Now(), no randomness (CLAUDE.md
-// §11) -- this only inspects name itself; it says nothing about whether
-// name already has a row at some OTHER (scope, scopeTargetID) pair (a
-// Postgres UNIQUE-index concern, not this function's).
+// the reserved NARVI_* namespace, not in the reserved OPENCODE_* namespace
+// (adversarial-review CRITICAL fix -- see OpenCodeReservedPrefix's own doc
+// comment), and not one of the names providercredential.EnvVarNames
+// already owns. Returns nil when name is acceptable. Pure -- no I/O, no
+// time.Now(), no randomness (CLAUDE.md §11) -- this only inspects name
+// itself; it says nothing about whether name already has a row at some
+// OTHER (scope, scopeTargetID) pair (a Postgres UNIQUE-index concern, not
+// this function's).
 func ValidateName(name string) error {
 	if name == "" {
 		return ErrNameEmpty
@@ -90,6 +126,9 @@ func ValidateName(name string) error {
 	}
 	if strings.HasPrefix(name, narviReservedPrefix) {
 		return fmt.Errorf("%w: %q", ErrNameReservedNarviNamespace, name)
+	}
+	if strings.HasPrefix(name, OpenCodeReservedPrefix) {
+		return fmt.Errorf("%w: %q", ErrNameReservedOpenCodeNamespace, name)
 	}
 	for _, reserved := range providercredential.AllEnvVarNames() {
 		if name == reserved {

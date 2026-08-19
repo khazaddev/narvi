@@ -52,7 +52,7 @@ func TestRunHooks_NewlineFreeOutputBoundedByBytes(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: false}} // secondary: non-fatal
 
 	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, 10*time.Second, time.Second, time.Millisecond)
+		nil, nil, 10*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (a secondary repo's start.sh failure is only a warning)", err)
 	}
@@ -107,7 +107,7 @@ func TestRunHooks_CarriageReturnProgressBecomesSuccessiveLines(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: false}}
 
 	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, 10*time.Second, time.Second, time.Millisecond)
+		nil, nil, 10*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (a secondary repo's start.sh failure is only a warning)", err)
 	}
@@ -153,7 +153,7 @@ func TestRunHooks_CRLFNotDoubled(t *testing.T) {
 	repos := []boot.RepoInfo{{Name: "repo-a", Primary: false}}
 
 	err := boot.RunHooks(context.Background(), sup, workspaceDir, repos, sandboxboot.BootModeFresh, nil,
-		nil, 10*time.Second, time.Second, time.Millisecond)
+		nil, nil, 10*time.Second, time.Second, time.Millisecond)
 	if err != nil {
 		t.Fatalf("RunHooks() error = %v, want nil (a secondary repo's start.sh failure is only a warning)", err)
 	}

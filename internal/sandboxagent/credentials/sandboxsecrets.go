@@ -52,13 +52,20 @@ type sandboxSecretsResponse struct {
 // may legitimately be empty (the overwhelming common case: no sandbox
 // secret configured at any scope for this session).
 //
-// Any non-2xx or malformed response is a plain error -- no retry, no
-// transient/permanent classification, mirroring FetchProviderCredentials'
-// own identical design. UNLIKE Fetch, a failed call here is NOT itself
-// fatal to the caller's own larger operation -- see
-// cmd/sandbox-agent/main.go's own call site doc comment for why a fetch
-// failure degrades to "boot with today's unchanged, ambient environment"
-// rather than aborting the boot.
+// This METHOD itself makes exactly ONE HTTP attempt and applies no retry
+// of its own -- any non-2xx response is returned as a *DeliveryStatusError
+// (deliverystatus.go), any transport/decode failure as a plain wrapped
+// error. §27.1's own "with bounded retry" requirement is implemented by
+// this method's CALLER (cmd/sandbox-agent's fetchSandboxSecrets), which
+// wraps repeated calls to this method in platform.Retry, using
+// DeliveryStatusError.StatusCode to retry a transport error or a 5xx but
+// never a 401/403/404/410 (this endpoint's own terminal handshake
+// fences). UNLIKE Fetch (the git-credential-helper's own scm-credentials
+// call, which is intentionally never retried -- §5.2's fail-closed
+// posture), a failed call here is NOT itself fatal to the caller's own
+// larger operation -- see cmd/sandbox-agent/main.go's own call site doc
+// comment for why an exhausted retry still degrades to "boot with today's
+// unchanged, ambient environment" rather than aborting the boot.
 //
 // The raw response body is deliberately never embedded in the returned
 // error -- mirrors Fetch/FetchProviderCredentials' own identical
@@ -85,8 +92,10 @@ func (c CPClient) FetchSandboxSecrets(ctx context.Context, sessionID, sandboxTok
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		// Deliberately does NOT include body -- see this func's own doc
-		// comment above.
-		return nil, fmt.Errorf("credentials: sandbox-secrets request returned http %d", resp.StatusCode)
+		// comment above. A typed *DeliveryStatusError (not a plain
+		// fmt.Errorf) so the caller's own retry wrapper can classify this
+		// by StatusCode alone -- see this func's own doc comment.
+		return nil, &DeliveryStatusError{Endpoint: "sandbox-secrets", StatusCode: resp.StatusCode}
 	}
 
 	var parsed sandboxSecretsResponse

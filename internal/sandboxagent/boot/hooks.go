@@ -103,6 +103,22 @@ type RepoInfo struct {
 // single required retry (see that function's own doc comment) -- consulted
 // ONLY inside that one retry path, so any value is a safe input for every
 // OTHER call site/outcome.
+//
+// secretEnv (Step 72, "sandbox secrets & opencode config", §27.1,
+// adversarial-review HIGH fix) is zero or more already-built "NAME=VALUE"
+// entries -- a session's own resolved general sandbox_secrets rows --
+// appended to every spawned hook's own env, AFTER supervisor.EnvWithout
+// (runHook's own call site, below), exactly mirroring
+// opencodeproc.Spawn's own providerCredentialEnv/sandboxSecretEnv append
+// pattern. Threaded explicitly (never os.Setenv onto sandbox-agent's own
+// process -- see opencodeproc.Spawn's own doc comment for the full "why")
+// so a repo's own setup.sh/start.sh sees exactly what §27.1 specifies,
+// with sandbox-agent's own process environment (and therefore this
+// package's OWN sup.Spawn calls for "git"/other bare-name binaries,
+// resolved via the calling process's ambient PATH) never at risk from a
+// resolved secret's own name/value. Nil/empty (the overwhelming common
+// case: no sandbox secret configured at any scope for this session)
+// changes nothing from this parameter's own pre-Step-72 absence.
 func RunHooks(
 	ctx context.Context,
 	sup *supervisor.Supervisor,
@@ -111,10 +127,11 @@ func RunHooks(
 	mode sandboxboot.BootMode,
 	workspaceMoved map[string]bool,
 	ladder map[string]SetupRerunLadder,
+	secretEnv []string,
 	hookTimeout, stopGrace, setupRetryDelay time.Duration,
 ) error {
 	for _, repo := range repos {
-		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, hookTimeout, stopGrace, setupRetryDelay); err != nil {
+		if err := runRepoHooks(ctx, sup, workspaceDir, repo, mode, workspaceMoved, ladder, secretEnv, hookTimeout, stopGrace, setupRetryDelay); err != nil {
 			return err
 		}
 	}
@@ -147,6 +164,7 @@ func runRepoHooks(
 	mode sandboxboot.BootMode,
 	workspaceMoved map[string]bool,
 	ladder map[string]SetupRerunLadder,
+	secretEnv []string,
 	hookTimeout, stopGrace, setupRetryDelay time.Duration,
 ) error {
 	moved := workspaceMovedFor(workspaceMoved, repo.Name)
@@ -180,7 +198,7 @@ func runRepoHooks(
 		// through to the plain runHook call below, completely unchanged
 		// from before this Step.
 		if hook == sandboxboot.HookSetup && mode == sandboxboot.BootModeRepoImage && moved {
-			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), moved, hookTimeout, stopGrace, setupRetryDelay)
+			runSetupRerunLadder(ctx, sup, workspaceDir, repo, ladderFor(ladder, repo.Name), moved, secretEnv, hookTimeout, stopGrace, setupRetryDelay)
 			continue
 		}
 
@@ -201,7 +219,7 @@ func runRepoHooks(
 		}
 
 		start := time.Now()
-		tail, runErr := runHook(ctx, sup, scriptPath, repoDir, hookTimeout, stopGrace)
+		tail, runErr := runHook(ctx, sup, scriptPath, repoDir, secretEnv, hookTimeout, stopGrace)
 		recordHookRerunDuration(ctx, repo.Name, string(hook), string(mode), moved, time.Since(start).Seconds(), runErr != nil)
 
 		if runErr != nil {
@@ -298,7 +316,7 @@ func runRepoHooks(
 // every other path through this function (the digest skip, the delta
 // tier, and a full-setup.sh attempt that succeeds on its first try never
 // consult it at all).
-func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, moved bool, hookTimeout, stopGrace, setupRetryDelay time.Duration) {
+func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, workspaceDir string, repo RepoInfo, ladder SetupRerunLadder, moved bool, secretEnv []string, hookTimeout, stopGrace, setupRetryDelay time.Duration) {
 	logger := platform.Logger(ctx)
 	repoDir := filepath.Join(workspaceDir, repo.Name)
 
@@ -332,7 +350,7 @@ func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, worksp
 	// HookStart, so a future edit to the row is no longer silently ignored.
 	deltaPolicy := sandboxboot.EvaluateHook(sandboxboot.BootModeRepoImage, sandboxboot.HookDelta, repo.Primary, moved)
 	if deltaPolicy.ShouldRun && ladder.DeltaEligible {
-		ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookDelta), sandboxboot.BootModeRepoImage, moved, hookTimeout, stopGrace)
+		ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookDelta), sandboxboot.BootModeRepoImage, moved, secretEnv, hookTimeout, stopGrace)
 		if ran {
 			logger.Info("boot: setup-rerun ladder decision",
 				"repo", repo.Name, "tier", "delta", "outcome", string(RerunReasonDelta), "succeeded", ok)
@@ -355,7 +373,7 @@ func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, worksp
 
 	logger.Info("boot: setup-rerun ladder decision",
 		"repo", repo.Name, "tier", "full", "outcome", string(RerunReasonFull))
-	ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, hookTimeout, stopGrace)
+	ran, ok := runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, secretEnv, hookTimeout, stopGrace)
 	if !ran || ok {
 		// ran == false: no setup.sh on disk at all (routine, silent,
 		// nothing to retry). ok == true: the first attempt already
@@ -394,7 +412,7 @@ func runSetupRerunLadder(ctx context.Context, sup *supervisor.Supervisor, worksp
 	// a second failure therefore still warns and continues, identical in
 	// severity to today's single-attempt behavior, never escalated to
 	// fatal.
-	runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, hookTimeout, stopGrace)
+	runNamedHookNonFatal(ctx, sup, repoDir, repo.Name, string(sandboxboot.HookSetup), sandboxboot.BootModeRepoImage, moved, secretEnv, hookTimeout, stopGrace)
 }
 
 // waitSetupRetryDelay waits d, honoring ctx cancellation -- mirrors
@@ -433,7 +451,7 @@ func waitSetupRetryDelay(ctx context.Context, d time.Duration) bool {
 // succeeded. recordHookRerunDuration is only ever called when ran is true,
 // exactly mirroring runRepoHooks' own existing "absent hook records
 // nothing" behavior.
-func runNamedHookNonFatal(ctx context.Context, sup *supervisor.Supervisor, repoDir, repoName, scriptName string, mode sandboxboot.BootMode, moved bool, hookTimeout, stopGrace time.Duration) (ran, ok bool) {
+func runNamedHookNonFatal(ctx context.Context, sup *supervisor.Supervisor, repoDir, repoName, scriptName string, mode sandboxboot.BootMode, moved bool, secretEnv []string, hookTimeout, stopGrace time.Duration) (ran, ok bool) {
 	scriptPath := filepath.Join(repoDir, scriptName)
 
 	present, statErr := hookScriptPresent(scriptPath)
@@ -447,7 +465,7 @@ func runNamedHookNonFatal(ctx context.Context, sup *supervisor.Supervisor, repoD
 	}
 
 	start := time.Now()
-	tail, runErr := runHook(ctx, sup, scriptPath, repoDir, hookTimeout, stopGrace)
+	tail, runErr := runHook(ctx, sup, scriptPath, repoDir, secretEnv, hookTimeout, stopGrace)
 	recordHookRerunDuration(ctx, repoName, scriptName, string(mode), moved, time.Since(start).Seconds(), runErr != nil)
 
 	if runErr != nil {
@@ -492,7 +510,14 @@ func hookScriptPresent(scriptPath string) (bool, error) {
 // proc.Wait call below -- a timeout-triggered proc.Stop can therefore
 // never lose a buffer that was never inside the cancelled operation to
 // begin with.
-func runHook(ctx context.Context, sup *supervisor.Supervisor, scriptPath, dir string, hookTimeout, stopGrace time.Duration) (*outputTail, error) {
+//
+// secretEnv (Step 72, §27.1, adversarial-review HIGH fix) is appended
+// after supervisor.EnvWithout, exactly mirroring opencodeproc.Spawn's own
+// pattern -- see RunHooks' own doc comment for the full "why threaded,
+// never os.Setenv" reasoning. A repo's own setup.sh/start.sh IS one of the
+// three spawn targets §27.1 names, so this is the exact seam that must
+// carry it.
+func runHook(ctx context.Context, sup *supervisor.Supervisor, scriptPath, dir string, secretEnv []string, hookTimeout, stopGrace time.Duration) (*outputTail, error) {
 	tail := newOutputTail()
 
 	proc, err := sup.Spawn(supervisor.Spec{
@@ -502,7 +527,9 @@ func runHook(ctx context.Context, sup *supervisor.Supervisor, scriptPath, dir st
 		// REPO -- it has no legitimate need to see the sandbox's own
 		// plaintext bearer token (NARVI_SESSION_CONFIG) either, so it is
 		// excluded here exactly like opencodeproc.Spawn's own call.
-		Env: supervisor.EnvWithout(SessionConfigEnvVar),
+		// secretEnv is then appended on top of that filtered base --
+		// §27.1's own explicit "hooks" spawn target.
+		Env: append(supervisor.EnvWithout(SessionConfigEnvVar), secretEnv...),
 		// tail captures BOTH streams into one combined, bounded,
 		// ANSI-stripped tail (§19.5(a)) -- a single io.Writer used for both
 		// fields is safe: outputTail.Write is mutex-guarded against

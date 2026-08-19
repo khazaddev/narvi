@@ -54,10 +54,17 @@ type openCodeConfigDeliveryResponse struct {
 // overwhelming common case: no OpenCode config configured at either
 // scope).
 //
-// Any non-2xx or malformed response is a plain error -- no retry, no
-// transient/permanent classification, mirroring
-// FetchSandboxSecrets/FetchProviderCredentials' own identical design. A
-// failed call here is NOT itself fatal to the caller's own larger
+// This METHOD itself makes exactly ONE HTTP attempt and applies no retry
+// of its own -- any non-2xx response is returned as a *DeliveryStatusError
+// (deliverystatus.go), any transport/decode failure as a plain wrapped
+// error. §27.1's own "with bounded retry" requirement (applied identically
+// here per §27.2's own "delivered at boot... same handshake" framing) is
+// implemented by this method's CALLER (cmd/sandbox-agent's
+// fetchOpenCodeConfig), which wraps repeated calls to this method in
+// platform.Retry using DeliveryStatusError.StatusCode to retry a transport
+// error or a 5xx but never a 401/403/404/410 (this endpoint's own terminal
+// handshake fences) -- mirrors FetchSandboxSecrets' own identical design.
+// A failed call here is NOT itself fatal to the caller's own larger
 // operation -- see cmd/sandbox-agent/main.go's own call site doc comment.
 //
 // The raw response body is deliberately never embedded in the returned
@@ -84,8 +91,10 @@ func (c CPClient) FetchOpenCodeConfig(ctx context.Context, sessionID, sandboxTok
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		// Deliberately does NOT include body -- see this func's own doc
-		// comment above.
-		return OpenCodeConfigDelivery{}, fmt.Errorf("credentials: opencode-config request returned http %d", resp.StatusCode)
+		// comment above. A typed *DeliveryStatusError (not a plain
+		// fmt.Errorf) so the caller's own retry wrapper can classify this
+		// by StatusCode alone -- see this func's own doc comment.
+		return OpenCodeConfigDelivery{}, &DeliveryStatusError{Endpoint: "opencode-config", StatusCode: resp.StatusCode}
 	}
 
 	var parsed openCodeConfigDeliveryResponse

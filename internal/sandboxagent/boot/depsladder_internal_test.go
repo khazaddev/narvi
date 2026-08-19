@@ -563,7 +563,7 @@ func TestRunSetupRerunLadder_ConsultsHookDeltaPolicy(t *testing.T) {
 	sup := supervisor.New()
 	repo := RepoInfo{Name: "repo1", Primary: true}
 
-	runSetupRerunLadder(context.Background(), sup, workspaceDir, repo, ladder, false, 5*time.Second, time.Second, time.Millisecond)
+	runSetupRerunLadder(context.Background(), sup, workspaceDir, repo, ladder, false, nil, 5*time.Second, time.Second, time.Millisecond)
 
 	if _, err := os.Stat(syncMarker); err == nil {
 		t.Error("sync.sh ran despite EvaluateHook(BootModeRepoImage, HookDelta, primary, moved=false).ShouldRun = false -- HookDelta policy row not actually consulted (B4 regression)")

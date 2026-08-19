@@ -123,7 +123,7 @@ func runBootSequenceForMode(t *testing.T, mode sandboxboot.BootMode, repoURL str
 	noopProgress := func(services.BootProgressEvent) {}
 	noopGitSync := func(string, string, string) {}
 
-	bootErr = runBootSequence(ctx, sup, cfg, platform.DefaultTimeouts(), noopProgress, noopGitSync)
+	bootErr = runBootSequence(ctx, sup, cfg, platform.DefaultTimeouts(), nil, nil, noopProgress, noopGitSync)
 	return workspaceDir, bootErr
 }
 

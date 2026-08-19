@@ -148,7 +148,7 @@ func startServer(t *testing.T) string {
 		"XDG_CONFIG_HOME=" + filepath.Join(isolatedHome, "config"),
 	}
 
-	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), isolatedEnv, testReadinessTimeout, testReadinessPollInterval)
+	result, err := opencodeproc.Spawn(ctx, sup, t.TempDir(), isolatedEnv, nil, testReadinessTimeout, testReadinessPollInterval)
 	if err != nil {
 		t.Fatalf("opencodeproc.Spawn() error = %v (is the real opencode binary on PATH?)", err)
 	}
