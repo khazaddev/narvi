@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/platform"
 )
@@ -71,17 +72,48 @@ func New(cfg Config) (*Provider, error) {
 // snapshots and builds images, allows an explicit stop, but is the
 // snapshot-based provider ("restore = new gen") rather than a
 // persistent-resume one.
+//
+// DockerInSandbox/EgressPolicy report true (§27.5/§27.6, Step 74): Modal
+// maps CreateSpec.Docker onto its own VM runtime option and
+// CreateSpec.EgressPolicy onto its own sandbox network controls (see
+// runtimeForSpec/networkPolicyFromSpec below) — both real, substrate-
+// level capabilities this adapter actually implements, not aspirational
+// flags. See CreateSandbox's own doc comment for §27.8's own genuinely
+// unresolved point this reporting deliberately does NOT paper over:
+// Snapshots being reported unconditionally true here does not, by
+// itself, claim snapshot parity for a Docker-enabled (VM-runtime)
+// sandbox — that is resolved separately, at the call site that decides
+// whether to ever attempt a snapshot at all (app/sessionactor's own
+// triggerSnapshotBestEffort, sandboxevent.go), not by this method
+// pretending the two runtimes are identical.
 func (p *Provider) Capabilities() ports.Capabilities {
 	return ports.Capabilities{
-		Snapshots:    true,
-		Resume:       false,
-		ExplicitStop: true,
-		ImageBuilds:  true,
+		Snapshots:       true,
+		Resume:          false,
+		ExplicitStop:    true,
+		ImageBuilds:     true,
+		DockerInSandbox: true,
+		EgressPolicy:    true,
 	}
 }
 
 // CreateSandbox POSTs spec to /v1/sandboxes, with the full SESSION_CONFIG
 // document nested under "sessionConfig" as one JSON blob (§4.1).
+//
+// spec.Docker/spec.EgressPolicy (§27.5/§27.6, Step 74) are mapped onto
+// Modal's own Runtime/NetworkPolicy wire fields via runtimeForSpec/
+// networkPolicyFromSpec, read from spec's OWN top-level duplicate
+// fields — never from spec.SessionConfig.Docker/EgressPolicy, even
+// though spec.Validate() (just below) already proved the two agree: this
+// is exactly the point of the top-level duplication (§27.5's own "the
+// provider must act on it without parsing the opaque doc" — CreateSpec's
+// own doc comment). §27.5's own named, real costs of the VM-runtime
+// option (boot latency against §19's warm-boot expectations, its
+// experimental status, per-sandbox cost) are not modeled anywhere in
+// this adapter's own wire protocol — there is no cost/latency field to
+// set — they are a deployment-level tradeoff a customer accepts by
+// setting the flag at all, not something this adapter's own request
+// shape can express or mitigate.
 func (p *Provider) CreateSandbox(ctx context.Context, spec ports.CreateSpec) (ports.SandboxRef, error) {
 	if err := spec.Validate(); err != nil {
 		return ports.SandboxRef{}, &ports.ProviderError{Transient: false, Code: "INVALID_SPEC", Op: ports.OpCreateSandbox, Err: err}
@@ -90,6 +122,8 @@ func (p *Provider) CreateSandbox(ctx context.Context, spec ports.CreateSpec) (po
 		Gen:           spec.Gen,
 		Image:         spec.Image,
 		SessionConfig: spec.SessionConfig,
+		Runtime:       runtimeForSpec(spec.Docker),
+		NetworkPolicy: networkPolicyFromSpec(spec.EgressPolicy),
 	}
 	var resp sandboxResponse
 	if err := p.do(ctx, ports.OpCreateSandbox, http.MethodPost, "/v1/sandboxes", req, &resp); err != nil {
@@ -141,6 +175,8 @@ func (p *Provider) RestoreFromSnapshot(ctx context.Context, id ports.SnapshotID,
 		Gen:           spec.Gen,
 		Image:         spec.Image,
 		SessionConfig: spec.SessionConfig,
+		Runtime:       runtimeForSpec(spec.Docker),
+		NetworkPolicy: networkPolicyFromSpec(spec.EgressPolicy),
 	}
 	var resp sandboxResponse
 	if err := p.do(ctx, ports.OpRestoreFromSnapshot, http.MethodPost, "/v1/sandboxes/restore", req, &resp); err != nil {
@@ -225,6 +261,53 @@ func (p *Provider) BuildImage(ctx context.Context, spec ports.ImageSpec) (ports.
 		outcome.PublishedCacheVersion = req.CacheVolume.PublishVersion
 	}
 	return outcome, nil
+}
+
+// runtimeGVisor/runtimeVM are createSandboxRequest/restoreSandboxRequest.
+// Runtime's own closed two-value vocabulary (§27.5, Step 74).
+// runtimeGVisor is Modal's own default gVisor sandbox — deliberately the
+// EMPTY string, so a Docker-false request omits Runtime from the wire
+// entirely (json:",omitempty") rather than sending an explicit
+// "gvisor" Modal never asked for; this is what keeps a Docker-false
+// request byte-for-byte identical to what this adapter sent before this
+// field existed. runtimeVM requests Modal's own VM-runtime sandbox
+// option (§27.5's "Modal concretely": "Modal's VM runtime option gives
+// the sandbox a real kernel, where Docker/compose/build behave
+// normally").
+//
+// There is deliberately no third value, and never will be: §27.5 is
+// explicit that privileged-mode DinD is rejected outright, under every
+// configuration — there is no privileged runtime option in this
+// adapter's own closed vocabulary for runtimeForSpec to ever select.
+const (
+	runtimeGVisor = ""
+	runtimeVM     = "vm"
+)
+
+// runtimeForSpec maps ports.CreateSpec.Docker onto this adapter's own
+// closed Runtime vocabulary — an exhaustive, two-case function that
+// cannot produce a third, privileged value (runtimeGVisor/runtimeVM's
+// own doc comment).
+func runtimeForSpec(dockerRequired bool) string {
+	if dockerRequired {
+		return runtimeVM
+	}
+	return runtimeGVisor
+}
+
+// networkPolicyFromSpec translates a ports.CreateSpec.EgressPolicy into
+// this adapter's own wire shape, or returns nil when policy is nil (no
+// egress policy attached to this Environment) — mirroring
+// cacheVolumeFromSpec's own identical "nil in, nil out, byte-for-byte
+// unaffected" shape immediately below.
+func networkPolicyFromSpec(policy *sessionconfig.SessionConfigEgressPolicy) *networkPolicyWire {
+	if policy == nil {
+		return nil
+	}
+	return &networkPolicyWire{
+		Mode:      string(policy.Mode),
+		Allowlist: policy.Allowlist,
+	}
 }
 
 // cacheVolumeFromSpec translates a ports.CacheMount into this adapter's own

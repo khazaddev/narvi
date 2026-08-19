@@ -15,18 +15,62 @@ import "github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 // top-level fields.
 
 // createSandboxRequest is the body POSTed to /v1/sandboxes.
+//
+// # No privileged-mode field, deliberately, permanently (§27.5, Step 74)
+//
+// This struct's field set is closed by construction: Runtime is a
+// two-value enum (runtimeGVisor's empty default, or runtimeVM — see
+// runtimeForSpec) and NetworkPolicy only ever carries a mode +
+// allowlist. Neither this struct, nor anything this adapter's own
+// runtimeForSpec/networkPolicyFromSpec helpers build, has any field that
+// could ask Modal for privileged-mode Docker-in-Docker — §27.5 is
+// explicit that privileged DinD is "rejected outright here... not a
+// default, not an option, not behind a flag." TestProvider_
+// CreateSandbox_WireRequestNeverCarriesAPrivilegedField (provider_test.go)
+// pins this structurally, via reflection over the actual JSON this
+// adapter sends, not merely by this comment's own claim.
 type createSandboxRequest struct {
 	Gen           int                         `json:"gen"`
 	Image         string                      `json:"image,omitempty"`
 	SessionConfig sessionconfig.SessionConfig `json:"sessionConfig"`
+
+	// Runtime maps ports.CreateSpec.Docker onto Modal's own VM-runtime
+	// sandbox option (§27.5, Step 74, "Modal concretely": "default Modal
+	// sandboxes run on gVisor, where dockerd's overlay2/bridge-networking
+	// stack does not run cleanly; Modal's VM runtime option gives the
+	// sandbox a real kernel"). Empty (omitted from the wire entirely)
+	// means Modal's own default gVisor sandbox — every request built
+	// before this field existed, and every Docker-false request today,
+	// is byte-for-byte unaffected. See runtimeForSpec.
+	Runtime string `json:"runtime,omitempty"`
+
+	// NetworkPolicy maps ports.CreateSpec.EgressPolicy onto Modal's own
+	// sandbox network controls (§27.6, Step 74). Nil (omitted from the
+	// wire entirely) means no egress restriction requested — Modal's own
+	// default open egress. See networkPolicyFromSpec.
+	NetworkPolicy *networkPolicyWire `json:"networkPolicy,omitempty"`
 }
 
-// restoreSandboxRequest is the body POSTed to /v1/sandboxes/restore.
+// networkPolicyWire is createSandboxRequest/restoreSandboxRequest's own
+// NetworkPolicy shape — mirrors ports.CreateSpec.EgressPolicy field-for-
+// field, the same "invented, tested against a fake httptest.Server, not
+// real Modal API docs" posture as every other shape in this file.
+type networkPolicyWire struct {
+	Mode      string   `json:"mode"`
+	Allowlist []string `json:"allowlist,omitempty"`
+}
+
+// restoreSandboxRequest is the body POSTed to /v1/sandboxes/restore. Same
+// Runtime/NetworkPolicy fields as createSandboxRequest, for the identical
+// reason — a restore is still asking for a real, live sandbox instance,
+// so it needs the same substrate mapping a fresh create does.
 type restoreSandboxRequest struct {
 	SnapshotID    string                      `json:"snapshotId"`
 	Gen           int                         `json:"gen"`
 	Image         string                      `json:"image,omitempty"`
 	SessionConfig sessionconfig.SessionConfig `json:"sessionConfig"`
+	Runtime       string                      `json:"runtime,omitempty"`
+	NetworkPolicy *networkPolicyWire          `json:"networkPolicy,omitempty"`
 }
 
 // imageBuildRequest is the body POSTed to /v1/images. §19.1 ("warm boot:

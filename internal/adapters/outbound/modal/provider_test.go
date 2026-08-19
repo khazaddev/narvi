@@ -163,7 +163,14 @@ func TestProvider_Capabilities(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 	got := p.Capabilities()
-	want := ports.Capabilities{Snapshots: true, Resume: false, ExplicitStop: true, ImageBuilds: true}
+	want := ports.Capabilities{
+		Snapshots:       true,
+		Resume:          false,
+		ExplicitStop:    true,
+		ImageBuilds:     true,
+		DockerInSandbox: true,
+		EgressPolicy:    true,
+	}
 	if got != want {
 		t.Errorf("Capabilities() = %+v, want %+v", got, want)
 	}
@@ -353,6 +360,200 @@ func TestProvider_CreateSandbox_NoCorrelationIDWhenAbsent(t *testing.T) {
 	}
 	if sawHeader {
 		t.Errorf("%s header present, want absent when no correlation id on context", platform.CorrelationIDHeader)
+	}
+}
+
+// --- CreateSandbox: §27.5/§27.6 Docker/EgressPolicy substrate mapping (Step 74) ---
+
+// captureRequestBody starts an httptest.Server that decodes every request
+// body into a generic map (for top-level key presence/absence checks) and
+// replies with sandboxResponse{SandboxID: "sbx-1"} -- shared by every test
+// in this section.
+func captureRequestBody(t *testing.T) (*httptest.Server, *map[string]json.RawMessage) {
+	t.Helper()
+	var gotBody map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("server: decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sandboxResponse{SandboxID: "sbx-1"})
+	}))
+	return srv, &gotBody
+}
+
+// TestProvider_CreateSandbox_DockerRequiredMapsToVMRuntime proves
+// spec.Docker=true maps onto Modal's own "vm" runtime wire value (§27.5's
+// own "Modal concretely" mapping) -- read from spec's own top-level
+// Docker field, not from spec.SessionConfig.Docker.
+func TestProvider_CreateSandbox_DockerRequiredMapsToVMRuntime(t *testing.T) {
+	srv, gotBody := captureRequestBody(t)
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	cfg := testSessionConfig()
+	cfg.Docker = true
+	_, err = p.CreateSandbox(context.Background(), ports.CreateSpec{Gen: cfg.Gen, SessionConfig: cfg, Docker: true})
+	if err != nil {
+		t.Fatalf("CreateSandbox() error = %v", err)
+	}
+
+	var gotRuntime string
+	if err := json.Unmarshal((*gotBody)["runtime"], &gotRuntime); err != nil {
+		t.Fatalf("decode runtime: %v (body=%v)", err, *gotBody)
+	}
+	if gotRuntime != "vm" {
+		t.Errorf("runtime = %q, want %q", gotRuntime, "vm")
+	}
+}
+
+// TestProvider_CreateSandbox_DockerFalseOmitsRuntimeField proves a
+// Docker-false request is byte-for-byte unaffected by this field's
+// existence: no "runtime" key at all on the wire, exactly what this
+// adapter sent before Runtime existed.
+func TestProvider_CreateSandbox_DockerFalseOmitsRuntimeField(t *testing.T) {
+	srv, gotBody := captureRequestBody(t)
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = p.CreateSandbox(context.Background(), ports.CreateSpec{Gen: 1, SessionConfig: testSessionConfig()})
+	if err != nil {
+		t.Fatalf("CreateSandbox() error = %v", err)
+	}
+
+	if _, ok := (*gotBody)["runtime"]; ok {
+		t.Errorf("request body has top-level key \"runtime\", want absent for Docker=false")
+	}
+}
+
+// TestProvider_CreateSandbox_EgressPolicyMapsToNetworkPolicy proves
+// spec.EgressPolicy maps onto Modal's own networkPolicy wire field,
+// carrying mode and allowlist verbatim -- read from spec's own top-level
+// EgressPolicy field, not from spec.SessionConfig.EgressPolicy.
+func TestProvider_CreateSandbox_EgressPolicyMapsToNetworkPolicy(t *testing.T) {
+	srv, gotBody := captureRequestBody(t)
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	policy := &sessionconfig.SessionConfigEgressPolicy{
+		Mode:      sessionconfig.SessionConfigEgressPolicyModeAllowlist,
+		Allowlist: []string{"github.com", "cp.narvi.dev"},
+	}
+	cfg := testSessionConfig()
+	cfg.EgressPolicy = policy
+	_, err = p.CreateSandbox(context.Background(), ports.CreateSpec{Gen: cfg.Gen, SessionConfig: cfg, EgressPolicy: policy})
+	if err != nil {
+		t.Fatalf("CreateSandbox() error = %v", err)
+	}
+
+	rawPolicy, ok := (*gotBody)["networkPolicy"]
+	if !ok {
+		t.Fatal("request body missing top-level \"networkPolicy\" key")
+	}
+	var gotPolicy networkPolicyWire
+	if err := json.Unmarshal(rawPolicy, &gotPolicy); err != nil {
+		t.Fatalf("decode networkPolicy: %v", err)
+	}
+	if gotPolicy.Mode != "allowlist" {
+		t.Errorf("networkPolicy.mode = %q, want %q", gotPolicy.Mode, "allowlist")
+	}
+	if !reflect.DeepEqual(gotPolicy.Allowlist, policy.Allowlist) {
+		t.Errorf("networkPolicy.allowlist = %v, want %v", gotPolicy.Allowlist, policy.Allowlist)
+	}
+}
+
+// TestProvider_CreateSandbox_NoEgressPolicyOmitsNetworkPolicyField proves
+// a nil spec.EgressPolicy is byte-for-byte unaffected by this field's
+// existence: no "networkPolicy" key at all on the wire.
+func TestProvider_CreateSandbox_NoEgressPolicyOmitsNetworkPolicyField(t *testing.T) {
+	srv, gotBody := captureRequestBody(t)
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = p.CreateSandbox(context.Background(), ports.CreateSpec{Gen: 1, SessionConfig: testSessionConfig()})
+	if err != nil {
+		t.Fatalf("CreateSandbox() error = %v", err)
+	}
+
+	if _, ok := (*gotBody)["networkPolicy"]; ok {
+		t.Errorf("request body has top-level key \"networkPolicy\", want absent when EgressPolicy is nil")
+	}
+}
+
+// TestProvider_CreateSandbox_WireRequestNeverCarriesAPrivilegedField is a
+// MUTATION-TESTABLE guard proving §27.5's own "privileged-mode DinD is
+// rejected outright here... not a default, not an option, not behind a
+// flag" holds structurally, not merely by doc-comment claim: it inspects
+// the ACTUAL JSON this adapter sends to the fake Modal server for a
+// docker-required, fully-populated request and asserts no key or string
+// value anywhere in it contains "privileged" (case-insensitive) --
+// neither this adapter's own createSandboxRequest struct, nor
+// runtimeForSpec's own closed two-value vocabulary, has anywhere to put
+// one. A future change that added e.g. `Privileged: true` to
+// createSandboxRequest, or made runtimeForSpec select a third value, would
+// fail this test immediately.
+func TestProvider_CreateSandbox_WireRequestNeverCarriesAPrivilegedField(t *testing.T) {
+	var rawBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var err error
+		rawBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("server: read request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sandboxResponse{SandboxID: "sbx-1"})
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	cfg := testSessionConfig()
+	cfg.Docker = true
+	cfg.EgressPolicy = &sessionconfig.SessionConfigEgressPolicy{
+		Mode:      sessionconfig.SessionConfigEgressPolicyModeAllowlist,
+		Allowlist: []string{"github.com"},
+	}
+	_, err = p.CreateSandbox(context.Background(), ports.CreateSpec{
+		Gen: cfg.Gen, SessionConfig: cfg, Docker: true,
+		EgressPolicy: cfg.EgressPolicy,
+	})
+	if err != nil {
+		t.Fatalf("CreateSandbox() error = %v", err)
+	}
+
+	if strings.Contains(strings.ToLower(string(rawBody)), "privileged") {
+		t.Errorf("request body contains \"privileged\" (case-insensitive) -- §27.5 rejects privileged-mode DinD outright, under every configuration: body=%s", rawBody)
+	}
+
+	// Belt-and-braces: also pin the STRUCT shape itself, not just this
+	// one serialized instance -- a field that happens to be empty/zero on
+	// this particular request would still pass the string-content check
+	// above but must still be caught here.
+	typ := reflect.TypeOf(createSandboxRequest{})
+	for i := 0; i < typ.NumField(); i++ {
+		name := strings.ToLower(typ.Field(i).Name)
+		if strings.Contains(name, "privileged") {
+			t.Errorf("createSandboxRequest has field %q -- §27.5 rejects privileged-mode DinD outright", typ.Field(i).Name)
+		}
 	}
 }
 
@@ -622,6 +823,52 @@ func TestProvider_RestoreFromSnapshot(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.SessionConfig, spec.SessionConfig) {
 		t.Errorf("request SessionConfig = %+v, want %+v", got.SessionConfig, spec.SessionConfig)
+	}
+}
+
+// TestProvider_RestoreFromSnapshot_DockerAndEgressPolicyMapToWire proves
+// RestoreFromSnapshot maps spec.Docker/spec.EgressPolicy onto the SAME
+// Runtime/NetworkPolicy wire fields CreateSandbox does -- a restore is
+// still asking for a real, live sandbox instance, so it needs the
+// identical substrate mapping (wire.go's own restoreSandboxRequest doc
+// comment).
+func TestProvider_RestoreFromSnapshot_DockerAndEgressPolicyMapToWire(t *testing.T) {
+	cfg := testSessionConfigWithGen(4)
+	cfg.Docker = true
+	policy := &sessionconfig.SessionConfigEgressPolicy{
+		Mode:      sessionconfig.SessionConfigEgressPolicyModeAllowlist,
+		Allowlist: []string{"github.com"},
+	}
+	cfg.EgressPolicy = policy
+	spec := ports.CreateSpec{Gen: 4, Image: "img:v2", SessionConfig: cfg, Docker: true, EgressPolicy: policy}
+
+	var got restoreSandboxRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sandboxResponse{SandboxID: "sbx-restored"})
+	}))
+	defer srv.Close()
+
+	p, err := New(testConfig(srv.URL))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if _, err := p.RestoreFromSnapshot(context.Background(), ports.SnapshotID("snap-9"), spec); err != nil {
+		t.Fatalf("RestoreFromSnapshot() error = %v", err)
+	}
+
+	if got.Runtime != "vm" {
+		t.Errorf("Runtime = %q, want %q", got.Runtime, "vm")
+	}
+	if got.NetworkPolicy == nil {
+		t.Fatal("NetworkPolicy = nil, want a non-nil allowlist policy")
+	}
+	if got.NetworkPolicy.Mode != "allowlist" || !reflect.DeepEqual(got.NetworkPolicy.Allowlist, policy.Allowlist) {
+		t.Errorf("NetworkPolicy = %+v, want mode=allowlist allowlist=%v", got.NetworkPolicy, policy.Allowlist)
 	}
 }
 
