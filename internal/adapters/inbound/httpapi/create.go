@@ -737,17 +737,25 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 		// via environment.AppendAllowlistFloor) -- see migrations/
 		// 000095_environment_docker_egress.up.sql's own doc comment for
 		// why. Both columns stay nil/NULL unless egressPolicy was
-		// actually supplied.
+		// actually supplied. egress_policy_allowlist is populated ONLY
+		// when Mode == EgressModeAllowlist -- migrations/
+		// 000095_environment_docker_egress.up.sql's own CHECK constraint
+		// enforces this pairing at the schema level too (an "open" row
+		// with a non-NULL allowlist column is structurally rejected), so
+		// this must match it exactly rather than always marshaling
+		// whatever egressPolicy.Allowlist happens to hold.
 		var egressPolicyModeCol *string
 		var egressPolicyAllowlistJSON []byte
 		if hasEgressPolicy {
 			mode := string(egressPolicy.Mode)
 			egressPolicyModeCol = &mode
-			var marshalErr error
-			egressPolicyAllowlistJSON, marshalErr = json.Marshal(egressPolicy.Allowlist)
-			if marshalErr != nil {
-				logger.Error("httpapi: marshal egressPolicy.allowlist failed", "error", marshalErr)
-				return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+			if egressPolicy.Mode == environment.EgressModeAllowlist {
+				var marshalErr error
+				egressPolicyAllowlistJSON, marshalErr = json.Marshal(egressPolicy.Allowlist)
+				if marshalErr != nil {
+					logger.Error("httpapi: marshal egressPolicy.allowlist failed", "error", marshalErr)
+					return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+				}
 			}
 		}
 
