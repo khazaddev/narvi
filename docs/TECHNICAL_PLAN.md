@@ -2199,6 +2199,22 @@ manufacturing complexity.
   grows a per-spec dimension or Docker-requiring sessions document degraded recovery (resume-only,
   §3.2) — decided at Step 74 implementation time against the provider's real behavior, not
   guessed here.
+  **Resolved at Step 74 implementation time, per this bullet's own instruction — not by real-
+  provider verification (there is none to check against: `internal/adapters/outbound/modal/doc.go`
+  is explicit that every wire shape this codebase's Modal adapter speaks is its own invention,
+  tested against a fake `httptest.Server`), but by refusing the unverifiable operation rather than
+  assuming it away.** `Capabilities` itself was NOT grown a per-spec dimension — that would have
+  let a caller ask the provider a real, structural question about VM-runtime snapshot support this
+  codebase has no way to answer honestly today. Instead, both halves of the operation are refused
+  for a Docker-required session: `sandboxevent.go`'s `triggerSnapshotBestEffort` never triggers a
+  snapshot for one in the first place (so `snapshot_id` can never become non-empty via this
+  codebase's own normal flow), and `dispatch.go`'s `tryPlanSpawn` downgrades a
+  `SpawnActionRestore` decision back to a plain `SpawnActionSpawn` as defense in depth against any
+  OTHER way a stale `snapshot_id` could reach that column. The degraded-recovery half this bullet
+  names is now real and named, not speculative: a Docker-required sandbox's only recovery path is
+  a fresh respawn, losing whatever in-progress state a snapshot would otherwise have preserved.
+  Proven by resilience scenario #17 ("restore-with-docker", `test/resilience/README.md`) —
+  `internal/app/sessionactor/snapshot_docker_integration_test.go`.
 - **Build-time secrets (§27.1, §19.8)**: rule (a) means shared-image builds run `setup.sh` with
   no user secrets. A `setup.sh` that hard-requires one (private package registry) fails its
   builds (fatal in `BootModeBuild`) and that Environment degrades to base-image cold boots — where
@@ -2212,6 +2228,12 @@ manufacturing complexity.
 - **Snapshotting a running dockerd (§27.5)**: daemon/image-store state inside snapshots
   (§3.2/§8.5's snapshot-restore path) is untested territory; Step 74 must add a §9.3-class
   scenario for restore-with-docker before claiming it works.
+  **Resolved at Step 74: not claimed to work, and structurally prevented from being attempted at
+  all** — see the per-spawn-capability-variance bullet above for the mechanism (the same fix closes
+  both bullets, since a snapshot of a running dockerd is exactly the untested state a restore would
+  otherwise resurrect). Scenario #17 (`test/resilience/README.md`) is the §9.3-class scenario this
+  bullet asked for, proving the refusal holds under a real dispatch cycle rather than merely being
+  documented.
 
 ### 27.9 Phasing
 

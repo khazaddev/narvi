@@ -150,7 +150,14 @@ import (
 // own doc comment ("Empty means the provider's own default base image") --
 // a non-empty, clearly-named value is used instead of leaving Image empty,
 // so a real SandboxProvider's own request log unambiguously shows which
-// image narvi asked for.
+// image narvi asked for. Its real build definition (§27.7, Step 74:
+// Playwright+Chromium, ripgrep, typescript-language-server+typescript,
+// the Docker CLI/engine binaries, and §27.4's three cloud exec-
+// credential plugins, every version pinned) is deploy/sandbox-image/
+// Dockerfile -- wiring a real build/push pipeline that produces the
+// concrete tag/digest this constant would point at is a separate,
+// external-build-service concern (§19.1's own "external, opaque-to-
+// this-repo build service" boundary), out of this Step's own scope.
 const defaultBaseImage = "narvi/sandbox-agent:placeholder"
 
 // scmCommitName/scmCommitEmail are the currently-unused-anywhere-in-git
