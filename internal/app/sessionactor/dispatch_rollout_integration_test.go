@@ -217,4 +217,3 @@ func TestDispatch_OpenMode_SpawnsRegardlessOfEnrollment(t *testing.T) {
 		t.Errorf("provider.callCount() = %d, want 1 -- open mode must spawn regardless of enrollment", got)
 	}
 }
-

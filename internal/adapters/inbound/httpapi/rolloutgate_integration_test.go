@@ -210,7 +210,7 @@ func TestCreateSessionOnTx_RolloutGate_CohortMode_MultiRepoRequiresAllEnrolled(t
 	auditLog := narvipg.NewAuditLogStore(pool)
 	repoSettings := narvipg.NewRepoSettingsStore(pool)
 
-	enrolledURL, enrolledFullName := "https://github.com/acme/" + t.Name() + "-enrolled.git", "acme/" + t.Name() + "-enrolled"
+	enrolledURL, enrolledFullName := "https://github.com/acme/"+t.Name()+"-enrolled.git", "acme/"+t.Name()+"-enrolled"
 	unenrolledURL := "https://github.com/acme/" + t.Name() + "-unenrolled.git"
 	if _, err := repoSettings.UpsertSessionsEnabled(ctx, enrolledFullName, true); err != nil {
 		t.Fatalf("seed enrollment: %v", err)
