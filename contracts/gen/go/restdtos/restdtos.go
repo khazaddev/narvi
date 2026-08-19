@@ -829,6 +829,133 @@ func (j *CloudIdentityBinding) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// One cluster_bindings row's own REST wire shape (Step 73b, §27.4,
+// migrations/000094_cluster_bindings.up.sql). Returned by GET/PUT
+// /api/environments/{environmentID}/cluster-binding -- environmentId is always
+// implied by the route, never a separate request field, mirroring
+// CloudIdentityBinding's own identical convention. Unlike cloud_identity_bindings
+// there is no global scope at all (§27.4: "one cluster per Environment in v1"), so
+// this shape carries no scope/scopeTarget pair. params carries no secret material
+// (identifiers only), so it is returned in full, never masked -- see
+// CloudIdentityBinding.params' own identical rationale.
+type ClusterBinding struct {
+	// Matches Postgres cluster_binding_auth_kind exactly -- the 3 auth rungs §27.4
+	// names, in preference order (cloud > oidc > static). See
+	// internal/domain/clusterbinding's own doc comment for what each rung requires of
+	// serverUrl/caBundle/params.
+	AuthKind ClusterBindingAuthKind `json:"authKind" yaml:"authKind" mapstructure:"authKind"`
+
+	// The PEM-encoded cluster CA certificate -- same presence rule as serverUrl.
+	CaBundle ClusterBindingCaBundle `json:"caBundle" yaml:"caBundle" mapstructure:"caBundle"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt time.Time `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// The environments.id (stringified, IMMUTABLE id) this cluster is bound to.
+	EnvironmentId string `json:"environmentId" yaml:"environmentId" mapstructure:"environmentId"`
+
+	// The cluster's own name -- a human-readable label AND, for authKind='cloud', the
+	// literal cluster-name argument the cloud's own exec-credential plugin needs (see
+	// migrations/000094_cluster_bindings.up.sql's own top comment).
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Auth-kind-specific identifiers, never secrets -- authKind='cloud': {cloud:
+	// "aws"|"gcp"|"azure"[, region]}; authKind='oidc': {clientId}; authKind='static':
+	// {secretName} (the Step 72 sandbox_secrets NAME whose value is the complete
+	// kubeconfig file content). Modeled as an opaque raw-JSON passthrough, the SAME
+	// precision-preserving convention CloudIdentityBinding.params already establishes
+	// in this schema.
+	Params json.RawMessage `json:"params" yaml:"params" mapstructure:"params"`
+
+	// The Kubernetes API server endpoint -- required for authKind IN
+	// ('cloud','oidc'), null/omitted for authKind='static' (that rung's own uploaded
+	// kubeconfig already carries its own server URL -- see PutClusterBindingRequest's
+	// own description).
+	ServerUrl ClusterBindingServerUrl `json:"serverUrl" yaml:"serverUrl" mapstructure:"serverUrl"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt time.Time `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+}
+
+type ClusterBindingAuthKind string
+
+const ClusterBindingAuthKindCloud ClusterBindingAuthKind = "cloud"
+const ClusterBindingAuthKindOidc ClusterBindingAuthKind = "oidc"
+const ClusterBindingAuthKindStatic ClusterBindingAuthKind = "static"
+
+var enumValues_ClusterBindingAuthKind = []interface{}{
+	"cloud",
+	"oidc",
+	"static",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ClusterBindingAuthKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ClusterBindingAuthKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ClusterBindingAuthKind, v)
+	}
+	*j = ClusterBindingAuthKind(v)
+	return nil
+}
+
+// The PEM-encoded cluster CA certificate -- same presence rule as serverUrl.
+type ClusterBindingCaBundle *string
+
+// The Kubernetes API server endpoint -- required for authKind IN ('cloud','oidc'),
+// null/omitted for authKind='static' (that rung's own uploaded kubeconfig already
+// carries its own server URL -- see PutClusterBindingRequest's own description).
+type ClusterBindingServerUrl *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ClusterBinding) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["authKind"]; raw != nil && !ok {
+		return fmt.Errorf("field authKind in ClusterBinding: required")
+	}
+	if _, ok := raw["caBundle"]; raw != nil && !ok {
+		return fmt.Errorf("field caBundle in ClusterBinding: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in ClusterBinding: required")
+	}
+	if _, ok := raw["environmentId"]; raw != nil && !ok {
+		return fmt.Errorf("field environmentId in ClusterBinding: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ClusterBinding: required")
+	}
+	if _, ok := raw["params"]; raw != nil && !ok {
+		return fmt.Errorf("field params in ClusterBinding: required")
+	}
+	if _, ok := raw["serverUrl"]; raw != nil && !ok {
+		return fmt.Errorf("field serverUrl in ClusterBinding: required")
+	}
+	if _, ok := raw["updatedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field updatedAt in ClusterBinding: required")
+	}
+	type Plain ClusterBinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ClusterBinding(plain)
+	return nil
+}
+
 // Response to POST /api/sessions/:id/uploads/:uploadId/complete (§28.4/§28.6):
 // tells the caller the RECORDED outcome -- the artifacts row and its
 // broadcast/persisted event are the durable truth regardless of what this response
@@ -4743,6 +4870,104 @@ func (j *ProviderCredential) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = ProviderCredential(plain)
+	return nil
+}
+
+// PUT request body for /api/environments/{environmentID}/cluster-binding --
+// create-or-replace (upsert), mirroring PutOpenCodeConfigRequest's own identical
+// singleton-resource shape (there is no separate POST/id-based-PUT pair, since a
+// caller never needs to learn or pass an id for a resource unique per
+// Environment). Gated by authz.ActionManageClusterBindings (maintainer+, §13.3's
+// own environments row -- see that action's own doc comment). serverUrl/caBundle
+// are required for authKind IN ('cloud','oidc') and optional (ignored if present)
+// for authKind='static' -- internal/domain/clusterbinding.Validate enforces this
+// server-side (400 on a missing one);
+// internal/domain/clusterbinding.ValidateParams enforces the matching required key
+// inside params for each rung.
+type PutClusterBindingRequest struct {
+	// AuthKind corresponds to the JSON schema field "authKind".
+	AuthKind PutClusterBindingRequestAuthKind `json:"authKind" yaml:"authKind" mapstructure:"authKind"`
+
+	// See ClusterBinding.caBundle's own description. Optional -- omitted/null is only
+	// valid for authKind='static'.
+	CaBundle PutClusterBindingRequestCaBundle `json:"caBundle,omitempty,omitzero" yaml:"caBundle,omitempty" mapstructure:"caBundle,omitempty"`
+
+	// See ClusterBinding.name's own description.
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Optional -- defaults to {} when omitted, though every authKind's own
+	// ValidateParams check then requires its own specific key
+	// (cloud/clientId/secretName) to be present, so an omitted params is only ever
+	// actually accepted transiently before that check runs. See
+	// ClusterBinding.params' own description.
+	Params *json.RawMessage `json:"params,omitempty,omitzero" yaml:"params,omitempty" mapstructure:"params,omitempty"`
+
+	// See ClusterBinding.serverUrl's own description. Optional -- omitted/null is
+	// only valid for authKind='static'.
+	ServerUrl PutClusterBindingRequestServerUrl `json:"serverUrl,omitempty,omitzero" yaml:"serverUrl,omitempty" mapstructure:"serverUrl,omitempty"`
+}
+
+type PutClusterBindingRequestAuthKind string
+
+const PutClusterBindingRequestAuthKindCloud PutClusterBindingRequestAuthKind = "cloud"
+const PutClusterBindingRequestAuthKindOidc PutClusterBindingRequestAuthKind = "oidc"
+const PutClusterBindingRequestAuthKindStatic PutClusterBindingRequestAuthKind = "static"
+
+var enumValues_PutClusterBindingRequestAuthKind = []interface{}{
+	"cloud",
+	"oidc",
+	"static",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PutClusterBindingRequestAuthKind) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_PutClusterBindingRequestAuthKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_PutClusterBindingRequestAuthKind, v)
+	}
+	*j = PutClusterBindingRequestAuthKind(v)
+	return nil
+}
+
+// See ClusterBinding.caBundle's own description. Optional -- omitted/null is only
+// valid for authKind='static'.
+type PutClusterBindingRequestCaBundle *string
+
+// See ClusterBinding.serverUrl's own description. Optional -- omitted/null is only
+// valid for authKind='static'.
+type PutClusterBindingRequestServerUrl *string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *PutClusterBindingRequest) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["authKind"]; raw != nil && !ok {
+		return fmt.Errorf("field authKind in PutClusterBindingRequest: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in PutClusterBindingRequest: required")
+	}
+	type Plain PutClusterBindingRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	*j = PutClusterBindingRequest(plain)
 	return nil
 }
 

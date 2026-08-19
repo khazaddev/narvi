@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
+	"github.com/khazaddev/narvi/internal/domain/clusterbinding"
 	"github.com/khazaddev/narvi/internal/domain/providercredential"
 )
 
@@ -40,6 +42,14 @@ func TestValidateName(t *testing.T) {
 		{"provider reserved google api key", "GOOGLE_API_KEY", ErrNameReservedProviderCredential},
 		{"provider reserved google generative", "GOOGLE_GENERATIVE_AI_API_KEY", ErrNameReservedProviderCredential},
 		{"provider reserved gemini", "GEMINI_API_KEY", ErrNameReservedProviderCredential},
+		{"cloud identity reserved aws token file", "AWS_WEB_IDENTITY_TOKEN_FILE", ErrNameReservedCloudIdentity},
+		{"cloud identity reserved aws role arn", "AWS_ROLE_ARN", ErrNameReservedCloudIdentity},
+		{"cloud identity reserved aws role session name", "AWS_ROLE_SESSION_NAME", ErrNameReservedCloudIdentity},
+		{"cloud identity reserved google application credentials", "GOOGLE_APPLICATION_CREDENTIALS", ErrNameReservedCloudIdentity},
+		{"cloud identity reserved azure federated token file", "AZURE_FEDERATED_TOKEN_FILE", ErrNameReservedCloudIdentity},
+		{"cloud identity reserved azure client id", "AZURE_CLIENT_ID", ErrNameReservedCloudIdentity},
+		{"cloud identity reserved azure tenant id", "AZURE_TENANT_ID", ErrNameReservedCloudIdentity},
+		{"cluster binding reserved kubeconfig", "KUBECONFIG", ErrNameReservedClusterBinding},
 		{"too long", strings.Repeat("A", maxNameLength+1), ErrNameTooLong},
 		{"exactly at max length is fine", strings.Repeat("A", maxNameLength), nil},
 	}
@@ -125,6 +135,38 @@ func TestValidateName_EveryProviderCredentialEnvVarNameIsRejected(t *testing.T) 
 			err := ValidateName(reserved)
 			if !errors.Is(err, ErrNameReservedProviderCredential) {
 				t.Errorf("ValidateName(%q) = %v, want ErrNameReservedProviderCredential", reserved, err)
+			}
+		})
+	}
+}
+
+// TestValidateName_EveryCloudIdentityEnvVarNameIsRejected is Step 73b's own
+// exhaustive, non-hardcoded mirror of
+// TestValidateName_EveryProviderCredentialEnvVarNameIsRejected, ranged over
+// cloudidentity.ReservedEnvVarNames rather than copy-pasted -- this is the
+// mutation-test-visible guard: removing any one of cloudidentity's own
+// reserved names (or removing this function's own call from ValidateName)
+// makes this test fail on that exact name.
+func TestValidateName_EveryCloudIdentityEnvVarNameIsRejected(t *testing.T) {
+	for _, reserved := range cloudidentity.ReservedEnvVarNames() {
+		t.Run(reserved, func(t *testing.T) {
+			err := ValidateName(reserved)
+			if !errors.Is(err, ErrNameReservedCloudIdentity) {
+				t.Errorf("ValidateName(%q) = %v, want ErrNameReservedCloudIdentity", reserved, err)
+			}
+		})
+	}
+}
+
+// TestValidateName_EveryClusterBindingEnvVarNameIsRejected mirrors
+// TestValidateName_EveryCloudIdentityEnvVarNameIsRejected exactly, for
+// Step 73b's own §27.4 KUBECONFIG reservation.
+func TestValidateName_EveryClusterBindingEnvVarNameIsRejected(t *testing.T) {
+	for _, reserved := range clusterbinding.ReservedEnvVarNames() {
+		t.Run(reserved, func(t *testing.T) {
+			err := ValidateName(reserved)
+			if !errors.Is(err, ErrNameReservedClusterBinding) {
+				t.Errorf("ValidateName(%q) = %v, want ErrNameReservedClusterBinding", reserved, err)
 			}
 		})
 	}

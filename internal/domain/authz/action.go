@@ -167,6 +167,27 @@ const (
 	// global scope does. internal/adapters/inbound/httpapi/
 	// cloudidentitybindings.go is this Action's own caller.
 	ActionManageCloudIdentityBindings Action = "manage_cloud_identity_bindings"
+	// ActionManageClusterBindings covers creating/editing/deleting the
+	// (at most one, per-Environment) cluster_bindings row (Step 73b,
+	// "cloud identity: sandbox-side consumption + kubeconfig injection",
+	// §27.4) -- this SAME row (maintainer+) as ActionManageCloudIdentityBindings
+	// immediately above, by the identical reasoning that action's own doc
+	// comment gives: a cluster binding's own name/serverUrl/caBundle/params
+	// are identifiers, never secrets (§27.4's own "params JSONB" shape,
+	// mirroring cloud_identity_bindings.params exactly), and it affects
+	// one Environment's own deployment target, not a platform-wide
+	// security posture -- never the admin-only row a real credential
+	// value would sit at (the static rung's own uploaded kubeconfig is
+	// itself stored through Step 72's sandbox_secrets, gated by
+	// ActionManageEnvSecrets/ActionManageGlobalSecrets at ITS OWN write
+	// path, not this one). A separate Action from
+	// ActionManageCloudIdentityBindings (not a reuse) because the two
+	// gate two structurally different resources (cloud_identity_bindings
+	// vs cluster_bindings) -- mirroring how ActionMergePR/
+	// ActionPromptSession stay two names despite sharing row 2's own
+	// RBAC shape. internal/adapters/inbound/httpapi/clusterbindings.go is
+	// this Action's own caller.
+	ActionManageClusterBindings Action = "manage_cluster_bindings"
 
 	// -- Row 5: "Edit review verdicts; re-trigger reviews; auto-approval
 	// eligibility config" — admin, maintainer only.
@@ -438,6 +459,7 @@ var AllActions = []Action{
 	ActionManageEnvSecrets,
 	ActionManageWorkflowDefinitions,
 	ActionManageCloudIdentityBindings,
+	ActionManageClusterBindings,
 	ActionEditReviewVerdict,
 	ActionRetriggerReview,
 	ActionConfigureAutoApprove,

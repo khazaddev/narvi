@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/khazaddev/narvi/internal/domain/cloudidentity"
+	"github.com/khazaddev/narvi/internal/domain/clusterbinding"
 	"github.com/khazaddev/narvi/internal/domain/providercredential"
 )
 
@@ -102,14 +104,36 @@ var (
 	// silently shadowed by whichever mechanism happens to write its env
 	// entry last.
 	ErrNameReservedProviderCredential = errors.New("sandboxsecret: name is already owned by provider credential injection")
+	// ErrNameReservedCloudIdentity means name is exactly one of
+	// cloudidentity.ReservedEnvVarNames -- already owned by Step 73b's own
+	// §27.3 cloud-identity-consumption mechanism (AWS_WEB_IDENTITY_TOKEN_
+	// FILE, AWS_ROLE_ARN, AWS_ROLE_SESSION_NAME, GOOGLE_APPLICATION_
+	// CREDENTIALS, AZURE_FEDERATED_TOKEN_FILE, AZURE_CLIENT_ID,
+	// AZURE_TENANT_ID). Without this, a maintainer holding
+	// ActionManageEnvSecrets could define e.g. AWS_ROLE_ARN as a sandbox
+	// secret and redirect the whole federation mechanism to a role of
+	// their own choosing -- exactly the class of hijack
+	// ErrNameReservedProviderCredential/ErrNameReservedOpenCodeNamespace
+	// already close for their own mechanisms.
+	ErrNameReservedCloudIdentity = errors.New("sandboxsecret: name is already owned by cloud identity injection")
+	// ErrNameReservedClusterBinding means name is exactly
+	// clusterbinding.EnvVarKubeconfig ("KUBECONFIG") -- already owned by
+	// Step 73b's own §27.4 kubeconfig-injection mechanism, for the
+	// identical "one owning mechanism per env-var name" reason
+	// ErrNameReservedCloudIdentity's own doc comment gives.
+	ErrNameReservedClusterBinding = errors.New("sandboxsecret: name is already owned by kubeconfig injection")
 )
 
 // ValidateName reports whether name is an acceptable sandbox_secrets env-
 // var name, per §27.1's own fail-closed rule: POSIX env-var shape, not in
 // the reserved NARVI_* namespace, not in the reserved OPENCODE_* namespace
 // (adversarial-review CRITICAL fix -- see OpenCodeReservedPrefix's own doc
-// comment), and not one of the names providercredential.EnvVarNames
-// already owns. Returns nil when name is acceptable. Pure -- no I/O, no
+// comment), not one of the names providercredential.EnvVarNames already
+// owns, not one of Step 73b's own §27.3 cloud-identity names
+// (cloudidentity.ReservedEnvVarNames), and not §27.4's own KUBECONFIG
+// (clusterbinding.ReservedEnvVarNames) -- the SAME "one owning mechanism
+// per env-var name" rule extended to this Step's own two injected
+// surfaces. Returns nil when name is acceptable. Pure -- no I/O, no
 // time.Now(), no randomness (CLAUDE.md §11) -- this only inspects name
 // itself; it says nothing about whether name already has a row at some
 // OTHER (scope, scopeTargetID) pair (a Postgres UNIQUE-index concern, not
@@ -133,6 +157,16 @@ func ValidateName(name string) error {
 	for _, reserved := range providercredential.AllEnvVarNames() {
 		if name == reserved {
 			return fmt.Errorf("%w: %q", ErrNameReservedProviderCredential, name)
+		}
+	}
+	for _, reserved := range cloudidentity.ReservedEnvVarNames() {
+		if name == reserved {
+			return fmt.Errorf("%w: %q", ErrNameReservedCloudIdentity, name)
+		}
+	}
+	for _, reserved := range clusterbinding.ReservedEnvVarNames() {
+		if name == reserved {
+			return fmt.Errorf("%w: %q", ErrNameReservedClusterBinding, name)
 		}
 	}
 	return nil

@@ -202,6 +202,59 @@ func (q *Queries) ListCloudIdentityBindingsForResolution(ctx context.Context, ar
 	return items, nil
 }
 
+const listCloudIdentityBindingsForSession = `-- name: ListCloudIdentityBindingsForSession :many
+SELECT id, scope, scope_target_id, kind, audience, params, created_at, updated_at FROM cloud_identity_bindings
+WHERE scope = 'global'
+   OR (scope = 'environment' AND scope_target_id IS NOT NULL AND scope_target_id = $1)
+ORDER BY kind
+`
+
+// Step 73b's own ("cloud identity: sandbox-side consumption + kubeconfig
+// injection", §27.3) sandbox-facing delivery endpoint's own single,
+// session-scoped read: EVERY candidate binding (global, plus this
+// session's own environment_id if it has one) regardless of audience --
+// unlike ListCloudIdentityBindingsForResolution (above), which filters to
+// one REQUESTED audience for the minting endpoint's own allowlist check,
+// this query answers a DIFFERENT question sandbox-agent asks at boot:
+// "which bindings apply to my session at all, so I know which kinds to
+// prepare a token file for and what audience/params each one declares" --
+// the caller (httpapi's own cloud-identity-config delivery handler) then
+// groups the result by Kind and resolves environment-vs-global via
+// internal/domain/providercredential.Resolve, mirroring
+// resolveCloudIdentityBindingForAudience's own identical resolution
+// shape, just without the audience pre-filter. environment_id is
+// sqlc.narg, NULL when the session has none (matches nothing at that
+// scope, never a wildcard -- mirrors ListCloudIdentityBindingsForResolution's
+// own identical environment_id convention).
+func (q *Queries) ListCloudIdentityBindingsForSession(ctx context.Context, environmentID *string) ([]CloudIdentityBinding, error) {
+	rows, err := q.db.Query(ctx, listCloudIdentityBindingsForSession, environmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CloudIdentityBinding
+	for rows.Next() {
+		var i CloudIdentityBinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.Scope,
+			&i.ScopeTargetID,
+			&i.Kind,
+			&i.Audience,
+			&i.Params,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateCloudIdentityBinding = `-- name: UpdateCloudIdentityBinding :one
 UPDATE cloud_identity_bindings
 SET audience = $2, params = $3, updated_at = now()

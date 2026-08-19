@@ -152,6 +152,10 @@ var matrix = map[Action]actionRule{
 	// global scope) -- maintainer+, this SAME row, per that action's own
 	// doc comment.
 	ActionManageCloudIdentityBindings: {allow: roles(RoleAdmin, RoleMaintainer)},
+	// Step 73b (§27.4): cluster-binding CRUD (the at-most-one,
+	// per-Environment row) -- maintainer+, this SAME row, per that
+	// action's own doc comment.
+	ActionManageClusterBindings: {allow: roles(RoleAdmin, RoleMaintainer)},
 
 	// Row 5: review verdicts/re-trigger/auto-approve config --
 	// admin/maintainer. Step 63 (§22.2/§22.4) adds the learned

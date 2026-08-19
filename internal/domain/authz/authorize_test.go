@@ -217,6 +217,13 @@ func TestAuthorize_ExhaustiveMatrix(t *testing.T) {
 		{"member cannot manage cloud identity bindings", authz.RoleMember, authz.ActionManageCloudIdentityBindings, false, false},
 		{"member cannot manage cloud identity bindings even if ownedOrJoined", authz.RoleMember, authz.ActionManageCloudIdentityBindings, true, false},
 		{"viewer cannot manage cloud identity bindings", authz.RoleViewer, authz.ActionManageCloudIdentityBindings, false, false},
+		// Step 73b (§27.4): cluster-binding CRUD -- this SAME maintainer+
+		// row, no member own/joined carve-out.
+		{"admin manages cluster bindings", authz.RoleAdmin, authz.ActionManageClusterBindings, false, true},
+		{"maintainer manages cluster bindings", authz.RoleMaintainer, authz.ActionManageClusterBindings, false, true},
+		{"member cannot manage cluster bindings", authz.RoleMember, authz.ActionManageClusterBindings, false, false},
+		{"member cannot manage cluster bindings even if ownedOrJoined", authz.RoleMember, authz.ActionManageClusterBindings, true, false},
+		{"viewer cannot manage cluster bindings", authz.RoleViewer, authz.ActionManageClusterBindings, false, false},
 
 		// Row 5: review verdicts/re-trigger/auto-approve config --
 		// admin/maintainer only.

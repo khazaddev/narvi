@@ -387,6 +387,13 @@ func serve() error {
 	// sandboxSecretStore's own identical "one store, shared" pattern.
 	cloudIdentityBindingStore := postgres.NewCloudIdentityBindingStore(pool)
 	oidcSigningKeyStore := postgres.NewOIDCSigningKeyStore(pool)
+	// clusterBindingStore (Step 73b, "cloud identity: sandbox-side
+	// consumption + kubeconfig injection", §27.4) backs the cluster-binding
+	// management route group (clusterbindings.go) AND the sandbox-facing
+	// cloud-identity-config delivery endpoint (cloudidentityconfigdelivery.go)
+	// -- mirrors cloudIdentityBindingStore's own identical "one store,
+	// shared" pattern.
+	clusterBindingStore := postgres.NewClusterBindingStore(pool)
 	// chatGPTLinkAttemptStore/chatGPTDeviceFlow (Step 59, "models: Codex
 	// via ChatGPT-account OAuth", §29.3/§29.5/§29.9) back the self-service
 	// link-flow REST routes (chatgptlink.go) AND the refresh pump
@@ -695,6 +702,23 @@ func serve() error {
 	// metadata is public.
 	router.Post("/sessions/{sessionID}/cloud-identity-token",
 		httpapi.MintCloudIdentityToken(sessionStore, sandboxStore, cloudIdentityBindingStore, oidcSigningKeyStore, cfg.TokenEncryptionKey, cfg.CloudIdentityIssuerURL, cfg.Timeouts))
+
+	// cloud-identity-config (Step 73b, "cloud identity: sandbox-side
+	// consumption + kubeconfig injection", §27.3/§27.4): deliberately
+	// mounted OUTSIDE /api/sessions and outside auth.Middleware entirely,
+	// mirroring cloud-identity-token immediately above -- another
+	// sandbox-bearer-token-authenticated route, not a browser-facing one.
+	// The boot-time DISCOVERY step 73a's own minting endpoint alone cannot
+	// provide: which bindings apply to this session at all, and this
+	// session's own Environment's cluster_bindings row -- see
+	// httpapi/cloudidentityconfigdelivery.go's own doc comment for the
+	// full "why this endpoint exists" reasoning. Deliberately NOT gated by
+	// RequireCloudIdentityCapability -- see that file's own doc comment
+	// for why (a read of existing, secret-free rows, harmless when the
+	// capability is off; enforcement happens at the already-gated mint
+	// call each resolved binding still has to go through).
+	router.Post("/sessions/{sessionID}/cloud-identity-config",
+		httpapi.CloudIdentityConfigDelivery(sessionStore, sandboxStore, cloudIdentityBindingStore, clusterBindingStore))
 
 	// snapshot-mint (Step 22, "snapshots & restore", design decision 2):
 	// deliberately mounted OUTSIDE /api/sessions and outside auth.
@@ -1432,6 +1456,28 @@ func serve() error {
 		r.Use(auth.Middleware(userSessionStore, userStore))
 		r.Use(httpapi.RequireCloudIdentityCapability(cfg.CloudIdentityIssuerURL))
 		r.Post("/rotate", httpapi.RotateCloudIdentitySigningKey(pool, oidcSigningKeyStore, auditLogStore, cfg.TokenEncryptionKey, cfg.Timeouts))
+	})
+
+	// /api/environments/{environmentID}/cluster-binding (Step 73b, "cloud
+	// identity: sandbox-side consumption + kubeconfig injection", §27.4):
+	// the ONE scope (environment-only, no global fallback -- §27.4's own
+	// "one cluster per Environment in v1") GET/PUT/DELETE singleton route
+	// group over cluster_bindings -- mirrors opencode-config's own
+	// singleton-resource route shape (GET/PUT/DELETE, no POST/list) rather
+	// than cloud-identity-bindings' own list-of-many-rows CRUD, since this
+	// table has at most one row per Environment. authz.ActionManageClusterBindings
+	// (maintainer+, this Step's own row -- see that action's own doc
+	// comment). Deliberately NOT mounted behind
+	// RequireCloudIdentityCapability -- see httpapi/
+	// cloudidentityconfigdelivery.go's own doc comment for why this
+	// feature's own capability gate is scoped to §27.3's OIDC-issuer-
+	// dependent surfaces only, never this table (a static-rung cluster
+	// binding needs no OIDC issuer at all).
+	router.Route("/api/environments/{environmentID}/cluster-binding", func(r chi.Router) {
+		r.Use(auth.Middleware(userSessionStore, userStore))
+		r.Get("/", httpapi.GetEnvironmentClusterBinding(clusterBindingStore))
+		r.Put("/", httpapi.PutEnvironmentClusterBinding(clusterBindingStore))
+		r.Delete("/", httpapi.DeleteEnvironmentClusterBinding(clusterBindingStore))
 	})
 
 	// /api/environments/{environmentID}/opencode-config,

@@ -177,11 +177,28 @@ import (
 
 func main() {
 	// A bare-bones dispatch, not a flag-parsing library, mirroring
-	// cmd/control-plane/main.go's own subcommand pattern: exactly one
-	// alternate subcommand exists today ("credential-helper", the process
-	// git itself invokes per gitclone's own `-c credential.helper=...`
+	// cmd/control-plane/main.go's own subcommand pattern: ONE alternate
+	// subcommand exists today -- "credential-helper" (the process git
+	// itself invokes per gitclone's own `-c credential.helper=...`
 	// configuration) -- everything else falls through to the normal boot
 	// sequence.
+	//
+	// Step 73b (§27.4) originally shipped a SECOND subcommand here,
+	// "kube-credential", for the AuthKindOIDC cluster rung's own exec
+	// plugin. Adversarial-review HIGH fix: that subcommand needed
+	// NARVI_SESSION_CONFIG (via boot.Load()) to mint anything, but every
+	// process that can ever run `kubectl` (opencodeproc.Spawn, boot/
+	// hooks.go's runHook, boot/runboot.go's services.yml dispatch) strips
+	// that var from the child env on purpose -- it carries this sandbox's
+	// own live bearer token -- so the exec plugin's own re-invocation of
+	// this binary had no env to inherit it FROM and failed 100% of the
+	// time. Removed entirely, never replaced with an equivalent
+	// subcommand: kubeconfig.go's own applyClusterBinding now mints that
+	// rung's own token the SAME way §27.3's cloud_identity_bindings
+	// tokens are minted and points the rendered kubeconfig's own
+	// `tokenFile` field straight at the resulting file -- see
+	// kubeconfig.go's own top doc comment ("Design correction") for the
+	// full reasoning and the client-go source verification behind it.
 	if len(os.Args) >= 2 && os.Args[1] == "credential-helper" {
 		if err := runCredentialHelper(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -1024,6 +1041,28 @@ func run() error {
 	// are.
 	var sandboxSecretEnv []string
 	var bootDegradeNotes []string
+	// cloudIdentityStates/cloudIdentityMintClient (Step 73b, "cloud
+	// identity: sandbox-side consumption + kubeconfig injection", §27.3)
+	// are populated inside the SAME block below and consumed LATER,
+	// outside it, by the background refresh loop's own group.Go
+	// registration (alongside bridge.Run/budgetServer.Serve) -- the exact
+	// same "declared at this outer scope so a later, unconditional section
+	// of run() can see it" shape sandboxSecretEnv/bootDegradeNotes/
+	// resolvedCredentials/agentRuntime already establish, immediately
+	// above. cloudIdentityMintClient stays its own zero value when
+	// cfg.SessionConfig is nil -- harmless, since cloudIdentityStates is
+	// then also nil/empty and the refresh loop's own registration is
+	// itself gated on cfg.SessionConfig != nil (see that call site's own
+	// comment, below). Since this fix (adversarial-review HIGH), this
+	// slice also carries at most one §27.4 AuthKindOIDC cluster-binding
+	// entry (kubeconfig.go's own applyClusterBinding, appended at its own
+	// call site below) alongside every §27.3 cloud_identity_bindings
+	// entry -- ONE refresh loop, ONE slice, for both mechanisms; see
+	// applyClusterBinding's own doc comment for why that rung's own token
+	// needs the SAME half-life refresh every other entry here already
+	// gets.
+	var cloudIdentityStates []cloudIdentityBindingState
+	var cloudIdentityMintClient credentials.CPClient
 	if cfg.SessionConfig != nil {
 		// opencodeproc.Spawn's own Dir is cfg.WorkspaceDir -- normally
 		// created by gitclone.CloneAll (runBootSequence, below), which
@@ -1034,6 +1073,20 @@ func run() error {
 		if err := os.MkdirAll(cfg.WorkspaceDir, 0o755); err != nil {
 			return fmt.Errorf("sandbox-agent: create workspace dir: %w", err)
 		}
+
+		// Step 73b (§27.3/§27.4): wipe cloudIdentityDir ENTIRELY before
+		// this boot writes anything else there -- this Step's own gap-2
+		// resolution (a snapshot_restore boot's own filesystem can already
+		// hold stale token files/a stale kubeconfig from whatever boot
+		// last wrote them; see resetCloudIdentityDir's own doc comment,
+		// cloudidentity.go, for the full "why unconditional, why every
+		// boot mode" reasoning). Ordered before EVERY other boot-time
+		// write in this block, including the sentinel-fix/review-sub-agent
+		// opencode.json merges immediately below -- none of them touch
+		// cloudIdentityDir, so ordering relative to THEM doesn't matter,
+		// but this must land before this file's own later cloud-identity/
+		// kubeconfig population block (further down this same function).
+		resetCloudIdentityDir(cloudIdentityDir)
 
 		// Step 48 (§17.2): for a sentinel-auto-fix child session
 		// (SessionConfig.CapabilityRestricted), write the glob-restricted
@@ -1154,6 +1207,49 @@ func run() error {
 			sandboxSecretEnv = append(sandboxSecretEnv, openCodeConfigEnv...)
 			if !openCodeConfigFetchOK {
 				bootDegradeNotes = append(bootDegradeNotes, "opencode config: boot-time fetch failed after retrying; this session booted with whatever OpenCode config document (if any) was already on disk from a prior boot, never a fresh one (warn-and-continue degrade policy, §27.1/§27.2)")
+			}
+		}
+
+		// Step 73b ("cloud identity: sandbox-side consumption + kubeconfig
+		// injection", §27.3/§27.4): resolve this session's own cloud-
+		// identity bindings + cluster binding, mint one token per binding
+		// (plus, for an AuthKindOIDC cluster binding, its own token --
+		// applyClusterBinding's own doc comment), and render a kubeconfig
+		// -- BEFORE spawning `opencode serve` (below) and BEFORE the boot
+		// sequence's own first hook run (runBootSequence), the SAME
+		// ordering §27.1 already requires of sandbox secrets/OpenCode
+		// config. resolvedSandboxSecrets (already fetched, above) is
+		// reused directly for the AuthKindStatic kubeconfig rung's own
+		// sandbox_secrets lookup -- no second CP round trip. Every failure
+		// along the way is warn-and-continue, folded into bootDegradeNotes
+		// exactly like every other boot-time fetch in this block (§27.1's
+		// own "recorded in the boot log and AGENTS.md" requirement,
+		// extended here).
+		cloudIdentityDelivery, cloudIdentityFetchOK := fetchCloudIdentityConfig(ctx, cfg, timeouts)
+		if !cloudIdentityFetchOK {
+			bootDegradeNotes = append(bootDegradeNotes, "cloud identity/kubeconfig: boot-time fetch failed after retrying; this session booted with NO cloud identity env vars or kubeconfig injected (warn-and-continue degrade policy, §27.3/§27.4)")
+		} else {
+			client, clientErr := credentials.NewCPClient(cfg.SessionConfig.ControlPlaneWsUrl, timeouts.CloudIdentityTokenMintTimeout)
+			if clientErr != nil {
+				slog.Warn("sandbox-agent: build cloud-identity-token CP client failed, skipping cloud identity/kubeconfig injection", "error", clientErr)
+				bootDegradeNotes = append(bootDegradeNotes, "cloud identity/kubeconfig: could not build a CP client; this session booted with NO cloud identity env vars or kubeconfig injected (warn-and-continue degrade policy, §27.3/§27.4)")
+			} else {
+				cloudIdentityMintClient = client
+				var cloudIdentityEnv []string
+				cloudIdentityEnv, cloudIdentityStates = populateCloudIdentityTokenFiles(ctx, cfg, timeouts, client, cloudIdentityDelivery.Bindings, cloudIdentityDir)
+				// applyClusterBinding also mints (AuthKindOIDC only) via
+				// the SAME client/session identity -- clusterBindingState
+				// is non-nil exactly when that rung's own mint succeeded,
+				// and MUST be folded into cloudIdentityStates so
+				// runCloudIdentityRefreshLoop (below, this SAME function)
+				// keeps refreshing it at half-life like every other entry
+				// -- see applyClusterBinding's own doc comment.
+				kubeconfigEnv, clusterBindingState := applyClusterBinding(ctx, client, cfg.SessionConfig.SessionId, cfg.SessionConfig.SandboxToken, cfg.SessionConfig.Gen, cloudIdentityDelivery.ClusterBinding, resolvedSandboxSecrets, timeouts, cloudIdentityDir)
+				if clusterBindingState != nil {
+					cloudIdentityStates = append(cloudIdentityStates, *clusterBindingState)
+				}
+				sandboxSecretEnv = append(sandboxSecretEnv, cloudIdentityEnv...)
+				sandboxSecretEnv = append(sandboxSecretEnv, kubeconfigEnv...)
 			}
 		}
 
@@ -1337,6 +1433,39 @@ func run() error {
 	// budgetSrvGroup.Go is actually called) for why this must NOT be the
 	// SAME group as the one immediately above.
 	var budgetSrvGroup errgroup.Group
+
+	// cloudIdentityRefreshCtx/cancelCloudIdentityRefresh/
+	// cloudIdentityRefreshGroup (Step 73b, "cloud identity: sandbox-side
+	// consumption + kubeconfig injection", §27.3) give the background
+	// token-refresh loop (runCloudIdentityRefreshLoop, cloudidentity.go)
+	// its OWN separate errgroup AND its OWN explicitly-canceled derived
+	// context -- deliberately NOT a member of "group" immediately above,
+	// for the SAME class of reason budgetSrvGroup is kept separate from
+	// bridge.Run/the ctx-wait stand-in (Step 70's own comment just below):
+	// bridge.Run(ctx) can return via a *wsbridge.FatalConnectError WITHOUT
+	// ever canceling ctx itself (wsbridge/run.go's own documented
+	// contract), and runCloudIdentityRefreshLoop's own loop has NO other
+	// exit condition besides ctx.Done() (unlike a turn goroutine, whose
+	// own ProviderHardCap-style ceiling bounds handler.group.Wait() even
+	// when ctx is not literally canceled) -- so folding it into "group"
+	// would risk blocking group.Wait() forever on exactly that fatal-
+	// status path. cancelCloudIdentityRefresh is called explicitly,
+	// unconditionally, immediately after group.Wait() returns (below),
+	// GUARANTEEING this loop unwinds regardless of which of the three
+	// ways group.Wait() itself converged, rather than depending on ctx's
+	// own cancellation state at that point -- the deferred call here is
+	// only a safety net for an early return above this point (none exists
+	// today, since every earlier failure path already returns before this
+	// line is reached, but costs nothing to have).
+	cloudIdentityRefreshCtx, cancelCloudIdentityRefresh := context.WithCancel(ctx)
+	defer cancelCloudIdentityRefresh()
+	var cloudIdentityRefreshGroup errgroup.Group
+	if cfg.SessionConfig != nil {
+		cloudIdentityRefreshGroup.Go(func() error {
+			return runCloudIdentityRefreshLoop(cloudIdentityRefreshCtx, cfg, timeouts, cloudIdentityMintClient, cloudIdentityStates)
+		})
+	}
+
 	if bridge != nil {
 		group.Go(func() error {
 			return bridge.Run(ctx)
@@ -1438,6 +1567,19 @@ func run() error {
 	}
 
 	runErr := group.Wait()
+
+	// Step 73b: unconditionally cancel the refresh loop's own derived
+	// context THE MOMENT group.Wait() has converged (whichever of the
+	// three ways it did) -- see this loop's own group construction, above,
+	// for the full "why a separate context, why explicit cancellation
+	// here" reasoning. cloudIdentityRefreshGroup.Wait() immediately after
+	// is therefore always bounded: the loop's own select statement reacts
+	// to this cancellation on its very next iteration (or is already
+	// blocked waiting on exactly this signal).
+	cancelCloudIdentityRefresh()
+	if err := cloudIdentityRefreshGroup.Wait(); err != nil {
+		slog.Warn("sandbox-agent: cloud identity token refresh loop returned an unexpected error", "error", err)
+	}
 
 	// Drain every turn goroutine commandHandler.HandlePrompt launched
 	// (handler.group) before proceeding to the supervised-process shutdown
