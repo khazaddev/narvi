@@ -2396,6 +2396,30 @@ type Timeouts struct {
 	CloudIdentityTokenMintMaxAttempts    int
 	CloudIdentityTokenMintRetryBaseDelay time.Duration
 	CloudIdentityTokenMintRetryMaxDelay  time.Duration
+
+	// --- Step 74 standalone addition ("sandbox substrate: docker, egress
+	// policy, toolchain", §27.5): no ordering relationship with either
+	// invariant chain above (or with any prior Step's standalone
+	// additions), so -- per those additions' own precedent -- a plain
+	// field with a sensible default, not wired into a fake invariant
+	// link.
+
+	// DockerReadinessTimeout bounds how long internal/sandboxagent/boot.
+	// RunDocker waits for dockerd to create its own Unix socket
+	// (boot.DefaultDockerSocketPath) before giving up -- called ONLY
+	// when a session's own SessionConfig.Docker is true (cmd/sandbox-
+	// agent/main.go's own runBootSequence). Not specified in the plan;
+	// chosen more generously than ServiceReadinessTimeout's own 30s (a
+	// typical dev-server/mock-server cold start): dockerd's own startup
+	// (initializing its overlay2 graph driver, bridge networking) is a
+	// heavier, real-kernel operation under §27.5's own VM runtime option,
+	// not a plain process binding a port -- 60s leaves comfortable
+	// headroom without letting a genuinely stuck daemon stall the whole
+	// boot sequence indefinitely. Polled at ServiceReadinessPollInterval
+	// (250ms) -- the identical poll cadence services.Run already uses;
+	// no second poll-interval field needed for what is structurally the
+	// same "poll until ready or timeout" shape.
+	DockerReadinessTimeout time.Duration
 }
 
 // DefaultTimeouts returns the shipped defaults for every field, each
@@ -2605,6 +2629,8 @@ func DefaultTimeouts() Timeouts {
 		CloudIdentityTokenMintMaxAttempts:      3,                      // mirrors CloudIdentityConfigFetchMaxAttempts
 		CloudIdentityTokenMintRetryBaseDelay:   500 * time.Millisecond, // mirrors CloudIdentityConfigFetchRetryBaseDelay
 		CloudIdentityTokenMintRetryMaxDelay:    2 * time.Second,        // mirrors CloudIdentityConfigFetchRetryMaxDelay
+
+		DockerReadinessTimeout: 60 * time.Second, // Step 74, §27.5; not specified, chosen generously -- see field doc comment
 	}
 }
 
