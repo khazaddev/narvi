@@ -1935,6 +1935,29 @@ func runBootSequence(
 		setupRerunLadder = boot.ComputeSetupRerunLadder(manifest, manifestFound, len(pathScope) > 0, cfg.WorkspaceDir, postCloneFingerprint.RepoSHAs, timeouts.RepoSHADiscoveryTimeout)
 	}
 
+	// §27.5 (Step 74): dockerd is supervised ONCE per boot, before RunBoot's
+	// own per-repo loop -- a session-level daemon, not scoped to any one
+	// repo, so a repo's own services.yml (started inside RunBoot below)
+	// can rely on it already being up if its own commands need Docker.
+	// Gated on cfg.SessionConfig.Docker being true (nil-SessionConfig dev/
+	// CI boots, and every Docker-false session, never call RunDocker at
+	// all -- "the daemon simply never starts when the flag is off",
+	// §27.5's own wording). env mirrors RunBoot's own identical
+	// supervisor.EnvWithout(SessionConfigEnvVar)+secretEnv construction
+	// immediately below -- dockerd has no more legitimate need to see the
+	// sandbox's own plaintext bearer token than any other spawned process
+	// does, and a customer's own configured HTTP_PROXY/HTTPS_PROXY/
+	// NO_PROXY secrets (§27.6) route its own image pulls through a
+	// configured proxy the same cooperative way every other spawned
+	// process already gets them.
+	if cfg.SessionConfig != nil && cfg.SessionConfig.Docker {
+		if err := boot.RunDocker(ctx, sup, boot.DefaultDockerdBinary, boot.DefaultDockerSocketPath,
+			append(supervisor.EnvWithout(boot.SessionConfigEnvVar), secretEnv...),
+			reportBootProgress, timeouts.DockerReadinessTimeout, timeouts.ServiceReadinessPollInterval); err != nil {
+			return fmt.Errorf("boot: docker: %w", err)
+		}
+	}
+
 	// timeouts.SetupRerunRetryBackoff (§19.6, Step 43) paces the ONE retry
 	// of a failed full setup.sh rerun -- see runSetupRerunLadder's own doc
 	// comment (hooks.go). It carries the same value as the OpenCode

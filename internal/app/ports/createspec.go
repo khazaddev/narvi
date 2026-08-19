@@ -2,6 +2,7 @@ package ports
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/khazaddev/narvi/contracts/gen/go/sessionconfig"
 )
@@ -45,6 +46,26 @@ type CreateSpec struct {
 	// SESSION_CONFIG to know what filesystem/runtime to start. Empty
 	// means "the provider's own default base image."
 	Image string
+
+	// Docker is the second deliberate exception to "don't duplicate
+	// SessionConfig" (§27.5, Step 74) — kept as its own top-level field,
+	// like Gen, so a provider can act on this Environment's own
+	// docker_required flag WITHOUT ever parsing the opaque SESSION_CONFIG
+	// document itself (the Modal adapter's own CreateSandbox/
+	// RestoreFromSnapshot map this directly onto Modal's VM runtime
+	// option). MUST equal SessionConfig.Docker; see Validate.
+	Docker bool
+
+	// EgressPolicy is the third such exception (§27.6, Step 74), carried
+	// exactly like Docker above for the identical reason: the provider
+	// substrate enforces this (Modal's own sandbox network controls), so
+	// it must be reachable without parsing SESSION_CONFIG. Nil means "no
+	// egress policy attached to this Environment" — today's unchanged,
+	// unrestricted behavior, mirroring SessionConfig.EgressPolicy's own
+	// nil zero value. MUST be structurally equal to
+	// SessionConfig.EgressPolicy (nil-ness, Mode, and Allowlist contents
+	// all included); see Validate.
+	EgressPolicy *sessionconfig.SessionConfigEgressPolicy
 }
 
 // GenMismatchError is returned by CreateSpec.Validate when Gen and
@@ -65,14 +86,53 @@ func (e *GenMismatchError) Error() string {
 	)
 }
 
+// DockerMismatchError is returned by CreateSpec.Validate when Docker and
+// SessionConfig.Docker disagree — the identical deliberate-duplicate
+// safety net GenMismatchError provides for Gen, applied to CreateSpec's
+// second such field (§27.5, Step 74).
+type DockerMismatchError struct {
+	Docker              bool
+	SessionConfigDocker bool
+}
+
+func (e *DockerMismatchError) Error() string {
+	return fmt.Sprintf(
+		"ports: CreateSpec.Docker (%t) does not match CreateSpec.SessionConfig.Docker (%t)",
+		e.Docker, e.SessionConfigDocker,
+	)
+}
+
+// EgressPolicyMismatchError is returned by CreateSpec.Validate when
+// EgressPolicy and SessionConfig.EgressPolicy disagree — the identical
+// safety net for CreateSpec's third deliberate-duplicate field (§27.6,
+// Step 74).
+type EgressPolicyMismatchError struct {
+	EgressPolicy              *sessionconfig.SessionConfigEgressPolicy
+	SessionConfigEgressPolicy *sessionconfig.SessionConfigEgressPolicy
+}
+
+func (e *EgressPolicyMismatchError) Error() string {
+	return fmt.Sprintf(
+		"ports: CreateSpec.EgressPolicy (%+v) does not match CreateSpec.SessionConfig.EgressPolicy (%+v)",
+		e.EgressPolicy, e.SessionConfigEgressPolicy,
+	)
+}
+
 // Validate reports whether spec is internally consistent. Every
 // SandboxProvider implementation must call this before using spec (Modal
 // does so in CreateSandbox/RestoreFromSnapshot), so a diverging
-// Gen/SessionConfig.Gen pair is rejected uniformly regardless of which
-// provider it was headed to.
+// Gen/SessionConfig.Gen, Docker/SessionConfig.Docker, or
+// EgressPolicy/SessionConfig.EgressPolicy pair is rejected uniformly
+// regardless of which provider it was headed to.
 func (s CreateSpec) Validate() error {
 	if s.Gen != s.SessionConfig.Gen {
 		return &GenMismatchError{Gen: s.Gen, SessionConfigGen: s.SessionConfig.Gen}
+	}
+	if s.Docker != s.SessionConfig.Docker {
+		return &DockerMismatchError{Docker: s.Docker, SessionConfigDocker: s.SessionConfig.Docker}
+	}
+	if !reflect.DeepEqual(s.EgressPolicy, s.SessionConfig.EgressPolicy) {
+		return &EgressPolicyMismatchError{EgressPolicy: s.EgressPolicy, SessionConfigEgressPolicy: s.SessionConfig.EgressPolicy}
 	}
 	return nil
 }

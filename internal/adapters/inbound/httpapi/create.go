@@ -15,6 +15,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres"
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/intentclassifier"
+	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/sessionactor"
 	"github.com/khazaddev/narvi/internal/domain/authz"
 	"github.com/khazaddev/narvi/internal/domain/environment"
@@ -402,6 +403,26 @@ type validatedCreateSessionInput struct {
 	hasPathScope  bool
 	hasMockConfig bool
 	contractsPath string
+
+	// docker/hasDocker (Step 74, §27.5) mirror pathScope/hasPathScope's own
+	// shape: docker is req.Docker itself (a plain bool, no tri-state
+	// needed -- absent and explicit-false are behaviorally identical), and
+	// hasDocker is docker's own value, kept as a separate field purely for
+	// symmetry with hasMockConfig/hasEgressPolicy at this struct's other
+	// call sites (createSessionOnTx's own "does this request need a new
+	// Environment row at all" gate).
+	docker    bool
+	hasDocker bool
+
+	// egressPolicy/hasEgressPolicy (Step 74, §27.6) mirror mockConfig's own
+	// shape: hasEgressPolicy is true whenever the request body carried an
+	// "egressPolicy" key at all (req.EgressPolicy != nil); egressPolicy is
+	// the already-validated (environment.ValidateEgressPolicy) domain
+	// value to persist. The zero value is EgressPolicy{} (Mode == ""),
+	// exactly matching "no policy attached to this Environment" for the
+	// hasEgressPolicy == false case.
+	egressPolicy    environment.EgressPolicy
+	hasEgressPolicy bool
 }
 
 // validateCreateSessionRequest performs every check CreateSession's own
@@ -496,13 +517,100 @@ func validateCreateSessionRequest(req restdtos.CreateSessionRequest) (validatedC
 		}
 	}
 
+	// docker (Step 74, §27.5) is a plain, always-present bool (unlike
+	// pathScope/mockConfig's own genuinely-optional-key shape) -- see
+	// validatedCreateSessionInput.docker's own doc comment for why no
+	// tri-state is needed. Nothing to validate here: every bool value is
+	// already valid; the fail-closed provider-capability check
+	// (environment.CheckSubstrateCapabilities) runs separately, in
+	// CreateSessionCore, once a real SandboxProvider is reachable -- this
+	// function stays pure/I-O-free like every other check it runs.
+	hasDocker := req.Docker
+
+	// egressPolicy is OPTIONAL and INDEPENDENT of docker/pathScope/
+	// mockConfig (row 27's own "either" gate, extended here), mirroring
+	// mockConfig's own genuinely-optional-key shape exactly: hasEgressPolicy
+	// is true whenever the request body carried an "egressPolicy" key at
+	// all (req.EgressPolicy != nil).
+	var egressPolicy environment.EgressPolicy
+	hasEgressPolicy := req.EgressPolicy != nil
+	if hasEgressPolicy {
+		egressPolicy = environment.EgressPolicy{
+			Mode:      environment.EgressMode(req.EgressPolicy.Mode),
+			Allowlist: append([]string(nil), req.EgressPolicy.Allowlist...),
+		}
+		if err := environment.ValidateEgressPolicy(egressPolicy); err != nil {
+			return validatedCreateSessionInput{}, &CreateSessionError{http.StatusBadRequest, fmt.Sprintf("egressPolicy: %s", err)}
+		}
+	}
+
 	return validatedCreateSessionInput{
-		reposJSON:     reposJSON,
-		pathScope:     pathScope,
-		hasPathScope:  hasPathScope,
-		hasMockConfig: hasMockConfig,
-		contractsPath: contractsPath,
+		reposJSON:       reposJSON,
+		pathScope:       pathScope,
+		hasPathScope:    hasPathScope,
+		hasMockConfig:   hasMockConfig,
+		contractsPath:   contractsPath,
+		docker:          req.Docker,
+		hasDocker:       hasDocker,
+		egressPolicy:    egressPolicy,
+		hasEgressPolicy: hasEgressPolicy,
 	}, nil
+}
+
+// checkSubstrateCapabilitiesUpFront is Step 74's own up-front half of the
+// "fail-closed, twice" rule (§27.5/§27.6, brief point A) -- the clearest-
+// possible-UX refusal at session-creation time, BEFORE any Postgres
+// write, when this request's own docker/egressPolicy asks for a substrate
+// requirement the CONFIGURED provider does not report supporting.
+//
+// Deliberately its own function, not folded into validateCreateSessionRequest:
+// that function is pure/I-O-free by design (CreateSessionCore's own doc
+// comment: "no tx, no pool, no I/O of any kind, so it is always safe...
+// to call before a transaction/connection exists") and is called from
+// BOTH CreateSessionCore and CreateSessionOnTx -- but a live
+// ports.SandboxProvider is only reachable via registry, which
+// CreateSessionOnTx's OTHER direct callers (automation/sentinelfix/
+// coalesce/child-session -- see that function's own doc comment) do not
+// carry today, since none of them construct a request with docker/
+// egressPolicy set (verified: none of their own req-building code sets
+// either new field). This check therefore lives at the ONE call site
+// that both has provider access AND is the sole path every externally-
+// reachable, potentially docker/egressPolicy-carrying request funnels
+// through today (CreateSessionCore -- Web/Slack/Linear/bot all call it).
+// A future Step that threads Environment-level docker/egress inheritance
+// into one of CreateSessionOnTx's other direct callers must add the
+// identical check at that new call site -- named here, not silently left
+// as a gap (mirroring this codebase's own "honest, documented limitation"
+// convention).
+//
+// Nothing to check (returns nil immediately, without ever touching
+// registry) when the request asks for neither req.Docker nor an
+// enforcement-requiring req.EgressPolicy -- the overwhelming common case,
+// and the reason a nil registry.Provider() (some test/dev setups) never
+// blocks an ordinary session that never asked for either.
+func checkSubstrateCapabilitiesUpFront(registry *sessionactor.Registry, req restdtos.CreateSessionRequest) *CreateSessionError {
+	dockerRequired := req.Docker
+	egressEnforcementRequired := req.EgressPolicy != nil && environment.EgressMode(req.EgressPolicy.Mode) == environment.EgressModeAllowlist
+	if !dockerRequired && !egressEnforcementRequired {
+		return nil
+	}
+
+	var caps ports.Capabilities
+	if registry != nil {
+		if provider := registry.Provider(); provider != nil {
+			caps = provider.Capabilities()
+		}
+	}
+	// A nil registry/provider leaves caps at its zero value (every field
+	// false) -- fail-closed, the same as a real provider that genuinely
+	// supports neither: a docker/enforced-egress request with no reachable
+	// provider to honor it is refused exactly like one a real,
+	// unsupporting provider refuses.
+
+	if err := environment.CheckSubstrateCapabilities(dockerRequired, egressEnforcementRequired, caps.DockerInSandbox, caps.EgressPolicy); err != nil {
+		return &CreateSessionError{http.StatusUnprocessableEntity, err.Error()}
+	}
+	return nil
 }
 
 // CreateSessionOnTx does everything CreateSession's own doc comment above
@@ -591,18 +699,21 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 	hasPathScope := validated.hasPathScope
 	hasMockConfig := validated.hasMockConfig
 	contractsPath := validated.contractsPath
+	hasDocker := validated.hasDocker
+	egressPolicy := validated.egressPolicy
+	hasEgressPolicy := validated.hasEgressPolicy
 
 	// An environments row is inserted in this SAME transaction, BEFORE
 	// the session row itself, so the session insert below can set
-	// environment_id to it directly, whenever EITHER a non-empty
-	// pathScope OR a present mockConfig was supplied -- matching
-	// CreateSession's own doc comment (row 27's "either" gate, not "both
-	// required"). environment_id/provenanceTag both stay their
-	// pgtype/Go zero values (NULL) when NEITHER is present, identical
-	// to every session created before this batch.
+	// environment_id to it directly, whenever ANY of pathScope/mockConfig/
+	// docker/egressPolicy was supplied -- matching CreateSession's own doc
+	// comment (row 27's "either" gate, extended by Step 74, §27.5/§27.6,
+	// to the two new independent attributes). environment_id/
+	// provenanceTag both stay their pgtype/Go zero values (NULL) when NONE
+	// is present, identical to every session created before this batch.
 	var environmentID pgtype.UUID
 	var provenanceTag *string
-	if hasPathScope || hasMockConfig {
+	if hasPathScope || hasMockConfig || hasDocker || hasEgressPolicy {
 		var pathScopeJSON []byte
 		if hasPathScope {
 			var marshalErr error
@@ -618,10 +729,43 @@ func CreateSessionOnTx(ctx context.Context, tx pgx.Tx, sessions *postgres.Sessio
 			contractsPathCol = &contractsPath
 		}
 
+		// egress_policy_mode/egress_policy_allowlist (Step 74, §27.6)
+		// store the CUSTOMER's own configured policy ONLY -- the
+		// server-appended allowlist floor is never persisted here; it is
+		// computed fresh every time a SessionConfig is assembled from
+		// this row (internal/app/sessionactor's own assembleSessionConfig,
+		// via environment.AppendAllowlistFloor) -- see migrations/
+		// 000095_environment_docker_egress.up.sql's own doc comment for
+		// why. Both columns stay nil/NULL unless egressPolicy was
+		// actually supplied. egress_policy_allowlist is populated ONLY
+		// when Mode == EgressModeAllowlist -- migrations/
+		// 000095_environment_docker_egress.up.sql's own CHECK constraint
+		// enforces this pairing at the schema level too (an "open" row
+		// with a non-NULL allowlist column is structurally rejected), so
+		// this must match it exactly rather than always marshaling
+		// whatever egressPolicy.Allowlist happens to hold.
+		var egressPolicyModeCol *string
+		var egressPolicyAllowlistJSON []byte
+		if hasEgressPolicy {
+			mode := string(egressPolicy.Mode)
+			egressPolicyModeCol = &mode
+			if egressPolicy.Mode == environment.EgressModeAllowlist {
+				var marshalErr error
+				egressPolicyAllowlistJSON, marshalErr = json.Marshal(egressPolicy.Allowlist)
+				if marshalErr != nil {
+					logger.Error("httpapi: marshal egressPolicy.allowlist failed", "error", marshalErr)
+					return sqlcgen.Session{}, false, &CreateSessionError{http.StatusInternalServerError, "internal error"}
+				}
+			}
+		}
+
 		env, envErr := environments.WithTx(tx).Create(ctx, sqlcgen.CreateEnvironmentParams{
-			PathScope:      pathScopeJSON,
-			MockConfigured: hasMockConfig,
-			ContractsPath:  contractsPathCol,
+			PathScope:             pathScopeJSON,
+			MockConfigured:        hasMockConfig,
+			ContractsPath:         contractsPathCol,
+			DockerRequired:        hasDocker,
+			EgressPolicyMode:      egressPolicyModeCol,
+			EgressPolicyAllowlist: egressPolicyAllowlistJSON,
 		})
 		if envErr != nil {
 			logger.Error("httpapi: create environment failed", "error", envErr)
@@ -779,6 +923,22 @@ func CreateSessionCore(ctx context.Context, pool *pgxpool.Pool, sessions *postgr
 	// connections/transactions, matching this function's pre-tx-support-
 	// split behavior exactly.
 	if _, verr := validateCreateSessionRequest(req); verr != nil {
+		return sqlcgen.Session{}, verr
+	}
+
+	// Step 74's own up-front half of the "fail-closed, twice" rule
+	// (§27.5/§27.6, brief point A): refused HERE, before any Postgres
+	// write, when this request asks for a docker/enforced-egress
+	// requirement the CONFIGURED provider does not report supporting --
+	// "the clearest possible UX" per §27.5's own wording. This is
+	// deliberately a SEPARATE, independent check from the one
+	// sessionactor.tryPlanSpawn runs again at dispatch time (dispatch.go's
+	// own doc comment) -- disabling either one alone must not disable the
+	// other; see checkSubstrateCapabilitiesUpFront's own doc comment for
+	// why this is where it runs (registry is the one thing this function
+	// has that validateCreateSessionRequest itself does not: a live
+	// ports.SandboxProvider to actually consult).
+	if verr := checkSubstrateCapabilitiesUpFront(registry, req); verr != nil {
 		return sqlcgen.Session{}, verr
 	}
 

@@ -36,6 +36,73 @@ func TestCreateSpec_Validate(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("Docker matches SessionConfig.Docker", func(t *testing.T) {
+		spec := CreateSpec{SessionConfig: sessionconfig.SessionConfig{Docker: true}, Docker: true}
+		if err := spec.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("Docker diverges from SessionConfig.Docker", func(t *testing.T) {
+		spec := CreateSpec{SessionConfig: sessionconfig.SessionConfig{Docker: false}, Docker: true}
+		err := spec.Validate()
+		var target *DockerMismatchError
+		if !errors.As(err, &target) {
+			t.Fatalf("Validate() error = %v, want *DockerMismatchError", err)
+		}
+		if target.Docker != true || target.SessionConfigDocker != false {
+			t.Errorf("DockerMismatchError = %+v, want Docker=true SessionConfigDocker=false", target)
+		}
+	})
+
+	t.Run("EgressPolicy nil on both sides matches", func(t *testing.T) {
+		spec := CreateSpec{SessionConfig: sessionconfig.SessionConfig{}}
+		if err := spec.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("EgressPolicy matches SessionConfig.EgressPolicy", func(t *testing.T) {
+		policy := &sessionconfig.SessionConfigEgressPolicy{
+			Mode:      sessionconfig.SessionConfigEgressPolicyModeAllowlist,
+			Allowlist: []string{"github.com", "cp.example.com"},
+		}
+		spec := CreateSpec{
+			SessionConfig: sessionconfig.SessionConfig{EgressPolicy: policy},
+			EgressPolicy:  policy,
+		}
+		if err := spec.Validate(); err != nil {
+			t.Errorf("Validate() = %v, want nil", err)
+		}
+	})
+
+	t.Run("EgressPolicy diverges: nil vs non-nil", func(t *testing.T) {
+		policy := &sessionconfig.SessionConfigEgressPolicy{Mode: sessionconfig.SessionConfigEgressPolicyModeOpen, Allowlist: nil}
+		spec := CreateSpec{
+			SessionConfig: sessionconfig.SessionConfig{EgressPolicy: policy},
+			EgressPolicy:  nil,
+		}
+		err := spec.Validate()
+		var target *EgressPolicyMismatchError
+		if !errors.As(err, &target) {
+			t.Fatalf("Validate() error = %v, want *EgressPolicyMismatchError", err)
+		}
+	})
+
+	t.Run("EgressPolicy diverges: different allowlist contents", func(t *testing.T) {
+		specPolicy := &sessionconfig.SessionConfigEgressPolicy{Mode: sessionconfig.SessionConfigEgressPolicyModeAllowlist, Allowlist: []string{"a.example.com"}}
+		configPolicy := &sessionconfig.SessionConfigEgressPolicy{Mode: sessionconfig.SessionConfigEgressPolicyModeAllowlist, Allowlist: []string{"b.example.com"}}
+		spec := CreateSpec{
+			SessionConfig: sessionconfig.SessionConfig{EgressPolicy: configPolicy},
+			EgressPolicy:  specPolicy,
+		}
+		err := spec.Validate()
+		var target *EgressPolicyMismatchError
+		if !errors.As(err, &target) {
+			t.Fatalf("Validate() error = %v, want *EgressPolicyMismatchError", err)
+		}
+	})
 }
 
 // TestImageSpec_CacheMount_NilByDefault proves a zero-value/pre-existing

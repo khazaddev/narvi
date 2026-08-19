@@ -517,6 +517,22 @@ type RegistryOptions struct {
 	ReviewModelDeep string
 }
 
+// Provider returns this Registry's own configured ports.SandboxProvider --
+// the SAME provider every Actor it hydrates shares (r.provider, threaded
+// through at hydration time, actor.go's own field doc comment) -- so a
+// caller that needs to consult provider capabilities BEFORE a session (and
+// therefore an Actor) exists at all can do so without reaching into an
+// unexported field. Step 74's own up-front fail-closed substrate check
+// (httpapi.CreateSessionCore, §27.5/§27.6 "refused up-front when the
+// configured provider reports no support") is this method's one caller
+// today. May be nil (some tests construct a Registry without one, e.g.
+// the resilience test) -- callers must nil-check before calling
+// Capabilities() on the result, exactly like every other r.provider
+// consumer in this package already does.
+func (r *Registry) Provider() ports.SandboxProvider {
+	return r.provider
+}
+
 // GetOrSpawn returns the live local Actor for sessionID if this process
 // already has one running, otherwise hydrates and starts a new one (§2:
 // "hydration on demand"). Returns ErrSessionActorElsewhere if another

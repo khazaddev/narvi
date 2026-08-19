@@ -34,4 +34,31 @@ type Capabilities struct {
 
 	// ImageBuilds reports whether BuildImage/DeleteImage are supported.
 	ImageBuilds bool
+
+	// DockerInSandbox reports whether CreateSandbox/RestoreFromSnapshot
+	// honor CreateSpec.Docker (§27.5, Step 74): a real, isolated dockerd
+	// can run inside a spawned sandbox instance. Consulted independently
+	// at two points -- once up front at session-creation time
+	// (internal/adapters/inbound/httpapi.CreateSessionCore, refusing a
+	// docker-requiring session outright when false) and again at dispatch
+	// time (internal/app/sessionactor.tryPlanSpawn, immediately before a
+	// real spawn/restore/resume attempt) -- via the SAME pure decision,
+	// internal/domain/environment.CheckSubstrateCapabilities, so a
+	// docker-requiring session can never be silently run somewhere this
+	// requirement is unenforceable. Modal reports true (it maps the flag
+	// onto its own VM runtime option, §27.5's "Modal concretely"); a
+	// provider with no such option must report false, never silently
+	// accept the flag and ignore it.
+	DockerInSandbox bool
+
+	// EgressPolicy reports whether CreateSandbox/RestoreFromSnapshot honor
+	// CreateSpec.EgressPolicy, enforcing it at the provider's own network
+	// substrate (§27.6, Step 74: "Modal's own sandbox network controls;
+	// NetworkPolicy for the anticipated Kubernetes provider"). Consulted
+	// the SAME two-point way DockerInSandbox is -- see that field's own
+	// doc comment -- but only when the policy actually requires
+	// enforcement (EgressPolicy.RequiresEnforcement(), i.e. mode ==
+	// allowlist): an "open" policy needs no substrate support at all,
+	// since every provider already defaults to unrestricted egress.
+	EgressPolicy bool
 }

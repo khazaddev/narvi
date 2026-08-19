@@ -18,6 +18,23 @@ type Environment struct {
 	// non-nil, non-empty PathScope is assumed to have already passed
 	// ValidatePathScope; nothing in this package re-validates it.
 	PathScope []string
+
+	// DockerRequired is §27.5's per-Environment "docker: required" flag
+	// (Step 74). false is the ordinary, unchanged-behavior default. A
+	// true value is assumed to have already passed the fail-closed
+	// provider-capability check both call sites run independently
+	// (httpapi.CreateSessionCore at session-creation time,
+	// sessionactor.tryPlanSpawn again at dispatch time) -- this package
+	// itself makes no provider-capability claim; see
+	// CheckSubstrateCapabilities.
+	DockerRequired bool
+
+	// EgressPolicy is §27.6's per-Environment egress_policy (Step 74). Its
+	// zero value (Mode == "") means "no policy attached to this
+	// Environment" -- today's unchanged, unrestricted behavior. A non-zero
+	// value is assumed to have already passed ValidateEgressPolicy;
+	// nothing in this package re-validates it.
+	EgressPolicy EgressPolicy
 }
 
 // Sentinel errors ValidatePathScope can return, each naming a distinct

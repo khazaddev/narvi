@@ -43,7 +43,11 @@ func (s *EnvironmentStore) WithTx(tx pgx.Tx) *EnvironmentStore {
 // marshaled to JSON and already validated by internal/domain/environment.
 // ValidatePathScope, mockConfigured/contractsPath already resolved from the
 // request's own optional mockConfig key (httpapi.CreateSession's own doc
-// comment) -- this method performs no validation of its own.
+// comment), and dockerRequired/egressPolicyMode/egressPolicyAllowlist
+// (Step 74, §27.5/§27.6) already resolved from the request's own optional
+// docker/egressPolicy keys and already validated by internal/domain/
+// environment.ValidateEgressPolicy -- this method performs no validation
+// of its own.
 func (s *EnvironmentStore) Create(ctx context.Context, arg sqlcgen.CreateEnvironmentParams) (sqlcgen.Environment, error) {
 	return s.q.CreateEnvironment(ctx, arg)
 }

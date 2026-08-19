@@ -32,6 +32,32 @@ type SessionConfig struct {
 	// created without an ingress webhook).
 	CorrelationId SessionConfigCorrelationId `json:"correlationId" yaml:"correlationId" mapstructure:"correlationId"`
 
+	// Step 74 (§27.5): this session's own Environment.docker_required. Carried here
+	// AND, deliberately, as a top-level ports.CreateSpec field (the SAME
+	// 'duplicate-with-Validate' discipline Gen already documents on that type) -- the
+	// provider must act on this flag without ever parsing this opaque document. When
+	// true, sandbox-agent supervises dockerd as one more entry in its own
+	// process-supervision table (§14.2); the daemon simply never starts when this is
+	// false. Genuinely OPTIONAL, like capabilityRestricted above: absent/false is
+	// today's exact unchanged behavior for every session created before this field
+	// existed.
+	Docker bool `json:"docker,omitempty,omitzero" yaml:"docker,omitempty" mapstructure:"docker,omitempty"`
+
+	// Step 74 (§27.6): this session's own Environment.egress_policy, enforced at the
+	// provider substrate (Modal's own sandbox network controls). Carried here AND,
+	// like docker above, also as a top-level ports.CreateSpec field. When mode is
+	// "allowlist", allowlist ALWAYS already includes the non-negotiable,
+	// server-appended floor (the control plane's own WS/API host plus this session's
+	// own actual git hosts, internal/domain/environment.AppendAllowlistFloor) --
+	// appended fresh at assembly time, every time, never merely validated once at
+	// input, so a customer allowlist that omits either can never reach the wire
+	// without both being added back in. Genuinely OPTIONAL (may be absent from the
+	// document entirely), NOT required-nullable like most fields above, matching
+	// pathScope's own convention exactly: absent or null both mean no egress policy
+	// is attached to this Environment -- today's exact unchanged, unrestricted
+	// behavior.
+	EgressPolicy *SessionConfigEgressPolicy `json:"egressPolicy,omitempty,omitzero" yaml:"egressPolicy,omitempty" mapstructure:"egressPolicy,omitempty"`
+
 	// Spawn generation (§3.2 fencing).
 	Gen int `json:"gen" yaml:"gen" mapstructure:"gen"`
 
@@ -121,6 +147,77 @@ func (j *SessionConfigBootMode) UnmarshalJSON(value []byte) error {
 // wrapper -> back. Null only when no upstream correlation id exists (e.g. session
 // created without an ingress webhook).
 type SessionConfigCorrelationId *string
+
+// Step 74 (§27.6): this session's own Environment.egress_policy, enforced at the
+// provider substrate (Modal's own sandbox network controls). Carried here AND,
+// like docker above, also as a top-level ports.CreateSpec field. When mode is
+// "allowlist", allowlist ALWAYS already includes the non-negotiable,
+// server-appended floor (the control plane's own WS/API host plus this session's
+// own actual git hosts, internal/domain/environment.AppendAllowlistFloor) --
+// appended fresh at assembly time, every time, never merely validated once at
+// input, so a customer allowlist that omits either can never reach the wire
+// without both being added back in. Genuinely OPTIONAL (may be absent from the
+// document entirely), NOT required-nullable like most fields above, matching
+// pathScope's own convention exactly: absent or null both mean no egress policy is
+// attached to this Environment -- today's exact unchanged, unrestricted behavior.
+type SessionConfigEgressPolicy struct {
+	// Allowlist corresponds to the JSON schema field "allowlist".
+	Allowlist []string `json:"allowlist" yaml:"allowlist" mapstructure:"allowlist"`
+
+	// Mode corresponds to the JSON schema field "mode".
+	Mode SessionConfigEgressPolicyMode `json:"mode" yaml:"mode" mapstructure:"mode"`
+}
+
+type SessionConfigEgressPolicyMode string
+
+const SessionConfigEgressPolicyModeAllowlist SessionConfigEgressPolicyMode = "allowlist"
+const SessionConfigEgressPolicyModeOpen SessionConfigEgressPolicyMode = "open"
+
+var enumValues_SessionConfigEgressPolicyMode = []interface{}{
+	"open",
+	"allowlist",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SessionConfigEgressPolicyMode) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_SessionConfigEgressPolicyMode {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_SessionConfigEgressPolicyMode, v)
+	}
+	*j = SessionConfigEgressPolicyMode(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SessionConfigEgressPolicy) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["allowlist"]; raw != nil && !ok {
+		return fmt.Errorf("field allowlist in SessionConfigEgressPolicy: required")
+	}
+	if _, ok := raw["mode"]; raw != nil && !ok {
+		return fmt.Errorf("field mode in SessionConfigEgressPolicy: required")
+	}
+	type Plain SessionConfigEgressPolicy
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = SessionConfigEgressPolicy(plain)
+	return nil
+}
 
 // §14.1: the session's own Environment.path_scope, when one is attached -- the
 // sparse-checkout glob patterns internal/sandboxagent/gitclone.CloneAll passes to
@@ -228,6 +325,9 @@ func (j *SessionConfig) UnmarshalJSON(value []byte) error {
 	}
 	if v, ok := raw["capabilityRestricted"]; !ok || v == nil {
 		plain.CapabilityRestricted = false
+	}
+	if v, ok := raw["docker"]; !ok || v == nil {
+		plain.Docker = false
 	}
 	if plain.Repos != nil && len(plain.Repos) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "repos", 1)

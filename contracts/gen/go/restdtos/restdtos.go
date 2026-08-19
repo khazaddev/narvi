@@ -1451,12 +1451,38 @@ type CreateSessionRequest struct {
 	// resubmits it).
 	BuildModelId CreateSessionRequestBuildModelId `json:"buildModelId,omitempty,omitzero" yaml:"buildModelId,omitempty" mapstructure:"buildModelId,omitempty"`
 
+	// Optional (Step 74, 'sandbox substrate: docker, egress policy, toolchain',
+	// §27.5). Deliberately stays OUT of this schema's own top-level required list
+	// (unlike planMode) so every existing caller that does not yet send this key
+	// keeps working unchanged -- mirrors capabilityRestricted's own precedent in the
+	// session-config schema, not planMode's. true creates (or attaches to) this
+	// session's own session-scoped Environment (like pathScope/mockConfig below) with
+	// docker_required=true -- refused up front, before any Postgres write, if the
+	// configured sandbox provider does not report DockerInSandbox support
+	// (internal/domain/environment.CheckSubstrateCapabilities, checked again
+	// independently at dispatch time).
+	Docker bool `json:"docker,omitempty,omitzero" yaml:"docker,omitempty" mapstructure:"docker,omitempty"`
+
 	// Step 59 (§29.8). Reasoning-effort override for this session's first turn; null
 	// means use the default. Required-nullable, mirroring modelId's own convention
 	// exactly -- valid values are owned per-model by OpenCode's own catalog
 	// `variants` maps (GET /api/models, this Step's own catalog endpoint), never a
 	// Narvi-side enum.
 	Effort CreateSessionRequestEffort `json:"effort" yaml:"effort" mapstructure:"effort"`
+
+	// Optional (Step 74, §27.6). Like pathScope/mockConfig above, this key is
+	// genuinely OPTIONAL (may be absent from the request body entirely) and
+	// independent of docker/pathScope/mockConfig -- presence alone (with
+	// mode/allowlist both required inside it, unlike this key itself) creates a
+	// session-scoped Environment carrying this egress_policy. mode "allowlist" is
+	// refused up front, before any Postgres write, if the configured sandbox provider
+	// does not report EgressPolicy support -- the SAME CheckSubstrateCapabilities
+	// check docker uses. The server-appended allowlist floor (CP host + this
+	// session's own git hosts) is never accepted from the caller here -- it is
+	// computed and appended fresh, every time a SessionConfig is assembled from the
+	// resulting Environment row, never merely validated against what this request
+	// supplied.
+	EgressPolicy *CreateSessionRequestEgressPolicy `json:"egressPolicy,omitempty,omitzero" yaml:"egressPolicy,omitempty" mapstructure:"egressPolicy,omitempty"`
 
 	// Optional (Step 61, 'builder epistemic pre-action check', §20.4), mirroring
 	// buildModelId's own optional-key convention exactly: this session's own override
@@ -1543,6 +1569,76 @@ type CreateSessionRequestBuildModelId *string
 // maps (GET /api/models, this Step's own catalog endpoint), never a Narvi-side
 // enum.
 type CreateSessionRequestEffort *string
+
+// Optional (Step 74, §27.6). Like pathScope/mockConfig above, this key is
+// genuinely OPTIONAL (may be absent from the request body entirely) and
+// independent of docker/pathScope/mockConfig -- presence alone (with
+// mode/allowlist both required inside it, unlike this key itself) creates a
+// session-scoped Environment carrying this egress_policy. mode "allowlist" is
+// refused up front, before any Postgres write, if the configured sandbox provider
+// does not report EgressPolicy support -- the SAME CheckSubstrateCapabilities
+// check docker uses. The server-appended allowlist floor (CP host + this session's
+// own git hosts) is never accepted from the caller here -- it is computed and
+// appended fresh, every time a SessionConfig is assembled from the resulting
+// Environment row, never merely validated against what this request supplied.
+type CreateSessionRequestEgressPolicy struct {
+	// Allowlist corresponds to the JSON schema field "allowlist".
+	Allowlist []string `json:"allowlist" yaml:"allowlist" mapstructure:"allowlist"`
+
+	// Mode corresponds to the JSON schema field "mode".
+	Mode CreateSessionRequestEgressPolicyMode `json:"mode" yaml:"mode" mapstructure:"mode"`
+}
+
+type CreateSessionRequestEgressPolicyMode string
+
+const CreateSessionRequestEgressPolicyModeAllowlist CreateSessionRequestEgressPolicyMode = "allowlist"
+const CreateSessionRequestEgressPolicyModeOpen CreateSessionRequestEgressPolicyMode = "open"
+
+var enumValues_CreateSessionRequestEgressPolicyMode = []interface{}{
+	"open",
+	"allowlist",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateSessionRequestEgressPolicyMode) UnmarshalJSON(value []byte) error {
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CreateSessionRequestEgressPolicyMode {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CreateSessionRequestEgressPolicyMode, v)
+	}
+	*j = CreateSessionRequestEgressPolicyMode(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateSessionRequestEgressPolicy) UnmarshalJSON(value []byte) error {
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["allowlist"]; raw != nil && !ok {
+		return fmt.Errorf("field allowlist in CreateSessionRequestEgressPolicy: required")
+	}
+	if _, ok := raw["mode"]; raw != nil && !ok {
+		return fmt.Errorf("field mode in CreateSessionRequestEgressPolicy: required")
+	}
+	type Plain CreateSessionRequestEgressPolicy
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = CreateSessionRequestEgressPolicy(plain)
+	return nil
+}
 
 // Optional (Step 61, 'builder epistemic pre-action check', §20.4), mirroring
 // buildModelId's own optional-key convention exactly: this session's own override
@@ -1706,6 +1802,9 @@ func (j *CreateSessionRequest) UnmarshalJSON(value []byte) error {
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
+	}
+	if v, ok := raw["docker"]; !ok || v == nil {
+		plain.Docker = false
 	}
 	if v, ok := raw["planMode"]; !ok || v == nil {
 		plain.PlanMode = false

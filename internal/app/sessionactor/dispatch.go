@@ -126,6 +126,7 @@ import (
 	"github.com/khazaddev/narvi/internal/adapters/outbound/postgres/sqlcgen"
 	"github.com/khazaddev/narvi/internal/app/ports"
 	"github.com/khazaddev/narvi/internal/app/workflowengine"
+	"github.com/khazaddev/narvi/internal/domain/environment"
 	"github.com/khazaddev/narvi/internal/domain/sandbox"
 	"github.com/khazaddev/narvi/internal/domain/turn"
 	"github.com/khazaddev/narvi/internal/platform"
@@ -149,7 +150,14 @@ import (
 // own doc comment ("Empty means the provider's own default base image") --
 // a non-empty, clearly-named value is used instead of leaving Image empty,
 // so a real SandboxProvider's own request log unambiguously shows which
-// image narvi asked for.
+// image narvi asked for. Its real build definition (§27.7, Step 74:
+// Playwright+Chromium, ripgrep, typescript-language-server+typescript,
+// the Docker CLI/engine binaries, and §27.4's three cloud exec-
+// credential plugins, every version pinned) is deploy/sandbox-image/
+// Dockerfile -- wiring a real build/push pipeline that produces the
+// concrete tag/digest this constant would point at is a separate,
+// external-build-service concern (§19.1's own "external, opaque-to-
+// this-repo build service" boundary), out of this Step's own scope.
 const defaultBaseImage = "narvi/sandbox-agent:placeholder"
 
 // scmCommitName/scmCommitEmail are the currently-unused-anywhere-in-git
@@ -710,6 +718,51 @@ func (a *Actor) tryPlanSpawn(
 		SpawningTimeout: a.timeouts.SpawnStuckTimeout,
 	}, now, false, caps.Resume)
 
+	// Step 74's own dispatch-time half of the "fail-closed, twice" rule
+	// (§27.5/§27.6, brief point A) -- deliberately gated to ONLY the
+	// three action kinds that are actually about to attempt a REAL
+	// provider call (Spawn/Restore/Resume): an ordinary Skip/Wait (a
+	// cooldown, an in-progress spawn, the circuit breaker) is not itself
+	// trying to reach the provider at all, so it must stay the same
+	// silent, cheap no-op it always was -- refusing a session that is not
+	// currently trying to spawn would be a confusing, spurious error with
+	// nothing for it to actually be about. See refuseIfSubstrateUnsupported's
+	// own doc comment for why this is a SEPARATE, independent check from
+	// httpapi.CreateSessionCore's own up-front one, not a re-use of its
+	// result.
+	if action.Kind == sandbox.SpawnActionSpawn || action.Kind == sandbox.SpawnActionRestore || action.Kind == sandbox.SpawnActionResume {
+		dockerRequired, err := a.refuseIfSubstrateUnsupported(ctx, tx, sessionRow, caps)
+		if err != nil {
+			return nil, err
+		}
+
+		// §27.8's own genuinely-unresolved snapshot-parity point (Step 74
+		// brief, point D), the SAME resolution sandboxevent.go's own
+		// triggerSnapshotBestEffort already applies on the way IN to a
+		// snapshot -- applied here, symmetrically, on the way OUT: even
+		// if action.Kind resolved to Restore (SnapshotImageID != ""),
+		// never actually restore it for a Docker-required session. In
+		// today's design this branch should be unreachable in practice
+		// (triggerSnapshotBestEffort's own identical gate means a
+		// Docker-required sandbox's snapshot_id column is never
+		// populated to begin with, since environments are immutable
+		// once created -- no UPDATE path exists), but defense in depth
+		// against exactly the failure this codebase cannot verify is
+		// safe (a cross-runtime restore: a snapshot taken under one
+		// Modal runtime restored into the OTHER) is cheap here and the
+		// cost of being wrong is silently running something §27.8 names
+		// as unverified. Downgrading to a fresh Spawn, never refusing
+		// outright, keeps §10-P2's "never block a spawn" intact -- the
+		// session still gets a live sandbox, just without whatever
+		// state the (untrusted, in this one case) snapshot would have
+		// restored.
+		if action.Kind == sandbox.SpawnActionRestore && dockerRequired {
+			a.logger.Warn("sessionactor: refusing snapshot restore for a Docker-required session; forcing a fresh spawn instead of an unverified cross-runtime restore (§27.8)",
+				"session_id", a.sessionID.String(), "snapshot_id", action.SnapshotImageID)
+			action = sandbox.SpawnAction{Kind: sandbox.SpawnActionSpawn}
+		}
+	}
+
 	switch action.Kind {
 	case sandbox.SpawnActionSpawn:
 		return a.planFreshSpawn(ctx, tx, sessionRow, hasSandbox, sandboxRow, now)
@@ -738,6 +791,63 @@ func (a *Actor) tryPlanSpawn(
 			"kind", action.Kind.String(), "reason", action.Reason)
 		return nil, nil
 	}
+}
+
+// refuseIfSubstrateUnsupported implements Step 74's own dispatch-time
+// half of the "fail-closed, twice" rule (§27.5/§27.6, brief point A):
+// re-checked HERE, immediately before tryPlanSpawn is about to attempt a
+// REAL spawn/restore/resume against a.provider, using the SAME pure
+// decision (environment.CheckSubstrateCapabilities)
+// httpapi.CreateSessionCore's own up-front check (checkSubstrateCapabilitiesUpFront,
+// create.go) already ran once at session-creation time.
+//
+// This is a genuinely SEPARATE, independent check, not a re-use of that
+// earlier result: the two run against fresh reads at two different
+// times, from two different processes/call paths, and either one being
+// disabled (or buggy) must not silently disable the other's own
+// protection. Concretely, the gap this closes that a single up-front
+// check alone cannot: an operator can reconfigure the deployment's
+// SandboxProvider (or a provider's own capability set can genuinely
+// change) at any point AFTER a docker/enforced-egress session was
+// already created -- the FIRST spawn attempt for that session, and
+// every respawn/restore/resume after it (this is tryPlanSpawn, the
+// entire spawn path §27.5/§27.6's own brief names, not just the very
+// first call), re-reads both the Environment's own current requirement
+// and the provider's own current Capabilities fresh, every time, rather
+// than trusting whatever was true when the session was first created.
+//
+// caps is the SAME ports.Capabilities value tryPlanSpawn's own caller
+// already read from a.provider (its own single call site, immediately
+// above) -- passed in rather than re-read a second time here, so this
+// check can never observe a DIFFERENT provider snapshot than the one
+// EvaluateSpawnDecision itself just reasoned over.
+//
+// On failure, this refuses the ENTIRE spawn attempt for this round with
+// a real, propagated error -- deliberately NOT sandbox.SpawnActionSkip's
+// own silent (nil, nil) shape: a Skip looks identical to an ordinary,
+// expected cooldown/in-progress no-op, but a docker/enforced-egress
+// session whose requirement the provider cannot honor is a genuine,
+// persistent misconfiguration that must be loud (logged at Error, and
+// surfaced to run's own "command handling failed" logger) until either
+// the provider or the Environment's own requirement changes -- silently
+// retrying forever would look, from the outside, exactly like a session
+// that is merely waiting its turn.
+//
+// Returns the resolved dockerRequired alongside the error (even on a nil
+// error) so its one caller (tryPlanSpawn) can also apply §27.8's own
+// restore-downgrade decision without a second Environment lookup.
+func (a *Actor) refuseIfSubstrateUnsupported(ctx context.Context, tx pgx.Tx, sessionRow sqlcgen.Session, caps ports.Capabilities) (dockerRequired bool, err error) {
+	_, dockerRequired, egressPolicy, err := a.environmentSubstrate(ctx, tx, sessionRow.EnvironmentID)
+	if err != nil {
+		return false, fmt.Errorf("sessionactor: resolve substrate requirements for dispatch-time capability re-check: %w", err)
+	}
+
+	if err := environment.CheckSubstrateCapabilities(dockerRequired, egressPolicy.RequiresEnforcement(), caps.DockerInSandbox, caps.EgressPolicy); err != nil {
+		a.logger.Error("sessionactor: refusing to spawn: configured provider cannot honor this Environment's substrate requirements (§27.5/§27.6 dispatch-time fail-closed re-check)",
+			"session_id", a.sessionID.String(), "error", err)
+		return dockerRequired, fmt.Errorf("sessionactor: dispatch-time substrate capability re-check failed: %w", err)
+	}
+	return dockerRequired, nil
 }
 
 // planFreshSpawn implements design decision 3a's own write (token mint,
@@ -839,7 +949,14 @@ func (a *Actor) planFreshSpawn(
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}
 
-	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: defaultBaseImage}
+	// Docker/EgressPolicy are threaded from cfg's own just-assembled
+	// fields (§27.5/§27.6, Step 74) -- the SAME deliberate top-level
+	// duplication Gen already has, above: a provider must be able to act
+	// on either without ever parsing the opaque SessionConfig document.
+	// spec.Validate() below is what catches the two copies ever
+	// diverging (it already did, once, during this Step's own
+	// development -- see ports.DockerMismatchError/EgressPolicyMismatchError).
+	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: defaultBaseImage, Docker: cfg.Docker, EgressPolicy: cfg.EgressPolicy}
 	if err := spec.Validate(); err != nil {
 		return nil, fmt.Errorf("sessionactor: invalid create spec: %w", err)
 	}
@@ -909,7 +1026,14 @@ func (a *Actor) planRestore(
 		return nil, fmt.Errorf("sessionactor: assemble session config: %w", err)
 	}
 
-	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: defaultBaseImage}
+	// Docker/EgressPolicy are threaded from cfg's own just-assembled
+	// fields (§27.5/§27.6, Step 74) -- the SAME deliberate top-level
+	// duplication Gen already has, above: a provider must be able to act
+	// on either without ever parsing the opaque SessionConfig document.
+	// spec.Validate() below is what catches the two copies ever
+	// diverging (it already did, once, during this Step's own
+	// development -- see ports.DockerMismatchError/EgressPolicyMismatchError).
+	spec := ports.CreateSpec{Gen: int(row.Gen), SessionConfig: cfg, Image: defaultBaseImage, Docker: cfg.Docker, EgressPolicy: cfg.EgressPolicy}
 	if err := spec.Validate(); err != nil {
 		return nil, fmt.Errorf("sessionactor: invalid create spec: %w", err)
 	}
